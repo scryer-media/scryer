@@ -1923,7 +1923,7 @@ async fn approval_waits_for_destructive_title_ownership() {
         .runtime
         .jobs
         .interactive_operation_guards
-        .try_acquire(&format!("maintenance-title:{}", first.title_id))
+        .try_acquire(&format!("lifecycle-title:{}", first.title_id))
         .await
         .unwrap();
     let error = harness

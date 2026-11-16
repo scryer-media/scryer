@@ -387,7 +387,7 @@ impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
         if let Some((guards, title_id, observed)) = self.read_guard_probe.lock().await.clone()
             && title_ids.contains(&title_id)
             && guards
-                .try_acquire(&format!("maintenance-title:{title_id}"))
+                .try_acquire(&format!("lifecycle-title:{title_id}"))
                 .await
                 .is_none()
         {

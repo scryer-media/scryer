@@ -1498,7 +1498,7 @@ async fn a_storage_delete_title_rechecks_space_and_keeps_the_title_no_longer_nee
         .runtime
         .jobs
         .interactive_operation_guards
-        .try_acquire("maintenance-storage-deletion")
+        .try_acquire("lifecycle-storage-deletion")
         .await
         .expect("hold storage deletion guard");
     let held = app
@@ -1595,7 +1595,7 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
         .runtime
         .jobs
         .interactive_operation_guards
-        .try_acquire("maintenance-storage-deletion")
+        .try_acquire("lifecycle-storage-deletion")
         .await
         .expect("hold storage deletion guard");
 

@@ -754,7 +754,7 @@ impl AppUseCase {
                 .runtime
                 .jobs
                 .interactive_operation_guards
-                .try_acquire("maintenance-storage-deletion")
+                .try_acquire("lifecycle-storage-deletion")
                 .await
             else {
                 self.save_scoped_deletion_checkpoint(run, &mut checkpoint)

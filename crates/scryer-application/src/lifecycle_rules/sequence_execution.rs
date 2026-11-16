@@ -938,7 +938,7 @@ impl AppUseCase {
                     .runtime
                     .jobs
                     .interactive_operation_guards
-                    .try_acquire(&format!("maintenance-title:{}", candidate.title_id))
+                    .try_acquire(&format!("lifecycle-title:{}", candidate.title_id))
                     .await
                 {
                     Some(_title_guard) => {
@@ -955,7 +955,7 @@ impl AppUseCase {
                                 self.runtime
                                     .jobs
                                     .interactive_operation_guards
-                                    .try_acquire("maintenance-storage-deletion")
+                                    .try_acquire("lifecycle-storage-deletion")
                                     .await,
                             )
                         } else {

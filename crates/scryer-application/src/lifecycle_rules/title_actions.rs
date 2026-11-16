@@ -137,7 +137,7 @@ impl AppUseCase {
             ),
         );
         event.event_id = format!(
-            "maintenance-notify:{}:{}:{}",
+            "lifecycle-notify:{}:{}:{}",
             candidate.id, candidate.match_generation, candidate.revision_number
         );
         match self.services.events.domain_events.append_once(event).await {

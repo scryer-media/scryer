@@ -57,7 +57,7 @@ impl AppUseCase {
             .runtime
             .jobs
             .interactive_operation_guards
-            .try_acquire(&format!("maintenance-title:{}", title.id))
+            .try_acquire(&format!("lifecycle-title:{}", title.id))
             .await
             .ok_or_else(|| {
                 AppError::validation_refused(
