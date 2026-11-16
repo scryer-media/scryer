@@ -21,7 +21,7 @@ jq '.data.qualityProfileSettings | {globalProfileId, globalScoringPersona,
 | `cutoffTier` | string | stop upgrading once a file reaches this tier |
 | `allowUpgrades` | bool | |
 | `minUpgradeScoreDelta` | int ≥ 0 | a same-tier release must beat the current file by this much (default 120); leaving it out keeps the stored value |
-| `minMissingEpisodesForPack` | int ≥ 1 | a season pack is searched only when at least this many of the season's episodes are missing (default 2); at 1 an automatic search for one missing episode may also take a pack; leaving it out keeps the stored value |
+| `minMissingEpisodesForPack` | int ≥ 1 | a season pack is searched only when at least this many of the season's episodes are missing, and the title's multi-season pack lookup only when at least this many of the series' episodes are (default 2); at 1 an automatic search for one missing episode may also take a pack; leaving it out keeps the stored value |
 | `minMissingPercentForSeriesPack` | int 0–100 | a multi-season pack is taken only when more than this percent of the series is missing (default 30); leaving it out keeps the stored value |
 | `cutoffScore` | int | stop same-tier upgrades past this score; leaving it out keeps the stored value |
 | `minScoreToGrab` | int | refuse releases below this score |
