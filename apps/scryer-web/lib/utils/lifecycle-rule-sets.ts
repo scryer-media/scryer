@@ -64,26 +64,52 @@ export type LifecycleActionEntry = {
   values: string[];
 };
 
+/// The value a valued head carries. The API keeps each kind in a field of its
+/// own; every notify head, at any level, carries a notification text.
+type LifecycleActionValueKind =
+  | "qualityProfile"
+  | "addTags"
+  | "removeTags"
+  | "library"
+  | "root"
+  | "notification";
+
+const ACTION_VALUE_KIND: Record<string, LifecycleActionValueKind> = {
+  SET_QUALITY_PROFILE: "qualityProfile",
+  ADD_TAGS: "addTags",
+  REMOVE_TAGS: "removeTags",
+  MOVE_TO_LIBRARY: "library",
+  MOVE_TO_ROOT: "root",
+  NOTIFY: "notification",
+  NOTIFY_SEASON: "notification",
+  NOTIFY_EPISODE: "notification",
+};
+
+function actionEntries(
+  heads: readonly string[],
+  values: Record<LifecycleActionValueKind, readonly string[]>,
+): LifecycleActionEntry[] {
+  return heads.map((head) => {
+    const kind = ACTION_VALUE_KIND[head];
+    return { head, values: kind ? [...values[kind]] : [] };
+  });
+}
+
 /// Everything a rule's source can do, as the server lists it, with every
-/// literal each valued head can produce. The API carries a valued head's
-/// literals in a field of its own, so only those fields are read here; a head
-/// added later is listed without values until the API carries them.
+/// literal each valued head can produce. A head added later is listed without
+/// values until the API carries them.
 export function declaredActionEntries(
   declared: LifecycleDeclaredActions | null | undefined,
 ): LifecycleActionEntry[] {
   if (!declared) return [];
-  const values: Record<string, string[]> = {
-    SET_QUALITY_PROFILE: declared.qualityProfiles,
-    ADD_TAGS: declared.addTags,
-    REMOVE_TAGS: declared.removeTags,
-    MOVE_TO_LIBRARY: declared.libraries,
-    MOVE_TO_ROOT: declared.roots,
-    NOTIFY: declared.notifications,
-  };
-  return [...new Set(declared.heads)].map((head) => ({
-    head,
-    values: [...(values[head] ?? [])],
-  }));
+  return actionEntries([...new Set(declared.heads)], {
+    qualityProfile: declared.qualityProfiles,
+    addTags: declared.addTags,
+    removeTags: declared.removeTags,
+    library: declared.libraries,
+    root: declared.roots,
+    notification: declared.notifications,
+  });
 }
 
 /// What a rule decided for one subject. The server already lists heads in the
@@ -93,18 +119,14 @@ export function decidedActionEntries(
 ): LifecycleActionEntry[] {
   if (!decided) return [];
   const single = (value: string | null) => (value ? [value] : []);
-  const values: Record<string, string[]> = {
-    SET_QUALITY_PROFILE: single(decided.qualityProfile),
-    ADD_TAGS: decided.addTags,
-    REMOVE_TAGS: decided.removeTags,
-    MOVE_TO_LIBRARY: single(decided.library),
-    MOVE_TO_ROOT: single(decided.root),
-    NOTIFY: single(decided.notification),
-  };
-  return decided.heads.map((head) => ({
-    head,
-    values: [...(values[head] ?? [])],
-  }));
+  return actionEntries(decided.heads, {
+    qualityProfile: single(decided.qualityProfile),
+    addTags: decided.addTags,
+    removeTags: decided.removeTags,
+    library: single(decided.library),
+    root: single(decided.root),
+    notification: single(decided.notification),
+  });
 }
 
 /// How often a new rule runs until the operator picks otherwise. The server

@@ -498,6 +498,33 @@ test("declared actions keep each head once, with the values it carries, in the o
   assert.deepEqual(declaredActionEntries(declared()), []);
 });
 
+test("season and episode notify heads carry their notification text like the title head", () => {
+  assert.deepEqual(
+    declaredActionEntries(
+      declared({
+        heads: ["NOTIFY_SEASON", "NOTIFY_EPISODE"],
+        notifications: ["Season removed"],
+      }),
+    ),
+    [
+      { head: "NOTIFY_SEASON", values: ["Season removed"] },
+      { head: "NOTIFY_EPISODE", values: ["Season removed"] },
+    ],
+  );
+  assert.deepEqual(
+    decidedActionEntries({
+      heads: ["NOTIFY_EPISODE"],
+      qualityProfile: null,
+      addTags: [],
+      removeTags: [],
+      library: null,
+      root: null,
+      notification: "Episode removed",
+    }),
+    [{ head: "NOTIFY_EPISODE", values: ["Episode removed"] }],
+  );
+});
+
 test("a head the API does not carry values for is listed without values", () => {
   assert.deepEqual(declaredActionEntries(declared({ heads: ["ARCHIVE"] })), [
     { head: "ARCHIVE", values: [] },
