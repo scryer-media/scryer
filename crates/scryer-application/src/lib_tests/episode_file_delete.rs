@@ -1526,15 +1526,14 @@ impl ScopedLifecycleFixture {
                 actor,
                 LifecycleRuleDraft {
                     max_titles_per_run: Some(100),
-                    subject_kind: scope,
                     name: "Scoped deletion".into(),
                     description: String::new(),
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::legacy_source_at(
                         matcher,
                         crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeDeleteFiles,
+                        scope,
                     ),
                     grace_days: grace,
-                    storage_root_id: None,
                     library_ids: vec![],
                 },
             )

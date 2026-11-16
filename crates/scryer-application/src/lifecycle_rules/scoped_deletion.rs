@@ -24,7 +24,7 @@ pub(super) struct ScopeFactSnapshot {
 }
 impl ScopeFactSnapshot {
     fn capture(input: &LifecycleInput) -> Self {
-        let facts = &input.facts;
+        let facts = input.subject_facts();
         Self {
             monitored: facts.monitored.clone(),
             has_file: facts.has_file.clone(),
@@ -39,7 +39,7 @@ impl ScopeFactSnapshot {
     /// Only restore facts this action changes. Watch signals, claims, identity,
     /// exclusions, and the rule's authorization are still rechecked live.
     pub fn restore(&self, input: &mut LifecycleInput) {
-        let facts = &mut input.facts;
+        let facts = input.subject_facts_mut();
         facts.monitored = self.monitored.clone();
         facts.has_file = self.has_file.clone();
         facts.file_count = self.file_count.clone();
@@ -100,13 +100,12 @@ pub(super) struct ScopedDeletionCheckpoint {
     /// file journal. Legacy journals intentionally omit this field.
     #[serde(default)]
     sequence_step_id: Option<String>,
-    /// `None` is a legacy, unfiltered manifest. It can only resume a rule
-    /// which still has no selected storage root.
+    /// Set only by journals written while a rule could select one configured
+    /// root. Such a journal never resumes; new journals leave it `None`.
     #[serde(default)]
     storage_root_id: Option<String>,
-    /// Physical root path and filesystem identity captured before monitoring
-    /// changed. A selected root id may be reconfigured between retries, which
-    /// must hold rather than resume the old manifest at a new location.
+    /// The selected root's physical identity, in journals written while a
+    /// rule could select one. Kept so those journals still read.
     #[serde(default)]
     storage_root_identity: Option<String>,
     subject_kind: String,
@@ -122,6 +121,39 @@ pub(super) struct ScopedDeletionCheckpoint {
     /// hold's detail without replacing the journal. Progress clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hold: Option<serde_json::Value>,
+}
+
+/// A deletion journal for `candidate` as one written when deletion narrowed
+/// to a configured root, with no files, serialized as a run's detail.
+#[cfg(test)]
+pub(crate) fn root_deletion_journal_for_test(candidate: &LifecycleCandidate) -> String {
+    serde_json::to_string(&ScopedDeletionCheckpoint {
+        scoped_deletion: 1,
+        match_generation: candidate.match_generation,
+        action_kind: candidate.action_kind.clone(),
+        sequence_step_id: None,
+        storage_root_id: Some("synthetic-selected-root".to_string()),
+        storage_root_identity: Some("synthetic-root-identity".to_string()),
+        subject_kind: candidate.subject_kind.clone(),
+        subject_id: candidate.subject_id.clone(),
+        subject_label: "Synthetic".to_string(),
+        grace_deadline: candidate.due_at.to_rfc3339(),
+        total_size_bytes: 0,
+        baseline: ScopeFactSnapshot {
+            monitored: Observation::unknown("synthetic"),
+            has_file: Observation::unknown("synthetic"),
+            file_count: Observation::unknown("synthetic"),
+            total_file_size_bytes: Observation::unknown("synthetic"),
+            files: Observation::unknown("synthetic"),
+            first_imported_at: Observation::unknown("synthetic"),
+            episode_file_count: Observation::unknown("synthetic"),
+            monitored_episode_count: Observation::unknown("synthetic"),
+        },
+        mutation_started: true,
+        files: Vec::new(),
+        hold: None,
+    })
+    .expect("serialize synthetic journal")
 }
 
 impl ScopedDeletionCheckpoint {
@@ -205,7 +237,7 @@ impl ScopedDeletionCheckpoint {
             },
         ) = (
             &self.baseline.file_count,
-            &input.facts.file_count,
+            &input.subject_facts().file_count,
             &self.baseline.has_file,
         ) && *current_count == *baseline_count - completed_count
         {
@@ -215,25 +247,17 @@ impl ScopedDeletionCheckpoint {
         };
         restore_known_delta(
             &self.baseline.file_count,
-            &mut input.facts.file_count,
+            &mut input.subject_facts_mut().file_count,
             completed_count,
         );
         restore_known_delta(
             &self.baseline.total_file_size_bytes,
-            &mut input.facts.total_file_size_bytes,
+            &mut input.subject_facts_mut().total_file_size_bytes,
             completed_size,
         );
         if let Some(baseline_has_file) = restore_has_file {
-            input.facts.has_file = Observation::known(baseline_has_file);
+            input.subject_facts_mut().has_file = Observation::known(baseline_has_file);
         }
-    }
-
-    fn file_matches_catalog(&self, file: &crate::types::TitleMediaFile) -> bool {
-        self.files.iter().any(|saved| {
-            !saved.completed
-                && saved.file_id == file.id
-                && saved.catalog_proof == catalog_proof(file)
-        })
     }
 }
 
@@ -264,22 +288,47 @@ fn catalog_proof(file: &crate::types::TitleMediaFile) -> String {
     )
 }
 
-impl AppUseCase {
-    pub(super) async fn lifecycle_deletion_checkpoint(
-        &self,
-        candidate: &LifecycleCandidate,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<Option<ScopedDeletionCheckpoint>> {
-        self.lifecycle_deletion_checkpoint_for_step(candidate, storage_root_id, None)
-            .await
-    }
+/// What a candidate's saved deletion journal is.
+pub(super) enum LifecycleDeletionJournal {
+    /// No journal: the deletion has not begun.
+    Missing,
+    /// A journal this candidate may resume.
+    Found(ScopedDeletionCheckpoint),
+    /// A journal written when deletion narrowed to one configured root. It
+    /// never resumes: resuming now would reach the subject's other roots.
+    WrittenForOneRoot,
+}
 
+impl AppUseCase {
+    /// The candidate's saved deletion journal. A journal written for one
+    /// configured root is an identity mismatch: deletion no longer narrows
+    /// to a root, and such a journal must never resume over the subject's
+    /// files on other roots.
     pub(super) async fn lifecycle_deletion_checkpoint_for_step(
         &self,
         candidate: &LifecycleCandidate,
-        storage_root_id: Option<&str>,
         sequence_step_id: Option<&str>,
     ) -> AppResult<Option<ScopedDeletionCheckpoint>> {
+        match self
+            .read_lifecycle_deletion_journal(candidate, sequence_step_id)
+            .await?
+        {
+            LifecycleDeletionJournal::Missing => Ok(None),
+            LifecycleDeletionJournal::Found(checkpoint) => Ok(Some(checkpoint)),
+            LifecycleDeletionJournal::WrittenForOneRoot => Err(AppError::Repository(
+                "lifecycle deletion checkpoint identity mismatch".into(),
+            )),
+        }
+    }
+
+    /// The candidate's saved deletion journal, telling a journal written for
+    /// one configured root apart so evaluation can close its candidate
+    /// instead of failing on it every pass.
+    pub(super) async fn read_lifecycle_deletion_journal(
+        &self,
+        candidate: &LifecycleCandidate,
+        sequence_step_id: Option<&str>,
+    ) -> AppResult<LifecycleDeletionJournal> {
         let Some(run) = self
             .services
             .customization
@@ -291,7 +340,7 @@ impl AppUseCase {
             )
             .await?
         else {
-            return Ok(None);
+            return Ok(LifecycleDeletionJournal::Missing);
         };
         let mut checkpoint: ScopedDeletionCheckpoint = serde_json::from_str(&run.detail)
             .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -312,8 +361,6 @@ impl AppUseCase {
             || checkpoint.match_generation != candidate.match_generation
             || checkpoint.action_kind != candidate.action_kind
             || checkpoint.sequence_step_id.as_deref() != sequence_step_id
-            || checkpoint.storage_root_id.as_deref()
-                != storage_root_id.map(str::trim).filter(|id| !id.is_empty())
             || checkpoint.subject_kind != candidate.subject_kind
             || checkpoint.subject_id != candidate.subject_id
         {
@@ -321,7 +368,10 @@ impl AppUseCase {
                 "lifecycle deletion checkpoint identity mismatch".into(),
             ));
         }
-        Ok(Some(checkpoint))
+        if checkpoint.storage_root_id.is_some() || checkpoint.storage_root_identity.is_some() {
+            return Ok(LifecycleDeletionJournal::WrittenForOneRoot);
+        }
+        Ok(LifecycleDeletionJournal::Found(checkpoint))
     }
 
     /// Reconcile only a catalog row proven absent by its immutable file id.
@@ -348,113 +398,6 @@ impl AppUseCase {
             }
         }
         Ok(changed)
-    }
-
-    /// Determine whether an interrupted storage journal can safely resume when
-    /// its own authorized paths disappeared before catalog cleanup or its
-    /// checkpoint progress write. This accepts no new or replacement catalog
-    /// file: every live row must match one saved proof, and a missing path is
-    /// acceptable only through the journal's exact policy plan on an unchanged
-    /// selected root.
-    pub(super) async fn lifecycle_storage_checkpoint_can_resume(
-        &self,
-        checkpoint: &ScopedDeletionCheckpoint,
-        current_files: &[crate::types::TitleMediaFile],
-        storage_root_id: Option<&str>,
-    ) -> AppResult<bool> {
-        if checkpoint.storage_root_identity
-            != self
-                .lifecycle_storage_root_identity(storage_root_id)
-                .await?
-        {
-            return Ok(false);
-        }
-        // Files outside the selected root were intentionally omitted from the
-        // original manifest. They may coexist with its checkpoint and must
-        // not block recovery; a newly discovered root-local file still does.
-        for file in current_files {
-            if checkpoint.file_matches_catalog(file) {
-                continue;
-            }
-            match self
-                .lifecycle_files_on_root(vec![file.clone()], storage_root_id)
-                .await?
-            {
-                Some(files) if files.is_empty() => continue,
-                _ => return Ok(false),
-            }
-        }
-        for saved in checkpoint.files.iter().filter(|file| !file.completed) {
-            let Some(current) = self
-                .services
-                .library
-                .media_files
-                .get_media_file_by_id(&saved.file_id)
-                .await?
-            else {
-                // The catalog cleanup committed after the authorized unlink;
-                // the scoped executor will record this exact id as complete.
-                if !checkpoint.mutation_started {
-                    return Ok(false);
-                }
-                continue;
-            };
-            if catalog_proof(&current) != saved.catalog_proof
-                || !current_files.iter().any(|file| {
-                    file.id == saved.file_id && catalog_proof(file) == saved.catalog_proof
-                })
-            {
-                return Ok(false);
-            }
-            match self
-                .lifecycle_files_on_root(vec![current], storage_root_id)
-                .await?
-            {
-                Some(files) if files.len() == 1 => continue,
-                Some(_) => return Ok(false),
-                None => {}
-            }
-            if !checkpoint.mutation_started {
-                return Ok(false);
-            }
-            let Some(plan) = saved.plan.as_ref() else {
-                return Ok(false);
-            };
-            if self
-                .lifecycle_policy_plan_on_root_or_absent(plan, storage_root_id)
-                .await?
-                != Some(true)
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    /// True only when every unfinished journal entry has already lost every
-    /// exact policy path. Continuing in this state performs catalog cleanup
-    /// and checkpoint reconciliation only; it cannot unlink a new path after
-    /// storage pressure has recovered.
-    pub(super) async fn lifecycle_storage_checkpoint_needs_catalog_cleanup(
-        &self,
-        checkpoint: &ScopedDeletionCheckpoint,
-        current_files: &[crate::types::TitleMediaFile],
-    ) -> AppResult<bool> {
-        if !checkpoint.mutation_started {
-            return Ok(false);
-        }
-        for saved in checkpoint.files.iter().filter(|file| !file.completed) {
-            if current_files.iter().all(|file| file.id != saved.file_id) {
-                continue;
-            }
-            let Some(plan) = saved.plan.as_ref() else {
-                return Ok(false);
-            };
-            if plan.paths_are_all_absent().await? != Some(true) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 
     /// Unmonitor every persisted monitoring layer before a title-preserving
@@ -786,94 +729,27 @@ impl AppUseCase {
         let title = context.title;
         let input = context.input;
         let run = &mut *context.run;
-        let storage_root_id = context.detail.revision.storage_root_id.as_deref();
+        // A rule that reads storage capacity decides on a moving condition:
+        // every unlink changes it. Such a deletion is serialized with every
+        // other one and re-checks the rule before each file.
+        let reads_storage =
+            super::storage::rule_reads_storage(&context.detail.revision.rego_source);
         let detail = context.detail;
         let evaluator = &mut *context.evaluator;
         let libraries = context.libraries;
         let tag_conflicts = context.tag_conflicts;
-        let storage_root_identity = if storage_root_id.is_some() {
-            let Some(identity) = self
-                .lifecycle_storage_root_identity(storage_root_id)
-                .await?
-            else {
-                return Ok(ActionResult::Held {
-                    reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                    detail: serde_json::json!({
-                        "storage_root_id": storage_root_id,
-                        "reason": "storage_root_identity_unavailable",
-                    }),
-                });
-            };
-            Some(identity)
-        } else {
-            None
-        };
-        let (subject_label, mut subject_files) = self
+        let storage_roots = context.storage_roots;
+        let (subject_label, subject_files) = self
             .lifecycle_policy_deletion_files(candidate, title)
             .await?;
-        if storage_root_id.is_some()
-            && self
-                .lifecycle_storage_root_identity(storage_root_id)
-                .await?
-                != storage_root_identity
-        {
-            return Ok(ActionResult::Held {
-                reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                detail: serde_json::json!({
-                    "storage_root_id": storage_root_id,
-                    "reason": "storage_root_identity_changed",
-                }),
-            });
-        }
         let existing_checkpoint = self
-            .lifecycle_deletion_checkpoint_for_step(candidate, storage_root_id, sequence_step_id)
+            .lifecycle_deletion_checkpoint_for_step(candidate, sequence_step_id)
             .await?;
         let mut checkpoint = match existing_checkpoint {
-            Some(checkpoint) => {
-                if checkpoint.storage_root_identity != storage_root_identity {
-                    return Ok(ActionResult::Held {
-                        reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                        detail: serde_json::json!({
-                            "storage_root_id": storage_root_id,
-                            "reason": "storage_root_identity_changed",
-                        }),
-                    });
-                }
-                if storage_root_id.is_some()
-                    && !self
-                        .lifecycle_storage_checkpoint_can_resume(
-                            &checkpoint,
-                            &subject_files,
-                            storage_root_id,
-                        )
-                        .await?
-                {
-                    return Ok(ActionResult::Held {
-                        reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                        detail: serde_json::json!({
-                            "storage_root_id": storage_root_id,
-                            "reason": "checkpoint_root_membership_unavailable",
-                        }),
-                    });
-                }
-                checkpoint
-            }
+            // A journal written for one configured root is refused by the
+            // read above: it never resumes over the subject's other roots.
+            Some(checkpoint) => checkpoint,
             None => {
-                if storage_root_id.is_some() {
-                    let Some(files) = self
-                        .lifecycle_files_on_root(subject_files, storage_root_id)
-                        .await?
-                    else {
-                        return Ok(ActionResult::Held {
-                            reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                            detail: serde_json::json!({
-                                "storage_root_id": storage_root_id,
-                                "remaining_files_held": true,
-                            }),
-                        });
-                    };
-                    subject_files = files;
-                }
                 let retention_inventory = if title.facet != scryer_domain::MediaFacet::Movie {
                     Some(self.lifecycle_load_title_episode_inventory(title).await?)
                 } else {
@@ -894,46 +770,7 @@ impl AppUseCase {
                         .unwrap_or_default();
                     let (plan, error) = match self.prepare_policy_media_file_delete(&file.id).await
                     {
-                        Ok(plan) if storage_root_id.is_some() => {
-                            match self
-                                .lifecycle_policy_plan_on_root(&plan, storage_root_id)
-                                .await?
-                            {
-                                Some(true) => (Some(plan), None),
-                                Some(false) => {
-                                    return Ok(ActionResult::Held {
-                                        reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                                        detail: serde_json::json!({
-                                            "storage_root_id": storage_root_id,
-                                            "file_id": file.id,
-                                            "reason": "policy_delete_path_outside_selected_root",
-                                        }),
-                                    });
-                                }
-                                None => {
-                                    return Ok(ActionResult::Held {
-                                        reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                                        detail: serde_json::json!({
-                                            "storage_root_id": storage_root_id,
-                                            "file_id": file.id,
-                                            "reason": "policy_delete_path_root_unavailable",
-                                        }),
-                                    });
-                                }
-                            }
-                        }
                         Ok(plan) => (Some(plan), None),
-                        Err(error) if storage_root_id.is_some() => {
-                            return Ok(ActionResult::Held {
-                                reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                                detail: serde_json::json!({
-                                    "storage_root_id": storage_root_id,
-                                    "file_id": file.id,
-                                    "reason": "policy_delete_plan_unavailable",
-                                    "error": error.to_string(),
-                                }),
-                            });
-                        }
                         Err(error) => (None, Some(error.to_string())),
                     };
                     files.push(FileCheckpoint {
@@ -953,11 +790,8 @@ impl AppUseCase {
                     match_generation: candidate.match_generation,
                     action_kind: candidate.action_kind.clone(),
                     sequence_step_id: sequence_step_id.map(str::to_string),
-                    storage_root_id: storage_root_id
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        .map(str::to_string),
-                    storage_root_identity: storage_root_identity.clone(),
+                    storage_root_id: None,
+                    storage_root_identity: None,
                     subject_kind: candidate.subject_kind.clone(),
                     subject_id: candidate.subject_id.clone(),
                     subject_label,
@@ -972,20 +806,19 @@ impl AppUseCase {
         };
         self.reconcile_absent_scoped_deletion_catalog_rows(&mut checkpoint)
             .await?;
-        if storage_root_id.is_none()
-            && subject_files.iter().any(|file| {
-                !checkpoint.files.iter().any(|saved| {
-                    saved.file_id == file.id && saved.catalog_proof == catalog_proof(file)
-                })
-            })
-        {
+        if subject_files.iter().any(|file| {
+            !checkpoint
+                .files
+                .iter()
+                .any(|saved| saved.file_id == file.id && saved.catalog_proof == catalog_proof(file))
+        }) {
             return Err(AppError::validation_refused(
                 crate::error_reasons::lifecycle::FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED,
                 "lifecycle file targets changed; another evaluation is required",
             ));
         }
         let mut guards = Vec::new();
-        if storage_root_id.is_some() {
+        if reads_storage {
             // Capacity can change after each unlink. Until configured roots
             // carry a portable volume identity, serialize all storage-pressure
             // deletions rather than letting two roots on the same filesystem
@@ -1015,7 +848,7 @@ impl AppUseCase {
                 .try_acquire(&format!("media-file:{}", file.file_id))
                 .await
             else {
-                if storage_root_id.is_some() {
+                if reads_storage {
                     self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                         .await?;
                     return Ok(ActionResult::Held {
@@ -1070,7 +903,7 @@ impl AppUseCase {
             // Storage pressure is a moving condition. The first safety check
             // authorized unmonitoring and the manifest; every subsequent file
             // gets a new capacity probe and Rego evaluation before unlinking.
-            if storage_root_id.is_some() || sequence_step_id.is_some() {
+            if reads_storage || sequence_step_id.is_some() {
                 match self
                     .lifecycle_execution_safety_checks(
                         detail,
@@ -1079,6 +912,7 @@ impl AppUseCase {
                         candidate,
                         libraries,
                         tag_conflicts,
+                        storage_roots,
                     )
                     .await
                 {
@@ -1117,31 +951,11 @@ impl AppUseCase {
                     }
                 }
             }
-            if storage_root_id.is_some()
-                && self
-                    .lifecycle_storage_root_identity(storage_root_id)
-                    .await?
-                    != checkpoint.storage_root_identity
-            {
-                checkpoint.files[index].record_reason(execution_reason::UNKNOWN_AT_EXECUTION);
-                self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
-                    .await?;
-                return Ok(ActionResult::Held {
-                    reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                    detail: serde_json::to_value(checkpoint)
-                        .map_err(|error| AppError::Repository(error.to_string()))?,
-                });
-            }
             // Re-read ownership after monitoring and before every file
-            // mutation. An unprovable root/path is a hold, never a partial
-            // manifest interpreted as "nothing left".
+            // mutation.
             let (_, fresh_files) = self
                 .lifecycle_policy_deletion_files(candidate, title)
                 .await?;
-            // The primary media file can remain under the selected root while
-            // a tracked subtitle or sidecar moves elsewhere. Re-prove every
-            // persisted policy path immediately before using the shared
-            // deleter, whose manifest may delete all of them together.
             let Some(plan) = saved.plan.clone() else {
                 // A single target may have failed its pre-mutation preview.
                 // Keep its error in the journal but continue independently
@@ -1157,32 +971,6 @@ impl AppUseCase {
                     .await?;
                 continue;
             };
-            if storage_root_id.is_some() {
-                let target_is_proven_on_root =
-                    match fresh_files.iter().find(|file| file.id == saved.file_id) {
-                        Some(file) => matches!(
-                            self.lifecycle_files_on_root(vec![file.clone()], storage_root_id)
-                                .await?,
-                            Some(files) if files.len() == 1
-                        ),
-                        None => false,
-                    };
-                if !target_is_proven_on_root
-                    && self
-                        .lifecycle_policy_plan_on_root_or_absent(&plan, storage_root_id)
-                        .await?
-                        != Some(true)
-                {
-                    checkpoint.files[index].record_reason(execution_reason::UNKNOWN_AT_EXECUTION);
-                    self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
-                        .await?;
-                    return Ok(ActionResult::Held {
-                        reason: execution_reason::UNKNOWN_AT_EXECUTION,
-                        detail: serde_json::to_value(checkpoint)
-                            .map_err(|error| AppError::Repository(error.to_string()))?,
-                    });
-                }
-            }
             let result = async {
                 let Some(file) = self
                     .services

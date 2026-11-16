@@ -165,6 +165,27 @@ pub fn unobservable_facts(document: &serde_json::Value) -> BTreeMap<String, Stri
         .collect()
 }
 
+/// [`unobservable_facts`], plus the unobservable facts of each nested section
+/// that carries its own `observations`, qualified by the section's name:
+/// `season.monitored` for `document.season.observations.monitored`.
+pub fn unobservable_facts_in(
+    document: &serde_json::Value,
+    nested_sections: &[&str],
+) -> BTreeMap<String, String> {
+    let mut facts = unobservable_facts(document);
+    for section in nested_sections {
+        let Some(nested) = document.get(*section) else {
+            continue;
+        };
+        facts.extend(
+            unobservable_facts(nested)
+                .into_iter()
+                .map(|(name, reason)| (format!("{section}.{name}"), reason)),
+        );
+    }
+    facts
+}
+
 /// Reason codes explaining why a rule cannot be consulted, deduplicated and in
 /// fact-name order. Empty when every fact the rule reads is observable, which
 /// is the signal to evaluate it normally.

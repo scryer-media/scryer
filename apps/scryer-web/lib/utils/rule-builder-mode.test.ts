@@ -4,10 +4,7 @@ import test from "node:test";
 import lifecycleFixtures from "../contracts/lifecycle-builder-fixtures.json" with { type: "json" };
 import requestFixtures from "../contracts/request-builder-fixtures.json" with { type: "json" };
 import scoringFixtures from "../contracts/scoring-builder-fixtures.json" with { type: "json" };
-import type {
-  LifecycleRuleScope,
-  LifecycleRuleSetDetail,
-} from "../types/lifecycle-rule-sets.ts";
+import type { LifecycleRuleSetDetail } from "../types/lifecycle-rule-sets.ts";
 import type { RequestRuleSetDetail } from "../types/request-rule-sets.ts";
 import type { RuleSetRecord } from "../types/rule-sets.ts";
 import {
@@ -68,7 +65,7 @@ const PREAMBLE = "package rules\nimport rego.v1\n\n";
 
 type Fixture = {
   id: string;
-  scope: string | null;
+  scope?: string | null;
   model: unknown;
   source: string;
 };
@@ -91,7 +88,6 @@ type Family<D extends RuleBuilderDraft> = {
 function lifecycleDetail(
   regoSource: string,
   builderModel: unknown,
-  subjectKind: LifecycleRuleScope = "TITLE",
 ): LifecycleRuleSetDetail {
   const declaredActions = {
     heads: [],
@@ -113,7 +109,6 @@ function lifecycleDetail(
       editedSinceEnabled: false,
       systemOwned: false,
       libraryIds: [],
-      subjectKind,
       currentRevisionNumber: 1,
       graceDays: 0,
       maxTitlesPerRun: null,
@@ -191,9 +186,7 @@ const lifecycle: Family<ReturnType<typeof initialLifecycleRuleDraft>> = {
   name: "lifecycle",
   binding: LIFECYCLE_BUILDER,
   starter: LIFECYCLE_STARTER_SOURCE,
-  fixtures: (lifecycleFixtures as Fixture[]).filter(
-    (entry) => entry.scope === "TITLE",
-  ),
+  fixtures: lifecycleFixtures as Fixture[],
   newDraft: () => newLifecycleRuleBuilderDraft(LIFECYCLE_BUILDER),
   handWrittenDraft: initialLifecycleRuleDraft,
   fromStored: (source, model) =>
@@ -437,7 +430,7 @@ suite(lifecycle);
 suite(scoring);
 suite(request);
 
-test("lifecycle: a scope change rewrites an attached rule for the new scope", () => {
+test("lifecycle: regenerating an attached rule keeps its source, and a detached one is left alone", () => {
   const entry = (lifecycleFixtures as Fixture[]).find(
     (candidate) => candidate.id === "title-delete-title",
   );
@@ -449,25 +442,9 @@ test("lifecycle: a scope change rewrites an attached rule for the new scope", ()
     model,
   );
   assert.equal(attached.regoSource, entry.source);
-
-  const episode = withRegeneratedRuleSource(LIFECYCLE_BUILDER, {
-    ...attached,
-    subjectKind: "EPISODE",
-  });
-  assert.equal(episode.regoSource, "");
-  assert.deepEqual(episode.builderModel, model);
   assert.equal(
-    isIncompleteRuleBuilderDraft(LIFECYCLE_BUILDER, episode),
-    true,
-  );
-
-  // A rule stored for one scope does not open in the builder under another.
-  assert.equal(
-    lifecycleRuleDraftFromDetail(
-      lifecycleDetail(entry.source, entry.model, "EPISODE"),
-      LIFECYCLE_BUILDER,
-    ).builderModel,
-    null,
+    withRegeneratedRuleSource(LIFECYCLE_BUILDER, attached).regoSource,
+    entry.source,
   );
 
   const detached = { ...attached, builderModel: null };

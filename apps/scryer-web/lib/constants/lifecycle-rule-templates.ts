@@ -1,5 +1,3 @@
-import type { LifecycleRuleScope } from "@/lib/types/lifecycle-rule-sets";
-
 /// Which kind of title a template was written for. The lifecycle editor scopes
 /// a rule by library rather than by facet, so this is descriptive metadata the
 /// gallery shows rather than a field the draft carries: it tells the operator
@@ -24,14 +22,12 @@ export type LifecycleRuleTemplate = {
   name: string;
   titleKey: string;
   descriptionKey: string;
-  /// The scope the example needs. Omitted examples remain title-scoped.
-  subjectKind?: LifecycleRuleScope;
   /// True when the source names a placeholder quality profile the operator
   /// has to replace with one of their own before the rule is useful.
   requiresTargetQualityProfile?: boolean;
   graceDays: number;
   subjectFacets: LifecycleTemplateFacet[];
-  /// True when the source declares `delete_files` or `delete_title`. The
+  /// True when the source declares a delete head at any level. The
   /// gallery marks these, and their copy says so, even though the instance
   /// gates and per-rule state still have to agree before anything is removed.
   destructive?: boolean;
@@ -191,26 +187,24 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     name: "keep_newest_three_downloaded_episodes",
     titleKey: "settings.lifecycleTemplateNewestEpisodesTitle",
     descriptionKey: "settings.lifecycleTemplateNewestEpisodesDescription",
-    subjectKind: "EPISODE",
     graceDays: 7,
     subjectFacets: ["show"],
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.facts.episode_position_by_air_date)\n\tinput.facts.episode_position_by_air_date > 3\n}\n\ndelete_files if rule_applies\n",
+      "package rules\nimport rego.v1\n\nrule_applies_1 if {\n\tis_number(input.episode.facts.episode_position_by_air_date)\n\tinput.episode.facts.episode_position_by_air_date > 3\n}\n\ndelete_episode_files if rule_applies_1\n",
   },
   {
     id: "keep-newest-two-downloaded-seasons",
     name: "keep_newest_two_downloaded_seasons",
     titleKey: "settings.lifecycleTemplateNewestSeasonsTitle",
     descriptionKey: "settings.lifecycleTemplateNewestSeasonsDescription",
-    subjectKind: "SEASON",
     graceDays: 7,
     subjectFacets: ["show"],
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.facts.season_position_by_air_date)\n\tinput.facts.season_position_by_air_date > 2\n}\n\ndelete_files if rule_applies\n",
+      "package rules\nimport rego.v1\n\nrule_applies_1 if {\n\tis_number(input.season.facts.season_position_by_air_date)\n\tinput.season.facts.season_position_by_air_date > 2\n}\n\ndelete_season_files if rule_applies_1\n",
   },
   {
     id: "left-every-public-list",

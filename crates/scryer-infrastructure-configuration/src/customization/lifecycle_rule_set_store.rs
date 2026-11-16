@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult, LifecycleRuleSetRepository};
 use scryer_domain::{
     LifecycleEffectArming, LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet,
-    LifecycleRuleSubjectKind,
 };
 use sqlx::Row;
 
@@ -524,26 +523,26 @@ fn disarm_args() -> [SqlArg; 3] {
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
 const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
-    subject_kind, system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at, scope.library_id AS scope_library_id
+    system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at, scope.library_id AS scope_library_id
     FROM lifecycle_rule_sets
     LEFT JOIN lifecycle_rule_set_libraries scope ON scope.rule_set_id = lifecycle_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, action_spec,
-    grace_days, storage_root_id, matcher_content_hash, created_by, created_at, builder_model_json";
+    grace_days, matcher_content_hash, created_by, created_at, builder_model_json";
 
 /// Revision keys per statement: two binds each, well under every engine's ceiling.
 const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO lifecycle_rule_sets
-        (id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required, subject_kind,
+        (id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
          system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO lifecycle_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
-         grace_days, storage_root_id, matcher_content_hash, created_by, created_at,
+         grace_days, matcher_content_hash, created_by, created_at,
          builder_model_json)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 async fn execute_write(
     datastore: &StoreDatastore,
@@ -570,7 +569,6 @@ fn rule_set_args(rule_set: &LifecycleRuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
         SqlArg::Text(rule_set.effect_arming.as_storage_str().to_string()),
         SqlArg::Bool(rule_set.destructive_rearm_required),
-        SqlArg::Text(rule_set.subject_kind.as_storage_str().to_string()),
         SqlArg::Bool(rule_set.system_owned),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Text(schedule_json(&rule_set.schedule)?),
@@ -608,7 +606,6 @@ fn revision_args(revision: &LifecycleRuleRevision) -> Vec<SqlArg> {
         SqlArg::Text(revision.rego_source.clone()),
         SqlArg::Text(revision.action_spec_json.clone()),
         SqlArg::I64(revision.grace_days),
-        SqlArg::OptText(revision.storage_root_id.clone()),
         SqlArg::Text(revision.matcher_content_hash.clone()),
         SqlArg::OptText(revision.created_by.clone()),
         SqlArg::Timestamp(revision.created_at),
@@ -633,8 +630,6 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<LifecycleRuleSet> {
             .unwrap_or_default(),
         destructive_rearm_required: row.bool("destructive_rearm_required")?,
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
-        subject_kind: LifecycleRuleSubjectKind::parse_storage(&row.text("subject_kind")?)
-            .unwrap_or_default(),
         system_owned: row.bool("system_owned")?,
         current_revision_number: row.i64("current_revision_number")?,
         schedule: stored_schedule(row)?,
@@ -656,7 +651,6 @@ fn row_to_revision(row: &SqlRow) -> AppResult<LifecycleRuleRevision> {
         rego_source: row.text("rego_source")?,
         action_spec_json: row.text("action_spec")?,
         grace_days: row.i64("grace_days")?,
-        storage_root_id: row.opt_text("storage_root_id")?,
         matcher_content_hash: row.text("matcher_content_hash")?,
         created_by: row.opt_text("created_by")?,
         created_at: timestamp_or_now(row, "created_at")?,

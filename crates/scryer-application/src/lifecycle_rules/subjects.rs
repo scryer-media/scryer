@@ -22,12 +22,6 @@ pub(crate) struct LifecycleTitleEpisodeInventory {
     scoped_files: Vec<EpisodeScopedMediaFile>,
     file_availability: HashMap<String, EpisodeFileAvailability>,
     episode_coverage: HashMap<String, EpisodeFileCoverage>,
-    /// Files any copy read for the title failed ownership on: another title,
-    /// a series-movie link, or an episode outside the title. The deletion
-    /// manifest quarantines such a file across its chunked reads, so the
-    /// owned files proven from this inventory leave it out the same way even
-    /// when a later copy looks clean.
-    quarantined_file_ids: HashSet<String>,
     retention_ranks: Mutex<Option<(DateTime<Utc>, Arc<LifecycleRetentionRanks>)>>,
 }
 
@@ -568,7 +562,6 @@ impl AppUseCase {
         mut presence: FilePresence<'_>,
     ) -> AppResult<Arc<LifecycleTitleEpisodeInventory>> {
         episodes_are_owned(title, &collections, &episodes)?;
-        let quarantined_file_ids = quarantined_file_ids(title, &episodes, &scoped_files);
         let mut deduplicated = HashMap::new();
         for file in scoped_files {
             deduplicated.insert(file.media_file.id.clone(), file);
@@ -634,7 +627,6 @@ impl AppUseCase {
             scoped_files,
             file_availability: file_availabilities,
             episode_coverage,
-            quarantined_file_ids,
             retention_ranks: Mutex::default(),
         }))
     }
@@ -816,23 +808,6 @@ impl AppUseCase {
             .map(LifecycleListingSubject::from)
             .collect())
     }
-
-    /// [`Self::lifecycle_resolve_subject`] for a candidate listing.
-    pub(crate) async fn lifecycle_resolve_listing_subject(
-        &self,
-        kind: &str,
-        subject_id: &str,
-        title: &Title,
-        files: &[TitleMediaFile],
-        inventories: &mut LifecycleListingInventories,
-    ) -> AppResult<LifecycleListingSubject> {
-        let kind = subject_coordinates_kind(kind, subject_id)?;
-        self.lifecycle_listing_subjects(kind, title, files, inventories)
-            .await?
-            .into_iter()
-            .find(|subject| subject.id == subject_id)
-            .ok_or_else(subject_no_longer_belongs)
-    }
 }
 
 fn subject_coordinates_kind(kind: &str, subject_id: &str) -> AppResult<Scope> {
@@ -864,20 +839,16 @@ fn subject_no_longer_belongs() -> AppError {
 #[derive(Debug)]
 pub(crate) struct LifecycleListingSubject {
     pub(crate) id: String,
-    pub(crate) kind: Scope,
     pub(crate) label: String,
     pub(crate) files: Vec<TitleMediaFile>,
-    pub(crate) ambiguous_files: bool,
 }
 
 impl From<LifecycleSubject> for LifecycleListingSubject {
     fn from(subject: LifecycleSubject) -> Self {
         Self {
             id: subject.id,
-            kind: subject.kind,
             label: subject.label,
             files: subject.files,
-            ambiguous_files: subject.ambiguous_files,
         }
     }
 }
@@ -889,79 +860,6 @@ impl From<LifecycleSubject> for LifecycleListingSubject {
 #[derive(Default)]
 pub(crate) struct LifecycleListingInventories {
     by_title: HashMap<String, Arc<LifecycleTitleEpisodeInventory>>,
-}
-
-/// The files [`AppUseCase::lifecycle_title_deletion_files`] returns, built
-/// from rows a page already holds instead of read again: `title_files` is the
-/// title's file listing and `inventory` its episode inventory. `None` for a
-/// show whose inventory is not in hand; the caller then reads.
-pub(crate) fn lifecycle_title_owned_files_in_hand(
-    title: &Title,
-    title_files: &[TitleMediaFile],
-    inventory: Option<&LifecycleTitleEpisodeInventory>,
-) -> Option<Vec<TitleMediaFile>> {
-    if title.facet == scryer_domain::MediaFacet::Movie {
-        let mut owned: HashMap<&str, &TitleMediaFile> = HashMap::new();
-        for file in title_files {
-            if file.title_id == title.id && file.series_movie_link_ids.is_empty() {
-                owned.insert(file.id.as_str(), file);
-            }
-        }
-        let mut owned: Vec<TitleMediaFile> = owned.into_values().cloned().collect();
-        owned.sort_by(|left, right| left.id.cmp(&right.id));
-        return Some(owned);
-    }
-    let inventory = inventory.filter(|inventory| inventory.title_id == title.id)?;
-    let episode_ids: HashSet<&str> = inventory
-        .episodes
-        .iter()
-        .map(|episode| episode.id.as_str())
-        .collect();
-    // A show's manifest holds only live episode files whose every association
-    // is the title's own; the inventory holds each file once, sorted by id,
-    // and a file any of its reads disqualified stays out, as in the manifest.
-    Some(
-        inventory
-            .scoped_files
-            .iter()
-            .filter(|scoped| {
-                !inventory
-                    .quarantined_file_ids
-                    .contains(&scoped.media_file.id)
-                    && scoped_file_is_owned(title, &episode_ids, scoped)
-            })
-            .map(|scoped| scoped.media_file.clone())
-            .collect(),
-    )
-}
-
-/// Whether every association of one read copy of an episode file is the
-/// title's own: the ownership test the deletion manifest applies per row.
-fn scoped_file_is_owned(
-    title: &Title,
-    episode_ids: &HashSet<&str>,
-    scoped: &EpisodeScopedMediaFile,
-) -> bool {
-    scoped.media_file.title_id == title.id
-        && scoped.media_file.series_movie_link_ids.is_empty()
-        && scoped
-            .episode_ids
-            .iter()
-            .all(|episode_id| episode_ids.contains(episode_id.as_str()))
-}
-
-/// The files any read copy failed ownership on, before copies are merged.
-fn quarantined_file_ids(
-    title: &Title,
-    episodes: &[Episode],
-    scoped_files: &[EpisodeScopedMediaFile],
-) -> HashSet<String> {
-    let episode_ids: HashSet<&str> = episodes.iter().map(|episode| episode.id.as_str()).collect();
-    scoped_files
-        .iter()
-        .filter(|scoped| !scoped_file_is_owned(title, &episode_ids, scoped))
-        .map(|scoped| scoped.media_file.id.clone())
-        .collect()
 }
 
 /// Episodes per inventory read of one title; the per-title loader reads a
@@ -1166,71 +1064,6 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The owned files proven from rows in hand quarantine a file the way the
-    /// deletion manifest does: once any read copy shows an association outside
-    /// the title, a later copy that looks clean does not put it back. A file
-    /// every copy of which is the title's own stays.
-    #[test]
-    fn owned_files_in_hand_quarantine_a_file_any_read_disqualified() {
-        let title = crate::lifecycle_rules::facts::tests::faceted_title(
-            None,
-            scryer_domain::MediaFacet::Series,
-        );
-        let episodes = vec![
-            episode(
-                "episode-a",
-                "season-1",
-                "1",
-                "1",
-                None,
-                EpisodeType::Standard,
-            ),
-            episode(
-                "episode-b",
-                "season-1",
-                "1",
-                "2",
-                None,
-                EpisodeType::Standard,
-            ),
-        ];
-        let scoped = |file_id: &str, episode_ids: &[&str]| EpisodeScopedMediaFile {
-            media_file: TitleMediaFile {
-                id: file_id.to_string(),
-                title_id: title.id.clone(),
-                role: crate::MediaFileRole::Primary,
-                ..Default::default()
-            },
-            title_role: crate::MediaFileRole::Primary,
-            episode_ids: episode_ids.iter().map(|id| (*id).to_string()).collect(),
-            primary_episode_ids: episode_ids.iter().map(|id| (*id).to_string()).collect(),
-        };
-        // The first read saw the shared file tied to another title's episode;
-        // the second read, after that row changed, saw it clean.
-        let reads = vec![
-            scoped("file-shared", &["episode-a", "episode-foreign"]),
-            scoped("file-owned", &["episode-b"]),
-            scoped("file-shared", &["episode-a"]),
-        ];
-        let quarantined = quarantined_file_ids(&title, &episodes, &reads);
-        assert_eq!(quarantined, HashSet::from(["file-shared".to_string()]));
-        let inventory = LifecycleTitleEpisodeInventory {
-            title_id: title.id.clone(),
-            collections: vec![collection("season-1", "1", CollectionType::Season)],
-            episodes,
-            // As the inventory keeps it: one copy per file, the last one read.
-            scoped_files: vec![reads[2].clone(), reads[1].clone()],
-            file_availability: HashMap::new(),
-            episode_coverage: HashMap::new(),
-            quarantined_file_ids: quarantined,
-            retention_ranks: Mutex::default(),
-        };
-        let owned = lifecycle_title_owned_files_in_hand(&title, &[], Some(&inventory))
-            .expect("inventory in hand");
-        let ids: Vec<&str> = owned.iter().map(|file| file.id.as_str()).collect();
-        assert_eq!(ids, vec!["file-owned"]);
-    }
 
     /// A batched file row carries the role over all of a title's episodes;
     /// the per-title loader leaves the role its last 100-episode read gave.
@@ -1453,7 +1286,6 @@ mod tests {
             scoped_files: vec![],
             file_availability: HashMap::new(),
             episode_coverage,
-            quarantined_file_ids: HashSet::new(),
             retention_ranks: Mutex::default(),
         };
 
@@ -1556,7 +1388,6 @@ mod tests {
                     coverage(true, false, false, false),
                 ),
             ]),
-            quarantined_file_ids: HashSet::new(),
             retention_ranks: Mutex::default(),
         };
         assert_eq!(
@@ -1590,7 +1421,6 @@ mod tests {
                     coverage(true, false, false, false),
                 ),
             ]),
-            quarantined_file_ids: HashSet::new(),
             retention_ranks: Mutex::default(),
         };
         let live = inventory.retention_ranks_at(at);

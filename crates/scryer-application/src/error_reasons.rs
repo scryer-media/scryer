@@ -2002,9 +2002,6 @@ pub mod lifecycle {
     pub const ACTION_CONFIGURATION_INVALID: &str = "LIFECYCLE_ACTION_CONFIGURATION_INVALID";
     /// The rule source defines no action head, so it could never do anything.
     pub const ACTION_HEAD_REQUIRED: &str = "LIFECYCLE_ACTION_HEAD_REQUIRED";
-    /// The rule defines an action head its scope cannot run.
-    pub const ACTION_HEAD_UNSUPPORTED_FOR_SCOPE: &str =
-        "LIFECYCLE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE";
     /// A `set_quality_profile` literal names no existing quality profile.
     pub const QUALITY_PROFILE_NOT_FOUND: &str = "LIFECYCLE_QUALITY_PROFILE_NOT_FOUND";
     /// A `move_to_library` literal names no library.
@@ -2074,7 +2071,6 @@ pub mod lifecycle {
         RULE_SOURCE_INVALID,
         ACTION_CONFIGURATION_INVALID,
         ACTION_HEAD_REQUIRED,
-        ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
         QUALITY_PROFILE_NOT_FOUND,
         MOVE_LIBRARY_NOT_FOUND,
         MOVE_LIBRARY_FACET_MISMATCH,

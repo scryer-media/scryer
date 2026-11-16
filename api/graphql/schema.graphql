@@ -2509,10 +2509,6 @@ Creates a lifecycle rule set together with its first matcher revision.
 """
 input CreateLifecycleRuleSetInput {
 	"""
-	Defaults to title scope when omitted.
-	"""
-	subjectKind: LifecycleRuleSubjectKind
-	"""
 	Rule-set name.
 	"""
 	name: String!
@@ -2534,11 +2530,6 @@ input CreateLifecycleRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
-	"""
-	Configured library root whose capacity and owned files this revision
-	uses. Required when the matcher reads a storage fact.
-	"""
-	storageRootId: String
 	"""
 	The simple builder's document for the source, or omitted for a rule
 	written by hand.
@@ -11576,6 +11567,46 @@ enum LifecycleActionHead {
 	`fetch_subtitles`: search for subtitles.
 	"""
 	FETCH_SUBTITLES
+	"""
+	`monitor_season`: monitor one season.
+	"""
+	MONITOR_SEASON
+	"""
+	`unmonitor_season`: stop monitoring one season and its episodes.
+	"""
+	UNMONITOR_SEASON
+	"""
+	`delete_season_files`: unmonitor one season, then delete its files.
+	"""
+	DELETE_SEASON_FILES
+	"""
+	`fetch_season_subtitles`: search for one season's subtitles.
+	"""
+	FETCH_SEASON_SUBTITLES
+	"""
+	`notify_season`: send a notification naming the rule and the season.
+	"""
+	NOTIFY_SEASON
+	"""
+	`monitor_episode`: monitor one episode.
+	"""
+	MONITOR_EPISODE
+	"""
+	`unmonitor_episode`: stop monitoring one episode.
+	"""
+	UNMONITOR_EPISODE
+	"""
+	`delete_episode_files`: unmonitor one episode, then delete its files.
+	"""
+	DELETE_EPISODE_FILES
+	"""
+	`fetch_episode_subtitles`: search for one episode's subtitles.
+	"""
+	FETCH_EPISODE_SUBTITLES
+	"""
+	`notify_episode`: send a notification naming the rule and the episode.
+	"""
+	NOTIFY_EPISODE
 }
 
 """
@@ -11946,18 +11977,6 @@ type LifecycleCandidate {
 	Current subject file size in bytes, or null if the subject is unavailable.
 	"""
 	totalSizeBytes: Int
-	"""
-	Number of unambiguously owned current subject files on the root selected
-	by this candidate's pinned revision, or null when no root is selected or
-	exact root ownership cannot be established.
-	"""
-	storageRootFileCount: Int
-	"""
-	Total bytes of unambiguously owned current subject files on the root
-	selected by this candidate's pinned revision. It is null under the same
-	conditions as `storageRootFileCount`.
-	"""
-	storageRootTotalSizeBytes: Int
 	"""
 	Exact subject display label, falling back to its ID if unavailable.
 	"""
@@ -12474,16 +12493,6 @@ type LifecyclePreviewTitle {
 	"""
 	totalSizeBytes: Int!
 	"""
-	Number of files eligible for deletion on the selected storage root, or
-	null when this matcher does not select a resolvable root.
-	"""
-	storageRootFileCount: Int
-	"""
-	Combined bytes eligible for deletion on the selected storage root, or
-	null when this matcher does not select a resolvable root.
-	"""
-	storageRootTotalSizeBytes: Int
-	"""
 	Subject scope: title, season, or episode.
 	"""
 	subjectKind: String!
@@ -12583,11 +12592,6 @@ type LifecycleRuleRevision {
 	"""
 	graceDays: Int!
 	"""
-	Configured library root whose capacity and owned files this revision
-	uses, or null when it is not storage-scoped.
-	"""
-	storageRootId: String
-	"""
 	Hash of the exact stored source, used to attribute a decision to the
 	revision that produced it.
 	"""
@@ -12644,10 +12648,6 @@ type LifecycleRuleSet {
 	Libraries the rule is confined to. Empty means every library.
 	"""
 	libraryIds: [String!]!
-	"""
-	Granularity the rule is scoped to.
-	"""
-	subjectKind: LifecycleRuleSubjectKind!
 	"""
 	Revision number of the matcher currently in force.
 	"""
@@ -24619,10 +24619,6 @@ input PreviewLifecycleRuleInput {
 	"""
 	libraryIds: [String!]
 	"""
-	Defaults to title scope when omitted.
-	"""
-	subjectKind: LifecycleRuleSubjectKind
-	"""
 	Stored rule set to preview at its current revision.
 	"""
 	ruleSetId: ID
@@ -24634,11 +24630,6 @@ input PreviewLifecycleRuleInput {
 	Grace period for the unsaved draft; defaults to zero.
 	"""
 	graceDays: Int
-	"""
-	Configured library root for an unsaved matcher. Required when its
-	matcher reads a storage fact.
-	"""
-	storageRootId: String
 	"""
 	Optional exact subjects, requiring their owning `titleIds`.
 	"""
@@ -29430,6 +29421,13 @@ type RuleBuilderOutput {
 	"""
 	labelKey: String!
 	"""
+	Translation key of the action the output performs, when it differs
+	from the label: a season or episode output is shown by its action
+	under its subject. Outputs with the same key are one action at
+	different subjects. Null otherwise.
+	"""
+	actionLabelKey: String
+	"""
 	Translation key of the output's help, or null when it has none.
 	"""
 	helpKey: String
@@ -29524,6 +29522,10 @@ type RuleBuilderSchema {
 	"""
 	family: String!
 	"""
+	What an action can act on; empty when every output acts on one thing.
+	"""
+	subjects: [RuleBuilderSubject!]!
+	"""
 	The outputs, in the order the builder lists and writes them.
 	"""
 	outputs: [RuleBuilderOutput!]!
@@ -29531,6 +29533,29 @@ type RuleBuilderSchema {
 	Rules about which outputs one rule chooses.
 	"""
 	outputRules: [RuleBuilderOutputRule!]!
+}
+
+"""
+One thing a rule's action can act on.
+"""
+type RuleBuilderSubject {
+	"""
+	Stable id of the subject.
+	"""
+	id: String!
+	"""
+	Translation key of the subject's label.
+	"""
+	labelKey: String!
+	"""
+	Input path of the subject's own document, whose facts an action at
+	this subject may read beside the title's, or null for the title.
+	"""
+	inputPath: String
+	"""
+	The outputs that act on this subject, in write order.
+	"""
+	outputs: [String!]!
 }
 
 """
@@ -35430,11 +35455,6 @@ input UpdateLifecycleRuleMatcherInput {
 	defaults to zero.
 	"""
 	graceDays: Int
-	"""
-	Configured library root. Omission preserves the current root, null
-	clears it, and a value replaces it.
-	"""
-	storageRootId: ID
 	"""
 	The simple builder's document. Omit to keep the current revision's
 	document, pass null to clear it, or pass a document to replace it.

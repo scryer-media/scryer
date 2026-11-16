@@ -23,12 +23,11 @@ use scryer_rules::validation::{
     ValidationResult, lifecycle_referenced_facts, validate_lifecycle_rule,
 };
 
+use crate::lifecycle_rules::LifecycleDeclaredActions;
 use crate::lifecycle_rules::facts::{
     LifecycleLibraryRef, LifecycleTitleClaims, LifecycleTitlePeople, LifecycleTitleWatch,
     build_subject_input,
 };
-use crate::lifecycle_rules::storage::{LifecycleRootFileSummary, LifecycleStorageFactCache};
-use crate::lifecycle_rules::{LifecycleDeclaredActions, head_supported_for_scope};
 use crate::rules::builder_model::{BuilderFamily, BuilderModelChange, resolved_builder_model};
 use crate::{AppError, AppResult, AppUseCase};
 use scryer_rules::lifecycle_actions::scan_lifecycle_action_heads;
@@ -51,17 +50,6 @@ pub const LIFECYCLE_PREVIEW_DEFAULT_TITLES: usize = 20;
 /// would take down the evaluation pass. Ten years is far past any real retention
 /// policy and nowhere near the overflow.
 pub const LIFECYCLE_MAX_GRACE_DAYS: i64 = 3650;
-
-/// Facts whose semantics depend on one configured library root. A policy that
-/// reaches any of these must persist that root identity with its revision.
-const STORAGE_LIFECYCLE_FACTS: [&str; 4] = [
-    "storage_root_id",
-    "storage_available_bytes",
-    "storage_total_bytes",
-    "storage_available_percent",
-];
-
-const STORAGE_ROOT_MEMBERSHIP_UNAVAILABLE: &str = "storage_root_membership_unavailable";
 
 /// Name of the lifecycle rule every instance ships with.
 pub(crate) const EXPIRED_REQUEST_LEASES_RULE_NAME: &str = "Expired request leases";
@@ -87,14 +75,11 @@ pub(crate) const PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION: &str = "Deletes a 
 /// A new rule set plus its first matcher revision.
 #[derive(Clone, Debug)]
 pub struct LifecycleRuleDraft {
-    pub subject_kind: LifecycleRuleSubjectKind,
     pub name: String,
     pub description: String,
     /// The rule source. Its action heads say what a match does.
     pub rego_source: String,
     pub grace_days: i64,
-    /// Configured root for storage-capacity facts and root-filtered deletion.
-    pub storage_root_id: Option<String>,
     /// Empty means every library.
     pub library_ids: Vec<String>,
     /// The most titles the rule acts on in one fire. Required when the rule
@@ -108,9 +93,6 @@ pub struct LifecycleRuleDraft {
 pub struct LifecycleMatcherDraft {
     pub rego_source: String,
     pub grace_days: i64,
-    /// `None` preserves the stored root for older GraphQL clients. `Some(None)`
-    /// explicitly clears it, and `Some(Some(_))` replaces it.
-    pub storage_root_id: Option<Option<String>>,
     /// The most titles the rule may act on in one fire, saved with the new
     /// source so a delete head and its maximum arrive in one save. `None`
     /// keeps the stored maximum, `Some(None)` clears it, `Some(Some(_))`
@@ -126,10 +108,8 @@ pub enum LifecyclePreviewMatcher {
     /// An unsaved draft from the editor. Validated and compiled, never stored.
     Inline {
         library_ids: Vec<String>,
-        subject_kind: LifecycleRuleSubjectKind,
         rego_source: String,
         grace_days: i64,
-        storage_root_id: Option<String>,
     },
 }
 
@@ -235,10 +215,6 @@ pub struct LifecyclePreviewTitleResult {
     pub subject_label: String,
     pub file_count: i64,
     pub total_size_bytes: i64,
-    /// Files eligible for deletion on the revision's selected root. `None`
-    /// means this preview is not storage-scoped or the root cannot be resolved.
-    pub storage_root_file_count: Option<i64>,
-    pub storage_root_total_size_bytes: Option<i64>,
     pub title_id: String,
     pub title_name: String,
     pub facet: MediaFacet,
@@ -369,16 +345,9 @@ impl AppUseCase {
             resolved_builder_model(&builder_model, None, BuilderFamily::Lifecycle)?;
 
         let name = require_non_empty(&draft.name, "name")?;
-        let storage_root_id = draft.storage_root_id;
 
         let id = Id::new_rego_safe().0;
-        let prepared = prepare_matcher(
-            &id,
-            draft.subject_kind,
-            &draft.rego_source,
-            draft.grace_days,
-            storage_root_id.is_some(),
-        )?;
+        let prepared = prepare_matcher(&id, &draft.rego_source, draft.grace_days)?;
         require_max_titles_per_run(&prepared.declared, draft.max_titles_per_run)?;
         self.require_declared_action_targets(
             &prepared.declared,
@@ -388,12 +357,6 @@ impl AppUseCase {
         .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
-        self.require_storage_root_for_matcher(
-            &prepared.rego_source,
-            &id,
-            storage_root_id.as_deref(),
-        )
-        .await?;
 
         let now = Utc::now();
         let rule_set = LifecycleRuleSet {
@@ -408,7 +371,6 @@ impl AppUseCase {
             effect_arming: scryer_domain::LifecycleEffectArming::None,
             destructive_rearm_required: false,
             library_ids: draft.library_ids,
-            subject_kind: draft.subject_kind,
             system_owned: false,
             current_revision_number: 1,
             schedule,
@@ -421,7 +383,6 @@ impl AppUseCase {
             1,
             &prepared,
             draft.grace_days,
-            storage_root_id,
             Some(actor.id.clone()),
             now,
             builder_model_json,
@@ -506,17 +467,7 @@ impl AppUseCase {
                     rule_set.id, rule_set.current_revision_number
                 ))
             })?;
-        let storage_root_id = draft
-            .storage_root_id
-            .clone()
-            .unwrap_or(current_revision.storage_root_id);
-        let prepared = prepare_matcher(
-            &rule_set.id,
-            rule_set.subject_kind,
-            &draft.rego_source,
-            draft.grace_days,
-            storage_root_id.is_some(),
-        )?;
+        let prepared = prepare_matcher(&rule_set.id, &draft.rego_source, draft.grace_days)?;
         let builder_model_json = resolved_builder_model(
             &builder_model.after_source_edit(&current_revision.rego_source, &prepared.rego_source),
             current_revision.builder_model_json.clone(),
@@ -552,12 +503,6 @@ impl AppUseCase {
         .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
-        self.require_storage_root_for_matcher(
-            &prepared.rego_source,
-            &rule_set.id,
-            storage_root_id.as_deref(),
-        )
-        .await?;
 
         let now = Utc::now();
         let revision_number = rule_set.current_revision_number + 1;
@@ -566,7 +511,6 @@ impl AppUseCase {
             revision_number,
             &prepared,
             draft.grace_days,
-            storage_root_id,
             Some(actor.id.clone()),
             now,
             builder_model_json,
@@ -842,15 +786,9 @@ impl AppUseCase {
         }
         let id = Id::new_rego_safe().0;
         let grace_days = 7;
-        let prepared = prepare_matcher(
-            &id,
-            LifecycleRuleSubjectKind::Title,
-            EXPIRED_REQUEST_LEASES_REGO,
-            grace_days,
-            false,
-        )?;
+        let prepared = prepare_matcher(&id, EXPIRED_REQUEST_LEASES_REGO, grace_days)?;
         let now = Utc::now();
-        let revision = build_revision(&id, 1, &prepared, grace_days, None, None, now, None);
+        let revision = build_revision(&id, 1, &prepared, grace_days, None, now, None);
         let rule_set = LifecycleRuleSet {
             id,
             name: EXPIRED_REQUEST_LEASES_RULE_NAME.into(),
@@ -860,7 +798,6 @@ impl AppUseCase {
             effect_arming: scryer_domain::LifecycleEffectArming::None,
             destructive_rearm_required: false,
             library_ids: Vec::new(),
-            subject_kind: LifecycleRuleSubjectKind::Title,
             system_owned: true,
             current_revision_number: 1,
             schedule: scryer_domain::default_lifecycle_rule_schedule(),
@@ -872,7 +809,7 @@ impl AppUseCase {
     }
 
     /// Bring the shipped rule onto the current source, keeping its identity,
-    /// state, grace period, libraries and storage root. The rule's matcher
+    /// state, grace period and libraries. The rule's matcher
     /// and action could never be edited, so a stored source is one of the
     /// sources the rule shipped with:
     ///
@@ -909,10 +846,8 @@ impl AppUseCase {
 
         let prepared = prepare_matcher(
             &rule_set.id,
-            rule_set.subject_kind,
             EXPIRED_REQUEST_LEASES_REGO,
             current.grace_days,
-            current.storage_root_id.is_some(),
         )?;
         let now = Utc::now();
         let revision = build_revision(
@@ -920,7 +855,6 @@ impl AppUseCase {
             rule_set.current_revision_number + 1,
             &prepared,
             current.grace_days,
-            current.storage_root_id.clone(),
             None,
             now,
             // The shipped source is replaced, so no stored builder document
@@ -996,7 +930,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let (policy, subject_kind, library_ids, grace_days, storage_root_id) =
+        let (policy, declared, library_ids, grace_days) =
             self.resolve_preview_policy(request.matcher).await?;
         // Preview evaluates against real subjects and reports per-title
         // outcomes, so an ungated one is a person-fact oracle: ask "did user x
@@ -1121,8 +1055,19 @@ impl AppUseCase {
             )
         })?;
         let mut evaluator = engine.evaluator();
-        let mut storage_facts = LifecycleStorageFactCache::new();
-        let mut storage_roots = super::storage::LifecycleStorageRootMemo::new();
+        // The levels the rule acts at, read off its heads, exactly as the
+        // scheduled pass reads them.
+        let levels = declared.levels();
+        let narrow_levels: Vec<_> = levels
+            .iter()
+            .copied()
+            .filter(|level| *level != scryer_rules::lifecycle::LifecycleSubjectKind::Title)
+            .collect();
+        let evaluates_titles =
+            levels.contains(&scryer_rules::lifecycle::LifecycleSubjectKind::Title);
+        // One read of the configured roots and at most one capacity read per
+        // root for the whole preview.
+        let mut storage = super::evaluation::LifecyclePassStorage::default();
 
         let evaluated_at = Utc::now();
         let mut results = Vec::with_capacity(titles.len());
@@ -1154,90 +1099,52 @@ impl AppUseCase {
                     .map(Vec::as_slice),
                 store_readable: claims_by_title.is_some(),
             };
-            let subjects = if title.facet == MediaFacet::Movie {
-                self.lifecycle_subjects_for_title(subject_kind, &title, files)
-                    .await?
+            let series_movies = series_movies_by_title
+                .get(&title.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let mut subjects = Vec::new();
+            if title.facet == MediaFacet::Movie {
+                if evaluates_titles {
+                    subjects = self
+                        .lifecycle_subjects_for_title(
+                            LifecycleRuleSubjectKind::Title,
+                            &title,
+                            files,
+                        )
+                        .await?;
+                }
             } else {
                 let inventory = episode_inventories_by_title.get(&title.id).ok_or_else(|| {
                     AppError::Repository("lifecycle preview lost title episode inventory".into())
                 })?;
-                self.lifecycle_subjects_from_episode_inventory(
-                    subject_kind,
-                    &title,
-                    files,
-                    inventory,
-                )?
-            };
-            for subject in subjects {
-                if results.len() >= result_limit {
-                    break;
+                if evaluates_titles || !narrow_levels.is_empty() {
+                    subjects.extend(self.lifecycle_subjects_from_episode_inventory(
+                        LifecycleRuleSubjectKind::Title,
+                        &title,
+                        files,
+                        inventory,
+                    )?);
                 }
-                if selected_subjects.is_some_and(|ids| !ids.contains(&subject.id)) {
-                    continue;
+                for level in &narrow_levels {
+                    subjects.extend(self.lifecycle_subjects_from_episode_inventory(
+                        super::evaluation::level_scope(*level),
+                        &title,
+                        files,
+                        inventory,
+                    )?);
                 }
-                let root_file_summary = match storage_root_id.as_deref() {
-                    None => {
-                        self.lifecycle_root_file_summary(&subject.files, None)
-                            .await?
-                    }
-                    Some(root_id) if subject.kind == LifecycleRuleSubjectKind::Title => {
-                        let owned_files = match super::subjects::lifecycle_title_owned_files_in_hand(
-                            &title,
-                            files,
-                            episode_inventories_by_title
-                                .get(&title.id)
-                                .map(|inventory| inventory.as_ref()),
-                        ) {
-                            Some(owned_files) => Ok(owned_files),
-                            None => self.lifecycle_title_deletion_files(&title).await,
-                        };
-                        match owned_files {
-                            Ok(owned_files) => {
-                                self.lifecycle_root_file_summary_memo(
-                                    &owned_files,
-                                    Some(root_id),
-                                    &mut storage_roots,
-                                )
-                                .await?
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    rule_set_id = policy.id.as_str(),
-                                    title_id = title.id.as_str(),
-                                    error = %error,
-                                    "could not prove title file ownership for storage preview"
-                                );
-                                LifecycleRootFileSummary::default()
-                            }
-                        }
-                    }
-                    Some(_) if subject.ambiguous_files => LifecycleRootFileSummary::default(),
-                    Some(root_id) => {
-                        self.lifecycle_root_file_summary_memo(
-                            &subject.files,
-                            Some(root_id),
-                            &mut storage_roots,
-                        )
-                        .await?
-                    }
-                };
-                if storage_root_id.is_some() && matches!(root_file_summary.file_count, Some(0)) {
-                    continue;
-                }
-                let storage_root_membership_unknown =
-                    storage_root_id.is_some() && root_file_summary.file_count.is_none();
+            }
+            let build_input = |subject: &super::subjects::LifecycleSubject| {
                 let mut input = build_subject_input(
                     evaluated_at,
                     &title,
                     &library,
-                    &subject,
+                    subject,
                     people,
                     watch,
                     claims,
-                    series_movies_by_title
-                        .get(&title.id)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default(),
+                    series_movies,
                 );
                 super::list_facts::apply_list_facts(&mut input, &lists_by_title, &title.id);
                 super::list_facts::apply_watchlist_and_metadata_facts(
@@ -1246,13 +1153,49 @@ impl AppUseCase {
                     &title.id,
                     people,
                 );
-                self.populate_lifecycle_storage_facts_from_cache(
-                    &mut input,
-                    storage_root_id.as_deref(),
-                    &mut storage_facts,
+                input
+            };
+            // The title's own input, beside which its seasons and episodes
+            // are evaluated.
+            let mut title_input = None;
+            if !narrow_levels.is_empty()
+                && let Some(title_subject) = subjects
+                    .iter()
+                    .find(|subject| subject.kind == LifecycleRuleSubjectKind::Title)
+            {
+                let mut input = build_input(title_subject);
+                self.lifecycle_pass_storage_facts(
+                    &mut storage,
+                    &mut input.facts,
+                    &title_subject.files,
                     crate::lifecycle_rules::storage::LifecycleStorageRead::Refresh,
                 )
-                .await?;
+                .await;
+                title_input = Some(input);
+            }
+            for subject in subjects {
+                if results.len() >= result_limit {
+                    break;
+                }
+                if subject.kind == LifecycleRuleSubjectKind::Title && !evaluates_titles {
+                    continue;
+                }
+                if selected_subjects.is_some_and(|ids| !ids.contains(&subject.id)) {
+                    continue;
+                }
+                let mut input = build_input(&subject);
+                self.lifecycle_pass_storage_facts(
+                    &mut storage,
+                    &mut input.facts,
+                    &subject.files,
+                    crate::lifecycle_rules::storage::LifecycleStorageRead::Refresh,
+                )
+                .await;
+                if let Some(title_input) = title_input.as_ref()
+                    && subject.kind != LifecycleRuleSubjectKind::Title
+                {
+                    input = super::facts::nest_subject_input(title_input.clone(), input, &subject);
+                }
 
                 let evaluation = evaluator.evaluate(&input).map_err(|e| {
                     AppError::validation_refused(
@@ -1261,14 +1204,7 @@ impl AppUseCase {
                     )
                 })?;
 
-                let (outcome, reason_codes, error, actions) = if storage_root_membership_unknown {
-                    (
-                        Some(LifecycleOutcome::Unknown),
-                        vec![STORAGE_ROOT_MEMBERSHIP_UNAVAILABLE.to_string()],
-                        None,
-                        None,
-                    )
-                } else {
+                let (outcome, reason_codes, error, actions) =
                     match (evaluation.records.first(), evaluation.errors.first()) {
                         (Some(record), _) => (
                             Some(record.decision.outcome),
@@ -1292,8 +1228,7 @@ impl AppUseCase {
                             )),
                             None,
                         ),
-                    }
-                };
+                    };
                 let (error_code, error) = error.unzip();
 
                 let facts = if facts_visible {
@@ -1320,13 +1255,11 @@ impl AppUseCase {
                     excluded,
                     due_at,
                     due_at_is_estimate: due_at.is_some(),
-                    subject_kind,
+                    subject_kind: subject.kind,
                     subject_id: subject.id,
                     subject_label: subject.label,
                     file_count: subject.files.len() as i64,
                     total_size_bytes: subject.files.iter().map(|file| file.size_bytes).sum(),
-                    storage_root_file_count: root_file_summary.file_count,
-                    storage_root_total_size_bytes: root_file_summary.total_size_bytes,
                     title_id: title.id.clone(),
                     title_name: title.name.clone(),
                     facet: title.facet.clone(),
@@ -1344,29 +1277,43 @@ impl AppUseCase {
         // One read for the open candidates of every matched subject on this
         // page; their due time replaces the estimate. A candidate opened by
         // another revision of the source decides nothing here.
-        let matched_ids: Vec<String> = results
-            .iter()
-            .filter(|result| result.due_at.is_some())
-            .map(|result| result.subject_id.clone())
-            .collect();
-        if !matched_ids.is_empty() {
-            let open: HashMap<String, chrono::DateTime<Utc>> = self
+        // One read per subject level present on the page, at most three.
+        let mut matched_by_kind: Vec<(LifecycleRuleSubjectKind, Vec<String>)> = Vec::new();
+        for result in results.iter().filter(|result| result.due_at.is_some()) {
+            match matched_by_kind
+                .iter_mut()
+                .find(|(kind, _)| *kind == result.subject_kind)
+            {
+                Some((_, ids)) => ids.push(result.subject_id.clone()),
+                None => {
+                    matched_by_kind.push((result.subject_kind, vec![result.subject_id.clone()]))
+                }
+            }
+        }
+        let mut open: HashMap<(&'static str, String), chrono::DateTime<Utc>> = HashMap::new();
+        for (kind, matched_ids) in &matched_by_kind {
+            for candidate in self
                 .services
                 .customization
                 .lifecycle_evaluation
-                .list_active_subject_candidates(
-                    &rule_set_id,
-                    subject_kind.as_storage_str(),
-                    &matched_ids,
-                )
+                .list_active_subject_candidates(&rule_set_id, kind.as_storage_str(), matched_ids)
                 .await?
                 .into_iter()
                 .filter(|candidate| candidate.matcher_content_hash == matcher_content_hash)
-                .map(|candidate| (candidate.subject_id, candidate.due_at))
-                .collect();
+            {
+                open.insert(
+                    (kind.as_storage_str(), candidate.subject_id),
+                    candidate.due_at,
+                );
+            }
+        }
+        if !open.is_empty() {
             for result in &mut results {
                 if result.due_at.is_some()
-                    && let Some(due_at) = open.get(&result.subject_id)
+                    && let Some(due_at) = open.get(&(
+                        result.subject_kind.as_storage_str(),
+                        result.subject_id.clone(),
+                    ))
                 {
                     result.due_at = Some(*due_at);
                     result.due_at_is_estimate = false;
@@ -1444,46 +1391,6 @@ impl AppUseCase {
         ))
     }
 
-    /// Resolve a selected root by its durable ID and reject a storage matcher
-    /// whose revision omits one. Root selection is global because a rule may
-    /// cover more than one library while pressure is measured on one mounted
-    /// filesystem.
-    async fn require_storage_root_for_matcher(
-        &self,
-        rego_source: &str,
-        rule_set_id: &str,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<()> {
-        let referenced = lifecycle_referenced_facts(rego_source, rule_set_id).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::lifecycle::RULE_VALIDATION_FAILED,
-                format!("rule validation failed: {error}"),
-            )
-        })?;
-        let reads_storage = STORAGE_LIFECYCLE_FACTS
-            .iter()
-            .any(|fact| referenced.contains(*fact));
-        if reads_storage && storage_root_id.is_none() {
-            return Err(AppError::validation_refused(crate::error_reasons::lifecycle::MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT, "a matcher that reads storage facts must select a configured library root"));
-        }
-        let Some(storage_root_id) = storage_root_id else {
-            return Ok(());
-        };
-        let roots = self.services.catalog.libraries.list(None).await?;
-        if roots
-            .iter()
-            .flat_map(|library| library.roots.iter())
-            .any(|root| root.id == storage_root_id)
-        {
-            Ok(())
-        } else {
-            Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::STORAGE_ROOT_NOT_CONFIGURED,
-                format!("storage root '{storage_root_id}' is not configured"),
-            ))
-        }
-    }
-
     pub(crate) async fn require_lifecycle_rule_set(&self, id: &str) -> AppResult<LifecycleRuleSet> {
         self.services
             .customization
@@ -1514,13 +1421,7 @@ impl AppUseCase {
     async fn resolve_preview_policy(
         &self,
         matcher: LifecyclePreviewMatcher,
-    ) -> AppResult<(
-        LifecyclePolicy,
-        LifecycleRuleSubjectKind,
-        Vec<String>,
-        i64,
-        Option<String>,
-    )> {
+    ) -> AppResult<(LifecyclePolicy, LifecycleDeclaredActions, Vec<String>, i64)> {
         match matcher {
             LifecyclePreviewMatcher::Stored { rule_set_id } => {
                 let rule_set = self.require_lifecycle_rule_set(&rule_set_id).await?;
@@ -1528,55 +1429,33 @@ impl AppUseCase {
                 if let Some(reason) = detail.load_refusal {
                     return Err(stored_actions_refused(reason));
                 }
-                self.require_storage_root_for_matcher(
-                    &detail.revision.rego_source,
-                    &detail.rule_set.id,
-                    detail.revision.storage_root_id.as_deref(),
-                )
-                .await?;
                 Ok((
                     LifecyclePolicy {
                         id: detail.rule_set.id,
                         name: detail.rule_set.name,
                         rego_source: detail.revision.rego_source,
                     },
-                    detail.rule_set.subject_kind,
+                    detail.declared_actions,
                     detail.rule_set.library_ids,
                     detail.revision.grace_days,
-                    detail.revision.storage_root_id,
                 ))
             }
             LifecyclePreviewMatcher::Inline {
                 library_ids,
-                subject_kind,
                 rego_source,
                 grace_days,
-                storage_root_id,
             } => {
                 let scratch_id = Id::new_rego_safe().0;
-                let prepared = prepare_matcher(
-                    &scratch_id,
-                    subject_kind,
-                    &rego_source,
-                    grace_days,
-                    storage_root_id.is_some(),
-                )?;
-                self.require_storage_root_for_matcher(
-                    &prepared.rego_source,
-                    &scratch_id,
-                    storage_root_id.as_deref(),
-                )
-                .await?;
+                let prepared = prepare_matcher(&scratch_id, &rego_source, grace_days)?;
                 Ok((
                     LifecyclePolicy {
                         id: scratch_id,
                         name: "preview".to_string(),
                         rego_source: prepared.rego_source,
                     },
-                    subject_kind,
+                    prepared.declared,
                     library_ids,
                     grace_days,
-                    storage_root_id,
                 ))
             }
         }
@@ -1842,14 +1721,12 @@ struct PreparedMatcher {
 
 /// Rewrite the package to the system-assigned id, then run every check that
 /// must hold before a revision is written: the matcher compiles, reads only
-/// documented facts and defines at least one action head, every head it
-/// defines is one its scope can run, and the grace period is a real duration.
+/// documented facts and defines at least one action head, and the grace
+/// period is a real duration. Where each head acts is its name.
 fn prepare_matcher(
     rule_id: &str,
-    subject_kind: LifecycleRuleSubjectKind,
     rego_source: &str,
     grace_days: i64,
-    storage_root_selected: bool,
 ) -> AppResult<PreparedMatcher> {
     if grace_days < 0 {
         return Err(AppError::validation_refused(
@@ -1891,30 +1768,6 @@ fn prepare_matcher(
             format!("rule validation failed: {e}"),
         )
     })?;
-
-    let unsupported: Vec<ValidationDiagnostic> = scan
-        .defined_heads
-        .iter()
-        .filter(|head| !head_supported_for_scope(**head, subject_kind, storage_root_selected))
-        .map(|head| {
-            let mut diagnostic = ValidationDiagnostic::new(
-                crate::error_reasons::lifecycle::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
-                format!("{} cannot run for this rule's scope", head.rule_name()),
-            );
-            if let Some((line, column)) = scan.head_positions.get(head) {
-                diagnostic.line = Some(*line);
-                diagnostic.column = Some(*column);
-            }
-            diagnostic
-        })
-        .collect();
-    if !unsupported.is_empty() {
-        return Err(AppError::validation_refused_with_diagnostics(
-            crate::error_reasons::lifecycle::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
-            "The rule defines an action its scope cannot run.",
-            unsupported,
-        ));
-    }
 
     let declared = LifecycleDeclaredActions::from_scan(&scan);
     let action_spec_json = declared.to_persisted_json();
@@ -2001,7 +1854,6 @@ fn build_revision(
     revision_number: i64,
     prepared: &PreparedMatcher,
     grace_days: i64,
-    storage_root_id: Option<String>,
     created_by: Option<String>,
     created_at: chrono::DateTime<Utc>,
     builder_model_json: Option<String>,
@@ -2013,7 +1865,6 @@ fn build_revision(
         rego_source: prepared.rego_source.clone(),
         action_spec_json: prepared.action_spec_json.clone(),
         grace_days,
-        storage_root_id,
         matcher_content_hash: prepared.content_hash.clone(),
         created_by,
         created_at,

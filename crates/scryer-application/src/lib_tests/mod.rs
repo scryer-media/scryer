@@ -332,6 +332,54 @@ pub(crate) fn legacy_source(
     append_heads_to_match_source(source.as_ref(), heads)
 }
 
+/// [`legacy_source`] for a fixture written when a rule was scoped to seasons
+/// or episodes: its heads act at that level and the facts it read as the
+/// subject's are read from that level's document.
+pub(crate) fn legacy_source_at(
+    source: impl AsRef<str>,
+    kind: crate::lifecycle_rules::LifecycleActionKind,
+    scope: scryer_domain::LifecycleRuleSubjectKind,
+) -> String {
+    use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
+    let (level, path) = match scope {
+        scryer_domain::LifecycleRuleSubjectKind::Title => return legacy_source(source, kind),
+        scryer_domain::LifecycleRuleSubjectKind::Season => (Level::Season, "season"),
+        scryer_domain::LifecycleRuleSubjectKind::Episode => (Level::Episode, "episode"),
+    };
+    let source = source
+        .as_ref()
+        .replace("input.facts.", &format!("input.{path}.facts."))
+        .replace(
+            "input.observations.",
+            &format!("input.{path}.observations."),
+        );
+    narrow_heads(&legacy_source(&source, kind), level)
+}
+
+/// Rename a title-level source's bare heads to their heads at `level`.
+fn narrow_heads(source: &str, level: scryer_rules::lifecycle::LifecycleSubjectKind) -> String {
+    use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
+    let mut narrowed = source.to_string();
+    for head in scryer_rules::lifecycle_actions::LifecycleActionHead::ALL {
+        if head.level() != Level::Title {
+            continue;
+        }
+        if let Some(at) = head.at_level(level) {
+            let bare = format!("\n{} if", head.rule_name());
+            narrowed = narrowed.replace(&bare, &format!("\n{} if", at.rule_name()));
+        }
+    }
+    narrowed
+}
+
+/// A title-level source whose heads act on episodes instead.
+pub(crate) fn episode_heads(source: &str) -> String {
+    narrow_heads(
+        source,
+        scryer_rules::lifecycle::LifecycleSubjectKind::Episode,
+    )
+}
+
 /// A `match`-form fixture source with the heads a step list means. A profile id is used
 /// as its name, the way the shared bootstrap names its test profiles.
 pub(crate) fn steps_source(

@@ -716,6 +716,11 @@ pub struct RuleBuilderOutput {
     pub head: String,
     /// Translation key of the output's label.
     pub label_key: String,
+    /// Translation key of the action the output performs, when it differs
+    /// from the label: a season or episode output is shown by its action
+    /// under its subject. Outputs with the same key are one action at
+    /// different subjects. Null otherwise.
+    pub action_label_key: Option<String>,
     /// Translation key of the output's help, or null when it has none.
     pub help_key: Option<String>,
     /// How the output's value is entered.
@@ -753,11 +758,27 @@ pub struct RuleBuilderOutputRule {
     pub of: Option<Vec<String>>,
 }
 
+/// One thing a rule's action can act on.
+#[derive(SimpleObject, Clone)]
+pub struct RuleBuilderSubject {
+    /// Stable id of the subject.
+    pub id: String,
+    /// Translation key of the subject's label.
+    pub label_key: String,
+    /// Input path of the subject's own document, whose facts an action at
+    /// this subject may read beside the title's, or null for the title.
+    pub input_path: Option<String>,
+    /// The outputs that act on this subject, in write order.
+    pub outputs: Vec<String>,
+}
+
 /// What the rule builder needs to offer one family's outputs.
 #[derive(SimpleObject, Clone)]
 pub struct RuleBuilderSchema {
     /// The rule family.
     pub family: String,
+    /// What an action can act on; empty when every output acts on one thing.
+    pub subjects: Vec<RuleBuilderSubject>,
     /// The outputs, in the order the builder lists and writes them.
     pub outputs: Vec<RuleBuilderOutput>,
     /// Rules about which outputs one rule chooses.
@@ -769,6 +790,16 @@ impl From<scryer_application::RuleBuilderSchema> for RuleBuilderSchema {
         let size = |value: usize| i32::try_from(value).unwrap_or(i32::MAX);
         Self {
             family: schema.family.to_string(),
+            subjects: schema
+                .subjects
+                .into_iter()
+                .map(|subject| RuleBuilderSubject {
+                    id: subject.id.to_string(),
+                    label_key: subject.label_key,
+                    input_path: subject.input_path.map(str::to_string),
+                    outputs: subject.outputs.into_iter().map(str::to_string).collect(),
+                })
+                .collect(),
             outputs: schema
                 .outputs
                 .into_iter()
@@ -776,6 +807,7 @@ impl From<scryer_application::RuleBuilderSchema> for RuleBuilderSchema {
                     id: output.id.to_string(),
                     head: output.head.to_string(),
                     label_key: output.label_key,
+                    action_label_key: output.action_label_key,
                     help_key: output.help_key,
                     value_kind: output.value_kind.into(),
                     options: output.options.map(str::to_string),

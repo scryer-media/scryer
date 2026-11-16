@@ -175,6 +175,7 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
         _rule_id: &str,
         _rule_name: &str,
         _extra: &Self::RuleExtra,
+        _ctx: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         if matches!(value, Value::Undefined) {
             return Err("decision rule produced no value".to_string());

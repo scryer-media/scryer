@@ -9,6 +9,7 @@
 
 use serde::Serialize;
 
+use crate::lifecycle::LifecycleSubjectKind;
 use crate::lifecycle_actions::{LifecycleActionHead, MAX_NOTIFY_LEN};
 use crate::policy::decode::{MAX_TAG_LEN, MAX_TAGS};
 
@@ -51,6 +52,12 @@ pub struct RuleBuilderOutputDescriptor {
     /// The Rego rule name the output writes.
     pub head: &'static str,
     pub label_key: String,
+    /// The tag of the action the output performs, when that differs from
+    /// the output's own label: a season's or an episode's head is shown by
+    /// its action ("Delete files") under its subject. Outputs with the same
+    /// action tag are the same action at different subjects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_label_key: Option<String>,
     pub help_key: Option<String>,
     pub value_kind: RuleBuilderValueKind,
     /// The catalog a choice or list draws from.
@@ -89,11 +96,30 @@ pub struct RuleBuilderOutputRule {
     pub of: Option<Vec<&'static str>>,
 }
 
+/// One thing a rule's action can act on, and the outputs that act on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleBuilderSubject {
+    /// Stable id of the subject.
+    pub id: &'static str,
+    pub label_key: String,
+    /// The input path of the subject's own document, whose `facts` an
+    /// action at this subject may read beside the title's. `None` for the
+    /// subject whose facts are the title's own.
+    pub input_path: Option<&'static str>,
+    /// The output ids that act on this subject, in write order.
+    pub outputs: Vec<&'static str>,
+}
+
 /// What the rule builder needs to offer a family's outputs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleBuilderSchema {
     pub family: &'static str,
+    /// What an action can act on. Empty for a family whose outputs all act
+    /// on one thing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subjects: Vec<RuleBuilderSubject>,
     pub outputs: Vec<RuleBuilderOutputDescriptor>,
     pub output_rules: Vec<RuleBuilderOutputRule>,
 }
@@ -121,12 +147,11 @@ pub fn rule_builder_schema_json(schema: &RuleBuilderSchema) -> String {
 pub fn scoring_builder_schema() -> RuleBuilderSchema {
     RuleBuilderSchema {
         family: SCORING_RULE_FAMILY,
+        subjects: Vec::new(),
         outputs: Vec::new(),
         output_rules: Vec::new(),
     }
 }
-
-const TITLE_VARIANT_ONLY: &[&str] = &["TITLE"];
 
 /// The id a client reads for a lifecycle head.
 pub fn lifecycle_output_id(head: LifecycleActionHead) -> &'static str {
@@ -143,20 +168,17 @@ pub fn lifecycle_output_id(head: LifecycleActionHead) -> &'static str {
         LifecycleActionHead::MoveToLibrary => "MOVE_TO_LIBRARY",
         LifecycleActionHead::MoveToRoot => "MOVE_TO_ROOT",
         LifecycleActionHead::Notify => "NOTIFY",
+        LifecycleActionHead::MonitorSeason => "MONITOR_SEASON",
+        LifecycleActionHead::UnmonitorSeason => "UNMONITOR_SEASON",
+        LifecycleActionHead::DeleteSeasonFiles => "DELETE_SEASON_FILES",
+        LifecycleActionHead::FetchSeasonSubtitles => "FETCH_SEASON_SUBTITLES",
+        LifecycleActionHead::NotifySeason => "NOTIFY_SEASON",
+        LifecycleActionHead::MonitorEpisode => "MONITOR_EPISODE",
+        LifecycleActionHead::UnmonitorEpisode => "UNMONITOR_EPISODE",
+        LifecycleActionHead::DeleteEpisodeFiles => "DELETE_EPISODE_FILES",
+        LifecycleActionHead::FetchEpisodeSubtitles => "FETCH_EPISODE_SUBTITLES",
+        LifecycleActionHead::NotifyEpisode => "NOTIFY_EPISODE",
     }
-}
-
-/// Whether a lifecycle head may be used by a rule of a narrower subject
-/// than a whole title (a season or an episode).
-pub fn lifecycle_head_allows_narrow_subjects(head: LifecycleActionHead) -> bool {
-    matches!(
-        head,
-        LifecycleActionHead::Unmonitor
-            | LifecycleActionHead::DeleteFiles
-            | LifecycleActionHead::Monitor
-            | LifecycleActionHead::FetchSubtitles
-            | LifecycleActionHead::Notify
-    )
 }
 
 fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
@@ -166,7 +188,7 @@ fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
         H::SetQualityProfile => (RuleBuilderValueKind::Choice, Some("qualityProfiles")),
         H::MoveToLibrary => (RuleBuilderValueKind::Choice, Some("libraries")),
         H::MoveToRoot => (RuleBuilderValueKind::Choice, Some("roots")),
-        H::Notify => (RuleBuilderValueKind::Text, None),
+        H::Notify | H::NotifySeason | H::NotifyEpisode => (RuleBuilderValueKind::Text, None),
         _ => (RuleBuilderValueKind::Flag, None),
     };
     let tags = value_kind == RuleBuilderValueKind::TextList;
@@ -174,6 +196,8 @@ fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
         id: lifecycle_output_id(head),
         head: head.rule_name(),
         label_key: format!("ruleOutput.lifecycle.{}", head.rule_name()),
+        action_label_key: (head.base() != head)
+            .then(|| format!("ruleOutput.lifecycle.{}", head.base().rule_name())),
         help_key: None,
         value_kind,
         options,
@@ -182,7 +206,7 @@ fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
         max_items: tags.then_some(MAX_TAGS),
         max_bytes: if tags {
             Some(MAX_TAG_LEN)
-        } else if head == H::Notify {
+        } else if head.base() == H::Notify {
             Some(MAX_NOTIFY_LEN)
         } else {
             None
@@ -195,7 +219,8 @@ fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
         },
         per_item: false,
         destructive: head.is_destructive(),
-        variants: (!lifecycle_head_allows_narrow_subjects(head)).then_some(TITLE_VARIANT_ONLY),
+        // Where a lifecycle output acts is its subject, not a rule variant.
+        variants: None,
         conflicts_with: head
             .conflicts_with()
             .iter()
@@ -207,8 +232,33 @@ fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
 /// The lifecycle rule builder schema, in the order the host applies the
 /// actions.
 pub fn lifecycle_builder_schema() -> RuleBuilderSchema {
+    let subject = |level: LifecycleSubjectKind, id, name: &str, input_path| RuleBuilderSubject {
+        id,
+        label_key: format!("ruleSubject.lifecycle.{name}"),
+        input_path,
+        outputs: LifecycleActionHead::EXECUTION_ORDER
+            .into_iter()
+            .filter(|head| head.level() == level)
+            .map(lifecycle_output_id)
+            .collect(),
+    };
     RuleBuilderSchema {
         family: LIFECYCLE_RULE_FAMILY,
+        subjects: vec![
+            subject(LifecycleSubjectKind::Title, "TITLE", "title", None),
+            subject(
+                LifecycleSubjectKind::Season,
+                "SEASON",
+                "season",
+                Some("input.season"),
+            ),
+            subject(
+                LifecycleSubjectKind::Episode,
+                "EPISODE",
+                "episode",
+                Some("input.episode"),
+            ),
+        ],
         outputs: LifecycleActionHead::EXECUTION_ORDER
             .into_iter()
             .map(lifecycle_output)
@@ -272,6 +322,33 @@ mod tests {
                     .count(),
                 1
             );
+        }
+        // Every output acts on exactly one subject, and a narrow output
+        // names the action of the title output it narrows.
+        for output in &schema.outputs {
+            let owners = schema
+                .subjects
+                .iter()
+                .filter(|subject| subject.outputs.contains(&output.id))
+                .count();
+            assert_eq!(owners, 1, "{} belongs to {owners} subjects", output.id);
+        }
+        for head in LifecycleActionHead::ALL {
+            let output = schema
+                .outputs
+                .iter()
+                .find(|output| output.id == lifecycle_output_id(head))
+                .unwrap();
+            if head.base() == head {
+                assert_eq!(output.action_label_key, None);
+            } else {
+                let title = schema
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == lifecycle_output_id(head.base()))
+                    .unwrap();
+                assert_eq!(output.action_label_key.as_ref(), Some(&title.label_key));
+            }
         }
         for output in &schema.outputs {
             for other in &output.conflicts_with {

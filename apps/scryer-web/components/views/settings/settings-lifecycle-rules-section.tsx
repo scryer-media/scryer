@@ -8,7 +8,6 @@ import { LifecycleSubjectPicker } from "@/components/common/lifecycle-subject-pi
 import {
   BookOpen,
   ChevronDown,
-  ChevronRight,
   Copy,
   Edit,
   Plus,
@@ -22,11 +21,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   Input,
@@ -65,7 +59,6 @@ import type {
   LifecyclePreviewResult,
   LifecyclePreviewSource,
   LifecyclePreviewTitle,
-  LifecycleRuleScope,
   LifecycleTestSubject,
   LifecycleRuleSetDraft,
   LifecycleRuleSetRecord,
@@ -78,7 +71,6 @@ import {
   previewOutcomeLabelKey,
   ruleStateLabelKey,
   ruleStateOptionsFor,
-  lifecycleRuleBuilder,
   lifecycleLoadRefusalKey,
   lifecyclePreviewErrorText,
 } from "@/lib/utils/lifecycle-rule-sets";
@@ -91,16 +83,12 @@ import {
   templateRuleOutputs,
 } from "@/lib/utils/rule-output-vocabulary";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { cn } from "@/lib/utils";
 import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
 import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
 import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
 import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
 import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
-import {
-  withRegeneratedRuleSource,
-  type RuleEditorMode,
-} from "@/lib/utils/rule-builder-mode";
+import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import {
   LifecycleRuleScheduleField,
   LifecycleRuleScheduleSummary,
@@ -108,11 +96,6 @@ import {
 import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
 
 export type LifecycleLibraryOption = { id: string; name: string };
-export type LifecycleStorageRootOption = {
-  id: string;
-  path: string;
-  libraryName: string;
-};
 
 type SettingsLifecycleRulesSectionProps = {
   isEditorOpen: boolean;
@@ -149,7 +132,6 @@ type SettingsLifecycleRulesSectionProps = {
   applyTemplate: (template: LifecycleRuleTemplate) => void;
   ruleSetRecords: LifecycleRuleSetRecord[];
   libraries: LifecycleLibraryOption[];
-  storageRoots: LifecycleStorageRootOption[];
   copyRuleSet: (record: LifecycleRuleSetRecord) => void;
   editRuleSet: (record: LifecycleRuleSetRecord) => void;
   deleteRuleSet: (record: LifecycleRuleSetRecord) => Promise<void> | void;
@@ -393,15 +375,6 @@ function LifecycleTemplateCard({
             {ruleOutputHeadLabel(t, descriptors, head)}
           </Badge>
         ))}
-        {template.subjectKind ? (
-          <Badge tone="info" className="text-[10px]">
-            {t(
-              template.subjectKind === "EPISODE"
-                ? "settings.lifecycleScopeEpisode"
-                : "settings.lifecycleScopeSeason",
-            )}
-          </Badge>
-        ) : null}
         {template.requiresTargetQualityProfile ? (
           <Badge tone="warning" className="text-[10px]">
             {t("settings.lifecycleTemplateNeedsProfileBadge")}
@@ -489,7 +462,6 @@ function PreviewOutcomeCell({ title }: { title: LifecyclePreviewTitle }) {
 function LifecyclePreviewPanel({
   isEditorOpen,
   draftName,
-  draftScope,
   draftDeclaredActions,
   ruleSetRecords,
   libraries,
@@ -507,7 +479,6 @@ function LifecyclePreviewPanel({
   previewError,
 }: {
   draftName: string;
-  draftScope: LifecycleRuleScope;
   /// What the draft declares, from its latest validation.
   draftDeclaredActions: LifecycleDeclaredActions | null | undefined;
 } & Pick<
@@ -533,10 +504,6 @@ function LifecyclePreviewPanel({
   const storedRule = ruleSetRecords.find(
     (rule) => rule.id === previewRuleSetId,
   );
-  const scope =
-    previewSource === "draft"
-      ? draftScope
-      : (storedRule?.subjectKind ?? "TITLE");
   const declared =
     previewSource === "draft"
       ? draftDeclaredActions
@@ -550,7 +517,7 @@ function LifecyclePreviewPanel({
     setSelectedSubject(undefined);
     setTargetPending(false);
     setManualTarget(false);
-  }, [previewSource, previewRuleSetId, previewLibraryId, draftName, scope]);
+  }, [previewSource, previewRuleSetId, previewLibraryId, draftName]);
   const canPreviewDraft = isEditorOpen;
   const canRun =
     !previewing &&
@@ -663,8 +630,8 @@ function LifecyclePreviewPanel({
         ) : null}
 
         <LifecycleSubjectPicker
-          key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
-          scope={scope}
+          key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${draftName}`}
+          scope="TITLE"
           onChange={(subject, pending, active) => {
             setSelectedSubject(subject);
             setTargetPending(pending);
@@ -761,17 +728,6 @@ function LifecyclePreviewPanel({
                             size: formatBytes(title.totalSizeBytes),
                           })}
                         </div>
-                        {title.storageRootFileCount !== null &&
-                        title.storageRootTotalSizeBytes !== null ? (
-                          <div className="text-xs text-muted-foreground">
-                            {t("settings.lifecycleStorageRootFileSummary", {
-                              count: title.storageRootFileCount,
-                              size: formatBytes(
-                                title.storageRootTotalSizeBytes,
-                              ),
-                            })}
-                          </div>
-                        ) : null}
                       </TableCell>
                       <TableCell>
                         <PreviewOutcomeCell title={title} />
@@ -873,47 +829,6 @@ function PreviewFacts({ facts }: { facts: Record<string, unknown> }) {
   );
 }
 
-/// Rule scope and storage root. Templates set the scope, so this starts
-/// collapsed, and opens by itself whenever either field holds a non-default
-/// value so a rule never hides what it is scoped to.
-function LifecycleRuleAdvanced({
-  hasNonDefault,
-  children,
-}: {
-  hasNonDefault: boolean;
-  children: React.ReactNode;
-}) {
-  const t = useTranslate();
-  const [open, setOpen] = React.useState(hasNonDefault);
-  const [seenNonDefault, setSeenNonDefault] = React.useState(hasNonDefault);
-  if (hasNonDefault !== seenNonDefault) {
-    setSeenNonDefault(hasNonDefault);
-    if (hasNonDefault) setOpen(true);
-  }
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger asChild>
-        <button
-          id="settings-lifecycle-rule-advanced-toggle"
-          type="button"
-          className="flex items-center gap-1.5 rounded-[8px] py-1 text-sm font-medium text-[var(--scry-muted)] transition-colors hover:text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ChevronRight
-            className={cn("h-4 w-4 transition-transform", open && "rotate-90")}
-          />
-          {t("settings.advancedConfig")}
-        </button>
-      </CollapsibleTrigger>
-      <CollapsibleContent
-        id="settings-lifecycle-rule-advanced"
-        className="space-y-3 pt-3"
-      >
-        {children}
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
 export function SettingsLifecycleRulesSection({
   isEditorOpen,
   editingRuleSetId,
@@ -935,7 +850,6 @@ export function SettingsLifecycleRulesSection({
   applyTemplate,
   ruleSetRecords,
   libraries,
-  storageRoots,
   copyRuleSet,
   editRuleSet,
   deleteRuleSet,
@@ -1067,15 +981,6 @@ export function SettingsLifecycleRulesSection({
                                 {t("settings.lifecycleRuleSystemOwned")}
                               </Badge>
                             ) : null}
-                            {record.subjectKind !== "TITLE" && (
-                              <div className="text-xs text-muted-foreground">
-                                {t(
-                                  record.subjectKind === "SEASON"
-                                    ? "settings.lifecycleScopeSeason"
-                                    : "settings.lifecycleScopeEpisode",
-                                )}
-                              </div>
-                            )}
                             {record.loadRefusal ? (
                               <p
                                 id={selectorId(
@@ -1282,7 +1187,7 @@ export function SettingsLifecycleRulesSection({
                       idPrefix="settings-lifecycle-rule"
                       schema={builderSchema}
                       builderStatus={builderStatus}
-                      variant={ruleSetDraft.subjectKind}
+                      variant={null}
                       mode={editorMode}
                       onModeChange={setEditorMode}
                       available={!editingSystemOwned}
@@ -1295,7 +1200,7 @@ export function SettingsLifecycleRulesSection({
                       editor={(readOnly) => (
                         <LazyRegoEditor
                           ruleFamily="lifecycle"
-                          ruleVariant={ruleSetDraft.subjectKind}
+                          ruleVariant={null}
                           id="settings-lifecycle-rule-rego-source"
                           value={ruleSetDraft.regoSource}
                           readOnly={editingSystemOwned || readOnly}
@@ -1432,86 +1337,6 @@ export function SettingsLifecycleRulesSection({
                       </div>
                     </div>
 
-                    <LifecycleRuleAdvanced
-                      key={editingRuleSetId ?? "new"}
-                      hasNonDefault={
-                        ruleSetDraft.subjectKind !== "TITLE" ||
-                        Boolean(ruleSetDraft.storageRootId)
-                      }
-                    >
-                      <SingleSelectField
-                        id="settings-lifecycle-rule-scope"
-                        label={t("settings.lifecycleRuleScope")}
-                        value={ruleSetDraft.subjectKind}
-                        disabled={Boolean(editingRuleSetId)}
-                        onValueChange={(value) =>
-                          // The builder writes for one scope, so a builder
-                          // rule regenerates for the new one.
-                          setRuleSetDraft((prev) =>
-                            withRegeneratedRuleSource(lifecycleRuleBuilder(builderSchema), {
-                              ...prev,
-                              subjectKind:
-                                value as LifecycleRuleSetDraft["subjectKind"],
-                            }),
-                          )
-                        }
-                        options={[
-                          { value: "TITLE", label: t("label.title") },
-                          {
-                            value: "SEASON",
-                            label: t("settings.lifecycleScopeSeason"),
-                          },
-                          {
-                            value: "EPISODE",
-                            label: t("settings.lifecycleScopeEpisode"),
-                          },
-                        ]}
-                      />
-                      <div>
-                        <SingleSelectField
-                          id="settings-lifecycle-rule-storage-root"
-                          label={
-                            <HelpLabel
-                              label={t("settings.lifecycleRuleStorageRoot")}
-                              help={`${t("settings.lifecycleRuleStorageRootHelp")} ${t("settings.lifecycleRuleStorageRootUnmonitorHelp")}`}
-                            />
-                          }
-                          placeholder={t(
-                            "settings.lifecycleRuleStorageRootNone",
-                          )}
-                          value={ruleSetDraft.storageRootId}
-                          onValueChange={(storageRootId) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              storageRootId,
-                            }))
-                          }
-                          options={storageRoots.map((root) => ({
-                            value: root.id,
-                            label: `${root.libraryName} · ${root.path}`,
-                          }))}
-                        />
-                        {ruleSetDraft.storageRootId ? (
-                          <div className="mt-2">
-                            <Button
-                              id="settings-lifecycle-rule-storage-root-clear"
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              onClick={() =>
-                                setRuleSetDraft((prev) => ({
-                                  ...prev,
-                                  storageRootId: "",
-                                }))
-                              }
-                            >
-                              {t("settings.lifecycleRuleStorageRootClear")}
-                            </Button>
-                          </div>
-                        ) : null}
-                      </div>
-                    </LifecycleRuleAdvanced>
-
                     <div className="flex gap-2">
                       <Button
                         id="settings-lifecycle-rule-save"
@@ -1551,7 +1376,6 @@ export function SettingsLifecycleRulesSection({
             <LifecyclePreviewPanel
               isEditorOpen={isEditorOpen}
               draftName={ruleSetDraft.name}
-              draftScope={ruleSetDraft.subjectKind}
               draftDeclaredActions={validationResult?.declaredActions}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}

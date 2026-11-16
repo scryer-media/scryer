@@ -588,6 +588,8 @@ pub fn build_title_input(
             claims,
             series_movies,
         ),
+        season: None,
+        episode: None,
     }
 }
 
@@ -669,13 +671,10 @@ fn build_facts(
         request_origin: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         request_list_name: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         series_movies: series_movies_observation(&title.facet, series_movies),
-        // Storage facts are populated only when a rule selected one configured
-        // root. Until that storage context is applied they are confirmed absent
-        // rather than a made-up capacity value.
-        storage_root_id: Observation::absent(),
-        storage_available_bytes: Observation::absent(),
-        storage_total_bytes: Observation::absent(),
-        storage_available_percent: Observation::absent(),
+        // The roots the files are on, with their capacity, are applied by the
+        // caller from one pass-wide root and capacity read. A caller that did
+        // not apply them leaves them unknown, never a made-up figure.
+        storage_roots: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         runtime_minutes: optional_known(title.runtime_minutes.map(i64::from)),
         original_language: optional_text(title.language.as_deref()),
         series_status: if matches!(title.facet, MediaFacet::Movie) {
@@ -1534,6 +1533,42 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
         retention_rank_observations(evaluation_time, subject, completed_retention_episode_ids);
     input.facts.episode_position_by_air_date = episode_position_by_air_date;
     input.facts.season_position_by_air_date = season_position_by_air_date;
+    input
+}
+
+/// The input a season or episode is evaluated with: the title's own input,
+/// with the subject's identity and the subject's facts beside the title's
+/// under `season` or `episode`. A title subject's input is returned as built.
+pub(crate) fn nest_subject_input(
+    title_input: LifecycleInput,
+    subject_input: LifecycleInput,
+    subject: &super::subjects::LifecycleSubject,
+) -> LifecycleInput {
+    let kind = subject_input.subject.kind;
+    if kind == LifecycleSubjectKind::Title {
+        return subject_input;
+    }
+    let mut input = title_input;
+    let narrow = scryer_rules::lifecycle::LifecycleNarrowSubjectDoc {
+        id: subject_input.subject.subject_id.clone(),
+        collection_id: subject_input.subject.collection_id.clone(),
+        season_number: subject_input.subject.season_number,
+        episode_number: (kind == LifecycleSubjectKind::Episode)
+            .then(|| {
+                subject
+                    .episodes
+                    .first()
+                    .and_then(|episode| episode.episode_number.as_deref()?.trim().parse().ok())
+            })
+            .flatten(),
+        facts: subject_input.facts,
+    };
+    input.subject = subject_input.subject;
+    match kind {
+        LifecycleSubjectKind::Season => input.season = Some(narrow),
+        LifecycleSubjectKind::Episode => input.episode = Some(narrow),
+        LifecycleSubjectKind::Title => unreachable!(),
+    }
     input
 }
 

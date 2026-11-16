@@ -23,7 +23,6 @@ test("legacy deletion checkpoints keep their file and grace details", () => {
   assert.deepEqual(detail, {
     graceDeadline: "2026-09-09T12:00:00Z",
     totalSizeBytes: 42,
-    storageRootId: null,
     completedFileCount: 1,
     remainingFileCount: 1,
     files: [
@@ -43,7 +42,7 @@ test("legacy deletion checkpoints keep their file and grace details", () => {
   });
 });
 
-test("storage checkpoints report their selected root and partial progress", () => {
+test("a checkpoint written for one root still reports its partial progress", () => {
   const detail = parseLifecycleFileResults(
     JSON.stringify({
       storage_root_id: "root-a",
@@ -60,7 +59,7 @@ test("storage checkpoints report their selected root and partial progress", () =
     }),
   );
 
-  assert.equal(detail?.storageRootId, "root-a");
+  assert.equal(detail?.files.length, 3);
   assert.equal(detail?.completedFileCount, 1);
   assert.equal(detail?.remainingFileCount, 2);
 });
@@ -94,7 +93,6 @@ test("sequence history unwraps its scoped deletion outcomes without another hist
   assert.equal(detail?.completedFileCount, 1);
   assert.equal(detail?.remainingFileCount, 1);
   assert.equal(detail?.totalSizeBytes, 42);
-  assert.equal(detail?.storageRootId, "root-a");
 });
 
 test("non-checkpoint action details do not render a file results table", () => {

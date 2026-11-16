@@ -76,9 +76,16 @@ const HOLD_FOR: RuleBuilderOutputDescriptor = {
   conflictsWith: [],
 };
 
+/// The server lists every output under the subject it acts on, so the unseen
+/// title outputs come listed under the title.
 const PAYLOAD: RuleBuilderSchemaPayload = {
   ...LIFECYCLE_SERVED_PAYLOAD,
   outputs: [ARCHIVE, ...LIFECYCLE_SERVED_PAYLOAD.outputs, HOLD_FOR, SET_LABELS],
+  subjects: (LIFECYCLE_SERVED_PAYLOAD.subjects ?? []).map((subject) =>
+    subject.inputPath === null
+      ? { ...subject, outputs: ["ARCHIVE", ...subject.outputs, "HOLD_FOR", "SET_LABELS"] }
+      : subject,
+  ),
 };
 
 const SCHEMA = ruleBuilderSchemaFromPayload(LIFECYCLE_RULE_BUILDER_BASE, PAYLOAD);
@@ -164,9 +171,21 @@ test("an unseen output keeps to its variants and its conflicts", () => {
   assert.ok(archive);
   assert.equal(isRuleBuilderOutputInVariant(archive, "TITLE"), true);
   assert.equal(isRuleBuilderOutputInVariant(archive, "EPISODE"), false);
+  // Lifecycle actions are placed by subject: one the server lists only
+  // under the title is out of scope on a season row.
   assert.deepEqual(
-    problemCodes(generateRuleSource(SCHEMA, model({ ARCHIVE: true }), "EPISODE")),
-    ["BUILDER_OUTPUT_NOT_IN_SCOPE"],
+    problemCodes(
+      generateRuleSource(
+        SCHEMA,
+        {
+          ...model({ ARCHIVE: true }),
+          actions: [{ subject: "SEASON", output: "ARCHIVE", join: "ALL", conditions: [] }],
+        },
+        null,
+      ),
+    ),
+    // The row's action is set aside, so the rule is left with none.
+    ["BUILDER_OUTPUT_NOT_IN_SCOPE", "BUILDER_NO_OUTPUTS"],
   );
 
   // Read in both directions.
@@ -248,8 +267,10 @@ test("the editor completes every head its variant offers, with a snippet from it
   const title = regoHeadAssists(DESCRIPTORS, t, "TITLE");
   const episode = regoHeadAssists(DESCRIPTORS, t, "EPISODE");
   assert.equal(title.length, DESCRIPTORS.length);
+  // Lifecycle heads name their own level, so only an unseen head that lists
+  // variants is left out of one.
   assert.equal(episode.some((head) => head.head === "archive"), false);
-  assert.equal(episode.some((head) => head.head === "delete_title"), false);
+  assert.ok(episode.some((head) => head.head === "delete_episode_files"));
   assert.ok(episode.some((head) => head.head === "delete_files"));
 
   assert.deepEqual(

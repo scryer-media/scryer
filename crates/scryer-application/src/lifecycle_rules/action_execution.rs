@@ -46,7 +46,7 @@ use crate::lifecycle_rules::declared_actions::LifecycleDeclaredActions;
 use crate::lifecycle_rules::evaluation::LifecycleEvaluationTrigger;
 use crate::lifecycle_rules::facts::{
     LifecycleLibraryRef, LifecycleTitleClaims, LifecycleTitlePeople, LifecycleTitleWatch,
-    build_subject_input_with_completed_retention_episodes,
+    build_subject_input, build_subject_input_with_completed_retention_episodes,
 };
 use crate::lifecycle_rules::safety::{LifecycleActivityCheck, LifecyclePlaybackHold};
 use crate::lifecycle_rules::sequence_execution::SequenceCandidateExecutionContext;
@@ -297,8 +297,6 @@ pub mod execution_reason {
     /// The candidate carries an action its rule's current revision does not
     /// declare. Nothing outside what the stored source can decide ever runs.
     pub const ACTION_NOT_DECLARED: &str = "action_not_declared";
-    /// The candidate's steps include one a storage-root rule cannot run.
-    pub const STORAGE_ROOT_ACTION_NOT_ALLOWED: &str = "storage_root_action_not_allowed";
     /// The rule decided actions that cannot be applied together, such as
     /// monitoring and unmonitoring, both moves, or a move and a delete.
     /// Nothing is applied.
@@ -352,7 +350,6 @@ pub mod execution_reason {
         ACTIONS_NOT_RUNNABLE,
         ACTIONS_CHANGED_AT_EXECUTION,
         ACTION_NOT_DECLARED,
-        STORAGE_ROOT_ACTION_NOT_ALLOWED,
         MONITORING_CONFLICT,
     ];
 
@@ -378,7 +375,7 @@ pub mod execution_reason {
                     "{reason} has a stray underscore"
                 );
             }
-            assert_eq!(ALL.len(), 37);
+            assert_eq!(ALL.len(), 36);
         }
     }
 }
@@ -550,6 +547,9 @@ pub(super) struct LifecycleExecutionContext<'a> {
     pub(super) evaluator: &'a mut LifecycleRulesEvaluator,
     pub(super) libraries: &'a HashMap<String, LifecycleLibraryRef>,
     pub(super) tag_conflicts: &'a Option<HashSet<String>>,
+    /// The configured roots, read once for this unit of work however many
+    /// safety checks it runs.
+    pub(super) storage_roots: &'a super::storage::LifecycleStorageRootsOnce,
 }
 
 // ── Rule state ──────────────────────────────────────────────────────────────
@@ -1275,7 +1275,9 @@ impl AppUseCase {
                 .max_titles_per_run
                 .map(|max| usize::try_from(max).unwrap_or(usize::MAX));
             let stale_before = self.lifecycle_lease_stale_before(now);
-            let mut titles_acted_on = 0usize;
+            // Titles, not candidates: a rule acting at several levels can
+            // have a title, a season and an episode of one show due together.
+            let mut titles_acted_on: HashSet<String> = HashSet::new();
             let mut cursor: Option<crate::LifecycleDueCursor> = None;
             // What other rules recently did to monitoring, read once for this
             // rule, only once something is due, and only when another
@@ -1311,7 +1313,10 @@ impl AppUseCase {
                     .expect("monitoring acts are read before the first candidate");
 
                 for candidate in due {
-                    if maximum.is_some_and(|max| titles_acted_on >= max) {
+                    if maximum.is_some_and(|max| {
+                        titles_acted_on.len() >= max
+                            && !titles_acted_on.contains(&candidate.title_id)
+                    }) {
                         // The rest stay due, untouched, for the next fire.
                         report.rules_stopped_at_maximum += 1;
                         break 'walk;
@@ -1325,6 +1330,7 @@ impl AppUseCase {
                         break 'walk;
                     }
                     report.candidates_considered += 1;
+                    let candidate_title_id = candidate.title_id.clone();
                     let mut sequence_budget = Some({
                         LifecycleSequencePassBudget::new(
                             usize::MAX,
@@ -1366,6 +1372,8 @@ impl AppUseCase {
                                     evaluator: &mut evaluator,
                                     libraries: &libraries,
                                     tag_conflicts: &tag_conflicts,
+                                    storage_roots: &super::storage::LifecycleStorageRootsOnce::new(
+                                    ),
                                     budget: sequence_budget
                                         .as_mut()
                                         .expect("sequence actions always have a step budget"),
@@ -1390,7 +1398,7 @@ impl AppUseCase {
                         // A title counts once however many of its steps ran,
                         // including one resuming a sequence an earlier fire began.
                         if budget.dispatched_steps() > 0 {
-                            titles_acted_on += 1;
+                            titles_acted_on.insert(candidate_title_id);
                         }
                         high_risk_failures += budget.failed_high_risk_steps();
                     }
@@ -1591,6 +1599,7 @@ impl AppUseCase {
         candidate: &LifecycleCandidate,
         libraries: &HashMap<String, LifecycleLibraryRef>,
         tag_conflicts: &Option<HashSet<String>>,
+        storage_roots: &super::storage::LifecycleStorageRootsOnce,
     ) -> SafetyDecision {
         // (1) Re-read the rule and the gates: both can move between selection
         // and execution, and a lowered gate must stop a leased worker before
@@ -1628,20 +1637,17 @@ impl AppUseCase {
         ) else {
             return SafetyDecision::Hold(execution_reason::ACTIONS_NOT_RUNNABLE);
         };
+        // The candidate's subject is the level its actions were decided at;
+        // each decided action must be one the revision defines at that level.
+        let Some(level) = super::evaluation::subject_level(&candidate.subject_kind) else {
+            return SafetyDecision::Hold(execution_reason::ACTION_NOT_FULLY_SUPPORTED);
+        };
         if decided
             .heads()
             .iter()
-            .any(|head| !detail.declared_actions.defines(*head))
+            .any(|head| !detail.declared_actions.defines_at(*head, level))
         {
             return SafetyDecision::Hold(execution_reason::ACTION_NOT_DECLARED);
-        }
-        if detail.revision.storage_root_id.is_some()
-            && sequence
-                .steps
-                .iter()
-                .any(|step| !step.descriptor().storage_root_allowed)
-        {
-            return SafetyDecision::Hold(execution_reason::STORAGE_ROOT_ACTION_NOT_ALLOWED);
         }
         let high_risk = sequence
             .steps
@@ -1705,10 +1711,6 @@ impl AppUseCase {
             Ok(exclusions) => exclusions,
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
-        if fresh.subject_kind.as_storage_str() != candidate.subject_kind {
-            return SafetyDecision::Hold(execution_reason::ACTION_NOT_FULLY_SUPPORTED);
-        }
-
         // (3) Fresh matcher re-evaluation on current facts.
         let title = match self
             .services
@@ -1896,11 +1898,7 @@ impl AppUseCase {
             .map(|step| step.id.as_str());
         let deletion_checkpoint = if let Some(step_id) = sequence_delete_files_step_id {
             match self
-                .lifecycle_deletion_checkpoint_for_step(
-                    candidate,
-                    detail.revision.storage_root_id.as_deref(),
-                    Some(step_id),
-                )
+                .lifecycle_deletion_checkpoint_for_step(candidate, Some(step_id))
                 .await
             {
                 Ok(checkpoint) => checkpoint,
@@ -1909,75 +1907,14 @@ impl AppUseCase {
         } else {
             None
         };
-        // A storage-scoped rule's subject may move after its preview. Even
-        // unmonitor-and-keep-files changes the whole subject, so it must not
-        // run once no actual owned file remains on the selected root.
-        let mut storage_journal_cleanup_only = false;
-        if detail.revision.storage_root_id.is_some() {
-            let storage_owned_files = if candidate.subject_kind == "title" {
-                match self.lifecycle_title_deletion_files(&title).await {
-                    Ok(files) => files,
-                    Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
-                }
-            } else if subject.ambiguous_files {
-                return SafetyDecision::Hold(execution_reason::AMBIGUOUS_EPISODE_FILE_COVERAGE);
-            } else {
-                subject.files.clone()
-            };
-            match self
-                .lifecycle_root_file_summary(
-                    &storage_owned_files,
-                    detail.revision.storage_root_id.as_deref(),
-                )
-                .await
-            {
-                Ok(summary) if matches!(summary.file_count, Some(count) if count > 0) => {}
-                Ok(summary) => {
-                    let Some(checkpoint) = deletion_checkpoint.as_ref() else {
-                        return if matches!(summary.file_count, Some(0)) {
-                            SafetyDecision::Cancel(
-                                crate::lifecycle_rules::evaluation::candidate_reason::OUT_OF_SCOPE,
-                            )
-                        } else {
-                            SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION)
-                        };
-                    };
-                    match self
-                        .lifecycle_storage_checkpoint_can_resume(
-                            checkpoint,
-                            &storage_owned_files,
-                            detail.revision.storage_root_id.as_deref(),
-                        )
-                        .await
-                    {
-                        Ok(true) => match self
-                            .lifecycle_storage_checkpoint_needs_catalog_cleanup(
-                                checkpoint,
-                                &storage_owned_files,
-                            )
-                            .await
-                        {
-                            Ok(cleanup_only) => storage_journal_cleanup_only = cleanup_only,
-                            Err(_) => {
-                                return SafetyDecision::Hold(
-                                    execution_reason::UNKNOWN_AT_EXECUTION,
-                                );
-                            }
-                        },
-                        Ok(false) | Err(_) => {
-                            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
-                        }
-                    }
-                }
-                Err(_) => {
-                    return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
-                }
-            }
-        }
         let completed_retention_episode_ids = deletion_checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.completed_retention_episode_ids());
-        let mut input = build_subject_input_with_completed_retention_episodes(
+        let series_movies = series_movies_by_title
+            .get(&title.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let subject_input = build_subject_input_with_completed_retention_episodes(
             recheck_time,
             &title,
             &library,
@@ -1985,12 +1922,30 @@ impl AppUseCase {
             people,
             watch,
             claims,
-            series_movies_by_title
-                .get(&title.id)
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
+            series_movies,
             completed_retention_episode_ids.as_ref(),
         );
+        // A season or episode is evaluated beside its title's own facts,
+        // read now like everything else here.
+        let title_subject = if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title {
+            None
+        } else {
+            match self
+                .lifecycle_resolve_subject("title", &title.id, &title, files)
+                .await
+            {
+                Ok(title_subject) => Some(title_subject),
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        };
+        let storage_roots = match storage_roots
+            .get_or_try_init(|| self.lifecycle_storage_roots_context())
+            .await
+        {
+            Ok(roots) => roots,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let mut capacities = super::storage::LifecycleStorageCapacityMemo::default();
         // Re-read like everything else here: a title that joined a list since
         // the pass must not be removed on the pass's stale answer. A store
         // that cannot be read leaves the list facts unknown, which holds any
@@ -2006,30 +1961,58 @@ impl AppUseCase {
                 recheck_time,
             )
             .await;
-        super::list_facts::apply_list_facts(&mut input, &lists_by_title, &title.id);
-        super::list_facts::apply_watchlist_and_metadata_facts(
-            &mut input,
-            &lists_by_title,
-            &title.id,
-            people,
-        );
-        // The capacity snapshot must be fresh for this lease. Baseline restore
+        // The capacity figures must be fresh for this lease. Baseline restore
         // below deliberately excludes storage facts, so a resumed deletion
         // cannot match against the capacity it observed before deleting.
-        if self
-            .populate_lifecycle_storage_facts(
-                &mut input,
-                detail.revision.storage_root_id.as_deref(),
+        let mut title_input = title_subject.as_ref().map(|title_subject| {
+            build_subject_input(
+                recheck_time,
+                &title,
+                &library,
+                title_subject,
+                people,
+                watch,
+                claims,
+                series_movies,
+            )
+        });
+        let mut subject_input = subject_input;
+        for (input, files) in [
+            (Some(&mut subject_input), subject.files.as_slice()),
+            (
+                title_input.as_mut(),
+                title_subject
+                    .as_ref()
+                    .map(|title_subject| title_subject.files.as_slice())
+                    .unwrap_or_default(),
+            ),
+        ] {
+            let Some(input) = input else { continue };
+            super::list_facts::apply_list_facts(input, &lists_by_title, &title.id);
+            super::list_facts::apply_watchlist_and_metadata_facts(
+                input,
+                &lists_by_title,
+                &title.id,
+                people,
+            );
+            self.populate_lifecycle_storage_roots(
+                &mut input.facts,
+                files,
+                &storage_roots,
+                &mut capacities,
                 super::storage::LifecycleStorageRead::Refresh,
             )
-            .await
-            .is_err()
-        {
-            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            .await;
         }
-        if detail.revision.storage_root_id.is_some()
+        let mut input = match title_input {
+            Some(title_input) => {
+                super::facts::nest_subject_input(title_input, subject_input, &subject)
+            }
+            None => subject_input,
+        };
+        if super::storage::rule_reads_storage(&detail.revision.rego_source)
             && !matches!(
-                input.facts.storage_available_bytes,
+                input.subject_facts().storage_roots,
                 scryer_rules::lifecycle::Observation::Known { .. }
             )
         {
@@ -2113,7 +2096,7 @@ impl AppUseCase {
                                     .and_then(serde_json::Value::as_bool);
                                 if monitoring_changed {
                                     if let Some(before_monitored) = before_monitored {
-                                        input.facts.monitored =
+                                        input.subject_facts_mut().monitored =
                                             scryer_rules::lifecycle::Observation::known(
                                                 before_monitored,
                                             );
@@ -2125,7 +2108,7 @@ impl AppUseCase {
                                         })
                                         .and_then(serde_json::Value::as_i64)
                                     {
-                                        input.facts.monitored_episode_count =
+                                        input.subject_facts_mut().monitored_episode_count =
                                             scryer_rules::lifecycle::Observation::known(
                                                 before_count,
                                             );
@@ -2167,7 +2150,7 @@ impl AppUseCase {
                                     .and_then(|value| value.get("facts_monitored"))
                                     .and_then(serde_json::Value::as_bool)
                                 {
-                                    input.facts.monitored =
+                                    input.subject_facts_mut().monitored =
                                         scryer_rules::lifecycle::Observation::known(
                                             before_monitored,
                                         );
@@ -2300,12 +2283,9 @@ impl AppUseCase {
                     }
                 }
             }
-            Some(LifecycleOutcome::NoMatch) if !storage_journal_cleanup_only => {
+            Some(LifecycleOutcome::NoMatch) => {
                 return SafetyDecision::Cancel(execution_reason::NO_MATCH_AT_EXECUTION);
             }
-            // Every exact journal path is already absent. Continue only far
-            // enough to remove its stale media-file row and record progress.
-            Some(LifecycleOutcome::NoMatch) => {}
             Some(LifecycleOutcome::Unknown) | None => {
                 return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
             }

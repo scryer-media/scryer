@@ -893,4 +893,14 @@ mod tests {
         assert!(rule_reads_watch_facts(watch, "rule-a"));
         assert!(!rule_reads_watch_facts(media, "rule-a"));
     }
+
+    #[test]
+    fn a_season_or_episode_watch_fact_is_a_watch_fact() {
+        for level in ["season", "episode"] {
+            let source = format!(
+                "package whatever\nimport rego.v1\n\nunmonitor_{level} if {{\n\tcount(input.{level}.facts.watched_by_user_ids) == 0\n}}\n"
+            );
+            assert!(rule_reads_watch_facts(&source, "rule-a"), "{level}");
+        }
+    }
 }

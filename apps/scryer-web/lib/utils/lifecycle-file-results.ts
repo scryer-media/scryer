@@ -9,7 +9,6 @@ export type LifecycleFileResults = {
   files: LifecycleFileResult[];
   totalSizeBytes: number | null;
   graceDeadline: string | null;
-  storageRootId: string | null;
   completedFileCount: number;
   remainingFileCount: number;
 };
@@ -17,9 +16,7 @@ export type LifecycleFileResults = {
 /// Read the versioned scoped-deletion checkpoint embedded in an action-run
 /// detail payload. A sequence summary keeps its child delete journal in
 /// `deletion_outcomes`, so it is unwrapped here rather than displaying the
-/// internal journal as a second action-history row. Older checkpoints omit
-/// `storage_root_id`; they retain their original file and grace-deadline
-/// rendering with a null root.
+/// internal journal as a second action-history row.
 export function parseLifecycleFileResults(
   detail: string,
 ): LifecycleFileResults | null {
@@ -86,8 +83,6 @@ function parseLifecycleFileCheckpoint(
         : null,
     graceDeadline:
       typeof value.grace_deadline === "string" ? value.grace_deadline : null,
-    storageRootId:
-      typeof value.storage_root_id === "string" ? value.storage_root_id : null,
     completedFileCount,
     remainingFileCount: files.length - completedFileCount,
   };
@@ -98,11 +93,6 @@ function combineLifecycleFileResults(
 ): LifecycleFileResults | null {
   const files = outcomes.flatMap((outcome) => outcome.files);
   if (files.length === 0) return null;
-  const storageRootIds = new Set(
-    outcomes
-      .map((outcome) => outcome.storageRootId)
-      .filter((rootId): rootId is string => rootId !== null),
-  );
   const graceDeadlines = new Set(
     outcomes
       .map((outcome) => outcome.graceDeadline)
@@ -122,8 +112,6 @@ function combineLifecycleFileResults(
     totalSizeBytes,
     graceDeadline:
       graceDeadlines.size === 1 ? ([...graceDeadlines][0] ?? null) : null,
-    storageRootId:
-      storageRootIds.size === 1 ? ([...storageRootIds][0] ?? null) : null,
     completedFileCount,
     remainingFileCount: files.length - completedFileCount,
   };

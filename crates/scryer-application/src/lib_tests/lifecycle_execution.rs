@@ -90,7 +90,6 @@ const ALWAYS_MATCHER: &str = "match := true\n";
 pub(super) fn unmonitor_draft(rego_source: &str) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
         name: "Unmonitor stale".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::legacy_source(
@@ -98,7 +97,6 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> LifecycleRuleDraft {
             crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -106,7 +104,6 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> LifecycleRuleDraft {
 fn delete_draft() -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
         name: "Retire".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::legacy_source(
@@ -114,7 +111,6 @@ fn delete_draft() -> LifecycleRuleDraft {
             crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
         ),
         grace_days: 0,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -228,7 +224,6 @@ async fn replacing_the_matcher_disarms_the_rule() {
                     crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 0,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )
@@ -850,7 +845,6 @@ async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
     let save = |max_titles_per_run| crate::lifecycle_rules::LifecycleMatcherDraft {
         rego_source: deleting_source.clone(),
         grace_days: 0,
-        storage_root_id: None,
         max_titles_per_run,
     };
 
@@ -1178,7 +1172,6 @@ async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same
             LifecycleMatcherDraft {
                 rego_source: draft.rego_source,
                 grace_days: 0,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )

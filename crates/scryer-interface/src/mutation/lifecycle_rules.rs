@@ -59,12 +59,8 @@ fn preview_matcher(input: &mut PreviewLifecycleRuleInput) -> GqlResult<Lifecycle
         }),
         (None, Some(rego_source)) => Ok(LifecyclePreviewMatcher::Inline {
             library_ids: input.library_ids.take().unwrap_or_default(),
-            subject_kind: crate::mappers::lifecycle_rule_subject_kind_into_application(
-                input.subject_kind,
-            ),
             rego_source,
             grace_days: grace_days(input.grace_days),
-            storage_root_id: input.storage_root_id.take(),
         }),
         (None, None) => Err(to_gql_error(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_REQUIRED,
@@ -158,14 +154,10 @@ impl LifecycleRuleMutations {
             .create_lifecycle_rule_set_with_schedule(
                 &actor,
                 LifecycleRuleDraft {
-                    subject_kind: crate::mappers::lifecycle_rule_subject_kind_into_application(
-                        input.subject_kind,
-                    ),
                     name: input.name,
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
                     grace_days: grace_days(input.grace_days),
-                    storage_root_id: input.storage_root_id,
                     library_ids: input.library_ids.unwrap_or_default(),
                     max_titles_per_run: input.max_titles_per_run.map(max_titles_per_run),
                 },
@@ -196,13 +188,6 @@ impl LifecycleRuleMutations {
                 LifecycleMatcherDraft {
                     rego_source: input.rego_source,
                     grace_days: grace_days(input.grace_days),
-                    storage_root_id: match input.storage_root_id {
-                        async_graphql::MaybeUndefined::Undefined => None,
-                        async_graphql::MaybeUndefined::Null => Some(None),
-                        async_graphql::MaybeUndefined::Value(root_id) => {
-                            Some(Some(root_id.to_string()))
-                        }
-                    },
                     max_titles_per_run: max_titles_per_run_change(input.max_titles_per_run),
                 },
                 super::rules::builder_model_change(input.builder_model),
@@ -537,15 +522,11 @@ mod lifecycle_scope_tests {
     use async_graphql::{InputType, value};
 
     #[test]
-    fn lifecycle_scope_omitted_preview_scope_remains_title() {
+    fn lifecycle_preview_of_titles_selects_those_titles() {
         let mut input = PreviewLifecycleRuleInput::parse(Some(
             value!({ "ruleSetId": "rule", "titleIds": ["title"] }),
         ))
         .unwrap_or_else(|_| panic!("fixture preview input must parse"));
-        assert_eq!(
-            crate::mappers::lifecycle_rule_subject_kind_into_application(input.subject_kind),
-            scryer_domain::LifecycleRuleSubjectKind::Title
-        );
         assert!(
             matches!(preview_selection(&mut input).unwrap(), LifecyclePreviewSelection::Titles(ids) if ids == vec!["title"])
         );
@@ -567,23 +548,6 @@ mod lifecycle_scope_tests {
             let mut input = PreviewLifecycleRuleInput::parse(Some(value))
                 .unwrap_or_else(|_| panic!("fixture preview input must parse"));
             assert!(preview_selection(&mut input).is_err());
-        }
-    }
-
-    #[test]
-    fn lifecycle_scope_child_values_are_additive() {
-        for (value, expected) in [
-            ("SEASON", scryer_domain::LifecycleRuleSubjectKind::Season),
-            ("EPISODE", scryer_domain::LifecycleRuleSubjectKind::Episode),
-        ] {
-            let input = PreviewLifecycleRuleInput::parse(Some(
-                value!({ "ruleSetId": "rule", "subjectKind": value }),
-            ))
-            .unwrap_or_else(|_| panic!("fixture preview input must parse"));
-            assert_eq!(
-                crate::mappers::lifecycle_rule_subject_kind_into_application(input.subject_kind),
-                expected
-            );
         }
     }
 }

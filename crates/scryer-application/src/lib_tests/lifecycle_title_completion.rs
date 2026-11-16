@@ -206,12 +206,14 @@ async fn create_destructive_rule(
             &fixture.user,
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
-                subject_kind,
                 name: "Completion acceptance".into(),
                 description: String::new(),
-                rego_source: crate::lib_tests::legacy_source(rego_source, action_kind),
+                rego_source: crate::lib_tests::legacy_source_at(
+                    rego_source,
+                    action_kind,
+                    subject_kind,
+                ),
                 grace_days: 0,
-                storage_root_id: None,
                 library_ids: vec![],
             },
         )
@@ -625,13 +627,12 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    subject_kind: LifecycleRuleSubjectKind::Episode,
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::legacy_source_at(
                         RETAIN_NEWEST_EPISODE,
                         crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeDeleteFiles,
+                        LifecycleRuleSubjectKind::Episode,
                     ),
                     grace_days: 0,
-                    storage_root_id: None,
                 },
                 selection: LifecyclePreviewSelection::Titles(vec![fixture.title.id.clone()]),
             },
@@ -777,13 +778,11 @@ async fn preview_whole_show_completion(
         LifecyclePreviewRequest {
             matcher: LifecyclePreviewMatcher::Inline {
                 library_ids: vec![],
-                subject_kind: LifecycleRuleSubjectKind::Title,
                 rego_source: crate::lib_tests::legacy_source(
                     COMPLETE_SHOW_WATCH,
                     crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
-                storage_root_id: None,
             },
             selection: LifecyclePreviewSelection::Titles(vec![title_id.to_string()]),
         },
