@@ -6,9 +6,9 @@ use crate::import::srrdb::{crc32_iso_hdlc_of_file, srrdb_lookup_applies};
 use crate::import_title_resolution::normalize_imdb_id;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{
-    AcquisitionScopeCompleteTransition, AcquisitionScopeStatesQuery, AppError, AppResult,
-    AppUseCase, ClientJobLocator, DownloadSubmission, DownloadSubmissionIdentity, ImportArtifact,
-    ParsedReleaseMetadata, SubmissionScope,
+    AcquisitionScopeCompleteTransition, AppError, AppResult, AppUseCase, ClientJobLocator,
+    DownloadSubmission, DownloadSubmissionIdentity, ImportArtifact, ParsedReleaseMetadata,
+    SubmissionScope,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     apply_remote_path_mappings_to_completed_download,
     domain_events::{
