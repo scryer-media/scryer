@@ -119,6 +119,10 @@ pub enum SqlArg {
     Json(JsonValue),
     OptJson(Option<JsonValue>),
     OptBytes(Option<Vec<u8>>),
+    /// Optional bytes held once and shared by every argument list that binds
+    /// them. Binds exactly as [`SqlArg::OptBytes`] does: a BLOB or BYTEA, and
+    /// NULL for `None`.
+    OptSharedBytes(Option<Arc<[u8]>>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -605,6 +609,7 @@ fn bind_sqlite<'q>(mut query: SqliteQuery<'q>, values: &'q [SqlArg]) -> SqliteQu
             SqlArg::Json(value) => query.bind(value.to_string()),
             SqlArg::OptJson(value) => query.bind(value.as_ref().map(JsonValue::to_string)),
             SqlArg::OptBytes(value) => query.bind(value),
+            SqlArg::OptSharedBytes(value) => query.bind(value.as_deref()),
         };
     }
     query
@@ -631,6 +636,7 @@ fn bind_postgres<'q>(mut query: PostgresQuery<'q>, values: &'q [SqlArg]) -> Post
             SqlArg::Json(value) => query.bind(Json(value)),
             SqlArg::OptJson(value) => query.bind(value.as_ref().map(Json)),
             SqlArg::OptBytes(value) => query.bind(value),
+            SqlArg::OptSharedBytes(value) => query.bind(value.as_deref()),
         };
     }
     query
@@ -1262,6 +1268,54 @@ mod tests {
             StoreDatastore::Sqlite { pool, .. } => pool,
             StoreDatastore::Postgres { .. } => panic!("expected sqlite datastore"),
         }
+    }
+
+    #[tokio::test]
+    async fn shared_bytes_bind_exactly_as_owned_bytes() {
+        let datastore = memory_datastore("shared_bytes_bind").await;
+        let pool = sqlite_pool(&datastore).clone();
+        sqlx::query(
+            "CREATE TABLE bytes_probe (n INTEGER NOT NULL, owned BLOB, shared BLOB, \
+             owned_type TEXT, shared_type TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create scratch table");
+
+        let cases: Vec<Option<Vec<u8>>> = vec![
+            None,
+            Some(Vec::new()),
+            Some(vec![0x28, 0xb5, 0x2f, 0xfd, 0x00, 0xff, 0x00]),
+        ];
+        for (index, case) in cases.iter().enumerate() {
+            SqlRuntime::execute(
+                SqlExec::Target(SqlTarget::Sqlite(&pool)),
+                "INSERT INTO bytes_probe (n, owned, shared) VALUES ({}, {}, {})",
+                &[
+                    SqlArg::I64(index as i64),
+                    SqlArg::OptBytes(case.clone()),
+                    SqlArg::OptSharedBytes(case.as_deref().map(Arc::from)),
+                ],
+            )
+            .await
+            .expect("insert bytes");
+        }
+
+        let rows: Vec<(i64, Option<Vec<u8>>, Option<Vec<u8>>, String, String)> = sqlx::query_as(
+            "SELECT n, owned, shared, typeof(owned), typeof(shared) FROM bytes_probe ORDER BY n",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read bytes back");
+        assert_eq!(rows.len(), cases.len());
+        for ((_, owned, shared, owned_type, shared_type), case) in rows.iter().zip(&cases) {
+            assert_eq!(owned, case, "owned bytes round-trip");
+            assert_eq!(shared, owned, "shared bytes store what owned bytes store");
+            assert_eq!(shared_type, owned_type, "both bind with the same SQL type");
+        }
+        assert_eq!(rows[0].3, "null");
+        assert_eq!(rows[1].3, "blob");
+        assert_eq!(rows[2].3, "blob");
     }
 
     #[tokio::test]
