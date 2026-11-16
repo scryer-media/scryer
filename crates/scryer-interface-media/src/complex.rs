@@ -9,7 +9,8 @@ use crate::mappers::{
     from_discovery_item, from_download_queue_item, from_episode, from_episode_media_availability,
     from_library_settings, from_pending_release, from_release_decision_selecting,
     from_series_movie_link, from_submission_scope, from_title, from_title_credit,
-    from_title_list_membership, from_title_media_file, from_title_rating_summary, from_wanted_item,
+    from_title_list_membership, from_title_media_file, from_title_rating_summary,
+    from_wanted_item_selecting,
 };
 use crate::types::*;
 
@@ -30,12 +31,15 @@ impl ReleaseDecisionsPageSelection {
         let items = look_ahead.field("items");
         Self {
             total: look_ahead.field("totalCount").exists() || look_ahead.field("hasMore").exists(),
-            explanation: ExplanationSelection {
-                explanation_json: items.field("explanationJson").exists(),
-                decided_by: items.field("decidedBy").exists(),
-            },
+            explanation: ExplanationSelection::of(items),
         }
     }
+}
+
+/// The explanation fields a resolver returning one wanted item reads from its
+/// latest decision.
+fn wanted_item_explanation_selection(ctx: &Context<'_>) -> ExplanationSelection {
+    ExplanationSelection::of(ctx.look_ahead().field("latestReleaseDecision"))
 }
 
 fn from_media_server_playback_link(
@@ -1122,6 +1126,11 @@ impl TitlePayload {
             let actor = actor_from_ctx(ctx)?;
             let limit = relation_page_limit(limit);
             let offset = relation_page_offset(offset);
+            let selection = ExplanationSelection::of(
+                ctx.look_ahead()
+                    .field("items")
+                    .field("latestReleaseDecision"),
+            );
             let (items, _total_count) = app
                 .list_acquisition_scope_states(
                     &actor,
@@ -1144,7 +1153,7 @@ impl TitlePayload {
             Ok(WantedItemsPagePayload {
                 items: items
                     .into_iter()
-                    .map(from_wanted_item)
+                    .map(|item| from_wanted_item_selecting(item, selection))
                     .collect::<scryer_application::AppResult<Vec<_>>>()
                     .map_err(to_gql_error)?,
             })
@@ -1549,8 +1558,9 @@ impl EpisodePayload {
                 .title_wanted_item
                 .load_one((self.title_id.to_string(), self.id.to_string()))
                 .await?;
+            let selection = wanted_item_explanation_selection(ctx);
             return state
-                .map(from_wanted_item)
+                .map(|item| from_wanted_item_selecting(item, selection))
                 .transpose()
                 .map_err(to_gql_error);
         }
@@ -1565,7 +1575,9 @@ impl EpisodePayload {
                 .map_err(to_gql_error)?
                 .into_iter()
                 .find(|state| state.episode_id.as_deref() == Some(self.id.as_str()))
-                .map(from_wanted_item)
+                .map(|item| {
+                    from_wanted_item_selecting(item, wanted_item_explanation_selection(ctx))
+                })
                 .transpose()
                 .map_err(to_gql_error)?;
             Ok(wanted_item)
@@ -1880,7 +1892,11 @@ impl ReleaseDecisionPayload {
                 .wanted_item
                 .load_one(self.wanted_item_id.to_string())
                 .await?;
-            return item.map(from_wanted_item).transpose().map_err(to_gql_error);
+            let selection = wanted_item_explanation_selection(ctx);
+            return item
+                .map(|item| from_wanted_item_selecting(item, selection))
+                .transpose()
+                .map_err(to_gql_error);
         }
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
@@ -1889,7 +1905,9 @@ impl ReleaseDecisionPayload {
                 .get_wanted_item(&actor, self.wanted_item_id.as_ref())
                 .await
                 .map_err(to_gql_error)?
-                .map(from_wanted_item)
+                .map(|item| {
+                    from_wanted_item_selecting(item, wanted_item_explanation_selection(ctx))
+                })
                 .transpose()
                 .map_err(to_gql_error)?;
             Ok(item)
@@ -2045,7 +2063,11 @@ impl PendingReleasePayload {
                 .wanted_item_for_management
                 .load_one(self.wanted_item_id.to_string())
                 .await?;
-            return item.map(from_wanted_item).transpose().map_err(to_gql_error);
+            let selection = wanted_item_explanation_selection(ctx);
+            return item
+                .map(|item| from_wanted_item_selecting(item, selection))
+                .transpose()
+                .map_err(to_gql_error);
         }
         Box::pin(async move {
             let app = app_from_ctx(ctx)?;
@@ -2054,7 +2076,9 @@ impl PendingReleasePayload {
                 .get_wanted_item_for_management(&actor, self.wanted_item_id.as_ref())
                 .await
                 .map_err(to_gql_error)?
-                .map(from_wanted_item)
+                .map(|item| {
+                    from_wanted_item_selecting(item, wanted_item_explanation_selection(ctx))
+                })
                 .transpose()
                 .map_err(to_gql_error)?;
             Ok(wanted_item)

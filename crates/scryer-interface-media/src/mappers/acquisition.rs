@@ -424,6 +424,15 @@ pub(super) fn extract_tag_bool(tags: &[String], prefix: &str) -> Option<bool> {
 pub fn from_wanted_item(
     item: scryer_application::AcquisitionScopeState,
 ) -> scryer_application::AppResult<WantedItemPayload> {
+    from_wanted_item_selecting(item, ExplanationSelection::ALL)
+}
+
+/// [`from_wanted_item`] that parses the latest decision's explanation only
+/// for the fields `selection` names.
+pub fn from_wanted_item_selecting(
+    item: scryer_application::AcquisitionScopeState,
+    selection: ExplanationSelection,
+) -> scryer_application::AppResult<WantedItemPayload> {
     let source_provider = source_provider_from_grabbed_release(item.grabbed_release.as_deref());
     Ok(WantedItemPayload {
         id: item.id.into(),
@@ -451,7 +460,7 @@ pub fn from_wanted_item(
         current_score: item.landed_bar,
         latest_release_decision: item
             .latest_release_decision
-            .map(from_release_decision)
+            .map(|decision| from_release_decision_selecting(decision, selection))
             .transpose()?,
         standby_count: 0,
         mismatch_recovery_eligible: item.mismatch_recovery_eligible,
@@ -478,6 +487,15 @@ pub fn from_wanted_item(
 /// batched per-page derivation.
 pub fn from_wanted_scope_view(
     view: scryer_application::WantedScopeView,
+) -> scryer_application::AppResult<WantedItemPayload> {
+    from_wanted_scope_view_selecting(view, ExplanationSelection::ALL)
+}
+
+/// [`from_wanted_scope_view`] that parses the latest decision's explanation
+/// only for the fields `selection` names.
+pub fn from_wanted_scope_view_selecting(
+    view: scryer_application::WantedScopeView,
+    selection: ExplanationSelection,
 ) -> scryer_application::AppResult<WantedItemPayload> {
     let id = view
         .state
@@ -525,7 +543,7 @@ pub fn from_wanted_scope_view(
         latest_release_decision: state
             .as_ref()
             .and_then(|state| state.latest_release_decision.clone())
-            .map(from_release_decision)
+            .map(|decision| from_release_decision_selecting(decision, selection))
             .transpose()?,
         standby_count: view.standby_count,
         mismatch_recovery_eligible: state
@@ -592,6 +610,16 @@ impl ExplanationSelection {
         explanation_json: true,
         decided_by: true,
     };
+
+    /// The explanation fields `decision`, the look-ahead at a
+    /// `ReleaseDecisionPayload` selection, reads — through fragments and
+    /// aliases too.
+    pub fn of(decision: async_graphql::Lookahead<'_>) -> Self {
+        Self {
+            explanation_json: decision.field("explanationJson").exists(),
+            decided_by: decision.field("decidedBy").exists(),
+        }
+    }
 }
 
 pub fn from_release_decision_selecting(
@@ -683,11 +711,20 @@ pub fn from_pending_release_status_count(
 pub fn from_title_acquisition_diagnostics(
     value: scryer_application::TitleAcquisitionDiagnostics,
 ) -> scryer_application::AppResult<TitleAcquisitionDiagnosticsPayload> {
+    from_title_acquisition_diagnostics_selecting(value, ExplanationSelection::ALL)
+}
+
+/// [`from_title_acquisition_diagnostics`] that parses the recent decisions'
+/// explanations only for the fields `selection` names.
+pub fn from_title_acquisition_diagnostics_selecting(
+    value: scryer_application::TitleAcquisitionDiagnostics,
+    selection: ExplanationSelection,
+) -> scryer_application::AppResult<TitleAcquisitionDiagnosticsPayload> {
     Ok(TitleAcquisitionDiagnosticsPayload {
         recent_decisions: value
             .recent_decisions
             .into_iter()
-            .map(from_release_decision)
+            .map(|decision| from_release_decision_selecting(decision, selection))
             .collect::<scryer_application::AppResult<Vec<_>>>()?,
         decision_counts: value
             .decision_counts
@@ -797,6 +834,88 @@ mod release_decision_tests {
             .unwrap();
             assert!(unselected.explanation_json.is_none());
             assert!(unselected.decided_by.is_none());
+        }
+    }
+
+    /// A decision-shaped object whose resolver records what
+    /// [`ExplanationSelection::of`] reads from its own selection.
+    struct ProbeQuery;
+
+    struct ProbeDecision;
+
+    #[async_graphql::Object]
+    impl ProbeDecision {
+        async fn decision_code(&self) -> &str {
+            "accepted"
+        }
+        async fn explanation_json(&self) -> &str {
+            "{}"
+        }
+        async fn decided_by(&self) -> &str {
+            "score"
+        }
+    }
+
+    type Seen = std::sync::Arc<std::sync::Mutex<Option<ExplanationSelection>>>;
+
+    #[async_graphql::Object]
+    impl ProbeQuery {
+        async fn decision(&self, ctx: &async_graphql::Context<'_>) -> ProbeDecision {
+            *ctx.data_unchecked::<Seen>().lock().unwrap() =
+                Some(ExplanationSelection::of(ctx.look_ahead()));
+            ProbeDecision
+        }
+    }
+
+    /// Executes a query that needs no I/O to completion on this thread.
+    fn selection_for(query: &str) -> ExplanationSelection {
+        let seen = Seen::default();
+        let schema = async_graphql::Schema::build(
+            ProbeQuery,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .data(Seen::clone(&seen))
+        .finish();
+        let mut execution = std::pin::pin!(schema.execute(query));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let response = loop {
+            if let std::task::Poll::Ready(response) = execution.as_mut().poll(&mut context) {
+                break response;
+            }
+        };
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        seen.lock().unwrap().expect("probe resolver ran")
+    }
+
+    #[test]
+    fn explanation_selection_reads_exactly_the_selected_explanation_fields() {
+        let none = ExplanationSelection {
+            explanation_json: false,
+            decided_by: false,
+        };
+        let json_only = ExplanationSelection {
+            explanation_json: true,
+            decided_by: false,
+        };
+        let decided_by_only = ExplanationSelection {
+            explanation_json: false,
+            decided_by: true,
+        };
+        for (query, expected) in [
+            ("{ decision { decisionCode } }", none),
+            ("{ decision { decisionCode explanationJson } }", json_only),
+            ("{ decision { step: decidedBy } }", decided_by_only),
+            (
+                "{ decision { ...Step } } fragment Step on ProbeDecision { decidedBy }",
+                decided_by_only,
+            ),
+            (
+                "{ decision { ... on ProbeDecision { explanationJson decidedBy } } }",
+                ExplanationSelection::ALL,
+            ),
+        ] {
+            assert_eq!(selection_for(query), expected, "{query}");
         }
     }
 }
