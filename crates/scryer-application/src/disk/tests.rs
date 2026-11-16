@@ -44,7 +44,10 @@ fn dir() -> RawStat {
 /// `contents_gate`, when set, holds every read through a handle until the
 /// test opens it, after signalling `contents_entered`. `open_dir_gate`, when
 /// set, holds every directory open the same way, after signalling
-/// `open_dir_entered`.
+/// `open_dir_entered`. `list_read_gate`, when set, holds the reading of a
+/// listing's first entry, after its open, the same way. A rename without
+/// replacement of a path in `ambiguous_renames` is refused as one that these
+/// paths alone may draw.
 #[derive(Default)]
 struct Scripted {
     stats: Mutex<HashMap<PathBuf, Result<RawStat, io::ErrorKind>>>,
@@ -64,6 +67,9 @@ struct Scripted {
     contents_entered: Mutex<Option<mpsc::Sender<()>>>,
     open_dir_gate: Mutex<Option<mpsc::Receiver<()>>>,
     open_dir_entered: Mutex<Option<mpsc::Sender<()>>>,
+    list_read_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    list_read_entered: Mutex<Option<mpsc::Sender<()>>>,
+    ambiguous_renames: Mutex<Vec<PathBuf>>,
 }
 
 impl Scripted {
@@ -198,14 +204,21 @@ impl DiskBackend for Scripted {
     fn lstat(&self, path: &Path) -> io::Result<RawStat> {
         self.stat_answer("lstat", path)
     }
-    fn list(&self, path: &Path) -> io::Result<Vec<RawEntry>> {
+    fn list(&self, path: &Path) -> io::Result<super::backend::Listing> {
         self.record("list", path)?;
-        self.listings
-            .lock()
-            .unwrap()
-            .get(path)
-            .cloned()
-            .ok_or_else(|| io::ErrorKind::NotFound.into())
+        let listing = self.listings.lock().unwrap().get(path).cloned();
+        let listing = listing.ok_or(io::ErrorKind::NotFound)?;
+        let gate = self.list_read_gate.lock().unwrap().take();
+        let entered = self.list_read_entered.lock().unwrap().take();
+        Ok(Box::new(listing.into_iter().map(move |entry| {
+            if let Some(entered) = &entered {
+                let _ = entered.send(());
+            }
+            if let Some(gate) = &gate {
+                let _ = gate.recv();
+            }
+            Ok(entry)
+        })))
     }
     /// An entry scripted with an empty name is one the listing fails on.
     fn open_dir(&self, path: &Path) -> io::Result<super::backend::DirEntries> {
@@ -251,7 +264,16 @@ impl DiskBackend for Scripted {
         self.record("rename", source)
     }
     fn rename_no_replace(&self, source: &Path, _dest: &Path) -> io::Result<()> {
-        self.record("rename_no_replace", source)
+        self.record("rename_no_replace", source)?;
+        match self
+            .ambiguous_renames
+            .lock()
+            .unwrap()
+            .contains(&source.to_path_buf())
+        {
+            true => Err(super::backend::AmbiguousRefusal.into()),
+            false => Ok(()),
+        }
     }
     fn rename_claimed(&self, source: &Path, _dest: &Path) -> io::Result<()> {
         self.record("rename_claimed", source)
@@ -451,7 +473,7 @@ async fn concurrent_fresh_reads_of_one_path_share_one_call() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_probe_that_does_not_answer_in_time_reads_unreachable_until_it_does() {
+async fn a_probe_that_does_not_answer_in_time_reads_unreachable_and_is_not_kept() {
     let clock = ManualClock::at(at(0));
     let (disk, backend) = owner(&clock);
     disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
@@ -469,15 +491,13 @@ async fn a_probe_that_does_not_answer_in_time_reads_unreachable_until_it_does() 
             cause: reason::DISK_TIMED_OUT
         }
     );
+    // A read that did not answer is not knowledge of the path.
     assert_eq!(
         disk.observed(&p("/srv/fixture-media/a.mkv")),
-        PathReading::Unreachable {
-            observed_at: at(0),
-            cause: reason::DISK_TIMED_OUT
-        }
+        PathReading::NotObserved
     );
 
-    // When the held probe returns, its newer reading replaces the timeout.
+    // When the held probe returns, its reading is kept.
     clock.set(at(1));
     let (done_tx, done) = mpsc::channel();
     {
@@ -547,6 +567,38 @@ fn only_not_found_is_missing() {
             Some(reason::DISK_PATH_UNREACHABLE)
         );
     }
+}
+
+#[test]
+fn a_read_that_failed_is_not_answered_again_from_the_cache() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let path = p("/srv/fixture-media/denied");
+    backend.stat_is("/srv/fixture-media/denied", Ok(file(5)));
+    assert_eq!(disk.fresh_blocking(&path).exists(), Some(true));
+    // Another process changes it; once the reading ages out, the next read
+    // fails, and that failure is neither kept nor allows the older reading.
+    clock.set(at(1));
+    backend.stat_is(
+        "/srv/fixture-media/denied",
+        Err(io::ErrorKind::PermissionDenied),
+    );
+    assert_eq!(disk.fresh_blocking(&path).exists(), None);
+    assert_eq!(disk.observed(&path), PathReading::NotObserved);
+    assert_eq!(disk.fresh_blocking(&path).exists(), None);
+    assert_eq!(backend.calls_of("lstat"), 3);
+}
+
+#[test]
+fn a_path_that_climbs_through_a_parent_is_never_cached() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    backend.stat_is("/srv/fixture-media/Show/../a.mkv", Ok(file(5)));
+    let path = p("/srv/fixture-media/Show/../a.mkv");
+    assert_eq!(disk.fresh_blocking(&path).exists(), Some(true));
+    assert_eq!(disk.fresh_blocking(&path).exists(), Some(true));
+    assert_eq!(disk.observed(&path), PathReading::NotObserved);
+    assert_eq!(backend.calls_of("lstat"), 2);
 }
 
 #[test]
@@ -816,6 +868,26 @@ fn a_root_without_exclusive_rename_is_learned_once() {
     disk.move_exclusive_blocking(&p("/tmp/invented-b"), &p("/tmp/invented-b2"))
         .unwrap();
     assert_eq!(disk.calls("rename_no_replace"), 3);
+}
+
+#[test]
+fn a_refusal_these_paths_alone_may_draw_falls_back_without_marking_the_root() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    backend
+        .ambiguous_renames
+        .lock()
+        .unwrap()
+        .push(p("/srv/fixture-media/odd"));
+    disk.move_exclusive_blocking(&p("/srv/fixture-media/odd"), &p("/srv/fixture-media/odd2"))
+        .unwrap();
+    assert_eq!(disk.calls("rename_claimed"), 1);
+    // The next move on the root still tries the exclusive rename first.
+    disk.move_exclusive_blocking(&p("/srv/fixture-media/a"), &p("/srv/fixture-media/a2"))
+        .unwrap();
+    assert_eq!(disk.calls("rename_no_replace"), 2);
+    assert_eq!(disk.calls("rename_claimed"), 1);
+    assert!(!read(&disk.inner.volumes).lacks_exclusive_rename(&p("/srv/fixture-media/b")));
 }
 
 #[test]
@@ -1283,7 +1355,7 @@ async fn a_path_still_out_past_its_bound_is_refused_after_its_root_answers_again
         vec![p("/srv/fixture-media/a.mkv"), p("/srv/fixture-media/b.mkv")]
     );
 
-    // Its late answer replaces the unreachable reading and clears the path.
+    // Its late answer is kept and clears the path.
     drop(open);
     until_clear(&disk, ROOT).await;
     assert_eq!(
@@ -2471,6 +2543,53 @@ async fn under_a_root_only_opening_a_visit_is_bounded_not_walking_it() {
     assert_eq!(walking.await.unwrap().unwrap(), ["a.mkv", "b.mkv"]);
     assert!(learned.is_clear());
     assert_eq!(backend.calls_of("visit"), 1);
+}
+
+// The reading of the listing is held after its open; the paused clock is
+// moved past the bound by hand while it is held.
+#[tokio::test(start_paused = true)]
+async fn under_a_root_only_opening_a_listing_is_bounded_not_reading_it() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let bound = std::time::Duration::from_secs(60);
+    disk.set_probe_timeout_for_test(bound);
+    let show = "/srv/fixture-media/Invented Show";
+    backend.lists(
+        show,
+        &[
+            ("a.mkv", Some(EntryKind::File)),
+            ("b.mkv", Some(EntryKind::File)),
+        ],
+    );
+    let (release, gate) = mpsc::channel::<()>();
+    let (entered_tx, entered) = mpsc::channel();
+    *backend.list_read_gate.lock().unwrap() = Some(gate);
+    *backend.list_read_entered.lock().unwrap() = Some(entered_tx);
+
+    let listing = {
+        let disk = disk.clone();
+        tokio::spawn(async move { disk.list(show).await })
+    };
+    tokio::task::spawn_blocking(move || entered.recv().expect("reading entered"))
+        .await
+        .unwrap();
+    tokio::time::advance(bound * 2).await;
+    let learned = read(&disk.inner.volumes).learned(&p(show)).unwrap();
+    assert!(learned.is_clear(), "a slow listing marks nothing stuck");
+    drop(release);
+    let listed = listing
+        .await
+        .unwrap()
+        .expect("a slow listing is not refused");
+    assert_eq!(
+        listed
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>(),
+        [p(&format!("{show}/a.mkv")), p(&format!("{show}/b.mkv"))]
+    );
+    assert!(learned.is_clear());
+    assert_eq!(backend.calls_of("list"), 1);
 }
 
 // The open is held in the backend until the test releases it; the paused

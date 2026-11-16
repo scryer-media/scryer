@@ -21,8 +21,11 @@
 //!   async reads under that root answer unreachable at once, but for one
 //!   trial at a time, so a dead mount does not collect blocking threads.
 //!
-//! Deletion guards always use a fresh read, never [`Disk::observed`] and never
-//! a [`DiskPass`]'s evidence.
+//! A check that decides a removal, a replacement, a move or a claim reads
+//! with [`Disk::uncached`] or [`Disk::uncached_blocking`]: never
+//! [`Disk::observed`], never a [`DiskPass`]'s evidence, and never
+//! [`Disk::fresh`], whose answer can be a reading another process has since
+//! outdated.
 //!
 //! Paths under no configured root (application data: the database, logs,
 //! caches) pass straight through: never cached, never bounded by a timeout.
@@ -588,15 +591,17 @@ impl Disk {
         reading
     }
 
-    /// [`Self::fresh_blocking`] that always asks the disk, for a fact another
-    /// name of the same file can change: its link count.
+    /// [`Self::fresh_blocking`] that always asks the disk and remembers
+    /// nothing: for a check that decides a removal, a replacement, a move or
+    /// a claim, and for a fact another name of the same file can change, its
+    /// link count.
     pub fn uncached_blocking(&self, path: &Path) -> PathReading {
         self.lstat(path)
     }
 
     /// [`Self::fresh_blocking`] off the async runtime, bounded by the root's
-    /// timeout. A probe that does not answer in time is recorded as
-    /// unreachable; when it answers later, its reading replaces that.
+    /// timeout. A probe that does not answer in time reads unreachable, and
+    /// nothing is kept for it; when it answers later, its reading is kept.
     ///
     /// While a read of the same path, or of anything under the same root, is
     /// out past its bound, this answers unreachable at once without probing
@@ -626,12 +631,7 @@ impl Disk {
             .await
         {
             Bounded::Done(reading) => reading,
-            Bounded::TimedOut => {
-                let timed_out = unreachable(reason::DISK_TIMED_OUT);
-                let cache = &self.inner.cache;
-                cache.store(&key_of(&path), timed_out, cache.epoch());
-                timed_out
-            }
+            Bounded::TimedOut => unreachable(reason::DISK_TIMED_OUT),
             Bounded::Refused | Bounded::Failed(_) => unreachable(reason::DISK_PATH_UNREACHABLE),
         }
     }
@@ -675,9 +675,26 @@ impl Disk {
     /// The entries of `dir`. On a configured root the listing seeds a reading
     /// for each entry and forgets cached entries it no longer holds.
     pub fn list_blocking(&self, dir: &Path) -> Result<Vec<Listed>, DiskError> {
+        let (epoch, raw) = self.open_listing_blocking(dir)?;
+        self.read_listing_blocking(dir, epoch, raw)
+    }
+
+    /// Open `dir` for a listing, with the cache epoch from before the open.
+    fn open_listing_blocking(&self, dir: &Path) -> Result<(u64, backend::Listing), DiskError> {
         let epoch = self.inner.cache.epoch();
-        let raw = self
-            .call("list", || self.inner.backend.list(dir))
+        self.call("list", || self.inner.backend.list(dir))
+            .map(|raw| (epoch, raw))
+            .map_err(|error| DiskError::new(DiskVerb::List, dir, error))
+    }
+
+    fn read_listing_blocking(
+        &self,
+        dir: &Path,
+        epoch: u64,
+        raw: backend::Listing,
+    ) -> Result<Vec<Listed>, DiskError> {
+        let raw = raw
+            .collect::<io::Result<Vec<_>>>()
             .map_err(|error| DiskError::new(DiskVerb::List, dir, error))?;
         let observed_at = self.inner.clock.now();
         let listed: Vec<Listed> = raw
@@ -711,11 +728,19 @@ impl Disk {
         Ok(listed)
     }
 
+    /// [`Self::list_blocking`] off the runtime. Under a configured root only
+    /// opening the directory is bounded, as [`Self::visit`] bounds it: a
+    /// large directory is never refused for taking long to read.
     pub async fn list(&self, dir: impl Into<PathBuf>) -> Result<Vec<Listed>, DiskError> {
         let dir = dir.into();
         let timeout = self.traits(&dir).probe_timeout;
-        self.run(DiskVerb::List, dir, timeout, |disk, dir| {
-            disk.list_blocking(dir)
+        let (epoch, raw) = self
+            .run(DiskVerb::List, dir.clone(), timeout, |disk, dir| {
+                disk.open_listing_blocking(dir)
+            })
+            .await?;
+        self.run(DiskVerb::List, dir, None, move |disk, dir| {
+            disk.read_listing_blocking(dir, epoch, raw)
         })
         .await
     }
@@ -1573,7 +1598,8 @@ impl Disk {
     }
 
     /// The exclusive rename, or `None` where the filesystem has none. A root
-    /// whose filesystem refused it is not asked again.
+    /// whose filesystem plainly refused it is not asked again; a refusal these
+    /// paths alone may have drawn falls back for this rename only.
     fn try_rename_no_replace(&self, source: &Path, dest: &Path) -> Option<io::Result<()>> {
         if read(&self.inner.volumes).lacks_exclusive_rename(dest) {
             return None;
@@ -1582,7 +1608,9 @@ impl Disk {
             self.inner.backend.rename_no_replace(source, dest)
         }) {
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                read(&self.inner.volumes).note_no_exclusive_rename(dest);
+                if !backend::AmbiguousRefusal::is(&error) {
+                    read(&self.inner.volumes).note_no_exclusive_rename(dest);
+                }
                 None
             }
             other => Some(other),
@@ -1608,7 +1636,7 @@ impl Disk {
     }
 
     fn cacheable(&self, path: &Path) -> bool {
-        self.traits(path).cacheable
+        self.traits(path).cacheable && !cache::climbs(path)
     }
 
     fn lstat(&self, path: &Path) -> PathReading {

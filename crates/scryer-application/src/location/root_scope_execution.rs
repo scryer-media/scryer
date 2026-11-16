@@ -729,7 +729,7 @@ impl AppUseCase {
         destination_root: &Path,
     ) -> AppResult<RootScopePathFacts> {
         let disk = Disk::process();
-        let source_root_is_symlink = disk.fresh(source_root).await.is(EntryKind::Symlink);
+        let source_root_is_symlink = disk.uncached(source_root).await.is(EntryKind::Symlink);
         let source_root_is_directory = disk.follow(source_root).await.is(EntryKind::Directory);
 
         let destination = match disk.follow(destination_root).await.kind() {

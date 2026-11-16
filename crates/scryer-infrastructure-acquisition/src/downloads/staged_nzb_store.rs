@@ -188,7 +188,7 @@ impl FileSystemStagedNzbStore {
     ) -> AppResult<Option<PathBuf>> {
         let disk = Disk::process();
         let path = entry.path;
-        let reading = disk.fresh_blocking(&path);
+        let reading = disk.uncached_blocking(&path);
         let is_file = match reading.kind() {
             Some(EntryKind::File) => true,
             Some(EntryKind::Symlink) => disk.follow_blocking(&path).kind() == Some(EntryKind::File),

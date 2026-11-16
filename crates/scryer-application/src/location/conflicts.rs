@@ -1744,7 +1744,7 @@ async fn disposal_version_current(
         return Ok(false);
     }
     let source = stored_path_to_path_buf(&row.source_path);
-    let source_absent = Disk::process().fresh(source).await.exists() == Some(false);
+    let source_absent = Disk::process().uncached(source).await.exists() == Some(false);
     if !source_absent {
         return Ok(!row.completed
             && proof.after_versions.get(path) == Some(&actual)
@@ -1801,7 +1801,7 @@ async fn conflict_resolution_current(
     }
     if let Some(source_expected) = &row.source_version {
         let reading = Disk::process()
-            .fresh(stored_path_to_path_buf(&row.source_path))
+            .uncached(stored_path_to_path_buf(&row.source_path))
             .await;
         match reading.exists() {
             Some(true) => {
@@ -1877,7 +1877,7 @@ async fn preview_version_current(
                 added.insert(&row.destination_path);
             }
             let source = stored_path_to_path_buf(&row.source_path);
-            if Disk::process().fresh(source).await.exists() == Some(false) {
+            if Disk::process().uncached(source).await.exists() == Some(false) {
                 removed.insert(&row.source_path);
             }
         }
@@ -2550,7 +2550,7 @@ impl AppUseCase {
                 continue;
             }
             let path = stored_path_to_path_buf(&file.path);
-            let reading = Disk::process().fresh(&path).await;
+            let reading = Disk::process().uncached(&path).await;
             match reading.exists() {
                 Some(true) => {
                     super::title_folder_recovery::inspect_path(&path, false).await?;
@@ -2898,7 +2898,7 @@ impl AppUseCase {
             .collect();
         for path in candidates {
             let native = stored_path_to_path_buf(&path);
-            if Disk::process().fresh(&native).await.is(EntryKind::File) {
+            if Disk::process().uncached(&native).await.is(EntryKind::File) {
                 let current = super::resolution::file_version(&native).await?;
                 if same_inode_version(&version, &current) {
                     before_versions.insert(path, current);
@@ -2956,7 +2956,7 @@ impl AppUseCase {
         }
         let source_version = row.source_version.as_deref().expect("disposal version");
         let source = stored_path_to_path_buf(&row.source_path);
-        if Disk::process().fresh(source).await.exists() != Some(false) {
+        if Disk::process().uncached(source).await.exists() != Some(false) {
             return Err(refused(
                 refusal::FILE_CHANGED,
                 "A disposal pathname is still occupied; its files were preserved",
@@ -3003,7 +3003,7 @@ impl AppUseCase {
         let mut verified_content = false;
         for path in candidates {
             let native = stored_path_to_path_buf(&path);
-            let reading = Disk::process().fresh(&native).await;
+            let reading = Disk::process().uncached(&native).await;
             match reading.exists() {
                 Some(false) => continue,
                 None => return Err(unread(reading)),
@@ -3095,7 +3095,7 @@ impl AppUseCase {
             .filter(|path| !retained.contains(*path))
         {
             if Disk::process()
-                .fresh(stored_path_to_path_buf(path))
+                .uncached(stored_path_to_path_buf(path))
                 .await
                 .exists()
                 == Some(true)
@@ -3119,7 +3119,7 @@ impl AppUseCase {
                     .collect();
                 for path in candidates {
                     let native = stored_path_to_path_buf(&path);
-                    if !Disk::process().fresh(&native).await.is(EntryKind::File) {
+                    if !Disk::process().uncached(&native).await.is(EntryKind::File) {
                         continue;
                     }
                     let version = super::resolution::file_version(&native).await?;
@@ -3198,7 +3198,7 @@ impl AppUseCase {
             let mut disposal_index = resolutions
                 .iter()
                 .position(|row| row.is_disposal() && row.source_path == *path);
-            let reading = Disk::process().fresh(&source).await;
+            let reading = Disk::process().uncached(&source).await;
             match reading.exists() {
                 Some(false) => {}
                 None => return Err(unread(reading)),

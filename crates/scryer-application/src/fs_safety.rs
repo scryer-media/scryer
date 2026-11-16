@@ -38,7 +38,7 @@ pub(crate) fn containing_root_for_path(path: &Path, roots: &[PathBuf]) -> AppRes
 pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {
     use crate::error_reasons::fs_safety as reasons;
     let disk = Disk::process();
-    let reading = disk.fresh_blocking(root);
+    let reading = disk.uncached_blocking(root);
     let (code, problem) = match reading.kind() {
         Some(EntryKind::Directory) => match disk.has_entries_blocking(root) {
             Ok(true) => return Ok(()),
@@ -491,7 +491,7 @@ async fn transfer_across_devices(
     dest: &Path,
     options: MoveOptions,
 ) -> io::Result<()> {
-    let reading = disk.fresh(source).await;
+    let reading = disk.uncached(source).await;
     let Some(kind) = reading.kind() else {
         let kind = match reading.exists() {
             Some(false) => io::ErrorKind::NotFound,
@@ -626,7 +626,7 @@ pub(crate) async fn exclusive_rename(source: &Path, dest: &Path) -> Option<Resul
 /// A destination that *is* the source is a case-only rename on a
 /// case-insensitive volume, not a collision, so it counts as free.
 pub async fn destination_is_free_for(source: &Path, dest: &Path) -> bool {
-    Disk::process().fresh(dest).await.exists() != Some(true) || paths_are_same_file(source, dest)
+    Disk::process().uncached(dest).await.exists() != Some(true) || paths_are_same_file(source, dest)
 }
 
 /// True when two paths differ only in case or Unicode form, which is how a

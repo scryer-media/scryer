@@ -813,13 +813,13 @@ async fn prune_stale_restore_uploads(data_dir: &Path) {
     let cutoff = SystemTime::now().checked_sub(Duration::from_secs(RESTORE_UPLOAD_TTL_SECONDS));
 
     for entry in entries {
-        // The removal is decided on a fresh read of the entry, never on the
+        // The removal is decided on an uncached read of the entry, never on the
         // listing.
         let PathReading::Known {
             kind: EntryKind::Directory,
             modified,
             ..
-        } = disk.fresh(&entry.path).await
+        } = disk.uncached(&entry.path).await
         else {
             continue;
         };

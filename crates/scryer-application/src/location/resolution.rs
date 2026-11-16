@@ -380,7 +380,7 @@ impl ConflictResolver {
                 warning: None,
                 reason_code: None,
             };
-            let reading = Disk::process().fresh(&destination).await;
+            let reading = Disk::process().uncached(&destination).await;
             let existing = match reading.exists() {
                 Some(true) => {
                     record.destination_version = Some(file_version(&destination).await?);
@@ -481,7 +481,7 @@ impl ConflictResolver {
                 ));
             }
             if verified.hashes.is_none() {
-                let reading = Disk::process().fresh(source).await;
+                let reading = Disk::process().uncached(source).await;
                 if reading.exists() != Some(true) {
                     return Err(unread(source, reading));
                 }
@@ -605,14 +605,14 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
         return Ok(());
     }
     let partial = super::verify::partial_destination_path(destination);
-    let reading = Disk::process().fresh(&partial).await;
+    let reading = Disk::process().uncached(&partial).await;
     match reading.exists() {
         Some(false) => return Ok(()),
         None => return Err(unread(&partial, reading)),
         Some(true) => {}
     }
     let source = Disk::process()
-        .fresh(stored_path_to_path_buf(&row.source_path))
+        .uncached(stored_path_to_path_buf(&row.source_path))
         .await;
     if !reading.is(EntryKind::File) || reading.size() > Some(source.size().unwrap_or_default()) {
         return Err(AppError::validation_refused(

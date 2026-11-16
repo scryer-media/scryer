@@ -64,7 +64,7 @@ impl PolicyMediaFileDeletePlan {
             return Ok(None);
         }
         for entry in &self.paths {
-            match Disk::process().fresh(&entry.path).await.exists() {
+            match Disk::process().uncached(&entry.path).await.exists() {
                 Some(false) => {}
                 Some(true) => return Ok(Some(false)),
                 None => return Ok(None),
@@ -1729,7 +1729,7 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     }
 
     let disk = Disk::process();
-    let reading = disk.fresh_blocking(&normalized_folder);
+    let reading = disk.uncached_blocking(&normalized_folder);
     match reading.kind() {
         Some(EntryKind::Directory) => {}
         Some(EntryKind::Symlink) => {
@@ -2062,7 +2062,7 @@ fn walk_directory_entries(
     child_paths.sort();
 
     for path in child_paths {
-        match known_kind(&path, disk.fresh_blocking(&path))? {
+        match known_kind(&path, disk.uncached_blocking(&path))? {
             EntryKind::Symlink => {
                 file_entries.push(DeleteManifestEntry {
                     path,
@@ -2097,7 +2097,7 @@ fn walk_directory_entries(
 fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<DeleteManifestEntry>> {
     let mut entries = Vec::new();
     for path in paths {
-        let reading = Disk::process().fresh_blocking(&path);
+        let reading = Disk::process().uncached_blocking(&path);
         if reading.exists() == Some(false) {
             continue;
         }

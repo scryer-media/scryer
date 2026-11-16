@@ -287,7 +287,7 @@ async fn inspect_payload_location(entry: &Path, payload: &Path) -> AppResult<()>
         )
     };
     let disk = Disk::process();
-    if !known_kind(entry, disk.fresh(entry).await)?.eq(&EntryKind::Directory) {
+    if !known_kind(entry, disk.uncached(entry).await)?.eq(&EntryKind::Directory) {
         return Err(invalid());
     }
     let relative = payload.strip_prefix(entry).map_err(|_| invalid())?;
@@ -305,7 +305,7 @@ pub(crate) async fn recycled_payload_path(
     let original = manifest.original_path_buf();
     let mapped = entry.join(payload_relative_path(&original));
     inspect_payload_location(entry, &mapped).await?;
-    let reading = Disk::process().fresh(&mapped).await;
+    let reading = Disk::process().uncached(&mapped).await;
     match reading.exists() {
         Some(true) if !payload_is_manifest(entry, &mapped).await? => return Ok(mapped),
         Some(_) => {}
@@ -326,7 +326,7 @@ pub(crate) async fn recycled_payload_path(
             .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
     );
     inspect_payload_location(entry, &separated).await?;
-    if Disk::process().fresh(&separated).await.exists() == Some(true)
+    if Disk::process().uncached(&separated).await.exists() == Some(true)
         && !payload_is_manifest(entry, &separated).await?
     {
         return Ok(separated);
@@ -444,7 +444,7 @@ fn trusted_committed_entry(
         .and_then(|name| name.to_str())
         .ok_or_else(|| "recycle entry has no valid directory name".to_string())?;
     validate_recycle_entry_id(entry_name).map_err(|error| error.to_string())?;
-    let entry_kind = known_kind(entry_dir, Disk::process().fresh_blocking(entry_dir))
+    let entry_kind = known_kind(entry_dir, Disk::process().uncached_blocking(entry_dir))
         .map_err(|error| format!("failed to stat recycle entry directory: {error}"))?;
     if entry_kind == EntryKind::Symlink {
         return Err("recycle entry directory is a symlink".to_string());
@@ -631,7 +631,7 @@ pub(crate) async fn finish_conflict_recycle(
         return Err(invalid());
     }
     let partial = crate::location::verify::partial_destination_path(&payload);
-    if Disk::process().fresh(&partial).await.exists() != Some(false) {
+    if Disk::process().uncached(&partial).await.exists() != Some(false) {
         return Err(invalid());
     }
     if manifest.status.as_deref() == Some(RECYCLE_STATUS_CONFLICT_PENDING) {
@@ -727,7 +727,7 @@ pub(crate) async fn renew_conflict_recycle(
         return prepare_conflict_recycle(config, source, manifest).await;
     }
     let partial = crate::location::verify::partial_destination_path(&payload);
-    let reading = Disk::process().fresh(&partial).await;
+    let reading = Disk::process().uncached(&partial).await;
     match reading.exists() {
         Some(true) => {
             // A suffix and a pending entry do not prove ownership of these
@@ -759,13 +759,13 @@ pub(crate) async fn execute_conflict_recycle(
         return Err(invalid());
     }
     let partial = crate::location::verify::partial_destination_path(&payload);
-    if Disk::process().fresh(&partial).await.exists() != Some(false) {
+    if Disk::process().uncached(&partial).await.exists() != Some(false) {
         return Err(invalid());
     }
     if crate::location::resolution::file_version(source).await? != expected_source_version {
         return Err(invalid());
     }
-    let reading = Disk::process().fresh(&payload).await;
+    let reading = Disk::process().uncached(&payload).await;
     match reading.exists() {
         Some(true) => {
             // A cross-volume copy can have been published before its selected
@@ -996,7 +996,7 @@ async fn recycle_file_inner(
     commit_after_move: bool,
     prepare_only: bool,
 ) -> AppResult<Option<RecycleResult>> {
-    let source_reading = Disk::process().fresh(source_path).await;
+    let source_reading = Disk::process().uncached(source_path).await;
     match source_reading.exists() {
         Some(true) => {}
         Some(false) => return Ok(None),
@@ -1592,7 +1592,7 @@ async fn restore_over_by_verified_copy(
     original_path: &Path,
     progress: CopyProgress,
 ) -> AppResult<()> {
-    let reading = Disk::process().fresh(original_path).await;
+    let reading = Disk::process().uncached(original_path).await;
     let claim = match reading.exists() {
         Some(true) => DestinationClaim::AlreadyHeld,
         Some(false) => DestinationClaim::ClaimHere,
@@ -1669,7 +1669,7 @@ async fn restore_from_recycle_inner(
 pub(crate) async fn ensure_recycled_restore_source_is_regular(
     recycled_path: &Path,
 ) -> AppResult<()> {
-    let reading = Disk::process().fresh(recycled_path).await;
+    let reading = Disk::process().uncached(recycled_path).await;
     match reading.exists() {
         Some(true) => {}
         Some(false) => {
@@ -1772,7 +1772,7 @@ async fn inspect_entry_dir(
     config: &RecycleBinConfig,
     entry_dir: PathBuf,
 ) -> (Option<Option<String>>, Option<CommittedRecycleEntry>) {
-    let reading = Disk::process().fresh(&entry_dir).await;
+    let reading = Disk::process().uncached(&entry_dir).await;
     if reading.exists().is_none() {
         warn!(
             path = %entry_dir.display(),
@@ -2492,9 +2492,9 @@ async fn recognized_entry(entry_dir: &Path) -> Option<(String, RecycleManifest)>
         return None;
     }
     let disk = Disk::process();
-    if !disk.fresh(entry_dir).await.is(EntryKind::Directory)
+    if !disk.uncached(entry_dir).await.is(EntryKind::Directory)
         || !disk
-            .fresh(manifest_path(entry_dir))
+            .uncached(manifest_path(entry_dir))
             .await
             .is(EntryKind::File)
     {
@@ -2567,7 +2567,7 @@ async fn relocate_entry(
     manifest: &RecycleManifest,
     ops: &RelocationOps,
 ) -> Result<RelocatedEntry, String> {
-    let reading = Disk::process().fresh(dest).await;
+    let reading = Disk::process().uncached(dest).await;
     match reading.exists() {
         Some(true) => return Err(relocation_collision(dest)),
         Some(false) => {}

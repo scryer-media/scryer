@@ -512,7 +512,7 @@ impl TitleFileMover for RootMoveFileMover {
             && stage_same_filesystem_file(source, destination).await?
         {
             VerifiedFile::same_filesystem_rename(source.clone(), destination.clone(), request.depth)
-        } else if Disk::process().fresh(destination).await.exists() == Some(true) {
+        } else if Disk::process().uncached(destination).await.exists() == Some(true) {
             // The runner only asks for files it has no verification record for,
             // so a destination that is already there is the crash window
             // between a completed copy's promotion and the record that should
@@ -1211,7 +1211,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .find(|row| row.source_path == file.source_path);
             let mut resolved = file.clone();
             if let Some(row) = resolution {
-                if Disk::process().fresh(file.source()).await.exists() == Some(false) {
+                if Disk::process().uncached(file.source()).await.exists() == Some(false) {
                     continue;
                 }
                 if !row.proof_is_current().await {
@@ -1280,7 +1280,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // A durable copy receipt describes the bytes copied, not whatever
             // occupies the source name after an interruption. Recheck both
             // copies and their versions before handing this path to disposal.
-            let reading = Disk::process().fresh(&source).await;
+            let reading = Disk::process().uncached(&source).await;
             match reading.exists() {
                 Some(false) => continue,
                 None => {
@@ -1677,7 +1677,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
                     file.source_path
                 ),
             );
-            if Disk::process().fresh(&path).await.exists() != Some(true) {
+            if Disk::process().uncached(&path).await.exists() != Some(true) {
                 return Ok(stale(PlanInputChange::UnprocessedSourceItem, detail));
             }
         }
@@ -1773,7 +1773,7 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         media_file_id: Option<&str>,
         size_bytes: u64,
     ) -> AppResult<SourceDisposal> {
-        if Disk::process().fresh(source).await.exists() != Some(true) {
+        if Disk::process().uncached(source).await.exists() != Some(true) {
             return Ok(SourceDisposal::AlreadyAbsent);
         }
 

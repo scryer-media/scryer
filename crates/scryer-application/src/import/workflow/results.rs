@@ -2666,7 +2666,7 @@ async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) ->
     {
         Ok(()) => Ok(()),
         Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
-            let reading = disk.fresh(checkpoint).await;
+            let reading = disk.uncached(checkpoint).await;
             let Some(kind) = reading.kind() else {
                 return Err(AppError::Repository(format!(
                     "failed to inspect download client payload cleanup checkpoint {}: {}",

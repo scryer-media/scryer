@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use crate::disk::{Disk, EntryKind, PathReading};
+use crate::disk::{Disk, EntryKind, IfPresent, PathReading};
 
 mod scan_cache;
 pub(crate) use scan_cache::{ScanClaimReservation, ScanOwnershipContext, with_scan_ownership};
@@ -84,7 +84,7 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
     let mut ancestor = path;
     let mut missing = Vec::new();
     loop {
-        let reading = disk.fresh_blocking(ancestor);
+        let reading = disk.uncached_blocking(ancestor);
         match reading.exists() {
             Some(true) => {
                 let mut resolved = disk.canonicalize_blocking(ancestor).map_err(|error| {
@@ -335,7 +335,7 @@ impl UnreadableFolders {
     fn probe(&mut self, folder: &Path, shared: bool) -> Result<std::path::PathBuf, bool> {
         self.probed();
         let disk = Disk::process();
-        let reading = disk.fresh_blocking(folder);
+        let reading = disk.uncached_blocking(folder);
         let (failure, seen) = match reading.exists() {
             Some(true) => {
                 self.probed();
@@ -535,8 +535,8 @@ pub(crate) async fn title_folder_is_case_variant_of(title: &Title, folder_path: 
     }
     let disk = Disk::process();
     let (owned, scanned) = tokio::join!(
-        disk.fresh(stored_path_to_path_buf(owned_path)),
-        disk.fresh(folder_path),
+        disk.uncached(stored_path_to_path_buf(owned_path)),
+        disk.uncached(folder_path),
     );
     match (owned, scanned) {
         (
@@ -991,7 +991,7 @@ impl FolderOverlapKeys {
                 None => {
                     let probe = evidence(ancestor).unwrap_or_else(|| {
                         self.link_probes += 1;
-                        LinkProbe::of_reading(Disk::process().fresh_blocking(ancestor))
+                        LinkProbe::of_reading(Disk::process().uncached_blocking(ancestor))
                     });
                     self.gone |= probe == LinkProbe::Gone;
                     self.links.insert(ancestor.to_path_buf(), probe);
@@ -1563,16 +1563,13 @@ async fn ensure_unowned_folder_claimable(
     let has_contents = if boundary_verified {
         false
     } else {
-        let disk = Disk::process();
-        let reading = disk.fresh(folder_path).await;
-        match reading.exists() {
-            Some(true) => disk
-                .has_entries(folder_path)
-                .await
-                .map_err(|error| AppError::Repository(std::io::Error::from(error).to_string()))?,
-            Some(false) => false,
-            None => return Err(AppError::Repository(reading.absence().to_string())),
-        }
+        // A missing folder has no contents.
+        Disk::process()
+            .has_entries(folder_path)
+            .await
+            .if_present()
+            .map_err(|error| AppError::Repository(std::io::Error::from(error).to_string()))?
+            .unwrap_or(false)
     };
     let contents_probe_ms = elapsed_ms(stage);
     let stage = std::time::Instant::now();

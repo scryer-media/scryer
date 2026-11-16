@@ -153,7 +153,7 @@ fn reclaim_expired_cleanup_marker(
     let _guard = RECLAIM.lock().unwrap_or_else(|error| error.into_inner());
     let marker = directory.join(format!(".cleanup.wip-{pid}"));
     let disk = Disk::process();
-    let modified = match disk.fresh_blocking(&marker) {
+    let modified = match disk.uncached_blocking(&marker) {
         PathReading::Known {
             kind: EntryKind::File,
             len: Some(0),

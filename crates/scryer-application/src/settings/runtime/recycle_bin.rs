@@ -225,7 +225,7 @@ impl AppUseCase {
     /// cannot be told apart from either.
     fn resolve_existing_component(candidate: &Path) -> Result<Option<PathBuf>, String> {
         let disk = crate::disk::Disk::process();
-        match disk.fresh_blocking(candidate) {
+        match disk.uncached_blocking(candidate) {
             crate::disk::PathReading::Known { kind, .. } => match disk.canonicalize_blocking(candidate) {
                 Ok(real) => Ok(Some(real)),
                 Err(error) if kind == crate::disk::EntryKind::Symlink => Err(format!(

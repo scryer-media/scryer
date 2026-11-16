@@ -1567,14 +1567,16 @@ async fn directory_has_episode_layout(
     let EpisodeFolderBoundaryPolicy::Configured(patterns) = episode_folders;
     let patterns = patterns.to_vec();
     // Each season folder is checked as the listing reaches it, so the walk
-    // stops at the first one holding media.
+    // stops at the first one holding media. Its open is bounded as the
+    // outer open is: the visit runs on a blocking thread, which waits on it.
+    let runtime = tokio::runtime::Handle::current();
     let disk = Disk::process();
     let found = disk.visit(path, Ok(false), move |found, entry| {
         let policy = EpisodeFolderBoundaryPolicy::Configured(&patterns);
         *found = entry.and_then(|entry| {
             Ok(entry.kind()? == EntryKind::Directory
                 && policy.matches(&entry.name().to_string_lossy())
-                && loose_root_files_blocking(&Disk::process(), entry.path())? > 0)
+                && runtime.block_on(loose_root_files(entry.path()))? > 0)
         });
         match found {
             Ok(false) => ControlFlow::Continue(()),
@@ -1925,18 +1927,15 @@ pub(crate) async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf
 }
 
 pub(crate) async fn count_series_loose_root_files(root: &Path) -> AppResult<usize> {
-    Disk::process()
-        .visit(root, Ok(0), count_loose_root_file)
+    loose_root_files(root)
         .await
-        .and_then(|count| count)
         .map_err(|error| AppError::Repository(error.to_string()))
 }
 
-/// [`count_series_loose_root_files`] on a blocking thread.
-fn loose_root_files_blocking(disk: &Disk, root: &Path) -> Result<usize, DiskError> {
-    let mut count = Ok(0);
-    disk.visit_blocking(root, |entry| count_loose_root_file(&mut count, entry))?;
-    count
+async fn loose_root_files(root: &Path) -> Result<usize, DiskError> {
+    Disk::process()
+        .visit(root, Ok(0), count_loose_root_file)
+        .await?
 }
 
 /// Count `entry` when it is a loose video file; an entry whose listing or

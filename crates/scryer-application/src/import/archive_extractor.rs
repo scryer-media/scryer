@@ -2265,7 +2265,7 @@ pub fn is_archive_workspace_output(source: &Path, dest: &Path) -> bool {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(is_workspace_output_dir_name)
-            && disk.fresh_blocking(output_dir).kind() == Some(EntryKind::Directory)
+            && disk.uncached_blocking(output_dir).kind() == Some(EntryKind::Directory)
             && disk
                 .canonicalize_blocking(output_dir)
                 .is_ok_and(|output| canonical_source.starts_with(output))

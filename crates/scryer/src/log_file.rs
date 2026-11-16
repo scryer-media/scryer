@@ -222,7 +222,7 @@ fn open_with_clock(
         // Preserve it; it has no events to recover and must not become an archive.
         .filter(|p| {
             !matches!(
-                disk.fresh_blocking(p),
+                disk.uncached_blocking(p),
                 PathReading::Known { len: Some(0), .. }
             )
         })
@@ -400,7 +400,7 @@ impl Active {
             ));
             let candidate = self.path.with_file_name(name);
             if disk
-                .fresh_blocking(&candidate.with_extension("gz"))
+                .uncached_blocking(&candidate.with_extension("gz"))
                 .exists()
                 == Some(true)
             {
@@ -542,7 +542,7 @@ fn same_contents(source: &Path, archive: &Path) -> io::Result<bool> {
 fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
     let destination = source.with_extension("gz");
     let disk = Disk::process();
-    if disk.fresh_blocking(&destination).exists() == Some(true) {
+    if disk.uncached_blocking(&destination).exists() == Some(true) {
         if same_contents(source, &destination)? {
             // This namespace is published only after syncing the gzip. Recovery
             // verifies its entire contents, including the checksum, before unlinking.

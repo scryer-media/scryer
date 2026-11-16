@@ -578,7 +578,7 @@ impl HttpStateStore {
         let disk = Disk::process();
         let queue = self.path.with_extension(LEGACY_STAGING_EXTENSION);
         let mut leftovers = Vec::new();
-        if disk.fresh(&queue).await.is(EntryKind::File) {
+        if disk.uncached(&queue).await.is(EntryKind::File) {
             leftovers.push(queue);
         }
         match disk.list(&self.progress_dir).await {

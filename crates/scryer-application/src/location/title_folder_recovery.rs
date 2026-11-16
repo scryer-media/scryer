@@ -555,7 +555,7 @@ async fn locate_hashed_destination(
                 continue;
             }
             inspect_path(&path, false).await?;
-            let reading = Disk::process().fresh(&path).await;
+            let reading = Disk::process().uncached(&path).await;
             if reading.exists().is_none() {
                 return Err(unreadable(reading));
             }
@@ -861,7 +861,7 @@ impl AppUseCase {
                     )
                 })?)
             };
-            let reading = Disk::process().fresh(&source).await;
+            let reading = Disk::process().uncached(&source).await;
             let source_version = match reading.exists() {
                 Some(true) => {
                     inspect_path(&source, false).await?;
@@ -948,7 +948,7 @@ impl AppUseCase {
             return Ok(());
         }
         let path = stored_path_to_path_buf(destination);
-        let reading = Disk::process().fresh(&path).await;
+        let reading = Disk::process().uncached(&path).await;
         match reading.exists() {
             Some(false) => return Ok(()),
             None => return Err(unreadable(reading)),

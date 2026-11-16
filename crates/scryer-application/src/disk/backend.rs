@@ -114,6 +114,9 @@ impl RawVisit for std::fs::DirEntry {
 /// The entries of an open directory, read one at a time.
 pub(crate) type DirEntries = Box<dyn Iterator<Item = io::Result<Box<dyn RawVisit>>> + Send>;
 
+/// The entries of a directory opened for a listing, read one at a time.
+pub(crate) type Listing = Box<dyn Iterator<Item = io::Result<RawEntry>> + Send>;
+
 /// Whether a written file reached stable storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncOutcome {
@@ -189,13 +192,37 @@ impl From<Refused> for io::Error {
     }
 }
 
+/// An exclusive rename refused with an answer a filesystem without one gives,
+/// but that these paths alone can also draw: carried inside an
+/// [`io::ErrorKind::Unsupported`] error, so the rename falls back without
+/// concluding that the filesystem lacks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the exclusive rename was refused for these paths")]
+pub(crate) struct AmbiguousRefusal;
+
+impl AmbiguousRefusal {
+    pub(crate) fn is(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .is_some_and(|inner| inner.downcast_ref::<Self>().is_some())
+    }
+}
+
+impl From<AmbiguousRefusal> for io::Error {
+    fn from(refusal: AmbiguousRefusal) -> Self {
+        io::Error::new(io::ErrorKind::Unsupported, refusal)
+    }
+}
+
 /// The disk seam. One method per platform operation.
 pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// Follows links.
     fn stat(&self, path: &Path) -> io::Result<RawStat>;
     /// Does not follow links.
     fn lstat(&self, path: &Path) -> io::Result<RawStat>;
-    fn list(&self, path: &Path) -> io::Result<Vec<RawEntry>>;
+    /// Opens a directory for a listing; its entries are read as the
+    /// iterator is driven.
+    fn list(&self, path: &Path) -> io::Result<Listing>;
     /// Opens a directory. Its entries are read in listing order as the
     /// iterator is driven, an entry the listing failed on as its error.
     fn open_dir(&self, path: &Path) -> io::Result<DirEntries>;
@@ -315,9 +342,8 @@ impl DiskBackend for SystemBackend {
         Ok(std::fs::read_dir(path)?.next().transpose()?.is_some())
     }
 
-    fn list(&self, path: &Path) -> io::Result<Vec<RawEntry>> {
-        let mut entries = Vec::new();
-        for entry in std::fs::read_dir(path)? {
+    fn list(&self, path: &Path) -> io::Result<Listing> {
+        Ok(Box::new(std::fs::read_dir(path)?.map(|entry| {
             let entry = entry?;
             // Unix listings carry the entry's kind but not its size, and
             // `DirEntry::metadata` there is one more call per entry, so it is
@@ -330,13 +356,12 @@ impl DiskBackend for SystemBackend {
                 Some(stat) => Some(stat.kind),
                 None => RawVisit::kind(&entry).ok(),
             };
-            entries.push(RawEntry {
+            Ok(RawEntry {
                 name: entry.file_name(),
                 kind,
                 stat,
-            });
-        }
-        Ok(entries)
+            })
+        })))
     }
 
     fn open_dir(&self, path: &Path) -> io::Result<DirEntries> {
@@ -789,9 +814,10 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     let error = io::Error::last_os_error();
     match error.raw_os_error() {
         // An old kernel, or a filesystem without exclusive rename.
-        Some(libc::ENOSYS) | Some(libc::ENOTSUP) | Some(libc::EINVAL) => {
-            Err(io::ErrorKind::Unsupported.into())
-        }
+        Some(libc::ENOSYS) | Some(libc::ENOTSUP) => Err(io::ErrorKind::Unsupported.into()),
+        // A filesystem without the flag, or a rename these paths cannot take,
+        // such as a directory into itself.
+        Some(libc::EINVAL) => Err(AmbiguousRefusal.into()),
         _ => Err(error),
     }
 }
@@ -800,7 +826,8 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
 fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
-    // Win32 error codes a filesystem returns for an operation it lacks.
+    // Win32 error codes a filesystem returns for an operation it lacks, and
+    // a filter or a reparse point for one path alone.
     const ERROR_INVALID_FUNCTION: i32 = 1;
     const ERROR_NOT_SUPPORTED: i32 = 50;
 
@@ -834,9 +861,7 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     }
     let error = io::Error::last_os_error();
     match error.raw_os_error() {
-        Some(ERROR_INVALID_FUNCTION) | Some(ERROR_NOT_SUPPORTED) => {
-            Err(io::ErrorKind::Unsupported.into())
-        }
+        Some(ERROR_INVALID_FUNCTION) | Some(ERROR_NOT_SUPPORTED) => Err(AmbiguousRefusal.into()),
         _ => Err(error),
     }
 }
@@ -922,7 +947,11 @@ mod tests {
             io::ErrorKind::NotFound
         );
 
-        let mut listed = backend.list(dir.path()).unwrap();
+        let mut listed = backend
+            .list(dir.path())
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap();
         listed.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].name, "Extras");

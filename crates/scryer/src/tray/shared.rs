@@ -1204,7 +1204,7 @@ fn is_desktop_profile_shape(path: &Path) -> bool {
 /// itself, never what it points at.
 fn remove_path(path: &Path) -> std::io::Result<()> {
     let disk = Disk::process();
-    let removal = match disk.fresh_blocking(path) {
+    let removal = match disk.uncached_blocking(path) {
         PathReading::Known {
             kind: EntryKind::Directory,
             ..

@@ -841,7 +841,7 @@ where
 /// prove ownership from its own durable record clears the partial before it
 /// asks for the copy (see [`crate::location::resolution::ConflictResolver`]).
 async fn ensure_partial_path_free(partial: &Path) -> AppResult<()> {
-    let reading = Disk::process().fresh(partial).await;
+    let reading = Disk::process().uncached(partial).await;
     match reading.exists() {
         Some(false) => Ok(()),
         None => Err(AppError::Repository(format!(

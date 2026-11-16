@@ -486,7 +486,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
                 ));
             }
         }
-        if Disk::process().fresh(destination).await.exists() == Some(false) {
+        if Disk::process().uncached(destination).await.exists() == Some(false) {
             if file.source_version.is_none() {
                 return Err(fail(
                     crate::error_reasons::location::RECOVERY_SOURCE_AND_DESTINATION_NOT_FOUND,
@@ -558,7 +558,7 @@ async fn create_recovery_destination_directories(
     let mut current = parent;
     let disk = Disk::process();
     loop {
-        let reading = disk.fresh(current).await;
+        let reading = disk.uncached(current).await;
         match reading.exists() {
             Some(true) if reading.is(EntryKind::Directory) => break,
             Some(true) => {
@@ -587,7 +587,7 @@ async fn create_recovery_destination_directories(
             }
             Err(error) if error.reason() == DISK_DESTINATION_EXISTS => {
                 inspect_path(&directory, false).await?;
-                let reading = disk.fresh(&directory).await;
+                let reading = disk.uncached(&directory).await;
                 if reading.exists().is_none() {
                     return Err(unreadable(reading));
                 }

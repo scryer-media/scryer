@@ -996,7 +996,7 @@ async fn recover_legacy_partial(
     }
     let original_part = super::state::part_path_for(&original_final, file.attempt);
     let disk = Disk::process();
-    let (kind, len) = match disk.fresh(&original_part).await {
+    let (kind, len) = match disk.uncached(&original_part).await {
         PathReading::Known { kind, len, .. } => (kind, len.unwrap_or(0)),
         PathReading::Missing { .. } => return Ok(()),
         PathReading::Unreachable { .. } | PathReading::NotObserved => {
@@ -1029,7 +1029,7 @@ async fn already_in_place(
     if may_exist(disk.follow(file.part_path()).await) {
         return Ok(false);
     }
-    match disk.fresh(&file.final_path).await {
+    match disk.uncached(&file.final_path).await {
         PathReading::Known { kind, len, .. } => {
             if let Some(proof) = &file.publication
                 && proof.attempt == file.attempt
@@ -1593,13 +1593,13 @@ async fn same_contents(left: &Path, right: &Path) -> Result<bool, TransferError>
         TransferError::Permanent(format!("cannot inspect {}: {error}", path.display()))
     };
     let disk = Disk::process();
-    // Fresh reads: what they find decides whether the partial is removed.
+    // Uncached reads: what they find decides whether the partial is removed.
     let file_len = |reading: PathReading, path: &Path| match reading {
         PathReading::Known { kind, len, .. } => Ok((kind == EntryKind::File).then_some(len)),
         _ => Err(cannot_inspect(path)),
     };
-    let left_len = file_len(disk.fresh(left).await, left)?;
-    let right_len = file_len(disk.fresh(right).await, right)?;
+    let left_len = file_len(disk.uncached(left).await, left)?;
+    let right_len = file_len(disk.uncached(right).await, right)?;
     if left_len.is_none() || right_len.is_none() || left_len != right_len {
         return Ok(false);
     }
