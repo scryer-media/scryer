@@ -5558,13 +5558,13 @@ const cs: LocaleDictionary = {
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Jednoduchý",
   "settings.ruleBuilderModeHelp":
-    "Jednoduchý režim sestaví pravidlo z podmínek a výsledků a napíše Rego za vás. Pokročilý režim zobrazí toto Rego jen pro čtení a do jednoduchého režimu se můžete kdykoli vrátit. Chcete-li Rego měnit sami, zvolte Upravit jako Rego; poté už pravidlo nepůjde otevřít v jednoduchém editoru.",
+    "Jednoduchý režim sestaví pravidlo z podmínek a výsledků a napíše Rego za vás. Pokročilý režim toto Rego zobrazí a do jednoduchého režimu se můžete vrátit, dokud ho neupravíte. Jakmile kód upravíte, pravidlo musí zůstat pokročilé.",
   "settings.ruleBuilderUnavailable":
     "Kód tohoto pravidla byl upraven ručně nebo nevznikl v jednoduchém editoru, takže jej lze upravovat jen jako Rego.",
   "settings.ruleBuilderEditAsRego": "Upravit jako Rego",
   "settings.ruleBuilderEditAsRegoTitle": "Upravit toto pravidlo jako Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
-    "Jakmile toto pravidlo upravíte jako Rego, už ho nebude možné otevřít v jednoduchém editoru, ani po uložení. Současný kód Rego zůstane zachován jako výchozí bod.",
+    "Jakmile kód upravíte, pravidlo musí zůstat pokročilé a už ho nebude možné otevřít v jednoduchém režimu, ani po uložení.",
   "settings.ruleBuilderIncomplete":
     "Před uložením dokončete podmínky a výsledky.",
   "settings.ruleBuilderConditions": "Podmínky",

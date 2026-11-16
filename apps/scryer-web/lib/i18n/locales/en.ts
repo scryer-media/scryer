@@ -10238,13 +10238,13 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Simple",
   "settings.ruleBuilderModeHelp":
-    "Simple builds the rule from conditions and outcomes and writes the Rego for you. Advanced shows that Rego read-only, and you can switch back to Simple at any time. To change the Rego yourself, choose Edit as Rego; after that the rule can no longer be opened in the simple builder.",
+    "Simple builds the rule from conditions and outcomes and writes the Rego for you. Advanced shows that Rego, and you can switch back to Simple until you edit it. Once you edit the code, the rule must stay an Advanced rule.",
   "settings.ruleBuilderUnavailable":
     "This rule's source was edited by hand or did not come from the simple builder, so it can only be edited as Rego.",
   "settings.ruleBuilderEditAsRego": "Edit as Rego",
   "settings.ruleBuilderEditAsRegoTitle": "Edit this rule as Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
-    "Once you edit this rule as Rego, it can no longer be opened in the simple builder, even after you save it. The Rego it has now is kept as the starting point.",
+    "Once you edit the code, it must stay an Advanced rule and can no longer be opened in Simple, even after you save it.",
   "settings.ruleBuilderIncomplete":
     "Finish the conditions and outcomes before saving.",
   "settings.ruleBuilderConditions": "Conditions",
