@@ -67,6 +67,7 @@ mod folder_ownership;
 pub mod fs_integrity;
 pub mod fs_safety;
 pub mod grabbed_file_names;
+pub mod nzb_text;
 pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;

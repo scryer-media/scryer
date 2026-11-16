@@ -49,10 +49,14 @@ pub struct GrabbedFileName {
 /// The long names an NZB's file subjects carry, each with its posted size.
 ///
 /// A subject names its file in double quotes (`[01/12] - "name.mkv" yEnc
-/// (1/50)`); a subject without one names no file and is skipped. An NZB that
-/// does not parse yields what was read before the fault.
+/// (1/50)`); a subject without one names no file and is skipped. The NZB is
+/// read as the download client reads it: bytes that are not UTF-8 as Latin-1,
+/// and HTML named entities decoded. An NZB that does not parse yields what was
+/// read before the fault.
 pub fn long_file_names_from_nzb(bytes: &[u8]) -> Vec<GrabbedFileName> {
-    let mut reader = Reader::from_reader(bytes);
+    let mut reader = Reader::from_reader(std::io::BufReader::new(
+        crate::nzb_text::Utf8OrLatin1::new(bytes),
+    ));
     let mut buffer = Vec::new();
     let mut names = Vec::new();
     let mut current: Option<GrabbedFileName> = None;
@@ -401,7 +405,11 @@ fn file_name_from_subject(subject: &str) -> Option<String> {
 
 fn attribute_text(attribute: &quick_xml::events::attributes::Attribute<'_>) -> String {
     attribute
-        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+        .normalized_value_with(
+            quick_xml::XmlVersion::Implicit1_0,
+            1,
+            crate::nzb_text::resolve_nzb_entity,
+        )
         .map(Cow::into_owned)
         .unwrap_or_else(|_| attribute.value.clone().into_owned())
 }
@@ -704,6 +712,92 @@ mod tests {
     #[test]
     fn an_nzb_that_does_not_parse_yields_nothing() {
         assert!(long_file_names_from_nzb(b"not an nzb at all").is_empty());
+    }
+
+    fn nzb_file(subject: &[u8], bytes: u64) -> Vec<u8> {
+        let mut file = b"<file poster=\"poster@example.invalid\" subject=\"".to_vec();
+        file.extend_from_slice(subject);
+        file.extend_from_slice(
+            format!("\"><groups><group>alt.binaries.example</group></groups><segments><segment bytes=\"{bytes}\" number=\"1\">a@example.invalid</segment></segments></file>\n").as_bytes(),
+        );
+        file
+    }
+
+    #[test]
+    fn a_latin1_nzb_names_its_files_as_the_client_reads_them() {
+        let stem = long_stem("08");
+        let mut body = b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n<nzb>\n".to_vec();
+        let mut latin1_subject = format!("&quot;{stem} Caf").into_bytes();
+        latin1_subject.extend_from_slice(b"\xe9.mkv&quot; yEnc (1/1)");
+        body.extend(nzb_file(&latin1_subject, 10));
+        let utf8_name = format!("{stem} Caf\u{e9} Two.mkv");
+        body.extend(nzb_file(
+            format!("&quot;{utf8_name}&quot; yEnc (1/1)").as_bytes(),
+            20,
+        ));
+        body.extend_from_slice(b"</nzb>\n");
+
+        assert_eq!(
+            long_file_names_from_nzb(&body)
+                .into_iter()
+                .map(|file| (file.name, file.posted_size_bytes))
+                .collect::<Vec<_>>(),
+            vec![
+                (format!("{stem} Caf\u{e9}.mkv"), Some(10)),
+                (utf8_name, Some(20)),
+            ]
+        );
+    }
+
+    #[test]
+    fn html_named_entities_in_a_subject_decode_and_unknown_ones_drop() {
+        let stem = long_stem("09");
+        let mut body = b"<nzb>\n".to_vec();
+        body.extend(nzb_file(
+            format!("&quot;{stem} Caf&eacute;&nbsp;x&notanentity;.mkv&quot; yEnc (1/1)").as_bytes(),
+            30,
+        ));
+        body.extend_from_slice(b"</nzb>\n");
+
+        assert_eq!(
+            long_file_names_from_nzb(&body),
+            vec![GrabbedFileName {
+                name: format!("{stem} Caf\u{e9}\u{a0}x.mkv"),
+                exact_size_bytes: None,
+                posted_size_bytes: Some(30),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_broken_latin1_nzb_keeps_the_names_read_before_the_fault() {
+        let stem = long_stem("10");
+        let mut body = b"<nzb>\n".to_vec();
+        let mut subject = format!("&quot;{stem} Caf").into_bytes();
+        subject.extend_from_slice(b"\xe9.mkv&quot; yEnc (1/1)");
+        body.extend(nzb_file(&subject, 40));
+        body.extend_from_slice(b"<file subject=\"&quot;broken");
+
+        assert_eq!(
+            long_file_names_from_nzb(&body)
+                .into_iter()
+                .map(|file| file.name)
+                .collect::<Vec<_>>(),
+            vec![format!("{stem} Caf\u{e9}.mkv")]
+        );
+    }
+
+    /// The client names a file whose subject has no quotes by the last dotted
+    /// word before ` yEnc`; Scryer keeps no name for it, so a cut name of such
+    /// a file is never matched back.
+    #[test]
+    fn a_subject_without_quotes_names_no_file() {
+        let name = format!("{}.mkv", long_stem("11").replace(' ', "."));
+        let mut body = b"<nzb>\n".to_vec();
+        body.extend(nzb_file(format!("{name} yEnc (1/1)").as_bytes(), 50));
+        body.extend_from_slice(b"</nzb>\n");
+
+        assert!(long_file_names_from_nzb(&body).is_empty());
     }
 
     #[test]
