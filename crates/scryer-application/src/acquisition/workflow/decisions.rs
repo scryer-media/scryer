@@ -144,7 +144,7 @@ fn release_decision_record(
         candidate_score,
         current_score: incumbent_bar,
         score_delta: incumbent_bar.map(|bar| candidate_score - bar),
-        explanation_json: serialize_decision_explanation(&decision_candidate),
+        explanation_json: Some(release_decision_explanation(&decision_candidate)),
         created_at: now.to_rfc3339(),
     }
 }
@@ -216,7 +216,10 @@ pub(crate) async fn record_pending_release_decision(
         candidate_score,
         current_score: incumbent_bar,
         score_delta: incumbent_bar.map(|bar| candidate_score - bar),
-        explanation_json: pending.scoring_log_json.clone(),
+        explanation_json: pending
+            .scoring_log_json
+            .clone()
+            .map(crate::ReleaseDecisionExplanation::untrusted),
         created_at: now.to_rfc3339(),
     };
 

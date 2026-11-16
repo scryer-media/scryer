@@ -1532,6 +1532,13 @@ impl AcquisitionScopeStateRepository for NullAcquisitionScopeStateRepository {
     ) -> AppResult<Option<AcquisitionScopeState>> {
         Ok(None)
     }
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        _title_id: &str,
+        _scope: crate::AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
+        Ok(None)
+    }
     async fn delete_acquisition_scope_states_for_title(&self, _title_id: &str) -> AppResult<()> {
         Ok(())
     }

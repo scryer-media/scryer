@@ -1909,9 +1909,70 @@ pub struct ReleaseDecision {
     pub candidate_score: i32,
     pub current_score: Option<i32>,
     pub score_delta: Option<i32>,
-    pub explanation_json: Option<String>,
+    pub explanation_json: Option<ReleaseDecisionExplanation>,
     pub created_at: String,
 }
+
+/// A release decision's explanation JSON, and whether its text is already in
+/// the compact form serde_json writes for a parsed value.
+///
+/// Only [`ReleaseDecisionExplanation::from_value`] yields canonical text, so
+/// the store can compress it without parsing it again. Text of any other
+/// origin comes in through [`ReleaseDecisionExplanation::untrusted`] and is
+/// parsed and re-serialized before it is stored.
+#[derive(Clone, Debug)]
+pub struct ReleaseDecisionExplanation {
+    text: String,
+    canonical: bool,
+}
+
+impl ReleaseDecisionExplanation {
+    /// Serializes `value` compactly; the result is canonical.
+    pub fn from_value(value: &serde_json::Value) -> Self {
+        Self {
+            text: value.to_string(),
+            canonical: true,
+        }
+    }
+
+    /// Text whose form is not known, such as a saved pending release's
+    /// explanation.
+    pub fn untrusted(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            canonical: false,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    pub fn into_string(self) -> String {
+        self.text
+    }
+
+    /// The text, when it is known to be canonical.
+    pub fn canonical_text(&self) -> Option<&str> {
+        self.canonical.then_some(self.text.as_str())
+    }
+}
+
+impl std::ops::Deref for ReleaseDecisionExplanation {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl PartialEq for ReleaseDecisionExplanation {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for ReleaseDecisionExplanation {}
 
 #[derive(Clone, Debug)]
 pub struct DecisionCodeCount {

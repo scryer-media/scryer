@@ -49,7 +49,9 @@ pub struct GrabbedFileName {
 /// The long names an NZB's file subjects carry, each with its posted size.
 ///
 /// A subject names its file in double quotes (`[01/12] - "name.mkv" yEnc
-/// (1/50)`); a subject without one names no file and is skipped. The NZB is
+/// (1/50)`). A subject without a quoted name names the last dotted word before
+/// ` yEnc` and its part count, as the download client does, and a subject
+/// with neither names no file and is skipped. The NZB is
 /// read as the download client reads it: bytes that are not UTF-8 as Latin-1,
 /// and HTML named entities decoded. An NZB that does not parse yields what was
 /// read before the fault.
@@ -396,11 +398,45 @@ fn starts_like(whole: &str, start: &str) -> bool {
     })
 }
 
+/// The file a subject names, as the download client names it: the text in
+/// its first pair of double quotes, or, when there is no such pair or it is
+/// empty, the last whitespace-separated word before ` yEnc` and a trailing
+/// `(n/m)` if that word has a dot. Directory parts are dropped either way.
 fn file_name_from_subject(subject: &str) -> Option<String> {
-    let (_, rest) = subject.split_once('"')?;
-    let (name, _) = rest.split_once('"')?;
+    let name = subject
+        .split_once('"')
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(quoted, _)| quoted)
+        .filter(|quoted| !quoted.is_empty())
+        .or_else(|| unquoted_file_name(subject))?;
     let name = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+fn unquoted_file_name(subject: &str) -> Option<&str> {
+    let before_yenc = subject
+        .find(" yEnc")
+        .map_or(subject, |index| &subject[..index]);
+    let trimmed = trim_trailing_part_info(before_yenc).trim_end();
+    let token = trimmed
+        .rsplit_once(char::is_whitespace)
+        .map_or(trimmed, |(_, token)| token);
+    (!token.is_empty() && token.contains('.')).then_some(token)
+}
+
+/// `subject` without a trailing `(n/m)` part count.
+fn trim_trailing_part_info(subject: &str) -> &str {
+    let subject = subject.trim_end();
+    if let Some(open) = subject.rfind('(') {
+        let inside = &subject[open + 1..];
+        if let Some(close) = inside.find(')') {
+            let content = &inside[..close];
+            if content.contains('/') && content.chars().all(|ch| ch.is_ascii_digit() || ch == '/') {
+                return subject[..open].trim_end();
+            }
+        }
+    }
+    subject
 }
 
 fn attribute_text(attribute: &quick_xml::events::attributes::Attribute<'_>) -> String {
@@ -788,16 +824,107 @@ mod tests {
     }
 
     /// The client names a file whose subject has no quotes by the last dotted
-    /// word before ` yEnc`; Scryer keeps no name for it, so a cut name of such
-    /// a file is never matched back.
+    /// word before ` yEnc` and its part count; Scryer keeps the same name, with
+    /// its posted size, whichever of the two tails the subject carries.
     #[test]
-    fn a_subject_without_quotes_names_no_file() {
-        let name = format!("{}.mkv", long_stem("11").replace(' ', "."));
+    fn a_subject_without_quotes_names_its_last_dotted_word() {
+        let yenc = format!("{}.mkv", long_stem("11").replace(' ', "."));
+        let parts = format!("{}.mkv", long_stem("12").replace(' ', "."));
         let mut body = b"<nzb>\n".to_vec();
-        body.extend(nzb_file(format!("{name} yEnc (1/1)").as_bytes(), 50));
+        body.extend(nzb_file(
+            format!("[01/02] - {yenc} yEnc (1/50)").as_bytes(),
+            50,
+        ));
+        body.extend(nzb_file(format!("[02/02] - {parts} (1/50)").as_bytes(), 60));
+        body.extend_from_slice(b"</nzb>\n");
+
+        assert_eq!(
+            long_file_names_from_nzb(&body),
+            vec![
+                GrabbedFileName {
+                    name: yenc,
+                    exact_size_bytes: None,
+                    posted_size_bytes: Some(50),
+                },
+                GrabbedFileName {
+                    name: parts,
+                    exact_size_bytes: None,
+                    posted_size_bytes: Some(60),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_quoted_name_falls_through_to_the_last_dotted_word() {
+        let name = format!("{}.mkv", long_stem("13").replace(' ', "."));
+        let mut body = b"<nzb>\n".to_vec();
+        body.extend(nzb_file(
+            format!("&quot;&quot; {name} yEnc (1/1)").as_bytes(),
+            70,
+        ));
+        body.extend_from_slice(b"</nzb>\n");
+
+        assert_eq!(
+            long_file_names_from_nzb(&body)
+                .into_iter()
+                .map(|file| (file.name, file.posted_size_bytes))
+                .collect::<Vec<_>>(),
+            vec![(name, Some(70))]
+        );
+    }
+
+    #[test]
+    fn a_subject_whose_last_word_has_no_dot_names_no_file() {
+        let mut body = b"<nzb>\n".to_vec();
+        body.extend(nzb_file(
+            format!("{} yEnc (1/1)", long_stem("14")).as_bytes(),
+            80,
+        ));
         body.extend_from_slice(b"</nzb>\n");
 
         assert!(long_file_names_from_nzb(&body).is_empty());
+        assert_eq!(file_name_from_subject("Harbor Pals 14 yEnc (1/1)"), None);
+        assert_eq!(file_name_from_subject("(1/1)"), None);
+        assert_eq!(file_name_from_subject(""), None);
+    }
+
+    #[test]
+    fn a_quoted_name_wins_over_a_later_dotted_word() {
+        assert_eq!(
+            file_name_from_subject("\"harbor.pals.mkv\" harbor.pals.nfo (1/1)").as_deref(),
+            Some("harbor.pals.mkv")
+        );
+    }
+
+    /// The download client's own subject cases name the same files here.
+    #[test]
+    fn subjects_name_the_files_the_download_client_names() {
+        for (subject, name) in [
+            (
+                "Title - [01/10] - \"movie.part01.rar\" yEnc (1/5)",
+                "movie.part01.rar",
+            ),
+            ("[GROUP] Title - \"file.nfo\" yEnc (1/1)", "file.nfo"),
+            ("simple.txt (1/1)", "simple.txt"),
+            ("\"a.bin\" yEnc (1/1)", "a.bin"),
+            ("Title & More - \"file.rar\" yEnc (1/1)", "file.rar"),
+            (
+                "Caf\u{e9}\u{a0}Night - \"Caf\u{e9}\u{a0}Night.mkv\" yEnc (1/1)",
+                "Caf\u{e9}\u{a0}Night.mkv",
+            ),
+            ("\"show.rar\" yEnc (1/1)", "show.rar"),
+            (
+                "Harbor Pals - harbor.pals.s01e01.mkv yEnc (1/50)",
+                "harbor.pals.s01e01.mkv",
+            ),
+        ] {
+            assert_eq!(
+                file_name_from_subject(subject).as_deref(),
+                Some(name),
+                "{subject}"
+            );
+        }
     }
 
     #[test]

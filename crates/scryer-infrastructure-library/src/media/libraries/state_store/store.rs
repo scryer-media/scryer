@@ -5,11 +5,11 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
-    AcquisitionScopeCoordinates, AcquisitionScopeState, AcquisitionScopeStateRepository,
-    AcquisitionScopeStatesQuery, AcquisitionScopeStatus, AppResult, BlocklistRepository,
-    DownloadSourceKind, HousekeepingMediaFileRootRow, HousekeepingRepository,
-    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, PendingRelease,
-    PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
+    AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeState,
+    AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery, AcquisitionScopeStatus,
+    AppResult, BlocklistRepository, DownloadSourceKind, HousekeepingMediaFileRootRow,
+    HousekeepingRepository, LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry,
+    PendingRelease, PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
     PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
     ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
     subtitles::{
@@ -30,7 +30,7 @@ use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
-use super::decode_release_decision_explanation;
+use super::decode_release_decision_explanation_record;
 use super::release_decision_explanation::ReleaseDecisionExplanationEncoder;
 
 // Throttle the SQLite full VACUUM so it does not run on every
@@ -493,9 +493,9 @@ fn release_decision_explanation_from_row(
     row: &SqlRow,
     column: &str,
     decision_id: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<scryer_application::ReleaseDecisionExplanation>> {
     let encoded = row.opt_bytes(column)?;
-    match decode_release_decision_explanation(encoded.as_deref()) {
+    match decode_release_decision_explanation_record(encoded.as_deref()) {
         Ok(explanation) => Ok(explanation),
         Err(error) => {
             tracing::warn!(
@@ -759,6 +759,44 @@ async fn execute_datastore_write(
     .await
 }
 
+/// The `WHERE` predicate that selects one scope's row of `wanted_items` under a
+/// title, with its bound arguments. `prefix` qualifies the columns (`"w."` when
+/// the table is aliased). An episode row also carries its collection id, so the
+/// collection arm excludes episode rows; otherwise it would hand every episode
+/// of a season the same sibling row. Each arm is served by an index: the
+/// `(title_id, episode_id)` unique key for the episode and title arms,
+/// `idx_wanted_items_collection_id` (or `idx_wanted_items_collection`) and
+/// `idx_wanted_items_series_movie_link`.
+fn wanted_scope_predicate(
+    prefix: &str,
+    title_id: &str,
+    scope: AcquisitionScopeKey<'_>,
+) -> (String, Vec<SqlArg>) {
+    let title_arg = SqlArg::Text(title_id.to_string());
+    match scope {
+        AcquisitionScopeKey::Episode(episode_id) => (
+            format!("{prefix}title_id = {{}} AND {prefix}episode_id = {{}}"),
+            vec![title_arg, SqlArg::Text(episode_id.to_string())],
+        ),
+        AcquisitionScopeKey::Collection(collection_id) => (
+            format!(
+                "{prefix}title_id = {{}} AND {prefix}collection_id = {{}} AND {prefix}episode_id IS NULL"
+            ),
+            vec![title_arg, SqlArg::Text(collection_id.to_string())],
+        ),
+        AcquisitionScopeKey::SeriesMovieLink(series_movie_link_id) => (
+            format!("{prefix}title_id = {{}} AND {prefix}series_movie_link_id = {{}}"),
+            vec![title_arg, SqlArg::Text(series_movie_link_id.to_string())],
+        ),
+        AcquisitionScopeKey::Title => (
+            format!(
+                "{prefix}title_id = {{}} AND {prefix}episode_id IS NULL AND {prefix}collection_id IS NULL AND {prefix}series_movie_link_id IS NULL"
+            ),
+            vec![title_arg],
+        ),
+    }
+}
+
 async fn fetch_seed_target_tx(
     tx: &mut crate::queries::sql_runtime::SqlTx<'_>,
     item: &AcquisitionScopeState,
@@ -768,45 +806,19 @@ async fn fetch_seed_target_tx(
                           last_search_at, status,
                           grabbed_release, created_at, updated_at
                      FROM wanted_items";
-    // Same precedence as the upsert conflict target and
-    // `find_wanted_state_for_scope`: the episode identity wins, then the
-    // remaining scope keys, then the bare title. An episode target also carries
-    // its collection id, so the collection arm has to exclude episode rows or it
-    // hands every episode of a season the same sibling row.
-    let (sql, args) = if let Some(episode_id) = item.episode_id.as_deref() {
-        (
-            format!("{columns} WHERE title_id = {{}} AND episode_id = {{}}"),
-            vec![
-                SqlArg::Text(item.title_id.clone()),
-                SqlArg::Text(episode_id.to_string()),
-            ],
-        )
+    // The episode identity wins, then the remaining scope keys, then the bare
+    // title.
+    let scope = if let Some(episode_id) = item.episode_id.as_deref() {
+        AcquisitionScopeKey::Episode(episode_id)
     } else if let Some(collection_id) = item.collection_id.as_deref() {
-        (
-            format!(
-                "{columns} WHERE title_id = {{}} AND collection_id = {{}} AND episode_id IS NULL"
-            ),
-            vec![
-                SqlArg::Text(item.title_id.clone()),
-                SqlArg::Text(collection_id.to_string()),
-            ],
-        )
+        AcquisitionScopeKey::Collection(collection_id)
     } else if let Some(series_movie_link_id) = item.series_movie_link_id.as_deref() {
-        (
-            format!("{columns} WHERE title_id = {{}} AND series_movie_link_id = {{}}"),
-            vec![
-                SqlArg::Text(item.title_id.clone()),
-                SqlArg::Text(series_movie_link_id.to_string()),
-            ],
-        )
+        AcquisitionScopeKey::SeriesMovieLink(series_movie_link_id)
     } else {
-        (
-            format!(
-                "{columns} WHERE title_id = {{}} AND episode_id IS NULL AND collection_id IS NULL AND series_movie_link_id IS NULL"
-            ),
-            vec![SqlArg::Text(item.title_id.clone())],
-        )
+        AcquisitionScopeKey::Title
     };
+    let (predicate, args) = wanted_scope_predicate("", &item.title_id, scope);
+    let sql = format!("{columns} WHERE {predicate}");
 
     SqlRuntime::fetch_optional(SqlExec::Tx(tx), &sql, &args)
         .await?
@@ -817,7 +829,6 @@ async fn fetch_seed_target_tx(
 
 /// A decision's bound arguments, built once so a batch and its per-row
 /// replay write exactly the same values.
-#[derive(Clone)]
 struct PreparedReleaseDecision {
     identity: ReleaseDecisionIdentityArgs,
     insert_args: Vec<SqlArg>,
@@ -886,7 +897,8 @@ impl PreparedReleaseDecision {
         decision: &ReleaseDecision,
         encoder: &mut ReleaseDecisionExplanationEncoder,
     ) -> AppResult<Self> {
-        let explanation_json = match encoder.encode(decision.explanation_json.as_deref()) {
+        let explanation_json = match encoder.encode_explanation(decision.explanation_json.as_ref())
+        {
             Ok(encoded) => encoded,
             Err(error) => {
                 tracing::warn!(
@@ -897,6 +909,9 @@ impl PreparedReleaseDecision {
                 None
             }
         };
+        // Held once: the insert and update argument lists, and every copy of
+        // this prepared decision a transaction attempt takes, share the bytes.
+        let explanation_json: Option<Arc<[u8]>> = explanation_json.map(Arc::from);
         // The same verdict, on the same release, for the same scope is one
         // ledger row that ages forward — not a new row per re-evaluation.
         // RSS re-sees the same feed every cadence, so an idle instance was
@@ -918,7 +933,7 @@ impl PreparedReleaseDecision {
             SqlArg::I32(decision.candidate_score),
             SqlArg::OptI32(decision.current_score),
             SqlArg::OptI32(decision.score_delta),
-            SqlArg::OptBytes(explanation_json.clone()),
+            SqlArg::OptSharedBytes(explanation_json.clone()),
             created_at.clone(),
         ];
         let update_args = vec![
@@ -926,7 +941,7 @@ impl PreparedReleaseDecision {
             SqlArg::I32(decision.candidate_score),
             SqlArg::OptI32(decision.current_score),
             SqlArg::OptI32(decision.score_delta),
-            SqlArg::OptBytes(explanation_json),
+            SqlArg::OptSharedBytes(explanation_json),
             created_at,
         ];
         Ok(Self {
@@ -989,10 +1004,10 @@ async fn write_release_decision_tx(
 impl WantedStore {
     async fn write_prepared_release_decision(
         &self,
-        prepared: PreparedReleaseDecision,
+        prepared: Arc<PreparedReleaseDecision>,
     ) -> AppResult<String> {
         SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decision", move |tx| {
-            let prepared = prepared.clone();
+            let prepared = Arc::clone(&prepared);
             Box::pin(async move { write_release_decision_tx(tx, &prepared).await })
         })
         .await
@@ -1164,26 +1179,21 @@ impl AcquisitionScopeStateRepository for WantedStore {
         title_id: &str,
         episode_id: Option<&str>,
     ) -> AppResult<Option<AcquisitionScopeState>> {
-        let (sql, args) = if let Some(episode_id) = episode_id {
-            (
-                format!(
-                    "{} WHERE w.title_id = {{}} AND w.episode_id = {{}}",
-                    wanted_item_select_sql()
-                ),
-                vec![
-                    SqlArg::Text(title_id.to_string()),
-                    SqlArg::Text(episode_id.to_string()),
-                ],
-            )
-        } else {
-            (
-                format!(
-                    "{} WHERE w.title_id = {{}} AND w.episode_id IS NULL AND w.collection_id IS NULL AND w.series_movie_link_id IS NULL",
-                    wanted_item_select_sql()
-                ),
-                vec![SqlArg::Text(title_id.to_string())],
-            )
+        let scope = match episode_id {
+            Some(episode_id) => AcquisitionScopeKey::Episode(episode_id),
+            None => AcquisitionScopeKey::Title,
         };
+        self.get_acquisition_scope_state_for_scope(title_id, scope)
+            .await
+    }
+
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
+        let (predicate, args) = wanted_scope_predicate("w.", title_id, scope);
+        let sql = format!("{} WHERE {predicate}", wanted_item_select_sql());
         SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args)
             .await?
             .as_ref()
@@ -1421,26 +1431,34 @@ impl AcquisitionScopeStateRepository for WantedStore {
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
         let prepared = PreparedReleaseDecision::of(&self.datastore, decision)?;
-        self.write_prepared_release_decision(prepared).await
+        self.write_prepared_release_decision(Arc::new(prepared))
+            .await
     }
 
     async fn insert_release_decisions(
         &self,
         decisions: &[ReleaseDecision],
     ) -> Vec<AppResult<String>> {
-        let prepared = PreparedReleaseDecision::of_batch(&self.datastore, decisions).await;
+        // Shared, not copied: the batch transaction, each of its attempts, and
+        // the per-row replay all read the same prepared values.
+        let prepared = PreparedReleaseDecision::of_batch(&self.datastore, decisions)
+            .await
+            .into_iter()
+            .map(|prepared| prepared.map(Arc::new))
+            .collect::<Vec<_>>();
         let batch = prepared
             .iter()
-            .map(|prepared| prepared.as_ref().ok().cloned())
-            .collect::<Option<Vec<_>>>();
+            .map(|prepared| prepared.as_ref().ok().map(Arc::clone))
+            .collect::<Option<Vec<_>>>()
+            .map(Arc::<[Arc<PreparedReleaseDecision>]>::from);
         if let Some(batch) = batch.filter(|batch| batch.len() > 1) {
             let written =
                 SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decisions", {
                     move |tx| {
-                        let batch = batch.clone();
+                        let batch = Arc::clone(&batch);
                         Box::pin(async move {
                             let mut ids = Vec::with_capacity(batch.len());
-                            for prepared in &batch {
+                            for prepared in batch.iter() {
                                 ids.push(write_release_decision_tx(tx, prepared).await?);
                             }
                             Ok(ids)

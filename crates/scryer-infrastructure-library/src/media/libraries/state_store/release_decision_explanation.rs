@@ -1,5 +1,6 @@
 use std::fmt;
 
+use scryer_application::ReleaseDecisionExplanation;
 use serde_json::Value;
 
 const FORMAT_ZSTD_DICTIONARY_V1: u8 = 1;
@@ -44,6 +45,35 @@ impl ReleaseDecisionExplanationEncoder {
             return Ok(None);
         };
         let canonical = canonical_explanation(explanation_json)?;
+        self.compress_canonical(&canonical).map(Some)
+    }
+
+    /// Encodes a decision's explanation. Text this process serialized is
+    /// compressed as it is; any other text is canonicalized first, exactly as
+    /// [`Self::encode`] does.
+    pub fn encode_explanation(
+        &mut self,
+        explanation: Option<&ReleaseDecisionExplanation>,
+    ) -> Result<Option<Vec<u8>>, ReleaseDecisionExplanationCodecError> {
+        let Some(explanation) = explanation else {
+            return Ok(None);
+        };
+        match explanation.canonical_text() {
+            Some(canonical) => self.compress_canonical(canonical.as_bytes()).map(Some),
+            None => self.encode(Some(explanation.as_str())),
+        }
+    }
+
+    fn compress_canonical(
+        &mut self,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, ReleaseDecisionExplanationCodecError> {
+        if canonical.len() > MAX_EXPLANATION_BYTES {
+            return Err(codec_error(format!(
+                "explanation expands to {} bytes, exceeding the {MAX_EXPLANATION_BYTES}-byte limit",
+                canonical.len()
+            )));
+        }
         let compressor = match &mut self.compressor {
             Some(compressor) => compressor,
             None => self.compressor.insert(
@@ -52,7 +82,7 @@ impl ReleaseDecisionExplanationEncoder {
                 )?,
             ),
         };
-        let compressed = match compressor.compress(&canonical) {
+        let compressed = match compressor.compress(canonical) {
             Ok(compressed) => compressed,
             Err(error) => {
                 // Start the next explanation from a fresh context rather than
@@ -66,7 +96,7 @@ impl ReleaseDecisionExplanationEncoder {
         let mut encoded = Vec::with_capacity(1 + compressed.len());
         encoded.push(FORMAT_ZSTD_DICTIONARY_V1);
         encoded.extend_from_slice(&compressed);
-        Ok(Some(encoded))
+        Ok(encoded)
     }
 }
 
@@ -75,21 +105,34 @@ fn canonical_explanation(
 ) -> Result<Vec<u8>, ReleaseDecisionExplanationCodecError> {
     let value: Value = serde_json::from_str(explanation_json)
         .map_err(|error| codec_error(format!("explanation is not valid JSON: {error}")))?;
-    let canonical = serde_json::to_vec(&value).map_err(|error| {
-        codec_error(format!("failed to canonicalize explanation JSON: {error}"))
-    })?;
-    if canonical.len() > MAX_EXPLANATION_BYTES {
-        return Err(codec_error(format!(
-            "explanation expands to {} bytes, exceeding the {MAX_EXPLANATION_BYTES}-byte limit",
-            canonical.len()
-        )));
-    }
-    Ok(canonical)
+    serde_json::to_vec(&value)
+        .map_err(|error| codec_error(format!("failed to canonicalize explanation JSON: {error}")))
 }
 
 pub fn decode_release_decision_explanation(
     encoded: Option<&[u8]>,
 ) -> Result<Option<String>, ReleaseDecisionExplanationCodecError> {
+    let Some(value) = decode_explanation_value(encoded)? else {
+        return Ok(None);
+    };
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|error| codec_error(format!("failed to serialize explanation JSON: {error}")))
+}
+
+/// Decodes a stored explanation into the form a release decision carries.
+/// The stored text is re-serialized from its parsed value, so it is canonical.
+pub(crate) fn decode_release_decision_explanation_record(
+    encoded: Option<&[u8]>,
+) -> Result<Option<ReleaseDecisionExplanation>, ReleaseDecisionExplanationCodecError> {
+    Ok(decode_explanation_value(encoded)?
+        .as_ref()
+        .map(ReleaseDecisionExplanation::from_value))
+}
+
+fn decode_explanation_value(
+    encoded: Option<&[u8]>,
+) -> Result<Option<Value>, ReleaseDecisionExplanationCodecError> {
     let Some(encoded) = encoded else {
         return Ok(None);
     };
@@ -112,14 +155,11 @@ pub fn decode_release_decision_explanation(
             "explanation expands beyond the {MAX_EXPLANATION_BYTES}-byte limit"
         )));
     }
-    let value: Value = serde_json::from_slice(&decoded).map_err(|error| {
+    serde_json::from_slice(&decoded).map(Some).map_err(|error| {
         codec_error(format!(
             "decompressed explanation is not valid JSON: {error}"
         ))
-    })?;
-    serde_json::to_string(&value)
-        .map(Some)
-        .map_err(|error| codec_error(format!("failed to serialize explanation JSON: {error}")))
+    })
 }
 
 fn codec_error(message: impl Into<String>) -> ReleaseDecisionExplanationCodecError {
@@ -311,6 +351,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn serialized_explanations_skip_reparsing_and_encode_byte_identically() {
+        let mut encoder = ReleaseDecisionExplanationEncoder::new();
+        for explanation in mixed_explanations().into_iter().flatten() {
+            let Ok(value) = serde_json::from_str::<Value>(&explanation) else {
+                continue;
+            };
+            let serialized = ReleaseDecisionExplanation::from_value(&value);
+            assert!(serialized.canonical_text().is_some());
+            let direct = encoder.encode_explanation(Some(&serialized));
+            let reparsed = encode_release_decision_explanation(Some(serialized.as_str()));
+            match direct {
+                Ok(direct) => {
+                    assert_eq!(direct, reparsed.expect("reparsed encode should agree"));
+                    assert_eq!(direct, fresh_context_encode(Some(serialized.as_str())));
+                    let decoded =
+                        decode_release_decision_explanation_record(direct.as_deref()).unwrap();
+                    assert_eq!(decoded, Some(serialized));
+                }
+                Err(_) => assert!(reparsed.is_err(), "both paths reject it"),
+            }
+        }
+    }
+
+    #[test]
+    fn untrusted_explanations_keep_canonicalization() {
+        let mut encoder = ReleaseDecisionExplanationEncoder::new();
+        for explanation in mixed_explanations().into_iter().flatten() {
+            let untrusted = ReleaseDecisionExplanation::untrusted(explanation.clone());
+            assert!(untrusted.canonical_text().is_none());
+            let encoded = encoder.encode_explanation(Some(&untrusted));
+            let old = encode_release_decision_explanation(Some(&explanation));
+            match (encoded, old) {
+                (Ok(encoded), Ok(old)) => assert_eq!(encoded, old),
+                (Err(encoded), Err(old)) => assert_eq!(encoded.to_string(), old.to_string()),
+                _ => panic!("untrusted text must encode exactly as before: {explanation}"),
+            }
+        }
+        assert_eq!(encoder.encode_explanation(None).unwrap(), None);
+    }
+
+    #[test]
+    fn oversized_serialized_explanation_is_rejected() {
+        let value = Value::String("x".repeat(MAX_EXPLANATION_BYTES));
+        let serialized = ReleaseDecisionExplanation::from_value(&value);
+        let mut encoder = ReleaseDecisionExplanationEncoder::new();
+        assert_eq!(
+            encoder
+                .encode_explanation(Some(&serialized))
+                .unwrap_err()
+                .to_string(),
+            encode_release_decision_explanation(Some(serialized.as_str()))
+                .unwrap_err()
+                .to_string()
+        );
     }
 
     #[test]
