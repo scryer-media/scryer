@@ -1,4 +1,4 @@
-// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
+// disk-guard: this crate is fixture tooling, does not depend on scryer-application, and is exempt from the disk guard.
 #![allow(clippy::disallowed_methods)]
 
 mod fixtures;

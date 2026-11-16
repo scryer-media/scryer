@@ -39,7 +39,10 @@ fn dir() -> RawStat {
 /// Records every call. A gate, when set, holds every stat call (or only those
 /// under `gate_under`) until the test opens it. Reads answer from `contents`.
 /// Opens record what was asked and hand back a handle on a real scratch file,
-/// whatever the mode, so the handle can be written and synced.
+/// so the handle can be written and synced; an open to read is missing unless
+/// `contents` holds the path, and its handle then reads those contents.
+/// `contents_gate`, when set, holds every read through a handle until the
+/// test opens it, after signalling `contents_entered`.
 #[derive(Default)]
 struct Scripted {
     stats: Mutex<HashMap<PathBuf, Result<RawStat, io::ErrorKind>>>,
@@ -55,6 +58,8 @@ struct Scripted {
     handles: Mutex<Option<tempfile::TempDir>>,
     /// Access asked for by creating calls, in order.
     accesses: Mutex<Vec<(&'static str, Access)>>,
+    contents_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    contents_entered: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl Scripted {
@@ -250,8 +255,29 @@ impl DiskBackend for Scripted {
         self.record("open", path)?;
         let mut handles = self.handles.lock().unwrap();
         let dir = handles.get_or_insert_with(|| tempfile::tempdir().expect("handle dir"));
-        let name = format!("handle-{}", self.calls_of("open"));
-        SystemBackend.open(&dir.path().join(name), Open::create_or_keep())
+        let handle = dir.path().join(format!("handle-{}", self.calls_of("open")));
+        if open.mode != OpenMode::Read {
+            return SystemBackend.open(&handle, Open::create_or_keep());
+        }
+        let bytes = self
+            .contents
+            .lock()
+            .unwrap()
+            .get(path)
+            .cloned()
+            .ok_or(io::ErrorKind::NotFound)?;
+        SystemBackend.write(&handle, &bytes, Replace::Never, Access::Default)?;
+        SystemBackend.open(&handle, Open::read())
+    }
+    fn read_from(&self, file: std::fs::File) -> io::Result<Vec<u8>> {
+        self.record("read_from", Path::new(""))?;
+        if let Some(entered) = self.contents_entered.lock().unwrap().as_ref() {
+            let _ = entered.send(());
+        }
+        if let Some(gate) = self.contents_gate.lock().unwrap().as_ref() {
+            let _ = gate.recv();
+        }
+        SystemBackend.read_from(file)
     }
     fn write(
         &self,
@@ -1871,6 +1897,7 @@ async fn reads_under_a_stuck_root_are_refused_but_writes_go_out() {
     }
     assert_eq!(backend.calls_of("read"), 0);
     assert_eq!(backend.calls_of("open"), 0);
+    assert_eq!(backend.calls_of("read_from"), 0);
 
     // Writing is never refused or timed out.
     let file = disk
@@ -1891,6 +1918,99 @@ async fn reads_under_a_stuck_root_are_refused_but_writes_go_out() {
 
     drop(open);
     until_clear(&disk, ROOT).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn under_a_root_only_reaching_the_file_is_bounded_not_reading_it() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    // A bound no correct open reaches on any machine: the open is the bounded
+    // step, and the contents read after it must not be.
+    disk.set_probe_timeout_for_test(std::time::Duration::from_secs(3600));
+    backend.holds("/srv/fixture-media/Show/large.nfo", b"<tvshow/>");
+    backend.stat_is("/srv/fixture-media/Show/other.nfo", Ok(file(5)));
+    let (release, gate) = mpsc::channel();
+    let (entered_tx, entered) = mpsc::channel();
+    *backend.contents_gate.lock().unwrap() = Some(gate);
+    *backend.contents_entered.lock().unwrap() = Some(entered_tx);
+
+    let reading = {
+        let disk = disk.clone();
+        tokio::spawn(async move {
+            disk.read_to_string("/srv/fixture-media/Show/large.nfo")
+                .await
+        })
+    };
+    // The contents read is under way and held until the test lets it go.
+    tokio::task::spawn_blocking(move || entered.recv().expect("contents read entered"))
+        .await
+        .unwrap();
+    let learned = read(&disk.inner.volumes)
+        .learned(&p("/srv/fixture-media/Show/large.nfo"))
+        .unwrap();
+    assert!(
+        learned.is_clear(),
+        "a slow contents read marks nothing stuck"
+    );
+    // Unrelated reads under the root still go out while it is held.
+    assert_eq!(
+        disk.fresh("/srv/fixture-media/Show/other.nfo")
+            .await
+            .exists(),
+        Some(true)
+    );
+    release.send(()).unwrap();
+    assert_eq!(reading.await.unwrap().unwrap(), "<tvshow/>");
+    assert!(learned.is_clear());
+    assert_eq!(backend.calls_of("open"), 1);
+    assert_eq!(backend.calls_of("read_from"), 1);
+    assert_eq!(backend.calls_of("read"), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn under_a_root_a_missing_or_undecodable_file_fails_as_the_blocking_read_does() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let missing = disk
+        .read("/srv/fixture-media/Show/absent.nfo")
+        .await
+        .unwrap_err();
+    assert_eq!(missing.reason(), reason::DISK_PATH_MISSING);
+    assert_eq!(missing.verb(), DiskVerb::Read);
+    assert_eq!(backend.calls_of("read_from"), 0);
+    backend.holds("/srv/fixture-media/Show/bad.nfo", &[0xff, 0xfe]);
+    let bad = disk
+        .read_to_string("/srv/fixture-media/Show/bad.nfo")
+        .await
+        .unwrap_err();
+    assert_eq!(bad.reason(), reason::DISK_OPERATION_FAILED);
+    backend.always_fails("read_from", io::ErrorKind::PermissionDenied);
+    backend.holds("/srv/fixture-media/Show/locked.nfo", b"x");
+    let denied = disk
+        .read("/srv/fixture-media/Show/locked.nfo")
+        .await
+        .unwrap_err();
+    assert_eq!(denied.reason(), reason::DISK_PERMISSION_DENIED);
+    assert_eq!(
+        denied.path(),
+        Path::new("/srv/fixture-media/Show/locked.nfo")
+    );
+}
+
+#[tokio::test]
+async fn application_data_is_read_whole_in_one_call() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    backend.holds("/var/lib/invented-app/settings.json", b"{}");
+    assert_eq!(
+        disk.read_to_string("/var/lib/invented-app/settings.json")
+            .await
+            .unwrap(),
+        "{}"
+    );
+    assert_eq!(backend.calls_of("read"), 1);
+    assert_eq!(backend.calls_of("open"), 0);
+    assert_eq!(backend.calls_of("read_from"), 0);
 }
 
 #[test]

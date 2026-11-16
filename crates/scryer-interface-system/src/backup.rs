@@ -5,6 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_graphql::{Context, ID, Object, Result as GqlResult, SimpleObject, Upload};
 use chrono::{DateTime, Utc};
+use scryer_application::disk::{
+    Access, Disk, EntryKind, IfPresent, Open, OwnerOnly, Parents, PathReading, Remove, Replace,
+};
 use scryer_application::{
     AppError, AppUseCase, BackupBundleInspectSummary, inspect_backup_bundle,
     prepare_backup_restore_payload, validate_inspected_bundle_is_restorable,
@@ -374,28 +377,34 @@ impl BackupMutations {
             .snapshot()
             .is_some_and(|s| s.phase.active())
         {
-            prune_stale_restore_uploads(&restore.data_dir);
+            prune_stale_restore_uploads(&restore.data_dir).await;
         }
+        let disk = Disk::process();
         let upload_id = next_restore_upload_id();
         let upload_dir = restore_upload_dir(&restore.data_dir, &upload_id);
-        tokio::fs::create_dir_all(&upload_dir)
+        disk.create_dir(&upload_dir, Parents::Create)
             .await
             .map_err(|error| {
                 to_gql_error(AppError::Repository(format!(
-                    "failed to create restore staging directory: {error}"
+                    "failed to create restore staging directory: {}",
+                    std::io::Error::from(error)
                 )))
             })?;
-        ensure_owner_only_dir_permissions(&upload_dir).map_err(|error| {
-            to_gql_error(AppError::Repository(format!(
-                "failed to protect restore staging directory: {error}"
-            )))
-        })?;
+        disk.restrict_to_owner(&upload_dir, OwnerOnly::Directory)
+            .await
+            .if_present()
+            .map_err(|error| {
+                to_gql_error(AppError::Repository(format!(
+                    "failed to protect restore staging directory: {}",
+                    std::io::Error::from(error)
+                )))
+            })?;
 
         let bundle_path = upload_dir.join(STAGED_BUNDLE_FILENAME);
         let guard = match write_uploaded_bundle(upload, bundle_path, guard).await {
             Ok(guard) => guard,
             Err(error) => {
-                let _ = tokio::fs::remove_dir_all(&upload_dir).await;
+                let _ = disk.remove(&upload_dir, Remove::Tree).await;
                 return Err(to_gql_error(error));
             }
         };
@@ -570,7 +579,7 @@ impl BackupMutations {
                 Ok(summary) => {
                     // The staged copy is no longer needed once the restore is
                     // prepared, and it holds the bundle's instance secrets.
-                    let _ = tokio::fs::remove_dir_all(&upload_dir).await;
+                    let _ = Disk::process().remove(&upload_dir, Remove::Tree).await;
                     worker_app.restore_coordinator().set_summary(summary);
                     match worker_app.restore_coordinator().transition(
                         &id,
@@ -654,7 +663,7 @@ async fn inspect_staged_upload(
     };
     let result = coordinator.supervise(id, deadline, work).await;
     if result.is_err() {
-        let _ = tokio::fs::remove_dir_all(&upload_dir).await;
+        let _ = Disk::process().remove(&upload_dir, Remove::Tree).await;
     }
     result
 }
@@ -669,7 +678,11 @@ fn resume_failed_restart(
     upload_id: &str,
     restart: &scryer_interface_core::RestoreRestartHandle,
 ) -> Result<Option<scryer_application::RestoreJobStatus>, AppError> {
-    if !pending_restore_ready_path(data_dir).is_file() {
+    if Disk::process()
+        .follow_blocking(&pending_restore_ready_path(data_dir))
+        .kind()
+        != Some(EntryKind::File)
+    {
         return Ok(None);
     }
     let Some(status) = coordinator.resume_failed_restart(upload_id)? else {
@@ -681,7 +694,7 @@ fn resume_failed_restart(
 
 fn staged_upload_bundle_path(data_dir: &Path, upload_id: &str) -> Result<PathBuf, AppError> {
     let bundle_path = restore_upload_bundle_path(data_dir, upload_id);
-    if !bundle_path.exists() {
+    if Disk::process().follow_blocking(&bundle_path).exists() != Some(true) {
         return Err(AppError::not_found_reason(
             scryer_interface_core::refusal::INTERFACE_RESTORE_UPLOAD_NOT_FOUND,
             "restore upload could not be found; inspect the bundle again",
@@ -792,28 +805,29 @@ fn restore_summary_payload(
     })
 }
 
-fn prune_stale_restore_uploads(data_dir: &Path) {
-    let uploads_dir = data_dir.join(RESTORE_STAGING_DIRNAME);
-    let Ok(entries) = std::fs::read_dir(&uploads_dir) else {
+async fn prune_stale_restore_uploads(data_dir: &Path) {
+    let disk = Disk::process();
+    let Ok(entries) = disk.list(data_dir.join(RESTORE_STAGING_DIRNAME)).await else {
         return;
     };
     let cutoff = SystemTime::now().checked_sub(Duration::from_secs(RESTORE_UPLOAD_TTL_SECONDS));
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = entry.metadata() else {
+    for entry in entries {
+        // The removal is decided on a fresh read of the entry, never on the
+        // listing.
+        let PathReading::Known {
+            kind: EntryKind::Directory,
+            modified,
+            ..
+        } = disk.fresh(&entry.path).await
+        else {
             continue;
         };
-        if !metadata.is_dir() {
-            continue;
-        }
-        let expired = metadata
-            .modified()
-            .ok()
+        let expired = modified
             .zip(cutoff)
             .is_some_and(|(modified, cutoff)| modified < cutoff);
         if expired {
-            let _ = std::fs::remove_dir_all(path);
+            let _ = disk.remove(entry.path, Remove::Tree).await;
         }
     }
 }
@@ -832,9 +846,14 @@ async fn write_uploaded_bundle(
     guard: tokio::sync::OwnedMutexGuard<()>,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, AppError> {
     tokio::task::spawn_blocking(move || {
-        let mut output = std::fs::File::create(&bundle_path).map_err(|error| {
-            AppError::Repository(format!("failed to create restore staging bundle: {error}"))
-        })?;
+        let mut output = Disk::process()
+            .open_blocking(&bundle_path, Open::create())
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to create restore staging bundle: {}",
+                    std::io::Error::from(error)
+                ))
+            })?;
         let mut reader = upload.into_read();
         std::io::copy(&mut reader, &mut output).map_err(|error| {
             AppError::Repository(format!("failed to write restore staging bundle: {error}"))
@@ -864,12 +883,15 @@ fn stage_restore_bundle(
     let pending_prepared_bundle_dir = pending_restore_prepared_bundle_dir(&data_dir);
     let pending_secrets_path = pending_restore_instance_secrets_path(&data_dir);
     let pending_ready_path = pending_restore_ready_path(&data_dir);
-    let _ = std::fs::remove_dir_all(&pending_dir);
-    std::fs::create_dir_all(&pending_dir).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create pending restore directory: {error}"
-        ))
-    })?;
+    let disk = Disk::process();
+    let _ = disk.remove_blocking(&pending_dir, Remove::Tree);
+    disk.create_dir_blocking(&pending_dir, Parents::Create)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to create pending restore directory: {}",
+                std::io::Error::from(error)
+            ))
+        })?;
     ensure_owner_only_dir_permissions(&pending_dir).map_err(|error| {
         AppError::Repository(format!(
             "failed to protect pending restore directory: {error}"
@@ -915,10 +937,12 @@ fn stage_restore_bundle(
     });
     match result {
         Ok(summary) => {
-            let marker_result = std::fs::write(&pending_ready_path, b"ready")
-                .and_then(|_| ensure_owner_only_permissions(&pending_ready_path));
+            let marker_result = disk
+                .write_blocking(&pending_ready_path, b"ready", Replace::Allowed, Access::Default)
+                .map_err(std::io::Error::from)
+                .and_then(|()| ensure_owner_only_permissions(&pending_ready_path));
             if let Err(error) = marker_result {
-                let _ = std::fs::remove_dir_all(&pending_dir);
+                let _ = disk.remove_blocking(&pending_dir, Remove::Tree);
                 return Err(AppError::Repository(format!(
                     "failed to mark pending restore ready: {error}"
                 )));
@@ -926,107 +950,51 @@ fn stage_restore_bundle(
             Ok(summary)
         }
         Err(error) => {
-            let _ = std::fs::remove_dir_all(&pending_dir);
+            let _ = disk.remove_blocking(&pending_dir, Remove::Tree);
             Err(error)
         }
     }
 }
 
-#[cfg(unix)]
+/// Narrow `path` to its owner where the platform has owner permissions; a
+/// missing path is left as it is.
+fn restrict_to_owner(path: &Path, what: OwnerOnly) -> std::io::Result<()> {
+    Disk::process()
+        .restrict_to_owner_blocking(path, what)
+        .if_present()
+        .map(drop)
+        .map_err(std::io::Error::from)
+}
+
 fn ensure_owner_only_permissions(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    if !path.exists() {
-        return Ok(());
-    }
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    restrict_to_owner(path, OwnerOnly::File)
 }
 
-#[cfg(not(unix))]
-fn ensure_owner_only_permissions(_path: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn ensure_owner_only_dir_permissions(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    if !path.exists() {
-        return Ok(());
-    }
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-}
-
-#[cfg(not(unix))]
-fn ensure_owner_only_dir_permissions(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+    restrict_to_owner(path, OwnerOnly::Directory)
 }
 
 fn write_owner_only_file_atomically(path: &Path, contents: &str) -> Result<(), AppError> {
-    let parent = path.parent().ok_or_else(|| {
-        AppError::Repository(format!(
-            "cannot resolve parent directory for {}",
-            path.display()
-        ))
-    })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create parent directory for {}: {error}",
-            path.display()
-        ))
-    })?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            AppError::Repository(format!("invalid restore secrets path {}", path.display()))
-        })?;
-    let temp_path = parent.join(format!(
-        ".{file_name}.tmp.{}.{}",
-        std::process::id(),
-        next_restore_upload_id()
-    ));
-
-    let write_result = (|| -> std::io::Result<()> {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temp_path)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-        Ok(())
-    })();
-
-    if let Err(error) = write_result {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(AppError::Repository(format!(
-            "failed to write restore secrets {}: {error}",
-            temp_path.display()
-        )));
-    }
-
-    std::fs::rename(&temp_path, path).map_err(|error| {
-        let _ = std::fs::remove_file(&temp_path);
-        AppError::Repository(format!(
-            "failed to move restore secrets into place {}: {error}",
-            path.display()
-        ))
-    })?;
-    ensure_owner_only_permissions(path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to protect restore secrets {}: {error}",
-            path.display()
-        ))
-    })
+    Disk::process()
+        .write_atomic_blocking(
+            path,
+            contents.as_bytes(),
+            Replace::Allowed,
+            Access::OwnerOnly,
+        )
+        .map(drop)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to write restore secrets {}: {}",
+                path.display(),
+                std::io::Error::from(error)
+            ))
+        })
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

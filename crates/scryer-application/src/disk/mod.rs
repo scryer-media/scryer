@@ -790,35 +790,56 @@ impl Disk {
             .map_err(|error| DiskError::new(DiskVerb::Read, path, error))
     }
 
-    /// [`Self::read_blocking`] off the runtime, bounded under a configured
-    /// root as every read is. The bound is the root's, whatever the file's
-    /// size.
+    /// [`Self::read_blocking`] off the runtime. Under a configured root only
+    /// reaching the file is bounded, as every read is: the open waits at most
+    /// the root's bound, so a dead mount still cannot collect threads, and the
+    /// contents are then read through the handle with no timeout, so a large
+    /// file on a slow share neither fails nor marks the root as stuck.
     pub async fn read(&self, path: impl Into<PathBuf>) -> Result<Vec<u8>, DiskError> {
-        let path = path.into();
-        let timeout = self.traits(&path).probe_timeout;
-        self.run(DiskVerb::Read, path, timeout, |disk, path| {
-            disk.read_blocking(path)
-        })
-        .await
+        self.read_whole(path.into(), |bytes, _| Ok(bytes), Self::read_blocking)
+            .await
     }
 
     /// The whole contents of `path` as text. Contents that are not UTF-8 fail
     /// with [`reason::DISK_OPERATION_FAILED`].
     pub fn read_to_string_blocking(&self, path: &Path) -> Result<String, DiskError> {
-        String::from_utf8(self.read_blocking(path)?).map_err(|error| {
-            DiskError::new(
-                DiskVerb::Read,
-                path,
-                io::Error::new(io::ErrorKind::InvalidData, error),
-            )
-        })
+        text_of(path, self.read_blocking(path)?)
     }
 
+    /// [`Self::read_to_string_blocking`] off the runtime, bounded as
+    /// [`Self::read`] is.
     pub async fn read_to_string(&self, path: impl Into<PathBuf>) -> Result<String, DiskError> {
-        let path = path.into();
-        let timeout = self.traits(&path).probe_timeout;
-        self.run(DiskVerb::Read, path, timeout, |disk, path| {
-            disk.read_to_string_blocking(path)
+        self.read_whole(
+            path.into(),
+            |bytes, path| text_of(path, bytes),
+            Self::read_to_string_blocking,
+        )
+        .await
+    }
+
+    /// A whole read off the runtime. Application data is one unbounded call,
+    /// as `whole` makes it. Under a root the open is bounded and the contents
+    /// are read through the handle, then turned into the answer by `then`,
+    /// with no bound.
+    async fn read_whole<T: Send + 'static>(
+        &self,
+        path: PathBuf,
+        then: fn(Vec<u8>, &Path) -> Result<T, DiskError>,
+        whole: fn(&Disk, &Path) -> Result<T, DiskError>,
+    ) -> Result<T, DiskError> {
+        let Some(timeout) = self.traits(&path).probe_timeout else {
+            return self.run(DiskVerb::Read, path, None, whole).await;
+        };
+        let file = self
+            .run(DiskVerb::Read, path.clone(), Some(timeout), |disk, path| {
+                disk.open_blocking(path, Open::read())
+            })
+            .await?;
+        self.run(DiskVerb::Read, path, None, move |disk, path| {
+            let bytes = disk
+                .call("read_from", || disk.inner.backend.read_from(file))
+                .map_err(|error| DiskError::new(DiskVerb::Read, path, error))?;
+            then(bytes, path)
         })
         .await
     }
@@ -1254,6 +1275,17 @@ fn link_not_possible(error: &io::Error) -> bool {
     {
         false
     }
+}
+
+/// `bytes` read from `path` as text.
+fn text_of(path: &Path, bytes: Vec<u8>) -> Result<String, DiskError> {
+    String::from_utf8(bytes).map_err(|error| {
+        DiskError::new(
+            DiskVerb::Read,
+            path,
+            io::Error::new(io::ErrorKind::InvalidData, error),
+        )
+    })
 }
 
 /// A streamed write into a hidden sibling of its destination, from

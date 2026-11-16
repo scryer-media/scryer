@@ -1,7 +1,19 @@
 use super::KeyStore;
-use std::path::PathBuf;
+use scryer_application::disk::{Access, Disk, IfPresent, Open, Parents, Remove};
+use std::path::{Path, PathBuf};
 
 const DOCKER_SECRET_PATH: &str = "/run/secrets/scryer_encryption_key";
+
+/// The trimmed key at `path`; a missing or blank file holds none.
+fn read_key(path: &Path) -> Result<Option<String>, std::io::Error> {
+    let contents = Disk::process()
+        .read_to_string_blocking(path)
+        .if_present()
+        .map_err(std::io::Error::from)?;
+    Ok(contents
+        .map(|contents| contents.trim().to_string())
+        .filter(|trimmed| !trimmed.is_empty()))
+}
 
 /// Reads the encryption key from a Docker secret mounted at
 /// `/run/secrets/scryer_encryption_key`.
@@ -12,20 +24,8 @@ pub struct DockerSecret;
 
 impl KeyStore for DockerSecret {
     fn get_key(&self) -> Result<Option<String>, String> {
-        match std::fs::read_to_string(DOCKER_SECRET_PATH) {
-            Ok(contents) => {
-                let trimmed = contents.trim().to_string();
-                if trimmed.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(trimmed))
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!(
-                "failed to read Docker secret at {DOCKER_SECRET_PATH}: {e}"
-            )),
-        }
+        read_key(Path::new(DOCKER_SECRET_PATH))
+            .map_err(|e| format!("failed to read Docker secret at {DOCKER_SECRET_PATH}: {e}"))
     }
 
     fn set_key(&self, _key_base64: &str) -> Result<(), String> {
@@ -59,67 +59,52 @@ impl KeyFile {
 
 impl KeyStore for KeyFile {
     fn get_key(&self) -> Result<Option<String>, String> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(contents) => {
-                let trimmed = contents.trim().to_string();
-                if trimmed.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(trimmed))
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!(
-                "failed to read key file at {}: {e}",
-                self.path.display()
-            )),
-        }
+        read_key(&self.path)
+            .map_err(|e| format!("failed to read key file at {}: {e}", self.path.display()))
     }
 
     fn set_key(&self, key_base64: &str) -> Result<(), String> {
         use std::io::Write;
 
+        let disk = Disk::process();
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create directory {}: {e}", parent.display()))?;
-        }
-
-        // Open with 0600 from the start to avoid a TOCTOU race where the file
-        // is briefly world-readable before permissions are narrowed.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&self.path)
+            disk.create_dir_blocking(parent, Parents::Create)
                 .map_err(|e| {
-                    format!("failed to create key file at {}: {e}", self.path.display())
+                    format!(
+                        "failed to create directory {}: {}",
+                        parent.display(),
+                        std::io::Error::from(e)
+                    )
                 })?;
-            file.write_all(key_base64.as_bytes())
-                .map_err(|e| format!("failed to write key file at {}: {e}", self.path.display()))?;
         }
 
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&self.path, key_base64)
-                .map_err(|e| format!("failed to write key file at {}: {e}", self.path.display()))?;
-        }
-
+        // Owner-only from the start to avoid a TOCTOU race where the file
+        // is briefly world-readable before permissions are narrowed.
+        let mut file = disk
+            .open_blocking(&self.path, Open::create().with_access(Access::OwnerOnly))
+            .map_err(|e| {
+                format!(
+                    "failed to create key file at {}: {}",
+                    self.path.display(),
+                    std::io::Error::from(e)
+                )
+            })?;
+        file.write_all(key_base64.as_bytes())
+            .map_err(|e| format!("failed to write key file at {}: {e}", self.path.display()))?;
         Ok(())
     }
 
     fn delete_key(&self) -> Result<(), String> {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!(
-                "failed to delete key file at {}: {e}",
-                self.path.display()
-            )),
-        }
+        Disk::process()
+            .remove_blocking(&self.path, Remove::File)
+            .map(drop)
+            .map_err(|e| {
+                format!(
+                    "failed to delete key file at {}: {}",
+                    self.path.display(),
+                    std::io::Error::from(e)
+                )
+            })
     }
 
     fn name(&self) -> &'static str {
@@ -128,6 +113,8 @@ impl KeyStore for KeyFile {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

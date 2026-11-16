@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
@@ -431,12 +430,18 @@ async fn export_table_part(
     );
 
     let output_path = tables_dir.join(backup_table_part_filename(table));
-    let file = File::create(&output_path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create PostgreSQL table export {}: {error}",
-            output_path.display()
-        ))
-    })?;
+    let file = scryer_application::disk::Disk::process()
+        .open(&output_path, scryer_application::disk::Open::create())
+        .await
+        .map_err(|error| {
+            let error = std::io::Error::from(error);
+            AppError::Repository(format!(
+                "failed to create PostgreSQL table export {}: {error}",
+                output_path.display()
+            ))
+        })?
+        .into_std()
+        .await;
     let mut writer = BufWriter::new(file);
     let mut hasher = blake3::Hasher::new();
     let mut line_buffer = Vec::with_capacity(16 * 1024);
@@ -654,12 +659,18 @@ async fn import_table_part(
         .iter()
         .map(PgColumnInfo::import_rule)
         .collect::<Vec<_>>();
-    let file = File::open(part_path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
-            format!("backup table payload missing for {table}: {error}"),
-        )
-    })?;
+    let file = scryer_application::disk::Disk::process()
+        .open(part_path, scryer_application::disk::Open::read())
+        .await
+        .map_err(|error| {
+            let error = std::io::Error::from(error);
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
+                format!("backup table payload missing for {table}: {error}"),
+            )
+        })?
+        .into_std()
+        .await;
     let reader = BufReader::new(scryer_application::RestoreReader::new(file));
     let progress = scryer_application::current_restore_deadline();
 
@@ -993,6 +1004,8 @@ async fn configure_restore_transaction(
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod restore_tests {
     use super::*;
 

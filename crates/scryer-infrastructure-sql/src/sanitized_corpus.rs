@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -58,12 +58,15 @@ const SAFE_VALUES: &[&str] = &[
 ];
 
 pub fn load_sanitized_jsonl(path: &Path) -> Result<Vec<Vec<u8>>, String> {
-    let source = fs::read_to_string(path).map_err(|error| {
-        format!(
-            "failed to read sanitized corpus {}: {error}",
-            path.display()
-        )
-    })?;
+    let source = scryer_application::disk::Disk::process()
+        .read_to_string_blocking(path)
+        .map_err(|error| {
+            let error = std::io::Error::from(error);
+            format!(
+                "failed to read sanitized corpus {}: {error}",
+                path.display()
+            )
+        })?;
     let mut samples = Vec::new();
     for (index, line) in source.lines().enumerate() {
         if line.trim().is_empty() {
@@ -163,8 +166,11 @@ fn is_placeholder(value: &str) -> bool {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn rejects_sensitive_shapes_and_unbucketed_identifiers() {

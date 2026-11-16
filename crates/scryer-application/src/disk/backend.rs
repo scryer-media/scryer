@@ -185,6 +185,8 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// fails with [`Refused::Link`] and anything but a regular file with
     /// [`Refused::NotAFile`].
     fn open(&self, path: &Path, open: Open) -> io::Result<std::fs::File>;
+    /// The rest of the contents of a handle from [`Self::open`].
+    fn read_from(&self, file: std::fs::File) -> io::Result<Vec<u8>>;
     /// Writes `bytes` to `path` in place, without syncing: created, or
     /// truncated and rewritten when `replace` allows it.
     fn write(&self, path: &Path, bytes: &[u8], replace: Replace, access: Access) -> io::Result<()>;
@@ -394,6 +396,13 @@ impl DiskBackend for SystemBackend {
             }
         }
         Ok(file)
+    }
+
+    fn read_from(&self, mut file: std::fs::File) -> io::Result<Vec<u8>> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 
     fn write(&self, path: &Path, bytes: &[u8], replace: Replace, access: Access) -> io::Result<()> {
