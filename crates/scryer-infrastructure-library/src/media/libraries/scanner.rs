@@ -532,6 +532,55 @@ mod tests {
         }
     }
 
+    /// Installing the roots changes only how long a reading is reused and how
+    /// long one may take: a scan finds the same files, sizes and signatures.
+    #[tokio::test]
+    async fn a_scan_finds_the_same_files_with_the_roots_installed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let season = dir.path().join("Invented Show").join("Season 01");
+        let film = dir.path().join("Invented Film (2001)");
+        std::fs::create_dir_all(&season).expect("season");
+        std::fs::create_dir_all(&film).expect("film");
+        for (path, bytes) in [
+            (
+                season.join("Invented Show - S01E01.mkv"),
+                &b"episode-one"[..],
+            ),
+            (
+                season.join("Invented Show - S01E01.nfo"),
+                b"<episodedetails/>",
+            ),
+            (season.join("Invented Show - S01E02.mkv"), b"episode-two"),
+            (season.join("notes.txt"), b"unrelated"),
+            (film.join("Invented Film (2001).mkv"), b"film"),
+            (film.join("sample.mkv"), b"s"),
+        ] {
+            std::fs::write(path, bytes).expect("seed");
+        }
+        let scanner = FileSystemLibraryScanner::new();
+        let root = dir.path().to_string_lossy().to_string();
+        let scan = || async {
+            (
+                scanner.scan_library(&root).await.expect("library"),
+                scanner.scan_directory(&root).await.expect("directory"),
+            )
+        };
+
+        let unset = scan().await;
+        let disk = Disk::process();
+        disk.set_volumes([(
+            dir.path().to_path_buf(),
+            scryer_application::disk::VolumeClass::LibraryRoot,
+        )]);
+        let installed = scan().await;
+        let again = scan().await;
+        disk.set_volumes([]);
+
+        assert!(!unset.0.is_empty());
+        assert_eq!(installed, unset);
+        assert_eq!(again, unset);
+    }
+
     #[tokio::test]
     async fn scan_library_prefers_same_stem_nfo() {
         let dir = tempfile::tempdir().expect("tempdir");

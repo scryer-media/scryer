@@ -55,7 +55,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn recycle_bin_config_values(&self) -> (bool, Option<String>, u32) {
+    pub(crate) async fn recycle_bin_config_values(&self) -> (bool, Option<String>, u32) {
         let enabled = self
             .read_setting_string_value_for_scope(
                 SETTINGS_SCOPE_MEDIA,
@@ -596,6 +596,7 @@ impl AppUseCase {
             // A JSON null reads back as unset, restoring the per-root default.
             self.upsert_media_setting_json(RECYCLE_BIN_PATH_KEY, &path, updated_by)
                 .await?;
+            self.install_disk_volumes().await;
             changed_keys.push(RECYCLE_BIN_PATH_KEY.to_string());
         }
 

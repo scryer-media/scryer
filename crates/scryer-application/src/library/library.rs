@@ -826,6 +826,7 @@ impl AppUseCase {
             .libraries
             .create(library, roots)
             .await?;
+        self.install_disk_volumes().await;
         // The badge filters pending imports by the library list it holds.
         self.refresh_navigation_badge_library_facts().await;
         if let Some(settings) = settings {
@@ -967,6 +968,9 @@ impl AppUseCase {
             .libraries
             .update(&existing.id, name.clone(), slug, roots)
             .await?;
+        if roots_were_provided {
+            self.install_disk_volumes().await;
+        }
         if let Some(settings) = settings {
             self.update_library_settings(actor, &library.id, settings)
                 .await?;
@@ -1092,6 +1096,7 @@ impl AppUseCase {
             .delete_library(&library.id)
             .await?;
         if deleted {
+            self.install_disk_volumes().await;
             self.refresh_navigation_badge_library_facts().await;
             self.refresh_download_client_category_admission_best_effort()
                 .await;

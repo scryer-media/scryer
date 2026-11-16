@@ -439,6 +439,33 @@ fn a_fresh_read_reuses_a_reading_under_a_second_old_and_probes_after() {
     assert_eq!(disk.calls("lstat"), 2);
 }
 
+/// With the configured roots installed, a repeated read inside one second
+/// is one probe and a mutation makes the next read probe again; a path
+/// outside every root probes on every read, as it does with none installed.
+#[test]
+fn installed_roots_reuse_a_reading_until_a_mutation() {
+    let clock = ManualClock::at(at(0));
+    let backend = Arc::new(Scripted::default());
+    let disk = Disk::with_seams(backend.clone(), clock.clone());
+    disk.set_volumes(super::volume::configured_volumes(vec![ROOT.into()], None));
+    let inside = p("/srv/fixture-media/a.mkv");
+    let outside = p("/var/lib/invented-app/a.db");
+    backend.stat_is("/srv/fixture-media/a.mkv", Ok(file(5)));
+    backend.stat_is("/var/lib/invented-app/a.db", Ok(file(5)));
+
+    disk.fresh_blocking(&inside);
+    clock.set(at(0) + chrono::Duration::milliseconds(900));
+    disk.fresh_blocking(&inside);
+    assert_eq!(disk.calls("lstat"), 1);
+    disk.remove_blocking(&inside, Remove::File).expect("remove");
+    disk.fresh_blocking(&inside);
+    assert_eq!(disk.calls("lstat"), 2);
+
+    disk.fresh_blocking(&outside);
+    disk.fresh_blocking(&outside);
+    assert_eq!(disk.calls("lstat"), 4);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_fresh_reads_of_one_path_share_one_call() {
     let clock = ManualClock::at(at(0));

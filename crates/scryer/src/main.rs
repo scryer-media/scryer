@@ -2168,6 +2168,9 @@ async fn bootstrap_application(
     if let Err(e) = app_use_case.reconcile_default_library_roots().await {
         tracing::warn!(error = %e, "failed to reconcile default library roots on startup");
     }
+    // The disk owner learns the roots it caches and bounds; root writes
+    // install them again.
+    app_use_case.install_disk_volumes().await;
 
     // After root reconciliation, so it reads the roots the library really has.
     application_migrator

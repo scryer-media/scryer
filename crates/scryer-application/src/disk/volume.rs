@@ -236,9 +236,60 @@ impl Volumes {
     }
 }
 
+impl crate::AppUseCase {
+    /// Install the configured roots on the process's owner: every library
+    /// root, and a custom recycle bin. Run once at startup and after every
+    /// write that adds, changes or removes one.
+    ///
+    /// A root's class is its role, so this reads the library list and one
+    /// setting and touches no filesystem. When the roots cannot be read, the
+    /// roots already installed stay.
+    pub async fn install_disk_volumes(&self) {
+        let library_roots = match self.storage_capacity_roots().await {
+            Ok(roots) => roots,
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read the library roots; the disk owner keeps the roots it has");
+                return;
+            }
+        };
+        let (_, recycle_bin, _) = self.recycle_bin_config_values().await;
+        super::Disk::process().set_volumes(configured_volumes(library_roots, recycle_bin));
+    }
+}
+
+pub(super) fn configured_volumes(
+    library_roots: Vec<String>,
+    recycle_bin: Option<String>,
+) -> Vec<(PathBuf, VolumeClass)> {
+    library_roots
+        .into_iter()
+        .map(|root| {
+            let root = crate::stored_paths::stored_path_to_path_buf(&root);
+            (root, VolumeClass::LibraryRoot)
+        })
+        .chain(recycle_bin.map(|bin| (PathBuf::from(bin), VolumeClass::RecycleBin)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_roots_and_a_custom_bin_are_installed_by_role() {
+        assert_eq!(
+            configured_volumes(
+                vec!["/srv/fixture-media".into(), "/srv/fixture-films".into()],
+                Some("/srv/fixture-bin".into()),
+            ),
+            vec![
+                ("/srv/fixture-media".into(), VolumeClass::LibraryRoot),
+                ("/srv/fixture-films".into(), VolumeClass::LibraryRoot),
+                ("/srv/fixture-bin".into(), VolumeClass::RecycleBin),
+            ]
+        );
+        assert!(configured_volumes(Vec::new(), None).is_empty());
+    }
 
     fn volumes() -> Volumes {
         Volumes::default().replaced(vec![

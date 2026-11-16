@@ -637,8 +637,9 @@ impl StorageCapacity {
 }
 
 impl AppUseCase {
-    /// Every configured library root path, for the sampler.
-    async fn storage_capacity_roots(&self) -> crate::AppResult<Vec<String>> {
+    /// Every configured library root path, for the sampler and the owner's
+    /// roots.
+    pub(super) async fn storage_capacity_roots(&self) -> crate::AppResult<Vec<String>> {
         let libraries = self.services.catalog.libraries.list(None).await?;
         Ok(libraries
             .into_iter()

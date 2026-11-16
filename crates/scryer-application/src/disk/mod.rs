@@ -1743,6 +1743,12 @@ impl Disk {
     pub(crate) fn total_calls(&self) -> u64 {
         self.inner.calls.lock().unwrap().values().sum()
     }
+
+    /// The class of the root `path` is under, for tests.
+    #[cfg(test)]
+    pub(crate) fn class_of(&self, path: &Path) -> VolumeClass {
+        read(&self.inner.volumes).class_of(path)
+    }
 }
 
 /// A link the destination cannot hold, as opposed to one that failed: the

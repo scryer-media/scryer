@@ -932,11 +932,14 @@ impl AppUseCase {
             // A resumed run reaching the tail a second time.
             library
         } else {
-            self.services
+            let library = self
+                .services
                 .catalog
                 .libraries
                 .set_root_path(&tail.root_id, &tail.destination_root_path)
-                .await?
+                .await?;
+            self.install_disk_volumes().await;
+            library
         };
 
         self.assert_root_post_conditions(
@@ -1231,7 +1234,8 @@ impl AppUseCase {
             // A resumed run reaching the tail a second time.
             library
         } else {
-            self.services
+            let library = self
+                .services
                 .catalog
                 .libraries
                 .update(
@@ -1240,7 +1244,9 @@ impl AppUseCase {
                     library.slug.clone(),
                     desired,
                 )
-                .await?
+                .await?;
+            self.install_disk_volumes().await;
+            library
         };
 
         // The one post-condition only this branch has: the root it retired is

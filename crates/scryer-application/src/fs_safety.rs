@@ -971,6 +971,63 @@ mod move_tests {
         assert_eq!(std::fs::read(&staged).expect("staged"), b"half");
     }
 
+    /// Installing the roots changes only reuse and timeouts: placing an import
+    /// into a root, and refusing one onto an occupied name, end the same way.
+    #[tokio::test]
+    async fn an_import_placement_ends_the_same_with_the_roots_installed() {
+        async fn place(root: &Path) -> (Vec<(String, Vec<u8>)>, Option<io::ErrorKind>) {
+            let downloads = root.join("downloads");
+            let season = root.join("Invented Show").join("Season 01");
+            std::fs::create_dir_all(&downloads).expect("downloads");
+            std::fs::create_dir_all(&season).expect("season");
+            write(&downloads.join("one.mkv"), b"episode-one");
+            write(&downloads.join("two.mkv"), b"episode-two");
+            write(&season.join("Invented Show - S01E02.mkv"), b"already-here");
+            move_file_exclusive(
+                &downloads.join("one.mkv"),
+                &season.join("Invented Show - S01E01.mkv"),
+                MoveOptions::default(),
+            )
+            .await
+            .expect("place the first episode");
+            let refused = move_file_exclusive(
+                &downloads.join("two.mkv"),
+                &season.join("Invented Show - S01E02.mkv"),
+                MoveOptions::default(),
+            )
+            .await
+            .err()
+            .map(|error| error.kind());
+            let mut tree = Vec::new();
+            for dir in [&downloads, &season] {
+                for entry in std::fs::read_dir(dir).expect("list") {
+                    let path = entry.expect("entry").path();
+                    let name = path.strip_prefix(root).expect("under root");
+                    tree.push((
+                        name.to_string_lossy().into_owned(),
+                        std::fs::read(&path).expect("read"),
+                    ));
+                }
+            }
+            tree.sort();
+            (tree, refused)
+        }
+
+        let unset = tempfile::tempdir().expect("tempdir");
+        let installed = tempfile::tempdir().expect("tempdir");
+        let without = place(unset.path()).await;
+        let disk = Disk::process();
+        disk.set_volumes([(
+            installed.path().to_path_buf(),
+            crate::disk::VolumeClass::LibraryRoot,
+        )]);
+        let with = place(installed.path()).await;
+        disk.set_volumes([]);
+
+        assert_eq!(without.1, Some(io::ErrorKind::AlreadyExists));
+        assert_eq!(with, without);
+    }
+
     /// A claim that holds data is not the empty file the move created: it may
     /// be the source, moved by a rename that reported failure. It goes back
     /// to the source's name, never over a file there, and is never removed.
