@@ -2,8 +2,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::disk::{
-    Disk, DiskError, DiskVerb, EntryKind, Link, LinkOutcome, Open, Parents, PathReading, Removal,
-    Remove, SyncOutcome, reason,
+    Disk, DiskError, EntryKind, Link, LinkOutcome, Open, Parents, PathReading, Removal, Remove,
+    SyncOutcome, reason,
 };
 use crate::{AppError, AppResult};
 
@@ -394,7 +394,18 @@ async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path, held: 
             let _ = disk.remove(staged, Remove::File).await;
             return;
         }
-        StagedHolds::EmptyClaim if reading.exists() == Some(false) => return,
+        // An unread claim is left alone: putting it back could leave an
+        // empty file under a source name that holds nothing.
+        StagedHolds::EmptyClaim if reading.exists() != Some(true) => {
+            if reading.exists().is_none() {
+                tracing::error!(
+                    staged = %staged.display(),
+                    state = reading.describe_absence(),
+                    "the claim of a failed move could not be read; it is left in place"
+                );
+            }
+            return;
+        }
         StagedHolds::EmptyClaim => StagedHolds::OnlyCopy,
         held => held,
     };
@@ -557,12 +568,6 @@ async fn transfer_across_devices(
     }
 
     if !options.overwrite {
-        // An occupied destination is refused before a whole copy is spent on
-        // it; the promotion that cannot replace stays the real guard.
-        if disk.uncached(dest).await.exists() == Some(true) {
-            let taken = io::Error::from(io::ErrorKind::AlreadyExists);
-            return Err(DiskError::new(DiskVerb::Move, dest, taken).into());
-        }
         let staged = crate::disk::staging_path_for(dest);
         claim(disk, &staged).await?;
         return copy_through_staging(disk, source, &staged, dest, options).await;

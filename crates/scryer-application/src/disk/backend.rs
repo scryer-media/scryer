@@ -432,6 +432,11 @@ impl DiskBackend for SystemBackend {
                 .is_ok_and(|stat| stat.kind == EntryKind::File && stat.len == 0)
             {
                 let _ = std::fs::remove_file(dest);
+            } else {
+                tracing::warn!(
+                    path = %dest.display(),
+                    "a rename reported failure and its reserved name is not an empty file; it is left in place"
+                );
             }
         })
     }
