@@ -507,12 +507,11 @@ async fn a_fresh_re_monitor_cancels_the_sequence_delete_files_step_and_preserves
     );
 }
 
-/// A journal written while a rule could select one configured root never
-/// resumes: deletion no longer narrows to a root, so resuming it would act
-/// over files the journal never covered. It holds with the journal kept.
+/// A stored journal carrying a key this version does not know still reads,
+/// and the held sequence resumes from it.
 #[tokio::test]
-async fn a_journal_written_for_one_root_holds_and_never_resumes() {
-    let fixture = title_fixture("Sequence root journal", MediaFacet::Movie).await;
+async fn a_journal_with_an_unknown_key_still_reads_and_resumes() {
+    let fixture = title_fixture("Sequence unknown key journal", MediaFacet::Movie).await;
     let first_path = fixture.root.join("Sequence/first.mkv");
     let first_file_id =
         add_movie_file(&fixture.execution.app, &fixture.title.id, &first_path).await;
@@ -557,54 +556,29 @@ async fn a_journal_written_for_one_root_holds_and_never_resumes() {
     assert!(!first_path.exists(), "the first target completed");
     assert!(second_path.exists(), "the second target is journaled");
 
-    // Rewrite the journal as one written for a single selected root.
     let mut journal: serde_json::Value =
         serde_json::from_str(&deletion_run.detail).expect("parse storage journal");
-    journal["storage_root_id"] = serde_json::json!("synthetic-selected-root");
-    journal["storage_root_identity"] = serde_json::json!("synthetic-root-identity");
-    let mut rooted = deletion_run.clone();
-    rooted.detail = journal.to_string();
+    journal["synthetic_unknown_key"] = serde_json::json!({"note": "written by another version"});
+    let mut extended = deletion_run.clone();
+    extended.detail = journal.to_string();
     fixture
         .execution
         .evaluation
-        .finish_action_run(&rooted)
+        .finish_action_run(&extended)
         .await
-        .expect("store the root journal");
+        .expect("store the extended journal");
 
     capacity_recovered.store(true, Ordering::SeqCst);
-    for pass in ["first pass", "second pass"] {
-        fixture.execution.evaluation.begin_next_evaluation().await;
-        let report = fixture
-            .execution
-            .app
-            .run_every_rule_action_pass_for_tests()
-            .await
-            .expect("hold a root journal");
-        assert_eq!(report.held, 1, "{pass}: {report:?}");
-        assert_eq!(report.executed, 0, "{pass}: {report:?}");
-        let held_run = fixture
-            .execution
-            .evaluation
-            .latest_scoped_deletion_action_run(
-                &candidate.id,
-                candidate.match_generation,
-                &candidate.action_kind,
-            )
-            .await
-            .expect("read held scoped deletion run")
-            .expect("held DeleteFiles run persists");
-        assert_eq!(held_run.id, deletion_run.id, "{pass}");
-        let held_journal: serde_json::Value =
-            serde_json::from_str(&held_run.detail).expect("parse held journal");
-        assert_eq!(
-            held_journal["storage_root_id"], journal["storage_root_id"],
-            "{pass}"
-        );
-        assert_eq!(held_journal["files"], journal["files"], "{pass}");
-        assert!(
-            second_path.exists(),
-            "{pass}: the journaled target is preserved"
-        );
+    fixture.execution.evaluation.begin_next_evaluation().await;
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("resume from the extended journal");
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert!(!second_path.exists(), "the journaled target is deleted");
+    for file_id in [&first_file_id, &second_file_id] {
         assert!(
             fixture
                 .execution
@@ -612,25 +586,12 @@ async fn a_journal_written_for_one_root_holds_and_never_resumes() {
                 .services
                 .library
                 .media_files
-                .get_media_file_by_id(&second_file_id)
+                .get_media_file_by_id(file_id)
                 .await
-                .expect("read preserved storage row")
-                .is_some(),
-            "{pass}"
+                .expect("read deleted storage row")
+                .is_none()
         );
     }
-    assert!(
-        fixture
-            .execution
-            .app
-            .services
-            .library
-            .media_files
-            .get_media_file_by_id(&first_file_id)
-            .await
-            .expect("read completed storage row")
-            .is_none()
-    );
 }
 
 #[tokio::test]
