@@ -2940,7 +2940,7 @@ fn descendants_unmonitored(
 
 /// The sequence a declared rule runs for one candidate, built from the
 /// actions stored on it. An `Err` is the hold reason.
-pub(super) fn declared_candidate_sequence(
+pub(crate) fn declared_candidate_sequence(
     candidate: &LifecycleCandidate,
     quality_profile_ids: &HashMap<String, String>,
 ) -> Result<LifecycleActionSequence, &'static str> {

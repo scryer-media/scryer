@@ -150,6 +150,27 @@ async fn persist_succeeded_step(
     sequence: &LifecycleActionSequence,
     kind: LifecycleActionStepKind,
 ) {
+    persist_succeeded_step_with_before(
+        fixture,
+        candidate,
+        sequence,
+        kind,
+        serde_json::json!({
+            "schema_version": 1,
+            "facts_monitored": true,
+            "monitoring_changed": true,
+        }),
+    )
+    .await;
+}
+
+async fn persist_succeeded_step_with_before(
+    fixture: &ExecutionFixture,
+    candidate: &scryer_domain::LifecycleCandidate,
+    sequence: &LifecycleActionSequence,
+    kind: LifecycleActionStepKind,
+    before_state: serde_json::Value,
+) {
     let step = sequence
         .steps
         .iter()
@@ -170,12 +191,7 @@ async fn persist_succeeded_step(
         sequence_content_hash: sequence.content_hash().expect("sequence hash"),
         step_kind: step.kind.as_wire_str().to_string(),
         intent_json: serde_json::json!({"step": step, "search_request": null}).to_string(),
-        before_state_json: serde_json::json!({
-            "schema_version": 1,
-            "facts_monitored": true,
-            "monitoring_changed": true,
-        })
-        .to_string(),
+        before_state_json: before_state.to_string(),
         target_identity_json: serde_json::json!({
             "schema_version": 1,
             "rule_set_id": candidate.rule_set_id,
@@ -2360,4 +2376,171 @@ async fn the_batched_started_delete_read_matches_per_candidate_reads() {
         vec![None, Some((1, false)), Some((2, false)), None],
         "no steps, unmonitor done, delete started, other generation"
     );
+}
+
+/// An evaluation pass lands between the sequence's completed Unmonitor and
+/// its DeleteFiles, after one of the show's episodes was re-monitored from
+/// outside. The restore no longer puts the show's monitored episode count
+/// back, so the rule reads the show as it is, the candidate ends, and no file
+/// goes.
+#[tokio::test]
+async fn an_outside_re_monitor_between_unmonitor_and_delete_is_not_hidden() {
+    let fixture = title_fixture("Synthetic Gap Re-monitor", MediaFacet::Series).await;
+    let (first_season, first_episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let (second_season, second_episode) = season_and_episode(&fixture, 2, 1, "2021-01-01").await;
+    let relative = "Gap Re-monitor/Season 01/S01E01.mkv";
+    add_episode_file(&fixture, &first_episode, relative).await;
+    let path = fixture.root.join(relative);
+    let app = &fixture.execution.app;
+    let user = &fixture.execution.user;
+    let title_id = &fixture.title.id;
+    let seasons = [&first_season.id, &second_season.id];
+    let episodes = [&first_episode.id, &second_episode.id];
+    let set_monitoring = |monitored: bool| async move {
+        app.set_title_monitored(user, title_id, monitored)
+            .await
+            .expect("set title monitoring");
+        for season_id in seasons {
+            app.set_collection_monitored(user, season_id, monitored)
+                .await
+                .expect("set season monitoring");
+        }
+        for episode_id in episodes {
+            app.set_episode_monitored(user, episode_id, monitored)
+                .await
+                .expect("set episode monitoring");
+        }
+    };
+    set_monitoring(true).await;
+    let _probe =
+        install_lifecycle_storage_capacity_probe_for_test(stable_capacity_probe(capacity(100)))
+            .await;
+    let mut draft = sequence_draft(deletion_steps());
+    with_matcher(
+        &mut draft,
+        &storage_matcher_with("input.facts.monitored_episode_count >= 2"),
+    );
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    assert_eq!(candidate.subject_id, fixture.title.id);
+
+    // The sequence's own Unmonitor completed: the show and everything under
+    // it is unmonitored, and DeleteFiles has not begun. The executor left the
+    // candidate blocked between the two steps.
+    set_monitoring(false).await;
+    assert!(
+        fixture
+            .execution
+            .evaluation
+            .transition_candidate_state(
+                &candidate.id,
+                scryer_domain::LifecycleCandidateState::Blocked,
+                "synthetic_hold_between_steps",
+                &[candidate.state],
+                Utc::now(),
+            )
+            .await
+            .expect("block the candidate between its steps")
+    );
+    persist_succeeded_step_with_before(
+        &fixture.execution,
+        &candidate,
+        &crate::lifecycle_rules::action_execution::declared_candidate_sequence(
+            &candidate,
+            &Default::default(),
+        )
+        .expect("the candidate's own sequence"),
+        LifecycleActionStepKind::Unmonitor,
+        serde_json::json!({
+            "schema_version": 1,
+            "facts_monitored": true,
+            "facts_monitored_episode_count": 2,
+            "monitoring_changed": true,
+        }),
+    )
+    .await;
+    let reread = |label: &'static str| {
+        let fixture = &fixture;
+        let rule_set_id = &rule_set_id;
+        let candidate_id = candidate.id.clone();
+        async move {
+            fixture
+                .execution
+                .app
+                .run_lifecycle_rule_evaluation_job()
+                .await
+                .expect(label);
+            rule_candidates(&fixture.execution, rule_set_id)
+                .await
+                .into_iter()
+                .find(|reread| reread.id == candidate_id)
+                .expect("candidate")
+        }
+    };
+    let intact = reread("evaluate with the own unmonitor intact").await;
+    assert!(
+        !intact.state.is_terminal(),
+        "the own unmonitor is restored while it holds: {intact:?}"
+    );
+
+    // Monitoring one episode also monitors its season and the show.
+    app.set_episode_monitored(user, &first_episode.id, true)
+        .await
+        .expect("re-monitor an episode from outside");
+    let after = reread("evaluate after the outside re-monitor").await;
+    assert!(after.state.is_terminal(), "{after:?}");
+
+    arm_destructive(&fixture, &rule_set_id).await;
+    let report = app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("action pass");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert!(path.exists(), "no file is deleted");
+}
+
+/// A started delete whose journal no longer passes its identity check holds
+/// its candidate at evaluation, and the next pass holds it again.
+#[tokio::test]
+async fn a_journal_failing_its_identity_check_holds_the_candidate_across_passes() {
+    let held = hold_movie_delete_after_one_file(
+        "Synthetic Mismatched Journal",
+        "input.facts.file_count >= 0",
+    )
+    .await;
+    let intact = held.reevaluate().await;
+    assert!(!intact.state.is_terminal(), "{intact:?}");
+    assert!(
+        intact.held_since.is_none(),
+        "an intact journal holds nothing: {intact:?}"
+    );
+
+    let evaluation = &held.fixture.execution.evaluation;
+    let run = evaluation
+        .latest_scoped_deletion_action_run(
+            &held.candidate.id,
+            held.candidate.match_generation,
+            &held.candidate.action_kind,
+        )
+        .await
+        .expect("read the journal")
+        .expect("the held delete kept its journal");
+    let mut journal: serde_json::Value =
+        serde_json::from_str(&run.detail).expect("parse the journal");
+    journal["subject_id"] = serde_json::json!("synthetic-other-subject");
+    let mut mismatched = run.clone();
+    mismatched.detail = journal.to_string();
+    evaluation
+        .finish_action_run(&mismatched)
+        .await
+        .expect("store the mismatched journal");
+
+    for pass in ["first", "second"] {
+        let candidate = held.reevaluate().await;
+        assert!(!candidate.state.is_terminal(), "{pass} pass: {candidate:?}");
+        assert!(
+            candidate.held_since.is_some(),
+            "{pass} pass holds: {candidate:?}"
+        );
+        assert!(held.remaining_path.exists(), "{pass} pass deletes nothing");
+    }
 }

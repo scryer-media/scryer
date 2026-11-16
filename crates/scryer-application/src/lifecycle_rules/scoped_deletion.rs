@@ -1068,3 +1068,167 @@ mod hold_detail_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod title_restore_tests {
+    use super::{FileCheckpoint, ScopeFactSnapshot, ScopedDeletionCheckpoint};
+    use scryer_domain::MediaFacet;
+    use scryer_rules::lifecycle::{
+        LifecycleInput, LifecycleNarrowSubjectDoc, LifecycleSubjectKind, Observation,
+    };
+    use std::collections::HashMap;
+
+    /// A show's title input with known file figures.
+    fn title_input(file_count: i64, total_size: i64) -> LifecycleInput {
+        let mut show =
+            crate::lifecycle_rules::facts::tests::faceted_title(None, MediaFacet::Series);
+        show.id = "synthetic-show".to_string();
+        let usernames = HashMap::new();
+        let watch = crate::lifecycle_rules::facts::LifecycleWatchContext::default();
+        let mut input = crate::lifecycle_rules::facts::build_title_input(
+            chrono::Utc::now(),
+            &show,
+            &crate::lifecycle_rules::facts::LifecycleLibraryRef {
+                id: "synthetic-library".to_string(),
+                name: "Synthetic Shows".to_string(),
+            },
+            &[],
+            crate::lifecycle_rules::facts::LifecycleTitlePeople {
+                requester_user_ids: None,
+                usernames: &usernames,
+            },
+            crate::lifecycle_rules::facts::LifecycleTitleWatch {
+                context: &watch,
+                signals: None,
+                audience: None,
+            },
+            crate::lifecycle_rules::facts::LifecycleTitleClaims::none(),
+            &[],
+        );
+        input.facts.has_file = Observation::known(true);
+        input.facts.file_count = Observation::known(file_count);
+        input.facts.total_file_size_bytes = Observation::known(total_size);
+        input
+    }
+
+    /// `title` with one season as the subject, read beside the title.
+    fn season_input(
+        title: &LifecycleInput,
+        season_id: &str,
+        file_count: i64,
+        total_size: i64,
+    ) -> LifecycleInput {
+        let mut input = title.clone();
+        let mut facts = title.facts.clone();
+        facts.has_file = Observation::known(file_count > 0);
+        facts.file_count = Observation::known(file_count);
+        facts.total_file_size_bytes = Observation::known(total_size);
+        input.subject.kind = LifecycleSubjectKind::Season;
+        input.season = Some(LifecycleNarrowSubjectDoc {
+            id: season_id.to_string(),
+            collection_id: Some(season_id.to_string()),
+            season_number: Some(1),
+            episode_number: None,
+            facts,
+        });
+        input
+    }
+
+    /// A season journal whose delete removed `completed_sizes` from a
+    /// season that held `baseline_count` files of `baseline_size` bytes.
+    fn season_journal(
+        title: &LifecycleInput,
+        season_id: &str,
+        baseline_count: i64,
+        baseline_size: i64,
+        completed_sizes: &[i64],
+    ) -> ScopedDeletionCheckpoint {
+        let baseline = season_input(title, season_id, baseline_count, baseline_size);
+        ScopedDeletionCheckpoint {
+            scoped_deletion: 1,
+            match_generation: 1,
+            action_kind: "sequence".to_string(),
+            sequence_step_id: Some("delete_files".to_string()),
+            subject_kind: "season".to_string(),
+            subject_id: season_id.to_string(),
+            subject_label: "Synthetic Season".to_string(),
+            grace_deadline: "2026-01-01T00:00:00+00:00".to_string(),
+            total_size_bytes: baseline_size,
+            baseline: ScopeFactSnapshot::capture(&baseline),
+            mutation_started: true,
+            files: completed_sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| FileCheckpoint {
+                    file_id: format!("{season_id}-file-{index}"),
+                    file_path: format!("/synthetic/{season_id}/{index}.mkv"),
+                    catalog_proof: format!("{season_id}-proof-{index}"),
+                    file_size_bytes: Some(*size),
+                    plan: None,
+                    retention_episode_ids: Vec::new(),
+                    completed: true,
+                    error: None,
+                    error_reason: None,
+                })
+                .collect(),
+            hold: None,
+        }
+    }
+
+    fn known(observation: &Observation<i64>) -> i64 {
+        match observation {
+            Observation::Known { value, .. } => *value,
+            other => panic!("expected a known figure, got {other:?}"),
+        }
+    }
+
+    /// The season's count reads exactly its baseline minus the journal's
+    /// removal, but its size moved some other way: the count comes back, the
+    /// size stays live, and the title's figures get nothing added.
+    #[test]
+    fn a_restorable_count_with_an_unrestorable_size_adds_nothing_to_the_title() {
+        let title = title_input(3, 20);
+        let journal = season_journal(&title, "synthetic-season-1", 2, 10, &[5]);
+        let mut input = season_input(&title, "synthetic-season-1", 1, 7);
+
+        journal.restore_sequence_owned_file_deltas(&mut input);
+
+        assert_eq!(known(&input.subject_facts().file_count), 2);
+        assert_eq!(known(&input.subject_facts().total_file_size_bytes), 7);
+        assert_eq!(known(&input.facts.file_count), 3);
+        assert_eq!(known(&input.facts.total_file_size_bytes), 20);
+    }
+
+    /// Two seasons of one show each removed one file. Each season is judged
+    /// on its own copy of the title's facts, with only its own removal added
+    /// back: neither reads the other's removal as restored.
+    #[test]
+    fn two_started_seasons_each_add_back_only_their_own_removal() {
+        let title = title_input(2, 10);
+        let first = season_journal(&title, "synthetic-season-1", 2, 10, &[5]);
+        let second = season_journal(&title, "synthetic-season-2", 2, 10, &[5]);
+
+        let mut first_input = season_input(&title, "synthetic-season-1", 1, 5);
+        first.restore_sequence_owned_file_deltas(&mut first_input);
+        let mut second_input = season_input(&title, "synthetic-season-2", 1, 5);
+        second.restore_sequence_owned_file_deltas(&mut second_input);
+
+        for input in [&first_input, &second_input] {
+            assert_eq!(known(&input.subject_facts().file_count), 2);
+            assert_eq!(known(&input.subject_facts().total_file_size_bytes), 10);
+            assert_eq!(known(&input.facts.file_count), 3);
+            assert_eq!(known(&input.facts.total_file_size_bytes), 15);
+        }
+        assert_eq!(
+            known(&title.facts.file_count),
+            2,
+            "the title input is untouched"
+        );
+
+        // Restoring the same journal again finds the figures no longer read
+        // baseline minus its removal, and adds nothing a second time.
+        first.restore_sequence_owned_file_deltas(&mut first_input);
+        assert_eq!(known(&first_input.facts.file_count), 3);
+        assert_eq!(known(&first_input.facts.total_file_size_bytes), 15);
+    }
+}
