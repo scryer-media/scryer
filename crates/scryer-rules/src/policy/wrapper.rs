@@ -51,27 +51,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wrapper_source_matches_the_shipped_lifecycle_layout() {
+    fn wrapper_source_reads_each_field_from_the_rule_with_its_default() {
         let source = object_wrapper_source(
-            "scryer.maintenance.wrapper",
-            "scryer.maintenance.user",
+            "scryer.fixture.wrapper",
+            "scryer.fixture.user",
             "rule_1",
             "decision",
             &[
-                WrapperField::new("matched", "match", "false"),
-                WrapperField::new("unknown", "unknown", "false"),
-                WrapperField::new("reasons", "reasons", "[]"),
+                WrapperField::new("first", "first_rule", "false"),
+                WrapperField::new("second", "second_rule", "[]"),
             ],
         );
 
         assert_eq!(
             source,
-            "package scryer.maintenance.wrapper.rule_1\n\
+            "package scryer.fixture.wrapper.rule_1\n\
              import rego.v1\n\n\
              decision := {\n\
-             \t\"matched\": object.get(data.scryer.maintenance.user.rule_1, \"match\", false),\n\
-             \t\"unknown\": object.get(data.scryer.maintenance.user.rule_1, \"unknown\", false),\n\
-             \t\"reasons\": object.get(data.scryer.maintenance.user.rule_1, \"reasons\", []),\n\
+             \t\"first\": object.get(data.scryer.fixture.user.rule_1, \"first_rule\", false),\n\
+             \t\"second\": object.get(data.scryer.fixture.user.rule_1, \"second_rule\", []),\n\
              }\n"
         );
     }

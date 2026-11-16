@@ -2562,20 +2562,13 @@ fn sequence_step_before_state_holds(
 }
 
 /// Whether the rule's source defines `notify` and no other action head. A
-/// revision whose action column cannot be read does not count.
+/// revision from before rules declared their own actions declares none.
 fn rule_only_notifies(detail: &LifecycleRuleSetDetail) -> bool {
-    super::declared_actions::LifecycleDeclaredActions::from_persisted_json(
-        &detail.revision.action_spec_json,
-    )
-    .ok()
-    .flatten()
-    .is_some_and(|declared| {
-        !declared.heads.is_empty()
-            && declared
-                .heads
-                .iter()
-                .all(|head| *head == scryer_rules::lifecycle_actions::LifecycleActionHead::Notify)
-    })
+    let heads = &detail.declared_actions.heads;
+    !heads.is_empty()
+        && heads
+            .iter()
+            .all(|head| *head == scryer_rules::lifecycle_actions::LifecycleActionHead::Notify)
 }
 
 /// Whether the title now sits where a recorded move sent it: in the target
