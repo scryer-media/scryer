@@ -34,9 +34,6 @@ pub struct QualityProfileCriteria {
     pub allow_upgrades: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ignore_proper_repack: bool,
-    /// Opt in to automatic packs when only one episode is wanted.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_pack_for_single_episode: bool,
     pub prefer_dual_audio: bool,
     pub required_audio_languages: Vec<String>,
     pub scoring_persona: ScoringPersona,
@@ -71,6 +68,27 @@ pub struct QualityProfileCriteria {
     /// `Some(DEFAULT_MIN_UPGRADE_SCORE_DELTA)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// How many wanted episodes must be missing before an automatic search
+    /// reaches for a pack, or `None` for
+    /// [`DEFAULT_MIN_MISSING_EPISODES_FOR_PACK`]. Read through
+    /// [`QualityProfileCriteria::min_missing_episodes_for_pack_or_default`].
+    ///
+    /// Search shaping, not acceptance: it is deliberately absent from
+    /// [`AcceptanceCriteria`], so changing it leaves every scope's convergence
+    /// fingerprint, and the coverage already earned under it, where it was.
+    /// The default is stored as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_episodes_for_pack: Option<u32>,
+    /// The share of a multi-season pack's eligible episodes that must be
+    /// missing, in percent, before the pack is worth taking. A pack qualifies
+    /// only when strictly more than this share is missing. `None` reads as
+    /// [`DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK`] through
+    /// [`QualityProfileCriteria::min_missing_percent_for_series_pack_or_default`].
+    ///
+    /// Kept out of [`AcceptanceCriteria`] for the same reason as
+    /// `min_missing_episodes_for_pack`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_percent_for_series_pack: Option<u32>,
     /// The order this profile compares releases in; the score always follows
     /// the last gate. See [`crate::decision_pipeline`].
     ///
@@ -87,6 +105,14 @@ pub struct QualityProfileCriteria {
 
 /// Same-tier upgrade delta for a profile that does not set one.
 pub const DEFAULT_MIN_UPGRADE_SCORE_DELTA: i32 = 120;
+
+/// Missing episodes a pack needs for a profile that does not set a minimum:
+/// more than one, as in Sonarr.
+pub const DEFAULT_MIN_MISSING_EPISODES_FOR_PACK: u32 = 2;
+
+/// Missing share of a multi-season pack, in percent, for a profile that does
+/// not set one. A pack qualifies only above it.
+pub const DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK: u32 = 30;
 
 /// The acceptance-deciding subset of [`QualityProfileCriteria`], hashed by
 /// `convergence::profile_criteria_version` to version a scope's search
@@ -127,9 +153,6 @@ pub(crate) struct AcceptanceCriteria<'a> {
     pub allow_upgrades: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ignore_proper_repack: bool,
-    /// Opt in to automatic packs when only one episode is wanted.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_pack_for_single_episode: bool,
     pub required_audio_languages: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff_tier: Option<&'a String>,
@@ -164,7 +187,6 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
             ignore_proper_repack: criteria.ignore_proper_repack,
-            allow_pack_for_single_episode: criteria.allow_pack_for_single_episode,
             required_audio_languages: &criteria.required_audio_languages,
             cutoff_tier: criteria.cutoff_tier.as_ref(),
             min_score_to_grab: criteria.min_score_to_grab,
@@ -181,9 +203,6 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
 pub struct ScoringConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ignore_proper_repack: bool,
-    /// Opt in to automatic packs when only one episode is wanted.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_pack_for_single_episode: bool,
     #[serde(default)]
     pub scoring_persona: ScoringPersona,
     #[serde(default)]
@@ -196,6 +215,10 @@ pub struct ScoringConfig {
     pub cutoff_score: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_episodes_for_pack: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_missing_percent_for_series_pack: Option<u32>,
     /// Omitted unless the profile chose an order other than the one its
     /// `ignore_proper_repack` switch implies; see
     /// [`QualityProfileCriteria::stored_decision_pipeline`]. A key this build
@@ -284,6 +307,18 @@ impl QualityProfileCriteria {
     pub fn min_upgrade_score_delta_or_default(&self) -> i32 {
         self.min_upgrade_score_delta
             .unwrap_or(DEFAULT_MIN_UPGRADE_SCORE_DELTA)
+    }
+
+    /// The missing-episode count this profile asks of a pack.
+    pub fn min_missing_episodes_for_pack_or_default(&self) -> u32 {
+        self.min_missing_episodes_for_pack
+            .unwrap_or(DEFAULT_MIN_MISSING_EPISODES_FOR_PACK)
+    }
+
+    /// The missing share, in percent, a multi-season pack must exceed.
+    pub fn min_missing_percent_for_series_pack_or_default(&self) -> u32 {
+        self.min_missing_percent_for_series_pack
+            .unwrap_or(DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK)
     }
 
     /// Returns the scoring persona for a given media category, falling back to the
@@ -490,8 +525,6 @@ struct RawQualityProfileCriteria {
     #[serde(default)]
     ignore_proper_repack: bool,
     #[serde(default)]
-    allow_pack_for_single_episode: bool,
-    #[serde(default)]
     prefer_dual_audio: bool,
     #[serde(default)]
     required_audio_languages: Vec<String>,
@@ -507,6 +540,10 @@ struct RawQualityProfileCriteria {
     cutoff_score: Option<i32>,
     #[serde(default)]
     min_upgrade_score_delta: Option<i32>,
+    #[serde(default)]
+    min_missing_episodes_for_pack: Option<u32>,
+    #[serde(default)]
+    min_missing_percent_for_series_pack: Option<u32>,
     #[serde(default)]
     decision_pipeline: Option<DecisionPipeline>,
     #[serde(default)]
@@ -570,7 +607,8 @@ pub fn builtin_4k_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
-            allow_pack_for_single_episode: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -611,7 +649,8 @@ pub fn builtin_8k_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
-            allow_pack_for_single_episode: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -647,7 +686,8 @@ pub fn builtin_1080p_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
-            allow_pack_for_single_episode: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -683,7 +723,8 @@ pub fn builtin_anime_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
-            allow_pack_for_single_episode: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -740,7 +781,6 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
             ignore_proper_repack: criteria.ignore_proper_repack,
-            allow_pack_for_single_episode: criteria.allow_pack_for_single_episode,
             prefer_dual_audio: criteria.prefer_dual_audio,
             required_audio_languages: criteria
                 .required_audio_languages
@@ -754,6 +794,8 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
             min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+            min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack,
+            min_missing_percent_for_series_pack: criteria.min_missing_percent_for_series_pack,
             decision_pipeline: criteria.decision_pipeline.unwrap_or_default(),
             facet_persona_overrides: criteria.facet_persona_overrides,
         },
@@ -787,7 +829,8 @@ impl Default for QualityProfile {
                 allow_bd_disk: false,
                 allow_upgrades: true,
                 ignore_proper_repack: false,
-                allow_pack_for_single_episode: false,
+                min_missing_episodes_for_pack: None,
+                min_missing_percent_for_series_pack: None,
                 prefer_dual_audio: false,
                 required_audio_languages: vec![],
                 scoring_persona: ScoringPersona::default(),
@@ -822,7 +865,8 @@ impl Default for QualityProfileCriteria {
             allow_bd_disk: true,
             allow_upgrades: true,
             ignore_proper_repack: false,
-            allow_pack_for_single_episode: false,
+            min_missing_episodes_for_pack: None,
+            min_missing_percent_for_series_pack: None,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),

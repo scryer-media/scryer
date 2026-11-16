@@ -2436,10 +2436,15 @@ fn evaluate_auto_candidate_recording(
         return ReleaseAutoDecisionCode::EpisodeMismatch;
     }
 
-    // By default a single-episode automatic search does not take a pack.
-    // Explicit profile opt-in relaxes only this gate; title, numbering,
-    // monitoring, quality, blocklist and upgrade admission still apply.
-    if !context.profile.criteria.allow_pack_for_single_episode
+    // Sonarr's `SingleEpisodeSearchMatchSpecification`: an automatic search
+    // for one episode takes that episode, or a double episode that holds it,
+    // never a season. The season and collection searches own packs and their
+    // missing-episode threshold. An operator-started search and the feed are
+    // not single-episode searches and are left alone. A profile whose pack
+    // minimum is one missing episode asks for exactly the pack this refuses,
+    // so the refusal stands only while the minimum is above one; the title,
+    // numbering, monitoring, quality and upgrade checks still apply.
+    if !context.thresholds.allows_pack_for_one_missing_episode()
         && !context.user_invoked
         && !context.is_rss_lane
         && matches!(
@@ -5922,21 +5927,21 @@ mod tests {
         coverage_scope: Option<SubmissionScope>,
         user_invoked: bool,
     ) -> ReleaseAutoDecisionCode {
-        single_episode_decision_with_pack_policy(
+        single_episode_decision_with_pack_minimum(
             release,
             wanted_episode,
             coverage_scope,
             user_invoked,
-            false,
+            None,
         )
     }
 
-    fn single_episode_decision_with_pack_policy(
+    fn single_episode_decision_with_pack_minimum(
         release: &str,
         wanted_episode: u32,
         coverage_scope: Option<SubmissionScope>,
         user_invoked: bool,
-        allow_pack: bool,
+        min_missing_episodes_for_pack: Option<u32>,
     ) -> ReleaseAutoDecisionCode {
         let mut title = make_title();
         title.name = "Synthetic Show".to_string();
@@ -5955,12 +5960,9 @@ mod tests {
         ));
         candidate.quality_profile_decision = Some(allowed_quality_decision(2400));
         candidate.coverage_scope = coverage_scope;
-        let mut profile =
-            serde_json::to_value(QualityProfile::default()).expect("serialize profile");
-        profile["criteria"]["allow_pack_for_single_episode"] = serde_json::json!(allow_pack);
-        let profile =
-            QualityProfile::parse(&profile.to_string()).expect("read profile pack policy");
-        let thresholds = AcquisitionThresholds::default();
+        let mut profile = QualityProfile::default();
+        profile.criteria.min_missing_episodes_for_pack = min_missing_episodes_for_pack;
+        let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
         let now = Utc::now();
         let db_blocklist = crate::app_usecase_discovery::TitleReleaseBlocklistSignatures::default();
         let no_minimum_seeders = HashMap::new();
@@ -5987,48 +5989,54 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_can_opt_in_to_single_episode_packs_without_overriding_identity() {
+    fn a_pack_minimum_of_one_lets_a_single_episode_search_take_a_pack() {
         let release = "Synthetic.Show.S01E01-E03.1080p.WEB-DL-SYNTH";
-        let coverage = Some(SubmissionScope::EpisodeSet {
+        let triple = Some(SubmissionScope::EpisodeSet {
             episode_ids: vec!["ep-1".into(), "ep-2".into(), "ep-3".into()],
         });
+        let season = Some(SubmissionScope::Collection {
+            collection_id: "season-1".to_string(),
+        });
+        // Unset and the stored default both refuse, as before the setting.
+        for minimum in [None, Some(2), Some(5)] {
+            assert_eq!(
+                single_episode_decision_with_pack_minimum(
+                    release,
+                    1,
+                    triple.clone(),
+                    false,
+                    minimum
+                ),
+                ReleaseAutoDecisionCode::PackForSingleEpisode,
+                "minimum {minimum:?}"
+            );
+        }
         assert_eq!(
-            single_episode_decision_with_pack_policy(release, 1, coverage.clone(), false, true),
+            single_episode_decision_with_pack_minimum(release, 1, triple.clone(), false, Some(1)),
             ReleaseAutoDecisionCode::Eligible,
         );
         assert_eq!(
-            single_episode_decision_with_pack_policy(release, 1, coverage.clone(), false, false),
-            ReleaseAutoDecisionCode::PackForSingleEpisode,
+            single_episode_decision_with_pack_minimum(
+                "Synthetic.Show.S01.1080p.WEB-DL-SYNTH",
+                1,
+                season,
+                false,
+                Some(1)
+            ),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        // The identity checks ahead of the pack gate still decide.
+        let foreign = "Another.Show.S01E01-E03.1080p.WEB-DL-SYNTH";
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, Some(1)),
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, None),
+        );
+        assert_ne!(
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, Some(1)),
+            ReleaseAutoDecisionCode::Eligible,
         );
         assert_eq!(
-            single_episode_decision_with_pack_policy(
-                "Another.Show.S01E01-E03.1080p.WEB-DL-SYNTH",
-                1,
-                coverage.clone(),
-                false,
-                true,
-            ),
-            ReleaseAutoDecisionCode::ParseAmbiguous,
-        );
-        assert_eq!(
-            single_episode_decision_with_pack_policy(
-                "Another.Show.S01E01-E03.1080p.WEB-DL-SYNTH",
-                1,
-                coverage.clone(),
-                false,
-                true,
-            ),
-            single_episode_decision_with_pack_policy(
-                "Another.Show.S01E01-E03.1080p.WEB-DL-SYNTH",
-                1,
-                coverage.clone(),
-                false,
-                false,
-            ),
-            "pack opt-in must not alter the existing foreign-title refusal",
-        );
-        assert_eq!(
-            single_episode_decision_with_pack_policy(release, 7, coverage, false, true),
+            single_episode_decision_with_pack_minimum(release, 7, triple, false, Some(1)),
             ReleaseAutoDecisionCode::EpisodeMismatch,
         );
     }

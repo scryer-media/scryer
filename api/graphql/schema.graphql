@@ -25210,10 +25210,6 @@ input QualityProfileCriteriaInput {
 	"""
 	ignoreProperRepack: Boolean
 	"""
-	Omission preserves the stored policy; new profiles default to false.
-	"""
-	allowPackForSingleEpisode: Boolean
-	"""
 	Additional scoring preferences.
 	"""
 	scoringOverrides: ScoringOverridesInput!
@@ -25238,6 +25234,20 @@ input QualityProfileCriteriaInput {
 	default.
 	"""
 	minUpgradeScoreDelta: Int
+	"""
+	Optional count of wanted episodes that must be missing before an
+	automatic search takes a pack; at least 1. Omitting it keeps the stored
+	value, and sending the default (2) stores the profile as using the
+	default.
+	"""
+	minMissingEpisodesForPack: Int
+	"""
+	Optional percentage, 0 to 100, of a multi-season pack's monitored,
+	aired episodes that must be exceeded by the missing ones. Omitting it
+	keeps the stored value, and sending the default (30) stores the profile
+	as using the default.
+	"""
+	minMissingPercentForSeriesPack: Int
 	"""
 	Optional decision order; each step at most once. Omitting it keeps the
 	stored order, and an empty list ranks on score alone. When sent,
@@ -25311,10 +25321,6 @@ type QualityProfileCriteriaPayload {
 	"""
 	ignoreProperRepack: Boolean!
 	"""
-	Explicit opt-in; other acquisition and import safeguards remain active.
-	"""
-	allowPackForSingleEpisode: Boolean!
-	"""
 	Optional boolean scoring overrides.
 	"""
 	scoringOverrides: ScoringOverridesPayload!
@@ -25337,6 +25343,20 @@ type QualityProfileCriteriaPayload {
 	an upgrade. Profiles that never set it report the default, 120.
 	"""
 	minUpgradeScoreDelta: Int!
+	"""
+	Wanted episodes that must be missing before an automatic search takes
+	a pack. At 1, a search for one missing episode may take a pack.
+	Profiles that never set it report the default, 2. Changing it does
+	not re-open searches already covered.
+	"""
+	minMissingEpisodesForPack: Int!
+	"""
+	A multi-season pack is taken only when more than this percentage of
+	its monitored, aired episodes is missing. Profiles that never set it
+	report the default, 30. Changing it does not re-open searches already
+	covered.
+	"""
+	minMissingPercentForSeriesPack: Int!
 	"""
 	The steps releases are compared on, in order, before the score
 	decides. Profiles that never set it report `QUALITY_TIER, REVISION,

@@ -1469,6 +1469,7 @@ impl AppUseCase {
                 &pending_parsed,
                 &catalog_episodes,
                 &owned_episode_ids,
+                crate::quality_profile::DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
             ) {
                 return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
             }

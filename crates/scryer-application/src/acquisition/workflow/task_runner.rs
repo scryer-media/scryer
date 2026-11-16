@@ -2330,6 +2330,7 @@ async fn plan_series_pack_for_title(
         || !crate::acquisition_coverage::title_series_pack_missing_ratio_qualifies(
             &episodes,
             &owned_episode_ids,
+            crate::quality_profile::DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
         )
     {
         return Ok(None);
@@ -2428,6 +2429,7 @@ async fn plan_series_pack_for_title(
         claimed_episode_ids,
         reads,
         !session.options.intent.is_interactive(),
+        convergence.min_missing_percent_for_series_pack,
     )
     .await?;
     let session_finalized = app
@@ -3048,6 +3050,7 @@ async fn evaluate_series_pack_candidates(
     claimed_episode_ids: &HashSet<String>,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
     automatic: bool,
+    min_missing_percent: u32,
 ) -> AppResult<(Vec<IndexerSearchResult>, HashSet<String>)> {
     let mut groups = HashMap::<Vec<String>, Vec<(usize, IndexerSearchResult)>>::new();
     let mut collection_ids = HashSet::new();
@@ -3063,6 +3066,7 @@ async fn evaluate_series_pack_candidates(
             parsed,
             episodes,
             owned_episode_ids,
+            min_missing_percent,
         ) {
             continue;
         }

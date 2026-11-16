@@ -1,6 +1,9 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
-use crate::quality_profile::{DEFAULT_MIN_UPGRADE_SCORE_DELTA, QualityProfileCriteria};
+use crate::quality_profile::{
+    DEFAULT_MIN_MISSING_EPISODES_FOR_PACK, DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
+    DEFAULT_MIN_UPGRADE_SCORE_DELTA, QualityProfileCriteria,
+};
 
 /// Episodes become searchable twelve hours before air time, for active search
 /// and for automatic RSS grabs alike.
@@ -13,15 +16,23 @@ pub(crate) const EPISODE_PRE_AIR_WINDOW_HOURS: i64 = 12;
 /// better tier admits outright and a delta only ever describes a same-tier
 /// comparison. There is no upgrade cooldown, and so no large-delta bypass of
 /// one; [`crate::admission`] explains why.
+///
+/// The profile's pack thresholds travel here too: how many wanted episodes
+/// must be missing before an automatic search takes a pack, and the missing
+/// share a multi-season pack must exceed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcquisitionThresholds {
     pub same_tier_min_delta: i32,
+    pub min_missing_episodes_for_pack: u32,
+    pub min_missing_percent_for_series_pack: u32,
 }
 
 impl Default for AcquisitionThresholds {
     fn default() -> Self {
         Self {
             same_tier_min_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+            min_missing_episodes_for_pack: DEFAULT_MIN_MISSING_EPISODES_FOR_PACK,
+            min_missing_percent_for_series_pack: DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
         }
     }
 }
@@ -31,7 +42,16 @@ impl AcquisitionThresholds {
     pub fn for_profile(criteria: &QualityProfileCriteria) -> Self {
         Self {
             same_tier_min_delta: criteria.min_upgrade_score_delta_or_default(),
+            min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack_or_default(),
+            min_missing_percent_for_series_pack: criteria
+                .min_missing_percent_for_series_pack_or_default(),
         }
+    }
+
+    /// Whether one missing episode is enough for a pack. An automatic search
+    /// for a single episode refuses packs unless it is.
+    pub fn allows_pack_for_one_missing_episode(&self) -> bool {
+        self.min_missing_episodes_for_pack <= 1
     }
 }
 
@@ -167,6 +187,34 @@ mod tests {
         assert_eq!(
             AcquisitionThresholds::for_profile(&zero).same_tier_min_delta,
             0
+        );
+    }
+
+    #[test]
+    fn a_profile_without_pack_thresholds_keeps_two_episodes_and_thirty_percent() {
+        let thresholds = AcquisitionThresholds::for_profile(&QualityProfileCriteria::default());
+        assert_eq!(thresholds.min_missing_episodes_for_pack, 2);
+        assert_eq!(thresholds.min_missing_percent_for_series_pack, 30);
+        assert!(!thresholds.allows_pack_for_one_missing_episode());
+    }
+
+    #[test]
+    fn profile_pack_thresholds_replace_the_defaults() {
+        let criteria = QualityProfileCriteria {
+            min_missing_episodes_for_pack: Some(1),
+            min_missing_percent_for_series_pack: Some(55),
+            ..QualityProfileCriteria::default()
+        };
+        let thresholds = AcquisitionThresholds::for_profile(&criteria);
+        assert_eq!(thresholds.min_missing_episodes_for_pack, 1);
+        assert_eq!(thresholds.min_missing_percent_for_series_pack, 55);
+        assert!(thresholds.allows_pack_for_one_missing_episode());
+        let stricter = QualityProfileCriteria {
+            min_missing_episodes_for_pack: Some(4),
+            ..QualityProfileCriteria::default()
+        };
+        assert!(
+            !AcquisitionThresholds::for_profile(&stricter).allows_pack_for_one_missing_episode()
         );
     }
 }

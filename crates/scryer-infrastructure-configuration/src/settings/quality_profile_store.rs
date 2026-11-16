@@ -333,7 +333,6 @@ fn decode_quality_profile(
         allow_bd_disk: row.bool("allow_bd_disk")?,
         allow_upgrades: row.bool("allow_upgrades")?,
         ignore_proper_repack: scoring_config.ignore_proper_repack,
-        allow_pack_for_single_episode: scoring_config.allow_pack_for_single_episode,
         prefer_dual_audio: row.bool("prefer_dual_audio").unwrap_or(false),
         required_audio_languages,
         scoring_persona: scoring_config.scoring_persona,
@@ -342,6 +341,8 @@ fn decode_quality_profile(
         min_score_to_grab: scoring_config.min_score_to_grab,
         cutoff_score: scoring_config.cutoff_score,
         min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
+        min_missing_episodes_for_pack: scoring_config.min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack: scoring_config.min_missing_percent_for_series_pack,
         decision_pipeline: scoring_config.decision_pipeline.unwrap_or_default(),
         facet_persona_overrides: scoring_config.facet_persona_overrides,
     };
@@ -414,13 +415,14 @@ async fn upsert_quality_profile_tx(
         .map_err(|error| AppError::Repository(error.to_string()))?;
     let scoring_config = serde_json::to_value(ScoringConfig {
         ignore_proper_repack: criteria.ignore_proper_repack,
-        allow_pack_for_single_episode: criteria.allow_pack_for_single_episode,
         scoring_persona: criteria.scoring_persona,
         scoring_overrides: criteria.scoring_overrides,
         cutoff_tier: criteria.cutoff_tier,
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
         min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+        min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack: criteria.min_missing_percent_for_series_pack,
         decision_pipeline,
         facet_persona_overrides: criteria.facet_persona_overrides,
     })
@@ -926,20 +928,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn single_episode_pack_policy_round_trips_and_defaults_off() {
+    async fn pack_thresholds_round_trip_and_read_absent_as_unset() {
         let (store, pool) = fixture().await;
         insert_profile(&pool, "pack-profile", "Pack Profile", None).await;
         let mut profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
-        assert!(!profiles[0].criteria.allow_pack_for_single_episode);
-        for enabled in [true, false] {
-            profiles[0].criteria.allow_pack_for_single_episode = enabled;
+        assert_eq!(profiles[0].criteria.min_missing_episodes_for_pack, None);
+        assert_eq!(
+            profiles[0].criteria.min_missing_percent_for_series_pack,
+            None
+        );
+        assert_eq!(
+            profiles[0]
+                .criteria
+                .min_missing_episodes_for_pack_or_default(),
+            2
+        );
+        assert_eq!(
+            profiles[0]
+                .criteria
+                .min_missing_percent_for_series_pack_or_default(),
+            30
+        );
+
+        for (minimum, percent) in [(Some(1), Some(55)), (None, None)] {
+            profiles[0].criteria.min_missing_episodes_for_pack = minimum;
+            profiles[0].criteria.min_missing_percent_for_series_pack = percent;
             store
                 .replace_quality_profiles(SCOPE, None, profiles.clone())
                 .await
                 .unwrap();
             store.invalidate_cache();
             let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
-            assert_eq!(loaded[0].criteria.allow_pack_for_single_episode, enabled);
+            assert_eq!(loaded[0].criteria.min_missing_episodes_for_pack, minimum);
+            assert_eq!(
+                loaded[0].criteria.min_missing_percent_for_series_pack,
+                percent
+            );
             let raw: String = sqlx::query_scalar(
                 "SELECT scoring_config FROM quality_profiles WHERE id = 'pack-profile'",
             )
@@ -949,9 +973,15 @@ mod tests {
             let value: JsonValue = serde_json::from_str(&raw).unwrap();
             assert_eq!(
                 value
-                    .get("allow_pack_for_single_episode")
-                    .and_then(JsonValue::as_bool),
-                enabled.then_some(true)
+                    .get("min_missing_episodes_for_pack")
+                    .and_then(JsonValue::as_u64),
+                minimum.map(u64::from)
+            );
+            assert_eq!(
+                value
+                    .get("min_missing_percent_for_series_pack")
+                    .and_then(JsonValue::as_u64),
+                percent.map(u64::from)
             );
         }
     }

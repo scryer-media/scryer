@@ -777,6 +777,10 @@ pub(crate) struct ScopeConvergence {
     pub facet: String,
     pub fingerprint: String,
     pub routed_indexer_ids: Vec<String>,
+    /// The resolved profile's multi-season pack threshold. It is not part of
+    /// the fingerprint; it rides here because the pack lane reads it after
+    /// convergence has already resolved the profile.
+    pub min_missing_percent_for_series_pack: u32,
 }
 
 /// The title-level inputs of [`ScopeConvergence`], memoized for one title walk.
@@ -1116,6 +1120,9 @@ impl AppUseCase {
             facet,
             fingerprint,
             routed_indexer_ids,
+            min_missing_percent_for_series_pack: profile
+                .criteria
+                .min_missing_percent_for_series_pack_or_default(),
         })
     }
 
@@ -1958,6 +1965,55 @@ mod tests {
         );
     }
 
+    /// The pack thresholds decide when a search reaches for a pack and which
+    /// multi-season packs are worth taking. Changing either must not re-open
+    /// convergence: a covered scope keeps its coverage and the new value
+    /// applies to the results that arrive from then on.
+    #[test]
+    fn pack_threshold_edits_do_not_move_the_criteria_version() {
+        let base = test_criteria();
+        let baseline = profile_criteria_version(&base);
+        let fingerprint = |criteria: &QualityProfileCriteria| {
+            compute_search_fingerprint(
+                "profile-1",
+                &profile_criteria_version(criteria),
+                &[],
+                &crate::AudioLanguagePreferences::default(),
+                "scope-identity",
+            )
+        };
+        let baseline_fingerprint = fingerprint(&base);
+
+        for minimum in [1, 2, 3, 10] {
+            let mut edited = base.clone();
+            edited.min_missing_episodes_for_pack = Some(minimum);
+            assert_eq!(
+                baseline,
+                profile_criteria_version(&edited),
+                "minimum {minimum}"
+            );
+            assert_eq!(
+                baseline_fingerprint,
+                fingerprint(&edited),
+                "minimum {minimum}"
+            );
+        }
+        for percent in [0, 10, 30, 50, 100] {
+            let mut edited = base.clone();
+            edited.min_missing_percent_for_series_pack = Some(percent);
+            assert_eq!(
+                baseline,
+                profile_criteria_version(&edited),
+                "percent {percent}"
+            );
+            assert_eq!(
+                baseline_fingerprint,
+                fingerprint(&edited),
+                "percent {percent}"
+            );
+        }
+    }
+
     #[test]
     fn every_acceptance_edit_moves_the_criteria_version() {
         let base = test_criteria();
@@ -1968,8 +2024,6 @@ mod tests {
 
         let mut upgrades = base.clone();
         upgrades.allow_upgrades = !base.allow_upgrades;
-        let mut packs = base.clone();
-        packs.allow_pack_for_single_episode = true;
 
         let mut audio = base.clone();
         audio.required_audio_languages.push("ja".to_string());
@@ -2000,7 +2054,6 @@ mod tests {
         for (label, edited) in [
             ("quality_tiers", tiers),
             ("allow_upgrades", upgrades),
-            ("allow_pack_for_single_episode", packs),
             ("required_audio_languages", audio),
             ("cutoff_score", cutoff),
             ("allow_unknown_quality", unknown),
@@ -2052,8 +2105,15 @@ mod tests {
             serialized.get("cutoff_score").is_none(),
             "an unset `cutoff_score` must not appear in the fingerprint input at all"
         );
-        assert!(!base.allow_pack_for_single_episode);
-        assert!(serialized.get("allow_pack_for_single_episode").is_none());
+        for key in [
+            "min_missing_episodes_for_pack",
+            "min_missing_percent_for_series_pack",
+        ] {
+            assert!(
+                serialized.get(key).is_none(),
+                "`{key}` is never part of the fingerprint input"
+            );
+        }
         assert_eq!(base.min_upgrade_score_delta, None);
         assert!(
             serialized.get("min_upgrade_score_delta").is_none(),
