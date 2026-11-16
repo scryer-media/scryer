@@ -1752,19 +1752,82 @@ pub(crate) fn annotate_auto_decision(
     candidate.auto_decision_summary = Some(code.summary().to_string());
 }
 
+/// Whether `candidate` already carries the annotation
+/// [`annotate_auto_decision`] gives `code`, so that its own explanation is
+/// [`release_decision_explanation_for`] with that code.
+pub(crate) fn candidate_carries_auto_decision(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> bool {
+    candidate.auto_eligible == Some(code.is_eligible())
+        && candidate.auto_decision_code.as_deref() == Some(code.as_str())
+        && candidate.auto_decision_summary.as_deref() == Some(code.summary())
+}
+
 pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) -> Option<String> {
     serde_json::to_string(&decision_explanation_value(candidate)).ok()
 }
 
 /// The explanation a release decision records, serialized once into the
 /// form the store compresses as it is.
+#[cfg(test)]
 pub(crate) fn release_decision_explanation(
     candidate: &IndexerSearchResult,
 ) -> crate::ReleaseDecisionExplanation {
     crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value(candidate))
 }
 
+/// The explanation `candidate` records once annotated with `code` — what
+/// [`annotate_auto_decision`] on a copy of the candidate and then serializing
+/// its explanation produce — without copying the candidate.
+pub(crate) fn release_decision_explanation_for(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> crate::ReleaseDecisionExplanation {
+    crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value_for(candidate, code))
+}
+
+/// [`release_decision_explanation_for`] as a value.
+pub(crate) fn decision_explanation_value_for(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> serde_json::Value {
+    explanation_value(
+        candidate,
+        AutoDecisionAnnotation {
+            eligible: Some(code.is_eligible()),
+            code: Some(code.as_str()),
+            summary: Some(code.summary()),
+        },
+    )
+}
+
+/// The `auto_decision` fields an explanation records, as
+/// [`annotate_auto_decision`] sets them on a candidate.
+struct AutoDecisionAnnotation<'a> {
+    eligible: Option<bool>,
+    code: Option<&'a str>,
+    summary: Option<&'a str>,
+}
+
+impl<'a> AutoDecisionAnnotation<'a> {
+    fn of(candidate: &'a IndexerSearchResult) -> Self {
+        Self {
+            eligible: candidate.auto_eligible,
+            code: candidate.auto_decision_code.as_deref(),
+            summary: candidate.auto_decision_summary.as_deref(),
+        }
+    }
+}
+
 fn decision_explanation_value(candidate: &IndexerSearchResult) -> serde_json::Value {
+    explanation_value(candidate, AutoDecisionAnnotation::of(candidate))
+}
+
+fn explanation_value(
+    candidate: &IndexerSearchResult,
+    auto_decision: AutoDecisionAnnotation<'_>,
+) -> serde_json::Value {
     let quality = candidate.quality_profile_decision.as_ref();
     let scoring_log = quality
         .map(|decision| {
@@ -1801,9 +1864,9 @@ fn decision_explanation_value(candidate: &IndexerSearchResult) -> serde_json::Va
             "external_id_conflicts": candidate.extra.get(EXTERNAL_ID_CONFLICTS_EXTRA_KEY),
         },
         "auto_decision": {
-            "eligible": candidate.auto_eligible,
-            "code": candidate.auto_decision_code.as_deref(),
-            "summary": candidate.auto_decision_summary.as_deref(),
+            "eligible": auto_decision.eligible,
+            "code": auto_decision.code,
+            "summary": auto_decision.summary,
             "decided_by": quality
                 .and_then(|decision| decision.decided_by)
                 .map(crate::ReleaseDecidingStep::as_str),
@@ -5054,6 +5117,88 @@ mod tests {
                 assert_eq!(recorded.canonical_text(), Some(serialized.as_str()));
                 let reparsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
                 assert_eq!(serde_json::to_string(&reparsed).unwrap(), serialized);
+            }
+        }
+    }
+
+    /// Building the explanation from the borrowed candidate and the decision
+    /// code records exactly what annotating a copy of the candidate and then
+    /// serializing it recorded.
+    #[test]
+    fn explanation_for_a_code_matches_annotating_a_copy() {
+        let codes = [
+            ReleaseAutoDecisionCode::Eligible,
+            ReleaseAutoDecisionCode::QualityBlocked,
+            ReleaseAutoDecisionCode::PendingDelay,
+            ReleaseAutoDecisionCode::MinimumAge,
+            ReleaseAutoDecisionCode::ReleaseAgeUnknown,
+            ReleaseAutoDecisionCode::DownloadClientUnavailable,
+            ReleaseAutoDecisionCode::UpgradeRejected,
+            ReleaseAutoDecisionCode::DbBlocklisted,
+            ReleaseAutoDecisionCode::SubtitlesOnly,
+        ];
+        let titles = [
+            "Synthetic.Show.S02E07.1080p.WEB-DL.DDP5.1.H.264-SYNTH",
+            "Synthetic Film 2026 2160p UHD BluRay REMUX HDR \"Cut\" \\ é-ÆON",
+            "",
+        ];
+        let mut candidates = Vec::new();
+        for (index, title) in titles.iter().enumerate() {
+            candidates.push(make_candidate(title, None));
+            let mut varied = make_candidate(title, None);
+            varied.guid = Some(format!("synthetic-guid-{index}"));
+            // Stale annotations the code must replace.
+            varied.auto_eligible = Some(index % 2 == 0);
+            varied.auto_decision_code = Some("synthetic_stale_code".to_string());
+            varied.auto_decision_summary = Some("synthetic stale summary".to_string());
+            varied.extra.insert(
+                EXTERNAL_ID_CONFLICTS_EXTRA_KEY.to_string(),
+                serde_json::json!({"tvdb": [index, -1.5, 0.1], "a": "é"}),
+            );
+            varied.quality_profile_decision = Some(crate::QualityProfileDecision {
+                release_score: -40 + index as i32,
+                scoring_log: (0..index * 2)
+                    .map(|step| crate::ScoringEntry {
+                        code: format!("synthetic_rule_{step}"),
+                        delta: step as i32 * 7 - 10,
+                        source: crate::ScoringSource::Builtin,
+                        kind: crate::ScoringEntryKind::ScoreContribution,
+                    })
+                    .collect(),
+                allowed: index % 2 == 1,
+                block_codes: vec!["synthetic_block".to_string()],
+                preference_score: 12,
+                tier_index: None,
+                size_fit_penalty: 0,
+                revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
+            });
+            candidates.push(varied);
+        }
+        for candidate in &candidates {
+            for code in codes {
+                let mut annotated = candidate.clone();
+                annotate_auto_decision(&mut annotated, code);
+                let expected = release_decision_explanation(&annotated);
+                let built = release_decision_explanation_for(candidate, code);
+                assert_eq!(built.as_str(), expected.as_str(), "code {}", code.as_str());
+                assert_eq!(built.canonical_text(), expected.canonical_text());
+                assert_eq!(
+                    decision_explanation_value_for(candidate, code),
+                    decision_explanation_value(&annotated)
+                );
+                // A candidate that already carries the annotation shares one
+                // text between its review park and its decision row.
+                assert!(candidate_carries_auto_decision(&annotated, code));
+                assert_eq!(
+                    serialize_decision_explanation(&annotated).as_deref(),
+                    Some(release_decision_explanation_for(&annotated, code).as_str())
+                );
+                if candidate.auto_decision_code.is_some() {
+                    assert!(!candidate_carries_auto_decision(candidate, code));
+                }
             }
         }
     }

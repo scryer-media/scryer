@@ -576,6 +576,46 @@ fn convergence_state_value(
 pub fn from_release_decision(
     decision: scryer_application::ReleaseDecision,
 ) -> scryer_application::AppResult<ReleaseDecisionPayload> {
+    from_release_decision_selecting(decision, ExplanationSelection::ALL)
+}
+
+/// Which of a release decision's explanation-derived fields a query reads.
+/// A field left out is returned as null and its explanation is not parsed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExplanationSelection {
+    pub explanation_json: bool,
+    pub decided_by: bool,
+}
+
+impl ExplanationSelection {
+    pub const ALL: Self = Self {
+        explanation_json: true,
+        decided_by: true,
+    };
+}
+
+pub fn from_release_decision_selecting(
+    decision: scryer_application::ReleaseDecision,
+    selection: ExplanationSelection,
+) -> scryer_application::AppResult<ReleaseDecisionPayload> {
+    // Parsed once for both fields that read it.
+    let explanation = (selection.explanation_json || selection.decided_by)
+        .then_some(decision.explanation_json.as_ref())
+        .flatten()
+        .map(|explanation| serde_json::from_str::<serde_json::Value>(explanation.as_str()).ok());
+    let decided_by = if selection.decided_by {
+        explanation
+            .as_ref()
+            .and_then(Option::as_ref)
+            .and_then(recorded_deciding_step)
+    } else {
+        None
+    };
+    let explanation_json = if selection.explanation_json {
+        explanation.map(|value| async_graphql::Json(value.unwrap_or(serde_json::Value::Null)))
+    } else {
+        None
+    };
     Ok(ReleaseDecisionPayload {
         id: decision.id.into(),
         wanted_item_id: decision.wanted_item_id.into(),
@@ -591,15 +631,8 @@ pub fn from_release_decision(
         candidate_score: decision.candidate_score,
         current_score: decision.current_score,
         score_delta: decision.score_delta,
-        decided_by: recorded_deciding_step(
-            decision
-                .explanation_json
-                .as_ref()
-                .map(scryer_application::ReleaseDecisionExplanation::as_str),
-        ),
-        explanation_json: decision
-            .explanation_json
-            .map(|explanation| json_string_to_value(explanation.into_string())),
+        decided_by,
+        explanation_json,
         created_at: parse_datetime(&decision.created_at, "release decision created_at")
             .map_err(scryer_application::AppError::Repository)?,
     })
@@ -607,8 +640,7 @@ pub fn from_release_decision(
 
 /// The deciding step a release decision's explanation records under
 /// `auto_decision.decided_by`; null for decisions recorded before it was.
-fn recorded_deciding_step(explanation_json: Option<&str>) -> Option<ReleaseDecidingStepValue> {
-    let explanation: serde_json::Value = serde_json::from_str(explanation_json?).ok()?;
+fn recorded_deciding_step(explanation: &serde_json::Value) -> Option<ReleaseDecidingStepValue> {
     crate::conversions::deciding_step_from_recorded(
         explanation
             .get("auto_decision")?
@@ -682,6 +714,91 @@ pub fn from_title_acquisition_diagnostics(
             "title acquisition latest_wanted_search_at",
         ),
     })
+}
+
+#[cfg(test)]
+mod release_decision_tests {
+    use super::*;
+
+    fn decision(
+        explanation: Option<scryer_application::ReleaseDecisionExplanation>,
+    ) -> scryer_application::ReleaseDecision {
+        scryer_application::ReleaseDecision {
+            id: "decision-synthetic".into(),
+            wanted_item_id: "wanted-synthetic".into(),
+            title_id: "title-synthetic".into(),
+            release_title: "Synthetic.Release.2020.1080p-GRP".into(),
+            release_url: None,
+            release_size_bytes: Some(1),
+            decision_code: "accepted".into(),
+            candidate_score: 1,
+            current_score: None,
+            score_delta: None,
+            explanation_json: explanation,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    /// The mapping as it stood before the explanation was parsed once: one
+    /// parse per field.
+    fn reparsed_fields(
+        explanation: Option<&str>,
+    ) -> (Option<serde_json::Value>, Option<ReleaseDecidingStepValue>) {
+        let decided_by = explanation
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .and_then(|value| {
+                crate::conversions::deciding_step_from_recorded(
+                    value.get("auto_decision")?.get("decided_by")?.as_str(),
+                )
+            });
+        let explanation_json = explanation.map(|text| json_string_to_value(text.to_string()).0);
+        (explanation_json, decided_by)
+    }
+
+    #[test]
+    fn explanation_fields_map_as_they_did_with_one_parse_per_field() {
+        let mut explanations = vec![
+            None,
+            Some(r#"{"auto_decision":{"decided_by":"quality"}}"#.to_string()),
+            Some(r#"{"auto_decision":{"decided_by":"not_a_step"}}"#.to_string()),
+            Some(r#"{"auto_decision":{"decided_by":7}}"#.to_string()),
+            Some(r#"{"auto_decision":null}"#.to_string()),
+            Some(r#"{"candidate":{"guid":"synthetic"},"auto_decision":{"code":"x"}}"#.to_string()),
+            Some("not-json".to_string()),
+            Some(String::new()),
+            Some("[1,2]".to_string()),
+        ];
+        for step in [
+            "score", "Score", "quality", "revision", "language", "protocol",
+        ] {
+            explanations.push(Some(format!(
+                r#"{{"auto_decision":{{"decided_by":"{step}"}},"parsed":null}}"#
+            )));
+        }
+        for text in explanations {
+            let explanation = text
+                .clone()
+                .map(scryer_application::ReleaseDecisionExplanation::untrusted);
+            let payload = from_release_decision(decision(explanation.clone())).unwrap();
+            let (explanation_json, decided_by) = reparsed_fields(text.as_deref());
+            assert_eq!(
+                payload.explanation_json.map(|json| json.0),
+                explanation_json
+            );
+            assert!(payload.decided_by == decided_by, "{text:?}");
+
+            let unselected = from_release_decision_selecting(
+                decision(explanation),
+                ExplanationSelection {
+                    explanation_json: false,
+                    decided_by: false,
+                },
+            )
+            .unwrap();
+            assert!(unselected.explanation_json.is_none());
+            assert!(unselected.decided_by.is_none());
+        }
+    }
 }
 
 #[cfg(test)]

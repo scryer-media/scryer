@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use scryer_application::{
 };
 
 use crate::backup_import_normalization::{
-    ImportColumnKind, ImportColumnRule, normalize_import_object_for_target,
+    ImportColumnKind, ImportColumnRule, InsertStatements, RestoreRowReader,
     strip_nonportable_backup_fields, validate_restore_manifest_table_set,
 };
 use crate::postgres::PostgresServices;
@@ -654,86 +654,67 @@ async fn import_table_part(
         .iter()
         .map(PgColumnInfo::import_rule)
         .collect::<Vec<_>>();
-    let file = File::open(part_path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
-            format!("backup table payload missing for {table}: {error}"),
-        )
-    })?;
-    let reader = BufReader::new(scryer_application::RestoreReader::new(file));
+    let mut rows = RestoreRowReader::open(table, part_path, target_column_rules).await?;
     let progress = scryer_application::current_restore_deadline();
+    let mut statements = InsertStatements::new();
+    let mut present = Vec::with_capacity(target_columns.len());
 
-    for (line_number, line) in reader.lines().enumerate() {
-        let line = line.map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_UNREADABLE,
-                format!("failed to read backup row {table}:{line_number}: {error}"),
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
+    loop {
+        let batch = rows.next_batch().await?;
+        if batch.is_empty() {
+            return Ok(());
         }
-        let value: JsonValue = serde_json::from_str(&line).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_INVALID,
-                format!("invalid backup row for {table}:{line_number}: {error}"),
-            )
-        })?;
-        let mut object = value.as_object().cloned().ok_or_else(|| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_NOT_OBJECT,
-                format!("backup row for {table}:{line_number} is not an object"),
-            )
-        })?;
-        normalize_import_object_for_target(
-            table,
-            &mut object,
-            chrono::Utc::now(),
-            &target_column_rules,
-            line_number,
-        )?;
-        let columns = target_columns
-            .iter()
-            .filter(|column| object.contains_key(&column.name))
-            .cloned()
-            .collect::<Vec<_>>();
-        if columns.is_empty() {
-            continue;
-        }
+        for row in batch {
+            let (line_number, mut object) = row?;
+            present.clear();
+            present.extend(
+                target_columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, column)| object.contains_key(&column.name))
+                    .map(|(index, _)| index),
+            );
+            if present.is_empty() {
+                continue;
+            }
 
-        let insert_sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quote_identifier(table),
-            columns
-                .iter()
-                .map(|column| quote_identifier(&column.name))
-                .collect::<Vec<_>>()
-                .join(", "),
-            columns
-                .iter()
-                .enumerate()
-                .map(|(index, column)| format!("${}{}", index + 1, pg_cast(column)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+            let insert_sql = statements.get(&present, || {
+                format!(
+                    "INSERT INTO {} ({}) VALUES ({})",
+                    quote_identifier(table),
+                    present
+                        .iter()
+                        .map(|&index| quote_identifier(&target_columns[index].name))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    present
+                        .iter()
+                        .enumerate()
+                        .map(|(position, &index)| {
+                            format!("${}{}", position + 1, pg_cast(&target_columns[index]))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            });
 
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(&*insert_sql));
-        for column in &columns {
-            let value = object.get(&column.name).unwrap_or(&JsonValue::Null);
-            query = bind_pg_value(query, column, value)?;
-        }
-        query.execute(&mut **tx).await.map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_IMPORT_FAILED,
-                format!("failed to import backup row for {table}:{line_number}: {error}"),
-            )
-        })?;
-        if let Some(progress) = &progress {
-            progress.imported_row();
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(insert_sql));
+            for &index in &present {
+                let column = &target_columns[index];
+                let value = object.remove(&column.name).unwrap_or(JsonValue::Null);
+                query = bind_pg_value(query, column, value)?;
+            }
+            query.execute(&mut **tx).await.map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_BACKUP_ROW_IMPORT_FAILED,
+                    format!("failed to import backup row for {table}:{line_number}: {error}"),
+                )
+            })?;
+            if let Some(progress) = &progress {
+                progress.imported_row();
+            }
         }
     }
-
-    Ok(())
 }
 
 async fn table_columns(
@@ -799,7 +780,7 @@ async fn table_columns(
 fn bind_pg_value<'q>(
     query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     column: &PgColumnInfo,
-    value: &JsonValue,
+    value: JsonValue,
 ) -> AppResult<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
     if is_json_column(column) {
         return match logical_json_value(value) {
@@ -821,25 +802,25 @@ fn bind_pg_value<'q>(
         JsonValue::String(value) if value.is_empty() && is_timestamp_column(column) => {
             query.bind(None::<String>)
         }
-        JsonValue::String(value) => query.bind(value.clone()),
+        JsonValue::String(value) => query.bind(value),
         JsonValue::Array(_) | JsonValue::Object(_) => query.bind(value.to_string()),
     })
 }
 
-fn logical_json_value(value: &JsonValue) -> Option<JsonValue> {
+fn logical_json_value(value: JsonValue) -> Option<JsonValue> {
     match value {
         JsonValue::Null => None,
         JsonValue::String(value) => {
-            Some(serde_json::from_str(value).unwrap_or_else(|_| JsonValue::String(value.clone())))
+            Some(serde_json::from_str(&value).unwrap_or(JsonValue::String(value)))
         }
-        value => Some(value.clone()),
+        value => Some(value),
     }
 }
 
-fn blob_bytes(value: &JsonValue) -> AppResult<Option<Vec<u8>>> {
+fn blob_bytes(value: JsonValue) -> AppResult<Option<Vec<u8>>> {
     match value {
         JsonValue::Null => Ok(None),
-        JsonValue::Object(object)
+        JsonValue::Object(ref object)
             if object.get("__scryer_type").and_then(JsonValue::as_str) == Some("blob") =>
         {
             let encoded = object
@@ -858,7 +839,7 @@ fn blob_bytes(value: &JsonValue) -> AppResult<Option<Vec<u8>>> {
                 )
             })
         }
-        JsonValue::String(value) => Ok(Some(value.as_bytes().to_vec())),
+        JsonValue::String(value) => Ok(Some(value.into_bytes())),
         _ => Err(AppError::validation_refused(
             crate::error_reasons::DATASTORE_BACKUP_BYTEA_UNSUPPORTED,
             "backup row contains an unsupported PostgreSQL bytea value",

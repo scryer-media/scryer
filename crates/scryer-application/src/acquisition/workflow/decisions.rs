@@ -95,23 +95,56 @@ pub(crate) async fn record_release_decisions(
     candidates: &[(&IndexerSearchResult, ReleaseAutoDecisionCode, Option<i32>)],
     now: &DateTime<Utc>,
 ) -> Vec<ReleaseDecisionOutcome> {
-    let records = candidates
+    let explained = candidates
         .iter()
-        .map(|(candidate, decision_code, incumbent_bar)| {
-            release_decision_record(item, title, candidate, *decision_code, *incumbent_bar, now)
+        .map(|&(candidate, decision_code, incumbent_bar)| ExplainedReleaseDecision {
+            candidate,
+            decision_code,
+            incumbent_bar,
+            explanation: release_decision_explanation_for(candidate, decision_code),
         })
+        .collect();
+    record_explained_release_decisions(app, item, title, explained, now).await
+}
+
+/// One decision to record, with the explanation its row stores already
+/// built: `release_decision_explanation_for(candidate, decision_code)`, or
+/// text proven equal to it.
+pub(crate) struct ExplainedReleaseDecision<'a> {
+    pub(crate) candidate: &'a IndexerSearchResult,
+    pub(crate) decision_code: ReleaseAutoDecisionCode,
+    pub(crate) incumbent_bar: Option<i32>,
+    pub(crate) explanation: crate::ReleaseDecisionExplanation,
+}
+
+/// [`record_release_decisions`] for decisions whose explanations the caller
+/// has already built, so a caller that also needs the text builds it once.
+pub(crate) async fn record_explained_release_decisions(
+    app: &AppUseCase,
+    item: &AcquisitionScopeState,
+    title: &Title,
+    decisions: Vec<ExplainedReleaseDecision<'_>>,
+    now: &DateTime<Utc>,
+) -> Vec<ReleaseDecisionOutcome> {
+    let records = decisions
+        .into_iter()
+        .map(|decision| explained_release_decision_record(item, title, decision, now))
+        .collect::<Vec<_>>();
+    let record_ids = records
+        .iter()
+        .map(|record| record.id.clone())
         .collect::<Vec<_>>();
     let written = app
         .services
         .workflow
         .acquisition_scope_states
-        .insert_release_decisions(&records)
+        .insert_release_decisions(records)
         .await;
-    records
+    record_ids
         .iter()
         .zip(written)
-        .map(|(record, written_id)| {
-            ReleaseDecisionOutcome::of(&record.id, written_id.ok().as_deref())
+        .map(|(record_id, written_id)| {
+            ReleaseDecisionOutcome::of(record_id, written_id.ok().as_deref())
         })
         .collect()
 }
@@ -124,27 +157,51 @@ fn release_decision_record(
     incumbent_bar: Option<i32>,
     now: &DateTime<Utc>,
 ) -> ReleaseDecision {
+    explained_release_decision_record(
+        item,
+        title,
+        ExplainedReleaseDecision {
+            candidate,
+            decision_code,
+            incumbent_bar,
+            explanation: release_decision_explanation_for(candidate, decision_code),
+        },
+        now,
+    )
+}
+
+/// The ledger row for one decision. Nothing the row reads from the candidate
+/// depends on the auto-decision annotation, so the candidate is read as it is
+/// and the annotation lives only in the explanation.
+fn explained_release_decision_record(
+    item: &AcquisitionScopeState,
+    title: &Title,
+    decision: ExplainedReleaseDecision<'_>,
+    now: &DateTime<Utc>,
+) -> ReleaseDecision {
+    let ExplainedReleaseDecision {
+        candidate,
+        decision_code,
+        incumbent_bar,
+        explanation,
+    } = decision;
     let candidate_score = candidate
         .quality_profile_decision
         .as_ref()
         .map(|decision| decision.preference_score)
         .unwrap_or(0);
-    let mut decision_candidate = candidate.clone();
-    annotate_auto_decision(&mut decision_candidate, decision_code);
     ReleaseDecision {
         id: Id::new().0,
         wanted_item_id: item.id.clone(),
         title_id: title.id.clone(),
-        release_title: decision_candidate.title.clone(),
-        release_url: decision_candidate
-            .canonical_download_source()
-            .map(|(source, _)| source),
-        release_size_bytes: decision_candidate.size_bytes,
+        release_title: candidate.title.clone(),
+        release_url: candidate.canonical_download_source().map(|(source, _)| source),
+        release_size_bytes: candidate.size_bytes,
         decision_code: decision_code.as_str().to_string(),
         candidate_score,
         current_score: incumbent_bar,
         score_delta: incumbent_bar.map(|bar| candidate_score - bar),
-        explanation_json: Some(release_decision_explanation(&decision_candidate)),
+        explanation_json: Some(explanation),
         created_at: now.to_rfc3339(),
     }
 }
@@ -264,12 +321,15 @@ impl AppUseCase {
                 .acquisition_scope_states
                 .list_release_decisions_for_acquisition_scope_state(wid, query.limit, query.offset)
                 .await?;
-            let total = self
-                .services
-                .workflow
-                .acquisition_scope_states
-                .count_release_decisions_for_acquisition_scope_state(wid)
-                .await?;
+            let total = if query.skip_total {
+                0
+            } else {
+                self.services
+                    .workflow
+                    .acquisition_scope_states
+                    .count_release_decisions_for_acquisition_scope_state(wid)
+                    .await?
+            };
             return Ok((items, total));
         }
         if let Some(tid) = query.title_id.as_deref() {
@@ -288,12 +348,15 @@ impl AppUseCase {
                 .acquisition_scope_states
                 .list_release_decisions_for_title(tid, query.limit, query.offset)
                 .await?;
-            let total = self
-                .services
-                .workflow
-                .acquisition_scope_states
-                .count_release_decisions_for_title(tid)
-                .await?;
+            let total = if query.skip_total {
+                0
+            } else {
+                self.services
+                    .workflow
+                    .acquisition_scope_states
+                    .count_release_decisions_for_title(tid)
+                    .await?
+            };
             return Ok((items, total));
         }
         Ok((vec![], 0))

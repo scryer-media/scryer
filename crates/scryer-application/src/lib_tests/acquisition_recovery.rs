@@ -14035,6 +14035,7 @@ async fn list_release_decisions_offset_paginates_within_title() {
                 title_id: Some(title.id.clone()),
                 limit: 2,
                 offset: 2,
+                skip_total: false,
             },
         )
         .await
@@ -14044,6 +14045,29 @@ async fn list_release_decisions_offset_paginates_within_title() {
     assert_eq!(page[0].id, "decision-page-2");
     assert_eq!(page[1].id, "decision-page-3");
 
+    // A caller that reads no total gets the same page without a count.
+    let (uncounted, uncounted_total) = app
+        .list_release_decisions_page(
+            &user,
+            crate::ReleaseDecisionsQuery {
+                wanted_item_id: None,
+                title_id: Some(title.id.clone()),
+                limit: 2,
+                offset: 2,
+                skip_total: true,
+            },
+        )
+        .await
+        .expect("uncounted release decisions");
+    assert_eq!(uncounted_total, 0);
+    assert_eq!(
+        uncounted
+            .iter()
+            .map(|decision| &decision.id)
+            .collect::<Vec<_>>(),
+        page.iter().map(|decision| &decision.id).collect::<Vec<_>>()
+    );
+
     let (tail, tail_total) = app
         .list_release_decisions_page(
             &user,
@@ -14052,6 +14076,7 @@ async fn list_release_decisions_offset_paginates_within_title() {
                 title_id: Some(title.id.clone()),
                 limit: 2,
                 offset: 4,
+                skip_total: false,
             },
         )
         .await

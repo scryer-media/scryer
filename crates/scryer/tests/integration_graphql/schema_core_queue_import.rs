@@ -1696,6 +1696,13 @@ async fn graphql_traverses_core_graph_relationships() {
             releaseDecisions(limit: 10) {
               items { id }
             }
+            countedDecisions: releaseDecisions(limit: 10) {
+              totalCount
+              items { id explanationJson decidedBy }
+            }
+            pagedDecisions: releaseDecisions(limit: 1) {
+              ...DecisionPage
+            }
           }
           episode(titleId: $titleId, episodeId: $episodeId) {
             id
@@ -1712,6 +1719,11 @@ async fn graphql_traverses_core_graph_relationships() {
           mismatchedEpisode: episode(titleId: $mismatchTitleId, episodeId: $episodeId) {
             id
           }
+        }
+
+        fragment DecisionPage on ReleaseDecisionsPagePayload {
+          hasMore
+          items { id }
         }
         "#,
         json!({
@@ -1799,6 +1811,17 @@ async fn graphql_traverses_core_graph_relationships() {
     assert_eq!(
         body["data"]["wantedItem"]["releaseDecisions"]["items"][0]["id"],
         decision.id
+    );
+    // The total is counted when it, or the continuation flag, is read —
+    // through a fragment too.
+    let counted = &body["data"]["wantedItem"]["countedDecisions"];
+    assert_eq!(counted["totalCount"], 1);
+    assert_eq!(counted["items"][0]["id"], decision.id);
+    assert!(counted["items"][0]["explanationJson"].is_null());
+    assert!(counted["items"][0]["decidedBy"].is_null());
+    assert_eq!(
+        body["data"]["wantedItem"]["pagedDecisions"]["hasMore"],
+        false
     );
     assert_eq!(body["data"]["episode"]["id"], episode.id);
     assert_eq!(body["data"]["episode"]["parentTitle"]["id"], title.id);

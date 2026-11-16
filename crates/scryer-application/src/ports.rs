@@ -10539,12 +10539,14 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
     /// `insert_release_decision` for each decision in order, one result per
     /// decision. SQL stores write the batch in one transaction and replay it
     /// row by row if that fails, so each result matches the per-row call.
+    /// The decisions are taken by value so a store can move them to the
+    /// thread that prepares them instead of copying them.
     async fn insert_release_decisions(
         &self,
-        decisions: &[ReleaseDecision],
+        decisions: Vec<ReleaseDecision>,
     ) -> Vec<AppResult<String>> {
         let mut results = Vec::with_capacity(decisions.len());
-        for decision in decisions {
+        for decision in &decisions {
             results.push(self.insert_release_decision(decision).await);
         }
         results

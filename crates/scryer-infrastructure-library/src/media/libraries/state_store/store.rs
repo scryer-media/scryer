@@ -819,14 +819,24 @@ impl PreparedReleaseDecision {
     /// canonicalizing and compressing explanations is CPU work that grows with
     /// the number of candidates a search returned. One zstd context serves a
     /// whole chunk.
+    /// The decisions are moved, a chunk at a time, to the blocking thread
+    /// that prepares them; none is copied.
     async fn of_batch(
         datastore: &StoreDatastore,
-        decisions: &[ReleaseDecision],
+        decisions: Vec<ReleaseDecision>,
     ) -> Vec<AppResult<Self>> {
         let mut prepared = Vec::with_capacity(decisions.len());
-        for chunk in decisions.chunks(RELEASE_DECISION_PREPARE_CHUNK) {
+        let mut remaining = decisions.into_iter();
+        loop {
+            let chunk_decisions = remaining
+                .by_ref()
+                .take(RELEASE_DECISION_PREPARE_CHUNK)
+                .collect::<Vec<_>>();
+            if chunk_decisions.is_empty() {
+                return prepared;
+            }
+            let chunk_len = chunk_decisions.len();
             let datastore = datastore.clone();
-            let chunk_decisions = chunk.to_vec();
             let joined = tokio::task::spawn_blocking(move || {
                 let mut encoder = ReleaseDecisionExplanationEncoder::new();
                 chunk_decisions
@@ -841,11 +851,11 @@ impl PreparedReleaseDecision {
                     // Every row of the chunk reports the failure as its own
                     // error, exactly as a row that could not be prepared does.
                     tracing::warn!(
-                        decisions = chunk.len(),
+                        decisions = chunk_len,
                         error = %error,
                         "release decision preparation task failed"
                     );
-                    prepared.extend(chunk.iter().map(|_| {
+                    prepared.extend((0..chunk_len).map(|_| {
                         Err(scryer_application::AppError::Repository(format!(
                             "release decision preparation task failed: {error}"
                         )))
@@ -853,7 +863,6 @@ impl PreparedReleaseDecision {
                 }
             }
         }
-        prepared
     }
 
     fn with_encoder(
@@ -1417,7 +1426,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
 
     async fn insert_release_decisions(
         &self,
-        decisions: &[ReleaseDecision],
+        decisions: Vec<ReleaseDecision>,
     ) -> Vec<AppResult<String>> {
         // Shared, not copied: the batch transaction, each of its attempts, and
         // the per-row replay all read the same prepared values.

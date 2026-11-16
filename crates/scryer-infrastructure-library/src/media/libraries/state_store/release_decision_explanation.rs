@@ -1,7 +1,10 @@
 use std::fmt;
+use std::sync::LazyLock;
 
 use scryer_application::ReleaseDecisionExplanation;
+use scryer_infrastructure_sql::json_shape::{ValueParseShape, check_value_parse};
 use serde_json::Value;
+use zstd::dict::DecoderDictionary;
 
 const FORMAT_ZSTD_DICTIONARY_V1: u8 = 1;
 const COMPRESSION_LEVEL: i32 = 3;
@@ -112,27 +115,53 @@ fn canonical_explanation(
 pub fn decode_release_decision_explanation(
     encoded: Option<&[u8]>,
 ) -> Result<Option<String>, ReleaseDecisionExplanationCodecError> {
-    let Some(value) = decode_explanation_value(encoded)? else {
-        return Ok(None);
-    };
-    serde_json::to_string(&value)
-        .map(Some)
-        .map_err(|error| codec_error(format!("failed to serialize explanation JSON: {error}")))
+    Ok(decode_release_decision_explanation_record(encoded)?
+        .map(ReleaseDecisionExplanation::into_string))
 }
 
 /// Decodes a stored explanation into the form a release decision carries.
-/// The stored text is re-serialized from its parsed value, so it is canonical.
+///
+/// Every writer stores the compact text serde_json writes for a parsed value,
+/// and that text parses back to a value that writes it again byte for byte,
+/// so the stored text is returned as it is rather than parsed and written a
+/// second time. It is still checked to be JSON exactly as a parse into a
+/// value would check it. Only text carrying serde_json's raw-value marker is
+/// parsed and rewritten; any other stored text is trusted to be canonical.
 pub(crate) fn decode_release_decision_explanation_record(
     encoded: Option<&[u8]>,
 ) -> Result<Option<ReleaseDecisionExplanation>, ReleaseDecisionExplanationCodecError> {
-    Ok(decode_explanation_value(encoded)?
-        .as_ref()
-        .map(ReleaseDecisionExplanation::from_value))
+    let Some(decoded) = decompress_explanation(encoded)? else {
+        return Ok(None);
+    };
+    match check_value_parse(&decoded).map_err(invalid_decoded_json)? {
+        ValueParseShape::Plain => {}
+        ValueParseShape::ExpandsRawValue => {
+            let value: Value = serde_json::from_slice(&decoded).map_err(invalid_decoded_json)?;
+            return Ok(Some(ReleaseDecisionExplanation::from_value(&value)));
+        }
+    }
+    // A value parse accepted the bytes, so they are UTF-8.
+    let text = String::from_utf8(decoded).map_err(|error| {
+        codec_error(format!(
+            "decompressed explanation is not valid JSON: {error}"
+        ))
+    })?;
+    Ok(Some(ReleaseDecisionExplanation::stored_canonical(text)))
 }
 
-fn decode_explanation_value(
+fn invalid_decoded_json(error: serde_json::Error) -> ReleaseDecisionExplanationCodecError {
+    codec_error(format!(
+        "decompressed explanation is not valid JSON: {error}"
+    ))
+}
+
+// Digested once per process, as the domain-event payload decoder's is.
+static DECODER_DICTIONARY_V1: LazyLock<Result<DecoderDictionary<'static>, String>> =
+    LazyLock::new(|| DecoderDictionary::try_copy(DICTIONARY_V1).map_err(|error| error.to_string()));
+
+fn decompress_explanation(
     encoded: Option<&[u8]>,
-) -> Result<Option<Value>, ReleaseDecisionExplanationCodecError> {
+) -> Result<Option<Vec<u8>>, ReleaseDecisionExplanationCodecError> {
     let Some(encoded) = encoded else {
         return Ok(None);
     };
@@ -145,7 +174,10 @@ fn decode_explanation_value(
         )));
     }
 
-    let mut decompressor = zstd::bulk::Decompressor::with_dictionary(DICTIONARY_V1)
+    let dictionary = (*DECODER_DICTIONARY_V1)
+        .as_ref()
+        .map_err(|error| codec_error(format!("failed to initialize zstd decompressor: {error}")))?;
+    let mut decompressor = zstd::bulk::Decompressor::with_prepared_dictionary(dictionary)
         .map_err(|error| codec_error(format!("failed to initialize zstd decompressor: {error}")))?;
     let decoded = decompressor
         .decompress(compressed, MAX_EXPLANATION_BYTES + 1)
@@ -155,11 +187,7 @@ fn decode_explanation_value(
             "explanation expands beyond the {MAX_EXPLANATION_BYTES}-byte limit"
         )));
     }
-    serde_json::from_slice(&decoded).map(Some).map_err(|error| {
-        codec_error(format!(
-            "decompressed explanation is not valid JSON: {error}"
-        ))
-    })
+    Ok(Some(decoded))
 }
 
 fn codec_error(message: impl Into<String>) -> ReleaseDecisionExplanationCodecError {
@@ -408,6 +436,168 @@ mod tests {
                 .unwrap_err()
                 .to_string()
         );
+    }
+
+    /// The decoder as it stood before stored text was carried as it is: a
+    /// fresh raw-dictionary context per row, a parse into a value, and the
+    /// value written out again.
+    fn reparsing_decode(encoded: &[u8]) -> Result<String, ()> {
+        let (&format, compressed) = encoded.split_first().ok_or(())?;
+        if format != FORMAT_ZSTD_DICTIONARY_V1 {
+            return Err(());
+        }
+        let mut decompressor =
+            zstd::bulk::Decompressor::with_dictionary(DICTIONARY_V1).map_err(|_| ())?;
+        let decoded = decompressor
+            .decompress(compressed, MAX_EXPLANATION_BYTES + 1)
+            .map_err(|_| ())?;
+        if decoded.len() > MAX_EXPLANATION_BYTES {
+            return Err(());
+        }
+        let value: Value = serde_json::from_slice(&decoded).map_err(|_| ())?;
+        serde_json::to_string(&value).map_err(|_| ())
+    }
+
+    fn compress_raw(bytes: &[u8]) -> Vec<u8> {
+        let mut compressor =
+            zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
+                .expect("compressor should initialize");
+        let mut encoded = vec![FORMAT_ZSTD_DICTIONARY_V1];
+        encoded.extend(compressor.compress(bytes).expect("bytes should compress"));
+        encoded
+    }
+
+    fn assert_decodes_as_before(encoded: &[u8]) {
+        let before = reparsing_decode(encoded);
+        let text = decode_release_decision_explanation(Some(encoded));
+        let record = decode_release_decision_explanation_record(Some(encoded));
+        match before {
+            Ok(before) => {
+                assert_eq!(
+                    text.expect("decode should agree").as_deref(),
+                    Some(&*before)
+                );
+                let record = record.expect("record decode should agree").unwrap();
+                assert_eq!(record.as_str(), before);
+                assert_eq!(record.canonical_text(), Some(before.as_str()));
+            }
+            Err(()) => {
+                assert!(text.is_err(), "rejected before, rejected now: {encoded:?}");
+                assert!(record.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn stored_text_decodes_byte_identically_to_a_reparse() {
+        let mut encoder = ReleaseDecisionExplanationEncoder::new();
+        let mut values = mixed_explanations()
+            .into_iter()
+            .flatten()
+            .filter_map(|text| serde_json::from_str::<Value>(&text).ok())
+            .collect::<Vec<_>>();
+        values.extend([
+            json!({"floats": [0.1, -0.0, 1e300, 5e-324, 1.0, 123456.789, f64::MAX, f64::MIN_POSITIVE]}),
+            json!({"ints": [0, -1, u64::MAX, i64::MIN], "nested": [[[{"k": null}]]]}),
+            json!({"escapes": "quote \" backslash \\ tab \t nl \n ctl \u{1} del \u{7f} slash / é 😀"}),
+            json!({"z": 1, "a": 2, "m": {"y": [], "b": {}}}),
+            json!([]),
+            json!("bare string"),
+            json!(null),
+        ]);
+        for value in values {
+            let explanation = ReleaseDecisionExplanation::from_value(&value);
+            let Ok(Some(encoded)) = encoder.encode_explanation(Some(&explanation)) else {
+                continue;
+            };
+            assert_decodes_as_before(&encoded);
+            assert_eq!(
+                decode_release_decision_explanation(Some(&encoded))
+                    .unwrap()
+                    .as_deref(),
+                Some(explanation.as_str())
+            );
+        }
+    }
+
+    /// Text no writer stores: accepted and rejected exactly as before, and
+    /// when accepted it is the same JSON value. Whitespace, duplicate keys and
+    /// other non-canonical spellings come back as stored rather than
+    /// rewritten; text in canonical form comes back byte for byte.
+    fn assert_decodes_equivalently(encoded: &[u8]) {
+        let before = reparsing_decode(encoded);
+        let text = decode_release_decision_explanation(Some(encoded));
+        let record = decode_release_decision_explanation_record(Some(encoded));
+        match before {
+            Ok(before) => {
+                let text = text.expect("accepted before, accepted now").unwrap();
+                assert_eq!(record.unwrap().unwrap().as_str(), text);
+                assert_eq!(
+                    serde_json::from_str::<Value>(&text).unwrap(),
+                    serde_json::from_str::<Value>(&before).unwrap()
+                );
+                let stored = &encoded[1..];
+                let mut decompressor =
+                    zstd::bulk::Decompressor::with_dictionary(DICTIONARY_V1).unwrap();
+                let raw = decompressor
+                    .decompress(stored, MAX_EXPLANATION_BYTES + 1)
+                    .unwrap();
+                if raw == before.as_bytes() {
+                    assert_eq!(text, before);
+                }
+            }
+            Err(()) => {
+                assert!(text.is_err(), "rejected before, rejected now: {encoded:?}");
+                assert!(record.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn raw_value_token_objects_decode_exactly_as_a_reparse() {
+        for sample in [
+            &br#"{"$serde_json::private::RawValue":"{\"x\": 1}"}"#[..],
+            br#"{"$serde_json::private::RawValue":7}"#,
+            br#"{"a":{"$serde_json::private::RawValue":"[1, 2]"}}"#,
+            br#"[{"$serde_json::private::RawValue":"{\"b\":2,  \"a\":1}"}]"#,
+        ] {
+            assert_decodes_as_before(&compress_raw(sample));
+        }
+    }
+
+    #[test]
+    fn foreign_and_malformed_stored_text_decodes_as_a_reparse_does() {
+        let deep_ok = format!("{}{}", "[".repeat(100), "]".repeat(100));
+        let too_deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        let samples: Vec<Vec<u8>> = vec![
+            br#"{"a": 1 , "b" : [1, 2]}"#.to_vec(),
+            br#"{"a":1,"a":2}"#.to_vec(),
+            br#"{"$serde_json::private::RawValue":"{\"x\": 1}"}"#.to_vec(),
+            br#"{"$serde_json::private::RawValue":7}"#.to_vec(),
+            br#"{"a":{"$serde_json::private::RawValue":"[1, 2]"}}"#.to_vec(),
+            br#"{"a":1,"$serde_json::private::RawValue":"[1]"}"#.to_vec(),
+            br#"[1e400]"#.to_vec(),
+            br#"["\ud800"]"#.to_vec(),
+            [&br#"[""#[..], br"\", b"ud83d", br"\", b"ude00", br#""]"#].concat(),
+            br#"{"a":1} trailing"#.to_vec(),
+            br#"{"a":1}  "#.to_vec(),
+            br#"18446744073709551616"#.to_vec(),
+            br#"1E2"#.to_vec(),
+            b"[\"\xff\"]".to_vec(),
+            b"\xef\xbb\xbf{}".to_vec(),
+            b"".to_vec(),
+            b"not-json".to_vec(),
+            deep_ok.into_bytes(),
+            too_deep.into_bytes(),
+        ];
+        for sample in samples {
+            assert_decodes_equivalently(&compress_raw(&sample));
+        }
+        let oversized = serde_json::to_vec(&"x".repeat(MAX_EXPLANATION_BYTES)).unwrap();
+        assert_decodes_equivalently(&compress_raw(&oversized));
+        for corrupt in [&[][..], &[2, 0], &[1, 0, 1, 2, 3]] {
+            assert_decodes_equivalently(corrupt);
+        }
     }
 
     #[test]
