@@ -42,7 +42,9 @@ fn dir() -> RawStat {
 /// so the handle can be written and synced; an open to read is missing unless
 /// `contents` holds the path, and its handle then reads those contents.
 /// `contents_gate`, when set, holds every read through a handle until the
-/// test opens it, after signalling `contents_entered`.
+/// test opens it, after signalling `contents_entered`. `open_dir_gate`, when
+/// set, holds every directory open the same way, after signalling
+/// `open_dir_entered`.
 #[derive(Default)]
 struct Scripted {
     stats: Mutex<HashMap<PathBuf, Result<RawStat, io::ErrorKind>>>,
@@ -60,6 +62,8 @@ struct Scripted {
     accesses: Mutex<Vec<(&'static str, Access)>>,
     contents_gate: Mutex<Option<mpsc::Receiver<()>>>,
     contents_entered: Mutex<Option<mpsc::Sender<()>>>,
+    open_dir_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    open_dir_entered: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl Scripted {
@@ -206,6 +210,12 @@ impl DiskBackend for Scripted {
     /// An entry scripted with an empty name is one the listing fails on.
     fn open_dir(&self, path: &Path) -> io::Result<super::backend::DirEntries> {
         self.record("visit", path)?;
+        if let Some(entered) = self.open_dir_entered.lock().unwrap().as_ref() {
+            let _ = entered.send(());
+        }
+        if let Some(gate) = self.open_dir_gate.lock().unwrap().as_ref() {
+            let _ = gate.recv();
+        }
         let listing = self.listings.lock().unwrap().get(path).cloned();
         let listing = listing.ok_or(io::ErrorKind::NotFound)?;
         Ok(Box::new(listing.into_iter().map(
@@ -2460,6 +2470,54 @@ async fn under_a_root_only_opening_a_visit_is_bounded_not_walking_it() {
     release.send(()).unwrap();
     assert_eq!(walking.await.unwrap().unwrap(), ["a.mkv", "b.mkv"]);
     assert!(learned.is_clear());
+    assert_eq!(backend.calls_of("visit"), 1);
+}
+
+// The open is held in the backend until the test releases it; the paused
+// clock is moved past the bound by hand while it is held.
+#[tokio::test(start_paused = true)]
+async fn an_async_visit_whose_open_does_not_answer_is_refused_at_the_bound() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let bound = std::time::Duration::from_secs(60);
+    disk.set_probe_timeout_for_test(bound);
+    let show = "/srv/fixture-media/Invented Show";
+    backend.lists(show, &[("a.mkv", Some(EntryKind::File))]);
+    let (release, gate) = mpsc::channel::<()>();
+    let (entered_tx, entered) = mpsc::channel();
+    *backend.open_dir_gate.lock().unwrap() = Some(gate);
+    *backend.open_dir_entered.lock().unwrap() = Some(entered_tx);
+
+    let visiting = {
+        let disk = disk.clone();
+        tokio::spawn(async move {
+            disk.visit(show, 0usize, |visited, _| {
+                *visited += 1;
+                ControlFlow::Continue(())
+            })
+            .await
+        })
+    };
+    tokio::task::spawn_blocking(move || entered.recv().expect("open entered"))
+        .await
+        .unwrap();
+    tokio::time::advance(bound * 2).await;
+    // The open is still held, so only the bound can finish the visit; a
+    // missed bound fails here instead of hanging on the gate.
+    for _ in 0..1_000 {
+        if visiting.is_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let finished = visiting.is_finished();
+    release.send(()).unwrap();
+    assert!(finished, "the visit waited on its open past the bound");
+    let refused = visiting.await.unwrap();
+    assert_eq!(
+        refused.err().map(|error| error.reason()),
+        Some(reason::DISK_TIMED_OUT)
+    );
     assert_eq!(backend.calls_of("visit"), 1);
 }
 

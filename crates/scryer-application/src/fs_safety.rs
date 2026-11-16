@@ -330,7 +330,10 @@ pub async fn move_file_exclusive(
         Ok(_) => promote_staged_file(&staged, dest).await,
         Err(error) if needs_copy(&error) => {
             match copy_into_destination(&disk, source, &staged, options).await {
-                Ok(()) => promote_staged_file(&staged, dest).await,
+                Ok(()) => match remove_copied_source(&disk, source).await {
+                    Ok(()) => promote_staged_file(&staged, dest).await,
+                    Err(error) => Err(error),
+                },
                 Err(error) => Err(error),
             }
         }
@@ -350,23 +353,31 @@ pub async fn move_file_exclusive(
 /// source still exists, and `RollbackMove` moves the file back when it does
 /// not. Leaving a stray file behind is always preferable to losing one.
 async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path) {
-    if disk.fresh(staged).await.exists() != Some(true) {
+    if disk.uncached(staged).await.exists() != Some(true) {
         return;
     }
 
-    if disk.fresh(source).await.exists() == Some(true) {
+    match disk.uncached(source).await.exists() {
         // The source survived, so the staged file is a partial copy.
-        let _ = disk.remove(staged, Remove::File).await;
-        return;
-    }
-
-    // The staged file is the only copy: put it back where it came from.
-    if disk.move_replacing(staged, source).await.is_err() {
-        tracing::error!(
+        Some(true) => {
+            let _ = disk.remove(staged, Remove::File).await;
+        }
+        // The staged file is the only copy: put it back where it came from,
+        // never over a file that has since appeared there.
+        Some(false) => {
+            if promote_staged_file(staged, source).await.is_err() {
+                tracing::error!(
+                    staged = %staged.display(),
+                    source = %source.display(),
+                    "failed to restore a staged file after a failed move; the file is left at the staging path rather than removed"
+                );
+            }
+        }
+        None => tracing::error!(
             staged = %staged.display(),
             source = %source.display(),
-            "failed to restore a staged file after a failed move; the file is left at the staging path rather than removed"
-        );
+            "could not tell whether the source survived a failed move; the staged file is left in place"
+        ),
     }
 }
 
@@ -480,15 +491,21 @@ async fn transfer_across_devices(
     if !options.overwrite {
         claim(disk, dest).await?;
     }
-    let result = copy_into_destination(disk, source, dest, options).await;
-    if result.is_err() {
+    if let Err(error) = copy_into_destination(disk, source, dest, options).await {
+        let _ = disk.remove(dest, Remove::File).await;
+        return Err(error);
+    }
+    let unlinked = remove_copied_source(disk, source).await;
+    // A failed move must not leave a duplicate that refuses the retry, so the
+    // copy goes again, but only while the source is seen to be still there.
+    if unlinked.is_err() && disk.uncached(source).await.exists() == Some(true) {
         let _ = disk.remove(dest, Remove::File).await;
     }
-    result
+    unlinked
 }
 
-/// Copies into a destination the caller already holds, proves it, then unlinks
-/// the source. Never widens the destination: the handle is opened for writing
+/// Copies into a destination the caller already holds and proves it. Never
+/// widens the destination: the handle is opened for writing
 /// without creating, so the claim is what decided the file may be written.
 async fn copy_into_destination(
     disk: &Disk,
@@ -519,8 +536,15 @@ async fn copy_into_destination(
         }
         verify_copy_with_retry(source, dest).await?;
     }
+    Ok(())
+}
 
-    remove_present_file(disk, source).await
+/// Unlinks the source of a copy that is written, synced and proven. The copy
+/// is then the file, so a source already gone is a finished move, and a
+/// failure here never costs the copy.
+async fn remove_copied_source(disk: &Disk, source: &Path) -> io::Result<()> {
+    disk.remove(source, Remove::File).await?;
+    Ok(())
 }
 
 /// Verifies a copy, retrying once after a pause.
@@ -593,13 +617,21 @@ async fn move_via_intermediate_name(disk: &Disk, source: &Path, dest: &Path) -> 
         }
         // The claim only reserved the name; the rename replaces it.
         match disk.move_replacing(source, &intermediate).await {
+            // Neither hop may replace a file: on a case-sensitive volume the
+            // destination is a different file whose name differs only in case.
             Ok(_) => {
-                return match disk.move_replacing(&intermediate, dest).await {
-                    Ok(_) => Ok(()),
+                return match promote_staged_file(&intermediate, dest).await {
+                    Ok(()) => Ok(()),
                     Err(error) => {
                         // Put the file back rather than stranding it.
-                        let _ = disk.move_replacing(&intermediate, source).await;
-                        Err(error.into())
+                        if promote_staged_file(&intermediate, source).await.is_err() {
+                            tracing::error!(
+                                intermediate = %intermediate.display(),
+                                source = %source.display(),
+                                "failed to restore a file after a refused case-only rename; it is left at the intermediate name"
+                            );
+                        }
+                        Err(error)
                     }
                 };
             }
@@ -800,6 +832,99 @@ mod move_tests {
 
         assert_eq!(std::fs::read(&source).expect("source"), b"payload");
         assert!(!staged.exists(), "the partial copy is cleaned up");
+    }
+
+    /// On a case-sensitive volume two names that differ only in case are two
+    /// files, so the case-only path must refuse rather than replace. Runs only
+    /// where the temporary directory is case-sensitive.
+    #[tokio::test]
+    async fn a_case_only_name_of_a_different_file_is_not_replaced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write(&dir.path().join("case-probe"), b"probe");
+        if dir.path().join("CASE-PROBE").exists() {
+            return;
+        }
+        std::fs::remove_file(dir.path().join("case-probe")).expect("remove probe");
+        let source = dir.path().join("sample show.mkv");
+        let dest = dir.path().join("SAMPLE SHOW.mkv");
+        write(&source, b"source-payload");
+        write(&dest, b"dest-payload");
+
+        let error = move_file_exclusive(&source, &dest, MoveOptions::default())
+            .await
+            .expect_err("a different file under the case-only name must not be replaced");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+
+        assert_eq!(std::fs::read(&source).expect("source"), b"source-payload");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
+        assert_eq!(std::fs::read_dir(dir.path()).expect("list").count(), 2);
+    }
+
+    /// Once the copy is written and proven it is the file: a source already
+    /// gone finishes the move. A source that cannot be unlinked but is still
+    /// there fails the move and takes the copy back, leaving no duplicate.
+    #[tokio::test]
+    async fn a_proven_copy_is_dropped_only_while_the_source_is_still_there() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let disk = Disk::process();
+        assert!(
+            remove_copied_source(&disk, &dir.path().join("already-gone.mkv"))
+                .await
+                .is_ok()
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let held = dir.path().join("held");
+            std::fs::create_dir(&held).expect("source folder");
+            let source = held.join("source.mkv");
+            let dest = dir.path().join("dest.mkv");
+            write(&source, b"payload");
+            std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555))
+                .expect("lock the source folder");
+
+            let outcome = transfer_across_devices(
+                &disk,
+                &source,
+                &dest,
+                MoveOptions {
+                    verify_cross_device: true,
+                    ..MoveOptions::default()
+                },
+            )
+            .await;
+            std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
+                .expect("unlock the source folder");
+
+            assert!(outcome.is_err(), "the source could not be unlinked");
+            assert_eq!(std::fs::read(&source).expect("source"), b"payload");
+            assert!(!dest.exists(), "the source survives, so no duplicate stays");
+        }
+    }
+
+    /// A source that cannot be read might still be there or might not, so the
+    /// staged file is neither removed nor moved over it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_rollback_that_cannot_read_the_source_leaves_the_staged_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = dir.path().join("held");
+        std::fs::create_dir(&held).expect("source folder");
+        let source = held.join("source.mkv");
+        let staged = dir.path().join(".scryer-partial.partial");
+        write(&source, b"payload");
+        write(&staged, b"staged-payload");
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the source folder");
+
+        roll_back_staged_file(&Disk::process(), &source, &staged).await;
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock the source folder");
+
+        assert_eq!(std::fs::read(&staged).expect("staged"), b"staged-payload");
+        assert_eq!(std::fs::read(&source).expect("source"), b"payload");
     }
 
     #[test]
