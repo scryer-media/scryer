@@ -259,6 +259,7 @@ pub struct Open {
     pub(crate) mode: OpenMode,
     pub(crate) follow_links: bool,
     pub(crate) access: Access,
+    pub(crate) read_back: bool,
 }
 
 impl Open {
@@ -267,6 +268,7 @@ impl Open {
             mode,
             follow_links: true,
             access: Access::Default,
+            read_back: false,
         }
     }
 
@@ -312,6 +314,13 @@ impl Open {
     /// Who may use a file this open creates.
     pub const fn with_access(mut self, access: Access) -> Self {
         self.access = access;
+        self
+    }
+
+    /// Also allow reading through the handle a writing open returns, so
+    /// what was written can be checked through that same handle.
+    pub const fn with_read_back(mut self) -> Self {
+        self.read_back = true;
         self
     }
 

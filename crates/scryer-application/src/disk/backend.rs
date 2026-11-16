@@ -362,6 +362,9 @@ impl DiskBackend for SystemBackend {
             OpenMode::CreateOrKeep => options.read(true).write(true).create(true).truncate(false),
             OpenMode::Append => options.append(true).create(true),
         };
+        if open.read_back {
+            options.read(true);
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;

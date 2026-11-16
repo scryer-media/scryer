@@ -2253,6 +2253,40 @@ mod system {
     }
 
     #[test]
+    fn a_writing_handle_reads_back_only_when_asked() {
+        use std::io::{Read, Seek, Write};
+        let temp = tempfile::tempdir().expect("temp dir");
+        let disk = real(temp.path());
+        let read_back = |file: &mut std::fs::File| {
+            let mut contents = Vec::new();
+            file.rewind()
+                .and_then(|_| file.read_to_end(&mut contents))
+                .map(|_| contents)
+        };
+
+        let plain = temp.path().join("invented-plain.probe");
+        let mut file = disk.open_blocking(&plain, Open::create_new()).unwrap();
+        file.write_all(b"written").unwrap();
+        assert!(read_back(&mut file).is_err());
+
+        let checked = temp.path().join("invented-checked.probe");
+        let mut file = disk
+            .open_blocking(&checked, Open::create_new().with_read_back())
+            .unwrap();
+        file.write_all(b"written").unwrap();
+        assert_eq!(read_back(&mut file).unwrap(), b"written");
+        drop(file);
+        // Still exclusive: an existing file is refused and kept.
+        assert_eq!(
+            disk.open_blocking(&checked, Open::create_new().with_read_back())
+                .unwrap_err()
+                .reason(),
+            reason::DISK_DESTINATION_EXISTS
+        );
+        assert_eq!(disk.read_blocking(&checked).unwrap(), b"written");
+    }
+
+    #[test]
     fn a_handle_that_does_not_follow_links_refuses_them_and_non_files() {
         let temp = tempfile::tempdir().expect("temp dir");
         let disk = real(temp.path());

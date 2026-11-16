@@ -634,8 +634,8 @@ impl TitleFuzzyIndex {
             "schema_version": FUZZY_SCHEMA_VERSION,
             "stamp": stamp,
         });
-        let bytes =
-            serde_json::to_vec(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+        let bytes = serde_json::to_vec(&payload)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
         // Never follow a symlink: the stamp must not land elsewhere.
         let path = self.meta_path();
         Disk::process()

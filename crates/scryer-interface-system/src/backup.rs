@@ -938,7 +938,12 @@ fn stage_restore_bundle(
     match result {
         Ok(summary) => {
             let marker_result = disk
-                .write_blocking(&pending_ready_path, b"ready", Replace::Allowed, Access::Default)
+                .write_blocking(
+                    &pending_ready_path,
+                    b"ready",
+                    Replace::Allowed,
+                    Access::Default,
+                )
                 .map_err(std::io::Error::from)
                 .and_then(|()| ensure_owner_only_permissions(&pending_ready_path));
             if let Err(error) = marker_result {

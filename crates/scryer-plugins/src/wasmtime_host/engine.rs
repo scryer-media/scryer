@@ -9,12 +9,12 @@
 //! background thread increments the engine epoch on a fixed tick so
 //! per-invocation deadlines actually fire without a timer thread per call.
 
-use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use scryer_application::disk::{Disk, EntryKind, Open, OwnerOnly, Parents, PathReading, Remove};
 use wasmtime::{Cache, CacheConfig, Config, Engine};
 
 /// Epoch tick interval. Per-invocation deadlines are expressed as a whole
@@ -52,18 +52,12 @@ pub fn initialize_wasm_runtime(data_dir: impl AsRef<Path>) -> Result<(), String>
 /// this function never falls back to Wasmtime's user-global cache.
 pub fn initialize_wasm_runtime_at(cache_dir: impl AsRef<Path>) -> Result<(), String> {
     let cache_dir = cache_dir.as_ref().to_path_buf();
-    fs::create_dir_all(&cache_dir).map_err(|error| {
-        format!(
-            "failed to create Wasmtime cache directory {}: {error}",
-            cache_dir.display()
-        )
-    })?;
-    let cache_dir = fs::canonicalize(&cache_dir).map_err(|error| {
-        format!(
-            "failed to resolve Wasmtime cache directory {}: {error}",
-            cache_dir.display()
-        )
-    })?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(&cache_dir, Parents::Create)
+        .map_err(|error| format!("failed to create Wasmtime cache directory: {error}"))?;
+    let cache_dir = disk
+        .canonicalize_blocking(&cache_dir)
+        .map_err(|error| format!("failed to resolve Wasmtime cache directory: {error}"))?;
     restrict_cache_directory(&cache_dir)?;
     probe_cache_directory(&cache_dir)?;
 
@@ -107,21 +101,9 @@ pub fn initialize_wasm_runtime_at(cache_dir: impl AsRef<Path>) -> Result<(), Str
 }
 
 fn restrict_cache_directory(cache_dir: &Path) -> Result<(), String> {
-    #[cfg(not(unix))]
-    let _ = cache_dir;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        fs::set_permissions(cache_dir, fs::Permissions::from_mode(0o700)).map_err(|error| {
-            format!(
-                "failed to restrict Wasmtime cache directory {}: {error}",
-                cache_dir.display()
-            )
-        })?;
-    }
-    Ok(())
+    Disk::process()
+        .restrict_to_owner_blocking(cache_dir, OwnerOnly::Directory)
+        .map_err(|error| format!("failed to restrict Wasmtime cache directory: {error}"))
 }
 
 fn configured_cache_dir() -> &'static Path {
@@ -170,25 +152,26 @@ fn reclaim_expired_cleanup_marker(
     static RECLAIM: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = RECLAIM.lock().unwrap_or_else(|error| error.into_inner());
     let marker = directory.join(format!(".cleanup.wip-{pid}"));
-    let metadata = match fs::symlink_metadata(&marker) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
+    let disk = Disk::process();
+    let modified = match disk.fresh_blocking(&marker) {
+        PathReading::Known {
+            kind: EntryKind::File,
+            len: Some(0),
+            modified,
+            ..
+        } => modified.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::Unsupported))?,
+        PathReading::Known { .. } | PathReading::Missing { .. } => return Ok(()),
+        PathReading::Unreachable { .. } | PathReading::NotObserved => {
+            return Err(std::io::Error::other(format!(
+                "could not inspect {}",
+                marker.display()
+            )));
+        }
     };
-    if !metadata.file_type().is_file() || metadata.len() != 0 {
-        return Ok(());
-    }
     // Match Wasmtime's expiration interval, but preserve future timestamps.
     // No directory scan, recursion, or compiled-module deletion is involved.
-    if now
-        .duration_since(metadata.modified()?)
-        .is_ok_and(|age| age > interval)
-    {
-        match fs::remove_file(marker) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+    if now.duration_since(modified).is_ok_and(|age| age > interval) {
+        disk.remove_blocking(&marker, Remove::File)?;
     }
     Ok(())
 }
@@ -202,17 +185,9 @@ fn probe_cache_directory(cache_dir: &Path) -> Result<(), String> {
             .unwrap_or_default()
             .as_nanos()
     ));
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&probe)
-        .map_err(|error| {
-            format!(
-                "Wasmtime cache directory {} is not writable: {error}",
-                cache_dir.display()
-            )
-        })?;
+    let mut file = Disk::process()
+        .open_blocking(&probe, Open::create_new().with_read_back())
+        .map_err(|error| format!("Wasmtime cache directory is not writable: {error}"))?;
     file.write_all(b"scryer-wasmtime-cache-probe")
         .and_then(|_| file.sync_all())
         .map_err(|error| {
@@ -224,7 +199,7 @@ fn probe_cache_directory(cache_dir: &Path) -> Result<(), String> {
     finish_cache_probe(file, &probe)
 }
 
-fn finish_cache_probe(mut file: fs::File, probe: &Path) -> Result<(), String> {
+fn finish_cache_probe(mut file: std::fs::File, probe: &Path) -> Result<(), String> {
     // Another process's Wasmtime cleanup can unlink this unrecognized file.
     // Read through the original handle rather than reopening its path.
     let mut contents = Vec::new();
@@ -237,14 +212,10 @@ fn finish_cache_probe(mut file: fs::File, probe: &Path) -> Result<(), String> {
             )
         })?;
     drop(file);
-    match fs::remove_file(probe) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!(
-            "failed to remove Wasmtime cache probe {}: {error}",
-            probe.display()
-        )),
-    }
+    Disk::process()
+        .remove_blocking(probe, Remove::File)
+        .map(drop)
+        .map_err(|error| format!("failed to remove Wasmtime cache probe: {error}"))
 }
 
 /// Borrow the process-wide archive engine, initialising it (and its epoch
@@ -351,6 +322,7 @@ fn spawn_epoch_ticker(engine: Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, OpenOptions};
 
     fn cache_for(directory: &Path) -> Cache {
         let mut config = CacheConfig::new();

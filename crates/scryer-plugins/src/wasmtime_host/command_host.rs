@@ -15,6 +15,7 @@ use crate::plugin_http_host::{
 };
 use crate::process_host::ProcessHost;
 use crate::socket_host::{SocketCallError, SocketHost, socket_plugin_error};
+use scryer_application::disk::{Access, Disk, EntryKind, Open, Parents, PathReading, Replace};
 use scryer_application::{AppError, ArchiveExtractorPluginProvider};
 use scryer_plugin_sdk::host::{
     PluginArchiveExtractRequest, PluginArchiveExtractResponse, PluginArchiveExtractedFile,
@@ -762,25 +763,40 @@ fn extract_archive(
             ArchiveExtractFailure::temporary("archive extraction runtime is unavailable")
         })?;
 
-    // `TempDir` removes the workspace when it drops, which happens on every
+    // The workspace removes itself when it drops, which happens on every
     // path out of this function including the `?` returns below.
-    let workspace = tempfile::tempdir().map_err(|error| {
-        ArchiveExtractFailure::temporary(format!(
-            "failed to create archive extraction workspace: {error}"
-        ))
-    })?;
+    let disk = Disk::process();
+    let workspace = disk
+        .scratch_dir_blocking("scryer-archive-extract-")
+        .map_err(|error| {
+            ArchiveExtractFailure::temporary(format!(
+                "failed to create archive extraction workspace: {}",
+                std::io::Error::from(error)
+            ))
+        })?;
     let archive_path = workspace
         .path()
         .join(staged_archive_name(request.filename.as_deref(), format));
-    std::fs::write(&archive_path, &request.content).map_err(|error| {
-        ArchiveExtractFailure::temporary(format!("failed to stage archive artifact: {error}"))
-    })?;
-    let output_dir = workspace.path().join(STAGED_ARCHIVE_OUTPUT_DIR);
-    std::fs::create_dir_all(&output_dir).map_err(|error| {
+    disk.write_blocking(
+        &archive_path,
+        &request.content,
+        Replace::Allowed,
+        Access::Default,
+    )
+    .map_err(|error| {
         ArchiveExtractFailure::temporary(format!(
-            "failed to create archive extraction output directory: {error}"
+            "failed to stage archive artifact: {}",
+            std::io::Error::from(error)
         ))
     })?;
+    let output_dir = workspace.path().join(STAGED_ARCHIVE_OUTPUT_DIR);
+    disk.create_dir_blocking(&output_dir, Parents::Create)
+        .map_err(|error| {
+            ArchiveExtractFailure::temporary(format!(
+                "failed to create archive extraction output directory: {}",
+                std::io::Error::from(error)
+            ))
+        })?;
 
     let response = runtime
         .block_on(client.process_with_limits(
@@ -833,38 +849,16 @@ fn extract_archive(
     collect_extracted_files(&output_dir)
 }
 
-/// Open and read a file, refusing to traverse a symlink at the final component.
+/// Open and read a regular file, refusing a link at the final component.
 ///
 /// The classification above already rejects links, but the entry can be swapped
-/// between the stat and the open. `O_NOFOLLOW` closes that window on Unix; on
-/// Windows the reparse-point flag does the same, so a planted link fails the
-/// open instead of handing the plugin host-side bytes.
+/// between the listing and the open; the open itself refuses a planted link or
+/// anything that is not a regular file instead of handing the plugin host-side
+/// bytes.
 fn read_without_following(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
 
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        // FILE_FLAG_OPEN_REPARSE_POINT; spelled out rather than pulling
-        // windows-sys into this crate for one constant.
-        options.custom_flags(0x0020_0000);
-    }
-    let mut file = options.open(path)?;
-    // A reparse point opened with the flag above is not a readable file; on
-    // Unix `O_NOFOLLOW` has already failed with ELOOP.
-    if !file.metadata()?.file_type().is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "extraction output entry is not a regular file",
-        ));
-    }
+    let mut file = Disk::process().open_blocking(path, Open::read().without_following_links())?;
     let mut content = Vec::new();
     file.read_to_end(&mut content)?;
     Ok(content)
@@ -881,51 +875,54 @@ fn collect_extracted_files(
     let mut files = Vec::new();
     let mut total_bytes = 0usize;
     let mut pending = vec![(output_dir.to_path_buf(), String::new())];
+    let disk = Disk::process();
 
     while let Some((dir, prefix)) = pending.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|error| {
+        let entries = disk.list_blocking(&dir).map_err(|error| {
             ArchiveExtractFailure::temporary(format!(
-                "failed to read archive extraction output: {error}"
+                "failed to read archive extraction output: {}",
+                std::io::Error::from(error)
             ))
         })?;
         for entry in entries {
-            let entry = entry.map_err(|error| {
-                ArchiveExtractFailure::temporary(format!(
-                    "failed to read archive extraction output entry: {error}"
-                ))
-            })?;
-            // `DirEntry::file_type` does not traverse the link, unlike
-            // `DirEntry::metadata`. Classifying with the followed metadata made
-            // the symlink arm unreachable, so a link planted by the archive was
-            // read — or recursed into — as whatever it pointed at, outside the
-            // WASI preopens.
-            let file_type = entry.file_type().map_err(|error| {
-                ArchiveExtractFailure::temporary(format!(
-                    "failed to inspect archive extraction output entry: {error}"
-                ))
-            })?;
-            if file_type.is_symlink() {
+            // The listing's kind does not traverse a link, so a link planted by
+            // the archive is skipped rather than read, or recursed into, as
+            // whatever it points at outside the WASI preopens. A file's length
+            // comes from its own reading when the listing did not carry it.
+            let reading = match entry.reading {
+                PathReading::Known {
+                    kind: EntryKind::File,
+                    len: None,
+                    ..
+                } => disk.fresh_blocking(&entry.path),
+                listed => listed,
+            };
+            let PathReading::Known { kind, len, .. } = reading else {
+                return Err(ArchiveExtractFailure::temporary(format!(
+                    "failed to inspect archive extraction output entry: {}",
+                    match reading.exists() {
+                        Some(false) => "it does not exist",
+                        _ => "it could not be inspected",
+                    }
+                )));
+            };
+            if kind == EntryKind::Symlink {
                 continue;
             }
-            let metadata = std::fs::symlink_metadata(entry.path()).map_err(|error| {
-                ArchiveExtractFailure::temporary(format!(
-                    "failed to inspect archive extraction output entry: {error}"
-                ))
-            })?;
-            if metadata.file_type().is_symlink() {
+            let Some(name) = entry.path.file_name() else {
                 continue;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            };
+            let name = name.to_string_lossy().into_owned();
             let relative_path = if prefix.is_empty() {
                 name
             } else {
                 format!("{prefix}/{name}")
             };
-            if metadata.is_dir() {
-                pending.push((entry.path(), relative_path));
+            if kind == EntryKind::Directory {
+                pending.push((entry.path, relative_path));
                 continue;
             }
-            if !metadata.is_file() {
+            if kind != EntryKind::File {
                 continue;
             }
             if files.len() >= MAX_ARCHIVE_RESPONSE_FILES {
@@ -933,13 +930,13 @@ fn collect_extracted_files(
                     "archive expands to more than {MAX_ARCHIVE_RESPONSE_FILES} files"
                 )));
             }
-            let next_total = total_bytes.saturating_add(metadata.len() as usize);
+            let next_total = total_bytes.saturating_add(len.unwrap_or_default() as usize);
             if next_total > MAX_ARCHIVE_RESPONSE_BYTES {
                 return Err(ArchiveExtractFailure::permanent(format!(
                     "archive expands beyond {MAX_ARCHIVE_RESPONSE_BYTES} bytes"
                 )));
             }
-            let content = read_without_following(&entry.path()).map_err(|error| {
+            let content = read_without_following(&entry.path).map_err(|error| {
                 ArchiveExtractFailure::temporary(format!(
                     "failed to read extracted file '{relative_path}': {error}"
                 ))

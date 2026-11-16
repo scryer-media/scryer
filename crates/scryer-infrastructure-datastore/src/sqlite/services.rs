@@ -142,7 +142,8 @@ impl SqliteServices {
             let db_file = std::path::Path::new(file_path);
             if let Some(parent) = db_file.parent() {
                 let disk = Disk::process();
-                if !parent.as_os_str().is_empty() && disk.follow(parent).await.exists() != Some(true)
+                if !parent.as_os_str().is_empty()
+                    && disk.follow(parent).await.exists() != Some(true)
                 {
                     tracing::info!(path = %parent.display(), "creating database directory");
                     disk.create_dir(parent, Parents::Create)

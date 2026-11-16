@@ -50,6 +50,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use scryer_application::disk::{
+    Access, Disk, DiskError, EntryKind, PathReading, Replace, ScratchDir,
+};
 use scryer_application::{AppError, AppResult, SubtitleSyncClient, SubtitleSyncJob};
 use scryer_plugin_sdk::command::{
     PluginCommand, PluginCommandRequest, PluginCommandResult, PluginSubtitleCommand,
@@ -126,7 +129,7 @@ impl WasmSubtitleSyncClient {
 #[async_trait]
 impl SubtitleSyncClient for WasmSubtitleSyncClient {
     async fn align_subtitle(&self, job: SubtitleSyncJob) -> AppResult<SubtitleSyncAlignResponse> {
-        let prepared = PreparedSubtitleSyncCommand::new(job)?;
+        let prepared = off_runtime(move || PreparedSubtitleSyncCommand::new(job)).await?;
         let mut spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
         if !self.settings.is_empty() {
             spec.command_host = spec
@@ -176,8 +179,19 @@ impl SubtitleSyncClient for WasmSubtitleSyncClient {
                 )));
             }
         };
-        prepared.align_response_to_port(align)
+        // Off the runtime: it reads the output back, and dropping the job
+        // removes its directories.
+        off_runtime(move || prepared.align_response_to_port(align)).await
     }
+}
+
+/// Run a pass of blocking disk work on a blocking thread.
+async fn off_runtime<T: Send + 'static>(
+    pass: impl FnOnce() -> AppResult<T> + Send + 'static,
+) -> AppResult<T> {
+    tokio::task::spawn_blocking(pass)
+        .await
+        .map_err(|error| AppError::Repository(format!("subtitle sync disk task failed: {error}")))?
 }
 
 impl std::fmt::Debug for WasmSubtitleSyncClient {
@@ -192,15 +206,15 @@ impl std::fmt::Debug for WasmSubtitleSyncClient {
 /// One align job's staged filesystem and the request that names it.
 ///
 /// The temp dirs are fields rather than locals because they must outlive the
-/// invocation: dropping a [`tempfile::TempDir`] deletes the directory, and the
+/// invocation: dropping a [`ScratchDir`] deletes the directory, and the
 /// guest reads `/subtitle` and writes `/output` while this is alive.
 struct PreparedSubtitleSyncCommand {
     request: SubtitleSyncPluginProcessRequest,
     media_root: PathBuf,
-    subtitle_dir: tempfile::TempDir,
-    reference_dir: Option<tempfile::TempDir>,
-    output_dir: tempfile::TempDir,
-    scratch_dir: tempfile::TempDir,
+    subtitle_dir: ScratchDir,
+    reference_dir: Option<ScratchDir>,
+    output_dir: ScratchDir,
+    scratch_dir: ScratchDir,
     guest_output_path: String,
     host_output_path: PathBuf,
 }
@@ -214,36 +228,35 @@ impl PreparedSubtitleSyncCommand {
             .to_path_buf();
         let guest_input_path = guest_file_path(GUEST_INPUT_ROOT, &input_path)?;
 
-        let subtitle_dir = tempfile::tempdir().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create subtitle sync input directory: {error}"
-            ))
-        })?;
+        let disk = Disk::process();
+        let subtitle_dir = scratch_dir(&disk, "input")?;
         let subtitle_file_name =
             safe_guest_file_name(job.subtitle_file_name.as_deref(), "subtitle.input");
         let host_subtitle_path = subtitle_dir.path().join(&subtitle_file_name);
-        std::fs::write(&host_subtitle_path, &job.subtitle_content).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to stage subtitle sync input '{}': {error}",
-                host_subtitle_path.display()
-            ))
+        disk.write_blocking(
+            &host_subtitle_path,
+            &job.subtitle_content,
+            Replace::Allowed,
+            Access::Default,
+        )
+        .map_err(|error| {
+            AppError::Repository(format!("failed to stage subtitle sync input: {error}"))
         })?;
         let guest_subtitle_path =
             guest_child_path(GUEST_SUBTITLE_ROOT, Path::new(&subtitle_file_name));
 
         let (reference_subtitle, reference_dir) = if let Some(reference) = job.reference_subtitle {
-            let dir = tempfile::tempdir().map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to create subtitle sync reference directory: {error}"
-                ))
-            })?;
+            let dir = scratch_dir(&disk, "reference")?;
             let file_name = safe_guest_file_name(reference.file_name.as_deref(), "reference.input");
             let host_path = dir.path().join(&file_name);
-            std::fs::write(&host_path, &reference.content).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to stage subtitle sync reference '{}': {error}",
-                    host_path.display()
-                ))
+            disk.write_blocking(
+                &host_path,
+                &reference.content,
+                Replace::Allowed,
+                Access::Default,
+            )
+            .map_err(|error| {
+                AppError::Repository(format!("failed to stage subtitle sync reference: {error}"))
             })?;
             (
                 Some(SubtitleSyncCommandSubtitleFile {
@@ -261,16 +274,8 @@ impl PreparedSubtitleSyncCommand {
             (None, None)
         };
 
-        let output_dir = tempfile::tempdir().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create subtitle sync output directory: {error}"
-            ))
-        })?;
-        let scratch_dir = tempfile::tempdir().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create subtitle sync scratch directory: {error}"
-            ))
-        })?;
+        let output_dir = scratch_dir(&disk, "output")?;
+        let scratch_dir = scratch_dir(&disk, "scratch")?;
         let output_file_name = format!("rewritten.{}", output_extension(&job.subtitle_format));
         let host_output_path = output_dir.path().join(&output_file_name);
         let guest_output_path = guest_child_path(GUEST_OUTPUT_ROOT, Path::new(&output_file_name));
@@ -386,6 +391,15 @@ impl PreparedSubtitleSyncCommand {
     }
 }
 
+/// A private per-job directory, removed with everything in it when dropped.
+fn scratch_dir(disk: &Disk, role: &str) -> AppResult<ScratchDir> {
+    disk.scratch_dir_blocking(".tmp").map_err(|error| {
+        AppError::Repository(format!(
+            "failed to create subtitle sync {role} directory: {error}"
+        ))
+    })
+}
+
 fn guest_file_path(root: &str, host_path: &Path) -> AppResult<String> {
     let file_name = host_path.file_name().ok_or_else(|| {
         AppError::validation_refused(
@@ -452,13 +466,21 @@ fn validate_rewritten_output_path(
 /// still contained within the output preopen root. This mirrors the symlink
 /// rejection the archive plugin consumer already performs on guest output.
 fn read_guest_output_file(output_root: &Path, path: &Path) -> AppResult<Vec<u8>> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+    let disk = Disk::process();
+    let read_failed = |detail: &dyn std::fmt::Display| {
         AppError::Repository(format!(
-            "failed to read subtitle sync output '{}': {error}",
+            "failed to read subtitle sync output '{}': {detail}",
             path.display()
         ))
-    })?;
-    if !metadata.file_type().is_file() {
+    };
+    let reading = disk.fresh_blocking(path);
+    let PathReading::Known { kind, len, .. } = reading else {
+        return Err(read_failed(&match reading.exists() {
+            Some(false) => "it does not exist",
+            _ => "it could not be inspected",
+        }));
+    };
+    if kind != EntryKind::File {
         return Err(AppError::validation_refused(
             crate::error_reasons::PLUGIN_SUBTITLE_SYNC_OUTPUT_NOT_FILE,
             format!(
@@ -467,25 +489,22 @@ fn read_guest_output_file(output_root: &Path, path: &Path) -> AppResult<Vec<u8>>
             ),
         ));
     }
-    if metadata.len() > MAX_REWRITTEN_SUBTITLE_BYTES {
+    if len.unwrap_or_default() > MAX_REWRITTEN_SUBTITLE_BYTES {
         return Err(AppError::validation_refused(
             crate::error_reasons::PLUGIN_SUBTITLE_SYNC_OUTPUT_TOO_LARGE,
             format!("subtitle sync plugin output exceeds {MAX_REWRITTEN_SUBTITLE_BYTES} bytes"),
         ));
     }
 
-    let output_root = output_root.canonicalize().map_err(|error| {
-        AppError::Repository(format!(
-            "failed to canonicalize subtitle sync output directory {}: {error}",
-            output_root.display()
-        ))
-    })?;
-    let canonical = path.canonicalize().map_err(|error| {
-        AppError::Repository(format!(
-            "failed to canonicalize subtitle sync output '{}': {error}",
-            path.display()
-        ))
-    })?;
+    let canonicalize = |path: &Path| {
+        disk.canonicalize_blocking(path).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to canonicalize subtitle sync output: {error}"
+            ))
+        })
+    };
+    let output_root = canonicalize(output_root)?;
+    let canonical = canonicalize(path)?;
     if !canonical.starts_with(&output_root) {
         return Err(AppError::validation_refused(
             crate::error_reasons::PLUGIN_SUBTITLE_SYNC_OUTPUT_OUTSIDE_DIRECTORY,
@@ -496,12 +515,8 @@ fn read_guest_output_file(output_root: &Path, path: &Path) -> AppResult<Vec<u8>>
         ));
     }
 
-    std::fs::read(&canonical).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to read subtitle sync output '{}': {error}",
-            path.display()
-        ))
-    })
+    disk.read_blocking(&canonical)
+        .map_err(|error: DiskError| read_failed(&std::io::Error::from(error)))
 }
 
 #[cfg(test)]
