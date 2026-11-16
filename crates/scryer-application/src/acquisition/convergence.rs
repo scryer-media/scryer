@@ -1096,13 +1096,25 @@ impl AppUseCase {
                 return None;
             }
         };
-        let fingerprint = compute_search_fingerprint(
+        let mut fingerprint = compute_search_fingerprint(
             &profile.id,
             &profile_criteria_version(&profile.criteria),
             &required_audio_languages,
             &language_preferences,
             &scope_match_identity(subject),
         );
+        let custom_aliases = title.custom_search_aliases();
+        if !custom_aliases.is_empty() {
+            // These names change the queries, not just candidate ranking. Keep
+            // their order (fallback priority) and use structured serialization
+            // so delimiters in names cannot collide. Unconfigured titles retain
+            // their existing coverage instead of reopening the entire library.
+            fingerprint = crate::helpers::blake3_identity_hex(
+                crate::helpers::HashDomain::ConvergenceScope,
+                serde_json::to_string(&(fingerprint, custom_aliases))
+                    .expect("search identity contains only strings"),
+            );
+        }
 
         let routed_indexer_ids = self
             .routed_indexer_ids_for_search(title, subject, memo)
