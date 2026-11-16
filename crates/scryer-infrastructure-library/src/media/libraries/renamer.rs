@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use scryer_application::disk::{Disk, EntryKind, Parents};
 use scryer_application::fs_safety::MoveOptions;
 use scryer_application::stored_paths::stored_path_to_path_buf;
 use scryer_application::{
     AppError, AppResult, ImportFilePermissions, LibraryRenamer, RenameApplyItemResult,
     RenameApplyStatus, RenamePlan, RenameWriteAction,
 };
-use tokio::fs;
 
 pub struct FileSystemLibraryRenamer;
 
@@ -209,13 +209,15 @@ async fn prepare_move_target(
     permissions: &ImportFilePermissions,
 ) -> Result<(), (String, String)> {
     let source = stored_path_to_path_buf(current_path);
-    let source_meta = fs::symlink_metadata(&source).await.map_err(|err| {
-        (
+    let reading = Disk::process().uncached(&source).await;
+    if reading.exists() != Some(true) {
+        let absence = reading.describe_absence();
+        return Err((
             "source_missing".to_string(),
-            format!("rename source is unreadable: {current_path}: {err}"),
-        )
-    })?;
-    if source_meta.is_dir() {
+            format!("rename source is unreadable: {current_path}: {absence}"),
+        ));
+    }
+    if reading.is(EntryKind::Directory) {
         return Err((
             "source_not_file".to_string(),
             format!("rename source is not a file: {current_path}"),
@@ -228,7 +230,8 @@ async fn prepare_move_target(
         // permissions, the way the importer already treats folders it creates
         // and Sonarr treats every folder it makes during a move.
         let created = crate::workflow::file_importer::missing_destination_dirs(parent);
-        fs::create_dir_all(parent).await.map_err(|err| {
+        let made = Disk::process().create_dir(parent, Parents::Create).await;
+        made.map_err(std::io::Error::from).map_err(|err| {
             (
                 "target_parent_unwritable".to_string(),
                 format!("could not create {}: {err}", parent.display()),

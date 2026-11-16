@@ -3,6 +3,7 @@ use std::fs as stdfs;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use scryer_application::disk::{Disk, EntryKind};
 use scryer_application::file_source_signature::file_source_signature_from_metadata;
 use scryer_application::filesystem_walk::{FilesystemWalker, WalkedDirectory};
 use scryer_application::{
@@ -10,7 +11,6 @@ use scryer_application::{
     LibraryScanner, stored_paths::path_to_stored_string,
 };
 use std::time::{Duration, Instant};
-use tokio::fs;
 use tokio::sync::mpsc;
 
 const LIBRARY_SCAN_DISCOVERY_CHANNEL_CAPACITY: usize = 16;
@@ -48,14 +48,15 @@ impl FileSystemLibraryScanner {
 
     async fn validate_root(root: &str) -> AppResult<PathBuf> {
         let root_path = scryer_application::stored_paths::stored_path_to_path_buf(root);
-        let metadata = fs::metadata(&root_path).await.map_err(|err| {
-            AppError::validation_refused(
+        let reading = Disk::process().follow(&root_path).await;
+        if reading.exists() != Some(true) {
+            return Err(AppError::validation_refused(
                 crate::error_reasons::MEDIA_LIBRARY_PATH_UNAVAILABLE,
-                format!("library path error: {err}"),
-            )
-        })?;
+                format!("library path error: {}", reading.describe_absence()),
+            ));
+        }
 
-        if !metadata.is_dir() {
+        if !reading.is(EntryKind::Directory) {
             return Err(AppError::validation_refused(
                 crate::error_reasons::MEDIA_LIBRARY_PATH_NOT_DIRECTORY,
                 "library path must be a directory",
@@ -230,7 +231,7 @@ fn scan_walked_directory_blocking(
                 continue;
             }
             if file.size_bytes.is_none() {
-                file.size_bytes = stdfs::metadata(&file.path).ok().map(|meta| meta.len());
+                file.size_bytes = Disk::process().follow_blocking(&file.path).size();
             }
             if is_sample_video_candidate(&file.path, file.size_bytes) {
                 continue;
@@ -322,6 +323,9 @@ fn scan_directory_with_metrics_blocking(
     })
 }
 
+// disk-guard: the source signature is built from the raw metadata's
+// modification time, which a disk reading does not carry.
+#[allow(clippy::disallowed_methods)]
 fn collect_directory_files_with_source_snapshot(
     allowed_extensions: &HashSet<String>,
     walked_dir: WalkedDirectory,
@@ -412,26 +416,24 @@ impl LibraryScanner for FileSystemLibraryScanner {
         let allowed_extensions = self.allowed_extensions.clone();
 
         tokio::task::spawn_blocking(move || {
+            let disk = Disk::process();
             let mut files = Vec::new();
-            let entries = stdfs::read_dir(&root_path).map_err(|err| {
-                AppError::validation_refused(
-                    crate::error_reasons::MEDIA_LIBRARY_PATH_UNAVAILABLE,
-                    format!("library path error: {err}"),
-                )
-            })?;
-            for entry in entries.filter_map(|entry| entry.ok()) {
-                let path = entry.path();
+            let listed = disk.visit_blocking(&root_path, |entry| {
+                let Ok(entry) = entry else {
+                    return std::ops::ControlFlow::Continue(());
+                };
                 let is_file = entry
-                    .file_type()
-                    .map(|file_type| file_type.is_file())
-                    .unwrap_or_else(|_| path.is_file());
+                    .kind()
+                    .map(|kind| kind == EntryKind::File)
+                    .unwrap_or_else(|_| disk.follow_blocking(entry.path()).is(EntryKind::File));
+                let path = entry.into_path();
                 if !is_file
                     || !FileSystemLibraryScanner::path_has_allowed_extension(
                         &allowed_extensions,
                         &path,
                     )
                 {
-                    continue;
+                    return std::ops::ControlFlow::Continue(());
                 }
                 files.push(LibraryFile {
                     path: path_to_stored_string(&path),
@@ -445,7 +447,14 @@ impl LibraryScanner for FileSystemLibraryScanner {
                     source_signature_scheme: None,
                     source_signature_value: None,
                 });
-            }
+                std::ops::ControlFlow::Continue(())
+            });
+            listed.map_err(|err| {
+                AppError::validation_refused(
+                    crate::error_reasons::MEDIA_LIBRARY_PATH_UNAVAILABLE,
+                    format!("library path error: {}", std::io::Error::from(err)),
+                )
+            })?;
             files.sort_by(|left, right| left.path.cmp(&right.path));
             Ok(files)
         })
