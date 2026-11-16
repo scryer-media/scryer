@@ -3651,50 +3651,27 @@ async fn mark_wanted_completed_for_series_movie_link(
 ) {
     // The link's own row, whatever its status, completed the way an episode's
     // row is: a landed import clears the in-flight grab, anything else keeps it.
-    match app
+    // One keyed write, so a transition between a read and the write cannot be
+    // overwritten; a link with no row writes nothing.
+    let now = Utc::now().to_rfc3339();
+    if let Err(err) = app
         .services
         .workflow
         .acquisition_scope_states
-        .get_acquisition_scope_state_for_scope(
+        .complete_acquisition_scope_for_key(
             title_id,
             crate::AcquisitionScopeKey::SeriesMovieLink(series_movie_link_id),
+            Some(&now),
+            landed_import,
         )
         .await
     {
-        Ok(None) => {}
-        Ok(Some(item)) => {
-            let now = Utc::now().to_rfc3339();
-            if let Err(err) = app
-                .services
-                .workflow
-                .acquisition_scope_states
-                .transition_acquisition_scope_to_completed(&AcquisitionScopeCompleteTransition {
-                    id: item.id,
-                    last_search_at: Some(now),
-                    grabbed_release: if landed_import {
-                        None
-                    } else {
-                        item.grabbed_release
-                    },
-                })
-                .await
-            {
-                tracing::warn!(
-                    error = %err,
-                    title_id = title_id,
-                    series_movie_link_id = series_movie_link_id,
-                    "failed to mark wanted item completed for series movie"
-                );
-            }
-        }
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                title_id = title_id,
-                series_movie_link_id = series_movie_link_id,
-                "failed to look up wanted item for series movie"
-            );
-        }
+        tracing::warn!(
+            error = %err,
+            title_id = title_id,
+            series_movie_link_id = series_movie_link_id,
+            "failed to mark wanted item completed for series movie"
+        );
     }
 }
 

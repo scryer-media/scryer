@@ -10455,6 +10455,39 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(true)
     }
 
+    /// [`Self::complete_acquisition_scope_for_title`] for the row stored under
+    /// any scope key, such as a series-movie link's: the row is completed
+    /// whatever its status, with `last_search_at` set and the in-flight grab
+    /// cleared only when `landed_import`. Returns whether a row was there.
+    /// SQL stores complete it in one keyed statement, so a transition between
+    /// a read and the write cannot be overwritten with stale values. The
+    /// default reads the row and then writes it.
+    async fn complete_acquisition_scope_for_key(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<bool> {
+        let Some(wanted) = self
+            .get_acquisition_scope_state_for_scope(title_id, scope)
+            .await?
+        else {
+            return Ok(false);
+        };
+        self.transition_acquisition_scope_to_completed(&AcquisitionScopeCompleteTransition {
+            id: wanted.id,
+            last_search_at: last_search_at.map(str::to_string),
+            grabbed_release: if landed_import {
+                None
+            } else {
+                wanted.grabbed_release
+            },
+        })
+        .await?;
+        Ok(true)
+    }
+
     /// `complete_acquisition_scope_for_title` for each episode of one title.
     /// The SQL store writes them in one statement, so on an error nothing is
     /// kept and a caller can replay the episodes one by one. The default runs

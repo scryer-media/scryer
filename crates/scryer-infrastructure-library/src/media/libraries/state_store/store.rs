@@ -1364,46 +1364,35 @@ impl AcquisitionScopeStateRepository for WantedStore {
         last_search_at: Option<&str>,
         landed_import: bool,
     ) -> AppResult<bool> {
+        let scope = episode_id.map_or(AcquisitionScopeKey::Title, AcquisitionScopeKey::Episode);
+        self.complete_acquisition_scope_for_key(title_id, scope, last_search_at, landed_import)
+            .await
+    }
+
+    async fn complete_acquisition_scope_for_key(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<bool> {
         let now = Utc::now().to_rfc3339();
-        let (sql, args) = if let Some(episode_id) = episode_id {
-            (
-                "UPDATE wanted_items
-                    SET status = {},
-                        last_search_at = {},
-                        grabbed_release = CASE WHEN {} THEN NULL ELSE grabbed_release END,
-                        updated_at = {}
-                  WHERE title_id = {} AND episode_id = {}"
-                    .to_string(),
-                vec![
-                    SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
-                    self.datastore.opt_timestamp_text_arg(last_search_at)?,
-                    SqlArg::Bool(landed_import),
-                    self.datastore.timestamp_text_arg(&now)?,
-                    SqlArg::Text(title_id.to_string()),
-                    SqlArg::Text(episode_id.to_string()),
-                ],
-            )
-        } else {
-            (
-                "UPDATE wanted_items
-                    SET status = {},
-                        last_search_at = {},
-                        grabbed_release = CASE WHEN {} THEN NULL ELSE grabbed_release END,
-                        updated_at = {}
-                  WHERE title_id = {}
-                    AND episode_id IS NULL
-                    AND collection_id IS NULL
-                    AND series_movie_link_id IS NULL"
-                    .to_string(),
-                vec![
-                    SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
-                    self.datastore.opt_timestamp_text_arg(last_search_at)?,
-                    SqlArg::Bool(landed_import),
-                    self.datastore.timestamp_text_arg(&now)?,
-                    SqlArg::Text(title_id.to_string()),
-                ],
-            )
-        };
+        let (predicate, key_args) = wanted_scope_predicate("", title_id, scope);
+        let sql = format!(
+            "UPDATE wanted_items
+                SET status = {{}},
+                    last_search_at = {{}},
+                    grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
+                    updated_at = {{}}
+              WHERE {predicate}"
+        );
+        let mut args = vec![
+            SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
+            self.datastore.opt_timestamp_text_arg(last_search_at)?,
+            SqlArg::Bool(landed_import),
+            self.datastore.timestamp_text_arg(&now)?,
+        ];
+        args.extend(key_args);
         let rows = execute_datastore_write(
             &self.datastore,
             "complete_acquisition_scope_for_title",
@@ -4408,5 +4397,185 @@ mod pending_release_fill_tests {
             status_and_unknown(&datastore, &matched_id).await,
             ("grabbed".to_string(), true)
         );
+    }
+}
+
+#[cfg(test)]
+mod keyed_scope_completion_tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use scryer_application::{
+        AcquisitionScopeKey, AcquisitionScopeState, AcquisitionScopeStateRepository,
+        AcquisitionScopeStatus,
+    };
+
+    use super::WantedStore;
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    const TITLE_ID: &str = "t-link-completion";
+    const RELEASE: &str = "{\"title\":\"Synthetic.Feature.2031.1080p-GROUP\"}";
+    const SEEDED_AT: &str = "2031-02-01T00:00:00+00:00";
+
+    async fn store() -> (StoreDatastore, WantedStore) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .unwrap();
+        let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        // The statement under test is keyed on the scope columns; the title
+        // and link rows the foreign keys name are not part of it.
+        SqlRuntime::execute(datastore.read_exec(), "PRAGMA foreign_keys = OFF", &[])
+            .await
+            .unwrap();
+        (datastore.clone(), WantedStore::new(datastore))
+    }
+
+    async fn seed_link_scope(
+        datastore: &StoreDatastore,
+        id: &str,
+        link_id: &str,
+        status: AcquisitionScopeStatus,
+    ) {
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO wanted_items
+             (id, title_id, series_movie_link_id, media_type, last_search_at, status,
+              grabbed_release, created_at, updated_at)
+             VALUES ({}, {}, {}, 'series_movie', '2031-01-01T00:00:00+00:00', {}, {}, {}, {})",
+            &[
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(TITLE_ID.to_string()),
+                SqlArg::Text(link_id.to_string()),
+                SqlArg::Text(status.as_str().to_string()),
+                SqlArg::Text(RELEASE.to_string()),
+                SqlArg::Text(SEEDED_AT.to_string()),
+                SqlArg::Text(SEEDED_AT.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn link_scope(store: &WantedStore, link_id: &str) -> AcquisitionScopeState {
+        store
+            .get_acquisition_scope_state_for_scope(
+                TITLE_ID,
+                AcquisitionScopeKey::SeriesMovieLink(link_id),
+            )
+            .await
+            .unwrap()
+            .expect("the link scope exists")
+    }
+
+    /// The fields the completion writes, and nothing it leaves alone.
+    fn written(scope: &AcquisitionScopeState) -> impl std::fmt::Debug + PartialEq {
+        (
+            scope.status,
+            scope.last_search_at.clone(),
+            scope.grabbed_release.clone(),
+            scope.episode_id.clone(),
+            scope.collection_id.clone(),
+            scope.series_movie_link_id.is_some(),
+            scope.media_type.clone(),
+            scope.created_at.clone(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_keyed_link_completion_writes_what_the_read_then_write_path_wrote_in_every_status() {
+        let (datastore, store) = store().await;
+        let now = Utc::now().to_rfc3339();
+        for status in [
+            AcquisitionScopeStatus::Wanted,
+            AcquisitionScopeStatus::Grabbed,
+            AcquisitionScopeStatus::Paused,
+            AcquisitionScopeStatus::Completed,
+        ] {
+            for landed_import in [true, false] {
+                let case = format!("{}-{landed_import}", status.as_str());
+                let old_link = format!("old-link-{case}");
+                let new_link = format!("new-link-{case}");
+                seed_link_scope(&datastore, &format!("old-{case}"), &old_link, status).await;
+                seed_link_scope(&datastore, &format!("new-{case}"), &new_link, status).await;
+
+                // The path the import used: read the row, then complete it by id.
+                let read = link_scope(&store, &old_link).await;
+                store
+                    .update_acquisition_scope_status(
+                        &read.id,
+                        AcquisitionScopeStatus::Completed.as_str(),
+                        Some(&now),
+                        if landed_import {
+                            None
+                        } else {
+                            read.grabbed_release.as_deref()
+                        },
+                    )
+                    .await
+                    .unwrap();
+
+                let found = store
+                    .complete_acquisition_scope_for_key(
+                        TITLE_ID,
+                        AcquisitionScopeKey::SeriesMovieLink(&new_link),
+                        Some(&now),
+                        landed_import,
+                    )
+                    .await
+                    .unwrap();
+                assert!(found, "{case}: the row is there");
+
+                let old = link_scope(&store, &old_link).await;
+                let new = link_scope(&store, &new_link).await;
+                assert_eq!(written(&new), written(&old), "{case}");
+                assert_eq!(new.status, AcquisitionScopeStatus::Completed, "{case}");
+                assert_eq!(
+                    new.grabbed_release.as_deref(),
+                    (!landed_import).then_some(RELEASE),
+                    "{case}"
+                );
+                assert_ne!(new.updated_at, SEEDED_AT, "{case}: the row is stamped");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_keyed_link_completion_without_a_row_writes_nothing() {
+        let (datastore, store) = store().await;
+        seed_link_scope(
+            &datastore,
+            "kept",
+            "kept-link",
+            AcquisitionScopeStatus::Grabbed,
+        )
+        .await;
+        let before = link_scope(&store, "kept-link").await;
+
+        let found = store
+            .complete_acquisition_scope_for_key(
+                TITLE_ID,
+                AcquisitionScopeKey::SeriesMovieLink("link-without-row"),
+                Some(&Utc::now().to_rfc3339()),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(!found);
+        assert_eq!(
+            format!("{:?}", link_scope(&store, "kept-link").await),
+            format!("{before:?}")
+        );
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), "SELECT id FROM wanted_items", &[])
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "no row is created");
     }
 }
