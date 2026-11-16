@@ -12,6 +12,7 @@
 
 use std::ffi::OsString;
 use std::io;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -82,6 +83,33 @@ pub(crate) struct RawEntry {
     /// Present only where the listing itself carries size and times, so no
     /// extra call was made for it.
     pub stat: Option<RawStat>,
+}
+
+/// One entry of a visit: its name in hand, its kind read only when asked.
+pub(crate) trait RawVisit: Send + Sync {
+    fn name(&self) -> OsString;
+    /// The listing's own kind where it carries one, else one probe that
+    /// does not follow a link.
+    fn kind(&self) -> io::Result<EntryKind>;
+}
+
+impl RawVisit for std::fs::DirEntry {
+    fn name(&self) -> OsString {
+        self.file_name()
+    }
+
+    fn kind(&self) -> io::Result<EntryKind> {
+        let file_type = self.file_type()?;
+        Ok(if file_type.is_symlink() {
+            EntryKind::Symlink
+        } else if file_type.is_dir() {
+            EntryKind::Directory
+        } else if file_type.is_file() {
+            EntryKind::File
+        } else {
+            EntryKind::Other
+        })
+    }
 }
 
 /// Whether a written file reached stable storage.
@@ -166,9 +194,23 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// Does not follow links.
     fn lstat(&self, path: &Path) -> io::Result<RawStat>;
     fn list(&self, path: &Path) -> io::Result<Vec<RawEntry>>;
+    /// Each entry of a directory in listing order until `each` stops, an
+    /// entry the listing failed on passed as its error.
+    fn visit(
+        &self,
+        path: &Path,
+        each: &mut dyn FnMut(io::Result<Box<dyn RawVisit>>) -> ControlFlow<()>,
+    ) -> io::Result<()>;
+    /// Whether a directory holds any entry, reading at most one.
+    fn has_entries(&self, path: &Path) -> io::Result<bool>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
     fn read_link(&self, path: &Path) -> io::Result<PathBuf>;
     fn remove_file(&self, path: &Path) -> io::Result<()>;
+    /// [`Self::remove_file`], clearing a Windows read-only attribute that
+    /// refuses it.
+    fn remove_file_clearing_readonly(&self, path: &Path) -> io::Result<()> {
+        self.remove_file(path)
+    }
     fn remove_dir(&self, path: &Path) -> io::Result<()>;
     fn remove_tree(&self, path: &Path) -> io::Result<()>;
     /// Replaces an existing destination.
@@ -211,6 +253,9 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn sync_dir(&self, path: &Path) -> io::Result<SyncOutcome>;
     /// Narrows an existing path's permissions to its owner.
     fn restrict_to_owner(&self, path: &Path, what: OwnerOnly) -> io::Result<()>;
+    /// [`Self::restrict_to_owner`] through a handle, which a link put at
+    /// the path afterwards cannot redirect.
+    fn restrict_handle_to_owner(&self, file: &std::fs::File, what: OwnerOnly) -> io::Result<()>;
     /// Sets a file's modification time, following links.
     fn set_modified(&self, path: &Path, at: SystemTime) -> io::Result<()>;
 }
@@ -253,6 +298,10 @@ impl DiskBackend for SystemBackend {
         std::fs::symlink_metadata(path).map(|metadata| RawStat::of(&metadata))
     }
 
+    fn has_entries(&self, path: &Path) -> io::Result<bool> {
+        Ok(std::fs::read_dir(path)?.next().transpose()?.is_some())
+    }
+
     fn list(&self, path: &Path) -> io::Result<Vec<RawEntry>> {
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(path)? {
@@ -266,17 +315,7 @@ impl DiskBackend for SystemBackend {
             let stat: Option<RawStat> = None;
             let kind = match &stat {
                 Some(stat) => Some(stat.kind),
-                None => entry.file_type().ok().map(|file_type| {
-                    if file_type.is_symlink() {
-                        EntryKind::Symlink
-                    } else if file_type.is_dir() {
-                        EntryKind::Directory
-                    } else if file_type.is_file() {
-                        EntryKind::File
-                    } else {
-                        EntryKind::Other
-                    }
-                }),
+                None => RawVisit::kind(&entry).ok(),
             };
             entries.push(RawEntry {
                 name: entry.file_name(),
@@ -285,6 +324,19 @@ impl DiskBackend for SystemBackend {
             });
         }
         Ok(entries)
+    }
+
+    fn visit(
+        &self,
+        path: &Path,
+        each: &mut dyn FnMut(io::Result<Box<dyn RawVisit>>) -> ControlFlow<()>,
+    ) -> io::Result<()> {
+        for entry in std::fs::read_dir(path)? {
+            if each(entry.map(|entry| Box::new(entry) as Box<dyn RawVisit>)).is_break() {
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
@@ -296,23 +348,22 @@ impl DiskBackend for SystemBackend {
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        if cfg!(windows) {
-            clear_readonly(path)?;
-        }
         std::fs::remove_file(path)
     }
 
-    fn remove_dir(&self, path: &Path) -> io::Result<()> {
-        if cfg!(windows) {
-            clear_readonly(path)?;
+    fn remove_file_clearing_readonly(&self, path: &Path) -> io::Result<()> {
+        let remove = |path: &Path| std::fs::remove_file(path);
+        if !cfg!(windows) {
+            return remove(path);
         }
+        removing_readonly(path, remove, clear_readonly, set_readonly)
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_dir(path)
     }
 
     fn remove_tree(&self, path: &Path) -> io::Result<()> {
-        if cfg!(windows) {
-            clear_readonly_tree(path)?;
-        }
         std::fs::remove_dir_all(path)
     }
 
@@ -470,17 +521,24 @@ impl DiskBackend for SystemBackend {
     fn restrict_to_owner(&self, path: &Path, what: OwnerOnly) -> io::Result<()> {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = match what {
-                OwnerOnly::File => 0o600,
-                OwnerOnly::Directory | OwnerOnly::Program => 0o700,
-            };
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            std::fs::set_permissions(path, owner_only(what))
         }
         // Permissions here are inherited access lists, not owner modes.
         #[cfg(not(unix))]
         {
             let _ = (path, what);
+            Ok(())
+        }
+    }
+
+    fn restrict_handle_to_owner(&self, file: &std::fs::File, what: OwnerOnly) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            file.set_permissions(owner_only(what))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (file, what);
             Ok(())
         }
     }
@@ -517,62 +575,65 @@ fn settled(file: &std::fs::File) -> io::Result<SyncOutcome> {
     })
 }
 
-/// Windows refuses to remove a file carrying the DOS read-only attribute;
-/// clear it first. Links are left alone. Compiled everywhere so it is
-/// checked everywhere, called only on Windows.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn clear_readonly(path: &Path) -> io::Result<()> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
+/// Windows refuses to remove an entry carrying the DOS read-only attribute.
+/// The removal is tried first; only a refusal clears the attribute (`clear`
+/// says whether there was one to clear) for one more try, and a failed
+/// second try sets it again (`restore`), so a directory that is not empty
+/// keeps it. Compiled everywhere so it is checked everywhere.
+fn removing_readonly(
+    path: &Path,
+    remove: impl Fn(&Path) -> io::Result<()>,
+    clear: impl FnOnce(&Path) -> io::Result<bool>,
+    restore: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let refused = match remove(path) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => error,
+        other => return other,
     };
-    clear_readonly_of(path, &metadata)
+    match clear(path) {
+        Ok(true) => {}
+        // Gone since the refusal: the caller reads that as already absent.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
+        Ok(false) | Err(_) => return Err(refused),
+    }
+    remove(path).inspect_err(|_| {
+        // Best effort: the second refusal is the caller's error.
+        let _ = restore(path);
+    })
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
-fn clear_readonly_of(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
+/// Clear the read-only attribute of `path`, a link left alone; whether
+/// there was one.
+fn clear_readonly(path: &Path) -> io::Result<bool> {
+    clear_readonly_of(path, &std::fs::symlink_metadata(path)?)
+}
+
+/// Set the read-only attribute [`clear_readonly`] cleared.
+fn set_readonly(path: &Path) -> io::Result<()> {
+    let mut permissions = std::fs::symlink_metadata(path)?.permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(path, permissions)
+}
+
+fn clear_readonly_of(path: &Path, metadata: &std::fs::Metadata) -> io::Result<bool> {
     let mut permissions = metadata.permissions();
-    if permissions.readonly() {
-        // Only reached on Windows, where this clears the DOS attribute.
-        #[allow(clippy::permissions_set_readonly_false)]
-        permissions.set_readonly(false);
-        std::fs::set_permissions(path, permissions)?;
+    if metadata.file_type().is_symlink() || !permissions.readonly() {
+        return Ok(false);
     }
-    Ok(())
+    // Only reached on Windows, where this clears the DOS attribute.
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions)?;
+    Ok(true)
 }
 
-/// [`clear_readonly`] for every entry under a directory that is about to be
-/// removed as a whole, without following links.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn clear_readonly_tree(path: &Path) -> io::Result<()> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return clear_readonly_of(path, &metadata);
-    }
-    let mut stack = vec![(path.to_path_buf(), metadata)];
-    while let Some((dir, metadata)) = stack.pop() {
-        clear_readonly_of(&dir, &metadata)?;
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            // Windows listings carry the entry's attributes, so this is no
-            // extra call there, and it does not follow links.
-            let child_metadata = entry.metadata()?;
-            if child_metadata.is_dir() && !child_metadata.file_type().is_symlink() {
-                stack.push((entry.path(), child_metadata));
-            } else {
-                clear_readonly_of(&entry.path(), &child_metadata)?;
-            }
-        }
-    }
-    Ok(())
+#[cfg(unix)]
+fn owner_only(what: OwnerOnly) -> std::fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::Permissions::from_mode(match what {
+        OwnerOnly::File => 0o600,
+        OwnerOnly::Directory | OwnerOnly::Program => 0o700,
+    })
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -621,13 +682,19 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     const ERROR_NOT_SUPPORTED: i32 = 50;
 
     let wide = |path: &Path| {
-        let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+        let value: Vec<u16> = path.as_os_str().encode_wide().collect();
         if value.contains(&0) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "path contains an interior NUL",
             ));
         }
+        let mut value = long_path_form(value, || {
+            Ok(std::path::absolute(path)?
+                .as_os_str()
+                .encode_wide()
+                .collect())
+        })?;
         value.push(0);
         Ok(value)
     };
@@ -646,6 +713,56 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
         }
         _ => Err(error),
     }
+}
+
+/// `path` in the form Win32 calls accept past `MAX_PATH`, prepared as std
+/// prepares its own: a verbatim path stays as it is, and so does a short
+/// drive or `\\` path, with either separator. Anything else is made absolute
+/// by `absolute`, and that is given the `\\?\` prefix when it is long, or
+/// `\\?\UNC\` for a share; a long `\\.\` device path becomes `\\?\`.
+#[cfg(any(windows, test))]
+fn long_path_form(
+    path: Vec<u16>,
+    absolute: impl FnOnce() -> io::Result<Vec<u16>>,
+) -> io::Result<Vec<u16>> {
+    // std's bound, which counts the terminating NUL these buffers lack.
+    const LEGACY_MAX_PATH: usize = 248;
+    const SEP: u16 = b'\\' as u16;
+    const ALT: u16 = b'/' as u16;
+    const COLON: u16 = b':' as u16;
+    const QUERY: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+    let prefixed =
+        |prefix: &str, rest: &[u16]| [&prefix.encode_utf16().collect::<Vec<_>>(), rest].concat();
+    if path.is_empty()
+        || matches!(
+            path[..],
+            [SEP, SEP, QUERY, SEP, ..] | [SEP, QUERY, QUERY, SEP, ..]
+        )
+    {
+        return Ok(path);
+    }
+    if path.len() + 1 < LEGACY_MAX_PATH {
+        match path[..] {
+            [drive, COLON] | [drive, COLON, SEP | ALT, ..] if drive != SEP && drive != ALT => {
+                return Ok(path);
+            }
+            [SEP | ALT, SEP | ALT, ..] => return Ok(path),
+            _ => {}
+        }
+    }
+    // The absolute form has only `\` separators.
+    let full = absolute()?;
+    if full.len() + 1 < LEGACY_MAX_PATH {
+        return Ok(full);
+    }
+    Ok(match full[..] {
+        [_, COLON, SEP, ..] => prefixed(r"\\?\", &full),
+        [SEP, SEP, DOT, SEP, ref rest @ ..] => prefixed(r"\\?\", rest),
+        [SEP, SEP, QUERY, SEP, ..] | [SEP, QUERY, QUERY, SEP, ..] => full,
+        [SEP, SEP, ref rest @ ..] => prefixed(r"\\?\UNC\", rest),
+        _ => full,
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -711,6 +828,143 @@ mod tests {
             SyncOutcome::Unconfirmed.required().unwrap_err().kind(),
             io::ErrorKind::Unsupported
         );
+    }
+
+    #[test]
+    fn a_read_only_attribute_is_cleared_only_after_a_refusal_and_set_again_if_still_refused() {
+        use std::cell::RefCell;
+        let path = Path::new("invented-folder");
+        let denied = || io::Error::from(io::ErrorKind::PermissionDenied);
+        let run = |answers: Vec<io::Result<()>>, readonly: bool| {
+            let steps = RefCell::new(Vec::new());
+            let answers = RefCell::new(answers.into_iter());
+            let result = removing_readonly(
+                path,
+                |_| {
+                    steps.borrow_mut().push("remove");
+                    answers.borrow_mut().next().expect("an answer")
+                },
+                |_| {
+                    steps.borrow_mut().push("clear");
+                    Ok(readonly)
+                },
+                |_| {
+                    steps.borrow_mut().push("restore");
+                    Ok(())
+                },
+            );
+            (result.map_err(|error| error.kind()), steps.into_inner())
+        };
+
+        assert_eq!(run(vec![Ok(())], true), (Ok(()), vec!["remove"]));
+        let not_found = run(vec![Err(io::ErrorKind::NotFound.into())], true);
+        assert_eq!(not_found, (Err(io::ErrorKind::NotFound), vec!["remove"]));
+        assert_eq!(
+            run(vec![Err(denied()), Ok(())], true),
+            (Ok(()), vec!["remove", "clear", "remove"])
+        );
+        // Refused without the attribute: nothing to clear, no second try.
+        assert_eq!(
+            run(vec![Err(denied())], false),
+            (
+                Err(io::ErrorKind::PermissionDenied),
+                vec!["remove", "clear"]
+            )
+        );
+        // Gone between the refusal and the clear: absent, not refused.
+        let vanished = removing_readonly(
+            path,
+            |_| Err(denied()),
+            |_| Err(io::ErrorKind::NotFound.into()),
+            |_| panic!("nothing was cleared"),
+        );
+        assert_eq!(vanished.unwrap_err().kind(), io::ErrorKind::NotFound);
+        // A folder that is not empty keeps its attribute.
+        assert_eq!(
+            run(
+                vec![Err(denied()), Err(io::ErrorKind::DirectoryNotEmpty.into())],
+                true
+            ),
+            (
+                Err(io::ErrorKind::DirectoryNotEmpty),
+                vec!["remove", "clear", "remove", "restore"]
+            )
+        );
+    }
+
+    #[test]
+    fn long_paths_take_the_verbatim_prefix_and_short_or_verbatim_ones_stay() {
+        fn wide(text: &str) -> Vec<u16> {
+            text.encode_utf16().collect()
+        }
+        fn not_needed() -> io::Result<Vec<u16>> {
+            panic!("a short or verbatim path is not made absolute")
+        }
+        // std's bound, the terminating NUL included.
+        const LEGACY_BOUND: usize = 248;
+        let short = r"C:\Library\Invented Show\invented.mkv";
+        assert_eq!(
+            long_path_form(wide(short), not_needed).unwrap(),
+            wide(short)
+        );
+
+        let tail = "x".repeat(260);
+        let drive = format!(r"C:\Library\{tail}");
+        let prefixed = format!(r"\\?\{drive}");
+        let made = long_path_form(wide(&drive), || Ok(wide(&drive))).unwrap();
+        assert_eq!(made, wide(&prefixed));
+
+        let relative = format!(r"Library\{tail}");
+        let absolute = format!(r"D:\{relative}");
+        let made = long_path_form(wide(&relative), || Ok(wide(&absolute))).unwrap();
+        assert_eq!(made, wide(&format!(r"\\?\{absolute}")));
+
+        let share = format!(r"\\invented-nas\media\{tail}");
+        let made = long_path_form(wide(&share), || Ok(wide(&share))).unwrap();
+        assert_eq!(made, wide(&format!(r"\\?\UNC\invented-nas\media\{tail}")));
+
+        for verbatim in [
+            prefixed,
+            format!(r"\\?\UNC\invented-nas\media\{tail}"),
+            format!(r"\??\C:\{tail}"),
+        ] {
+            assert_eq!(
+                long_path_form(wide(&verbatim), not_needed).unwrap(),
+                wide(&verbatim)
+            );
+        }
+
+        // Short paths with either separator stay; so does a short device path.
+        for short in [
+            r"C:/Library/invented.mkv",
+            r"C:",
+            r"//invented-nas/media/invented.mkv",
+            r"\\.\C:\invented.mkv",
+        ] {
+            assert_eq!(
+                long_path_form(wide(short), not_needed).unwrap(),
+                wide(short)
+            );
+        }
+
+        // The bound is on the absolute form: a short relative path is made
+        // absolute and prefixed only when that is long.
+        let near = "x".repeat(LEGACY_BOUND - 1 - r"D:\".len());
+        let at_bound = format!(r"D:\{near}");
+        let made = long_path_form(wide("invented.mkv"), || Ok(wide(&at_bound))).unwrap();
+        assert_eq!(made, wide(&format!(r"\\?\{at_bound}")));
+        let under = format!(r"D:\{}", &near[1..]);
+        let made = long_path_form(wide("invented.mkv"), || Ok(wide(&under))).unwrap();
+        assert_eq!(made, wide(&under));
+
+        // A long path with `/` separators, and a long device path, are made
+        // absolute and take the verbatim prefix.
+        let slashed = format!(r"C:/Library/{tail}");
+        let made = long_path_form(wide(&slashed), || Ok(wide(&drive))).unwrap();
+        assert_eq!(made, wide(&format!(r"\\?\{drive}")));
+        let device = format!(r"\\.\C:\{tail}");
+        let made = long_path_form(wide(&device), || Ok(wide(&device))).unwrap();
+        assert_eq!(made, wide(&format!(r"\\?\C:\{tail}")));
     }
 
     #[test]

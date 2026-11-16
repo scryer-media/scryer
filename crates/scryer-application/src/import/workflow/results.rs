@@ -1698,8 +1698,8 @@ fn remove_inventoried_payload_blocking(
             retained.push(entry.path.clone());
             continue;
         }
-        // The owner clears a Windows read-only attribute before removing.
-        match disk.remove_blocking(&path, Remove::File) {
+        // A Windows read-only attribute was always cleared for payload files.
+        match disk.remove_blocking(&path, Remove::FileEvenReadOnly) {
             Ok(Removal::Removed) => removed += 1,
             Ok(Removal::AlreadyAbsent) => {}
             Err(error) => {

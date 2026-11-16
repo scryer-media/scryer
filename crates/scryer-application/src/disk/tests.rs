@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::mpsc;
 
-use super::backend::{RawEntry, RawStat, WriteFailure};
+use super::backend::{RawEntry, RawStat, RawVisit, WriteFailure};
 use super::test_support::ManualClock;
 use super::*;
 
@@ -176,6 +176,17 @@ impl Scripted {
     }
 }
 
+/// A scripted entry without a kind is one whose kind cannot be read.
+impl RawVisit for RawEntry {
+    fn name(&self) -> OsString {
+        self.name.clone()
+    }
+    fn kind(&self) -> io::Result<EntryKind> {
+        self.kind
+            .ok_or_else(|| io::ErrorKind::PermissionDenied.into())
+    }
+}
+
 impl DiskBackend for Scripted {
     fn stat(&self, path: &Path) -> io::Result<RawStat> {
         self.stat_answer("stat", path)
@@ -191,6 +202,31 @@ impl DiskBackend for Scripted {
             .get(path)
             .cloned()
             .ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+    /// An entry scripted with an empty name is one the listing fails on.
+    fn visit(
+        &self,
+        path: &Path,
+        each: &mut dyn FnMut(io::Result<Box<dyn RawVisit>>) -> std::ops::ControlFlow<()>,
+    ) -> io::Result<()> {
+        self.record("visit", path)?;
+        let listing = self.listings.lock().unwrap().get(path).cloned();
+        for entry in listing.ok_or(io::ErrorKind::NotFound)? {
+            let entry = match entry.name.is_empty() {
+                true => Err(io::ErrorKind::InvalidData.into()),
+                false => Ok(Box::new(entry) as Box<dyn RawVisit>),
+            };
+            if each(entry).is_break() {
+                break;
+            }
+        }
+        Ok(())
+    }
+    fn has_entries(&self, path: &Path) -> io::Result<bool> {
+        self.record("has_entries", path)?;
+        let listings = self.listings.lock().unwrap();
+        let listing = listings.get(path).ok_or(io::ErrorKind::NotFound)?;
+        Ok(!listing.is_empty())
     }
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         self.record("canonicalize", path)
@@ -311,6 +347,9 @@ impl DiskBackend for Scripted {
     fn restrict_to_owner(&self, path: &Path, _what: OwnerOnly) -> io::Result<()> {
         self.record("restrict_to_owner", path)
     }
+    fn restrict_handle_to_owner(&self, _file: &std::fs::File, _what: OwnerOnly) -> io::Result<()> {
+        self.record("restrict_handle_to_owner", Path::new(""))
+    }
     fn set_modified(&self, path: &Path, _at: SystemTime) -> io::Result<()> {
         self.record("set_modified", path)
     }
@@ -420,10 +459,19 @@ async fn a_probe_that_does_not_answer_in_time_reads_unreachable_until_it_does() 
     // The probe is held in the backend until the gate opens, so the bound
     // always elapses first.
     let reading = disk.fresh("/srv/fixture-media/a.mkv").await;
-    assert_eq!(reading, PathReading::Unreachable { observed_at: at(0) });
+    assert_eq!(
+        reading,
+        PathReading::Unreachable {
+            observed_at: at(0),
+            cause: reason::DISK_TIMED_OUT
+        }
+    );
     assert_eq!(
         disk.observed(&p("/srv/fixture-media/a.mkv")),
-        PathReading::Unreachable { observed_at: at(0) }
+        PathReading::Unreachable {
+            observed_at: at(0),
+            cause: reason::DISK_TIMED_OUT
+        }
     );
 
     // When the held probe returns, its newer reading replaces the timeout.
@@ -479,15 +527,16 @@ fn only_not_found_is_missing() {
         disk.fresh_blocking(&p("/srv/fixture-media/gone")),
         PathReading::Missing { observed_at: at(0) }
     );
-    for path in [
-        "/srv/fixture-media/denied",
-        "/srv/fixture-media/hung",
-        "/srv/fixture-media/stale",
+    for (path, cause) in [
+        ("/srv/fixture-media/denied", reason::DISK_PERMISSION_DENIED),
+        ("/srv/fixture-media/hung", reason::DISK_TIMED_OUT),
+        ("/srv/fixture-media/stale", reason::DISK_PATH_UNREACHABLE),
     ] {
         let reading = disk.fresh_blocking(&p(path));
+        let observed_at = at(0);
         assert_eq!(
             reading,
-            PathReading::Unreachable { observed_at: at(0) },
+            PathReading::Unreachable { observed_at, cause },
             "{path}"
         );
         assert_eq!(
@@ -1094,11 +1143,17 @@ async fn a_dead_root_holds_one_probe_and_one_trial_and_answers_the_rest_at_once(
     // next read under it goes out as the one trial, which is held too.
     assert_eq!(
         disk.fresh("/srv/fixture-media/a.mkv").await,
-        PathReading::Unreachable { observed_at: at(0) }
+        PathReading::Unreachable {
+            observed_at: at(0),
+            cause: reason::DISK_TIMED_OUT
+        }
     );
     assert_eq!(
         disk.fresh("/srv/fixture-media/b.mkv").await,
-        PathReading::Unreachable { observed_at: at(0) }
+        PathReading::Unreachable {
+            observed_at: at(0),
+            cause: reason::DISK_TIMED_OUT
+        }
     );
     assert_eq!(lstats_under(&backend, ROOT), 2);
 
@@ -1116,13 +1171,19 @@ async fn a_dead_root_holds_one_probe_and_one_trial_and_answers_the_rest_at_once(
             ] {
                 assert_eq!(
                     disk.fresh(path).await,
-                    PathReading::Unreachable { observed_at: at(5) },
+                    PathReading::Unreachable {
+                        observed_at: at(5),
+                        cause: reason::DISK_PATH_UNREACHABLE
+                    },
                     "{path}"
                 );
             }
             assert_eq!(
                 disk.follow("/srv/fixture-media/c.mkv").await,
-                PathReading::Unreachable { observed_at: at(5) }
+                PathReading::Unreachable {
+                    observed_at: at(5),
+                    cause: reason::DISK_PATH_UNREACHABLE
+                }
             );
             for error in [
                 disk.list("/srv/fixture-media").await.map(|_| ()),
@@ -1189,7 +1250,10 @@ async fn a_path_still_out_past_its_bound_is_refused_after_its_root_answers_again
 
     assert_eq!(
         disk.fresh("/srv/fixture-media/a.mkv").await,
-        PathReading::Unreachable { observed_at: at(0) }
+        PathReading::Unreachable {
+            observed_at: at(0),
+            cause: reason::DISK_TIMED_OUT
+        }
     );
     // The trial answers, so the root reads again; the held path does not.
     assert_eq!(
@@ -1202,7 +1266,10 @@ async fn a_path_still_out_past_its_bound_is_refused_after_its_root_answers_again
         for _ in 0..8 {
             assert_eq!(
                 disk.fresh("/srv/fixture-media/a.mkv").await,
-                PathReading::Unreachable { observed_at: at(5) }
+                PathReading::Unreachable {
+                    observed_at: at(5),
+                    cause: reason::DISK_PATH_UNREACHABLE
+                }
             );
         }
     })
@@ -1622,6 +1689,37 @@ fn fixed_staging_reuses_one_sibling_and_keeps_it_when_a_write_fails() {
     assert_eq!(io::Error::from(refused).kind(), io::ErrorKind::Unsupported);
     assert_eq!(backend.calls_of("rename"), 0);
     assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_fixed_sibling_is_refused_and_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let disk = Disk::with_seams(Arc::new(SystemBackend), Arc::new(SystemClock));
+    let dest = dir.path().join("queue.json");
+    let target = dir.path().join("invented-elsewhere.txt");
+    std::fs::write(&target, b"not the queue").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let sibling = fixed_staging_path_for(&dest);
+    std::os::unix::fs::symlink(&target, &sibling).unwrap();
+
+    let refused = disk
+        .write_staged_blocking(
+            &dest,
+            b"queue",
+            Replace::Allowed,
+            Access::OwnerOnly,
+            Staging::Fixed,
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(refused.reason(), reason::DISK_LINK_NOT_FOLLOWED);
+    assert!(sibling.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&target).unwrap(), b"not the queue");
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o644);
+    assert!(!dest.exists());
 }
 
 #[test]
@@ -2221,6 +2319,85 @@ fn if_present_turns_only_a_missing_path_into_none() {
     assert_eq!(Ok::<u8, DiskError>(7).if_present().unwrap(), Some(7));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_follow_that_does_not_answer_in_time_reads_timed_out() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
+    backend.stat_is("/srv/fixture-media/a.mkv", Ok(file(5)));
+    let (open, gate) = mpsc::channel();
+    *backend.gate.lock().unwrap() = Some(gate);
+
+    let reading = disk.follow("/srv/fixture-media/a.mkv").await;
+    assert_eq!(reading.unreachable_cause(), Some(reason::DISK_TIMED_OUT));
+    open.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn a_visit_reads_names_first_stops_when_asked_and_passes_a_bad_entry_on() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let show = "/srv/fixture-media/Invented Show";
+    backend.lists(
+        show,
+        &[
+            ("a.mkv", Some(EntryKind::File)),
+            ("unreadable kind", None),
+            ("", None),
+            ("Season 01", Some(EntryKind::Directory)),
+        ],
+    );
+
+    // A kind nobody asks for is never read, so it cannot fail; a bad entry
+    // reaches the caller, which goes on past it.
+    let mut seen = Vec::new();
+    disk.visit_blocking(&p(show), |entry| {
+        seen.push(match entry {
+            Ok(entry) => entry.name().to_string_lossy().into_owned(),
+            Err(_) => "bad entry".to_owned(),
+        });
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+    assert_eq!(seen, ["a.mkv", "unreadable kind", "bad entry", "Season 01"]);
+
+    // Asked, the kind is read; the caller stops where it likes.
+    let kinds = disk.visit(show, Vec::new(), |kinds, entry| {
+        kinds.push(entry.unwrap().kind().ok());
+        match kinds.len() {
+            2 => ControlFlow::Break(()),
+            _ => ControlFlow::Continue(()),
+        }
+    });
+    assert_eq!(kinds.await.unwrap(), [Some(EntryKind::File), None]);
+
+    // Gathering fails on the bad entry; a listing without one keeps what
+    // its filter accepts.
+    assert!(disk.entries_blocking(&p(show), |_| true).is_err());
+    backend.lists(
+        show,
+        &[
+            ("a.mkv", Some(EntryKind::File)),
+            ("Season 01", Some(EntryKind::Directory)),
+        ],
+    );
+    let files = disk.entries(show, |entry| {
+        entry.kind().is_ok_and(|kind| kind == EntryKind::File)
+    });
+    let files: Vec<PathBuf> = files
+        .await
+        .unwrap()
+        .into_iter()
+        .map(Visited::into_path)
+        .collect();
+    assert_eq!(files, [p("/srv/fixture-media/Invented Show/a.mkv")]);
+    let missing = disk.entries_blocking(&p("/srv/fixture-media/Absent"), |_| true);
+    assert_eq!(
+        missing.err().map(|error| error.reason()),
+        Some(reason::DISK_PATH_MISSING)
+    );
+}
+
 mod system {
     //! The owner over the real filesystem, on synthetic files in a temporary
     //! directory.
@@ -2230,6 +2407,22 @@ mod system {
         let disk = Disk::with_seams(Arc::new(SystemBackend), Arc::new(SystemClock));
         disk.set_volumes([(root.to_path_buf(), VolumeClass::LibraryRoot)]);
         disk
+    }
+
+    #[test]
+    fn has_entries_reports_an_empty_folder_a_filled_one_and_a_missing_one() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let disk = real(temp.path());
+        let folder = temp.path().join("Invented Season 01");
+        std::fs::create_dir(&folder).unwrap();
+
+        assert!(!disk.has_entries_blocking(&folder).unwrap());
+        std::fs::write(folder.join("invented.mkv"), b"x").unwrap();
+        assert!(disk.has_entries_blocking(&folder).unwrap());
+        let missing = disk
+            .has_entries_blocking(&temp.path().join("Absent"))
+            .unwrap_err();
+        assert_eq!(missing.reason(), reason::DISK_PATH_MISSING);
     }
 
     #[test]

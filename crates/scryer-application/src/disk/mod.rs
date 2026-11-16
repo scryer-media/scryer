@@ -55,6 +55,7 @@ mod reading;
 mod volume;
 
 use std::io;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
@@ -172,6 +173,9 @@ impl Drop for Answers {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Remove {
     File,
+    /// A file, clearing a Windows read-only attribute only when that refuses
+    /// the removal. For the callers that cleared it before the owner existed.
+    FileEvenReadOnly,
     /// A directory that must already be empty.
     EmptyDir,
     /// A directory and everything in it. A link is removed, never followed.
@@ -418,6 +422,53 @@ pub struct Listed {
     pub reading: PathReading,
 }
 
+/// One entry of a visit. Its kind is read only when asked: from the listing
+/// where it carries one, else with one probe that does not follow a link.
+pub struct Visited {
+    path: PathBuf,
+    raw: Box<dyn backend::RawVisit>,
+}
+
+impl Visited {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn into_path(self) -> PathBuf {
+        self.path
+    }
+
+    pub fn name(&self) -> &std::ffi::OsStr {
+        self.path.file_name().unwrap_or_default()
+    }
+
+    pub fn kind(&self) -> Result<EntryKind, DiskError> {
+        (self.raw.kind()).map_err(|error| DiskError::new(DiskVerb::Read, &self.path, error))
+    }
+}
+
+/// Keep `entry` in `kept` when `keep` accepts it; an entry the listing failed
+/// on replaces `kept` with its error and stops.
+fn gather(
+    kept: &mut Result<Vec<Visited>, DiskError>,
+    entry: Result<Visited, DiskError>,
+    keep: fn(&Visited) -> bool,
+) -> ControlFlow<()> {
+    match (entry, kept.as_mut()) {
+        (Ok(entry), Ok(kept)) => {
+            if keep(&entry) {
+                kept.push(entry);
+            }
+            ControlFlow::Continue(())
+        }
+        (Err(error), _) => {
+            *kept = Err(error);
+            ControlFlow::Break(())
+        }
+        (Ok(_), Err(_)) => ControlFlow::Break(()),
+    }
+}
+
 struct Inner {
     backend: Arc<dyn DiskBackend>,
     clock: Arc<dyn DiskClock>,
@@ -535,8 +586,9 @@ impl Disk {
         }
         let owner = self.clone();
         let probed = path.clone();
-        let unreachable = PathReading::Unreachable {
+        let unreachable = |cause| PathReading::Unreachable {
             observed_at: self.inner.clock.now(),
+            cause,
         };
         match self
             .bounded(&path, traits.probe_timeout, move || {
@@ -546,11 +598,12 @@ impl Disk {
         {
             Bounded::Done(reading) => reading,
             Bounded::TimedOut => {
+                let timed_out = unreachable(reason::DISK_TIMED_OUT);
                 let cache = &self.inner.cache;
-                cache.store(&key_of(&path), unreachable, cache.epoch());
-                unreachable
+                cache.store(&key_of(&path), timed_out, cache.epoch());
+                timed_out
             }
-            Bounded::Refused | Bounded::Failed(_) => unreachable,
+            Bounded::Refused | Bounded::Failed(_) => unreachable(reason::DISK_PATH_UNREACHABLE),
         }
     }
 
@@ -571,8 +624,12 @@ impl Disk {
             .await
         {
             Bounded::Done(reading) => reading,
-            Bounded::Refused | Bounded::TimedOut | Bounded::Failed(_) => PathReading::Unreachable {
+            outcome => PathReading::Unreachable {
                 observed_at: self.inner.clock.now(),
+                cause: match outcome {
+                    Bounded::TimedOut => reason::DISK_TIMED_OUT,
+                    _ => reason::DISK_PATH_UNREACHABLE,
+                },
             },
         }
     }
@@ -625,6 +682,81 @@ impl Disk {
         .await
     }
 
+    /// Whether the directory `dir` holds any entry. Reads at most one entry,
+    /// so a large directory costs no more than an empty one.
+    pub fn has_entries_blocking(&self, dir: &Path) -> Result<bool, DiskError> {
+        self.call("has_entries", || self.inner.backend.has_entries(dir))
+            .map_err(|error| DiskError::new(DiskVerb::List, dir, error))
+    }
+
+    pub async fn has_entries(&self, dir: impl Into<PathBuf>) -> Result<bool, DiskError> {
+        let dir = dir.into();
+        let timeout = self.traits(&dir).probe_timeout;
+        self.run(DiskVerb::List, dir, timeout, |disk, dir| {
+            disk.has_entries_blocking(dir)
+        })
+        .await
+    }
+
+    /// Each entry of `dir` in listing order until `each` stops. An entry the
+    /// listing failed on is passed as its error, for the caller to skip or
+    /// stop on. Kinds are read only when asked, and nothing is cached.
+    pub fn visit_blocking(
+        &self,
+        dir: &Path,
+        mut each: impl FnMut(Result<Visited, DiskError>) -> ControlFlow<()>,
+    ) -> Result<(), DiskError> {
+        let failed = |error| DiskError::new(DiskVerb::List, dir, error);
+        self.call("visit", || {
+            (self.inner.backend).visit(dir, &mut |entry| {
+                each(entry.map_err(failed).map(|raw| Visited {
+                    path: dir.join(raw.name()),
+                    raw,
+                }))
+            })
+        })
+        .map_err(failed)
+    }
+
+    /// [`Self::visit_blocking`] off the runtime, `each` folding into `state`.
+    pub async fn visit<T: Send + 'static>(
+        &self,
+        dir: impl Into<PathBuf>,
+        mut state: T,
+        mut each: impl FnMut(&mut T, Result<Visited, DiskError>) -> ControlFlow<()> + Send + 'static,
+    ) -> Result<T, DiskError> {
+        let dir = dir.into();
+        let timeout = self.traits(&dir).probe_timeout;
+        self.run(DiskVerb::List, dir, timeout, move |disk, dir| {
+            disk.visit_blocking(dir, |entry| each(&mut state, entry))?;
+            Ok(state)
+        })
+        .await
+    }
+
+    /// The entries of `dir` that `keep` accepts, kinds unread unless `keep`
+    /// reads them. An entry the listing failed on fails the call.
+    pub fn entries_blocking(
+        &self,
+        dir: &Path,
+        keep: fn(&Visited) -> bool,
+    ) -> Result<Vec<Visited>, DiskError> {
+        let mut kept = Ok(Vec::new());
+        self.visit_blocking(dir, |entry| gather(&mut kept, entry, keep))?;
+        kept
+    }
+
+    pub async fn entries(
+        &self,
+        dir: impl Into<PathBuf>,
+        keep: fn(&Visited) -> bool,
+    ) -> Result<Vec<Visited>, DiskError> {
+        let found = self.visit(dir, Ok(Vec::new()), move |kept, entry| {
+            gather(kept, entry, keep)
+        });
+        found.await?
+    }
+
     /// The absolute path with every link resolved.
     pub fn canonicalize_blocking(&self, path: &Path) -> Result<PathBuf, DiskError> {
         self.call("canonicalize", || self.inner.backend.canonicalize(path))
@@ -661,13 +793,16 @@ impl Disk {
         let backend = &self.inner.backend;
         let result = match what {
             Remove::File => self.call("remove_file", || backend.remove_file(path)),
+            Remove::FileEvenReadOnly => self.call("remove_file", || {
+                backend.remove_file_clearing_readonly(path)
+            }),
             Remove::EmptyDir => self.call("remove_dir", || backend.remove_dir(path)),
             Remove::Tree => self.call("remove_tree", || backend.remove_tree(path)),
         };
         // Evicted whatever the outcome: a failed tree removal can have
         // removed part of the tree.
         match what {
-            Remove::File => self.inner.cache.evict(&key_of(path)),
+            Remove::File | Remove::FileEvenReadOnly => self.inner.cache.evict(&key_of(path)),
             Remove::EmptyDir | Remove::Tree => self.inner.cache.evict_subtree(&key_of(path)),
         }
         match result {
@@ -934,10 +1069,14 @@ impl Disk {
         access: Access,
     ) -> io::Result<SyncOutcome> {
         let backend = &self.inner.backend;
-        let mut file = backend.open(staged, Open::create().with_access(access))?;
+        // A link or anything but a regular file at the sibling is refused
+        // and kept; only a regular file is emptied and reused.
+        let open = Open::create_or_keep().without_following_links();
+        let mut file = backend.open(staged, open.with_access(access))?;
         if matches!(access, Access::OwnerOnly) {
-            backend.restrict_to_owner(staged, OwnerOnly::File)?;
+            backend.restrict_handle_to_owner(&file, OwnerOnly::File)?;
         }
+        file.set_len(0)?;
         io::Write::write_all(&mut file, bytes)?;
         backend.sync_handle(&file)
     }
@@ -1624,7 +1763,7 @@ fn unique_suffix(near: &Path) -> String {
 
 /// A hidden sibling of `dest` that no scanner takes for media. A short digest
 /// keeps the name 25 bytes however long the destination's name is.
-fn staging_path_for(dest: &Path) -> PathBuf {
+pub(crate) fn staging_path_for(dest: &Path) -> PathBuf {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     parent.join(format!(".scryer-{}.partial", unique_suffix(dest)))
 }

@@ -12,8 +12,7 @@ pub(crate) enum BurnedDataCleanupOutcome {
 
 /// Applies the filesystem policy for burned Usenet download data using explicit protected roots.
 // disk-guard: the lstat decides what is deleted, so it must see a link or
-// file put there a moment ago, and the owner's removal clears a read-only
-// flag on Windows, which would delete files this refuses to.
+// file put there a moment ago.
 #[allow(clippy::disallowed_methods)]
 pub(crate) async fn delete_burned_download_data_with_roots(
     job_dir: &Path,

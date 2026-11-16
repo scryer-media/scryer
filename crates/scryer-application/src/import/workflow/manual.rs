@@ -899,13 +899,16 @@ fn source_entry_location_under_parent(source_path: &Path) -> AppResult<PathBuf> 
 }
 
 /// The kind and size a followed reading shows, or an I/O error when it does
-/// not say.
+/// not say; a refused read stays a permission error.
 fn followed_manual_import_entry(reading: PathReading) -> std::io::Result<(EntryKind, u64)> {
     match reading {
         PathReading::Known { kind, len, .. } if kind != EntryKind::File || len.is_some() => {
             Ok((kind, len.unwrap_or(0)))
         }
         PathReading::Missing { .. } => Err(std::io::ErrorKind::NotFound.into()),
+        reading if reading.unreachable_cause() == Some(reason::DISK_PERMISSION_DENIED) => {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
         reading => Err(std::io::Error::other(
             reading
                 .unknown_reason()
@@ -4821,6 +4824,30 @@ mod manual_archive_workspace_tests {
         let selection = selection(workspace.path(), trusted.path());
 
         assert!(reusable_manual_archive_workspace(&selection).is_none());
+    }
+
+    #[test]
+    fn an_unreadable_source_keeps_the_permission_code_and_other_failures_stay_io() {
+        let unreachable = |cause| PathReading::Unreachable {
+            observed_at: chrono::Utc::now(),
+            cause,
+        };
+        let code = |reading| {
+            let error = followed_manual_import_entry(reading).unwrap_err();
+            manual_import_io_error(&error, "invented".to_string()).reason()
+        };
+        assert_eq!(
+            code(unreachable(reason::DISK_PERMISSION_DENIED)),
+            Some(crate::error_reasons::import::PERMISSION_DENIED)
+        );
+        assert_eq!(
+            code(unreachable(reason::DISK_TIMED_OUT)),
+            Some(crate::error_reasons::import::IO_FAILED)
+        );
+        assert_eq!(
+            code(PathReading::NotObserved),
+            Some(crate::error_reasons::import::IO_FAILED)
+        );
     }
 }
 

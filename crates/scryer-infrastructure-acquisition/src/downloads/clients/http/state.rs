@@ -21,7 +21,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use scryer_application::disk::{
-    Access, Disk, IfPresent, Open, Parents, PathReading, Replace, Staging,
+    Access, Disk, EntryKind, IfPresent, Open, Parents, PathReading, Remove, Replace, Staging,
+    reason,
 };
 use scryer_application::{AppError, AppResult};
 use scryer_plugin_sdk::{PluginHttpResource, PluginHttpVerify};
@@ -382,6 +383,10 @@ pub(crate) struct HttpStateStore {
 /// The directory under the state directory that holds per-job progress.
 const PROGRESS_DIR_NAME: &str = "progress";
 
+/// The extension the queue and progress documents were staged under before
+/// staging moved to the disk owner's own sibling names.
+const LEGACY_STAGING_EXTENSION: &str = "json.next";
+
 impl HttpStateStore {
     pub(crate) fn for_client(download_dir: &Path, client_id: &str) -> Self {
         let state_dir = download_dir.join(STATE_DIR_NAME);
@@ -564,6 +569,52 @@ impl HttpStateStore {
                 None
             }
         }
+    }
+
+    /// Remove the staging files earlier versions left beside this client's
+    /// queue and beside the progress documents: regular files only, as a
+    /// reading that does not follow links shows them. A failure is logged.
+    pub(crate) async fn remove_legacy_staging(&self) {
+        let disk = Disk::process();
+        let queue = self.path.with_extension(LEGACY_STAGING_EXTENSION);
+        let mut leftovers = Vec::new();
+        if disk.fresh(&queue).await.is(EntryKind::File) {
+            leftovers.push(queue);
+        }
+        match disk.list(&self.progress_dir).await {
+            Ok(entries) => leftovers.extend(
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.reading.is(EntryKind::File))
+                    .map(|entry| entry.path)
+                    .filter(|path| self.is_legacy_progress_staging(path)),
+            ),
+            Err(error) if error.reason() == reason::DISK_PATH_MISSING => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "HTTP downloader could not list its progress files");
+            }
+        }
+        for leftover in leftovers {
+            if let Err(error) = disk.remove(&leftover, Remove::File).await {
+                tracing::warn!(error = %error, "HTTP downloader could not remove an old staging file");
+            }
+        }
+    }
+
+    /// Whether `path` is the name an earlier version staged some job's
+    /// progress document under.
+    fn is_legacy_progress_staging(&self, path: &Path) -> bool {
+        let suffix = format!(".{LEGACY_STAGING_EXTENSION}");
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(&suffix))
+            .is_some_and(|stem| {
+                safe_file_stem(stem) == stem
+                    && self
+                        .progress_path(stem)
+                        .with_extension(LEGACY_STAGING_EXTENSION)
+                        == path
+            })
     }
 
     fn state_dir(&self) -> AppResult<&Path> {

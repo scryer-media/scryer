@@ -114,6 +114,8 @@ pub enum PathReading {
     },
     Unreachable {
         observed_at: DateTime<Utc>,
+        /// The [`reason`] code for the failure that left it unread.
+        cause: &'static str,
     },
     /// Nothing current is known; only [`super::Disk::observed`] answers this.
     NotObserved,
@@ -126,6 +128,20 @@ impl PathReading {
             Self::Known { .. } | Self::Missing { .. } => None,
             Self::Unreachable { .. } => Some(reason::DISK_PATH_UNREACHABLE),
             Self::NotObserved => Some(reason::DISK_NOT_OBSERVED),
+        }
+    }
+
+    /// Why a reading offers nothing to use, for a sentence: the unknown
+    /// reason, or "missing".
+    pub fn absence(self) -> &'static str {
+        self.unknown_reason().unwrap_or("missing")
+    }
+
+    /// Why an unreachable reading could not be taken, as a [`reason`] code.
+    pub fn unreachable_cause(self) -> Option<&'static str> {
+        match self {
+            Self::Unreachable { cause, .. } => Some(cause),
+            _ => None,
         }
     }
 
@@ -146,6 +162,27 @@ impl PathReading {
         }
     }
 
+    /// Whether the reading shows `kind` there; `false` when it is unknown.
+    pub fn is(self, kind: EntryKind) -> bool {
+        self.kind() == Some(kind)
+    }
+
+    /// The modification time the reading carries, when it carries one.
+    pub fn modified(self) -> Option<SystemTime> {
+        match self {
+            Self::Known { modified, .. } => modified,
+            _ => None,
+        }
+    }
+
+    /// The length the reading carries, when it carries one.
+    pub fn size(self) -> Option<u64> {
+        match self {
+            Self::Known { len, .. } => len,
+            _ => None,
+        }
+    }
+
     /// How many names the file has, when the reading carries it.
     pub fn link_count(self) -> Option<u64> {
         match self {
@@ -158,7 +195,7 @@ impl PathReading {
         match self {
             Self::Known { observed_at, .. }
             | Self::Missing { observed_at }
-            | Self::Unreachable { observed_at } => Some(observed_at),
+            | Self::Unreachable { observed_at, .. } => Some(observed_at),
             Self::NotObserved => None,
         }
     }
@@ -176,7 +213,10 @@ impl PathReading {
         match result {
             Ok(stat) => stat.reading(observed_at),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::Missing { observed_at },
-            Err(_) => Self::Unreachable { observed_at },
+            Err(error) => Self::Unreachable {
+                observed_at,
+                cause: classify(error),
+            },
         }
     }
 }
@@ -316,6 +356,7 @@ mod tests {
             PathReading::NotObserved,
             PathReading::Unreachable {
                 observed_at: Utc::now(),
+                cause: reason::DISK_PERMISSION_DENIED,
             },
         ] {
             assert!(reason::ALL.contains(&reading.unknown_reason().unwrap()));
@@ -331,17 +372,32 @@ mod tests {
             PathReading::from_result(&missing, at),
             PathReading::Missing { observed_at: at }
         );
-        for kind in [
-            io::ErrorKind::PermissionDenied,
-            io::ErrorKind::TimedOut,
-            io::ErrorKind::StaleNetworkFileHandle,
-            io::ErrorKind::Other,
+        for (kind, cause) in [
+            (
+                io::ErrorKind::PermissionDenied,
+                reason::DISK_PERMISSION_DENIED,
+            ),
+            (io::ErrorKind::TimedOut, reason::DISK_TIMED_OUT),
+            (
+                io::ErrorKind::StaleNetworkFileHandle,
+                reason::DISK_PATH_UNREACHABLE,
+            ),
+            (io::ErrorKind::Other, reason::DISK_OPERATION_FAILED),
         ] {
             let failed: io::Result<super::super::backend::RawStat> = Err(kind.into());
+            let reading = PathReading::from_result(&failed, at);
             assert_eq!(
-                PathReading::from_result(&failed, at),
-                PathReading::Unreachable { observed_at: at },
+                reading,
+                PathReading::Unreachable {
+                    observed_at: at,
+                    cause
+                },
                 "{kind:?}"
+            );
+            // The reading's own reason stays the same for every cause.
+            assert_eq!(
+                reading.unknown_reason(),
+                Some(reason::DISK_PATH_UNREACHABLE)
             );
             assert_eq!(PathReading::from_result(&failed, at).exists(), None);
         }

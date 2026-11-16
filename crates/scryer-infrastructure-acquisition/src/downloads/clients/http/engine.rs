@@ -315,6 +315,9 @@ impl HttpEngine {
                 if let Some(predecessor) = predecessor {
                     predecessor.wait().await;
                 }
+                // Once per start, before anything writes: no current writer
+                // uses these names, so this cannot race a save.
+                self.store.remove_legacy_staging().await;
                 let mut document = self.store.load().await?;
                 let mut changed = false;
                 for job in &mut document.jobs {
@@ -945,6 +948,9 @@ impl HttpEngine {
 
     /// Prove the download directory can hold this client's queue.
     pub(crate) async fn check_writable(&self) -> AppResult<()> {
+        // The queue's writer lock: a first document written here must not
+        // race a persist, and both stage under the same sibling name.
+        let _writer = self.save_lock.lock().await;
         self.store.initialize().await
     }
 }
