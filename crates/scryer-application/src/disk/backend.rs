@@ -425,8 +425,14 @@ impl DiskBackend for SystemBackend {
     fn rename_claimed(&self, source: &Path, dest: &Path) -> io::Result<()> {
         self.open(dest, Open::create_new())?;
         std::fs::rename(source, dest).inspect_err(|_| {
-            // Do not leave the empty reservation behind.
-            let _ = std::fs::remove_file(dest);
+            // Release the empty reservation, and only that: a share can apply
+            // the rename and lose the reply, leaving the only copy here.
+            if self
+                .lstat(dest)
+                .is_ok_and(|stat| stat.kind == EntryKind::File && stat.len == 0)
+            {
+                let _ = std::fs::remove_file(dest);
+            }
         })
     }
 

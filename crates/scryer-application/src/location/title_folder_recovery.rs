@@ -439,7 +439,7 @@ async fn folder_identity_matches(
     for name in ["tvshow.nfo", "movie.nfo"] {
         let file = path.join(name);
         let content: AppResult<Option<String>> = async {
-            let reading = Disk::process().fresh(&file).await;
+            let reading = Disk::process().uncached(&file).await;
             match reading.exists() {
                 Some(true)
                     if reading.is(EntryKind::File)

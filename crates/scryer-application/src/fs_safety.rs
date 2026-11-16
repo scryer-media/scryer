@@ -2,8 +2,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::disk::{
-    Disk, DiskError, EntryKind, Link, LinkOutcome, Open, Parents, Removal, Remove, SyncOutcome,
-    reason,
+    Disk, DiskError, DiskVerb, EntryKind, Link, LinkOutcome, Open, Parents, PathReading, Removal,
+    Remove, SyncOutcome, reason,
 };
 use crate::{AppError, AppResult};
 
@@ -390,7 +390,7 @@ async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path, held: 
         // Only the empty claim this move created is removed. Anything else
         // there may be the source, moved by a rename that reported failure,
         // so it is treated as the only copy.
-        StagedHolds::EmptyClaim if reading.is(EntryKind::File) && reading.size() == Some(0) => {
+        StagedHolds::EmptyClaim if holds_only_the_claim(reading) => {
             let _ = disk.remove(staged, Remove::File).await;
             return;
         }
@@ -402,7 +402,11 @@ async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path, held: 
         StagedHolds::Copy { proven } => proven,
         _ => true,
     };
-    if reading.exists() != Some(true) {
+    // The only copy goes back even unread: the promotion cannot replace
+    // anything, so trying costs nothing.
+    if reading.exists() != Some(true)
+        && !(held == StagedHolds::OnlyCopy && reading.exists().is_none())
+    {
         tracing::error!(
             staged = %staged.display(),
             source = %source.display(),
@@ -445,6 +449,12 @@ async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path, held: 
             "could not tell whether the source survived a failed move; the staged file is left in place"
         ),
     }
+}
+
+/// Whether a staging or intermediate name still holds only the empty file
+/// claimed for it.
+fn holds_only_the_claim(reading: PathReading) -> bool {
+    reading.is(EntryKind::File) && reading.size() == Some(0)
 }
 
 /// Moves the finished file from its staging name onto the destination.
@@ -547,6 +557,12 @@ async fn transfer_across_devices(
     }
 
     if !options.overwrite {
+        // An occupied destination is refused before a whole copy is spent on
+        // it; the promotion that cannot replace stays the real guard.
+        if disk.uncached(dest).await.exists() == Some(true) {
+            let taken = io::Error::from(io::ErrorKind::AlreadyExists);
+            return Err(DiskError::new(DiskVerb::Move, dest, taken).into());
+        }
         let staged = crate::disk::staging_path_for(dest);
         claim(disk, &staged).await?;
         return copy_through_staging(disk, source, &staged, dest, options).await;
@@ -719,7 +735,18 @@ async fn move_via_intermediate_name(disk: &Disk, source: &Path, dest: &Path) -> 
                     }
                 };
             }
+            // The rename may have landed and lost its reply, so only the empty
+            // claim is released; anything else there may be the only copy.
             Err(error) => {
+                let reading = disk.uncached(&intermediate).await;
+                if !holds_only_the_claim(reading) {
+                    tracing::error!(
+                        intermediate = %intermediate.display(),
+                        source = %source.display(),
+                        "a case-only rename reported failure and its intermediate name is not the empty claim; it is left in place"
+                    );
+                    return Err(error.into());
+                }
                 let _ = disk.remove(&intermediate, Remove::File).await;
                 last_error = Some(error.into());
             }

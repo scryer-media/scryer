@@ -3094,14 +3094,16 @@ impl AppUseCase {
             .iter()
             .filter(|path| !retained.contains(*path))
         {
-            if Disk::process()
+            let reading = Disk::process()
                 .uncached(stored_path_to_path_buf(path))
-                .await
-                .exists()
-                == Some(true)
-            {
-                disposal_remaining = true;
-                break;
+                .await;
+            match reading.exists() {
+                Some(false) => {}
+                None => return Err(unread(reading)),
+                Some(true) => {
+                    disposal_remaining = true;
+                    break;
+                }
             }
         }
         if disposal_remaining {

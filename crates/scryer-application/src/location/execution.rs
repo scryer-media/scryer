@@ -1773,8 +1773,18 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         media_file_id: Option<&str>,
         size_bytes: u64,
     ) -> AppResult<SourceDisposal> {
-        if Disk::process().uncached(source).await.exists() != Some(true) {
-            return Ok(SourceDisposal::AlreadyAbsent);
+        let reading = Disk::process().uncached(source).await;
+        match reading.exists() {
+            Some(false) => return Ok(SourceDisposal::AlreadyAbsent),
+            // The source may still be there, so the disposal is not done.
+            None => {
+                return Err(AppError::Repository(format!(
+                    "{}: {}",
+                    source.display(),
+                    reading.describe_absence()
+                )));
+            }
+            Some(true) => {}
         }
 
         let Some(config) = self.config_for(title).filter(|config| config.enabled) else {

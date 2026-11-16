@@ -987,7 +987,7 @@ impl Disk {
 
     /// Move `source` to `dest` by reserving `dest` with an exclusive create
     /// and renaming over the reservation, which is removed again if the
-    /// rename fails. For a caller that reserves the name whatever the
+    /// rename fails and it still reads as empty. For a caller that reserves the name whatever the
     /// filesystem offers; anything else uses [`Self::move_exclusive_blocking`].
     pub fn move_claimed_blocking(
         &self,
