@@ -73,19 +73,13 @@ export type LifecycleActionStepKind =
   | "MOVE_TO_LIBRARY"
   | "MOVE_TO_ROOT";
 
+/// The step parameters the progress list shows.
 export type LifecycleActionStepParameters = {
-  includeDescendants: boolean | null;
-  targetQualityProfileId: string | null;
-  searchCondition: LifecycleSearchCondition | null;
-  tags: string[];
   /// The library a move step names, as the rule wrote it.
-  targetLibrary?: string | null;
+  targetLibrary: string | null;
   /// The library root a move step names, as the rule wrote it.
-  targetRoot?: string | null;
+  targetRoot: string | null;
 };
-
-export type LifecycleSearchCondition =
-  "UNCONDITIONAL" | "PREVIOUS_PROFILE_CHANGED";
 
 export type LifecycleActionStep = {
   id: string;
@@ -94,7 +88,6 @@ export type LifecycleActionStep = {
 };
 
 export type LifecycleActionSequence = {
-  schemaVersion: number;
   steps: LifecycleActionStep[];
 };
 
@@ -242,31 +235,22 @@ export type LifecycleCandidateState =
 
 /// Latest durable outcome for one ordered action sequence step.
 export type LifecycleActionStepRun = {
-  stepId: string;
-  stepKind: string;
   state: string;
-  attempt: number;
   holdReason: string | null;
   error: string | null;
-  createdAt: string;
-  updatedAt: string;
-  finishedAt: string | null;
 };
 
 /// Durable evidence for a job requested by a sequence step. An accepted
 /// receipt means the request was accepted; it is not a download completion.
 export type LifecycleActionJobReceipt = {
-  dispatchAttempt: number;
-  logicalRequestKey: string;
   jobRunId: string | null;
   state: string;
-  createdAt: string;
-  updatedAt: string;
 };
 
-/// One configured action sequence step with its latest checkpoint and receipts.
+/// One configured action sequence step, by id, with its latest checkpoint and
+/// receipts. The step itself is read from the sequence.
 export type LifecycleActionStepProgress = {
-  step: LifecycleActionStep;
+  step: Pick<LifecycleActionStep, "id">;
   run: LifecycleActionStepRun | null;
   receipts: LifecycleActionJobReceipt[];
 };
@@ -283,11 +267,8 @@ export type LifecycleCandidate = {
   id: string;
   ruleSetId: string;
   ruleName: string;
-  revisionNumber: number;
   titleId: string;
   titleName: string;
-  libraryId: string;
-  facet: string;
   state: LifecycleCandidateState;
   stateReason: string;
   reasonCodes: string[];
@@ -295,14 +276,10 @@ export type LifecycleCandidate = {
   actions: LifecycleDecidedActions | null;
   actionSequence: LifecycleActionSequence | null;
   sequenceSteps: LifecycleActionStepProgress[];
-  graceDays: number;
-  matchGeneration: number;
   firstMatchedAt: string;
-  lastMatchedAt: string;
   dueAt: string;
   /// Set while the latest evaluation could not decide, null otherwise.
   heldSince: string | null;
-  updatedAt: string;
 };
 
 /// One rule set's pass through one evaluation run. Runs carry counts rather
@@ -316,7 +293,6 @@ export type LifecycleEvaluationRun = {
   /// value.
   status: string;
   startedAt: string;
-  finishedAt: string | null;
   evaluatedCount: number;
   matchedCount: number;
   noMatchCount: number;
@@ -331,16 +307,11 @@ export type LifecycleActionRun = {
   subjectLabel: string;
   detail: string;
   subjectKind: string;
-  subjectId: string;
   id: string;
-  ruleSetId: string;
-  candidateId: string;
-  titleId: string;
   titleName: string;
   actionKind: LifecycleActionKind;
   actionSequence: LifecycleActionSequence | null;
   sequenceSteps: LifecycleActionStepProgress[];
-  matchGeneration: number;
   attempt: number;
   /// Free-form for the same reason as an evaluation run's status; includes
   /// `already_satisfied` for an action that found nothing left to do.
@@ -349,7 +320,6 @@ export type LifecycleActionRun = {
   holdReason: string | null;
   error: string | null;
   startedAt: string;
-  finishedAt: string | null;
 };
 
 /// The two instance-wide switches. A new instance has lifecycle disabled and
@@ -365,14 +335,11 @@ export type LifecycleGateKey = keyof LifecycleInstanceGates;
 export type LifecycleExclusion = {
   subjectLabel: string;
   subjectKind: string;
-  subjectId: string;
   id: string;
   /// Null when the exclusion is global rather than confined to one rule.
   ruleSetId: string | null;
-  titleId: string;
   titleName: string;
   reason: string;
-  createdBy: string | null;
   createdAt: string;
 };
 

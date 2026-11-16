@@ -9523,10 +9523,6 @@ const en: LocaleDictionary = {
   "settings.lifecycleNavRules": "Rules",
   "settings.lifecycleNavHistory": "History",
   "settings.lifecycleRuleAction": "Actions",
-  "settings.lifecycleRuleActionHelp":
-    "What this rule would do once lifecycle actions are switched on.",
-  "settings.lifecycleRuleActionPlaceholder": "Choose an action",
-  "settings.lifecycleRuleNoActions": "No title-scoped actions are available.",
   "settings.lifecycleActionSequence": "Action sequence",
   "settings.lifecycleSequenceObserveOnly": "Dry run only",
   "settings.lifecycleSequenceHistoryWaiting": "waiting for an earlier step",
@@ -9868,14 +9864,6 @@ const en: LocaleDictionary = {
     "Episode rank by air date within its show",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Season rank by newest eligible downloaded episode",
-  "settings.refLifecycleFactsStorageRootId":
-    "Configured root selected for storage capacity and file deletion",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "Bytes currently available on the selected root",
-  "settings.refLifecycleFactsStorageTotalBytes":
-    "Total capacity in bytes of the selected root",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "Percentage of the selected root currently available",
   "settings.refLifecycleFactsActiveDownloads":
     "Whether the subject has a download in flight",
   "settings.refLifecycleFactsWatchedByUserIds":
@@ -9974,14 +9962,6 @@ const en: LocaleDictionary = {
     "Rank 1 is the newest eligible downloaded, aired non-special episode. Equal air dates use season and episode numbers, then stable IDs.",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Rank 1 is the season with the newest eligible downloaded, aired non-special episode. Protected files still occupy a rank.",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "Durable configured library-root identifier selected on this revision",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "Bytes available on the selected root. Scheduled runs use the last sample, taken every five minutes; preview and the check just before an action read the root at that moment. Unknown with reason storage_not_sampled before the root's first sample, storage_sample_stale when the last sample is more than ten minutes old, and storage_capacity_unavailable when the root could not be read",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "Total capacity in bytes of the selected root, from the same reading as storage_available_bytes and unknown for the same reasons",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "Available capacity divided by total capacity, from 0 to 100, from the same reading as storage_available_bytes and unknown for the same reasons",
   "settings.refLifecycleFactsActiveDownloadsValue":
     "True when a download for the subject is in flight",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
@@ -11672,8 +11652,6 @@ const en: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Series movies",
   "settings.lifecycleActionAddTags": "Add tags",
   "settings.lifecycleActionRemoveTags": "Remove tags",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Tagged for removal",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

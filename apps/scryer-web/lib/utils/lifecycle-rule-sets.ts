@@ -16,7 +16,6 @@ import type {
   LifecycleActionKind,
   LifecycleActionStepKind,
   LifecycleActionStepProgress,
-  LifecycleCandidate,
   LifecycleCandidateState,
   LifecycleDecidedActions,
   LifecycleDeclaredActions,
@@ -550,16 +549,6 @@ export function isNonTerminalCandidateState(state: string): boolean {
   return (
     LIFECYCLE_NON_TERMINAL_CANDIDATE_STATES as readonly string[]
   ).includes(state);
-}
-
-/// How many of a rule's candidates the handler could still act on. This is the
-/// number enabling a deleting rule makes the operator acknowledge.
-export function nonTerminalCandidateCount(
-  candidates: Pick<LifecycleCandidate, "state">[],
-): number {
-  return candidates.filter((candidate) =>
-    isNonTerminalCandidateState(candidate.state),
-  ).length;
 }
 
 const MINUTE_MS = 60_000;

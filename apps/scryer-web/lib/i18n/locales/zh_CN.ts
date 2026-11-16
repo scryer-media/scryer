@@ -2320,9 +2320,6 @@ const zh_CN: LocaleDictionary = {
   "settings.lifecycleNavRules": "规则",
   "settings.lifecycleNavHistory": "历史",
   "settings.lifecycleRuleAction": "操作",
-  "settings.lifecycleRuleActionHelp": "生命周期操作启用后，此规则将执行的动作。",
-  "settings.lifecycleRuleActionPlaceholder": "选择操作",
-  "settings.lifecycleRuleNoActions": "没有可用的标题级操作。",
   "settings.lifecycleRuleGraceDays": "宽限天数",
   "settings.lifecycleRuleGraceDaysHelp":
     "规则首次匹配后、操作执行前的天数（目前不会执行任何操作）。",
@@ -2342,11 +2339,6 @@ const zh_CN: LocaleDictionary = {
   "settings.lifecycleRuleDeleting": "删除生命周期规则 {{name}}？",
   "settings.noLifecycleRulesFound": "暂无生命周期规则。",
   "settings.lifecycleRuleRevision": "修订版",
-  "settings.lifecycleRuleRisk": "风险",
-  "settings.lifecycleRiskNone": "无风险",
-  "settings.lifecycleRiskLow": "低风险",
-  "settings.lifecycleRiskMedium": "中等风险",
-  "settings.lifecycleRiskHigh": "高风险",
   "settings.lifecycleActionDoNothing": "不执行任何操作",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "取消监控该范围，保留文件",
@@ -3058,8 +3050,6 @@ const zh_CN: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "剧集电影",
   "settings.lifecycleActionAddTags": "添加标签",
   "settings.lifecycleActionRemoveTags": "移除标签",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "标记为待删除",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

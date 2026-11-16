@@ -2588,11 +2588,6 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecycleNavRules": "Regras",
   "settings.lifecycleNavHistory": "Histórico",
   "settings.lifecycleRuleAction": "Ação",
-  "settings.lifecycleRuleActionHelp":
-    "O que esta regra faria assim que as ações de ciclo de vida forem ativadas.",
-  "settings.lifecycleRuleActionPlaceholder": "Escolha uma ação",
-  "settings.lifecycleRuleNoActions":
-    "Nenhuma ação com escopo de título está disponível.",
   "settings.lifecycleRuleGraceDays": "Dias de carência",
   "settings.lifecycleRuleGraceDaysHelp":
     "Dias após a primeira correspondência da regra até que a ação seria executada (nenhuma ação é executada ainda).",
@@ -2613,11 +2608,6 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecycleRuleDeleting": "Excluir a regra de ciclo de vida {{name}}?",
   "settings.noLifecycleRulesFound": "Ainda não há regras de ciclo de vida.",
   "settings.lifecycleRuleRevision": "Revisão",
-  "settings.lifecycleRuleRisk": "Risco",
-  "settings.lifecycleRiskNone": "Sem risco",
-  "settings.lifecycleRiskLow": "Risco baixo",
-  "settings.lifecycleRiskMedium": "Risco médio",
-  "settings.lifecycleRiskHigh": "Risco alto",
   "settings.lifecycleActionDoNothing": "Não fazer nada",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Parar de monitorar o escopo, manter arquivos",
@@ -3395,8 +3385,6 @@ const pt_BR: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Filmes da série",
   "settings.lifecycleActionAddTags": "Adicionar tags",
   "settings.lifecycleActionRemoveTags": "Remover tags",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Marcado para remoção",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

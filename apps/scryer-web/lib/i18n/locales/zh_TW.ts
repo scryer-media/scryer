@@ -4182,9 +4182,6 @@ const zh_TW: LocaleDictionary = {
   "settings.lifecycleNavRules": "規則",
   "settings.lifecycleNavHistory": "歷史",
   "settings.lifecycleRuleAction": "操作",
-  "settings.lifecycleRuleActionHelp": "生命週期操作啟用後，此規則將執行的動作。",
-  "settings.lifecycleRuleActionPlaceholder": "選擇操作",
-  "settings.lifecycleRuleNoActions": "沒有可用的標題級操作。",
   "settings.lifecycleActionSequence": "動作順序",
   "settings.lifecycleSequenceHistoryWaiting": "正在等待較早的步驟",
   "settings.lifecycleSequenceHistorySearchRequested": "已請求搜尋",
@@ -4553,13 +4550,6 @@ const zh_TW: LocaleDictionary = {
     "單集在其節目中按播出日期的排名",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "依最新符合資格的已下載單集排名的季度順序",
-  "settings.refLifecycleFactsStorageRootId":
-    "針對儲存容量與檔案刪除所選取的設定根目錄",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "所選根目錄上目前可用的位元組數",
-  "settings.refLifecycleFactsStorageTotalBytes": "所選根目錄的總容量位元組數",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "所選根目錄目前可用容量的百分比",
   "settings.refLifecycleFactsActiveDownloads": "主體是否有正在進行中的下載",
   "settings.refLifecycleFactsWatchedByUserIds":
     "觀看過此單集的使用者；對於季，相同使用者必須觀看過每一集已播出的單集（包括遺失的檔案）。未來單集已排除；未確定的播出日期或不完整的信號為未知。空季度永遠不會完成。",
@@ -4612,14 +4602,6 @@ const zh_TW: LocaleDictionary = {
     "第 1 名是最新符合資格已下載且已播出的非特別篇單集。播出日期相同時依季與單集編號排序，然後使用穩定 ID。",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "第 1 名是具有最新符合資格已下載且已播出非特別篇單集的季度。受保護的檔案仍佔據排名。",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "在此版本中選取的持久設定媒體庫根目錄識別碼",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "所選根目錄的可用位元組。排程執行使用最近一次量測，每五分鐘量測一次；預覽與動作前的檢查則在當下讀取根目錄。根目錄尚未量測時為未知，原因為 storage_not_sampled；最近一次量測超過十分鐘時原因為 storage_sample_stale；無法讀取根目錄時原因為 storage_capacity_unavailable",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "所選根目錄的總容量（位元組），與 storage_available_bytes 來自同一次量測，未知的原因相同",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "可用容量除以總容量，介於 0 至 100，與 storage_available_bytes 來自同一次量測，未知的原因相同",
   "settings.refLifecycleFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
     "播放過它的所有人的識別碼，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的單集，包括遺失的檔案。未來單集已排除；缺少單集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 使用者 (signal_identity_missing)。",
@@ -6093,8 +6075,6 @@ const zh_TW: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "單集電影",
   "settings.lifecycleActionAddTags": "新增標籤",
   "settings.lifecycleActionRemoveTags": "移除標籤",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "標記為待刪除",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

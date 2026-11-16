@@ -2674,11 +2674,6 @@ const fr: LocaleDictionary = {
   "settings.lifecycleNavRules": "Règles",
   "settings.lifecycleNavHistory": "Historique",
   "settings.lifecycleRuleAction": "Action",
-  "settings.lifecycleRuleActionHelp":
-    "Ce que ferait cette règle une fois les actions de cycle de vie activées.",
-  "settings.lifecycleRuleActionPlaceholder": "Choisir une action",
-  "settings.lifecycleRuleNoActions":
-    "Aucune action à portée de titre n'est disponible.",
   "settings.lifecycleRuleGraceDays": "Jours de grâce",
   "settings.lifecycleRuleGraceDaysHelp":
     "Jours après la première correspondance de la règle avant que l'action ne s'exécute (aucune action ne s'exécute pour l'instant).",
@@ -2702,11 +2697,6 @@ const fr: LocaleDictionary = {
   "settings.noLifecycleRulesFound":
     "Aucune règle de cycle de vie pour l'instant.",
   "settings.lifecycleRuleRevision": "Révision",
-  "settings.lifecycleRuleRisk": "Risque",
-  "settings.lifecycleRiskNone": "Aucun risque",
-  "settings.lifecycleRiskLow": "Risque faible",
-  "settings.lifecycleRiskMedium": "Risque moyen",
-  "settings.lifecycleRiskHigh": "Risque élevé",
   "settings.lifecycleActionDoNothing": "Ne rien faire",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Ne plus suivre la portée, conserver les fichiers",
@@ -3491,8 +3481,6 @@ const fr: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Films de série",
   "settings.lifecycleActionAddTags": "Ajouter des tags",
   "settings.lifecycleActionRemoveTags": "Retirer des tags",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle":
     "Marqué pour suppression",
   "settings.lifecycleTemplateTaggedForRemovalDescription":

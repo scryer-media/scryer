@@ -4874,11 +4874,6 @@ const cs: LocaleDictionary = {
   "settings.lifecycleNavRules": "Pravidla",
   "settings.lifecycleNavHistory": "Historie",
   "settings.lifecycleRuleAction": "Akce",
-  "settings.lifecycleRuleActionHelp":
-    "Co toto pravidlo udělá, jakmile se zapnou akce životního cyklu.",
-  "settings.lifecycleRuleActionPlaceholder": "Vyberte akci",
-  "settings.lifecycleRuleNoActions":
-    "Nejsou k dispozici žádné akce vázané na titul.",
   "settings.lifecycleActionSequence": "Posloupnost akcí",
   "settings.lifecycleSequenceObserveOnly": "Pouze zkušební běh",
   "settings.lifecycleSequenceHistoryWaiting": "čeká na dřívější krok",
@@ -5208,14 +5203,6 @@ const cs: LocaleDictionary = {
     "Pořadí epizody podle data vysílání v rámci seriálu",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Pořadí řady podle nejnovější způsobilé stažené epizody",
-  "settings.refLifecycleFactsStorageRootId":
-    "Nakonfigurovaný kořen vybraný pro kapacitu úložiště a mazání souborů",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "Bajty aktuálně dostupné na vybraném kořeni",
-  "settings.refLifecycleFactsStorageTotalBytes":
-    "Celková kapacita vybraného kořene v bajtech",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "Procento aktuálně dostupné kapacity vybraného kořene",
   "settings.refLifecycleFactsActiveDownloads":
     "Zda má subjekt probíhající stahování",
   "settings.refLifecycleFactsWatchedByUserIds":
@@ -5314,14 +5301,6 @@ const cs: LocaleDictionary = {
     "Pořadí 1 má nejnovější způsobilá stažená, odvysílaná nespeciální epizoda. Při shodě dat vysílání rozhoduje číslo řady a epizody, poté stabilní ID.",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Pořadí 1 má řada s nejnovější způsobilou staženou, odvysílanou nespeciální epizodou. Chráněné soubory stále zabírají pořadí.",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "Trvalý identifikátor nakonfigurovaného kořene knihovny vybraný v této revizi",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "Bajty dostupné na vybraném kořeni. Plánované běhy používají poslední měření, které probíhá každých pět minut; náhled a kontrola těsně před akcí čtou kořen v tu chvíli. Neznámé s důvodem storage_not_sampled před prvním měřením kořene, storage_sample_stale, když je poslední měření starší než deset minut, a storage_capacity_unavailable, když kořen nešlo přečíst",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "Celková kapacita vybraného kořene v bajtech, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "Dostupná kapacita dělená celkovou kapacitou, od 0 do 100, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
   "settings.refLifecycleFactsActiveDownloadsValue":
     "True, pokud u subjektu právě probíhá stahování",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
@@ -7014,8 +6993,6 @@ const cs: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Seriálové filmy",
   "settings.lifecycleActionAddTags": "Přidat štítky",
   "settings.lifecycleActionRemoveTags": "Odebrat štítky",
-  "settings.lifecycleRuleTagsHelp":
-    "Pravidlo zapíše tyto štítky na každý titul, kterému odpovídá. Vybrat lze jen štítky, které administrátor definoval v Nastavení > Štítky.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Označeno k odstranění",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Pozor: tato šablona smaže titul i jeho soubory. Odpovídá všemu, co nese štítek „remove“, po týdenní odkladné lhůtě, takže ruční označení titulu je celým spouštěčem a odebrání štítku v rámci týdne odstranění zruší. Nejprve definujte štítek „remove“ v Nastavení > Štítky.",

@@ -4620,10 +4620,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleNavRules": "Правила",
   "settings.lifecycleNavHistory": "История",
   "settings.lifecycleRuleAction": "Действия",
-  "settings.lifecycleRuleActionHelp":
-    "Что сделало бы это правило, когда действия жизненного цикла будут включены.",
-  "settings.lifecycleRuleActionPlaceholder": "Выберите действие",
-  "settings.lifecycleRuleNoActions": "Действия уровня тайтла недоступны.",
   "settings.lifecycleRuleGraceDays": "Дни отсрочки",
   "settings.lifecycleRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
@@ -4648,11 +4644,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRuleDeleting": "Удалить правило жизненного цикла {{name}}?",
   "settings.noLifecycleRulesFound": "Правил жизненного цикла пока нет.",
   "settings.lifecycleRuleRevision": "Ревизия",
-  "settings.lifecycleRuleRisk": "Риск",
-  "settings.lifecycleRiskNone": "Без риска",
-  "settings.lifecycleRiskLow": "Низкий риск",
-  "settings.lifecycleRiskMedium": "Средний риск",
-  "settings.lifecycleRiskHigh": "Высокий риск",
   "settings.lifecycleActionDoNothing": "Ничего не делать",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Снять отслеживание области, сохранить файлы",
@@ -6403,8 +6394,6 @@ const ru: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Фильмы сериала",
   "settings.lifecycleActionAddTags": "Добавить теги",
   "settings.lifecycleActionRemoveTags": "Удалить теги",
-  "settings.lifecycleRuleTagsHelp":
-    "Правило назначает эти теги каждому подходящему тайтлу. Можно выбрать только теги, заданные администратором в разделе «Настройки → Теги».",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Помечено к удалению",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Внимание: этот шаблон удаляет тайтл и его файлы. Он применяется ко всем тайтлам с тегом «remove» после недели ожидания. Достаточно назначить тег вручную, чтобы запустить отсчёт; снятие тега в течение недели отменяет удаление. Сначала создайте тег «remove» в разделе «Настройки → Теги».",
@@ -12455,14 +12444,6 @@ const ru: LocaleDictionary = {
     "Позиция эпизода по дате выхода в рамках сериала",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Позиция сезона по самому новому подходящему загруженному эпизоду",
-  "settings.refLifecycleFactsStorageRootId":
-    "Настроенная корневая папка, выбранная для определения ёмкости хранилища и удаления файлов",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "Количество байтов, доступных сейчас в выбранной корневой папке",
-  "settings.refLifecycleFactsStorageTotalBytes":
-    "Общая ёмкость выбранной корневой папки в байтах",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "Процент доступного сейчас места в выбранной корневой папке",
   "settings.refLifecycleFactsListsEnabledIds":
     "Идентификаторы включённых списков, общедоступных или личных, в которых объект ещё присутствует",
   "settings.refLifecycleFactsListsPublicCount":
@@ -12491,14 +12472,6 @@ const ru: LocaleDictionary = {
     "Позиция 1 — самый новый подходящий загруженный эпизод, уже вышедший в эфир и не являющийся специальным. При одинаковых датах выхода порядок определяется номерами сезона и эпизода, затем стабильными ID.",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Позиция 1 — сезон с самым новым подходящим загруженным эпизодом, уже вышедшим в эфир и не являющимся специальным. Защищённые файлы также занимают позиции.",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "Постоянный идентификатор настроенной корневой папки медиатеки, выбранной в этой редакции",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "Байты, доступные в выбранной корневой папке. Плановые запуски берут последний замер, который делается каждые пять минут; предпросмотр и проверка непосредственно перед действием читают корневую папку в этот момент. Неизвестно с причиной storage_not_sampled до первого замера корневой папки, storage_sample_stale, если последнему замеру больше десяти минут, и storage_capacity_unavailable, если корневую папку не удалось прочитать",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "Общая ёмкость выбранной корневой папки в байтах, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "Доступная ёмкость, делённая на общую ёмкость, от 0 до 100, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
   "settings.refLifecycleFactsListsEnabledIdsValue":
     "Отсортированные идентификаторы списков; никогда не название списка",
   "settings.refLifecycleFactsListsPublicCountValue":

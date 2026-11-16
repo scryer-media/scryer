@@ -2517,10 +2517,6 @@ const ja: LocaleDictionary = {
   "settings.lifecycleNavRules": "ルール",
   "settings.lifecycleNavHistory": "履歴",
   "settings.lifecycleRuleAction": "アクション",
-  "settings.lifecycleRuleActionHelp":
-    "ライフサイクルアクションが有効になったときに、このルールが行う処理です。",
-  "settings.lifecycleRuleActionPlaceholder": "アクションを選択",
-  "settings.lifecycleRuleNoActions": "タイトル単位のアクションはありません。",
   "settings.lifecycleRuleGraceDays": "猶予日数",
   "settings.lifecycleRuleGraceDaysHelp":
     "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",
@@ -2542,11 +2538,6 @@ const ja: LocaleDictionary = {
     "ライフサイクルルール {{name}} を削除しますか？",
   "settings.noLifecycleRulesFound": "ライフサイクルルールはまだありません。",
   "settings.lifecycleRuleRevision": "リビジョン",
-  "settings.lifecycleRuleRisk": "リスク",
-  "settings.lifecycleRiskNone": "リスクなし",
-  "settings.lifecycleRiskLow": "低リスク",
-  "settings.lifecycleRiskMedium": "中リスク",
-  "settings.lifecycleRiskHigh": "高リスク",
   "settings.lifecycleActionDoNothing": "何もしない",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "対象のモニタリングを解除し、ファイルは保持",
@@ -3313,8 +3304,6 @@ const ja: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "シリーズ映画",
   "settings.lifecycleActionAddTags": "タグを追加",
   "settings.lifecycleActionRemoveTags": "タグを削除",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "削除対象としてタグ付け",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
