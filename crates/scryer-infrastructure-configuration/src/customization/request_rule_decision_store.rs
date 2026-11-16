@@ -1,10 +1,8 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, RequestRuleDecisionRepository};
 use scryer_domain::{RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode};
-use sqlx::Row;
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
 
 /// Append-only traces of request evaluations (spec 0003 FR-016).
@@ -187,7 +185,7 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
     Ok(RequestRuleDecisionRecord {
         id: row.text("id")?,
         request_id: row.text("request_id")?,
-        evaluated_at: timestamp_or_now(row, "evaluated_at")?,
+        evaluated_at: row.timestamp_or_now("evaluated_at")?,
         // An unrecognized mode or outcome was written by a newer build. Both
         // read back at their safe default — disabled, manual review — so this
         // build never presents a verdict it cannot interpret as an approval.
@@ -202,18 +200,6 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
         shaping_json: row.opt_text("shaping_json")?,
         input_hash: row.text("input_hash")?,
         input_schema_version: row.i64("input_schema_version")?,
-        created_at: timestamp_or_now(row, "created_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
     })
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }

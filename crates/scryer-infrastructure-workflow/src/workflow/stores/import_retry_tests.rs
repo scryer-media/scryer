@@ -68,12 +68,12 @@ async fn retry_fixture() -> (
     };
     sqlx::raw_sql("CREATE TABLE downloads (id TEXT PRIMARY KEY);
         CREATE TABLE download_submissions (id TEXT PRIMARY KEY, download_client_id TEXT, download_client_type TEXT,
-            download_client_item_id TEXT, title_id TEXT, facet TEXT, source_title TEXT, tracked_state TEXT);
+            download_client_item_id TEXT, title_id TEXT, facet TEXT, source_title TEXT, tracked_state TEXT, tracked_state_at TEXT);
         CREATE TABLE download_clients (id TEXT PRIMARY KEY, client_type TEXT);
         CREATE TABLE download_client_bindings (download_id TEXT PRIMARY KEY, client_config_id TEXT,
             client_type_snapshot TEXT, native_item_id TEXT, ended_at TEXT);
         CREATE TABLE download_identity_states (id TEXT PRIMARY KEY, identity_key TEXT UNIQUE, canonical_download_id TEXT,
-            client_id TEXT, client_type TEXT, download_client_item_id TEXT, tracked_state TEXT, reason TEXT, detail TEXT,
+            download_id TEXT, client_id TEXT, client_type TEXT, download_client_item_id TEXT, tracked_state TEXT, reason TEXT, detail TEXT,
             created_at TEXT, updated_at TEXT);")
         .execute(pool).await.unwrap();
     sqlx::raw_sql(include_str!(
@@ -88,7 +88,7 @@ async fn retry_fixture() -> (
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO download_submissions VALUES (?, 'client-1', 'nzbget', 'job-1', 'title-1', 'movie', 'release', 'failed')")
+    sqlx::query("INSERT INTO download_submissions VALUES (?, 'client-1', 'nzbget', 'job-1', 'title-1', 'movie', 'release', 'failed', NULL)")
         .bind(download_id.to_string()).execute(pool).await.unwrap();
     let id = store
         .queue_import_request_with_identity_for_download(

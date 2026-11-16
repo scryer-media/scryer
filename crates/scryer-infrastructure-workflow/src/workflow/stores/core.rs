@@ -217,6 +217,22 @@ async fn insert_prepared_domain_event_tx(
     .transpose()
 }
 
+/// Moves one wanted item to a status. Binds: status, last search
+/// (timestamp text), grabbed release, updated at, id.
+pub const UPDATE_WANTED_ITEM_STATUS_SQL: &str = "UPDATE wanted_items
+    SET status = {}, last_search_at = {}, grabbed_release = {}, updated_at = {}
+    WHERE id = {}";
+
+/// Moves one pending release to a status. Binds: status, grabbed at
+/// (timestamp text), id.
+pub const UPDATE_PENDING_RELEASE_STATUS_SQL: &str =
+    "UPDATE pending_releases SET status = {}, grabbed_at = {} WHERE id = {}";
+
+/// [`UPDATE_PENDING_RELEASE_STATUS_SQL`] only while the release is still in
+/// the expected status. Binds: status, grabbed at, id, expected status.
+pub const COMPARE_AND_SET_PENDING_RELEASE_STATUS_SQL: &str =
+    "UPDATE pending_releases SET status = {}, grabbed_at = {} WHERE id = {} AND status = {}";
+
 pub async fn commit_successful_grab_tx(
     tx: &mut SqlTx<'_>,
     commit: &SuccessfulGrabCommit,
@@ -232,15 +248,13 @@ pub async fn commit_successful_grab_tx(
     wanted_item_ids.dedup();
 
     for wanted_item_id in &wanted_item_ids {
+        let last_search_at = tx.opt_timestamp_text_arg(commit.last_search_at.as_deref())?;
         SqlRuntime::execute(
             SqlExec::Tx(tx),
-            "UPDATE wanted_items
-             SET status = {}, last_search_at = {},
-                 grabbed_release = {}, updated_at = {}
-             WHERE id = {}",
+            UPDATE_WANTED_ITEM_STATUS_SQL,
             &[
                 SqlArg::Text(AcquisitionScopeStatus::Grabbed.as_str().to_string()),
-                opt_timestamp_arg(commit.last_search_at.as_deref()),
+                last_search_at,
                 SqlArg::Text(commit.grabbed_release.clone()),
                 SqlArg::Timestamp(Utc::now()),
                 SqlArg::Text(wanted_item_id.clone()),
@@ -250,12 +264,13 @@ pub async fn commit_successful_grab_tx(
     }
 
     if let Some(pending_release_id) = commit.grabbed_pending_release_id.as_deref() {
+        let grabbed_at = tx.opt_timestamp_text_arg(commit.grabbed_at.as_deref())?;
         SqlRuntime::execute(
             SqlExec::Tx(tx),
-            "UPDATE pending_releases SET status = {}, grabbed_at = {} WHERE id = {}",
+            UPDATE_PENDING_RELEASE_STATUS_SQL,
             &[
                 SqlArg::Text(PendingReleaseStatus::Grabbed.as_str().to_string()),
-                opt_timestamp_arg(commit.grabbed_at.as_deref()),
+                grabbed_at,
                 SqlArg::Text(pending_release_id.to_string()),
             ],
         )
@@ -322,6 +337,51 @@ async fn ensure_submission_download_tx(
     Ok(())
 }
 
+/// The columns a recorded submission writes, in the order of
+/// [`download_submission_insert_args`].
+const DOWNLOAD_SUBMISSION_INSERT_COLUMNS: &str = "id, title_id, facet, download_client_id,
+    download_client_type, download_client_item_id, source_hint, source_provider_id,
+    source_provider_name, source_kind, source_title, info_hash, release_size_bytes,
+    release_listing_json, request_signature, purpose, episode_id, collection_id,
+    series_movie_link_id";
+const DOWNLOAD_SUBMISSION_INSERT_VALUES: &str =
+    "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}";
+
+/// The binds for [`DOWNLOAD_SUBMISSION_INSERT_COLUMNS`]: the client item and
+/// the scope (episode, collection, series-movie link) come from the caller.
+fn download_submission_insert_args(
+    submission: &DownloadSubmission,
+    download_client_id: String,
+    download_client_item_id: SqlArg,
+    (episode_id, collection_id, series_movie_link_id): (Option<&str>, Option<&str>, Option<&str>),
+) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(submission.download_id.to_string()),
+        SqlArg::Text(submission.title_id.clone()),
+        SqlArg::Text(submission.facet.clone()),
+        SqlArg::Text(download_client_id),
+        SqlArg::Text(submission.download_client_type.clone()),
+        download_client_item_id,
+        SqlArg::OptText(submission.source_hint.clone()),
+        SqlArg::OptText(submission.source_provider_id.clone()),
+        SqlArg::OptText(submission.source_provider_name.clone()),
+        SqlArg::OptText(
+            submission
+                .source_kind
+                .map(|value| value.as_str().to_string()),
+        ),
+        SqlArg::OptText(submission.source_title.clone()),
+        SqlArg::OptText(submission.info_hash.clone()),
+        SqlArg::OptI64(submission.release_size_bytes),
+        SqlArg::OptText(submission.release_listing_json.clone()),
+        SqlArg::OptText(submission.request_signature.clone()),
+        SqlArg::Text(submission.purpose.as_str().to_string()),
+        SqlArg::OptText(episode_id.map(str::to_string)),
+        SqlArg::OptText(collection_id.map(str::to_string)),
+        SqlArg::OptText(series_movie_link_id.map(str::to_string)),
+    ]
+}
+
 /// Persist a submit whose HTTP request may have reached the client but whose
 /// response never supplied a native client item identifier. The row remains
 /// deliberately unbound so legacy tuple readers cannot mistake it for a
@@ -363,16 +423,19 @@ pub async fn record_ambiguous_download_submission_tx(
 
     ensure_submission_download_tx(tx, submission, origin).await?;
 
+    let mut args = download_submission_insert_args(
+        submission,
+        download_client_id,
+        SqlArg::OptText(None),
+        (None, None, None),
+    );
+    args.push(SqlArg::OptText(Some(submission.download_id.to_wire())));
     SqlRuntime::execute(
         SqlExec::Tx(tx),
-        "INSERT INTO download_submissions
-         (id, title_id, facet, download_client_id, download_client_type,
-          download_client_item_id, source_hint, source_provider_id,
-          source_provider_name, source_kind, source_title, info_hash,
-          release_size_bytes, release_listing_json, request_signature, purpose,
-          episode_id, collection_id, series_movie_link_id, download_id)
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-         ON CONFLICT(id) DO UPDATE
+        &format!(
+            "INSERT INTO download_submissions ({DOWNLOAD_SUBMISSION_INSERT_COLUMNS}, download_id)
+             VALUES ({DOWNLOAD_SUBMISSION_INSERT_VALUES}, {{}})
+             ON CONFLICT(id) DO UPDATE
          SET download_client_id = CASE
                  WHEN TRIM(COALESCE(download_submissions.download_client_id, '')) = ''
                  THEN excluded.download_client_id
@@ -383,33 +446,9 @@ pub async fn record_ambiguous_download_submission_tx(
                  THEN excluded.download_client_type
                  ELSE download_submissions.download_client_type
              END
-         WHERE download_submissions.download_client_item_id IS NULL",
-        &[
-            SqlArg::Text(canonical_id.clone()),
-            SqlArg::Text(submission.title_id.clone()),
-            SqlArg::Text(submission.facet.clone()),
-            SqlArg::Text(download_client_id),
-            SqlArg::Text(submission.download_client_type.clone()),
-            SqlArg::OptText(None),
-            SqlArg::OptText(submission.source_hint.clone()),
-            SqlArg::OptText(submission.source_provider_id.clone()),
-            SqlArg::OptText(submission.source_provider_name.clone()),
-            SqlArg::OptText(
-                submission
-                    .source_kind
-                    .map(|value| value.as_str().to_string()),
-            ),
-            SqlArg::OptText(submission.source_title.clone()),
-            SqlArg::OptText(submission.info_hash.clone()),
-            SqlArg::OptI64(submission.release_size_bytes),
-            SqlArg::OptText(submission.release_listing_json.clone()),
-            SqlArg::OptText(submission.request_signature.clone()),
-            SqlArg::Text(submission.purpose.as_str().to_string()),
-            SqlArg::OptText(None),
-            SqlArg::OptText(None),
-            SqlArg::OptText(None),
-            SqlArg::OptText(Some(submission.download_id.to_wire())),
-        ],
+         WHERE download_submissions.download_client_item_id IS NULL"
+        ),
+        &args,
     )
     .await?;
 
@@ -623,41 +662,18 @@ async fn record_download_submission_tx_inner(
              collection_id = excluded.collection_id,
              series_movie_link_id = excluded.series_movie_link_id"
     };
-    let sql = [
-        "INSERT INTO download_submissions
-         (id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, release_listing_json, request_signature, purpose, episode_id, collection_id, series_movie_link_id)
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-        conflict_clause,
-    ]
-    .join(" ");
     let rows_affected = SqlRuntime::execute(
         SqlExec::Tx(tx),
-        &sql,
-        &[
-            SqlArg::Text(submission.download_id.to_string()),
-            SqlArg::Text(submission.title_id.clone()),
-            SqlArg::Text(submission.facet.clone()),
-            SqlArg::Text(download_client_id.clone()),
-            SqlArg::Text(submission.download_client_type.clone()),
+        &format!(
+            "INSERT INTO download_submissions ({DOWNLOAD_SUBMISSION_INSERT_COLUMNS})
+             VALUES ({DOWNLOAD_SUBMISSION_INSERT_VALUES}) {conflict_clause}"
+        ),
+        &download_submission_insert_args(
+            &submission,
+            download_client_id,
             SqlArg::Text(submission.download_client_item_id.clone()),
-            SqlArg::OptText(submission.source_hint.clone()),
-            SqlArg::OptText(submission.source_provider_id.clone()),
-            SqlArg::OptText(submission.source_provider_name.clone()),
-            SqlArg::OptText(
-                submission
-                    .source_kind
-                    .map(|value| value.as_str().to_string()),
-            ),
-            SqlArg::OptText(submission.source_title.clone()),
-            SqlArg::OptText(submission.info_hash.clone()),
-            SqlArg::OptI64(submission.release_size_bytes),
-            SqlArg::OptText(submission.release_listing_json.clone()),
-            SqlArg::OptText(submission.request_signature.clone()),
-            SqlArg::Text(submission.purpose.as_str().to_string()),
-            SqlArg::OptText(episode_id.map(str::to_string)),
-            SqlArg::OptText(collection_id.map(str::to_string)),
-            SqlArg::OptText(series_movie_link_id.map(str::to_string)),
-        ],
+            (episode_id, collection_id, series_movie_link_id),
+        ),
     )
     .await?;
     if rows_affected == 0 {
@@ -728,20 +744,23 @@ pub async fn replace_download_submission_episode_links_tx(
         &[SqlArg::Text(download_id.to_string())],
     )
     .await?;
-    for episode_id in episode_ids {
-        SqlRuntime::execute(
-            SqlExec::Tx(tx),
-            "INSERT INTO download_submission_episode_links
-             (download_id, episode_id)
-             VALUES ({}, {})
-             ON CONFLICT DO NOTHING",
-            &[
-                SqlArg::Text(download_id.to_string()),
-                SqlArg::Text(episode_id.clone()),
-            ],
-        )
-        .await?;
-    }
+    let download_id = download_id.to_string();
+    SqlRuntime::execute_batch_insert(
+        tx,
+        "INSERT INTO download_submission_episode_links (download_id, episode_id)",
+        2,
+        episode_ids
+            .iter()
+            .map(|episode_id| {
+                vec![
+                    SqlArg::Text(download_id.clone()),
+                    SqlArg::Text(episode_id.clone()),
+                ]
+            })
+            .collect(),
+        "ON CONFLICT DO NOTHING",
+    )
+    .await?;
     Ok(())
 }
 
@@ -1079,27 +1098,25 @@ pub async fn create_workflow_operation(
         let progress_arg = progress_arg.clone();
         let summary_arg = summary_arg.clone();
         Box::pin(async move {
-            SqlRuntime::execute(
-                SqlExec::Tx(tx),
-                "INSERT INTO workflow_operations
-                 (id, operation_type, status, job_key, trigger_source, actor_user_id, progress_json, summary_json, summary_text, error_text, started_at, completed_at, created_at, updated_at)
-                 VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                &[
-                    SqlArg::Text(id.clone()),
-                    SqlArg::Text(operation.operation_type.clone()),
-                    SqlArg::Text(operation.status.clone()),
-                    SqlArg::OptText(operation.job_key.clone()),
-                    SqlArg::OptText(operation.trigger_source.clone()),
-                    SqlArg::OptText(operation.actor_user_id.clone()),
-                    progress_arg,
-                    summary_arg,
-                    SqlArg::OptText(operation.summary_text.clone()),
-                    SqlArg::OptText(operation.error_text.clone()),
-                    opt_timestamp_arg(operation.started_at.as_deref()).or_timestamp(now),
-                    opt_timestamp_arg(operation.completed_at.as_deref()),
-                    SqlArg::Timestamp(now),
-                    SqlArg::Timestamp(now),
-                ],
+            insert_workflow_operation_tx(
+                tx,
+                WorkflowOperationInsert {
+                    id: id.clone(),
+                    operation_type: operation.operation_type,
+                    status: operation.status,
+                    job_key: operation.job_key,
+                    trigger_source: operation.trigger_source,
+                    actor_user_id: operation.actor_user_id,
+                    progress_json: progress_arg,
+                    summary_json: summary_arg,
+                    summary_text: operation.summary_text,
+                    error_text: operation.error_text,
+                    started_at: opt_timestamp_arg(operation.started_at.as_deref())
+                        .or_timestamp(now),
+                    completed_at: opt_timestamp_arg(operation.completed_at.as_deref()),
+                    created_at: SqlArg::Timestamp(now),
+                    updated_at: SqlArg::Timestamp(now),
+                },
             )
             .await?;
             fetch_optional_workflow_operation(SqlExec::Tx(tx), &id)
@@ -1108,6 +1125,57 @@ pub async fn create_workflow_operation(
         })
     })
     .await
+}
+
+/// A `workflow_operations` row as it is first written. Timestamps and JSON
+/// arrive as bound arguments, already in the datastore's form.
+pub struct WorkflowOperationInsert {
+    pub id: String,
+    pub operation_type: String,
+    pub status: String,
+    pub job_key: Option<String>,
+    pub trigger_source: Option<String>,
+    pub actor_user_id: Option<String>,
+    pub progress_json: SqlArg,
+    pub summary_json: SqlArg,
+    pub summary_text: Option<String>,
+    pub error_text: Option<String>,
+    pub started_at: SqlArg,
+    pub completed_at: SqlArg,
+    pub created_at: SqlArg,
+    pub updated_at: SqlArg,
+}
+
+pub async fn insert_workflow_operation_tx(
+    tx: &mut SqlTx<'_>,
+    row: WorkflowOperationInsert,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO workflow_operations
+         (id, operation_type, status, job_key, trigger_source, actor_user_id,
+          progress_json, summary_json, summary_text, error_text, started_at,
+          completed_at, created_at, updated_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        &[
+            SqlArg::Text(row.id),
+            SqlArg::Text(row.operation_type),
+            SqlArg::Text(row.status),
+            SqlArg::OptText(row.job_key),
+            SqlArg::OptText(row.trigger_source),
+            SqlArg::OptText(row.actor_user_id),
+            row.progress_json,
+            row.summary_json,
+            SqlArg::OptText(row.summary_text),
+            SqlArg::OptText(row.error_text),
+            row.started_at,
+            row.completed_at,
+            row.created_at,
+            row.updated_at,
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 trait SqlArgExt {
@@ -1987,12 +2055,12 @@ pub fn import_record_from_row(row: &SqlRow) -> AppResult<ImportRecord> {
             .and_then(ImportTransferPhase::parse),
         import_transfer_bytes: row.opt_i64("import_transfer_bytes")?,
         import_transfer_total_bytes: row.opt_i64("import_transfer_total_bytes")?,
-        import_transfer_started_at: opt_timestamp_string(row, "import_transfer_started_at")?,
-        import_transfer_updated_at: opt_timestamp_string(row, "import_transfer_updated_at")?,
-        started_at: opt_timestamp_string(row, "started_at")?,
-        finished_at: opt_timestamp_string(row, "finished_at")?,
-        created_at: timestamp_string(row, "created_at")?,
-        updated_at: timestamp_string(row, "updated_at")?,
+        import_transfer_started_at: row.opt_timestamp_text("import_transfer_started_at")?,
+        import_transfer_updated_at: row.opt_timestamp_text("import_transfer_updated_at")?,
+        started_at: row.opt_timestamp_text("started_at")?,
+        finished_at: row.opt_timestamp_text("finished_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
     })
 }
 
@@ -2037,7 +2105,7 @@ pub fn snapshot_chunk_from_row(row: &SqlRow) -> AppResult<ExternalImportMonitorS
         )?,
         chunk_index: row.i32("chunk_index")?,
         payload_ndjson: row.text("payload_ndjson")?,
-        created_at: timestamp_string(row, "created_at")?,
+        created_at: row.timestamp_text("created_at")?,
     })
 }
 
@@ -2064,10 +2132,10 @@ pub fn download_queue_command_from_row(row: &SqlRow) -> AppResult<DownloadQueueC
         })?,
         error_text: row.opt_text("error_text")?,
         requested_by_user_id: row.opt_text("requested_by_user_id")?,
-        started_at: opt_timestamp_string(row, "started_at")?,
-        finished_at: opt_timestamp_string(row, "finished_at")?,
-        created_at: timestamp_string(row, "created_at")?,
-        updated_at: timestamp_string(row, "updated_at")?,
+        started_at: row.opt_timestamp_text("started_at")?,
+        finished_at: row.opt_timestamp_text("finished_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
     })
 }
 
@@ -2089,10 +2157,10 @@ pub fn workflow_operation_from_row(row: &SqlRow) -> AppResult<WorkflowOperationR
         summary_json: json_text_from_row(row, "summary_json")?,
         summary_text: row.opt_text("summary_text")?,
         error_text: row.opt_text("error_text")?,
-        started_at: opt_timestamp_string(row, "started_at")?,
-        completed_at: opt_timestamp_string(row, "completed_at")?,
-        created_at: timestamp_string(row, "created_at")?,
-        updated_at: timestamp_string(row, "updated_at")?,
+        started_at: row.opt_timestamp_text("started_at")?,
+        completed_at: row.opt_timestamp_text("completed_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
     })
 }
 
@@ -2319,26 +2387,6 @@ pub fn opt_text_lenient(row: &SqlRow, column: &str) -> AppResult<Option<String>>
     match row {
         SqlRow::Sqlite(row) => Ok(row.try_get::<Option<String>, _>(column).ok().flatten()),
         SqlRow::Postgres(row) => Ok(row.try_get::<Option<String>, _>(column).ok().flatten()),
-    }
-}
-
-pub fn timestamp_string(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(row) => row.try_get(column).map_err(repo_err),
-        SqlRow::Postgres(row) => {
-            let value: DateTime<Utc> = row.try_get(column).map_err(repo_err)?;
-            Ok(value.to_rfc3339())
-        }
-    }
-}
-
-pub fn opt_timestamp_string(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
-    match row {
-        SqlRow::Sqlite(row) => row.try_get(column).map_err(repo_err),
-        SqlRow::Postgres(row) => {
-            let value: Option<DateTime<Utc>> = row.try_get(column).map_err(repo_err)?;
-            Ok(value.map(|value| value.to_rfc3339()))
-        }
     }
 }
 

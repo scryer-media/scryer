@@ -3322,8 +3322,4 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
             })
             .collect())
     }
-
-    async fn prune_terminal_delete_commands_older_than(&self, _days: i64) -> AppResult<u32> {
-        Ok(0)
-    }
 }
