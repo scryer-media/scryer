@@ -12235,6 +12235,118 @@ async fn trigger_title_mismatch_recovery_search_requeues_only_mismatch_only_item
 }
 
 #[tokio::test]
+async fn trigger_title_mismatch_recovery_search_requeues_every_eligible_scope_past_one_page() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        download_submissions,
+        pending_releases,
+        wanted_items.clone(),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Mismatch Recovery Many".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    // More eligible scopes than the old single 500-row read held, oldest
+    // last, plus one grabbed scope with only mismatches.
+    const ELIGIBLE: usize = 520;
+    let scope = |n: usize, status: AcquisitionScopeStatus| AcquisitionScopeState {
+        id: format!("mismatch-scope-{n:04}"),
+        title_id: title.id.clone(),
+        title_name: Some(title.name.clone()),
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: Some(format!("mismatch-episode-{n:04}")),
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: Some("1".to_string()),
+        episode_number: Some(n.to_string()),
+        media_type: "episode".to_string(),
+        last_search_at: Some("2026-04-21T00:00:00Z".to_string()),
+        status,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: "2026-04-01T00:00:00Z".to_string(),
+        updated_at: format!("2026-04-{:02}T00:00:00Z", 28 - (n * 27 / ELIGIBLE)),
+    };
+    let mut scopes = (0..ELIGIBLE)
+        .map(|n| scope(n, AcquisitionScopeStatus::Wanted))
+        .collect::<Vec<_>>();
+    scopes.push(scope(ELIGIBLE, AcquisitionScopeStatus::Grabbed));
+    for item in &scopes {
+        wanted_items
+            .upsert_acquisition_scope_state(item)
+            .await
+            .expect("seed scope");
+        wanted_items
+            .insert_release_decision(&ReleaseDecision {
+                id: format!("{}-decision", item.id),
+                wanted_item_id: item.id.clone(),
+                title_id: title.id.clone(),
+                release_title: "Mismatch.Release".to_string(),
+                release_url: None,
+                release_size_bytes: None,
+                decision_code: "title_mismatch".to_string(),
+                candidate_score: 100,
+                current_score: None,
+                score_delta: None,
+                explanation_json: None,
+                created_at: "2026-04-21T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("seed mismatch decision");
+    }
+
+    let queued = app
+        .trigger_title_mismatch_recovery_search(&user, &title.id)
+        .await
+        .expect("trigger mismatch recovery");
+
+    assert_eq!(queued, ELIGIBLE);
+    for item in &scopes[..ELIGIBLE] {
+        assert_eq!(
+            wanted_items.status_update_call_count_for(&item.id).await,
+            1,
+            "{} is re-opened exactly once",
+            item.id
+        );
+    }
+    let oldest = &scopes[ELIGIBLE - 1];
+    assert_eq!(
+        wanted_items.status_update_call_count_for(&oldest.id).await,
+        1,
+        "the oldest eligible scope is re-opened too"
+    );
+    assert_eq!(
+        wanted_items
+            .status_update_call_count_for(&scopes[ELIGIBLE].id)
+            .await,
+        0,
+        "a grabbed scope is never re-opened by mismatch recovery"
+    );
+}
+
+#[tokio::test]
 async fn acquisition_cycle_drops_saved_results_of_a_completed_scope() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());

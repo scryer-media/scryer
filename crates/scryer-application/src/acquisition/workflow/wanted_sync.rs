@@ -542,6 +542,7 @@ impl AppUseCase {
             library_ids: _,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             limit,
             offset,
             skip_total,
@@ -564,6 +565,7 @@ impl AppUseCase {
                 library_ids: library_ids.clone(),
                 title_search: title_search.clone(),
                 latest_decision_codes: latest_decision_codes.clone(),
+                mismatch_recovery_eligible_only,
                 limit,
                 offset,
                 skip_total,
@@ -583,6 +585,7 @@ impl AppUseCase {
                 library_ids,
                 title_search,
                 latest_decision_codes,
+                mismatch_recovery_eligible_only,
                 ..AcquisitionScopeStatesQuery::default()
             })
             .await?;

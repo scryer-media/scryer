@@ -552,6 +552,23 @@ const WANTED_LATEST_DECISION_COLUMNS_SQL: &str = "
             latest_decision.explanation_json AS latest_decision_explanation_json,
             latest_decision.created_at AS latest_decision_created_at,";
 
+/// Whether the wanted row `w` is eligible for title-mismatch recovery: it is
+/// wanted, has a release decision, and every one of its decisions is a title
+/// mismatch. Both probes are served by the `(wanted_item_id, created_at)`
+/// index on `release_decisions`.
+const WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL: &str = "(w.status = 'wanted'
+                 AND EXISTS (
+                     SELECT 1
+                       FROM release_decisions mismatch_any
+                      WHERE mismatch_any.wanted_item_id = w.id
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1
+                       FROM release_decisions mismatch_other
+                      WHERE mismatch_other.wanted_item_id = w.id
+                        AND mismatch_other.decision_code <> 'title_mismatch'
+                 ))";
+
 /// Title ids per statement once a title-id read is too long for one.
 const ID_LIST_CHUNK: usize = 1_000;
 
@@ -568,22 +585,8 @@ fn wanted_item_projection_sql(projection: WantedProjection) -> String {
             w.episode_id, w.collection_id, w.series_movie_link_id,
             e.season_number, e.episode_number, w.media_type,
             w.last_search_at, w.status, w.grabbed_release,{}
-            CASE
-                WHEN w.status = 'wanted'
-                 AND EXISTS (
-                     SELECT 1
-                       FROM release_decisions mismatch_any
-                      WHERE mismatch_any.wanted_item_id = w.id
-                 )
-                 AND NOT EXISTS (
-                     SELECT 1
-                       FROM release_decisions mismatch_other
-                      WHERE mismatch_other.wanted_item_id = w.id
-                        AND mismatch_other.decision_code <> 'title_mismatch'
-                 )
-                THEN TRUE
-                ELSE FALSE
-            END AS mismatch_recovery_eligible,
+            CASE WHEN {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL} THEN TRUE ELSE FALSE END
+                AS mismatch_recovery_eligible,
             w.created_at, w.updated_at
        FROM wanted_items w
        LEFT JOIN titles t ON t.id = w.title_id
@@ -640,6 +643,10 @@ fn append_wanted_query_filters(
         "latest_decision.decision_code",
         &query.latest_decision_codes,
     );
+    if query.mismatch_recovery_eligible_only {
+        sql.push_str(" AND ");
+        sql.push_str(WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL);
+    }
 }
 
 fn wanted_upsert_sql(datastore: &StoreDatastore, item: &AcquisitionScopeState) -> String {

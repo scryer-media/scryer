@@ -1069,6 +1069,10 @@ pub struct AcquisitionScopeStatesQuery {
     pub library_ids: Vec<String>,
     pub title_search: Option<String>,
     pub latest_decision_codes: Vec<String>,
+    /// Only scopes eligible for title-mismatch recovery: wanted, with at
+    /// least one release decision, and every decision a title mismatch.
+    /// The same rule sets `AcquisitionScopeState::mismatch_recovery_eligible`.
+    pub mismatch_recovery_eligible_only: bool,
     pub limit: i64,
     pub offset: i64,
     /// The caller reads no total, so it is not counted and comes back as 0.

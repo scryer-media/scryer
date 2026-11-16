@@ -435,6 +435,15 @@ fn cases() -> Vec<(
             2,
         ),
         (
+            "mismatch recovery eligible",
+            AcquisitionScopeStatesQuery {
+                mismatch_recovery_eligible_only: true,
+                ..query()
+            },
+            vec!["w6", "w1"],
+            2,
+        ),
+        (
             "first page",
             AcquisitionScopeStatesQuery {
                 limit: 2,
@@ -719,4 +728,131 @@ async fn sqlite_latest_decisions_for_kept_scopes_match_the_full_title_read() {
             "{max_binds:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn sqlite_mismatch_recovery_filter_takes_every_decision_and_only_wanted_scopes() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+        &pool, None, true,
+    )
+    .await
+    .unwrap();
+    let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+    let titles = TitleStore::new(datastore.clone());
+    // Three episode scopes without decisions, given decisions below.
+    seed_series_with_many_episodes(&datastore, &titles, 3).await;
+    SqlRuntime::execute(datastore.read_exec(), "DELETE FROM release_decisions", &[])
+        .await
+        .unwrap();
+    SqlRuntime::execute(
+        datastore.read_exec(),
+        "UPDATE wanted_items SET status = 'grabbed' WHERE id = 'wl-many-w-1'",
+        &[],
+    )
+    .await
+    .unwrap();
+    let decide = |scope: &'static str, n: usize, code: &'static str, at: String| {
+        let datastore = datastore.clone();
+        async move {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO release_decisions
+                 (id, wanted_item_id, title_id, release_title, decision_code, candidate_score,
+                  created_at)
+                 VALUES ({}, {}, 'wl-series-many', 'Synthetic.Release', {}, 0, {})",
+                &[
+                    SqlArg::Text(format!("{scope}-d-{n}")),
+                    SqlArg::Text(scope.to_string()),
+                    SqlArg::Text(code.to_string()),
+                    SqlArg::Text(at),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+    };
+    // w-0: ten recent title mismatches over one older rejection.
+    decide(
+        "wl-many-w-0",
+        0,
+        "rejected_quality",
+        "2031-04-01T00:00:00+00:00".into(),
+    )
+    .await;
+    for n in 1..=10 {
+        decide(
+            "wl-many-w-0",
+            n,
+            "title_mismatch",
+            format!("2031-04-02T00:00:{n:02}+00:00"),
+        )
+        .await;
+    }
+    // w-1: only title mismatches, but grabbed.
+    for n in 0..3 {
+        decide(
+            "wl-many-w-1",
+            n,
+            "title_mismatch",
+            format!("2031-04-02T00:00:{n:02}+00:00"),
+        )
+        .await;
+    }
+    // w-2: eleven title mismatches and nothing else.
+    for n in 0..11 {
+        decide(
+            "wl-many-w-2",
+            n,
+            "title_mismatch",
+            format!("2031-04-02T00:00:{n:02}+00:00"),
+        )
+        .await;
+    }
+
+    let wanted = WantedStore::new(datastore.clone());
+    let eligible = AcquisitionScopeStatesQuery {
+        title_id: Some("wl-series-many".into()),
+        mismatch_recovery_eligible_only: true,
+        ..query()
+    };
+    let listed = wanted
+        .list_acquisition_scope_states(eligible.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        listed.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        vec!["wl-many-w-2"]
+    );
+    assert!(listed[0].mismatch_recovery_eligible);
+    assert_eq!(
+        wanted.count_acquisition_scope_states(eligible).await.unwrap(),
+        1
+    );
+
+    // The flag on every row agrees with the filter.
+    let all = wanted
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+            title_id: Some("wl-series-many".into()),
+            ..query()
+        })
+        .await
+        .unwrap();
+    let mut flags = all
+        .iter()
+        .map(|row| (row.id.as_str(), row.mismatch_recovery_eligible))
+        .collect::<Vec<_>>();
+    flags.sort();
+    assert_eq!(
+        flags,
+        vec![
+            ("wl-many-w-0", false),
+            ("wl-many-w-1", false),
+            ("wl-many-w-2", true)
+        ]
+    );
 }

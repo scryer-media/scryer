@@ -640,6 +640,7 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             title_id,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             limit,
             offset,
             library_ids: _,
@@ -674,6 +675,15 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
                                 .as_ref()
                                 .is_some_and(|decision| decision.decision_code == *code)
                         }))
+                    && (!mismatch_recovery_eligible_only || {
+                        let mut decisions = latest_decisions
+                            .iter()
+                            .filter(|decision| decision.wanted_item_id == item.id)
+                            .peekable();
+                        item.status == AcquisitionScopeStatus::Wanted
+                            && decisions.peek().is_some()
+                            && decisions.all(|decision| decision.decision_code == "title_mismatch")
+                    })
             })
             .skip(offset.max(0) as usize)
             .take(limit.max(0) as usize)

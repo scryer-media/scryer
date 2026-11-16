@@ -1144,6 +1144,7 @@ impl TitlePayload {
                         library_ids: Vec::new(),
                         title_search: None,
                         latest_decision_codes: Vec::new(),
+                        mismatch_recovery_eligible_only: false,
                         limit: i64::from(limit),
                         offset: i64::from(offset),
                         // The page carries no total.
