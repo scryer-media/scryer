@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
     ImportFileTransferProgress, ImportFileTransferProgressSender,
+    disk::{Disk, EntryKind, Link, LinkOutcome, Open, Parents, Removal, Remove},
     fs_integrity::import_content_proof,
     location::verify::{StreamedContentHasher, VerifiedCopier},
 };
@@ -446,7 +447,7 @@ fn cleanup_guard_after_placement(
     match cleanup_guard(source, dest, source_fingerprint, size) {
         Ok(guard) => Ok(Some(guard)),
         Err(error) => {
-            let _ = std::fs::remove_file(dest);
+            let _ = Disk::process().remove_blocking(dest, Remove::File);
             Err(error)
         }
     }
@@ -519,6 +520,9 @@ fn import_file_identity_from_fingerprint(file: &FileFingerprint) -> ImportFileId
     }
 }
 
+// disk-guard: the fingerprint holds the raw device, inode and owner uid, and a
+// failure's own error kind names the import reason; a reading carries neither.
+#[allow(clippy::disallowed_methods)]
 fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> {
     let link_meta = std::fs::symlink_metadata(path).map_err(|e| {
         import_io_error(
@@ -592,6 +596,9 @@ fn fingerprint_from_metadata(metadata: &std::fs::Metadata) -> AppResult<FileFing
     })
 }
 
+// disk-guard: the persisted guard compares raw device and inode, or the Windows
+// volume serial and file index from the handle, which the owner does not serve.
+#[allow(clippy::disallowed_methods)]
 fn directory_fingerprint_from_path(path: &Path) -> AppResult<DirectoryFingerprint> {
     let metadata = std::fs::metadata(path).map_err(|e| {
         import_io_error(
@@ -849,10 +856,18 @@ thread_local! {
     static HARD_LINK_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn hard_link_import_source(source: &Path, dest: &Path) -> io::Result<()> {
+/// `Ok(false)` when this destination cannot hold a hard link to the source.
+fn hard_link_import_source(source: &Path, dest: &Path) -> io::Result<bool> {
     #[cfg(test)]
     HARD_LINK_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
-    std::fs::hard_link(source, dest)
+    let linked = Disk::process().link_blocking(source, dest, Link::Hard)?;
+    Ok(linked == LinkOutcome::Linked)
+}
+
+/// Renames over the empty reservation the rename lane made at `dest`.
+fn rename_into_reservation(source: &Path, dest: &Path) -> io::Result<()> {
+    Disk::process().move_replacing_blocking(source, dest)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -886,13 +901,13 @@ fn rename_archive_output(
             std::fs::rename(dest, dest.with_extension("moved-aside"))?;
             std::fs::write(dest, vec![b'x'; size])
         }
-        RenameFault::None => std::fs::rename(source, dest),
+        RenameFault::None => rename_into_reservation(source, dest),
     }
 }
 
 #[cfg(not(test))]
 fn rename_archive_output(source: &Path, dest: &Path, _: &ImportFileOptions) -> io::Result<()> {
-    std::fs::rename(source, dest)
+    rename_into_reservation(source, dest)
 }
 
 #[cfg(test)]
@@ -1021,6 +1036,8 @@ fn source_uid_matches_scryer(
 }
 
 #[cfg(unix)]
+// disk-guard: the owning uid is not part of a reading.
+#[allow(clippy::disallowed_methods)]
 fn log_imported_destination_ownership(path: &Path, _options: &ImportFileOptions) {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
@@ -1069,6 +1086,8 @@ fn chmod_target_mode(current_mode: u32, mask: &str, parsed_mask: u32) -> u32 {
 }
 
 #[cfg(unix)]
+// disk-guard: the owner has no verb that sets an operator-chosen mode.
+#[allow(clippy::disallowed_methods)]
 fn apply_chmod(path: &Path, mask: &str) -> io::Result<()> {
     let metadata = std::fs::metadata(path)?;
     let parsed_mask = parse_chmod_mask(mask)?;
@@ -1156,6 +1175,8 @@ fn resolve_group_id(group: &str) -> io::Result<libc::gid_t> {
 }
 
 #[cfg(unix)]
+// disk-guard: the owner has no verb that changes a file's group.
+#[allow(clippy::disallowed_methods)]
 fn apply_group(path: &Path, group: &str) -> io::Result<()> {
     let gid = resolve_group_id(group)?;
     let c_path = CString::new(path.as_os_str().as_bytes())
@@ -1230,10 +1251,11 @@ pub fn apply_directory_permissions_best_effort(_path: &Path, _permissions: &Impo
 }
 
 pub fn missing_destination_dirs(parent: &Path) -> Vec<PathBuf> {
+    let disk = Disk::process();
     let mut missing = Vec::new();
     let mut current = Some(parent);
     while let Some(path) = current {
-        if path.as_os_str().is_empty() || path.exists() {
+        if path.as_os_str().is_empty() || disk.follow_blocking(path).exists() == Some(true) {
             break;
         }
         missing.push(path.to_path_buf());
@@ -1273,7 +1295,9 @@ fn prepare_import_destination(
 
     let parent = destination_parent_for_guard(dest);
     let missing_dirs = missing_destination_dirs(parent);
-    std::fs::create_dir_all(parent).map_err(|e| {
+    let disk = Disk::process();
+    let created = disk.create_dir_blocking(parent, Parents::Create);
+    created.map_err(io::Error::from).map_err(|e| {
         import_io_error(
             &e,
             format!(
@@ -1283,7 +1307,8 @@ fn prepare_import_destination(
             ),
         )
     })?;
-    let approved_parent_canonical = std::fs::canonicalize(parent).map_err(|e| {
+    let canonical = disk.canonicalize_blocking(parent).map_err(io::Error::from);
+    let approved_parent_canonical = canonical.map_err(|e| {
         import_io_error(
             &e,
             format!(
@@ -1321,7 +1346,8 @@ fn validate_import_destination_parent(
         )));
     }
 
-    let current_parent_canonical = std::fs::canonicalize(&guard.parent_path).map_err(|e| {
+    let canonical = Disk::process().canonicalize_blocking(&guard.parent_path);
+    let current_parent_canonical = canonical.map_err(io::Error::from).map_err(|e| {
         import_io_error(
             &e,
             format!(
@@ -1351,19 +1377,24 @@ fn validate_import_destination_parent(
 }
 
 fn ensure_import_destination_absent(dest: &Path) -> AppResult<()> {
-    match std::fs::symlink_metadata(dest) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(AppError::Repository(format!(
+    let reading = Disk::process().uncached_blocking(dest);
+    match reading.exists() {
+        Some(false) => Ok(()),
+        Some(true) => Err(AppError::Repository(format!(
             "import destination appeared before copy execution: {}",
             dest.display()
         ))),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to inspect import destination {} before copy: {error}",
-            dest.display()
+        None => Err(AppError::Repository(format!(
+            "failed to inspect import destination {} before copy: {}",
+            dest.display(),
+            reading.absence()
         ))),
     }
 }
 
+// disk-guard: a failure's own error kind names the import reason, which a
+// reading does not carry.
+#[allow(clippy::disallowed_methods)]
 fn validate_import_destination_file(guard: &ImportDestinationGuard) -> AppResult<()> {
     let metadata = std::fs::symlink_metadata(&guard.requested_path).map_err(|e| {
         import_io_error(
@@ -1404,20 +1435,21 @@ fn validate_import_destination_guard_after_placement(
         Ok(()) => Ok(()),
         Err(validation_error) => {
             let validation_message = validation_error.to_string();
-            match std::fs::remove_file(returned_dest) {
-                Ok(()) => Err(validation_error),
-                Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {
-                    Err(validation_error)
-                }
+            match Disk::process().remove_blocking(returned_dest, Remove::File) {
+                Ok(_) => Err(validation_error),
                 Err(cleanup_error) => Err(AppError::Repository(format!(
-                    "{validation_message}; additionally failed to remove placed import destination {} after validation failure: {cleanup_error}",
-                    returned_dest.display()
+                    "{validation_message}; additionally failed to remove placed import destination {} after validation failure: {}",
+                    returned_dest.display(),
+                    io::Error::from(cleanup_error)
                 ))),
             }
         }
     }
 }
 
+// disk-guard: a failure's own error kind names the import reason, which the
+// owner's link and reading verbs do not keep for a link it cannot make.
+#[allow(clippy::disallowed_methods)]
 fn import_symlink_source(
     source: &Path,
     dest: &Path,
@@ -1466,7 +1498,7 @@ fn import_symlink_source(
             )
         })?;
         if !dest_meta.file_type().is_symlink() {
-            let _ = std::fs::remove_file(dest);
+            let _ = Disk::process().remove_blocking(dest, Remove::File);
             return Err(AppError::Repository(format!(
                 "import destination is not a symlink: {}",
                 dest.display()
@@ -1474,7 +1506,7 @@ fn import_symlink_source(
         }
         ensure_same_source(source, source_fingerprint)?;
         let dest_target_meta = std::fs::metadata(dest).map_err(|e| {
-            let _ = std::fs::remove_file(dest);
+            let _ = Disk::process().remove_blocking(dest, Remove::File);
             AppError::Repository(format!(
                 "imported symlink target is unavailable: {}: {}",
                 dest.display(),
@@ -1482,7 +1514,7 @@ fn import_symlink_source(
             ))
         })?;
         if dest_target_meta.len() != size {
-            let _ = std::fs::remove_file(dest);
+            let _ = Disk::process().remove_blocking(dest, Remove::File);
             return Err(AppError::Repository(format!(
                 "symlink import size mismatch: source={} dest={}",
                 size,
@@ -1521,10 +1553,16 @@ impl fmt::Display for ImportCopyAttemptError {
 }
 
 fn remove_import_temp_file(temp_dest: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(temp_dest) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
+    Disk::process().remove_blocking(temp_dest, Remove::File)?;
+    Ok(())
+}
+
+/// Removes a file whose presence this import has just proved, where a file
+/// already gone is a failure as well: something else changed the path.
+fn remove_placed_file(path: &Path) -> io::Result<()> {
+    match Disk::process().remove_blocking(path, Remove::File)? {
+        Removal::Removed => Ok(()),
+        Removal::AlreadyAbsent => Err(io::ErrorKind::NotFound.into()),
     }
 }
 
@@ -1593,8 +1631,10 @@ fn copy_regular_source_to_destination_once(
     ensure_same_source(source, source_fingerprint)
         .map_err(io_other)
         .map_err(|error| ImportCopyAttemptError::new("source preflight", error))?;
-    let mut source_file = std::fs::File::open(source)
-        .map_err(|error| ImportCopyAttemptError::new("source open", error))?;
+    let disk = Disk::process();
+    let mut source_file = disk
+        .open_blocking(source, Open::read())
+        .map_err(|error| ImportCopyAttemptError::new("source open", error.into()))?;
     let source_open_fingerprint = fingerprint_from_metadata(
         &source_file
             .metadata()
@@ -1609,8 +1649,9 @@ fn copy_regular_source_to_destination_once(
         ));
     }
 
-    let mut temp_file = std::fs::File::create(temp_dest)
-        .map_err(|error| ImportCopyAttemptError::new("temp create", error))?;
+    let mut temp_file = disk
+        .open_blocking(temp_dest, Open::create())
+        .map_err(|error| ImportCopyAttemptError::new("temp create", error.into()))?;
     force_copy_attempt_error(&mut temp_file, &options, attempt)
         .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
     report_import_transfer_progress(progress, ImportTransferPhase::Copying, 0, size);
@@ -1645,7 +1686,6 @@ fn copy_regular_source_to_destination_once(
     temp_file
         .flush()
         .map_err(|error| ImportCopyAttemptError::new("flush", error))?;
-    let disk = scryer_application::disk::Disk::process();
     let sync = disk
         .finish_blocking(temp_dest, temp_file)
         .map_err(|error| ImportCopyAttemptError::new("sync", error.into()))?;
@@ -1750,7 +1790,7 @@ fn copy_regular_source_to_destination(
     };
 
     if force_copy_verification_failure(&options) {
-        let _ = std::fs::remove_file(dest);
+        let _ = Disk::process().remove_blocking(dest, Remove::File);
         return Err(AppError::Repository(format!(
             "copy verification failed for test: {}",
             dest.display()
@@ -1761,7 +1801,7 @@ fn copy_regular_source_to_destination(
     let dest_fingerprint = fingerprint_import_source(dest)?.file;
 
     if dest_fingerprint.len != size {
-        let _ = std::fs::remove_file(dest);
+        let _ = Disk::process().remove_blocking(dest, Remove::File);
         return Err(AppError::Repository(format!(
             "copy size mismatch: source={} dest={}",
             size, dest_fingerprint.len
@@ -1805,7 +1845,7 @@ fn copy_regular_source_to_destination(
             .detail
             .clone()
             .unwrap_or_else(|| "no detail recorded".to_string());
-        let _ = std::fs::remove_file(dest);
+        let _ = Disk::process().remove_blocking(dest, Remove::File);
         return Err(AppError::Repository(format!(
             "copy verification failed at depth {} for {}: {} ({detail})",
             verification.depth.label(),
@@ -1878,7 +1918,7 @@ fn remove_import_source_after_verified_import_blocking(
     let remove_result = if force_delete_failure(&options) {
         Err(io_other("forced source delete failure for test"))
     } else {
-        std::fs::remove_file(&guard.source_path)
+        remove_placed_file(&guard.source_path)
     };
 
     if let Err(error) = remove_result {
@@ -2086,7 +2126,7 @@ fn try_fast_import_placement_blocking(
         );
     } else if !force_cross_device_move(&prepared.options) && hardlink_uid_safe {
         match hard_link_import_source(&prepared.source, &prepared.dest) {
-            Ok(()) => {
+            Ok(true) => {
                 partial_destination_created = true;
                 let identity = ensure_same_source(&prepared.source, &prepared.source_fingerprint)
                     .and_then(|_| {
@@ -2098,12 +2138,12 @@ fn try_fast_import_placement_blocking(
                     });
                 match identity {
                     Err(error) => {
-                        let _ = std::fs::remove_file(&prepared.dest);
+                        let _ = Disk::process().remove_blocking(&prepared.dest, Remove::File);
                         return Err(error);
                     }
                     Ok(Some(mismatch)) => hard_link_identity_mismatch = Some(mismatch),
-                    Ok(None) => match std::fs::metadata(&prepared.dest) {
-                        Ok(dest_meta) if dest_meta.len() == prepared.size => {
+                    Ok(None) => match Disk::process().follow_blocking(&prepared.dest) {
+                        linked if linked.size() == Some(prepared.size) => {
                             validate_import_destination_guard_after_placement(
                                 &prepared.destination_guard,
                                 &prepared.dest,
@@ -2116,20 +2156,22 @@ fn try_fast_import_placement_blocking(
                             return finish_prepared_import(prepared, ImportStrategy::HardLink)
                                 .map(FastPlacementResult::Finished);
                         }
-                        Ok(dest_meta) => tracing::warn!(
-                            source_size = prepared.size,
-                            destination_size = dest_meta.len(),
-                            "hard link size mismatch; handing import to copy lane"
-                        ),
-                        Err(error) => tracing::warn!(
-                            error = %error,
-                            "hard link destination stat failed; handing import to copy lane"
-                        ),
+                        linked => match linked.size() {
+                            Some(destination_size) => tracing::warn!(
+                                source_size = prepared.size,
+                                destination_size,
+                                "hard link size mismatch; handing import to copy lane"
+                            ),
+                            None => tracing::warn!(
+                                error = linked.absence(),
+                                "hard link destination stat failed; handing import to copy lane"
+                            ),
+                        },
                     },
                 }
             }
-            Err(error) if scryer_application::disk::is_cross_device_error(&error) => {
-                tracing::debug!(error = %error, "hard link is ineligible; handing import to copy lane");
+            Ok(false) => {
+                tracing::debug!("hard link is ineligible; handing import to copy lane");
             }
             Err(error) => {
                 tracing::warn!(error = %error, "hard link failed; handing import to copy lane");
@@ -2138,7 +2180,7 @@ fn try_fast_import_placement_blocking(
     }
 
     if partial_destination_created {
-        std::fs::remove_file(&prepared.dest).map_err(|error| {
+        remove_placed_file(&prepared.dest).map_err(|error| {
             AppError::Repository(format!(
                 "failed to remove partial hardlink destination {} before copy: {error}",
                 prepared.dest.display()
@@ -2166,11 +2208,7 @@ fn rename_archive_workspace_output(prepared: &PreparedImportPlacement) -> AppRes
         stable_import_source_snapshot(&prepared.source, Some(&prepared.source_fingerprint))?;
     // Reserve the name so a file that appeared since the destination was
     // checked is never replaced by the rename.
-    let reservation = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&prepared.dest)
-    {
+    let reservation = match Disk::process().open_blocking(&prepared.dest, Open::create_new()) {
         Ok(file) => file
             .metadata()
             .ok()
@@ -2224,6 +2262,9 @@ fn rename_archive_workspace_output(prepared: &PreparedImportPlacement) -> AppRes
 /// only while the source is provably still in place: a network filesystem can
 /// report failure for a rename that took effect, and the destination is then
 /// the only copy of the output.
+// disk-guard: the reservation is matched on its raw device and inode, which a
+// reading keeps opaque.
+#[allow(clippy::disallowed_methods)]
 fn release_archive_rename_reservation(
     prepared: &PreparedImportPlacement,
     reservation: Option<&FileFingerprint>,
@@ -2239,15 +2280,12 @@ fn release_archive_rename_reservation(
     match std::fs::symlink_metadata(&prepared.dest) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Ok(metadata) if is_unused_rename_reservation(&metadata, reservation) => {
-            match std::fs::remove_file(&prepared.dest) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to release destination reservation {}: {error}",
-                        prepared.dest.display()
-                    )));
-                }
+            if let Err(error) = Disk::process().remove_blocking(&prepared.dest, Remove::File) {
+                return Err(AppError::Repository(format!(
+                    "failed to release destination reservation {}: {}",
+                    prepared.dest.display(),
+                    io::Error::from(error)
+                )));
             }
         }
         _ => {
@@ -2284,15 +2322,17 @@ fn reconcile_existing_destination(
     destination_guard: &ImportDestinationGuard,
     source_cleanup_required: bool,
 ) -> AppResult<Option<ImportFileResult>> {
-    let metadata = match std::fs::symlink_metadata(dest) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
+    let existing = Disk::process().uncached_blocking(dest);
+    let kind = match (existing.exists(), existing.kind()) {
+        (Some(false), _) => return Ok(None),
+        (Some(true), Some(kind)) => kind,
+        _ => {
             return Err(AppError::Repository(format!(
-                "failed to inspect existing import destination {}: {error}",
-                dest.display()
+                "failed to inspect existing import destination {}: {}",
+                dest.display(),
+                existing.absence()
             )));
         }
-        Ok(metadata) => metadata,
     };
     if source == dest {
         return Err(AppError::ManualReconciliationRequired(format!(
@@ -2300,7 +2340,7 @@ fn reconcile_existing_destination(
             dest.display()
         )));
     }
-    if !metadata.file_type().is_file() && !metadata.file_type().is_symlink() {
+    if !matches!(kind, EntryKind::File | EntryKind::Symlink) {
         return Err(AppError::ManualReconciliationRequired(format!(
             "import destination conflict is not a regular file: {}",
             dest.display()
@@ -2443,17 +2483,17 @@ fn import_hardlink_or_copy_blocking(
 
     if !force_cross_device_move(&options) && hardlink_uid_safe {
         match hard_link_import_source(&source, &dest) {
-            Ok(()) => {
+            Ok(true) => {
                 let identity = ensure_same_source(&source, &source_fingerprint).and_then(|_| {
                     linked_file_identity_mismatch(&dest, &source_fingerprint.file, &options)
                 });
                 match identity {
                     Err(error) => {
-                        let _ = std::fs::remove_file(&dest);
+                        let _ = Disk::process().remove_blocking(&dest, Remove::File);
                         return Err(error);
                     }
                     Ok(Some(mismatch)) => {
-                        let _ = std::fs::remove_file(&dest);
+                        let _ = Disk::process().remove_blocking(&dest, Remove::File);
                         tracing::warn!(
                             dest = %dest.display(),
                             source_identity = %file_identity_label(&mismatch.source),
@@ -2461,8 +2501,8 @@ fn import_hardlink_or_copy_blocking(
                             "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
                         );
                     }
-                    Ok(None) => match std::fs::metadata(&dest) {
-                        Ok(dest_meta) if dest_meta.len() == size => {
+                    Ok(None) => match Disk::process().follow_blocking(&dest) {
+                        linked if linked.size() == Some(size) => {
                             validate_import_destination_guard_after_placement(
                                 &destination_guard,
                                 &dest,
@@ -2493,26 +2533,26 @@ fn import_hardlink_or_copy_blocking(
                                 verification: None,
                             });
                         }
-                        Ok(dest_meta) => {
-                            let _ = std::fs::remove_file(&dest);
-                            tracing::warn!(
-                                "hard link size mismatch: source={} dest={}, falling back to copy",
-                                size,
-                                dest_meta.len()
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
+                        linked => match linked.size() {
+                            Some(dest_len) => {
+                                let _ = Disk::process().remove_blocking(&dest, Remove::File);
+                                tracing::warn!(
+                                    "hard link size mismatch: source={} dest={}, falling back to copy",
+                                    size,
+                                    dest_len
+                                );
+                            }
+                            None => tracing::warn!(
                                 "hard link created but dest stat failed: {}, falling back to copy",
-                                e
-                            );
-                        }
+                                linked.absence()
+                            ),
+                        },
                     },
                 }
             }
-            Err(e) if scryer_application::disk::is_cross_device_error(&e) => {
+            Ok(false) => {
                 tracing::info!(
-                    "hard link failed (cross-device), falling back to copy: {} -> {}",
+                    "hard link is not possible here, falling back to copy: {} -> {}",
                     source.display(),
                     dest.display()
                 );
