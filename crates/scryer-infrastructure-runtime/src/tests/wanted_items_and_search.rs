@@ -1622,6 +1622,97 @@ async fn release_decision_batch_matches_per_row_outcomes() {
     assert_decision_batch_matches_per_row("scryer_decision_batch_ok", None).await;
 }
 
+/// A search-sized batch, spanning several preparation chunks, with
+/// explanations that encode, repeat, and fail to encode, lands exactly the rows,
+/// ids and stored explanation bytes the per-row path does.
+#[tokio::test]
+async fn release_decision_batch_with_explanations_matches_per_row_across_chunks() {
+    let (batch_services, batch_db, batch_store) =
+        seed_grab_batch_fixture("scryer_decision_batch_explained_batch").await;
+    let (row_services, row_db, row_store) =
+        seed_grab_batch_fixture("scryer_decision_batch_explained_rows").await;
+    let decisions = (0..700)
+        .map(|index| {
+            // Every seventh release repeats an earlier one, so it ages that
+            // row forward instead of appending.
+            let release = if index % 7 == 6 { index - 3 } else { index };
+            let explanation_json = match index % 11 {
+                0 => None,
+                5 => Some("not-json".to_string()),
+                _ => Some(
+                    serde_json::json!({
+                        "candidate": {"source": "synthetic-indexer", "guid": format!("guid-{index}")},
+                        "auto_decision": {"eligible": false, "code": "quality_blocked"},
+                        "quality_profile_decision": {
+                            "allowed": index % 2 == 0,
+                            "release_score": index * 13,
+                            "scoring_log": (0..index % 9)
+                                .map(|step| serde_json::json!({"code": format!("rule_{step}"), "delta": step}))
+                                .collect::<Vec<_>>(),
+                        },
+                        "parsed": {"raw_title": format!("Emberfall.S01E{release:03}.1080p-SYNTH")},
+                    })
+                    .to_string(),
+                ),
+            };
+            scryer_application::ReleaseDecision {
+                id: format!("decision-{index:04}"),
+                wanted_item_id: "wanted-ep-1".to_string(),
+                title_id: "emberfall".to_string(),
+                release_title: format!("Emberfall.S01E{release:03}.1080p-SYNTH"),
+                release_url: Some(format!("https://indexer.invalid/{release}")),
+                release_size_bytes: Some(1_000 + i64::from(release)),
+                decision_code: "quality_blocked".to_string(),
+                candidate_score: index,
+                current_score: None,
+                score_delta: None,
+                explanation_json,
+                created_at: "2026-04-20T00:00:00Z".to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let batch = decision_batch_results(batch_store.insert_release_decisions(&decisions).await);
+    let mut per_row = Vec::new();
+    for decision in &decisions {
+        per_row.push(row_store.insert_release_decision(decision).await);
+    }
+    let per_row = decision_batch_results(per_row);
+
+    assert_eq!(batch, per_row);
+    assert_eq!(batch.len(), decisions.len());
+    assert_eq!(batch[6], Ok("decision-0003".to_string()));
+    let stored = |services: &SqliteServices| {
+        let pool = services.pool().clone();
+        async move {
+            sqlx::query(
+                "SELECT id, release_title, candidate_score, explanation_json
+                   FROM release_decisions ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("decision rows should load")
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("id"),
+                    row.get::<String, _>("release_title"),
+                    row.get::<i64, _>("candidate_score"),
+                    row.get::<Option<Vec<u8>>, _>("explanation_json"),
+                )
+            })
+            .collect::<Vec<_>>()
+        }
+    };
+    let batch_rows = stored(&batch_services).await;
+    assert_eq!(batch_rows, stored(&row_services).await);
+    assert!(batch_rows.iter().any(|row| row.3.is_some()));
+    assert!(batch_rows.iter().any(|row| row.3.is_none()));
+
+    let _ = std::fs::remove_file(batch_db);
+    let _ = std::fs::remove_file(row_db);
+}
+
 #[tokio::test]
 async fn release_decision_batch_failure_keeps_per_row_outcomes() {
     assert_decision_batch_matches_per_row("scryer_decision_batch_fail", Some("Emberfall.S01.720p"))

@@ -19,9 +19,60 @@ impl fmt::Display for ReleaseDecisionExplanationCodecError {
 pub fn encode_release_decision_explanation(
     explanation_json: Option<&str>,
 ) -> Result<Option<Vec<u8>>, ReleaseDecisionExplanationCodecError> {
-    let Some(explanation_json) = explanation_json else {
-        return Ok(None);
-    };
+    ReleaseDecisionExplanationEncoder::new().encode(explanation_json)
+}
+
+/// Encodes a run of explanations through one zstd context, so the dictionary
+/// is loaded and digested once for the run instead of once per explanation.
+/// Each explanation encodes to exactly the bytes
+/// [`encode_release_decision_explanation`] produces for it alone.
+#[derive(Default)]
+pub struct ReleaseDecisionExplanationEncoder {
+    compressor: Option<zstd::bulk::Compressor<'static>>,
+}
+
+impl ReleaseDecisionExplanationEncoder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn encode(
+        &mut self,
+        explanation_json: Option<&str>,
+    ) -> Result<Option<Vec<u8>>, ReleaseDecisionExplanationCodecError> {
+        let Some(explanation_json) = explanation_json else {
+            return Ok(None);
+        };
+        let canonical = canonical_explanation(explanation_json)?;
+        let compressor = match &mut self.compressor {
+            Some(compressor) => compressor,
+            None => self.compressor.insert(
+                zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1).map_err(
+                    |error| codec_error(format!("failed to initialize zstd compressor: {error}")),
+                )?,
+            ),
+        };
+        let compressed = match compressor.compress(&canonical) {
+            Ok(compressed) => compressed,
+            Err(error) => {
+                // Start the next explanation from a fresh context rather than
+                // trust one that just failed.
+                self.compressor = None;
+                return Err(codec_error(format!(
+                    "failed to compress explanation JSON: {error}"
+                )));
+            }
+        };
+        let mut encoded = Vec::with_capacity(1 + compressed.len());
+        encoded.push(FORMAT_ZSTD_DICTIONARY_V1);
+        encoded.extend_from_slice(&compressed);
+        Ok(Some(encoded))
+    }
+}
+
+fn canonical_explanation(
+    explanation_json: &str,
+) -> Result<Vec<u8>, ReleaseDecisionExplanationCodecError> {
     let value: Value = serde_json::from_str(explanation_json)
         .map_err(|error| codec_error(format!("explanation is not valid JSON: {error}")))?;
     let canonical = serde_json::to_vec(&value).map_err(|error| {
@@ -33,16 +84,7 @@ pub fn encode_release_decision_explanation(
             canonical.len()
         )));
     }
-
-    let mut compressor = zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
-        .map_err(|error| codec_error(format!("failed to initialize zstd compressor: {error}")))?;
-    let compressed = compressor
-        .compress(&canonical)
-        .map_err(|error| codec_error(format!("failed to compress explanation JSON: {error}")))?;
-    let mut encoded = Vec::with_capacity(1 + compressed.len());
-    encoded.push(FORMAT_ZSTD_DICTIONARY_V1);
-    encoded.extend_from_slice(&compressed);
-    Ok(Some(encoded))
+    Ok(canonical)
 }
 
 pub fn decode_release_decision_explanation(
@@ -192,6 +234,83 @@ mod tests {
             encoded.len() - 1,
             without_dictionary.len()
         );
+    }
+
+    /// The per-explanation encoder as it stood before explanations shared a
+    /// zstd context: a fresh compressor, and its dictionary, for every call.
+    fn fresh_context_encode(explanation_json: Option<&str>) -> Option<Vec<u8>> {
+        let explanation_json = explanation_json?;
+        let value: Value = serde_json::from_str(explanation_json).ok()?;
+        let canonical = serde_json::to_vec(&value).ok()?;
+        if canonical.len() > MAX_EXPLANATION_BYTES {
+            return None;
+        }
+        let mut compressor =
+            zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
+                .expect("compressor should initialize");
+        let compressed = compressor
+            .compress(&canonical)
+            .expect("explanation should compress");
+        let mut encoded = vec![FORMAT_ZSTD_DICTIONARY_V1];
+        encoded.extend_from_slice(&compressed);
+        Some(encoded)
+    }
+
+    fn mixed_explanations() -> Vec<Option<String>> {
+        let representative = representative_explanation();
+        let oversized = serde_json::to_string(&"x".repeat(MAX_EXPLANATION_BYTES))
+            .expect("oversized explanation should serialize");
+        let mut explanations = vec![
+            Some(representative.clone()),
+            None,
+            Some("not-json".to_string()),
+            Some(format!("  {}\n", representative.replace(',', ", "))),
+            Some(oversized),
+            Some(r#"{"b":1,"a":{"z":[1,2.50,"é"],"y":null},"b":2}"#.to_string()),
+            Some(representative.clone()),
+        ];
+        for index in 0..40 {
+            let mut value: Value = serde_json::from_str(&representative).unwrap();
+            value["parsed"]["raw_title"] =
+                Value::String(format!("Synthetic.Show.S01E{index:02}.WEBDL-1080p-PARITY"));
+            value["quality_profile_decision"]["release_score"] = Value::from(index * 37);
+            let hints = (0..index)
+                .map(|hint| Value::String(format!("synthetic hint {hint}")))
+                .collect::<Vec<_>>();
+            value["parsed"]["parse_hints"] = Value::Array(hints);
+            explanations.push(Some(serde_json::to_string(&value).unwrap()));
+        }
+        explanations
+    }
+
+    #[test]
+    fn shared_context_encodes_byte_identically_to_a_fresh_context() {
+        let explanations = mixed_explanations();
+        let mut encoder = ReleaseDecisionExplanationEncoder::new();
+        for explanation in &explanations {
+            let shared = encoder.encode(explanation.as_deref());
+            let single = encode_release_decision_explanation(explanation.as_deref());
+            let fresh = fresh_context_encode(explanation.as_deref());
+            match shared {
+                Ok(shared) => {
+                    assert_eq!(shared, fresh, "shared context must match a fresh context");
+                    assert_eq!(shared, single.expect("single-row encode should agree"));
+                    if let (Some(encoded), Some(source)) = (&shared, explanation) {
+                        let decoded = decode_release_decision_explanation(Some(encoded))
+                            .expect("explanation should decode")
+                            .expect("explanation should be present");
+                        assert_eq!(
+                            serde_json::from_str::<Value>(&decoded).unwrap(),
+                            serde_json::from_str::<Value>(source).unwrap()
+                        );
+                    }
+                }
+                Err(_) => {
+                    assert!(fresh.is_none(), "a rejected explanation stays rejected");
+                    assert!(single.is_err(), "single-row encode should reject it too");
+                }
+            }
+        }
     }
 
     #[test]

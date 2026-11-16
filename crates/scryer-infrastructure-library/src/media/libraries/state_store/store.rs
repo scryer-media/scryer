@@ -30,7 +30,8 @@ use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
-use super::{decode_release_decision_explanation, encode_release_decision_explanation};
+use super::decode_release_decision_explanation;
+use super::release_decision_explanation::ReleaseDecisionExplanationEncoder;
 
 // Throttle the SQLite full VACUUM so it does not run on every
 // daily maintenance tick. `auto_vacuum` is not enabled on the connection, so
@@ -824,20 +825,78 @@ struct PreparedReleaseDecision {
     record_id: String,
 }
 
+/// Decisions prepared per blocking call. A search can return thousands of
+/// candidates; bounding the call keeps one batch from holding a blocking
+/// thread for its whole length, and lets a cancelled write stop between
+/// chunks.
+const RELEASE_DECISION_PREPARE_CHUNK: usize = 256;
+
 impl PreparedReleaseDecision {
     fn of(datastore: &StoreDatastore, decision: &ReleaseDecision) -> AppResult<Self> {
-        let explanation_json =
-            match encode_release_decision_explanation(decision.explanation_json.as_deref()) {
-                Ok(encoded) => encoded,
+        Self::with_encoder(
+            datastore,
+            decision,
+            &mut ReleaseDecisionExplanationEncoder::new(),
+        )
+    }
+
+    /// Prepares every decision, in order, off the async runtime: parsing,
+    /// canonicalizing and compressing explanations is CPU work that grows with
+    /// the number of candidates a search returned. One zstd context serves a
+    /// whole chunk.
+    async fn of_batch(
+        datastore: &StoreDatastore,
+        decisions: &[ReleaseDecision],
+    ) -> Vec<AppResult<Self>> {
+        let mut prepared = Vec::with_capacity(decisions.len());
+        for chunk in decisions.chunks(RELEASE_DECISION_PREPARE_CHUNK) {
+            let datastore = datastore.clone();
+            let chunk_decisions = chunk.to_vec();
+            let joined = tokio::task::spawn_blocking(move || {
+                let mut encoder = ReleaseDecisionExplanationEncoder::new();
+                chunk_decisions
+                    .iter()
+                    .map(|decision| Self::with_encoder(&datastore, decision, &mut encoder))
+                    .collect::<Vec<_>>()
+            })
+            .await;
+            match joined {
+                Ok(chunk_prepared) => prepared.extend(chunk_prepared),
                 Err(error) => {
+                    // Every row of the chunk reports the failure as its own
+                    // error, exactly as a row that could not be prepared does.
                     tracing::warn!(
-                        decision_id = %decision.id,
+                        decisions = chunk.len(),
                         error = %error,
-                        "release decision explanation could not be encoded"
+                        "release decision preparation task failed"
                     );
-                    None
+                    prepared.extend(chunk.iter().map(|_| {
+                        Err(scryer_application::AppError::Repository(format!(
+                            "release decision preparation task failed: {error}"
+                        )))
+                    }));
                 }
-            };
+            }
+        }
+        prepared
+    }
+
+    fn with_encoder(
+        datastore: &StoreDatastore,
+        decision: &ReleaseDecision,
+        encoder: &mut ReleaseDecisionExplanationEncoder,
+    ) -> AppResult<Self> {
+        let explanation_json = match encoder.encode(decision.explanation_json.as_deref()) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                tracing::warn!(
+                    decision_id = %decision.id,
+                    error = %error,
+                    "release decision explanation could not be encoded"
+                );
+                None
+            }
+        };
         // The same verdict, on the same release, for the same scope is one
         // ledger row that ages forward — not a new row per re-evaluation.
         // RSS re-sees the same feed every cadence, so an idle instance was
@@ -1369,10 +1428,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
         &self,
         decisions: &[ReleaseDecision],
     ) -> Vec<AppResult<String>> {
-        let prepared = decisions
-            .iter()
-            .map(|decision| PreparedReleaseDecision::of(&self.datastore, decision))
-            .collect::<Vec<_>>();
+        let prepared = PreparedReleaseDecision::of_batch(&self.datastore, decisions).await;
         let batch = prepared
             .iter()
             .map(|prepared| prepared.as_ref().ok().cloned())
