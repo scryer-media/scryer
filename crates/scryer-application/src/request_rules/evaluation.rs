@@ -8,9 +8,12 @@
 //! # Nothing here may fail the caller
 //!
 //! A request rule is a convenience layered over a flow that worked without it.
-//! With no enabled rule covering the library, and whenever shared facts are
-//! unavailable, the library's existing Auto-Approve permission decides.
-//! Uncertainty in an enabled rule holds the request for a human. Trace persistence is best effort: a failed trace write
+//! With no enabled rule covering the library, the library's existing
+//! Auto-Approve permission decides. Once an enabled rule covers the library,
+//! anything that keeps the rules from speaking (facts that cannot be
+//! assembled, an engine that fails, an engine generation that could not be
+//! rebuilt) holds the request for a human: a rule that might have denied it
+//! must not be skipped. Trace persistence is best effort: a failed trace write
 //! must not change the verdict already reached by policy.
 
 use chrono::Utc;
@@ -25,7 +28,6 @@ use crate::helpers::{HashDomain, blake3_identity_hex};
 use crate::media_requests::snapshot::MediaRequestMetadataSnapshot;
 use crate::request_rules::arbitration::{
     ArbitratedShaping, Arbitration, FALLBACK_ERROR, ScopedError, ScopedVote, arbitrate,
-    legacy_outcome,
 };
 use crate::request_rules::facts::{RequestDraft, build_request_input};
 use crate::{AppResult, AppUseCase};
@@ -121,24 +123,19 @@ pub struct ResolvedShaping {
 }
 
 impl RequestEvaluation {
-    /// The verdict Scryer had before rules existed, for the paths that never
-    /// reached a rule.
-    fn legacy(
-        permission_grants_auto_approve: bool,
-        metadata_partial: bool,
-        fallback_reason: Option<&str>,
-    ) -> Self {
-        let outcome = legacy_outcome(permission_grants_auto_approve);
+    /// Held for a human because enabled rules should have been consulted and
+    /// could not be.
+    fn held_on_error(metadata_partial: bool) -> Self {
         Self {
             decision_id: None,
-            policy_outcome: outcome,
-            effective_outcome: outcome,
-            fallback_reason: fallback_reason.map(str::to_string),
+            policy_outcome: RequestDecisionOutcome::ManualReview,
+            effective_outcome: RequestDecisionOutcome::ManualReview,
+            fallback_reason: Some(FALLBACK_ERROR.to_string()),
             deciding_rule_set_ids: Vec::new(),
             tags: Vec::new(),
             emitted_tags: Vec::new(),
             reasons: Vec::new(),
-            evaluation_mode: RequestRuleEvaluationMode::Disabled,
+            evaluation_mode: RequestRuleEvaluationMode::Enforce,
             metadata_partial,
             shaping: ArbitratedShaping::default(),
             resolved_shaping: ResolvedShaping::default(),
@@ -247,9 +244,7 @@ impl AppUseCase {
                 library_id = library.id.as_str(),
                 "request rules engine generation is unavailable; holding the request"
             );
-            return Ok(self
-                .record_unavailable_engine_fallback(&purpose, permission, metadata_partial)
-                .await);
+            return Ok(self.record_error_fallback(&purpose, metadata_partial).await);
         }
         let consulted: Vec<(String, crate::request_rules::engine::RequestRuleScope)> = cache
             .scopes_for_library(&library.id)
@@ -257,16 +252,16 @@ impl AppUseCase {
             .map(|(id, scope)| (id.clone(), scope.clone()))
             .collect();
 
-        // No rule can speak about this library. Arbitration would reach the
-        // same verdict the legacy check does, and building the fact document
-        // would cost a dozen repository reads to prove it — so short-circuit
-        // without a trace: no rule took part.
+        // No rule can speak about this library, so the Auto-Approve permission
+        // decides. Building the fact document would cost a dozen repository
+        // reads to reach the same verdict, so short-circuit without a trace:
+        // no rule took part.
         if consulted.is_empty() {
             let arbitration = arbitrate(&[], &[], permission);
             return Ok(RequestEvaluation {
                 decision_id: None,
                 policy_outcome: arbitration.policy_outcome,
-                effective_outcome: legacy_outcome(permission),
+                effective_outcome: arbitration.policy_outcome,
                 fallback_reason: arbitration.fallback_reason.map(str::to_string),
                 deciding_rule_set_ids: arbitration.deciding_rule_set_ids.clone(),
                 tags: Vec::new(),
@@ -299,11 +294,9 @@ impl AppUseCase {
                 tracing::warn!(
                     library_id = library.id.as_str(),
                     error = %error,
-                    "could not assemble request rule facts; falling back to the permission check"
+                    "could not assemble request rule facts; holding the request"
                 );
-                return Ok(self
-                    .record_error_fallback(&purpose, permission, metadata_partial)
-                    .await);
+                return Ok(self.record_error_fallback(&purpose, metadata_partial).await);
             }
         };
         let input = build_request_input(context);
@@ -319,11 +312,9 @@ impl AppUseCase {
                 tracing::warn!(
                     library_id = library.id.as_str(),
                     error = %error,
-                    "request rule evaluation failed; falling back to the permission check"
+                    "request rule evaluation failed; holding the request"
                 );
-                return Ok(self
-                    .record_error_fallback(&purpose, permission, metadata_partial)
-                    .await);
+                return Ok(self.record_error_fallback(&purpose, metadata_partial).await);
             }
         };
 
@@ -621,42 +612,18 @@ impl AppUseCase {
         }
     }
 
-    /// The path taken when the facts or the engine failed: the library's
-    /// Auto-Approve permission decides, as it does when no rule applies, and
-    /// the trace says policy never got to speak.
+    /// The path taken when enabled rules should have been consulted and could
+    /// not be: the facts could not be assembled, the engine failed, or the
+    /// engine generation could not be rebuilt after a rule mutation. The
+    /// request is held for a human whatever the Auto-Approve permission says,
+    /// because a rule that might have denied it never ran, and the trace says
+    /// policy never got to speak.
     async fn record_error_fallback(
         &self,
         purpose: &RequestEvaluationPurpose,
-        permission: bool,
         metadata_partial: bool,
     ) -> RequestEvaluation {
-        let mut evaluation =
-            RequestEvaluation::legacy(permission, metadata_partial, Some(FALLBACK_ERROR));
-        // The policy reached no verdict at all, and an unevaluable policy is
-        // never an approval.
-        evaluation.policy_outcome = RequestDecisionOutcome::ManualReview;
-        evaluation.evaluation_mode = RequestRuleEvaluationMode::Enforce;
-        evaluation.decision_id = self
-            .record_request_decision(purpose, &evaluation, &[], &[], "")
-            .await;
-        evaluation
-    }
-
-    /// A rule mutation committed but its replacement generation could not be
-    /// built. The prior cache might still contain a rule that was just
-    /// disabled, so this is stricter than an ordinary fact-read failure: never
-    /// fall back to Auto-Approve.
-    async fn record_unavailable_engine_fallback(
-        &self,
-        purpose: &RequestEvaluationPurpose,
-        permission: bool,
-        metadata_partial: bool,
-    ) -> RequestEvaluation {
-        let mut evaluation =
-            RequestEvaluation::legacy(permission, metadata_partial, Some(FALLBACK_ERROR));
-        evaluation.policy_outcome = RequestDecisionOutcome::ManualReview;
-        evaluation.effective_outcome = RequestDecisionOutcome::ManualReview;
-        evaluation.evaluation_mode = RequestRuleEvaluationMode::Enforce;
+        let mut evaluation = RequestEvaluation::held_on_error(metadata_partial);
         evaluation.decision_id = self
             .record_request_decision(purpose, &evaluation, &[], &[], "")
             .await;

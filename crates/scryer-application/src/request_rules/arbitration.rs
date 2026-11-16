@@ -265,16 +265,6 @@ pub struct ArbitrationReason {
     pub rule_set_name: String,
 }
 
-/// What Scryer did before request rules existed, and what it still does
-/// whenever no rule takes part.
-pub const fn legacy_outcome(permission_grants_auto_approve: bool) -> RequestDecisionOutcome {
-    if permission_grants_auto_approve {
-        RequestDecisionOutcome::AutoApprove
-    } else {
-        RequestDecisionOutcome::ManualReview
-    }
-}
-
 /// Arbitrate one request's votes.
 ///
 /// | condition | outcome | deciders | fallback |

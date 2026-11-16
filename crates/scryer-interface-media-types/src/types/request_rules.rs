@@ -325,12 +325,13 @@ pub struct RequestRuleVote {
 /// made it.
 ///
 /// `policyOutcome` is what the rules concluded and `effectiveOutcome` is what
-/// the instance acted on. They disagree in two cases. When the title tag
-/// registry could not be read, the request is held for approval whatever the
-/// rules concluded. When the input facts could not be assembled or the rules
-/// could not be evaluated, `policyOutcome` is `MANUAL_REVIEW` and the library's
-/// Auto-Approve permission decides `effectiveOutcome`. Both record the
-/// fallback `error`.
+/// the instance acted on. They disagree only when the title tag registry could
+/// not be read: the request is held for approval whatever the rules concluded,
+/// with the fallback `error`. When the input facts could not be assembled or
+/// the rules could not be evaluated, both are `MANUAL_REVIEW` with the
+/// fallback `error`. Decisions recorded by 0.22 and earlier may also show
+/// `policyOutcome` `MANUAL_REVIEW` with the Auto-Approve permission's
+/// `effectiveOutcome` for that case.
 #[derive(SimpleObject, Clone)]
 pub struct RequestRuleDecision {
     /// Trace ID, or null for a preview, which persists nothing.

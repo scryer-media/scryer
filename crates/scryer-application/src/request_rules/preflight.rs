@@ -14,7 +14,7 @@
 //!   catalog-settings authority.
 //! - **It never errors for an evaluation failure.** A preview that 500s teaches
 //!   a requester nothing; a preview that says "this will need approval" is both
-//!   true (an unevaluable policy never approves) and useful.
+//!   true (rules that cannot be consulted never approve) and useful.
 
 use scryer_domain::{LibraryPermission, RequestDecisionOutcome, RequestRuleEvaluationMode, User};
 
@@ -40,9 +40,10 @@ pub struct RequestPreflight {
     /// What the policy concluded, which differs from `outcome` only when the
     /// request was held because its tags could not be checked.
     pub policy_outcome: RequestDecisionOutcome,
-    /// Why the verdict fell back to needing approval, when it did: one of the
-    /// arbitration codes (`rule_manual`, `held`, `error`, `no_rule_matched`),
-    /// or `None` when a rule decided outright. It names the *shape* of the
+    /// Why the verdict is a fallback rather than a rule's own decision: one of
+    /// the arbitration codes (`rule_manual`, `held`, `error`, `no_rule_matched`,
+    /// `library_permission`, `shaping_conflict`, `shaping_invalid`), or `None`
+    /// when a rule decided outright. It names the *shape* of the
     /// fallback and never a rule, so it is safe on the requester's surface.
     pub fallback_reason: Option<String>,
     /// What an approval would be changed to. The requester's surface shows

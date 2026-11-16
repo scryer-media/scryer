@@ -619,3 +619,82 @@ async fn an_older_rebuild_cannot_replace_a_failed_newer_disarm_refresh() {
         Some(FALLBACK_ERROR)
     );
 }
+
+/// A requester holding Auto-Approve, so only the rules stand between the
+/// request and an approval.
+fn auto_approving_requester(harness: &mut MediaRequestTestHarness) {
+    harness.user.authorization.default_library =
+        scryer_domain::LibraryPermissionMask::from_permissions([
+            scryer_domain::LibraryPermission::Request,
+            scryer_domain::LibraryPermission::AutoApproveRequests,
+        ]);
+}
+
+#[tokio::test]
+async fn unassemblable_facts_hold_a_request_an_enabled_rule_might_deny() {
+    let mut harness = bootstrap_media_request_app();
+    auto_approving_requester(&mut harness);
+    let detail = create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    enable(&harness, &detail.rule_set.id).await;
+    harness.app = harness.app.clone().with_test_overrides(|services| {
+        services.with_external_account_store(Arc::new(UnreadableExternalAccounts))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9047))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        preflight.policy_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(preflight.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
+
+    submit(&harness, &library_id, 9047, None).await;
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Pending
+    );
+    assert!(harness.titles.store.lock().await.is_empty());
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.policy_outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        trace.effective_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(trace.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
+}
+
+#[tokio::test]
+async fn without_an_enabled_rule_the_permission_still_approves_when_facts_are_unreadable() {
+    let mut harness = bootstrap_media_request_app();
+    auto_approving_requester(&mut harness);
+    // A disabled rule is not consulted, so nothing reads the facts.
+    create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    harness.app = harness.app.clone().with_test_overrides(|services| {
+        services.with_external_account_store(Arc::new(UnreadableExternalAccounts))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9047))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
+    assert_eq!(
+        preflight.fallback_reason.as_deref(),
+        Some(crate::request_rules::FALLBACK_LIBRARY_PERMISSION)
+    );
+
+    submit(&harness, &library_id, 9047, None).await;
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Approved
+    );
+    assert!(harness.request_rule_decisions.recorded().await.is_empty());
+}
