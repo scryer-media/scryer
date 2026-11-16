@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, PluginInstallationRepository,
     persisted_records::external_plugin_installation_shape_is_supported,
@@ -8,11 +8,8 @@ use scryer_domain::{
     Id, PersistedPluginWasmPayload, PluginCatalogSource, PluginCatalogStatusRecord,
     PluginInstallation, PluginSourceKind, PluginSupportTier, PluginWasmEncoding,
 };
-use sqlx::Row;
 
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
-};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::opt_json_text;
 
 #[derive(Clone)]
@@ -744,8 +741,8 @@ fn row_to_plugin_installation(row: &SqlRow) -> AppResult<PluginInstallation> {
         wasm_digest: row.opt_text("wasm_digest")?,
         artifact_digest: row.opt_text("artifact_digest")?,
         descriptor_json: descriptor_json_text(row)?,
-        installed_at: timestamp_or_now(row, "installed_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        installed_at: row.timestamp_or_now("installed_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
     })
 }
 
@@ -757,9 +754,9 @@ fn row_to_plugin_catalog_source(row: &SqlRow) -> AppResult<PluginCatalogSource> 
         github_repo: row.opt_text("github_repo")?,
         support_tier: parse_support_tier(&row.text("support_tier")?),
         catalog_json: row.opt_text("catalog_json")?,
-        last_success_at: optional_timestamp_or_none(row, "last_success_at")?,
+        last_success_at: row.opt_timestamp_or_none("last_success_at")?,
         last_error: row.opt_text("last_error")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
     })
 }
 
@@ -767,38 +764,12 @@ fn row_to_plugin_catalog_status(row: &SqlRow) -> AppResult<PluginCatalogStatusRe
     Ok(PluginCatalogStatusRecord {
         status_key: row.text("status_key")?,
         status_json: row.text("status_json")?,
-        checked_at: timestamp_or_now(row, "checked_at")?,
+        checked_at: row.timestamp_or_now("checked_at")?,
     })
 }
 
 fn descriptor_json_text(row: &SqlRow) -> AppResult<Option<String>> {
     opt_json_text(row, "descriptor_json")
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
-}
-
-fn optional_timestamp_or_none(row: &SqlRow, column: &str) -> AppResult<Option<DateTime<Utc>>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: Option<String> = row.try_get(column).map_err(repo_err)?;
-            Ok(raw.and_then(|value| {
-                DateTime::parse_from_rfc3339(&value)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .ok()
-            }))
-        }
-        SqlRow::Postgres(_) => row.opt_timestamp(column),
-    }
 }
 
 fn row_is_incompatible_external_installation(

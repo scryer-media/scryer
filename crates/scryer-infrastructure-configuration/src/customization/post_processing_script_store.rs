@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use scryer_application::{AppError, AppResult, PostProcessingScriptRepository};
 use scryer_domain::{
     PostProcessingScript, PostProcessingScriptRun, ScriptLanguage, ScriptSchedule, ScriptTrigger,
@@ -7,7 +7,6 @@ use scryer_domain::{
 use scryer_infrastructure_sql::script_output::{
     decode_script_output_tail, encode_script_output_tail,
 };
-use sqlx::Row;
 
 use crate::postgres::timestamp::{parse_optional_rfc3339_timestamp, parse_rfc3339_timestamp};
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
@@ -490,8 +489,8 @@ fn row_to_script(row: &SqlRow) -> AppResult<PostProcessingScript> {
         })?,
         schedule: schedule(row)?,
         run_on_startup: row.bool("run_on_startup")?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
     })
 }
 
@@ -512,8 +511,8 @@ fn row_to_run(row: &SqlRow) -> AppResult<PostProcessingScriptRun> {
         stderr_tail: decode_output_tail(row, "stderr_tail")?,
         duration_ms: row.opt_i64("duration_ms")?,
         env_payload_json: row.opt_text("env_payload_json")?,
-        started_at: timestamp_text(row, "started_at")?,
-        completed_at: optional_timestamp_text(row, "completed_at")?,
+        started_at: row.timestamp_text("started_at")?,
+        completed_at: row.opt_timestamp_text("completed_at")?,
     })
 }
 
@@ -541,34 +540,6 @@ fn schedule(row: &SqlRow) -> AppResult<Option<ScriptSchedule>> {
             );
             Ok(None)
         }
-    }
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
-}
-
-fn timestamp_text(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(_) => row.text(column),
-        SqlRow::Postgres(_) => row.timestamp(column).map(|value| value.to_rfc3339()),
-    }
-}
-
-fn optional_timestamp_text(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
-    match row {
-        SqlRow::Sqlite(_) => row.opt_text(column),
-        SqlRow::Postgres(_) => row
-            .opt_timestamp(column)
-            .map(|value| value.map(|value| value.to_rfc3339())),
     }
 }
 

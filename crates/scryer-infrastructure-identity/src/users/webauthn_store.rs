@@ -8,7 +8,6 @@ use scryer_application::{
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
-use crate::workflow::stores::{opt_timestamp_string, timestamp_string};
 
 #[derive(Clone)]
 pub struct WebauthnStore {
@@ -646,8 +645,8 @@ fn row_to_credential_record(row: &SqlRow) -> AppResult<WebauthnCredentialRecord>
         credential_id: row.text("credential_id")?,
         credential_json: row.text("credential_json")?,
         friendly_name: row.opt_text("friendly_name")?,
-        created_at: timestamp_string(row, "created_at")?,
-        last_used_at: opt_timestamp_string(row, "last_used_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        last_used_at: row.opt_timestamp_text("last_used_at")?,
     })
 }
 
@@ -670,8 +669,8 @@ fn row_to_challenge_record(row: &SqlRow) -> AppResult<WebauthnChallengeRecord> {
         login_verification_challenge_id: row.opt_text("login_verification_challenge_id")?,
         auth_session_version: row.opt_text("auth_session_version")?,
         state_json: row.text("state_json")?,
-        created_at: timestamp_string(row, "created_at")?,
-        expires_at: timestamp_string(row, "expires_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        expires_at: row.timestamp_text("expires_at")?,
     })
 }
 
@@ -716,8 +715,8 @@ fn row_to_login_verification_challenge_record(
         allow_passkey: row.bool("allow_passkey")?,
         allow_totp: row.bool("allow_totp")?,
         auth_session_version: row.opt_text("auth_session_version")?,
-        created_at: timestamp_string(row, "created_at")?,
-        expires_at: timestamp_string(row, "expires_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        expires_at: row.timestamp_text("expires_at")?,
     })
 }
 
