@@ -216,8 +216,23 @@ pub(crate) struct ArchiveComponentRuntime {
 }
 
 impl ArchiveComponentRuntime {
-    pub(crate) fn new(engine: &Engine, wasm: &[u8]) -> Result<Self, String> {
-        let component = module_cache::archive_component(wasm)?;
+    /// The runtime for `wasm`, linked once per cached module and shared by
+    /// every invocation of the same bytes. Each invocation still builds its own
+    /// `Store`, so nothing a guest does outlives it.
+    pub(crate) fn new(engine: &Engine, wasm: &[u8]) -> Result<Arc<Self>, String> {
+        let (component, runtime) =
+            module_cache::binding_for(module_cache::ModuleFlavor::Archive, wasm, |component| {
+                Self::link(engine, Arc::clone(component))
+            })?;
+        if !Engine::same(component.engine(), engine) {
+            return Err(
+                "archive component cache returned an artifact for a different engine".into(),
+            );
+        }
+        Ok(runtime)
+    }
+
+    fn link(engine: &Engine, component: Arc<Component>) -> Result<Self, String> {
         if !Engine::same(component.engine(), engine) {
             return Err(
                 "archive component cache returned an artifact for a different engine".into(),
@@ -360,7 +375,7 @@ async fn describe_async(wasm: &[u8]) -> Result<PluginDescriptor, String> {
 async fn prepare_archive_component(
     wasm: Arc<Vec<u8>>,
     timeout: Duration,
-) -> Result<ArchiveComponentRuntime, String> {
+) -> Result<Arc<ArchiveComponentRuntime>, String> {
     let prepare = tokio::task::spawn_blocking(move || {
         ArchiveComponentRuntime::new(engine::shared_async_engine(), &wasm)
     });
