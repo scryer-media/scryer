@@ -40,16 +40,14 @@ pub struct LifecycleDeclaredActions {
     /// Whether any defined head deletes media.
     pub destructive: bool,
     /// Every profile name written for `set_quality_profile`.
-    #[serde(default)]
     pub quality_profiles: Vec<String>,
     /// Every tag written for `add_tags`.
-    #[serde(default)]
     pub add_tags: Vec<String>,
     /// Every tag written for `remove_tags`.
-    #[serde(default)]
     pub remove_tags: Vec<String>,
-    // The lists below are left out while empty, so a document that names
-    // none of them keeps the form it was stored in before they existed.
+    // The lists below are left out while empty. Stored documents are compared
+    // as text (a shipped rule's actions may not change), so a rule that names
+    // none of them keeps the exact text it was stored with.
     /// Every library name written for `move_to_library`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub libraries: Vec<String>,
@@ -532,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_document_without_the_newer_lists_keeps_its_stored_form() {
+    fn a_declared_document_with_no_moves_or_notifications_keeps_its_stored_text() {
         let stored = r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#;
         let declared = LifecycleDeclaredActions::from_persisted_json(stored)
             .expect("reads")
