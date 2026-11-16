@@ -7,11 +7,12 @@ use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeState,
     AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery, AcquisitionScopeStatus,
-    AppResult, BlocklistRepository, DownloadSourceKind, HousekeepingMediaFileRootRow,
-    HousekeepingRepository, LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry,
-    PendingRelease, PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
-    PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
-    ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
+    AcquisitionScopeStatusTally, AppResult, BlocklistRepository, DownloadSourceKind,
+    HousekeepingMediaFileRootRow, HousekeepingRepository, LibraryProbeRepository,
+    LibraryProbeSignature, NewBlocklistEntry, PendingRelease, PendingReleaseObservation,
+    PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
+    PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
+    normalize_release_name,
     subtitles::{
         ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
         SubtitleSearchBackoffKey,
@@ -1616,6 +1617,53 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .map(|row| row.i64("cnt"))
             .transpose()
             .map(|value| value.unwrap_or_default())
+    }
+
+    async fn tally_acquisition_scope_states_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<AcquisitionScopeStatusTally>> {
+        let sql = format!(
+            "SELECT w.status,
+                    COUNT(*) AS scope_count,
+                    COUNT(CASE WHEN {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL} THEN 1 END)
+                        AS mismatch_recovery_eligible,
+                    MAX(w.last_search_at) AS latest_search_at
+               FROM wanted_items w
+              WHERE w.title_id = {{}}
+              GROUP BY w.status"
+        );
+        // A stored status the domain does not know reads as the default, as
+        // it does on a row; such groups fold into that status here.
+        let mut tallies: Vec<AcquisitionScopeStatusTally> = Vec::new();
+        for row in SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(title_id.to_string())],
+        )
+        .await?
+        {
+            let status = AcquisitionScopeStatus::parse(&row.text("status")?).unwrap_or_default();
+            let count = row.i64("scope_count")?;
+            let eligible = row.i64("mismatch_recovery_eligible")?;
+            let latest_search_at = row.opt_timestamp_text("latest_search_at")?;
+            match tallies.iter_mut().find(|tally| tally.status == status) {
+                Some(tally) => {
+                    tally.count += count;
+                    tally.mismatch_recovery_eligible += eligible;
+                    if latest_search_at > tally.latest_search_at {
+                        tally.latest_search_at = latest_search_at;
+                    }
+                }
+                None => tallies.push(AcquisitionScopeStatusTally {
+                    status,
+                    count,
+                    mismatch_recovery_eligible: eligible,
+                    latest_search_at,
+                }),
+            }
+        }
+        Ok(tallies)
     }
 
     async fn list_release_decisions_for_title(

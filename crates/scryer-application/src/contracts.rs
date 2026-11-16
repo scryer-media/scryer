@@ -1089,6 +1089,17 @@ pub struct AcquisitionScopeCoordinates {
     pub series_movie_link_id: Option<String>,
 }
 
+/// The acquisition state rows of one title in one status, counted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcquisitionScopeStatusTally {
+    pub status: AcquisitionScopeStatus,
+    pub count: i64,
+    /// How many of these rows are eligible for title-mismatch recovery.
+    pub mismatch_recovery_eligible: i64,
+    /// The newest `last_search_at` among these rows.
+    pub latest_search_at: Option<String>,
+}
+
 /// One scope under a title, as the acquisition state row for it is keyed.
 /// Each arm matches at most one row of the title.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

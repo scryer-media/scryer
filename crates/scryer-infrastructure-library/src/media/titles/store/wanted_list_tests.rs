@@ -830,7 +830,10 @@ async fn sqlite_mismatch_recovery_filter_takes_every_decision_and_only_wanted_sc
     );
     assert!(listed[0].mismatch_recovery_eligible);
     assert_eq!(
-        wanted.count_acquisition_scope_states(eligible).await.unwrap(),
+        wanted
+            .count_acquisition_scope_states(eligible)
+            .await
+            .unwrap(),
         1
     );
 
@@ -855,4 +858,113 @@ async fn sqlite_mismatch_recovery_filter_takes_every_decision_and_only_wanted_sc
             ("wl-many-w-2", true)
         ]
     );
+}
+
+#[tokio::test]
+async fn sqlite_title_scope_tally_counts_every_scope_past_the_old_500_row_read() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+        &pool, None, true,
+    )
+    .await
+    .unwrap();
+    let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+    let titles = TitleStore::new(datastore.clone());
+    seed(&datastore, &titles).await;
+    const SCOPES: usize = 620;
+    seed_series_with_many_episodes(&datastore, &titles, SCOPES).await;
+    for n in 0..SCOPES {
+        let status = match n % 4 {
+            0 => "grabbed",
+            1 => "paused",
+            _ => "wanted",
+        };
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "UPDATE wanted_items SET status = {}, last_search_at = {} WHERE id = {}",
+            &[
+                SqlArg::Text(status.to_string()),
+                SqlArg::OptText(
+                    (n % 7 != 0).then(|| format!("2031-05-{:02}T00:00:00+00:00", 1 + n % 28)),
+                ),
+                SqlArg::Text(format!("wl-many-w-{n}")),
+            ],
+        )
+        .await
+        .unwrap();
+        // Scopes without decisions get title mismatches only, so wanted ones
+        // among them are eligible for recovery.
+        if n % 3 == 0 {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO release_decisions
+                 (id, wanted_item_id, title_id, release_title, decision_code, candidate_score,
+                  created_at)
+                 VALUES ({}, {}, 'wl-series-many', 'Synthetic.Release', 'title_mismatch', 0,
+                         '2031-04-01T00:00:00+00:00')",
+                &[
+                    SqlArg::Text(format!("wl-many-mismatch-{n}")),
+                    SqlArg::Text(format!("wl-many-w-{n}")),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+    }
+    let wanted = WantedStore::new(datastore.clone());
+
+    // What the diagnostics computed from the rows, without the row cap.
+    let rows = wanted
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+            title_id: Some("wl-series-many".into()),
+            limit: i64::MAX,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), SCOPES);
+    let mut expected = std::collections::BTreeMap::<&str, (i64, i64, Option<String>)>::new();
+    for row in &rows {
+        let entry = expected.entry(row.status.as_str()).or_default();
+        entry.0 += 1;
+        entry.1 += i64::from(row.mismatch_recovery_eligible);
+        entry.2 = entry.2.clone().max(row.last_search_at.clone());
+    }
+    assert!(expected["wanted"].1 > 0, "fixture has eligible scopes");
+
+    let tallies = wanted
+        .tally_acquisition_scope_states_for_title("wl-series-many")
+        .await
+        .unwrap();
+    let actual = tallies
+        .into_iter()
+        .map(|tally| {
+            (
+                tally.status.as_str(),
+                (
+                    tally.count,
+                    tally.mismatch_recovery_eligible,
+                    tally.latest_search_at,
+                ),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual.values().map(|tally| tally.0).sum::<i64>(),
+        SCOPES as i64
+    );
+
+    // Another title's rows stay out of the tally.
+    let movie = wanted
+        .tally_acquisition_scope_states_for_title("wl-movie-a")
+        .await
+        .unwrap();
+    assert_eq!(movie.len(), 1);
+    assert_eq!(movie[0].count, 1);
+    assert_eq!(movie[0].mismatch_recovery_eligible, 1);
 }

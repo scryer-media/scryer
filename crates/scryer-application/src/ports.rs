@@ -10694,6 +10694,47 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<i64>;
 
+    /// The acquisition state rows of `title_id` counted per status, in no
+    /// particular order; a status with no rows is absent. The default reads
+    /// the title's rows; SQL stores override it with one grouped count.
+    async fn tally_acquisition_scope_states_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<AcquisitionScopeStatusTally>> {
+        let states = self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                title_id: Some(title_id.to_string()),
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?;
+        let mut tallies: Vec<AcquisitionScopeStatusTally> = Vec::new();
+        for state in states {
+            let index = match tallies
+                .iter()
+                .position(|tally| tally.status == state.status)
+            {
+                Some(index) => index,
+                None => {
+                    tallies.push(AcquisitionScopeStatusTally {
+                        status: state.status,
+                        count: 0,
+                        mismatch_recovery_eligible: 0,
+                        latest_search_at: None,
+                    });
+                    tallies.len() - 1
+                }
+            };
+            let tally = &mut tallies[index];
+            tally.count += 1;
+            tally.mismatch_recovery_eligible += i64::from(state.mismatch_recovery_eligible);
+            if state.last_search_at > tally.latest_search_at {
+                tally.latest_search_at = state.last_search_at;
+            }
+        }
+        Ok(tallies)
+    }
+
     async fn list_release_decisions_for_title(
         &self,
         title_id: &str,
