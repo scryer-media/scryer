@@ -44,19 +44,18 @@ pub(crate) fn print_setup_code(code: &str) -> std::io::Result<()> {
 
 #[cfg(unix)]
 fn operator_stderr() -> std::io::Result<std::fs::File> {
-    use std::os::fd::FromRawFd;
+    use std::os::fd::AsFd;
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    // SAFETY: fcntl validates the descriptor. A successful result is a new,
-    // non-inheritable descriptor, owned by the returned File.
-    let descriptor = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_DUPFD_CLOEXEC, 0) };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let output = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    // A new, non-inheritable descriptor, owned by the returned File.
+    let output = std::fs::File::from(std::io::stderr().as_fd().try_clone_to_owned()?);
     let metadata = output.metadata()?;
     // Rust startup can replace a closed standard descriptor with /dev/null.
     if metadata.file_type().is_char_device()
-        && let Ok(null) = std::fs::metadata("/dev/null")
+        && let Ok(null) = scryer_application::disk::Disk::process().open_blocking(
+            std::path::Path::new("/dev/null"),
+            scryer_application::disk::Open::read(),
+        )
+        && let Ok(null) = null.metadata()
         && metadata.rdev() == null.rdev()
     {
         return Err(std::io::Error::new(

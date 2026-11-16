@@ -315,9 +315,19 @@ impl DiskBackend for SystemBackend {
     fn create_dir(&self, path: &Path, access: Access) -> io::Result<()> {
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        if access == Access::OwnerOnly {
+        {
             use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
+            match access {
+                Access::Default => {}
+                Access::OwnerOnly => {
+                    builder.mode(0o700);
+                }
+                Access::Like(_) => {
+                    if let Some(mode) = access.mode() {
+                        builder.mode(mode);
+                    }
+                }
+            }
         }
         #[cfg(not(unix))]
         let _ = access;
@@ -368,8 +378,8 @@ impl DiskBackend for SystemBackend {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            if open.access == Access::OwnerOnly {
-                options.mode(0o600);
+            if let Some(mode) = open.access.mode() {
+                options.mode(mode);
             }
             if !open.follow_links {
                 options.custom_flags(libc::O_NOFOLLOW);

@@ -1,6 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
-// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
-#![allow(clippy::disallowed_methods)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 #[cfg(windows)]
 mod windows_installer_recovery;

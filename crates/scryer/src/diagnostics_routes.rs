@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scryer_application::application_upgrade::InstallationAssessment;
 use scryer_application::diagnostics::{DiagnosticsHostInputs, DiagnosticsMetrics};
+use scryer_application::disk::{Disk, PathReading};
 use scryer_application::{AppError, JwtSessionScope};
 use scryer_domain::AppPermission;
 use serde_json::{Map, Value, json};
@@ -320,9 +321,10 @@ impl HostFacts {
                 let size = |suffix: &str| {
                     let mut name = path.as_os_str().to_owned();
                     name.push(suffix);
-                    std::fs::metadata(PathBuf::from(name))
-                        .ok()
-                        .map(|metadata| metadata.len())
+                    match Disk::process().follow_blocking(&PathBuf::from(name)) {
+                        PathReading::Known { len, .. } => len,
+                        _ => None,
+                    }
                 };
                 self.environment.insert(
                     "datastore_files".to_string(),
@@ -404,10 +406,12 @@ impl HostFacts {
 
     fn container(&mut self, variables: &[(String, String)]) {
         let variable = |name: &str| env_value(variables, name);
+        let exists =
+            |path: &str| Disk::process().follow_blocking(Path::new(path)).exists() == Some(true);
         let mut hints = Vec::new();
         if cfg!(target_os = "linux") {
             for source in ["/proc/1/cgroup", "/proc/self/cgroup"] {
-                if let Ok(text) = std::fs::read_to_string(source) {
+                if let Ok(text) = Disk::process().read_to_string_blocking(Path::new(source)) {
                     for token in ["docker", "kubepods", "containerd", "libpod", "lxc"] {
                         if text.contains(token) && !hints.contains(&token) {
                             hints.push(token);
@@ -426,8 +430,8 @@ impl HostFacts {
         self.environment.insert(
             "container".to_string(),
             json!({
-                "docker_env_file": Path::new("/.dockerenv").exists(),
-                "podman_env_file": Path::new("/run/.containerenv").exists(),
+                "docker_env_file": exists("/.dockerenv"),
+                "podman_env_file": exists("/run/.containerenv"),
                 "container_variable": container_variable,
                 "kubernetes": variable("KUBERNETES_SERVICE_HOST").is_some(),
                 "cgroup_hints": hints,
@@ -747,8 +751,10 @@ fn address_kind(address: IpAddr) -> &'static str {
 
 #[cfg(target_os = "linux")]
 fn os_release() -> Option<(String, String)> {
-    let text = std::fs::read_to_string("/etc/os-release")
-        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+    let disk = Disk::process();
+    let text = disk
+        .read_to_string_blocking(Path::new("/etc/os-release"))
+        .or_else(|_| disk.read_to_string_blocking(Path::new("/usr/lib/os-release")))
         .ok()?;
     let field = |key: &str| {
         text.lines()
@@ -807,7 +813,9 @@ fn host_name() -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn total_memory_bytes() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let text = Disk::process()
+        .read_to_string_blocking(Path::new("/proc/meminfo"))
+        .ok()?;
     let kib = text
         .lines()
         .find_map(|line| line.strip_prefix("MemTotal:"))?

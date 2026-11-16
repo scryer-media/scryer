@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 use std::sync::atomic::{AtomicI64, Ordering};
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -590,7 +591,11 @@ fn exclusive_rename_fallback_never_replaces_an_occupied_destination() {
     let destination = dir.path().join("archive.gz");
     fs::write(&source, "ours").unwrap();
     fs::write(&destination, "theirs").unwrap();
-    assert!(publish_platform::rename_exclusive(&source, &destination).is_err());
+    assert!(
+        Disk::process()
+            .move_exclusive_blocking(&source, &destination)
+            .is_err()
+    );
     assert_eq!(fs::read_to_string(&source).unwrap(), "ours");
     assert_eq!(fs::read_to_string(&destination).unwrap(), "theirs");
 }
@@ -604,7 +609,11 @@ fn exclusive_rename_fallback_preserves_a_dangling_symlink_collision() {
     let destination = dir.path().join("archive.gz");
     fs::write(&source, "ours").unwrap();
     symlink("missing", &destination).unwrap();
-    assert!(publish_platform::rename_exclusive(&source, &destination).is_err());
+    assert!(
+        Disk::process()
+            .move_exclusive_blocking(&source, &destination)
+            .is_err()
+    );
     assert_eq!(fs::read_to_string(&source).unwrap(), "ours");
     assert_eq!(fs::read_link(&destination).unwrap(), Path::new("missing"));
 }

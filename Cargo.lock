@@ -6245,7 +6245,6 @@ dependencies = [
  "chrono",
  "crc-turbo",
  "glob",
- "libc",
  "postcard",
  "proxy-tunnels",
  "quick-xml",

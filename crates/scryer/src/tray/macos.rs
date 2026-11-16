@@ -13,8 +13,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::fs::File;
-use std::os::fd::AsRawFd;
 use std::path::Path;
+
+use scryer_application::disk::{Disk, Open};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -196,31 +197,24 @@ fn run_interactive() -> Result<(), String> {
 /// with a wrapper that refuses to start and no way to tell why.
 fn acquire_instance_lock(profile_dir: &Path) -> Result<Option<File>, String> {
     let path = profile_dir.join(INSTANCE_LOCK_FILE);
-    let file = File::options()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
+    let file = Disk::process()
+        .open_blocking(&path, Open::create_or_keep())
         .map_err(|error| {
             format!(
-                "failed to open the Scryer instance lock at {}: {error}",
-                path.display()
+                "failed to open the Scryer instance lock at {}: {}",
+                path.display(),
+                std::io::Error::from(error)
             )
         })?;
-    // SAFETY: The descriptor is owned by `file`, which outlives this call.
-    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if locked == 0 {
-        return Ok(Some(file));
+    // `File::try_lock` is an exclusive, non-blocking `flock` here.
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(format!(
+            "failed to take the Scryer instance lock at {}: {error}",
+            path.display()
+        )),
     }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
-        return Ok(None);
-    }
-    Err(format!(
-        "failed to take the Scryer instance lock at {}: {error}",
-        path.display()
-    ))
 }
 
 fn post_open_notification() {

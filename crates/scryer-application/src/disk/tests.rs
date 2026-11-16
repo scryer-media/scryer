@@ -770,6 +770,38 @@ fn a_move_that_needs_a_copy_or_meets_an_existing_destination_is_refused() {
 }
 
 #[test]
+fn a_replacing_move_renames_over_the_destination_and_evicts_both_paths() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    seed(&disk, &backend, TREE);
+    disk.move_replacing_blocking(
+        &p("/srv/fixture-media/Show/S01/e1.mkv"),
+        &p("/srv/fixture-media/Show/S01/e2.mkv"),
+    )
+    .unwrap();
+    evicted(
+        &disk,
+        &[
+            "/srv/fixture-media/Show/S01/e1.mkv",
+            "/srv/fixture-media/Show/S01/e2.mkv",
+        ],
+    );
+    assert_eq!(backend.calls_of("rename"), 1);
+    assert_eq!(disk.calls("rename_no_replace"), 0);
+    assert_eq!(disk.calls("rename_claimed"), 0);
+
+    backend.fails(
+        "rename",
+        "/srv/fixture-media/a",
+        io::ErrorKind::CrossesDevices,
+    );
+    let error = disk
+        .move_replacing_blocking(&p("/srv/fixture-media/a"), &p("/srv/fixture-downloads/a"))
+        .unwrap_err();
+    assert_eq!(error.reason(), reason::DISK_MOVE_NEEDS_COPY);
+}
+
+#[test]
 fn a_link_evicts_its_destination_and_reports_when_it_cannot_be_made() {
     let clock = ManualClock::at(at(0));
     let (disk, backend) = owner(&clock);
@@ -2359,6 +2391,31 @@ mod system {
                 .reason(),
             reason::DISK_PATH_MISSING
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn access_like_an_existing_file_creates_with_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let temp = tempfile::tempdir().expect("temp dir");
+        let disk = real(temp.path());
+        let original = temp.path().join("invented-original.log");
+        std::fs::write(&original, b"o").unwrap();
+        std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let access = Access::like(&std::fs::metadata(&original).unwrap().permissions());
+
+        let opened = temp.path().join("invented-opened.log");
+        let file = disk
+            .open_blocking(&opened, Open::create_new().with_access(access))
+            .unwrap();
+        disk.finish_blocking(&opened, file).unwrap();
+        assert_eq!(mode(&opened), 0o640);
+
+        let written = temp.path().join("invented-written.log");
+        disk.write_blocking(&written, b"w", Replace::Never, access)
+            .unwrap();
+        assert_eq!(mode(&written), 0o640);
     }
 
     #[test]

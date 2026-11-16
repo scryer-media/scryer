@@ -10,8 +10,16 @@ use application_updater::pipeline::{
     verify_artifact_hash,
 };
 use scryer_application::application_upgrade::{SCRYER_PRODUCT, msi_source::retain_installer};
+use scryer_application::disk::{Disk, Parents};
 use serde::Deserialize;
 use std::path::Path;
+
+async fn create_dir(path: &Path) -> Result<(), String> {
+    Disk::process()
+        .create_dir(path, Parents::Create)
+        .await
+        .map_err(|e| std::io::Error::from(e).to_string())
+}
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct InstallerIdentity {
@@ -105,20 +113,21 @@ pub async fn repair() -> Result<(), String> {
             .map_err(|e| e.to_string())?
             .manifest;
         let mut restored = false;
+        let disk = Disk::process();
         for artifact in manifest.artifacts.iter().filter(|a| {
             a.platform == UpgradePlatform::Windows
                 && a.archive == UpgradeArchive::Msi
                 && a.arch == product.arch
         }) {
             let source = discovery.cache.join(&artifact.blake3).join("installer.msi");
-            if !source.exists() {
+            if disk.follow(&source).await.exists() != Some(true) {
                 // Do not overwrite a download or source another invocation may
                 // be using. Completed sources are reused only after revalidation.
                 let download_dir = discovery
                     .cache
                     .join("downloads")
                     .join(uuid::Uuid::new_v4().to_string());
-                std::fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
+                create_dir(&download_dir).await?;
                 let download = download_dir.join("installer.msi");
                 download_artifact(&client, artifact, None, &download, &mut DiscardProgress)
                     .await
@@ -183,12 +192,12 @@ pub async fn install(version: &str) -> Result<bool, String> {
         })
         .ok_or("The signed release does not contain this Windows installer.")?;
     let source = discovery.cache.join(&artifact.blake3).join("installer.msi");
-    if !source.exists() {
+    if Disk::process().follow(&source).await.exists() != Some(true) {
         let directory = discovery
             .cache
             .join("downloads")
             .join(uuid::Uuid::new_v4().to_string());
-        std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        create_dir(&directory).await?;
         let download = directory.join("installer.msi");
         download_artifact(&client, artifact, None, &download, &mut DiscardProgress)
             .await

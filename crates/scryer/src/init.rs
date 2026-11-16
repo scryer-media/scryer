@@ -3,6 +3,14 @@ use scryer_infrastructure_datastore::keystore;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
+use scryer_application::disk::{Access, Disk, OwnerOnly, Replace};
+
+const KEY_FILE: &str = "scryer_encryption_key.txt";
+
+fn exists(path: &Path) -> bool {
+    Disk::process().follow_blocking(path).exists() == Some(true)
+}
+
 enum InitMode {
     Docker,
     #[cfg(target_os = "macos")]
@@ -17,7 +25,7 @@ fn detect_init_mode(args: &[String]) -> InitMode {
     if args.iter().any(|a| a == "--compose") {
         return InitMode::Docker;
     }
-    if Path::new("/.dockerenv").exists() {
+    if exists(Path::new("/.dockerenv")) {
         return InitMode::Docker;
     }
     #[cfg(target_os = "macos")]
@@ -52,11 +60,11 @@ fn run_init_docker(args: Vec<String>) {
 
     if !write_to_stdout {
         let compose_path = output_path.as_deref().unwrap_or("docker-compose.yml");
-        if Path::new(compose_path).exists() {
+        if exists(Path::new(compose_path)) {
             eprintln!("error: {compose_path} already exists (refusing to overwrite)");
             std::process::exit(1);
         }
-        if Path::new("scryer_encryption_key.txt").exists() {
+        if exists(Path::new(KEY_FILE)) {
             eprintln!("error: scryer_encryption_key.txt already exists (refusing to overwrite)");
             std::process::exit(1);
         }
@@ -74,27 +82,30 @@ fn run_init_docker(args: Vec<String>) {
         print!("{encryption_key}\n---\n{compose}");
     } else {
         let compose_path = output_path.as_deref().unwrap_or("docker-compose.yml");
-        std::fs::write(compose_path, &compose).unwrap_or_else(|e| {
-            eprintln!("error: failed to write {compose_path}: {e}");
-            std::process::exit(1);
-        });
-        std::fs::write("scryer_encryption_key.txt", &encryption_key).unwrap_or_else(|e| {
-            eprintln!("error: failed to write scryer_encryption_key.txt: {e}");
-            std::process::exit(1);
-        });
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                "scryer_encryption_key.txt",
-                std::fs::Permissions::from_mode(0o600),
+        let disk = Disk::process();
+        let write = |path: &str, contents: &str| {
+            disk.write_blocking(
+                Path::new(path),
+                contents.as_bytes(),
+                Replace::Allowed,
+                Access::Default,
             )
             .unwrap_or_else(|e| {
+                eprintln!("error: failed to write {path}: {}", io::Error::from(e));
+                std::process::exit(1);
+            });
+        };
+        write(compose_path, &compose);
+        write(KEY_FILE, &encryption_key);
+        // Permissions here are owner modes only on Unix.
+        #[cfg(unix)]
+        disk.restrict_to_owner_blocking(Path::new(KEY_FILE), OwnerOnly::File)
+            .unwrap_or_else(|e| {
                 eprintln!(
-                    "warning: could not set scryer_encryption_key.txt permissions to 600: {e}"
+                    "warning: could not set {KEY_FILE} permissions to 600: {}",
+                    io::Error::from(e)
                 );
             });
-        }
         eprintln!("wrote {compose_path}");
         eprintln!("wrote scryer_encryption_key.txt (0600)");
         eprintln!();

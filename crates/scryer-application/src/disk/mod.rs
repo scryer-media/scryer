@@ -232,6 +232,43 @@ pub enum Access {
     /// so its contents are never readable by anyone else first. An existing
     /// file keeps its permissions.
     OwnerOnly,
+    /// The permissions another file has, from [`Access::like`]. Applied as
+    /// the file is created, as [`Access::OwnerOnly`] is.
+    Like(KeptPermissions),
+}
+
+/// Permissions taken from an existing file by [`Access::like`]; only the
+/// owner applies them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
+pub struct KeptPermissions(u32);
+
+impl Access {
+    /// Create with the same permissions as a file that has `permissions`,
+    /// where the platform has owner, group and other permissions; elsewhere
+    /// the defaults.
+    pub fn like(permissions: &std::fs::Permissions) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            Self::Like(KeptPermissions(permissions.mode() & 0o777))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = permissions;
+            Self::Default
+        }
+    }
+
+    /// The permission bits a creation applies, when it applies any.
+    #[cfg(unix)]
+    pub(crate) fn mode(self) -> Option<u32> {
+        match self {
+            Self::Default => None,
+            Self::OwnerOnly => Some(0o600),
+            Self::Like(kept) => Some(kept.0),
+        }
+    }
 }
 
 /// What [`Disk::restrict_to_owner_blocking`] narrows: a file loses every
@@ -659,6 +696,37 @@ impl Disk {
         let dest = dest.into();
         self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
             disk.move_exclusive_blocking(source, &dest)
+        })
+        .await
+    }
+
+    /// Move `source` to `dest` by rename, replacing the file at `dest` if
+    /// there is one: for a destination the caller itself holds, such as a
+    /// reservation or rollback copy it made. Anything else moves with
+    /// [`Self::move_exclusive_blocking`]. A move that a rename cannot make
+    /// fails with [`reason::DISK_MOVE_NEEDS_COPY`] and leaves both paths as
+    /// they were.
+    pub fn move_replacing_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<MoveOutcome, DiskError> {
+        let result = self.call("rename", || self.inner.backend.rename(source, dest));
+        self.inner.cache.evict_subtree(&key_of(source));
+        self.inner.cache.evict_subtree(&key_of(dest));
+        result
+            .map(|()| MoveOutcome::Renamed)
+            .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
+    }
+
+    pub async fn move_replacing(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+    ) -> Result<MoveOutcome, DiskError> {
+        let dest = dest.into();
+        self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
+            disk.move_replacing_blocking(source, &dest)
         })
         .await
     }

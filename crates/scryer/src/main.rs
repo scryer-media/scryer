@@ -1,7 +1,7 @@
 // async-graphql schema expansion exceeded the default macro recursion depth.
 #![recursion_limit = "256"]
-// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
-#![allow(clippy::disallowed_methods)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 // Scryer never uses the system allocator: glibc's does not plateau on a large
 // library (§15 of the load-test report: ~3 GB and still climbing after 30
@@ -112,6 +112,7 @@ use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use scryer_application::disk::{Disk, IfPresent, Open, Parents, reason};
 use scryer_application::{
     AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY, AppUseCase, ArchiveExtractorPluginProvider,
     AutoBackupRunOutcome, DownloadClientCategorySnapshotStore, DownloadClientPluginProvider,
@@ -593,7 +594,11 @@ enum VersionLifecycle {
 fn log_smg_version_incompatibility(
     incompat: &scryer_infrastructure_metadata::metadata::enrollment::VersionIncompatible,
 ) {
-    let env = if std::path::Path::new("/.dockerenv").exists() {
+    let env = if Disk::process()
+        .follow_blocking(Path::new("/.dockerenv"))
+        .exists()
+        == Some(true)
+    {
         "docker"
     } else {
         "binary"
@@ -948,7 +953,9 @@ async fn run_application() {
     );
 
     let secrets_path = data_dir.join("instance-secrets.env");
-    if secrets_path.exists() && dotenvy::from_path_override(&secrets_path).is_err() {
+    if Disk::process().follow(&secrets_path).await.exists() == Some(true)
+        && dotenvy::from_path_override(&secrets_path).is_err()
+    {
         tracing::error!("cannot load managed instance secrets");
         std::process::exit(1);
     }
@@ -973,7 +980,7 @@ async fn run_application() {
         && let Some(path) = datastore_config.database_url.strip_prefix("sqlite://")
         && let Some(parent) = std::path::Path::new(path).parent()
     {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = Disk::process().create_dir(parent, Parents::Create).await;
     }
     let jwt_issuer = std::env::var("SCRYER_JWT_ISSUER").unwrap_or_else(|_| "scryer".to_string());
     let development_mode = resolve_development_mode_from_env().unwrap_or_else(|error| {
@@ -1735,7 +1742,7 @@ async fn bootstrap_application(
                 tracing::warn!(
                     "no SMG registration secret available; using persistent local JWT salt"
                 );
-                load_or_create_persistent_jwt_signing_salt(&data_dir)?
+                load_or_create_persistent_jwt_signing_salt(&data_dir).await?
             }
         },
     };
@@ -2678,7 +2685,7 @@ async fn bootstrap_application(
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {
-            if Path::new(dist_dir).exists() {
+            if Disk::process().follow(dist_dir).await.exists() == Some(true) {
                 tracing::info!(path = %dist_dir.display(), "serving web UI from filesystem path");
             } else {
                 tracing::warn!(
@@ -3157,14 +3164,16 @@ fn load_startup_environment() -> Result<(), String> {
         PathBuf::from(".env"),
         profile.join(".env"),
     ];
-    if !candidates.iter().any(|path| path.exists()) {
+    let disk = Disk::process();
+    let exists = |path: &Path| disk.follow_blocking(path).exists() == Some(true);
+    if !candidates.iter().any(|path| exists(path)) {
         for parent in std::env::current_dir()
             .map_err(|_| "cannot resolve working directory")?
             .ancestors()
             .skip(1)
         {
             let candidate = parent.join(".env");
-            if candidate.exists() {
+            if exists(&candidate) {
                 candidates.push(candidate);
                 break;
             }
@@ -3206,7 +3215,11 @@ fn maybe_open_browser(url: &str) {
         return;
     }
     // Skip in containers (Docker sets /.dockerenv).
-    if Path::new("/.dockerenv").exists() {
+    if Disk::process()
+        .follow_blocking(Path::new("/.dockerenv"))
+        .exists()
+        == Some(true)
+    {
         return;
     }
     if let Err(err) = open::that(url) {
@@ -3332,21 +3345,18 @@ fn build_webauthn_runtime(
     }
 }
 
-fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Result<String> {
+async fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Result<String> {
     use aws_lc_rs::rand::{SecureRandom, SystemRandom};
-    use std::io::Write;
+    use tokio::io::AsyncWriteExt;
 
-    std::fs::create_dir_all(data_dir)?;
+    let disk = Disk::process();
+    disk.create_dir(data_dir, Parents::Create).await?;
     let path = data_dir.join("jwt-signing-secret");
-    match std::fs::read_to_string(&path) {
-        Ok(existing) => {
-            let existing = existing.trim();
-            if !existing.is_empty() {
-                return Ok(existing.to_string());
-            }
+    if let Some(existing) = disk.read_to_string(&path).await.if_present()? {
+        let existing = existing.trim();
+        if !existing.is_empty() {
+            return Ok(existing.to_string());
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
     }
 
     let rng = SystemRandom::new();
@@ -3355,18 +3365,15 @@ fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Resul
         .map_err(|_| std::io::Error::other("failed to generate JWT signing secret"))?;
     let secret = format!("scryer-jwt-v1-{}", hex_bytes(&bytes));
 
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
+    match disk.open(&path, Open::create_new()).await {
         Ok(mut file) => {
-            file.write_all(secret.as_bytes())?;
-            file.write_all(b"\n")?;
+            file.write_all(secret.as_bytes()).await?;
+            file.write_all(b"\n").await?;
+            file.flush().await?;
             Ok(secret)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let existing = std::fs::read_to_string(&path)?;
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            let existing = disk.read_to_string(&path).await?;
             let existing = existing.trim();
             if existing.is_empty() {
                 Err(std::io::Error::other("JWT signing secret file is empty"))
@@ -3374,7 +3381,7 @@ fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Resul
                 Ok(existing.to_string())
             }
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 

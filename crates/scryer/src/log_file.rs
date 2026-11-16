@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -7,6 +7,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use scryer_application::disk::{
+    Access, Disk, DiskError, EntryKind, Link, LinkOutcome, Open, Parents, PathReading, Removal,
+    Remove, reason,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LogFilePolicy {
@@ -61,7 +65,7 @@ struct Active {
     path: PathBuf,
     file: Option<File>,
     bytes: u64,
-    permissions: fs::Permissions,
+    access: Access,
     policy: LogFilePolicy,
     clock: Clock,
     work: Arc<Work>,
@@ -194,8 +198,9 @@ fn open_with_clock(
     clock: Clock,
 ) -> io::Result<(LogFileWriter, LogFileGuard)> {
     let path = std::path::absolute(path)?;
-    fs::create_dir_all(path.parent().unwrap())?;
-    let file = open_active(&path)?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(path.parent().unwrap(), Parents::Create)?;
+    let file = open_active(&path, Access::Default)?;
     let metadata = file.metadata()?;
     let sealed = managed_files(&path, "sealed")?;
     let archives = managed_files(&path, "gz")?;
@@ -214,7 +219,12 @@ fn open_with_clock(
         .into_iter()
         // An interruption before rename can leave an empty exclusive reservation.
         // Preserve it; it has no events to recover and must not become an archive.
-        .filter(|p| fs::symlink_metadata(p).map_or(true, |m| m.len() != 0))
+        .filter(|p| {
+            !matches!(
+                disk.fresh_blocking(p),
+                PathReading::Known { len: Some(0), .. }
+            )
+        })
         .map(|p| Job { source: Some(p) })
         .collect();
     if archives.len() > policy.max_files {
@@ -234,7 +244,7 @@ fn open_with_clock(
     let writer = LogFileWriter(Arc::new(Mutex::new(Active {
         path,
         bytes: metadata.len(),
-        permissions: metadata.permissions(),
+        access: Access::like(&metadata.permissions()),
         file: Some(file),
         policy,
         clock,
@@ -256,69 +266,54 @@ fn report(operation: &str, error: &io::Error) {
     eprintln!("Scryer file log {operation} failed: {error}; recoverable log contents preserved");
 }
 
-fn regular(path: &Path) -> io::Result<()> {
-    if !fs::symlink_metadata(path)?.file_type().is_file() {
-        return Err(unrecoverable("log segment is not a regular file"));
+fn not_regular(path: PathReading) -> io::Error {
+    match path {
+        PathReading::Known { .. } => unrecoverable("log segment is not a regular file"),
+        PathReading::Missing { .. } => io::ErrorKind::NotFound.into(),
+        PathReading::Unreachable { .. } | PathReading::NotObserved => {
+            io::Error::other("log segment could not be read")
+        }
     }
-    Ok(())
 }
 
-fn no_follow(options: &mut OpenOptions) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+fn regular(path: &Path) -> io::Result<()> {
+    match Disk::process().fresh_blocking(path) {
+        PathReading::Known {
+            kind: EntryKind::File,
+            ..
+        } => Ok(()),
+        reading => Err(not_regular(reading)),
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
+}
+
+// A link or anything but a regular file met while opening becomes `refusal`.
+fn refused(error: DiskError, refusal: impl FnOnce() -> io::Error) -> io::Error {
+    match error.reason() {
+        reason::DISK_LINK_NOT_FOLLOWED | reason::DISK_WRONG_KIND => refusal(),
+        _ => error.into(),
     }
 }
 
 fn open_regular(path: &Path) -> io::Result<File> {
     regular(path)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    no_follow(&mut options);
-    let file = options.open(path)?;
-    if !file.metadata()?.file_type().is_file() {
-        return Err(unrecoverable("not a regular log file"));
-    }
-    Ok(file)
+    Disk::process()
+        .open_blocking(path, Open::read().without_following_links())
+        .map_err(|error| refused(error, || unrecoverable("not a regular log file")))
 }
 
-fn open_active(path: &Path) -> io::Result<File> {
-    open_active_with_permissions(path, None)
-}
-
-fn preserve_create_mode(options: &mut OpenOptions, permissions: Option<&fs::Permissions>) {
-    #[cfg(not(unix))]
-    let _ = (options, permissions);
-    #[cfg(unix)]
-    if let Some(permissions) = permissions {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        // Set the mode at creation, before any log contents become visible.
-        options.mode(permissions.mode() & 0o777);
+// Creates the active log with `access`, set before any contents are visible.
+fn open_active(path: &Path, access: Access) -> io::Result<File> {
+    let disk = Disk::process();
+    if let reading @ PathReading::Known { kind, .. } = disk.fresh_blocking(path)
+        && kind != EntryKind::File
+    {
+        return Err(not_regular(reading));
     }
-}
-
-fn open_active_with_permissions(
-    path: &Path,
-    permissions: Option<&fs::Permissions>,
-) -> io::Result<File> {
-    if fs::symlink_metadata(path).is_ok() {
-        regular(path)?;
-    }
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    preserve_create_mode(&mut options, permissions);
-    no_follow(&mut options);
-    let file = options.open(path)?;
-    if !file.metadata()?.file_type().is_file() {
-        return Err(io::Error::other("not a regular active log"));
-    }
-    Ok(file)
+    disk.open_blocking(
+        path,
+        Open::append().with_access(access).without_following_links(),
+    )
+    .map_err(|error| refused(error, || io::Error::other("not a regular active log")))
 }
 
 fn prefix(path: &Path) -> std::ffi::OsString {
@@ -331,9 +326,10 @@ fn managed_files(path: &Path, extension: &str) -> io::Result<Vec<PathBuf>> {
     let prefix = prefix(path);
     let suffix = format!(".{extension}");
     let mut paths = Vec::new();
-    for entry in fs::read_dir(path.parent().unwrap())? {
-        let entry = entry?;
-        let name = entry.file_name();
+    for entry in Disk::process().list_blocking(path.parent().unwrap())? {
+        let Some(name) = entry.path.file_name() else {
+            continue;
+        };
         let Some(id) = name
             .as_encoded_bytes()
             .strip_prefix(prefix.as_encoded_bytes())
@@ -353,8 +349,8 @@ fn managed_files(path: &Path, extension: &str) -> io::Result<Vec<PathBuf>> {
         {
             continue;
         }
-        if entry.file_type()?.is_file() {
-            paths.push(entry.path());
+        if entry.reading.kind() == Some(EntryKind::File) {
+            paths.push(entry.path);
         }
     }
     paths.sort_by_key(|path| (sequence(path), path.clone()));
@@ -383,8 +379,9 @@ impl Active {
             return Ok(());
         }
         if let Some(file) = &self.file {
-            self.permissions = file.metadata()?.permissions();
+            self.access = Access::like(&file.metadata()?.permissions());
         }
+        let disk = Disk::process();
         // Reserve an exclusive destination before closing the Windows handle.
         let sealed = loop {
             let sequence = self.next_sequence;
@@ -397,36 +394,38 @@ impl Active {
                 now.format("%Y%m%dT%H%M%SZ")
             ));
             let candidate = self.path.with_file_name(name);
-            if fs::symlink_metadata(candidate.with_extension("gz")).is_ok() {
+            if disk
+                .fresh_blocking(&candidate.with_extension("gz"))
+                .exists()
+                == Some(true)
+            {
                 continue;
             }
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
+            match disk.open_blocking(&candidate, Open::create_new()) {
                 Ok(reservation) => {
                     drop(reservation);
                     break candidate;
                 }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
+                Err(e) if e.reason() == reason::DISK_DESTINATION_EXISTS => {}
+                Err(e) => return Err(e.into()),
             }
         };
         if let Some(file) = self.file.as_mut()
             && let Err(error) = file.flush().and_then(|_| file.sync_all())
         {
-            let _ = fs::remove_file(&sealed); // Our exclusive empty reservation.
+            // Our exclusive empty reservation.
+            let _ = disk.remove_blocking(&sealed, Remove::File);
             return Err(error);
         }
         drop(self.file.take());
-        if let Err(error) = work
-            .faults
-            .check("rename")
-            .and_then(|_| fs::rename(&self.path, &sealed))
-        {
-            let _ = fs::remove_file(&sealed);
-            self.file = open_active_with_permissions(&self.path, Some(&self.permissions)).ok();
+        // The destination is the reservation made above, so it is replaced.
+        if let Err(error) = work.faults.check("rename").and_then(|_| {
+            disk.move_replacing_blocking(&self.path, &sealed)
+                .map(drop)
+                .map_err(io::Error::from)
+        }) {
+            let _ = disk.remove_blocking(&sealed, Remove::File);
+            self.file = open_active(&self.path, self.access).ok();
             return Err(error);
         }
         queue.jobs.push_back(Job {
@@ -437,12 +436,12 @@ impl Active {
         let reopened = work
             .faults
             .check("reopen")
-            .and_then(|_| open_active_with_permissions(&self.path, Some(&self.permissions)));
+            .and_then(|_| open_active(&self.path, self.access));
         match reopened {
             Ok(file) => self.file = Some(file),
             Err(error) => {
                 // A transient reopen failure must not unnecessarily lose this event.
-                self.file = open_active_with_permissions(&self.path, Some(&self.permissions)).ok();
+                self.file = open_active(&self.path, self.access).ok();
                 return Err(error);
             }
         }
@@ -458,7 +457,7 @@ impl Active {
         }
         let result = (|| {
             if self.file.is_none() {
-                let file = open_active_with_permissions(&self.path, Some(&self.permissions))?;
+                let file = open_active(&self.path, self.access)?;
                 self.bytes = file.metadata()?.len();
                 self.file = Some(file);
             }
@@ -537,7 +536,8 @@ fn same_contents(source: &Path, archive: &Path) -> io::Result<bool> {
 
 fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
     let destination = source.with_extension("gz");
-    if fs::symlink_metadata(&destination).is_ok() {
+    let disk = Disk::process();
+    if disk.fresh_blocking(&destination).exists() == Some(true) {
         if same_contents(source, &destination)? {
             // This namespace is published only after syncing the gzip. Recovery
             // verifies its entire contents, including the checksum, before unlinking.
@@ -547,10 +547,9 @@ fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
     }
     let temporary = source.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let mut input = open_regular(source)?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    preserve_create_mode(&mut options, Some(&input.metadata()?.permissions()));
-    let output = options.open(&temporary)?;
+    // Created with the source's mode, before any log contents become visible.
+    let access = Access::like(&input.metadata()?.permissions());
+    let output = disk.open_blocking(&temporary, Open::create_new().with_access(access))?;
     let result = (|| {
         let mut encoder = flate2::GzBuilder::new()
             .comment(ROTATION_MARKER)
@@ -559,24 +558,26 @@ fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
         io::copy(&mut input, &mut encoder)?;
         encoder.finish()?.sync_all()?;
         faults.check("publication")?;
-        let linked = faults
-            .check("hard_link")
-            .and_then(|_| fs::hard_link(&temporary, &destination));
-        if let Err(error) = linked {
-            if error.kind() == io::ErrorKind::AlreadyExists {
-                return Err(error);
+        let linked = match faults.check("hard_link") {
+            Ok(()) => disk.link_blocking(&temporary, &destination, Link::Hard),
+            Err(_) => Ok(LinkOutcome::NotPossible),
+        };
+        match linked {
+            Ok(LinkOutcome::Linked) => {}
+            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+                return Err(error.into());
             }
-            // FAT/exFAT cannot hard-link. Native exclusive rename retains both
+            // FAT/exFAT cannot hard-link. An exclusive rename retains both
             // atomic publication and collision safety on those filesystems.
-            publish_platform::rename_exclusive(&temporary, &destination)?;
+            Ok(LinkOutcome::NotPossible) | Err(_) => {
+                disk.move_exclusive_blocking(&temporary, &destination)?;
+            }
         }
         sync_directory(source.parent().unwrap())
     })();
     // Only this invocation's exclusively created temporary file is eligible.
-    if let Err(error) = fs::remove_file(&temporary)
-        && error.kind() != io::ErrorKind::NotFound
-    {
-        report("temporary cleanup", &error);
+    if let Err(error) = disk.remove_blocking(&temporary, Remove::File) {
+        report("temporary cleanup", &error.into());
     }
     result
 }
@@ -599,18 +600,23 @@ fn rotated_here(archive: &Path) -> bool {
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    File::open(path)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = path;
+    Disk::process().sync_dir_blocking(path)?;
     Ok(())
+}
+
+// A file already gone fails as not found, which parks the job as before.
+fn remove_regular(path: &Path) -> io::Result<()> {
+    match Disk::process().remove_blocking(path, Remove::File)? {
+        Removal::Removed => Ok(()),
+        Removal::AlreadyAbsent => Err(io::ErrorKind::NotFound.into()),
+    }
 }
 
 fn process_job(job: &mut Job, work: &Work) -> io::Result<()> {
     if let Some(source) = &job.source {
         publish(source, &work.faults)?;
         regular(source)?;
-        fs::remove_file(source)?;
+        remove_regular(source)?;
         job.source = None;
     }
     // Only archives that carry this rotation's mark count toward retention
@@ -624,7 +630,7 @@ fn process_job(job: &mut Job, work: &Work) -> io::Result<()> {
     for archive in archives.into_iter().take(expired) {
         regular(&archive)?;
         work.faults.check("retention")?;
-        fs::remove_file(archive)?;
+        remove_regular(&archive)?;
     }
     Ok(())
 }
@@ -682,6 +688,3 @@ fn run_worker(work: Arc<Work>) {
 #[cfg(test)]
 #[path = "log_file_tests.rs"]
 mod tests;
-
-#[path = "log_file_publish.rs"]
-mod publish_platform;
