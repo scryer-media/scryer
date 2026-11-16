@@ -2106,7 +2106,7 @@ impl MediaFileRepository for MediaFileStore {
              ORDER BY mf.analysis_revision, mf.analysis_attempted_at, mf.id LIMIT {{}}",
             media_file_select_columns(dialect, "NULL", "mf.role"),
         );
-        fetch_media_files(
+        fetch_distinct_media_files(
             self.datastore.read_exec(),
             &query,
             &[
@@ -2827,7 +2827,9 @@ impl MediaFileRepository for MediaFileStore {
                  WHERE {where_clause}",
                 media_file_select_columns(dialect, "NULL", "mf.role")
             );
-            for media_file in fetch_media_files(self.datastore.read_exec(), &sql, &args).await? {
+            for media_file in
+                fetch_distinct_media_files(self.datastore.read_exec(), &sql, &args).await?
+            {
                 // Attribute each row to the path the caller asked for, using the
                 // same equivalence the predicate above matched on.
                 if let Some(requested_paths) =
@@ -3470,6 +3472,8 @@ fn bool_column_is_true(dialect: SqlDialect, column: &str) -> String {
     }
 }
 
+/// Reads media file rows from a statement that can return one file on several
+/// rows (one per linked episode), decoding each file's analysis once.
 async fn fetch_media_files(
     exec: SqlExec<'_, '_>,
     sql: &str,
@@ -3480,6 +3484,21 @@ async fn fetch_media_files(
         .await?
         .iter()
         .map(|row| decoder.title_media_file(row))
+        .collect()
+}
+
+/// Reads media file rows from a statement that returns each file at most
+/// once. Every row's analysis is decoded and moved into its result, with
+/// nothing kept for later rows.
+async fn fetch_distinct_media_files(
+    exec: SqlExec<'_, '_>,
+    sql: &str,
+    args: &[SqlArg],
+) -> AppResult<Vec<TitleMediaFile>> {
+    SqlRuntime::fetch_all(exec, sql, args)
+        .await?
+        .iter()
+        .map(row_to_title_media_file)
         .collect()
 }
 
@@ -3495,9 +3514,14 @@ async fn fetch_optional_media_file(
         .transpose()
 }
 
+/// `succeeded_parts` yields the stored analysis's report and disc; it is
+/// called only for a succeeded attempt.
 fn media_analysis_attempt_from_row(
     row: &SqlRow,
-    analysis: &AnalysisParts,
+    succeeded_parts: impl FnOnce() -> (
+        Option<scryer_media_types::ProbeReport>,
+        Option<scryer_media_types::DiscMetadata>,
+    ),
 ) -> AppResult<Option<scryer_media_types::AnalysisAttempt>> {
     let Some(revision) = row
         .opt_i64("analysis_attempt_revision")?
@@ -3511,10 +3535,7 @@ fn media_analysis_attempt_from_row(
     let status = row.opt_text("analysis_attempt_status")?.unwrap_or_default();
     let succeeded = status == "succeeded";
     let (report, disc) = if succeeded {
-        (
-            analysis.attempt_report.clone(),
-            analysis.attempt_disc.clone(),
-        )
+        succeeded_parts()
     } else {
         let document = row
             .opt_text("analysis_attempt_json")?
@@ -3544,8 +3565,38 @@ fn media_analysis_attempt_from_row(
     }))
 }
 
+/// Decodes one media file row on its own, moving its decoded analysis into
+/// the result.
 fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
-    MediaFileRowDecoder::default().title_media_file(row)
+    let mut analysis = {
+        let stored = row.opt_bytes("analysis").ok();
+        AnalysisParts::from_stored(stored.as_ref().map(|stored| stored.as_deref()))
+    };
+    let analysis_attempt = media_analysis_attempt_from_row(row, || {
+        (analysis.attempt_report.take(), analysis.attempt_disc.take())
+    })?;
+    let AnalysisParts {
+        details,
+        audio_languages,
+        audio_streams,
+        subtitle_languages,
+        subtitle_codecs,
+        subtitle_streams,
+        dovi_profile,
+        dovi_bl_compat_id,
+        ..
+    } = analysis;
+    Ok(TitleMediaFile {
+        analysis_details: details,
+        dovi_profile,
+        dovi_bl_compat_id,
+        audio_languages,
+        audio_streams,
+        subtitle_languages,
+        subtitle_codecs,
+        subtitle_streams,
+        ..title_media_file_columns(row, analysis_attempt)?
+    })
 }
 
 /// What a file's stored analysis contributes to a decoded media file row.
@@ -3748,74 +3799,93 @@ impl MediaFileRowDecoder {
 
     fn title_media_file(&mut self, row: &SqlRow) -> AppResult<TitleMediaFile> {
         let analysis = self.analysis(row);
+        let analysis_attempt = media_analysis_attempt_from_row(row, || {
+            (
+                analysis.attempt_report.clone(),
+                analysis.attempt_disc.clone(),
+            )
+        })?;
         Ok(TitleMediaFile {
             analysis_details: analysis.details.clone(),
-            analysis_attempt: media_analysis_attempt_from_row(row, &analysis)?,
-            id: row.text("id")?,
-            title_id: row.text("title_id")?,
-            episode_id: row.opt_text("episode_id")?,
-            series_movie_link_ids: string_array_from_json_column(
-                row,
-                "series_movie_link_ids_json",
-                "media_files.series_movie_link_ids_json",
-            ),
-            file_path: row.text("file_path")?,
-            size_bytes: row.i64("size_bytes")?,
-            announced_size_bytes: row.opt_i64("announced_size_bytes")?,
-            role: row
-                .opt_text("role")?
-                .as_deref()
-                .map(scryer_application::MediaFileRole::from_label)
-                .unwrap_or_default(),
-            source_signature_scheme: row.opt_text("source_signature_scheme")?,
-            source_signature_value: row.opt_text("source_signature_value")?,
-            content_hashes: row_to_persisted_content_hashes(row)?,
-            quality_label: row.opt_text("quality_id")?,
-            scan_status: row.text("scan_status")?,
-            created_at: row.timestamp_text("created_at")?,
-            video_codec: parse_stored_video_codec(row.opt_text("video_codec")?)?,
-            video_width: row.opt_i32("video_width")?,
-            video_height: row.opt_i32("video_height")?,
-            video_bitrate_kbps: row.opt_i32("video_bitrate_kbps")?,
-            video_bit_depth: row.opt_i32("video_bit_depth")?,
-            video_hdr_format: row.opt_text("video_hdr_format")?,
             // Dolby Vision has no dedicated column: it rides in the serialized
             // analysis, so rows written before it was captured read as `None`.
             dovi_profile: analysis.dovi_profile,
             dovi_bl_compat_id: analysis.dovi_bl_compat_id,
-            video_frame_rate: row.opt_text("video_frame_rate")?,
-            video_profile: row.opt_text("video_profile")?,
-            audio_codec: row.opt_text("audio_codec")?,
-            audio_profile: row.opt_text("audio_profile")?,
-            audio_channels: row.opt_i32("audio_channels")?,
-            audio_bitrate_kbps: row.opt_i32("audio_bitrate_kbps")?,
             audio_languages: analysis.audio_languages.clone(),
             audio_streams: analysis.audio_streams.clone(),
             subtitle_languages: analysis.subtitle_languages.clone(),
             subtitle_codecs: analysis.subtitle_codecs.clone(),
             subtitle_streams: analysis.subtitle_streams.clone(),
-            has_multiaudio: row.opt_bool("has_multiaudio")?.unwrap_or(false),
-            duration_seconds: row.opt_i32("duration_seconds")?,
-            num_chapters: row.opt_i32("num_chapters")?,
-            container_format: row.opt_text("container_format")?,
-            scene_name: row.opt_text("scene_name")?,
-            release_group: row.opt_text("release_group")?,
-            source_type: row.opt_text("source_type")?,
-            resolution: row.opt_text("resolution")?,
-            video_codec_parsed: parse_stored_video_codec(row.opt_text("video_codec_parsed")?)?,
-            audio_codec_parsed: row.opt_text("audio_codec_parsed")?,
-            audio_channels_parsed: row.opt_text("audio_channels_parsed")?,
-            acquisition_score: row.opt_i32("acquisition_score")?,
-            scoring_log: row.opt_text("scoring_log")?,
-            indexer_source: row.opt_text("indexer_source")?,
-            grabbed_release_title: row.opt_text("grabbed_release_title")?,
-            grabbed_at: row.opt_timestamp_text("grabbed_at")?,
-            edition: row.opt_text("edition")?,
-            original_file_path: row.opt_text("original_file_path")?,
-            release_hash: row.opt_text("release_hash")?,
-            release_listing_json: row.opt_text("release_listing_json")?,
+            ..title_media_file_columns(row, analysis_attempt)?
         })
     }
+}
+
+/// Every column-backed field of a media file row, with `analysis_attempt`
+/// placed first; the fields read from the stored analysis are left at their
+/// defaults for the caller to fill.
+fn title_media_file_columns(
+    row: &SqlRow,
+    analysis_attempt: Option<scryer_media_types::AnalysisAttempt>,
+) -> AppResult<TitleMediaFile> {
+    Ok(TitleMediaFile {
+        analysis_attempt,
+        id: row.text("id")?,
+        title_id: row.text("title_id")?,
+        episode_id: row.opt_text("episode_id")?,
+        series_movie_link_ids: string_array_from_json_column(
+            row,
+            "series_movie_link_ids_json",
+            "media_files.series_movie_link_ids_json",
+        ),
+        file_path: row.text("file_path")?,
+        size_bytes: row.i64("size_bytes")?,
+        announced_size_bytes: row.opt_i64("announced_size_bytes")?,
+        role: row
+            .opt_text("role")?
+            .as_deref()
+            .map(scryer_application::MediaFileRole::from_label)
+            .unwrap_or_default(),
+        source_signature_scheme: row.opt_text("source_signature_scheme")?,
+        source_signature_value: row.opt_text("source_signature_value")?,
+        content_hashes: row_to_persisted_content_hashes(row)?,
+        quality_label: row.opt_text("quality_id")?,
+        scan_status: row.text("scan_status")?,
+        created_at: row.timestamp_text("created_at")?,
+        video_codec: parse_stored_video_codec(row.opt_text("video_codec")?)?,
+        video_width: row.opt_i32("video_width")?,
+        video_height: row.opt_i32("video_height")?,
+        video_bitrate_kbps: row.opt_i32("video_bitrate_kbps")?,
+        video_bit_depth: row.opt_i32("video_bit_depth")?,
+        video_hdr_format: row.opt_text("video_hdr_format")?,
+        video_frame_rate: row.opt_text("video_frame_rate")?,
+        video_profile: row.opt_text("video_profile")?,
+        audio_codec: row.opt_text("audio_codec")?,
+        audio_profile: row.opt_text("audio_profile")?,
+        audio_channels: row.opt_i32("audio_channels")?,
+        audio_bitrate_kbps: row.opt_i32("audio_bitrate_kbps")?,
+        has_multiaudio: row.opt_bool("has_multiaudio")?.unwrap_or(false),
+        duration_seconds: row.opt_i32("duration_seconds")?,
+        num_chapters: row.opt_i32("num_chapters")?,
+        container_format: row.opt_text("container_format")?,
+        scene_name: row.opt_text("scene_name")?,
+        release_group: row.opt_text("release_group")?,
+        source_type: row.opt_text("source_type")?,
+        resolution: row.opt_text("resolution")?,
+        video_codec_parsed: parse_stored_video_codec(row.opt_text("video_codec_parsed")?)?,
+        audio_codec_parsed: row.opt_text("audio_codec_parsed")?,
+        audio_channels_parsed: row.opt_text("audio_channels_parsed")?,
+        acquisition_score: row.opt_i32("acquisition_score")?,
+        scoring_log: row.opt_text("scoring_log")?,
+        indexer_source: row.opt_text("indexer_source")?,
+        grabbed_release_title: row.opt_text("grabbed_release_title")?,
+        grabbed_at: row.opt_timestamp_text("grabbed_at")?,
+        edition: row.opt_text("edition")?,
+        original_file_path: row.opt_text("original_file_path")?,
+        release_hash: row.opt_text("release_hash")?,
+        release_listing_json: row.opt_text("release_listing_json")?,
+        ..Default::default()
+    })
 }
 
 /// Reads the migration-0205 columns off a media file row.
@@ -9181,6 +9251,20 @@ mod tests {
             let single = row_to_title_media_file(row).unwrap();
             assert_eq!(&decoded_analysis_view(&single), expected);
         }
+
+        // The uncached reader returns exactly what the cached one does, field
+        // for field and in the same order, repeated file ids included.
+        let distinct = fetch_distinct_media_files(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            distinct
+                .iter()
+                .filter(|file| file.file_path == "/synthetic/decode/00.mkv")
+                .count(),
+            3
+        );
+        assert_eq!(format!("{distinct:?}"), format!("{decoded:?}"));
 
         // The repeated file shares one decoded analysis across its rows.
         let mut decoder = MediaFileRowDecoder::default();
