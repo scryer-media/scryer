@@ -35,9 +35,7 @@ pub(crate) mod subjects;
 pub(crate) mod title_actions;
 pub(crate) mod watch_recheck;
 
-pub use action_catalog::{
-    LifecycleActionKind, LifecycleEffectClass, LifecycleRiskClass, LifecycleSubjectKind,
-};
+pub use action_catalog::{LifecycleRiskClass, LifecycleSubjectKind};
 pub use action_execution::{
     LIFECYCLE_HIGH_RISK_FAILURE_BREAKER, LIFECYCLE_MAX_ACTION_ATTEMPTS,
     LifecycleActionHandlingReport, LifecycleActionRunView, arming_kept_across_edit,
@@ -47,8 +45,8 @@ pub use action_sequence::{
     ACTION_SEQUENCE_KIND, LIFECYCLE_ACTION_SEQUENCE_SCHEMA_VERSION,
     LIFECYCLE_MAX_ACTION_SEQUENCE_STEPS, LifecycleActionCompletionPolicy, LifecycleActionSequence,
     LifecycleActionSequenceError, LifecycleActionStep, LifecycleActionStepDescriptor,
-    LifecycleActionStepKind, LifecycleActionStepParameters, LifecycleActionStepRequirement,
-    LifecycleSearchCondition, action_sequence_catalog, action_sequence_descriptor_for,
+    LifecycleActionStepKind, LifecycleActionStepParameters, LifecycleSearchCondition,
+    action_sequence_descriptor_for,
 };
 pub use declared_actions::{
     LIFECYCLE_DECLARED_ACTIONS_SCHEMA_VERSION, LifecycleDeclaredActions,

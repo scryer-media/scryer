@@ -11,8 +11,8 @@ use std::sync::atomic::AtomicBool;
 
 use crate::lib_tests::lifecycle_rules::InMemoryLifecycleRuleRepo;
 use crate::lifecycle_rules::{
-    ACTION_SEQUENCE_KIND, LifecycleActionKind, LifecycleCandidateFilter, LifecycleGates,
-    LifecycleGatesUpdate, LifecycleMatcherDraft, LifecycleRuleDraft, candidate_reason,
+    ACTION_SEQUENCE_KIND, LifecycleCandidateFilter, LifecycleGates, LifecycleGatesUpdate,
+    LifecycleMatcherDraft, LifecycleRuleDraft, candidate_reason,
 };
 use crate::ports::{LifecycleActionStepCandidateKey, LifecycleCandidateQuery};
 use scryer_domain::{
@@ -538,24 +538,6 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         Ok(true)
     }
 
-    async fn cancel_active_candidates_for_rule(
-        &self,
-        rule_set_id: &str,
-        state_reason: &str,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<u64> {
-        let mut canceled = 0;
-        for candidate in self.candidates.lock().await.iter_mut() {
-            if candidate.rule_set_id == rule_set_id && !candidate.state.is_terminal() {
-                candidate.state = LifecycleCandidateState::Canceled;
-                candidate.state_reason = state_reason.to_string();
-                candidate.updated_at = updated_at;
-                canceled += 1;
-            }
-        }
-        Ok(canceled)
-    }
-
     async fn count_candidates_by_state(
         &self,
         rule_set_id: &str,
@@ -642,22 +624,6 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         candidate.updated_at = updated_at;
         Ok(true)
     }
-
-    async fn record_candidate_attempts(
-        &self,
-        id: &str,
-        action_attempts: i64,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<()> {
-        let mut rows = self.candidates.lock().await;
-        let candidate = rows
-            .iter_mut()
-            .find(|candidate| candidate.id == id)
-            .ok_or_else(|| AppError::NotFound(id.to_string()))?;
-        candidate.action_attempts = action_attempts;
-        candidate.updated_at = updated_at;
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -693,63 +659,6 @@ impl LifecycleActionRunRepository for InMemoryLifecycleEvaluationRepo {
 
         self.steal_armed_lease().await;
         Ok(())
-    }
-
-    async fn finish_held_action_run_and_release_attempt(
-        &self,
-        run: &LifecycleActionRun,
-        expected_attempt: i64,
-    ) -> AppResult<bool> {
-        if expected_attempt <= 0
-            || run.attempt != expected_attempt
-            || run.status != LifecycleActionRunStatus::Held
-            || run.finished_at.is_none()
-            || run.idempotency_key != format!("hold:{}", run.id)
-        {
-            return Err(AppError::Validation(
-                "invalid synthetic lifecycle held-attempt release".to_string(),
-            ));
-        }
-        if !run
-            .hold_reason
-            .as_deref()
-            .is_some_and(|reason| !reason.is_empty())
-        {
-            return Err(AppError::Validation(
-                "synthetic lifecycle held-attempt release lacks a reason".to_string(),
-            ));
-        }
-        let mut candidates = self.candidates.lock().await;
-        let Some(candidate) = candidates.iter_mut().find(|candidate| {
-            candidate.id == run.candidate_id
-                && candidate.match_generation == run.match_generation
-                && candidate.action_kind == run.action_kind
-                && candidate.action_attempts == expected_attempt
-                && candidate.state == LifecycleCandidateState::Executing
-        }) else {
-            return Ok(false);
-        };
-        let mut action_runs = self.action_runs.lock().await;
-        let Some(stored) = action_runs.iter_mut().find(|stored| {
-            stored.id == run.id
-                && stored.candidate_id == run.candidate_id
-                && stored.match_generation == run.match_generation
-                && stored.action_kind == run.action_kind
-                && stored.attempt == expected_attempt
-                && stored.status == LifecycleActionRunStatus::Running
-        }) else {
-            return Err(AppError::Repository(
-                "synthetic lifecycle held action run was not running".to_string(),
-            ));
-        };
-        *stored = run.clone();
-        candidate.action_attempts = expected_attempt - 1;
-        candidate.state = LifecycleCandidateState::Blocked;
-        candidate.state_reason = run.hold_reason.clone().unwrap_or_default();
-        candidate.last_evaluated_at = run.finished_at.expect("checked above");
-        candidate.held_since = candidate.held_since.or(run.finished_at);
-        candidate.updated_at = run.finished_at.expect("checked above");
-        Ok(true)
     }
 
     async fn latest_scoped_deletion_action_run(
@@ -1023,26 +932,6 @@ impl LifecycleActionStepRepository for InMemoryLifecycleEvaluationRepo {
         Ok(steps)
     }
 
-    async fn list_action_step_attempts(
-        &self,
-        key: &LifecycleActionStepKey,
-    ) -> AppResult<Vec<LifecycleActionStepAttempt>> {
-        let mut attempts: Vec<_> = self
-            .action_step_attempts
-            .lock()
-            .await
-            .iter()
-            .filter(|attempt| &attempt.key == key)
-            .cloned()
-            .collect();
-        attempts.sort_by(|left, right| {
-            left.started_at
-                .cmp(&right.started_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(attempts)
-    }
-
     async fn list_step_acts_since(
         &self,
         step_kinds: &[&str],
@@ -1071,20 +960,6 @@ impl LifecycleActionStepRepository for InMemoryLifecycleEvaluationRepo {
             }
         }
         Ok(acts)
-    }
-
-    async fn get_action_job_receipt(
-        &self,
-        key: &LifecycleActionStepKey,
-        dispatch_attempt: i64,
-    ) -> AppResult<Option<LifecycleActionJobReceipt>> {
-        Ok(self
-            .action_job_receipts
-            .lock()
-            .await
-            .iter()
-            .find(|receipt| &receipt.key == key && receipt.dispatch_attempt == dispatch_attempt)
-            .cloned())
     }
 
     async fn list_action_job_receipts(
@@ -1312,31 +1187,6 @@ impl LifecycleSequenceCompletionRepository for InMemoryLifecycleEvaluationRepo {
                     && membership.released_at.is_none()
             })
             .cloned())
-    }
-
-    async fn list_active_sequence_completions(
-        &self,
-        rule_set_id: &str,
-        revision_number: i64,
-        after_id: Option<&str>,
-        limit: usize,
-    ) -> AppResult<Vec<LifecycleSequenceTerminalMembership>> {
-        let mut memberships: Vec<_> = self
-            .sequence_terminal_memberships
-            .lock()
-            .await
-            .iter()
-            .filter(|membership| {
-                membership.rule_set_id == rule_set_id
-                    && membership.revision_number == revision_number
-                    && membership.released_at.is_none()
-                    && after_id.is_none_or(|after_id| membership.id.as_str() > after_id)
-            })
-            .cloned()
-            .collect();
-        memberships.sort_by(|left, right| left.id.cmp(&right.id));
-        memberships.truncate(limit.min(100));
-        Ok(memberships)
     }
 
     async fn finish_sequence_terminal_membership_and_candidate(
@@ -1659,9 +1509,9 @@ fn draft(rego_source: &str, grace_days: i64) -> LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: "Stale movies".to_string(),
         description: String::new(),
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             rego_source,
-            crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days,
         library_ids: Vec::new(),
@@ -1966,9 +1816,9 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
             &fixture.user,
             &id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     MONITORED_MATCHER,
-                    LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 3,
                 max_titles_per_run: None,
@@ -2003,9 +1853,9 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
             &fixture.user,
             &id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     MONITORED_MATCHER,
-                    LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 4,
                 max_titles_per_run: None,
@@ -2045,9 +1895,9 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
             &fixture.user,
             &id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     MONITORED_MATCHER,
-                    LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 5,
                 max_titles_per_run: None,
@@ -2252,9 +2102,9 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
             &fixture.user,
             &rule_set_id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     MONITORED_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 30,
                 max_titles_per_run: None,
@@ -2685,9 +2535,9 @@ async fn swap_matcher_in_place(
             rule_set_id: rule_set_id.to_string(),
             revision_number: reference.revision_number,
             rego_source: scryer_rules::lifecycle::rewrite_package_declaration(
-                &crate::lib_tests::legacy_source(
+                &crate::lib_tests::heads_source(
                     rego_source,
-                    LifecycleActionKind::UnmonitorScopeKeepFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 rule_set_id,
             ),

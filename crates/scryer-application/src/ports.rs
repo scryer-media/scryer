@@ -11153,16 +11153,6 @@ pub struct LifecycleCandidateQuery {
 /// when an active candidate already exists.
 #[async_trait]
 pub trait LifecycleCandidateRepository: Send + Sync {
-    /// The non-terminal candidate for this subject, if any.
-    async fn get_active_candidate(
-        &self,
-        rule_set_id: &str,
-        title_id: &str,
-    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
-        self.get_active_subject_candidate(rule_set_id, "title", title_id)
-            .await
-    }
-
     async fn get_active_subject_candidate(
         &self,
         rule_set_id: &str,
@@ -11191,13 +11181,6 @@ pub trait LifecycleCandidateRepository: Send + Sync {
         &self,
         query: &LifecycleCandidateQuery,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
-
-    /// Highest match generation ever recorded for this subject, terminal rows
-    /// included. Zero when the subject has never had a candidate.
-    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
-        self.max_subject_match_generation(rule_set_id, "title", title_id)
-            .await
-    }
 
     async fn max_subject_match_generation(
         &self,
@@ -11280,15 +11263,6 @@ pub trait LifecycleCandidateRepository: Send + Sync {
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 
-    /// Cancel every active candidate of one rule set in a single write. Used
-    /// when a whole rule is superseded or retired; returns how many rows moved.
-    async fn cancel_active_candidates_for_rule(
-        &self,
-        rule_set_id: &str,
-        state_reason: &str,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<u64>;
-
     /// Candidate counts per state for one rule set, states with no rows omitted.
     async fn count_candidates_by_state(
         &self,
@@ -11336,21 +11310,6 @@ pub trait LifecycleCandidateRepository: Send + Sync {
         stale_before: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
-
-    /// Persist the bounded attempt counter for the current generation.
-    ///
-    /// The executor writes this as a *reservation*, before the action's external
-    /// side effects begin, not as an after-the-fact tally of failures. That is
-    /// what makes a reclaimed execution compute attempt N+1 instead of colliding
-    /// with the `(idempotency_key, attempt)` row an interrupted attempt already
-    /// wrote — and it is what makes the attempt cap bound a crash loop, which a
-    /// counter only advanced on a *handled* failure never could.
-    async fn record_candidate_attempts(
-        &self,
-        id: &str,
-        action_attempts: i64,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<()>;
 }
 
 /// Append-only record of action-handler attempts (RFC 137 section 8).
@@ -11362,19 +11321,6 @@ pub trait LifecycleActionRunRepository: Send + Sync {
 
     /// Write the attempt's terminal status, hold reason, error, and detail.
     async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
-
-    /// Finish a storage-held running attempt and return its reservation in one
-    /// transaction. The release succeeds only while this exact generation,
-    /// action, attempt, and execution lease still belong to the candidate.
-    ///
-    /// Storage capacity and the filesystem guard are environmental holds, not
-    /// failures. Releasing their reservation avoids consuming retry budget or
-    /// colliding with the next attempt's execution idempotency key.
-    async fn finish_held_action_run_and_release_attempt(
-        &self,
-        run: &scryer_domain::LifecycleActionRun,
-        expected_attempt: i64,
-    ) -> AppResult<bool>;
 
     /// The newest durable policy-deletion checkpoint for this exact candidate
     /// generation and action, independently of later safety holds.
@@ -11534,11 +11480,6 @@ pub trait LifecycleActionStepRepository: Send + Sync {
         candidates: &[LifecycleActionStepCandidateKey],
     ) -> AppResult<Vec<scryer_domain::LifecycleActionStepRun>>;
 
-    async fn list_action_step_attempts(
-        &self,
-        key: &scryer_domain::LifecycleActionStepKey,
-    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepAttempt>>;
-
     /// Across every rule: which rule changed which title with the named step
     /// kinds, by attempts started at or after `since` that succeeded. Each
     /// (rule, title, kind) once, at most `limit` of them. Served by the index
@@ -11549,12 +11490,6 @@ pub trait LifecycleActionStepRepository: Send + Sync {
         since: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleStepAct>>;
-
-    async fn get_action_job_receipt(
-        &self,
-        key: &scryer_domain::LifecycleActionStepKey,
-        dispatch_attempt: i64,
-    ) -> AppResult<Option<scryer_domain::LifecycleActionJobReceipt>>;
 
     async fn list_action_job_receipts(
         &self,
@@ -11596,17 +11531,6 @@ pub trait LifecycleSequenceCompletionRepository: Send + Sync {
         subject_kind: &str,
         subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleSequenceTerminalMembership>>;
-
-    /// Active markers in stable-ID keyset order for a reconciliation page. This
-    /// lets a storage-root pass release a marker only after it has observed an
-    /// exact raw no-match without a released early page starving later rows.
-    async fn list_active_sequence_completions(
-        &self,
-        rule_set_id: &str,
-        revision_number: i64,
-        after_id: Option<&str>,
-        limit: usize,
-    ) -> AppResult<Vec<scryer_domain::LifecycleSequenceTerminalMembership>>;
 
     /// Verify the durable per-step evidence and atomically write the terminal
     /// membership marker before moving the candidate to its terminal state.

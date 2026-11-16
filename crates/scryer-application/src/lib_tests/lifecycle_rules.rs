@@ -2,7 +2,7 @@ use super::*;
 
 use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
 use crate::lifecycle_rules::{
-    LIFECYCLE_MAX_GRACE_DAYS, LifecycleActionKind, LifecycleMatcherDraft, LifecyclePreviewMatcher,
+    LIFECYCLE_MAX_GRACE_DAYS, LifecycleMatcherDraft, LifecyclePreviewMatcher,
     LifecyclePreviewRequest, LifecyclePreviewSelection, LifecycleRuleDraft,
 };
 use scryer_domain::{
@@ -370,9 +370,7 @@ fn action_run(rule_set_id: &str, title_id: &str) -> LifecycleActionRun {
         title_id: title_id.to_string(),
         subject_id: title_id.to_string(),
         subject_kind: "title".to_string(),
-        action_kind: LifecycleActionKind::DeleteTitleAndFiles
-            .as_wire_str()
-            .to_string(),
+        action_kind: crate::lifecycle_rules::ACTION_SEQUENCE_KIND.to_string(),
         match_generation: 1,
         idempotency_key: Id::new().0,
         attempt: 1,
@@ -403,9 +401,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
         state: LifecycleCandidateState::Observing,
         state_reason: "first_match".to_string(),
         reason_codes: vec![],
-        action_kind: LifecycleActionKind::UnmonitorScopeKeepFiles
-            .as_wire_str()
-            .to_string(),
+        action_kind: crate::lifecycle_rules::ACTION_SEQUENCE_KIND.to_string(),
         grace_days: 7,
         first_matched_at: now,
         last_matched_at: now,
@@ -425,9 +421,9 @@ fn draft(rego_source: &str) -> LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: "Stale movies".to_string(),
         description: "Unwatched for a long time".to_string(),
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             rego_source,
-            crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days: 7,
         library_ids: Vec::new(),
@@ -649,9 +645,9 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
     );
 
     let matcher = |grace_days| LifecycleMatcherDraft {
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             MONITORED_MATCHER,
-            crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days,
         max_titles_per_run: None,
@@ -673,9 +669,9 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
             &user,
             &created.rule_set.id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     NEVER_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 8,
                 max_titles_per_run: None,
@@ -760,9 +756,9 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
             &user,
             &created.rule_set.id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     NEVER_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 30,
                 max_titles_per_run: None,
@@ -1238,9 +1234,9 @@ async fn the_grace_period_is_bounded_at_ten_years() {
             &user,
             &accepted.rule_set.id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     MONITORED_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: LIFECYCLE_MAX_GRACE_DAYS + 1,
                 max_titles_per_run: None,
@@ -1299,9 +1295,9 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::heads_source(
                         MONITORED_MATCHER,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
                 },
@@ -1435,9 +1431,9 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::heads_source(
                         NEEDS_UPGRADE_HISTORY_MATCHER,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
                 },
@@ -1472,9 +1468,9 @@ async fn an_inline_preview_persists_nothing() {
         LifecyclePreviewRequest {
             matcher: LifecyclePreviewMatcher::Inline {
                 library_ids: vec![],
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     MONITORED_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 0,
             },
@@ -1500,9 +1496,9 @@ async fn preview_refuses_a_selection_above_the_cap() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::heads_source(
                         MONITORED_MATCHER,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
                 },
@@ -1534,9 +1530,9 @@ async fn validate_reports_errors_without_storing_anything() {
     let valid = app
         .validate_lifecycle_rule_source(
             &user,
-            &crate::lib_tests::legacy_source(
+            &crate::lib_tests::heads_source(
                 MONITORED_MATCHER,
-                crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
             ),
         )
         .await
@@ -1597,9 +1593,9 @@ async fn file_facts_distinguish_having_files_from_having_none() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::heads_source(
                         matcher,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
                 },
@@ -1719,9 +1715,9 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::heads_source(
                         matcher,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
                 },

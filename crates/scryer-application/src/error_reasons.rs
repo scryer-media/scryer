@@ -1925,11 +1925,6 @@ pub mod lifecycle {
     /// This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.
     pub const PERSON_TARGETING_PERMISSION_REQUIRED: &str =
         "LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED";
-    /// A matcher that reads storage facts must select a configured library root.
-    pub const MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT: &str =
-        "LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT";
-    /// The storage root the rule selects is not configured.
-    pub const STORAGE_ROOT_NOT_CONFIGURED: &str = "LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED";
     /// Lifecycle rule set was not found.
     pub const RULE_SET_NOT_FOUND: &str = "LIFECYCLE_RULE_SET_NOT_FOUND";
     /// Preview accepts at most 50 titles.
@@ -1939,8 +1934,6 @@ pub mod lifecycle {
     pub const GRACE_PERIOD_INVALID: &str = "LIFECYCLE_GRACE_PERIOD_INVALID";
     /// Grace period must be at most 3650 days (ten years).
     pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE";
-    /// Lifecycle action is not storable.
-    pub const ACTION_NOT_STORABLE: &str = "LIFECYCLE_ACTION_NOT_STORABLE";
     /// The rule's current revision stores its action the way builds before
     /// rules declared their own actions did. It is never evaluated or run
     /// until a revision that declares its actions replaces it.
@@ -1955,10 +1948,6 @@ pub mod lifecycle {
     pub const RULE_REVISION_CONFLICT: &str = "LIFECYCLE_RULE_REVISION_CONFLICT";
     /// A previewed subject got neither a decision nor an error from the rule.
     pub const PREVIEW_NO_DECISION: &str = "LIFECYCLE_PREVIEW_NO_DECISION";
-    /// This lifecycle action is not supported for titles.
-    pub const ACTION_UNSUPPORTED: &str = "LIFECYCLE_ACTION_UNSUPPORTED";
-    /// Lifecycle action is not valid for a title-scoped rule.
-    pub const ACTION_INVALID: &str = "LIFECYCLE_ACTION_INVALID";
     /// A required field is empty.
     pub const FIELD_REQUIRED: &str = "LIFECYCLE_FIELD_REQUIRED";
     /// Movie titles do not have an episode inventory.
@@ -1978,13 +1967,6 @@ pub mod lifecycle {
     pub const RULE_CONFIGURATION_INVALID: &str = "LIFECYCLE_RULE_CONFIGURATION_INVALID";
     /// The rule changed while confirming; review it again before arming deletion.
     pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING";
-    /// Sequence actions must use the sequence executor.
-    pub const SEQUENCE_ACTIONS_INVALID: &str = "LIFECYCLE_SEQUENCE_ACTIONS_INVALID";
-    /// Tag action has no tags configured.
-    pub const TAG_ACTION_NO_TAGS_CONFIGURED: &str = "LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED";
-    /// Quality-profile action has no target profile.
-    pub const QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE: &str =
-        "LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE";
     /// The target quality profile does not exist.
     pub const TARGET_QUALITY_PROFILE_DOES_NOT_EXIST: &str =
         "LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST";
@@ -1998,8 +1980,6 @@ pub mod lifecycle {
         "LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE";
     /// The lifecycle rule source is invalid.
     pub const RULE_SOURCE_INVALID: &str = "LIFECYCLE_RULE_SOURCE_INVALID";
-    /// The lifecycle action configuration is invalid.
-    pub const ACTION_CONFIGURATION_INVALID: &str = "LIFECYCLE_ACTION_CONFIGURATION_INVALID";
     /// The rule source defines no action head, so it could never do anything.
     pub const ACTION_HEAD_REQUIRED: &str = "LIFECYCLE_ACTION_HEAD_REQUIRED";
     /// A `set_quality_profile` literal names no existing quality profile.
@@ -2040,19 +2020,14 @@ pub mod lifecycle {
         RULE_EVALUATION_FAILED,
         PREVIEW_SUBJECT_OUTSIDE_SCOPE,
         PERSON_TARGETING_PERMISSION_REQUIRED,
-        MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT,
-        STORAGE_ROOT_NOT_CONFIGURED,
         RULE_SET_NOT_FOUND,
         PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED,
         GRACE_PERIOD_INVALID,
         GRACE_PERIOD_OUT_OF_RANGE,
-        ACTION_NOT_STORABLE,
         RULE_STORED_ACTIONS_NOT_DECLARED,
         RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN,
         RULE_REVISION_CONFLICT,
         PREVIEW_NO_DECISION,
-        ACTION_UNSUPPORTED,
-        ACTION_INVALID,
         FIELD_REQUIRED,
         MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY,
         SUBJECT_KIND_INVALID,
@@ -2061,15 +2036,11 @@ pub mod lifecycle {
         RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN,
         RULE_CONFIGURATION_INVALID,
         RULE_CHANGED_WHILE_CONFIRMING,
-        SEQUENCE_ACTIONS_INVALID,
-        TAG_ACTION_NO_TAGS_CONFIGURED,
-        QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE,
         TARGET_QUALITY_PROFILE_DOES_NOT_EXIST,
         SEQUENCE_STEP_PARAMETERS_INVALID,
         DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP,
         DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
         RULE_SOURCE_INVALID,
-        ACTION_CONFIGURATION_INVALID,
         ACTION_HEAD_REQUIRED,
         QUALITY_PROFILE_NOT_FOUND,
         MOVE_LIBRARY_NOT_FOUND,

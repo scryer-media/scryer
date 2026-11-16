@@ -164,95 +164,96 @@ impl LifecycleDeclaredActions {
     }
 }
 
+/// One decided action in the place it runs: the head it shows as, and the step
+/// it runs as. A notification is not a step: it is sent once the whole
+/// sequence has succeeded, so it can follow even a title deletion.
+struct OrderedAction {
+    head: LifecycleActionHead,
+    step: Option<LifecycleActionStepKind>,
+}
+
+/// What one evaluation decided, in execution order. This is the only place
+/// that order is written.
+///
+/// Steps run in a fixed order: add tags, remove tags, set quality profile,
+/// monitor, search, fetch subtitles, move, unmonitor, delete files, delete
+/// title, and the notification last. Deleting files unmonitors the subject
+/// first. Deleting the title removes its files with it, so a subject that is
+/// also told to delete files gets the title deletion alone.
+fn actions_in_execution_order(actions: &LifecycleActions) -> Vec<OrderedAction> {
+    use LifecycleActionHead as Head;
+    use LifecycleActionStepKind as Step;
+    let delete_files = actions.delete_files && !actions.delete_title;
+    [
+        (
+            !actions.add_tags.is_empty(),
+            Head::AddTags,
+            Some(Step::AddTags),
+        ),
+        (
+            !actions.remove_tags.is_empty(),
+            Head::RemoveTags,
+            Some(Step::RemoveTags),
+        ),
+        (
+            actions.set_quality_profile.is_some(),
+            Head::SetQualityProfile,
+            Some(Step::ChangeQualityProfile),
+        ),
+        (actions.monitor, Head::Monitor, Some(Step::Monitor)),
+        (actions.search, Head::Search, Some(Step::Search)),
+        (
+            actions.fetch_subtitles,
+            Head::FetchSubtitles,
+            Some(Step::FetchSubtitles),
+        ),
+        (
+            actions.move_to_library.is_some(),
+            Head::MoveToLibrary,
+            Some(Step::MoveToLibrary),
+        ),
+        (
+            actions.move_to_root.is_some(),
+            Head::MoveToRoot,
+            Some(Step::MoveToRoot),
+        ),
+        (
+            actions.unmonitor || delete_files,
+            Head::Unmonitor,
+            Some(Step::Unmonitor),
+        ),
+        (delete_files, Head::DeleteFiles, Some(Step::DeleteFiles)),
+        (
+            actions.delete_title,
+            Head::DeleteTitle,
+            Some(Step::DeleteTitleAndFiles),
+        ),
+        (actions.notify.is_some(), Head::Notify, None),
+    ]
+    .into_iter()
+    .filter(|(present, _, _)| *present)
+    .map(|(_, head, step)| OrderedAction { head, step })
+    .collect()
+}
+
 /// The heads one evaluation decided, in execution order, as shown to the
 /// operator. Deleting files always unmonitors first, so it shows both.
 pub fn decided_heads_in_execution_order(actions: &LifecycleActions) -> Vec<LifecycleActionHead> {
-    let mut heads = Vec::new();
-    if !actions.add_tags.is_empty() {
-        heads.push(LifecycleActionHead::AddTags);
-    }
-    if !actions.remove_tags.is_empty() {
-        heads.push(LifecycleActionHead::RemoveTags);
-    }
-    if actions.set_quality_profile.is_some() {
-        heads.push(LifecycleActionHead::SetQualityProfile);
-    }
-    if actions.monitor {
-        heads.push(LifecycleActionHead::Monitor);
-    }
-    if actions.search {
-        heads.push(LifecycleActionHead::Search);
-    }
-    if actions.fetch_subtitles {
-        heads.push(LifecycleActionHead::FetchSubtitles);
-    }
-    if actions.move_to_library.is_some() {
-        heads.push(LifecycleActionHead::MoveToLibrary);
-    }
-    if actions.move_to_root.is_some() {
-        heads.push(LifecycleActionHead::MoveToRoot);
-    }
-    if actions.unmonitor || (actions.delete_files && !actions.delete_title) {
-        heads.push(LifecycleActionHead::Unmonitor);
-    }
-    if actions.delete_files && !actions.delete_title {
-        heads.push(LifecycleActionHead::DeleteFiles);
-    }
-    if actions.delete_title {
-        heads.push(LifecycleActionHead::DeleteTitle);
-    }
-    if actions.notify.is_some() {
-        heads.push(LifecycleActionHead::Notify);
-    }
-    heads
+    actions_in_execution_order(actions)
+        .into_iter()
+        .map(|action| action.head)
+        .collect()
 }
 
 /// The step ids [`build_declared_action_sequence`] produces for these
 /// actions, without resolving anything. A finished sequence records its step
 /// ids, so this tells whether a later decision would run different steps.
 pub fn declared_step_ids(actions: &LifecycleActions) -> Vec<String> {
-    let delete_files = actions.delete_files && !actions.delete_title;
-    [
-        (
-            !actions.add_tags.is_empty(),
-            LifecycleActionStepKind::AddTags,
-        ),
-        (
-            !actions.remove_tags.is_empty(),
-            LifecycleActionStepKind::RemoveTags,
-        ),
-        (
-            actions.set_quality_profile.is_some(),
-            LifecycleActionStepKind::ChangeQualityProfile,
-        ),
-        (actions.monitor, LifecycleActionStepKind::Monitor),
-        (actions.search, LifecycleActionStepKind::Search),
-        (
-            actions.fetch_subtitles,
-            LifecycleActionStepKind::FetchSubtitles,
-        ),
-        (
-            actions.move_to_library.is_some(),
-            LifecycleActionStepKind::MoveToLibrary,
-        ),
-        (
-            actions.move_to_root.is_some(),
-            LifecycleActionStepKind::MoveToRoot,
-        ),
-        (
-            actions.unmonitor || delete_files,
-            LifecycleActionStepKind::Unmonitor,
-        ),
-        (delete_files, LifecycleActionStepKind::DeleteFiles),
-        (
-            actions.delete_title,
-            LifecycleActionStepKind::DeleteTitleAndFiles,
-        ),
-    ]
-    .into_iter()
-    .filter(|(present, _)| *present)
-    .map(|(_, kind)| kind.descriptor().id.to_string())
-    .collect()
+    actions_in_execution_order(actions)
+        .into_iter()
+        .filter_map(|action| action.step)
+        .map(|kind| kind.descriptor().id.to_string())
+        .collect()
 }
 
 /// Read the decided actions a candidate stored. A candidate written before
@@ -277,16 +278,9 @@ fn step(
     }
 }
 
-/// The step sequence for what one evaluation decided for one subject.
-///
-/// Steps run in a fixed order: add tags, remove tags, set quality profile,
-/// monitor, search, fetch subtitles, move, unmonitor, delete files, delete
-/// title. A notification is not a step: it is sent once the whole sequence
-/// has succeeded, so it can follow even a title deletion. Deleting files unmonitors
-/// the subject first. Deleting the title removes its files with it, so a
-/// subject that is also told to delete files gets the title deletion alone.
-/// A search decided together with a profile change runs only when the change
-/// took effect.
+/// The step sequence for what one evaluation decided for one subject, in the
+/// order [`actions_in_execution_order`] fixes. A search decided together with
+/// a profile change runs only when the change took effect.
 ///
 /// `quality_profile_id` is the id the decided profile name resolved to; it
 /// must be present when a profile was decided. The result is validated with
@@ -297,95 +291,51 @@ pub fn build_declared_action_sequence(
     subject: LifecycleSubjectKind,
     quality_profile_id: Option<&str>,
 ) -> Result<LifecycleActionSequence, LifecycleActionSequenceError> {
+    let profile_changes = actions.set_quality_profile.is_some();
     let mut steps = Vec::new();
-    if !actions.add_tags.is_empty() {
-        steps.push(step(
-            LifecycleActionStepKind::AddTags,
-            LifecycleActionStepParameters::Tags {
+    for kind in actions_in_execution_order(actions)
+        .into_iter()
+        .filter_map(|action| action.step)
+    {
+        let parameters = match kind {
+            LifecycleActionStepKind::AddTags => LifecycleActionStepParameters::Tags {
                 tags: actions.add_tags.clone(),
             },
-        ));
-    }
-    if !actions.remove_tags.is_empty() {
-        steps.push(step(
-            LifecycleActionStepKind::RemoveTags,
-            LifecycleActionStepParameters::Tags {
+            LifecycleActionStepKind::RemoveTags => LifecycleActionStepParameters::Tags {
                 tags: actions.remove_tags.clone(),
             },
-        ));
-    }
-    let profile_changes = actions.set_quality_profile.is_some();
-    if profile_changes {
-        let Some(target) = quality_profile_id else {
-            return Err(LifecycleActionSequenceError::InvalidEnvelope(
-                "the decided quality profile has no resolved id".into(),
-            ));
-        };
-        steps.push(step(
-            LifecycleActionStepKind::ChangeQualityProfile,
-            LifecycleActionStepParameters::ChangeQualityProfile {
-                target_quality_profile_id: target.to_string(),
-            },
-        ));
-    }
-    if actions.monitor {
-        steps.push(step(
-            LifecycleActionStepKind::Monitor,
-            LifecycleActionStepParameters::None,
-        ));
-    }
-    if actions.search {
-        steps.push(step(
-            LifecycleActionStepKind::Search,
-            LifecycleActionStepParameters::Search {
+            LifecycleActionStepKind::ChangeQualityProfile => {
+                let Some(target) = quality_profile_id else {
+                    return Err(LifecycleActionSequenceError::InvalidEnvelope(
+                        "the decided quality profile has no resolved id".into(),
+                    ));
+                };
+                LifecycleActionStepParameters::ChangeQualityProfile {
+                    target_quality_profile_id: target.to_string(),
+                }
+            }
+            LifecycleActionStepKind::Search => LifecycleActionStepParameters::Search {
                 condition: if profile_changes {
                     LifecycleSearchCondition::PreviousProfileChanged
                 } else {
                     LifecycleSearchCondition::Unconditional
                 },
             },
-        ));
-    }
-    if actions.fetch_subtitles {
-        steps.push(step(
-            LifecycleActionStepKind::FetchSubtitles,
-            LifecycleActionStepParameters::None,
-        ));
-    }
-    if let Some(library) = &actions.move_to_library {
-        steps.push(step(
-            LifecycleActionStepKind::MoveToLibrary,
-            LifecycleActionStepParameters::Library {
-                library: library.clone(),
+            LifecycleActionStepKind::MoveToLibrary => LifecycleActionStepParameters::Library {
+                library: actions.move_to_library.clone().unwrap_or_default(),
             },
-        ));
-    }
-    if let Some(root) = &actions.move_to_root {
-        steps.push(step(
-            LifecycleActionStepKind::MoveToRoot,
-            LifecycleActionStepParameters::Root { root: root.clone() },
-        ));
-    }
-    let delete_files = actions.delete_files && !actions.delete_title;
-    if actions.unmonitor || delete_files {
-        steps.push(step(
-            LifecycleActionStepKind::Unmonitor,
-            LifecycleActionStepParameters::Unmonitor {
+            LifecycleActionStepKind::MoveToRoot => LifecycleActionStepParameters::Root {
+                root: actions.move_to_root.clone().unwrap_or_default(),
+            },
+            LifecycleActionStepKind::Unmonitor => LifecycleActionStepParameters::Unmonitor {
                 include_descendants: true,
             },
-        ));
-    }
-    if delete_files {
-        steps.push(step(
-            LifecycleActionStepKind::DeleteFiles,
-            LifecycleActionStepParameters::None,
-        ));
-    }
-    if actions.delete_title {
-        steps.push(step(
-            LifecycleActionStepKind::DeleteTitleAndFiles,
-            LifecycleActionStepParameters::None,
-        ));
+            LifecycleActionStepKind::Monitor
+            | LifecycleActionStepKind::FetchSubtitles
+            | LifecycleActionStepKind::DeleteFiles
+            | LifecycleActionStepKind::DeleteTitleAndFiles => LifecycleActionStepParameters::None,
+        };
+        steps.push(step(kind, parameters));
     }
     let sequence = LifecycleActionSequence::new(steps);
     sequence.validate(subject)?;
@@ -462,6 +412,58 @@ mod tests {
             let built: Vec<String> = sequence.steps.iter().map(|step| step.id.clone()).collect();
             assert_eq!(built, declared_step_ids(&actions), "{actions:?}");
         }
+    }
+
+    /// Every combination of decided actions, at every subject level, with the
+    /// heads shown, the step ids recorded and the sequence built for it,
+    /// folded into one digest. A change to the execution order, to a step's
+    /// parameters or to what is refused changes the digest.
+    #[test]
+    fn execution_order_is_pinned_for_every_head_combination() {
+        let mut hasher = blake3::Hasher::new();
+        for bits in 0u32..(1 << 12) {
+            let actions = LifecycleActions {
+                unmonitor: bits & 1 != 0,
+                delete_files: bits & 2 != 0,
+                delete_title: bits & 4 != 0,
+                search: bits & 8 != 0,
+                set_quality_profile: (bits & 16 != 0).then(|| "Fixture HD".to_string()),
+                add_tags: if bits & 32 != 0 {
+                    vec!["stale".into()]
+                } else {
+                    Vec::new()
+                },
+                remove_tags: if bits & 64 != 0 {
+                    vec!["fresh".into()]
+                } else {
+                    Vec::new()
+                },
+                monitor: bits & 128 != 0,
+                fetch_subtitles: bits & 256 != 0,
+                move_to_library: (bits & 512 != 0).then(|| "Fixture Archive".to_string()),
+                move_to_root: (bits & 1024 != 0).then(|| "/fixture/archive".to_string()),
+                notify: (bits & 2048 != 0).then(|| "Fixture".to_string()),
+            };
+            hasher.update(
+                format!(
+                    "{bits}|{:?}|{:?}\n",
+                    decided_heads_in_execution_order(&actions),
+                    declared_step_ids(&actions)
+                )
+                .as_bytes(),
+            );
+            for subject in LifecycleSubjectKind::ALL {
+                for profile_id in [None, Some("7")] {
+                    let built = build_declared_action_sequence(&actions, *subject, profile_id);
+                    hasher.update(format!("  {subject:?} {profile_id:?} {built:?}\n").as_bytes());
+                }
+            }
+        }
+        assert_eq!(
+            hasher.finalize().to_hex().to_string(),
+            "f2aadf61628607b596a0280d087b762dc53a950ececdcb07a31b9de138bdd235",
+            "the execution order changed"
+        );
     }
 
     #[test]

@@ -20,10 +20,10 @@ use scryer_application::{
 };
 use scryer_domain::{
     LIFECYCLE_TERMINAL_CANDIDATE_STATES, LifecycleActionJobReceipt, LifecycleActionJobReceiptState,
-    LifecycleActionRun, LifecycleActionRunStatus, LifecycleActionStepAttempt,
-    LifecycleActionStepKey, LifecycleActionStepRun, LifecycleActionStepState, LifecycleCandidate,
-    LifecycleCandidateState, LifecycleEvaluationRun, LifecycleEvaluationRunStatus,
-    LifecycleRuleExclusion, LifecycleSequenceTerminalMembership, LifecycleSequenceTerminalOutcome,
+    LifecycleActionRun, LifecycleActionRunStatus, LifecycleActionStepKey, LifecycleActionStepRun,
+    LifecycleActionStepState, LifecycleCandidate, LifecycleCandidateState, LifecycleEvaluationRun,
+    LifecycleEvaluationRunStatus, LifecycleRuleExclusion, LifecycleSequenceTerminalMembership,
+    LifecycleSequenceTerminalOutcome,
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
@@ -69,10 +69,6 @@ const ACTION_STEP_COLUMNS: &str = "candidate_id, match_generation, revision_numb
     rule_set_id, title_id, subject_kind, subject_id, sequence_content_hash, step_kind,
     intent_json, before_state_json, target_identity_json, provenance_json, state, attempt,
     lease_id, lease_expires_at, hold_reason, error, created_at, updated_at, finished_at";
-
-const ACTION_STEP_ATTEMPT_COLUMNS: &str = "id, candidate_id, match_generation, revision_number,
-    step_id, attempt, state, intent_json, before_state_json, target_identity_json,
-    provenance_json, hold_reason, error, started_at, finished_at, created_at, updated_at";
 
 const ACTION_JOB_RECEIPT_COLUMNS: &str = "candidate_id, match_generation, revision_number,
     step_id, dispatch_attempt, schema_version, logical_request_key, request_hash, job_run_id,
@@ -562,43 +558,6 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         Ok(affected == 1)
     }
 
-    async fn cancel_active_candidates_for_rule(
-        &self,
-        rule_set_id: &str,
-        state_reason: &str,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<u64> {
-        let (predicate, mut predicate_args) = active_state_predicate();
-        let sql = format!(
-            "UPDATE lifecycle_candidates
-                SET state = {{}}, state_reason = {{}}, last_evaluated_at = {{}}, updated_at = {{}}
-              WHERE rule_set_id = {{}} AND {predicate}"
-        );
-        let mut args = vec![
-            SqlArg::Text(
-                LifecycleCandidateState::Canceled
-                    .as_storage_str()
-                    .to_string(),
-            ),
-            SqlArg::Text(state_reason.to_string()),
-            SqlArg::Timestamp(updated_at),
-            SqlArg::Timestamp(updated_at),
-            SqlArg::Text(rule_set_id.to_string()),
-        ];
-        args.append(&mut predicate_args);
-
-        SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "cancel_active_lifecycle_candidates",
-            move |tx| {
-                let sql = sql.clone();
-                let args = args.clone();
-                Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
-            },
-        )
-        .await
-    }
-
     async fn count_candidates_by_state(
         &self,
         rule_set_id: &str,
@@ -755,27 +714,6 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         .await?;
         Ok(affected == 1)
     }
-
-    async fn record_candidate_attempts(
-        &self,
-        id: &str,
-        action_attempts: i64,
-        updated_at: DateTime<Utc>,
-    ) -> AppResult<()> {
-        execute_write(
-            &self.datastore,
-            "record_lifecycle_candidate_attempts",
-            "UPDATE lifecycle_candidates
-                SET action_attempts = {}, updated_at = {}
-              WHERE id = {}",
-            vec![
-                SqlArg::I64(action_attempts),
-                SqlArg::Timestamp(updated_at),
-                SqlArg::Text(id.to_string()),
-            ],
-        )
-        .await
-    }
 }
 
 // ── Action runs ─────────────────────────────────────────────────────────────
@@ -807,109 +745,6 @@ impl LifecycleActionRunRepository for LifecycleEvaluationStore {
                 SqlArg::OptTimestamp(run.finished_at),
                 SqlArg::Text(run.id.clone()),
             ],
-        )
-        .await
-    }
-
-    async fn finish_held_action_run_and_release_attempt(
-        &self,
-        run: &LifecycleActionRun,
-        expected_attempt: i64,
-    ) -> AppResult<bool> {
-        if expected_attempt <= 0
-            || run.attempt != expected_attempt
-            || run.status != LifecycleActionRunStatus::Held
-            || run.finished_at.is_none()
-            || run.idempotency_key != format!("hold:{}", run.id)
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID,
-                "invalid lifecycle held-attempt release".to_string(),
-            ));
-        }
-        let hold_reason = run
-            .hold_reason
-            .as_deref()
-            .filter(|reason| !reason.is_empty())
-            .ok_or_else(|| {
-                AppError::validation_refused(
-                    crate::error_reasons::CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED,
-                    "lifecycle held-attempt release lacks a reason".to_string(),
-                )
-            })?;
-        let finished_at = run.finished_at.expect("checked above");
-        let candidate_sql = "UPDATE lifecycle_candidates
-                SET action_attempts = {}, state = {}, state_reason = {},
-                    last_evaluated_at = {}, held_since = COALESCE(held_since, {}), updated_at = {}
-              WHERE id = {} AND match_generation = {} AND action_kind = {}
-                AND action_attempts = {} AND state = {}";
-        let candidate_args = vec![
-            SqlArg::I64(expected_attempt - 1),
-            SqlArg::Text(
-                LifecycleCandidateState::Blocked
-                    .as_storage_str()
-                    .to_string(),
-            ),
-            SqlArg::Text(hold_reason.to_string()),
-            SqlArg::Timestamp(finished_at),
-            SqlArg::Timestamp(finished_at),
-            SqlArg::Timestamp(finished_at),
-            SqlArg::Text(run.candidate_id.clone()),
-            SqlArg::I64(run.match_generation),
-            SqlArg::Text(run.action_kind.clone()),
-            SqlArg::I64(expected_attempt),
-            SqlArg::Text(
-                LifecycleCandidateState::Executing
-                    .as_storage_str()
-                    .to_string(),
-            ),
-        ];
-        let action_sql = "UPDATE lifecycle_action_runs
-                SET idempotency_key = {}, status = {}, hold_reason = {}, error = {},
-                    detail = {}, finished_at = {}
-              WHERE id = {} AND candidate_id = {} AND match_generation = {}
-                AND action_kind = {} AND attempt = {} AND status = {}";
-        let action_args = vec![
-            SqlArg::Text(run.idempotency_key.clone()),
-            SqlArg::Text(run.status.as_storage_str().to_string()),
-            SqlArg::OptText(run.hold_reason.clone()),
-            SqlArg::OptText(run.error.clone()),
-            SqlArg::Text(run.detail.clone()),
-            SqlArg::OptTimestamp(run.finished_at),
-            SqlArg::Text(run.id.clone()),
-            SqlArg::Text(run.candidate_id.clone()),
-            SqlArg::I64(run.match_generation),
-            SqlArg::Text(run.action_kind.clone()),
-            SqlArg::I64(expected_attempt),
-            SqlArg::Text(
-                LifecycleActionRunStatus::Running
-                    .as_storage_str()
-                    .to_string(),
-            ),
-        ];
-        SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "finish_held_lifecycle_action_run_and_release_attempt",
-            move |tx| {
-                let candidate_args = candidate_args.clone();
-                let action_args = action_args.clone();
-                Box::pin(async move {
-                    let affected =
-                        SqlRuntime::execute(SqlExec::Tx(tx), candidate_sql, &candidate_args)
-                            .await?;
-                    if affected != 1 {
-                        return Ok(false);
-                    }
-                    let action_affected =
-                        SqlRuntime::execute(SqlExec::Tx(tx), action_sql, &action_args).await?;
-                    if action_affected != 1 {
-                        return Err(AppError::Repository(
-                            "lifecycle held action run was not running".to_string(),
-                        ));
-                    }
-                    Ok(true)
-                })
-            },
         )
         .await
     }
@@ -1360,26 +1195,6 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
         .collect()
     }
 
-    async fn list_action_step_attempts(
-        &self,
-        key: &LifecycleActionStepKey,
-    ) -> AppResult<Vec<LifecycleActionStepAttempt>> {
-        SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            &format!(
-                "SELECT {ACTION_STEP_ATTEMPT_COLUMNS} FROM lifecycle_action_step_attempts
-                  WHERE candidate_id = {{}} AND match_generation = {{}}
-                    AND revision_number = {{}} AND step_id = {{}}
-                  ORDER BY started_at ASC, id ASC"
-            ),
-            &action_step_key_args(key),
-        )
-        .await?
-        .iter()
-        .map(row_to_action_step_attempt)
-        .collect()
-    }
-
     async fn list_step_acts_since(
         &self,
         step_kinds: &[&str],
@@ -1429,28 +1244,6 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
                 })
             })
             .collect()
-    }
-
-    async fn get_action_job_receipt(
-        &self,
-        key: &LifecycleActionStepKey,
-        dispatch_attempt: i64,
-    ) -> AppResult<Option<LifecycleActionJobReceipt>> {
-        let mut args = action_step_key_args(key);
-        args.push(SqlArg::I64(dispatch_attempt));
-        SqlRuntime::fetch_optional(
-            self.datastore.read_exec(),
-            &format!(
-                "SELECT {ACTION_JOB_RECEIPT_COLUMNS} FROM lifecycle_action_job_receipts
-                  WHERE candidate_id = {{}} AND match_generation = {{}}
-                    AND revision_number = {{}} AND step_id = {{}} AND dispatch_attempt = {{}}"
-            ),
-            &args,
-        )
-        .await?
-        .as_ref()
-        .map(row_to_action_job_receipt)
-        .transpose()
     }
 
     async fn list_action_job_receipts(
@@ -1599,42 +1392,6 @@ impl LifecycleSequenceCompletionRepository for LifecycleEvaluationStore {
         .as_ref()
         .map(row_to_sequence_terminal_membership)
         .transpose()
-    }
-
-    async fn list_active_sequence_completions(
-        &self,
-        rule_set_id: &str,
-        revision_number: i64,
-        after_id: Option<&str>,
-        limit: usize,
-    ) -> AppResult<Vec<LifecycleSequenceTerminalMembership>> {
-        let limit = i64::try_from(limit.min(100)).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID,
-                format!("invalid lifecycle completion limit: {error}"),
-            )
-        })?;
-        SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            &format!(
-                "SELECT {SEQUENCE_TERMINAL_MEMBERSHIP_COLUMNS}
-                   FROM lifecycle_sequence_terminal_memberships
-                  WHERE rule_set_id = {{}} AND revision_number = {{}} AND released_at IS NULL
-                    AND ({{}} IS NULL OR id > {{}})
-                  ORDER BY id ASC LIMIT {{}}"
-            ),
-            &[
-                SqlArg::Text(rule_set_id.to_string()),
-                SqlArg::I64(revision_number),
-                SqlArg::OptText(after_id.map(str::to_string)),
-                SqlArg::OptText(after_id.map(str::to_string)),
-                SqlArg::I64(limit),
-            ],
-        )
-        .await?
-        .iter()
-        .map(row_to_sequence_terminal_membership)
-        .collect()
     }
 
     async fn finish_sequence_terminal_membership_and_candidate(
@@ -2603,35 +2360,6 @@ fn row_to_action_step(row: &SqlRow) -> AppResult<LifecycleActionStepRun> {
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
         finished_at: row.opt_timestamp("finished_at")?,
-    })
-}
-
-fn row_to_action_step_attempt(row: &SqlRow) -> AppResult<LifecycleActionStepAttempt> {
-    let state_raw = row.text("state")?;
-    Ok(LifecycleActionStepAttempt {
-        id: row.text("id")?,
-        key: LifecycleActionStepKey {
-            candidate_id: row.text("candidate_id")?,
-            match_generation: row.i64("match_generation")?,
-            revision_number: row.i64("revision_number")?,
-            step_id: row.text("step_id")?,
-        },
-        attempt: row.i64("attempt")?,
-        state: LifecycleActionStepState::parse_storage(&state_raw).ok_or_else(|| {
-            AppError::Repository(format!(
-                "unknown lifecycle action attempt state: {state_raw}"
-            ))
-        })?,
-        intent_json: row.text("intent_json")?,
-        before_state_json: row.text("before_state_json")?,
-        target_identity_json: row.text("target_identity_json")?,
-        provenance_json: row.text("provenance_json")?,
-        hold_reason: row.opt_text("hold_reason")?,
-        error: row.opt_text("error")?,
-        started_at: row.timestamp("started_at")?,
-        finished_at: row.opt_timestamp("finished_at")?,
-        created_at: row.timestamp("created_at")?,
-        updated_at: row.timestamp("updated_at")?,
     })
 }
 

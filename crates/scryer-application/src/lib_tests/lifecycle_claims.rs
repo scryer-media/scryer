@@ -10,8 +10,8 @@ use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
 use crate::lib_tests::lifecycle_rules::InMemoryLifecycleRuleRepo;
 use crate::lib_tests::request_rules_support::InMemoryLifecycleClaimRepo;
 use crate::lifecycle_rules::{
-    LifecycleActionKind, LifecyclePreviewMatcher, LifecyclePreviewRequest,
-    LifecyclePreviewSelection, LifecycleRuleDraft, execution_reason,
+    LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
+    LifecycleRuleDraft, execution_reason,
 };
 use scryer_domain::{
     LifecycleCandidateState, LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer,
@@ -111,12 +111,15 @@ impl ClaimFixture {
     }
 }
 
-fn draft(rego_source: &str, kind: LifecycleActionKind) -> LifecycleRuleDraft {
+fn draft(
+    rego_source: &str,
+    heads: &[scryer_rules::lifecycle_actions::LifecycleActionHead],
+) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: "Lease rule".to_string(),
         description: String::new(),
-        rego_source: crate::lib_tests::legacy_source(rego_source, kind),
+        rego_source: crate::lib_tests::heads_source(rego_source, heads),
         grace_days: 0,
         library_ids: Vec::new(),
     }
@@ -187,7 +190,10 @@ async fn assert_lease_does_not_hold(state: LifecycleClaimState) {
     let fixture = claims_app();
     let rule_id = fixture
         .rule(
-            draft(ALWAYS_MATCHER, LifecycleActionKind::DeleteTitleAndFiles),
+            draft(
+                ALWAYS_MATCHER,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
+            ),
             LifecycleRuleState::DryRun,
         )
         .await;
@@ -255,7 +261,10 @@ async fn destructive_execution_reads_claims_under_the_approval_guard() {
     let fixture = claims_app();
     let rule_id = fixture
         .rule(
-            draft(ALWAYS_MATCHER, LifecycleActionKind::DeleteTitleAndFiles),
+            draft(
+                ALWAYS_MATCHER,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
+            ),
             LifecycleRuleState::DryRun,
         )
         .await;
@@ -308,7 +317,10 @@ async fn an_unreadable_claim_store_holds_a_destructive_action() {
     let fixture = claims_app();
     let rule_id = fixture
         .rule(
-            draft(ALWAYS_MATCHER, LifecycleActionKind::DeleteTitleAndFiles),
+            draft(
+                ALWAYS_MATCHER,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
+            ),
             LifecycleRuleState::DryRun,
         )
         .await;
@@ -344,7 +356,10 @@ async fn a_live_lease_does_not_hold_a_reversible_action() {
     let fixture = claims_app();
     let rule_id = fixture
         .rule(
-            draft(ALWAYS_MATCHER, LifecycleActionKind::UnmonitorScopeKeepFiles),
+            draft(
+                ALWAYS_MATCHER,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
+            ),
             LifecycleRuleState::DryRun,
         )
         .await;
@@ -382,7 +397,7 @@ async fn the_shipped_template_matches_an_expired_lease() {
         .rule(
             draft(
                 EXPIRED_LEASE_MATCHER,
-                LifecycleActionKind::DeleteTitleAndFiles,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
         )
@@ -407,7 +422,7 @@ async fn the_shipped_template_spares_a_title_kept_permanently() {
         .rule(
             draft(
                 EXPIRED_LEASE_MATCHER,
-                LifecycleActionKind::DeleteTitleAndFiles,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
         )
@@ -430,7 +445,7 @@ async fn the_shipped_template_spares_a_title_whose_lease_is_still_running() {
         .rule(
             draft(
                 EXPIRED_LEASE_MATCHER,
-                LifecycleActionKind::DeleteTitleAndFiles,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
         )
@@ -455,7 +470,7 @@ async fn an_unreadable_claim_store_holds_a_rule_that_reads_a_lease_fact() {
         .rule(
             draft(
                 EXPIRED_LEASE_MATCHER,
-                LifecycleActionKind::DeleteTitleAndFiles,
+                &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
         )
@@ -505,9 +520,9 @@ async fn preview_reads_the_same_claim_facts_as_the_pass() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::heads_source(
                         EXPIRED_LEASE_MATCHER,
-                        crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                     ),
                     grace_days: 0,
                 },

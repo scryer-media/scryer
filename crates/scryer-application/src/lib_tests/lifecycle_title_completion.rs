@@ -14,8 +14,7 @@ use crate::lib_tests::media_server_signals::{
     jellyfin_connection,
 };
 use crate::lifecycle_rules::{
-    LifecycleActionKind, LifecyclePreviewMatcher, LifecyclePreviewRequest,
-    LifecyclePreviewSelection, LifecycleRuleDraft,
+    LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection, LifecycleRuleDraft,
 };
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
@@ -197,7 +196,7 @@ fn write_file(path: &Path) {
 async fn create_destructive_rule(
     fixture: &ExecutionFixture,
     subject_kind: LifecycleRuleSubjectKind,
-    action_kind: LifecycleActionKind,
+    heads: &[scryer_rules::lifecycle_actions::LifecycleActionHead],
     rego_source: &str,
 ) -> String {
     let created = fixture
@@ -208,11 +207,7 @@ async fn create_destructive_rule(
                 max_titles_per_run: Some(100),
                 name: "Completion acceptance".into(),
                 description: String::new(),
-                rego_source: crate::lib_tests::legacy_source_at(
-                    rego_source,
-                    action_kind,
-                    subject_kind,
-                ),
+                rego_source: crate::lib_tests::heads_source_at(rego_source, heads, subject_kind),
                 grace_days: 0,
                 library_ids: vec![],
             },
@@ -344,7 +339,7 @@ async fn title_file_only_deletion_retains_show_records_and_linked_or_sibling_fil
     let rule = create_destructive_rule(
         &fixture.execution,
         LifecycleRuleSubjectKind::Title,
-        LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
+        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
         &title_matcher,
     )
     .await;
@@ -536,7 +531,7 @@ async fn movie_title_file_only_deletion_retains_title_and_metadata_records() {
     create_destructive_rule(
         &fixture.execution,
         LifecycleRuleSubjectKind::Title,
-        LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
+        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
         &movie_matcher,
     )
     .await;
@@ -627,9 +622,9 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    rego_source: crate::lib_tests::legacy_source_at(
+                    rego_source: crate::lib_tests::heads_source_at(
                         RETAIN_NEWEST_EPISODE,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeDeleteFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
                         LifecycleRuleSubjectKind::Episode,
                     ),
                     grace_days: 0,
@@ -653,7 +648,7 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
     let rule = create_destructive_rule(
         &fixture.execution,
         LifecycleRuleSubjectKind::Episode,
-        LifecycleActionKind::UnmonitorScopeDeleteFiles,
+        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
         RETAIN_NEWEST_EPISODE,
     )
     .await;
@@ -778,9 +773,9 @@ async fn preview_whole_show_completion(
         LifecyclePreviewRequest {
             matcher: LifecyclePreviewMatcher::Inline {
                 library_ids: vec![],
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     COMPLETE_SHOW_WATCH,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 0,
             },

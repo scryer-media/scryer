@@ -11640,62 +11640,14 @@ type LifecycleActionJobReceipt {
 }
 
 """
-The closed catalog of actions a lifecycle rule revision can authorize.
+How a lifecycle candidate or action run records its actions.
 """
 enum LifecycleActionKind {
 	"""
-	This revision contains an ordered action sequence. Read
-	`actionSequence` for the authoritative steps; it is never a legacy
-	action input value.
+	The actions run as an ordered step sequence. Read `actionSequence` for
+	the steps.
 	"""
 	ACTION_SEQUENCE
-	"""
-	Track membership only, and mutate no media.
-	"""
-	DO_NOTHING
-	"""
-	Unmonitor the matched scope and keep its files.
-	"""
-	UNMONITOR_SCOPE_KEEP_FILES
-	"""
-	Delete the title and its files.
-	"""
-	DELETE_TITLE_AND_FILES
-	"""
-	Unmonitor the title and delete its files while preserving the title.
-	"""
-	UNMONITOR_TITLE_DELETE_ALL_FILES
-	"""
-	Unmonitor the show and its seasons, and delete existing episode files.
-	"""
-	UNMONITOR_SHOW_DELETE_EXISTING_FILES
-	"""
-	Unmonitor the season or episode scope and delete its files.
-	"""
-	UNMONITOR_SCOPE_DELETE_FILES
-	"""
-	Unmonitor the season and delete its files, then delete the show when a
-	fresh parent check proves it is empty.
-	"""
-	UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY
-	"""
-	Unmonitor the season, then unmonitor the show when a fresh parent check
-	proves it is empty.
-	"""
-	UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY
-	"""
-	Change the quality profile and search only when the current profile
-	differs from the target.
-	"""
-	CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED
-	"""
-	Add the configured user tags to the matched title.
-	"""
-	ADD_TAGS
-	"""
-	Remove the configured user tags from the matched title.
-	"""
-	REMOVE_TAGS
 }
 
 """
@@ -11739,12 +11691,11 @@ type LifecycleActionRun {
 	"""
 	titleName: String!
 	"""
-	Action the attempt performed or refused.
+	How the attempt records its actions.
 	"""
 	actionKind: LifecycleActionKind!
 	"""
-	The immutable schema-2 sequence this attempt executed. Legacy attempts
-	retain their original `actionKind` and leave this null.
+	The immutable sequence this attempt executed.
 	"""
 	actionSequence: LifecycleActionSequence
 	"""
@@ -12057,9 +12008,7 @@ type LifecycleCandidate {
 	"""
 	reasonCodes: [String!]!
 	"""
-	Action the rule revision authorizes, and the one the handler will run if
-	this candidate becomes due while the rule is in `OBSERVE` mode, armed for
-	the action's risk class, and its instance effect gate is on.
+	How the candidate records its actions.
 	"""
 	actionKind: LifecycleActionKind!
 	"""
