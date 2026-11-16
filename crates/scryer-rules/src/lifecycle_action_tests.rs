@@ -292,6 +292,74 @@ fn conflicting_heads_are_reported_as_a_pair() {
     }
 }
 
+/// Monitoring at one level conflicts with unmonitoring or deleting at any
+/// level, and a move conflicts with every delete, whichever head is named
+/// first. Deletes never conflict with each other or with unmonitoring, so a
+/// rule may still define any mix of them.
+#[test]
+fn conflicts_reach_across_levels_in_both_orders_and_deletes_combine_freely() {
+    use LifecycleActionHead as H;
+    let monitors = [H::Monitor, H::MonitorSeason, H::MonitorEpisode];
+    let unmonitors = [H::Unmonitor, H::UnmonitorSeason, H::UnmonitorEpisode];
+    let deletes = [
+        H::DeleteFiles,
+        H::DeleteTitle,
+        H::DeleteSeasonFiles,
+        H::DeleteEpisodeFiles,
+    ];
+    let mut refused = vec![(H::MoveToLibrary, H::MoveToRoot)];
+    for monitor in monitors {
+        for other in unmonitors.iter().chain(&deletes) {
+            refused.push((monitor, *other));
+        }
+    }
+    for mover in [H::MoveToLibrary, H::MoveToRoot] {
+        for delete in deletes {
+            refused.push((mover, delete));
+        }
+    }
+    for (a, b) in &refused {
+        assert!(a.conflicts(*b), "{a:?} with {b:?}");
+        assert!(b.conflicts(*a), "{b:?} with {a:?}");
+    }
+    for a in H::ALL {
+        for b in H::ALL {
+            let listed = refused.contains(&(a, b)) || refused.contains(&(b, a));
+            assert_eq!(a.conflicts(b), listed, "{a:?} with {b:?}");
+        }
+    }
+
+    // Each pair is listed once, on the head the host applies first.
+    let position = |head| H::EXECUTION_ORDER.iter().position(|h| *h == head);
+    for head in H::ALL {
+        for other in head.conflicts_with() {
+            assert!(
+                position(head) < position(*other),
+                "{head:?} lists {other:?}"
+            );
+        }
+    }
+
+    for (a, b) in [
+        (H::DeleteFiles, H::DeleteTitle),
+        (H::DeleteFiles, H::DeleteSeasonFiles),
+        (H::DeleteTitle, H::DeleteEpisodeFiles),
+        (H::DeleteSeasonFiles, H::DeleteEpisodeFiles),
+        (H::Unmonitor, H::DeleteSeasonFiles),
+        (H::UnmonitorSeason, H::DeleteEpisodeFiles),
+        (H::UnmonitorEpisode, H::DeleteTitle),
+    ] {
+        assert!(!a.conflicts(b), "{a:?} with {b:?}");
+        for body in [
+            format!("{} := true\n{} := true\n", a.rule_name(), b.rule_name()),
+            format!("{} := true\n{} := true\n", b.rule_name(), a.rule_name()),
+        ] {
+            let validation = validate(&body);
+            assert!(validation.valid, "{body}: {:?}", validation.errors);
+        }
+    }
+}
+
 /// Decisions stored before the newer heads existed still read, and a decision
 /// that uses none of them is written back in the same form.
 #[test]

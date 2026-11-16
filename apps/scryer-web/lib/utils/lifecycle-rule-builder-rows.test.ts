@@ -169,3 +169,90 @@ test("a condition the new subject cannot read is reported against its row, not d
     [["BUILDER_FACT_UNKNOWN", 1, 0]],
   );
 });
+
+function twoRows(
+  first: { subject: string; output: string },
+  second: { subject: string; output: string },
+): RuleBuilderModel {
+  const conditions = (subject: string) =>
+    subject === "SEASON"
+      ? [{ ...SEASON_UNMONITORED }]
+      : subject === "EPISODE"
+        ? [{ field: "input.episode.facts.monitored", operator: "IS_FALSE", value: "" }]
+        : [];
+  return {
+    version: 2,
+    family: "lifecycle",
+    join: "ALL",
+    conditions: [{ ...TITLE_MONITORED }],
+    outputs: { [first.output]: true, [second.output]: true },
+    actions: [first, second].map((row) => ({
+      ...row,
+      join: "ALL" as const,
+      conditions: conditions(row.subject),
+    })),
+  };
+}
+
+test("rows of different subjects conflict the way rows of one subject do", () => {
+  const sameLevel = twoRows(
+    { subject: "TITLE", output: "MONITOR" },
+    { subject: "TITLE", output: "UNMONITOR" },
+  );
+  assert.deepEqual(problems(sameLevel), [
+    { code: "BUILDER_OUTPUTS_CONFLICT", output: "MONITOR", outputs: ["UNMONITOR"], actionIndex: 0 },
+    { code: "BUILDER_OUTPUTS_CONFLICT", output: "UNMONITOR", outputs: ["MONITOR"], actionIndex: 1 },
+  ]);
+
+  const crossLevel = twoRows(
+    { subject: "TITLE", output: "MONITOR" },
+    { subject: "SEASON", output: "DELETE_SEASON_FILES" },
+  );
+  assert.deepEqual(problems(crossLevel), [
+    {
+      code: "BUILDER_OUTPUTS_CONFLICT",
+      output: "MONITOR",
+      outputs: ["DELETE_SEASON_FILES"],
+      actionIndex: 0,
+    },
+    {
+      code: "BUILDER_OUTPUTS_CONFLICT",
+      output: "DELETE_SEASON_FILES",
+      outputs: ["MONITOR"],
+      actionIndex: 1,
+    },
+  ]);
+
+  // Whichever row is written first.
+  const reversed = twoRows(
+    { subject: "EPISODE", output: "UNMONITOR_EPISODE" },
+    { subject: "SEASON", output: "MONITOR_SEASON" },
+  );
+  assert.deepEqual(
+    problems(reversed).map((problem) => [problem.code, problem.actionIndex]),
+    [
+      ["BUILDER_OUTPUTS_CONFLICT", 1],
+      ["BUILDER_OUTPUTS_CONFLICT", 0],
+    ],
+  );
+});
+
+test("deletes and unmonitors at different levels still combine", () => {
+  for (const [first, second] of [
+    [
+      { subject: "TITLE", output: "DELETE_FILES" },
+      { subject: "SEASON", output: "DELETE_SEASON_FILES" },
+    ],
+    [
+      { subject: "EPISODE", output: "DELETE_EPISODE_FILES" },
+      { subject: "TITLE", output: "DELETE_TITLE" },
+    ],
+    [
+      { subject: "TITLE", output: "UNMONITOR" },
+      { subject: "EPISODE", output: "DELETE_EPISODE_FILES" },
+    ],
+  ] as const) {
+    const result = generateRuleSource(SCHEMA, twoRows(first, second), null);
+    assert.ok(result.ok, JSON.stringify(result));
+  }
+});

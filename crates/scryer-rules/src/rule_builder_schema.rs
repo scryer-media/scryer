@@ -359,5 +359,30 @@ mod tests {
                 );
             }
         }
+        // The builder is served every conflict, across subjects as well as
+        // within one.
+        let conflicts_of = |head| {
+            &schema
+                .outputs
+                .iter()
+                .find(|output| output.id == lifecycle_output_id(head))
+                .unwrap()
+                .conflicts_with
+        };
+        for head in LifecycleActionHead::ALL {
+            let served: Vec<_> = head
+                .conflicts_with()
+                .iter()
+                .map(|other| lifecycle_output_id(*other))
+                .collect();
+            assert_eq!(conflicts_of(head), &served, "{head:?}");
+        }
+        let monitor_episode = conflicts_of(LifecycleActionHead::MonitorEpisode);
+        assert!(monitor_episode.contains(&lifecycle_output_id(LifecycleActionHead::Unmonitor)));
+        assert!(monitor_episode.contains(&lifecycle_output_id(LifecycleActionHead::DeleteTitle)));
+        let move_to_root = conflicts_of(LifecycleActionHead::MoveToRoot);
+        assert!(move_to_root.contains(&lifecycle_output_id(
+            LifecycleActionHead::DeleteEpisodeFiles
+        )));
     }
 }

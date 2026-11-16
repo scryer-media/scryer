@@ -118,7 +118,11 @@
       "variants": null,
       "conflictsWith": [
         "UNMONITOR",
+        "UNMONITOR_SEASON",
+        "UNMONITOR_EPISODE",
         "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
         "DELETE_TITLE"
       ]
     },
@@ -140,8 +144,13 @@
       "destructive": false,
       "variants": null,
       "conflictsWith": [
+        "UNMONITOR",
         "UNMONITOR_SEASON",
-        "DELETE_SEASON_FILES"
+        "UNMONITOR_EPISODE",
+        "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
+        "DELETE_TITLE"
       ]
     },
     {
@@ -162,8 +171,13 @@
       "destructive": false,
       "variants": null,
       "conflictsWith": [
+        "UNMONITOR",
+        "UNMONITOR_SEASON",
         "UNMONITOR_EPISODE",
-        "DELETE_EPISODE_FILES"
+        "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
+        "DELETE_TITLE"
       ]
     },
     {
@@ -259,6 +273,8 @@
       "conflictsWith": [
         "MOVE_TO_ROOT",
         "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
         "DELETE_TITLE"
       ]
     },
@@ -280,6 +296,8 @@
       "variants": null,
       "conflictsWith": [
         "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
         "DELETE_TITLE"
       ]
     },

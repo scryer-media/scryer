@@ -222,17 +222,44 @@ impl LifecycleActionHead {
         )
     }
 
-    /// The heads that cannot be applied together with this one. Each pair is
-    /// listed once, on the head that comes first in [`Self::EXECUTION_ORDER`].
+    /// The heads that cannot be applied together with this one, at any
+    /// level: monitoring part of a show while unmonitoring or deleting another
+    /// part of it is as contradictory as doing both to the same part. Each
+    /// pair is listed once, on the head that comes first in
+    /// [`Self::EXECUTION_ORDER`]; [`Self::conflicts`] reads it both ways.
     pub const fn conflicts_with(self) -> &'static [Self] {
+        const UNDO_MONITOR: &[LifecycleActionHead] = &[
+            LifecycleActionHead::Unmonitor,
+            LifecycleActionHead::UnmonitorSeason,
+            LifecycleActionHead::UnmonitorEpisode,
+            LifecycleActionHead::DeleteFiles,
+            LifecycleActionHead::DeleteSeasonFiles,
+            LifecycleActionHead::DeleteEpisodeFiles,
+            LifecycleActionHead::DeleteTitle,
+        ];
         match self {
-            Self::Monitor => &[Self::Unmonitor, Self::DeleteFiles, Self::DeleteTitle],
-            Self::MonitorSeason => &[Self::UnmonitorSeason, Self::DeleteSeasonFiles],
-            Self::MonitorEpisode => &[Self::UnmonitorEpisode, Self::DeleteEpisodeFiles],
-            Self::MoveToLibrary => &[Self::MoveToRoot, Self::DeleteFiles, Self::DeleteTitle],
-            Self::MoveToRoot => &[Self::DeleteFiles, Self::DeleteTitle],
+            Self::Monitor | Self::MonitorSeason | Self::MonitorEpisode => UNDO_MONITOR,
+            Self::MoveToLibrary => &[
+                Self::MoveToRoot,
+                Self::DeleteFiles,
+                Self::DeleteSeasonFiles,
+                Self::DeleteEpisodeFiles,
+                Self::DeleteTitle,
+            ],
+            Self::MoveToRoot => &[
+                Self::DeleteFiles,
+                Self::DeleteSeasonFiles,
+                Self::DeleteEpisodeFiles,
+                Self::DeleteTitle,
+            ],
             _ => &[],
         }
+    }
+
+    /// Whether the two heads cannot be applied together, whichever is named
+    /// first.
+    pub fn conflicts(self, other: Self) -> bool {
+        self.conflicts_with().contains(&other) || other.conflicts_with().contains(&self)
     }
 
     /// The Rego literal the wrapper uses when the head is undefined.
