@@ -177,7 +177,6 @@ test("every template key resolves in the default locale and in Russian", () => {
     "settings.lifecycleTemplateApply",
     "settings.lifecycleTemplateGraceBadge",
     "settings.lifecycleTemplateNoGraceBadge",
-    "settings.lifecycleTemplateDestructiveBadge",
     "settings.lifecycleTemplateNeedsProfileBadge",
     ...[...facets].map(lifecycleTemplateFacetLabelKey),
     ...LIFECYCLE_RULE_TEMPLATES.flatMap((template) => [

@@ -50,6 +50,5 @@ export const LIFECYCLE_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
     outputsHelp: "settings.lifecycleBuilderActionsHelp",
     conditionsHelp: "settings.lifecycleBuilderConditionsHelp",
     outputNotInVariant: "settings.lifecycleBuilderActionTitleOnly",
-    destructive: "settings.lifecycleTemplateDestructiveBadge",
   },
 };

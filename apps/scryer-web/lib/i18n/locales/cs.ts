@@ -5714,7 +5714,6 @@ const cs: LocaleDictionary = {
   "settings.lifecycleTemplateFacetShow": "Seriály",
   "settings.lifecycleTemplateGraceBadge": "{{count}}denní ochranná doba",
   "settings.lifecycleTemplateNoGraceBadge": "Bez ochranné doby",
-  "settings.lifecycleTemplateDestructiveBadge": "Maže soubory",
   "settings.lifecycleTemplateNeedsProfileBadge": "Pojmenujte cílový profil",
   "settings.lifecycleTemplateDeadWantedTitle": "Mrtvé požadované položky",
   "settings.lifecycleTemplateDeadWantedDescription":

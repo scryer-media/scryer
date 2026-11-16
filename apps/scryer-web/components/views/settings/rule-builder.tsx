@@ -1,7 +1,6 @@
 import * as React from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { HelpLabel } from "@/components/common/info-help";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -468,11 +467,6 @@ function OutputRow({
             label
           )}
         </span>
-        {output.destructive && schema.labels.destructive ? (
-          <Badge tone="negative" className="text-[10px]">
-            {t(schema.labels.destructive)}
-          </Badge>
-        ) : null}
       </label>
       {!inVariant ? (
         <p

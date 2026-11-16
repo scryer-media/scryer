@@ -4938,7 +4938,6 @@ const zh_TW: LocaleDictionary = {
   "settings.lifecycleTemplateFacetShow": "影集",
   "settings.lifecycleTemplateGraceBadge": "{{count}} 天寬限期",
   "settings.lifecycleTemplateNoGraceBadge": "無寬限期",
-  "settings.lifecycleTemplateDestructiveBadge": "刪除檔案",
   "settings.lifecycleTemplateNeedsProfileBadge": "指定目標設定檔",
   "settings.lifecycleTemplateDeadWantedTitle": "失效的徵求中項目",
   "settings.lifecycleTemplateDeadWantedDescription":

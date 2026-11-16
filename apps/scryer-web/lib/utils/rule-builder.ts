@@ -209,8 +209,6 @@ export type RuleBuilderSchema = {
     conditionsHelp: string;
     /// Shown on an output the rule's variant cannot declare.
     outputNotInVariant?: string;
-    /// Badge on a destructive output.
-    destructive?: string;
   };
 };
 

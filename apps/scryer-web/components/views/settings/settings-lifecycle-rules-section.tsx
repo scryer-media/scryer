@@ -325,11 +325,6 @@ function LifecycleContextReference() {
                         {help ? (
                           <span className="block text-xs">{help}</span>
                         ) : null}
-                        {descriptor.destructive ? (
-                          <Badge tone="negative" className="ml-2 text-[10px]">
-                            {t("settings.lifecycleTemplateDestructiveBadge")}
-                          </Badge>
-                        ) : null}
                       </TableCell>
                     </TableRow>
                   );
@@ -405,11 +400,6 @@ function LifecycleTemplateCard({
                 ? "settings.lifecycleScopeEpisode"
                 : "settings.lifecycleScopeSeason",
             )}
-          </Badge>
-        ) : null}
-        {template.destructive ? (
-          <Badge tone="negative" className="text-[10px]">
-            {t("settings.lifecycleTemplateDestructiveBadge")}
           </Badge>
         ) : null}
         {template.requiresTargetQualityProfile ? (
@@ -1026,9 +1016,6 @@ export function SettingsLifecycleRulesSection({
                     <TableRow>
                       <TableHead>{t("label.name")}</TableHead>
                       <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead>
-                        {t("settings.lifecycleRuleAction")}
-                      </TableHead>
                       <TableHead className="text-center">
                         {t("settings.lifecycleRuleGraceDays")}
                       </TableHead>
@@ -1089,18 +1076,6 @@ export function SettingsLifecycleRulesSection({
                                 )}
                               </div>
                             )}
-                          </TableCell>
-                          <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                            {record.description || "—"}
-                          </TableCell>
-                          <TableCell className="max-w-[320px]">
-                            <LifecycleDeclaredActionsSummary
-                              declared={record.declaredActions}
-                              idPrefix={selectorId(
-                                "settings-lifecycle-rule-declared-action",
-                                record.id,
-                              )}
-                            />
                             {record.loadRefusal ? (
                               <p
                                 id={selectorId(
@@ -1114,6 +1089,9 @@ export function SettingsLifecycleRulesSection({
                                 )}
                               </p>
                             ) : null}
+                          </TableCell>
+                          <TableCell className="max-w-[200px] truncate text-muted-foreground">
+                            {record.description || "—"}
                           </TableCell>
                           <TableCell className="text-center">
                             {record.graceDays}

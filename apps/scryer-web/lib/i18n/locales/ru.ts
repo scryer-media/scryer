@@ -5278,7 +5278,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleTemplateFacetShow": "Сериалы",
   "settings.lifecycleTemplateGraceBadge": "Отсрочка {{count}} дн.",
   "settings.lifecycleTemplateNoGraceBadge": "Без отсрочки",
-  "settings.lifecycleTemplateDestructiveBadge": "Удаляет файлы",
   "settings.lifecycleTemplateNeedsProfileBadge": "Укажите целевой профиль",
   "settings.lifecycleTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
   "settings.lifecycleTemplateDeadWantedDescription":

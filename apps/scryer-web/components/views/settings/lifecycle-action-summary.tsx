@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
 import { HelpLabel } from "@/components/common/info-help";
 import { Badge } from "@/components/ui/badge";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
@@ -136,23 +135,11 @@ export function LifecycleDeclaredActionsSummary({
     );
   }
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      {declared.destructive ? (
-        <Badge
-          id={selectorId(idPrefix, "destructive")}
-          tone="negative"
-          className="text-[11px]"
-        >
-          <AlertTriangle className="mr-1 h-3 w-3" aria-hidden />
-          {t("settings.lifecycleTemplateDestructiveBadge")}
-        </Badge>
-      ) : null}
-      <ActionEntryList
-        entries={entries}
-        vocabulary={vocabulary}
-        idPrefix={idPrefix}
-      />
-    </div>
+    <ActionEntryList
+      entries={entries}
+      vocabulary={vocabulary}
+      idPrefix={idPrefix}
+    />
   );
 }
 

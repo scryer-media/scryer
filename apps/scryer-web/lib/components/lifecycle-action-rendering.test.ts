@@ -217,7 +217,7 @@ test("a candidate shows the actions its rule decided", async () => {
   });
 });
 
-test("the destructive marker follows declaredActions.destructive", async () => {
+test("the declared summary lists heads in execution order", async () => {
   await withLifecycleViews(({ DeclaredSummary, render }) => {
     const destructive = render(
       createElement(DeclaredSummary, {
@@ -229,7 +229,7 @@ test("the destructive marker follows declaredActions.destructive", async () => {
         idPrefix: "rule",
       }),
     );
-    assert.match(destructive, /id="rule-destructive"/);
+    assert.doesNotMatch(destructive, /id="rule-destructive"/);
     assert.match(
       destructive,
       /id="rule-delete-title"[^>]*data-lifecycle-action-head="DELETE_TITLE"/,
@@ -244,7 +244,6 @@ test("the destructive marker follows declaredActions.destructive", async () => {
         idPrefix: "rule",
       }),
     );
-    assert.doesNotMatch(reversible, /id="rule-destructive"/);
     assert.match(reversible, /\/media\/archive/);
     // Execution order: subtitles are fetched before the move.
     assert.ok(

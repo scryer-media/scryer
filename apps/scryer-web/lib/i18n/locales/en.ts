@@ -10393,7 +10393,6 @@ const en: LocaleDictionary = {
   "settings.lifecycleTemplateFacetShow": "Shows",
   "settings.lifecycleTemplateGraceBadge": "{{count}}-day grace",
   "settings.lifecycleTemplateNoGraceBadge": "No grace period",
-  "settings.lifecycleTemplateDestructiveBadge": "Deletes files",
   "settings.lifecycleTemplateNeedsProfileBadge": "Name a target profile",
   "settings.lifecycleTemplateDeadWantedTitle": "Dead wanted entries",
   "settings.lifecycleTemplateDeadWantedDescription":
