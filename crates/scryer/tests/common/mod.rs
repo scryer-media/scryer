@@ -281,6 +281,60 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
         self.wanted.count_acquisition_scope_states(query).await
     }
 
+    async fn list_acquisition_scope_states_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted.list_acquisition_scope_states_by_ids(ids).await
+    }
+
+    async fn list_acquisition_scope_states_for_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_acquisition_scope_states_for_title_ids(title_ids)
+            .await
+    }
+
+    async fn list_acquisition_scope_states_for_title_ids_without_decisions(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_acquisition_scope_states_for_title_ids_without_decisions(title_ids)
+            .await
+    }
+
+    async fn list_mismatch_recovery_scopes_for_title(
+        &self,
+        title_id: &str,
+        after_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_mismatch_recovery_scopes_for_title(title_id, after_id, limit)
+            .await
+    }
+
+    async fn list_latest_release_decisions_for_acquisition_scope_states(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_application::ReleaseDecision>> {
+        self.wanted
+            .list_latest_release_decisions_for_acquisition_scope_states(ids)
+            .await
+    }
+
+    async fn tally_acquisition_scope_states_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeStatusTally>> {
+        self.wanted
+            .tally_acquisition_scope_states_for_title(title_id)
+            .await
+    }
+
     async fn list_release_decisions_for_title(
         &self,
         title_id: &str,
