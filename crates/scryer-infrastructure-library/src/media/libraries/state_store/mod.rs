@@ -5,7 +5,8 @@ mod store;
 pub use probe_store::LibraryProbeStore;
 pub(crate) use release_decision_explanation::decode_release_decision_explanation_record;
 pub use release_decision_explanation::{
-    decode_release_decision_explanation, encode_release_decision_explanation,
+    ReleaseDecisionExplanationEncoder, decode_release_decision_explanation,
+    encode_release_decision_explanation,
 };
 pub use store::{
     BlocklistStore, HousekeepingStore, PendingReleaseStore, SubtitleDownloadStore, WantedStore,
