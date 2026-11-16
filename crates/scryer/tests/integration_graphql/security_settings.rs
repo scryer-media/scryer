@@ -1244,6 +1244,9 @@ async fn graphql_delay_profile_library_scope_round_trips_and_follows_library_del
         json!([library_id])
     );
 
+    // Resolving the default actor refreshes library grants. Do it before
+    // deletion starts so those writes cannot race the library's removal.
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let deleted = gql(
         &ctx,
         r#"mutation($id: ID!) { deleteLibrary(id: $id) { id jobRun { id } } }"#,
@@ -1256,7 +1259,6 @@ async fn graphql_delay_profile_library_scope_round_trips_and_follows_library_del
         .as_str()
         .expect("library deletion job run")
         .to_string();
-    let admin = ctx.app.find_or_create_default_user().await.unwrap();
     crate::common::wait_until("library deletion job completes", || {
         let admin = &admin;
         let run_id = run_id.clone();

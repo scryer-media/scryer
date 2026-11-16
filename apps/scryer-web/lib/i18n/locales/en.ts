@@ -7869,6 +7869,10 @@ const en: LocaleDictionary = {
     "Allow BD/Disc image releases (ISO/Blu-ray disk style releases) to pass the profile.",
   "qualityProfile.allowDv": "Dolby Vision",
   "qualityProfile.allowUpgrades": "Upgrades allowed",
+  "qualityProfile.allowPackForSingleEpisode":
+    "Allow packs for one missing episode",
+  "qualityProfile.allowPackForSingleEpisodeInfo":
+    "Off by default. Allow automatic episode searches to consider packs even when only one episode is wanted. This can download already-owned episodes. Title, episode, monitoring, quality and upgrade checks still apply.",
   "qualityProfile.allowUpgradesInfo":
     "Allow managed copies to be replaced later by a better match, but never above the selected archival quality.",
   "qualityProfile.sourceAllowlist": "Sources",

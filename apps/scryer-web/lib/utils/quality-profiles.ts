@@ -120,6 +120,10 @@ export function normalizeQualityProfileEntry(
       prefer_remux: readBoolean(criteria.prefer_remux, false),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
+      allow_pack_for_single_episode: readBoolean(
+        criteria.allow_pack_for_single_episode,
+        false,
+      ),
       ignore_proper_repack: ignoresProperRepack(decisionPipeline),
       scoring_overrides: readScoringOverrides(criteria.scoring_overrides),
       cutoff_tier:
@@ -224,6 +228,8 @@ export function qualityProfileEntryFromGraph(
       prefer_remux: profile.criteria.preferRemux,
       allow_bd_disk: profile.criteria.allowBdDisk,
       allow_upgrades: profile.criteria.allowUpgrades,
+      allow_pack_for_single_episode:
+        profile.criteria.allowPackForSingleEpisode ?? false,
       ignore_proper_repack: ignoresProperRepack(decisionPipeline),
       scoring_overrides: scoringOverridesFromGraph(
         profile.criteria.scoringOverrides,
@@ -494,6 +500,7 @@ export function buildQualityProfileTemplate(
     prefer_remux: false,
     allow_bd_disk: true,
     allow_upgrades: true,
+    allow_pack_for_single_episode: false,
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
@@ -570,6 +577,8 @@ export function toQualityProfileDraft(
       typeof entry.criteria.allow_bd_disk === "boolean"
         ? entry.criteria.allow_bd_disk
         : true,
+    allow_pack_for_single_episode:
+      entry.criteria.allow_pack_for_single_episode === true,
     allow_upgrades:
       typeof entry.criteria.allow_upgrades === "boolean"
         ? entry.criteria.allow_upgrades
@@ -633,6 +642,7 @@ export function qualityProfileCatalogEntryFromDraft(
       prefer_remux: draft.prefer_remux,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
+      allow_pack_for_single_episode: draft.allow_pack_for_single_episode,
       ignore_proper_repack: ignoresProperRepack(draft.decision_pipeline),
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
@@ -665,6 +675,7 @@ export function qualityProfileEntryToMutationInput(
       preferRemux: entry.criteria.prefer_remux,
       allowBdDisk: entry.criteria.allow_bd_disk,
       allowUpgrades: entry.criteria.allow_upgrades,
+      allowPackForSingleEpisode: entry.criteria.allow_pack_for_single_episode,
       ignoreProperRepack: ignoresProperRepack(entry.criteria.decision_pipeline),
       scoringOverrides: scoringOverridesToGraphInput(
         entry.criteria.scoring_overrides,

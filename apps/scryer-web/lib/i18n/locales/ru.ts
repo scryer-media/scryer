@@ -3127,6 +3127,10 @@ const ru: LocaleDictionary = {
     "Разрешить релизы в формате BD/образов дисков (ISO и релизы в формате Blu-ray Disc).",
   "qualityProfile.allowDv": "Dolby Vision",
   "qualityProfile.allowUpgrades": "Разрешить обновления",
+  "qualityProfile.allowPackForSingleEpisode":
+    "Разрешать пакет ради одной недостающей серии",
+  "qualityProfile.allowPackForSingleEpisodeInfo":
+    "По умолчанию выключено. Автоматический поиск одной серии сможет рассматривать пакеты, даже если нужна только одна серия. При этом могут скачиваться уже имеющиеся серии. Проверки названия, номеров серий, мониторинга, качества и улучшений сохраняются.",
   "qualityProfile.allowUpgradesInfo":
     "Разрешить замену существующих копий более качественными версиями, но не выше выбранного архивного качества.",
   "qualityProfile.sourceAllowlist": "Источники",

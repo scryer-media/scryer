@@ -45,6 +45,7 @@ export type QualityProfileCriteriaPayload = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  allow_pack_for_single_episode: boolean;
   ignore_proper_repack: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
@@ -82,6 +83,7 @@ export type QualityProfileGraphCriteriaPayload = {
   preferRemux: boolean;
   allowBdDisk: boolean;
   allowUpgrades: boolean;
+  allowPackForSingleEpisode?: boolean;
   ignoreProperRepack: boolean;
   scoringOverrides: ScoringOverridesPayload;
   cutoffTier: string | null;
@@ -127,6 +129,7 @@ export type QualityProfileDraft = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  allow_pack_for_single_episode: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;

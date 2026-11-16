@@ -263,6 +263,7 @@ pub fn from_quality_profile_criteria(
         allow_bd_disk: criteria.allow_bd_disk,
         allow_upgrades: criteria.allow_upgrades,
         ignore_proper_repack,
+        allow_pack_for_single_episode: criteria.allow_pack_for_single_episode,
         decision_pipeline,
         scoring_overrides: from_scoring_overrides(criteria.scoring_overrides),
         cutoff_tier: criteria.cutoff_tier,

@@ -947,6 +947,8 @@ pub struct QualityProfileCriteriaPayload {
     pub allow_upgrades: bool,
     /// Let scores decide without automatic PROPER/REPACK preference.
     pub ignore_proper_repack: bool,
+    /// Explicit opt-in; other acquisition and import safeguards remain active.
+    pub allow_pack_for_single_episode: bool,
     /// Optional boolean scoring overrides.
     pub scoring_overrides: ScoringOverridesPayload,
     /// Cutoff quality tier, or null when no cutoff is configured.
@@ -1748,6 +1750,8 @@ pub struct QualityProfileCriteriaInput {
     /// Let scores decide without automatic PROPER/REPACK preference.
     /// Omission preserves the stored policy when updating a profile.
     pub ignore_proper_repack: Option<bool>,
+    /// Omission preserves the stored policy; new profiles default to false.
+    pub allow_pack_for_single_episode: Option<bool>,
     /// Additional scoring preferences.
     pub scoring_overrides: ScoringOverridesInput,
     /// Optional cutoff quality tier.
