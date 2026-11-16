@@ -1387,7 +1387,7 @@ fn ensure_import_destination_absent(dest: &Path) -> AppResult<()> {
         None => Err(AppError::Repository(format!(
             "failed to inspect import destination {} before copy: {}",
             dest.display(),
-            reading.absence()
+            reading.describe_absence()
         ))),
     }
 }
@@ -1562,7 +1562,10 @@ fn remove_import_temp_file(temp_dest: &Path) -> std::io::Result<()> {
 fn remove_placed_file(path: &Path) -> io::Result<()> {
     match Disk::process().remove_blocking(path, Remove::File)? {
         Removal::Removed => Ok(()),
-        Removal::AlreadyAbsent => Err(io::ErrorKind::NotFound.into()),
+        Removal::AlreadyAbsent => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is already gone", path.display()),
+        )),
     }
 }
 
@@ -2163,7 +2166,7 @@ fn try_fast_import_placement_blocking(
                                 "hard link size mismatch; handing import to copy lane"
                             ),
                             None => tracing::warn!(
-                                error = linked.absence(),
+                                error = linked.describe_absence(),
                                 "hard link destination stat failed; handing import to copy lane"
                             ),
                         },
@@ -2330,7 +2333,7 @@ fn reconcile_existing_destination(
             return Err(AppError::Repository(format!(
                 "failed to inspect existing import destination {}: {}",
                 dest.display(),
-                existing.absence()
+                existing.describe_absence()
             )));
         }
     };
@@ -2544,7 +2547,7 @@ fn import_hardlink_or_copy_blocking(
                             }
                             None => tracing::warn!(
                                 "hard link created but dest stat failed: {}, falling back to copy",
-                                linked.absence()
+                                linked.describe_absence()
                             ),
                         },
                     },

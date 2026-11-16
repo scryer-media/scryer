@@ -326,23 +326,41 @@ pub async fn move_file_exclusive(
     // scanner never sees an empty file under the real name.
     let staged = crate::disk::staging_path_for(dest);
     claim(&disk, &staged).await?;
-    let outcome = match disk.move_replacing(source, &staged).await {
-        Ok(_) => promote_staged_file(&staged, dest).await,
+    let (outcome, held) = match disk.move_replacing(source, &staged).await {
+        Ok(_) => (
+            promote_staged_file(&staged, dest).await,
+            StagedHolds::OnlyCopy,
+        ),
         Err(error) if needs_copy(&error) => {
             match copy_into_destination(&disk, source, &staged, options).await {
                 Ok(()) => match remove_copied_source(&disk, source).await {
-                    Ok(()) => promote_staged_file(&staged, dest).await,
-                    Err(error) => Err(error),
+                    Ok(()) => (
+                        promote_staged_file(&staged, dest).await,
+                        StagedHolds::OnlyCopy,
+                    ),
+                    Err(error) => (Err(error), StagedHolds::Copy { proven: true }),
                 },
-                Err(error) => Err(error),
+                Err(error) => (Err(error), StagedHolds::Copy { proven: false }),
             }
         }
-        Err(error) => Err(error.into()),
+        Err(error) => (Err(error.into()), StagedHolds::EmptyClaim),
     };
     if outcome.is_err() {
-        roll_back_staged_file(&disk, source, &staged).await;
+        roll_back_staged_file(&disk, source, &staged, held).await;
     }
     outcome
+}
+
+/// What the staging name holds when a move through it fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StagedHolds {
+    /// Only the empty claim: nothing of the source reached it.
+    EmptyClaim,
+    /// A copy of a source that may still exist, `proven` once it was written
+    /// and verified in full.
+    Copy { proven: bool },
+    /// The source itself, renamed there or copied and then unlinked.
+    OnlyCopy,
 }
 
 /// Undoes a failed move without destroying the file.
@@ -352,19 +370,34 @@ pub async fn move_file_exclusive(
 /// line: `RollbackPartialMove` deletes the target only after confirming the
 /// source still exists, and `RollbackMove` moves the file back when it does
 /// not. Leaving a stray file behind is always preferable to losing one.
-async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path) {
+async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path, held: StagedHolds) {
+    let proven = match held {
+        // Nothing of the source reached the claim, so only the claim goes.
+        StagedHolds::EmptyClaim => {
+            let _ = disk.remove(staged, Remove::File).await;
+            return;
+        }
+        StagedHolds::Copy { proven } => proven,
+        StagedHolds::OnlyCopy => true,
+    };
     if disk.uncached(staged).await.exists() != Some(true) {
         return;
     }
 
-    match disk.uncached(source).await.exists() {
-        // The source survived, so the staged file is a partial copy.
+    // The only copy goes back whatever is at the source now: the promotion
+    // refuses a file that has since appeared there.
+    let source_present = match held {
+        StagedHolds::OnlyCopy => Some(false),
+        _ => disk.uncached(source).await.exists(),
+    };
+    match source_present {
+        // The source survived, so the staged file is a copy of it.
         Some(true) => {
             let _ = disk.remove(staged, Remove::File).await;
         }
-        // The staged file is the only copy: put it back where it came from,
-        // never over a file that has since appeared there.
-        Some(false) => {
+        // The staged file is the file: put it back where it came from, never
+        // over a file that has since appeared there.
+        Some(false) if proven => {
             if promote_staged_file(staged, source).await.is_err() {
                 tracing::error!(
                     staged = %staged.display(),
@@ -373,6 +406,11 @@ async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path) {
                 );
             }
         }
+        Some(false) => tracing::error!(
+            staged = %staged.display(),
+            source = %source.display(),
+            "the source is gone and the staged copy of it was never proven; the copy is left at the staging path"
+        ),
         None => tracing::error!(
             staged = %staged.display(),
             source = %source.display(),
@@ -447,14 +485,6 @@ async fn claim(disk: &Disk, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Remove the file at `path`, a missing one being an error.
-async fn remove_present_file(disk: &Disk, path: &Path) -> io::Result<()> {
-    match disk.remove(path, Remove::File).await? {
-        Removal::Removed => Ok(()),
-        Removal::AlreadyAbsent => Err(io::ErrorKind::NotFound.into()),
-    }
-}
-
 async fn transfer_across_devices(
     disk: &Disk,
     source: &Path,
@@ -485,7 +515,7 @@ async fn transfer_across_devices(
                 format!("{} cannot hold a symbolic link", dest.display()),
             ));
         }
-        return remove_present_file(disk, source).await;
+        return unlink_moved_source(disk, source, dest).await;
     }
 
     if !options.overwrite {
@@ -495,13 +525,25 @@ async fn transfer_across_devices(
         let _ = disk.remove(dest, Remove::File).await;
         return Err(error);
     }
-    let unlinked = remove_copied_source(disk, source).await;
-    // A failed move must not leave a duplicate that refuses the retry, so the
-    // copy goes again, but only while the source is seen to be still there.
-    if unlinked.is_err() && disk.uncached(source).await.exists() == Some(true) {
-        let _ = disk.remove(dest, Remove::File).await;
+    unlink_moved_source(disk, source, dest).await
+}
+
+/// Finishes a move whose destination is in place by unlinking the source.
+/// When the unlink fails, one look at the source decides: gone means the move
+/// finished; still there means the new destination is taken back, so no
+/// duplicate refuses the retry; unknown leaves both and reports the failure.
+async fn unlink_moved_source(disk: &Disk, source: &Path, dest: &Path) -> io::Result<()> {
+    let Err(error) = remove_copied_source(disk, source).await else {
+        return Ok(());
+    };
+    match disk.uncached(source).await.exists() {
+        Some(false) => Ok(()),
+        Some(true) => {
+            let _ = disk.remove(dest, Remove::File).await;
+            Err(error)
+        }
+        None => Err(error),
     }
-    unlinked
 }
 
 /// Copies into a destination the caller already holds and proves it. Never
@@ -808,7 +850,7 @@ mod move_tests {
             .expect("stage the source");
         assert!(!source.exists(), "the source has moved to the staging name");
 
-        roll_back_staged_file(&disk, &source, &staged).await;
+        roll_back_staged_file(&disk, &source, &staged, StagedHolds::OnlyCopy).await;
 
         assert_eq!(
             std::fs::read(&source).expect("the source must come back"),
@@ -828,10 +870,63 @@ mod move_tests {
         write(&source, b"payload");
         write(&staged, b"half");
 
-        roll_back_staged_file(&Disk::process(), &source, &staged).await;
+        roll_back_staged_file(
+            &Disk::process(),
+            &source,
+            &staged,
+            StagedHolds::Copy { proven: false },
+        )
+        .await;
 
         assert_eq!(std::fs::read(&source).expect("source"), b"payload");
         assert!(!staged.exists(), "the partial copy is cleaned up");
+    }
+
+    /// The staged file is the only copy, so a different file that has since
+    /// appeared at the source's name neither causes its removal nor is
+    /// replaced by it.
+    #[tokio::test]
+    async fn a_rollback_never_removes_the_only_copy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let staged = dir.path().join(".scryer-move.partial");
+        write(&source, b"newcomer");
+        write(&staged, b"the-only-copy");
+
+        roll_back_staged_file(&Disk::process(), &source, &staged, StagedHolds::OnlyCopy).await;
+
+        assert_eq!(std::fs::read(&staged).expect("staged"), b"the-only-copy");
+        assert_eq!(std::fs::read(&source).expect("source"), b"newcomer");
+    }
+
+    /// An empty claim is released, and never put under the source's name.
+    #[tokio::test]
+    async fn a_rollback_of_an_empty_claim_never_creates_the_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let staged = dir.path().join(".scryer-move.partial");
+        claim(&Disk::process(), &staged).await.expect("claim");
+
+        roll_back_staged_file(&Disk::process(), &source, &staged, StagedHolds::EmptyClaim).await;
+
+        assert!(!source.exists(), "no empty file appears at the source name");
+        assert!(!staged.exists(), "the claim is released");
+    }
+
+    /// A copy that was never proven is not put under the source's name even
+    /// when the source is gone.
+    #[tokio::test]
+    async fn a_rollback_never_promotes_an_unproven_copy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let staged = dir.path().join(".scryer-move.partial");
+        write(&staged, b"half");
+
+        let held = StagedHolds::Copy { proven: false };
+        roll_back_staged_file(&Disk::process(), &source, &staged, held).await;
+
+        assert!(!source.exists(), "the partial copy is not promoted");
+        assert_eq!(std::fs::read(&staged).expect("staged"), b"half");
     }
 
     /// On a case-sensitive volume two names that differ only in case are two
@@ -919,7 +1014,8 @@ mod move_tests {
         std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o000))
             .expect("lock the source folder");
 
-        roll_back_staged_file(&Disk::process(), &source, &staged).await;
+        let proven = StagedHolds::Copy { proven: true };
+        roll_back_staged_file(&Disk::process(), &source, &staged, proven).await;
         std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
             .expect("unlock the source folder");
 

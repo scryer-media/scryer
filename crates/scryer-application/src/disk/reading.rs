@@ -137,6 +137,26 @@ impl PathReading {
         self.unknown_reason().unwrap_or("missing")
     }
 
+    /// Why a reading offers nothing to use, in words for a log line or an
+    /// error sentence, never a reason code. A reading that found something
+    /// but lacks the detail asked for says so.
+    pub fn describe_absence(self) -> &'static str {
+        match self {
+            Self::Known { .. } => "present, but the detail was not read",
+            Self::Missing { .. } => "missing",
+            Self::NotObserved => "not observed",
+            Self::Unreachable { cause, .. } => match cause {
+                reason::DISK_TIMED_OUT => "the disk did not answer in time",
+                reason::DISK_PERMISSION_DENIED => "permission denied",
+                reason::DISK_PATH_MISSING => "missing",
+                reason::DISK_PATH_UNREACHABLE => "the path could not be read",
+                reason::DISK_WRONG_KIND => "the path holds the wrong kind of entry",
+                reason::DISK_LINK_NOT_FOLLOWED => "a link that is not followed",
+                _ => "the read failed",
+            },
+        }
+    }
+
     /// Why an unreachable reading could not be taken, as a [`reason`] code.
     pub fn unreachable_cause(self) -> Option<&'static str> {
         match self {

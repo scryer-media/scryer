@@ -72,7 +72,7 @@ async fn restore_target(path: &Path) -> AppResult<PathReading> {
         AppError::Repository(format!(
             "failed to inspect restore destination {}: {}",
             path.display(),
-            reading.absence()
+            reading.describe_absence()
         ))
     })
 }
@@ -2908,7 +2908,7 @@ fn probe_orphan_media_file(
     match reading.exists() {
         Some(true) => OrphanProbe::Present,
         Some(false) => OrphanProbe::Orphan,
-        None => OrphanProbe::StatusUnreadable(reading.absence()),
+        None => OrphanProbe::StatusUnreadable(reading.describe_absence()),
     }
 }
 
