@@ -8,8 +8,7 @@
 use super::*;
 use scryer_application::{RequestRuleDecisionRepository, RequestRuleSetRepository};
 use scryer_domain::{
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
-    RequestRuleRevision, RequestRuleSet,
+    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleRevision, RequestRuleSet,
 };
 
 #[tokio::test]
@@ -182,7 +181,6 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> RequestRuleSet {
         name: "Family friendly".to_string(),
         description: "Auto-approve low-certification titles".to_string(),
         enabled: false,
-        evaluation_mode: RequestRuleEvaluationMode::Disabled,
         library_ids,
         current_revision_number: 1,
         created_at: now,
@@ -214,7 +212,6 @@ fn decision(
         id: id.to_string(),
         request_id: request_id.to_string(),
         evaluated_at: now,
-        mode: RequestRuleEvaluationMode::Enforce,
         effective_outcome: outcome,
         policy_outcome: outcome,
         fallback_reason: None,
@@ -244,7 +241,6 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
     assert_eq!(loaded.name, created.name);
     assert_eq!(loaded.description, created.description);
     assert!(!loaded.enabled, "a new rule set is created disabled");
-    assert_eq!(loaded.evaluation_mode, RequestRuleEvaluationMode::Disabled);
     assert_eq!(loaded.library_ids, vec!["library-1".to_string()]);
     assert_eq!(loaded.current_revision_number, 1);
 
@@ -316,12 +312,7 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
         )
         .await?;
     store
-        .update_rule_set_evaluation_mode(
-            "rule-a",
-            RequestRuleEvaluationMode::Enforce,
-            true,
-            Utc::now(),
-        )
+        .update_rule_set_enabled("rule-a", true, Utc::now())
         .await?;
     let loaded = store
         .get_rule_set("rule-a")
@@ -329,16 +320,15 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
         .expect("rule set should exist");
     assert_eq!(loaded.name, "Renamed");
     assert_eq!(loaded.library_ids, vec!["library-9".to_string()]);
-    assert_eq!(loaded.evaluation_mode, RequestRuleEvaluationMode::Enforce);
     assert!(loaded.enabled);
     assert_eq!(
         loaded.current_revision_number, 2,
-        "metadata and mode edits leave the revision pointer alone"
+        "metadata and enabled edits leave the revision pointer alone"
     );
     assert_eq!(
         store.get_builder_model("rule-a").await?.as_deref(),
         Some(r#"{"rows":[1]}"#),
-        "metadata and mode edits leave the builder document alone"
+        "metadata and enabled edits leave the builder document alone"
     );
 
     // A revision can replace the builder document, and another can clear it.
@@ -577,6 +567,130 @@ async fn request_rule_decisions_round_trip() {
     assert_decision_round_trip(&store)
         .await
         .expect("decisions should round-trip");
+    let _ = std::fs::remove_file(db);
+}
+
+/// The retired mode columns are still NOT NULL, so the stores write them, but
+/// nothing reads them: `enabled` alone decides whether a rule set takes part,
+/// and decision rows written under any mode, including ones this build never
+/// knew, still list.
+#[tokio::test]
+async fn retired_request_rule_mode_columns_are_written_but_never_read() {
+    let (services, db) = temp_services("scryer_request_rule_retired_modes").await;
+    let rules = crate::RequestRuleSetStore::new(services.datastore());
+    let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
+    let pool = services.pool();
+
+    rules
+        .create_rule_set(
+            &rule_set("rule-quiet", Vec::new()),
+            &revision("rule-quiet", 1),
+            None,
+        )
+        .await
+        .unwrap();
+    let stored_mode = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT evaluation_mode FROM request_rule_sets WHERE id = 'rule-quiet'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(stored_mode().await, "disabled");
+    rules
+        .update_rule_set_enabled("rule-quiet", true, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(stored_mode().await, "enforce");
+
+    // A stored mode that disagrees with `enabled` changes nothing.
+    sqlx::query("UPDATE request_rule_sets SET evaluation_mode = 'shadow' WHERE id = 'rule-quiet'")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        rules
+            .get_rule_set("rule-quiet")
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    rules
+        .update_rule_set_enabled("rule-quiet", false, Utc::now())
+        .await
+        .unwrap();
+    assert!(
+        !rules
+            .get_rule_set("rule-quiet")
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert_eq!(stored_mode().await, "disabled");
+
+    decisions
+        .record(&decision(
+            "decision-new",
+            "request-new",
+            RequestDecisionOutcome::AutoApprove,
+        ))
+        .await
+        .unwrap();
+    let new_mode: String =
+        sqlx::query_scalar("SELECT mode FROM request_rule_decisions WHERE id = 'decision-new'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(new_mode, "enforce");
+
+    // Rows recorded before the mode was retired, including a mode value this
+    // build never knew, with votes that still carry a per-rule mode.
+    for (id, mode) in [
+        ("decision-old-enforce", "enforce"),
+        ("decision-old-disabled", "disabled"),
+        ("decision-old-shadow", "shadow"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO request_rule_decisions
+                (id, request_id, mode, effective_outcome, policy_outcome, fallback_reason,
+                 votes_json, tags_json, input_hash, input_schema_version)
+             VALUES ('{id}', 'request-old', '{mode}', 'deny', 'deny', NULL,
+                 '[{{\"rule_set_id\":\"rule-quiet\",\"mode\":\"{mode}\",\"vote\":\"deny\"}}]',
+                 '[]', 'old-hash', 1)"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let listed = decisions.list_recent(10, None).await.unwrap();
+    let mut ids: Vec<&str> = listed.iter().map(|row| row.id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![
+            "decision-new",
+            "decision-old-disabled",
+            "decision-old-enforce",
+            "decision-old-shadow",
+        ]
+    );
+    let shadow = listed
+        .iter()
+        .find(|row| row.id == "decision-old-shadow")
+        .unwrap();
+    assert_eq!(shadow.effective_outcome, RequestDecisionOutcome::Deny);
+    assert!(shadow.votes_json.contains(r#""mode":"shadow""#));
+    assert_eq!(
+        decisions
+            .latest_for_request("request-old")
+            .await
+            .unwrap()
+            .map(|row| row.request_id),
+        Some("request-old".to_string())
+    );
     let _ = std::fs::remove_file(db);
 }
 

@@ -16,7 +16,7 @@
 //!   a requester nothing; a preview that says "this will need approval" is both
 //!   true (rules that cannot be consulted never approve) and useful.
 
-use scryer_domain::{LibraryPermission, RequestDecisionOutcome, RequestRuleEvaluationMode, User};
+use scryer_domain::{LibraryPermission, RequestDecisionOutcome, User};
 
 use crate::media_requests::SubmitMediaRequestInput;
 use crate::request_rules::evaluation::{RequestDecisionReason, RequestEvaluationPurpose};
@@ -35,8 +35,9 @@ pub struct RequestPreflight {
     /// were unknown. The dialog says "metadata unavailable — will need
     /// approval" rather than pretending to a verdict it does not have.
     pub metadata_partial: bool,
-    /// `Enforce` when an enabled rule was consulted, `Disabled` when none was.
-    pub evaluation_mode: RequestRuleEvaluationMode,
+    /// False when no enabled rule covers the library, so the Auto-Approve
+    /// permission alone decided.
+    pub rules_consulted: bool,
     /// What the policy concluded, which differs from `outcome` only when the
     /// request was held because its tags could not be checked.
     pub policy_outcome: RequestDecisionOutcome,
@@ -161,7 +162,7 @@ impl AppUseCase {
             // would drop.
             tags: evaluation.tags,
             metadata_partial: evaluation.metadata_partial,
-            evaluation_mode: evaluation.evaluation_mode,
+            rules_consulted: evaluation.rules_consulted,
             policy_outcome: evaluation.policy_outcome,
             fallback_reason: evaluation.fallback_reason,
             shaping: evaluation.shaping,

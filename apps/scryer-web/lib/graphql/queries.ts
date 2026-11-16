@@ -4538,7 +4538,6 @@ export const REQUEST_RULE_DECISION_FIELDS = `
     id
     requestId
     evaluatedAt
-    mode
     effectiveOutcome
     policyOutcome
     fallbackReason
@@ -4587,7 +4586,6 @@ export const previewMyRequestDecisionQuery = `query PreviewMyRequestDecision($in
   previewMyRequestDecision(input: $input) {
     outcome
     metadataPartial
-    evaluationMode
     fallbackReason
     tags
     reasons {

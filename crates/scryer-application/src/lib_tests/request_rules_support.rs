@@ -11,8 +11,7 @@ use super::*;
 use crate::lib_tests::support_events_requests::MockMediaRequestRepo;
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
-    RequestRuleRevision, RequestRuleSet,
+    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleRevision, RequestRuleSet,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -155,10 +154,9 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         Ok(())
     }
 
-    async fn update_rule_set_evaluation_mode(
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -167,7 +165,6 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
             .iter_mut()
             .find(|rule_set| rule_set.id == id)
             .ok_or_else(|| AppError::NotFound(id.to_string()))?;
-        rule_set.evaluation_mode = mode;
         rule_set.enabled = enabled;
         rule_set.updated_at = updated_at;
         Ok(())

@@ -12,7 +12,7 @@ use super::*;
 mod failure_tests;
 use scryer_domain::{
     LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState, MediaRequestStatus,
-    RequestDecisionOutcome, RequestRuleEvaluationMode,
+    RequestDecisionOutcome,
 };
 use scryer_rules::request::{RequestRuleDecision, RequestVote};
 use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue};
@@ -96,7 +96,6 @@ fn vote(id: &str, vote: RequestVote, held: bool, tags: &[&str]) -> ScopedVote {
         rule_set_name: format!("rule {id}"),
         revision_number: 1,
         content_hash: format!("hash-{id}"),
-        mode: RequestRuleEvaluationMode::Enforce,
         decision: RequestRuleDecision {
             vote,
             reason_codes: vec![format!("{id}_reason")],
@@ -125,7 +124,6 @@ fn error(id: &str) -> ScopedError {
         rule_set_name: format!("rule {id}"),
         revision_number: 1,
         content_hash: format!("hash-{id}"),
-        mode: RequestRuleEvaluationMode::Enforce,
         message: "timed out".to_string(),
     }
 }
@@ -504,10 +502,6 @@ async fn a_new_rule_set_is_stored_disabled_and_loads_nothing() {
         .expect("rule set should be created");
 
     assert!(!detail.rule_set.enabled);
-    assert_eq!(
-        detail.rule_set.evaluation_mode,
-        RequestRuleEvaluationMode::Disabled
-    );
     assert_eq!(detail.revision.revision_number, 1);
     assert!(!detail.revision.matcher_content_hash.is_empty());
     // A disabled rule is not compiled at all, so the engine is still empty.
@@ -525,7 +519,6 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
         .await
         .expect("enabling should succeed");
     assert!(enabled.enabled);
-    assert_eq!(enabled.evaluation_mode, RequestRuleEvaluationMode::Enforce);
 
     let snapshot = harness.app.request_rules_engine_snapshot();
     assert!(!snapshot.is_empty());
@@ -533,7 +526,6 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
         .scopes
         .get(&detail.rule_set.id)
         .expect("the enabled rule is loaded");
-    assert_eq!(scope.mode, RequestRuleEvaluationMode::Enforce);
     assert_eq!(scope.revision_number, 1);
 
     // …and disabling it takes it back out.
@@ -543,10 +535,6 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
         .await
         .expect("disabling should succeed");
     assert!(!disabled.enabled);
-    assert_eq!(
-        disabled.evaluation_mode,
-        RequestRuleEvaluationMode::Disabled
-    );
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
 }
 
@@ -869,7 +857,6 @@ async fn an_enabled_rule_decides_with_no_instance_switch_and_stops_once_disabled
 
     let traces = harness.request_rule_decisions.recorded().await;
     assert_eq!(traces.len(), 1);
-    assert_eq!(traces[0].mode, RequestRuleEvaluationMode::Enforce);
     assert_eq!(traces[0].effective_outcome, RequestDecisionOutcome::Deny);
 
     harness
@@ -877,6 +864,16 @@ async fn an_enabled_rule_decides_with_no_instance_switch_and_stops_once_disabled
         .set_request_rule_enabled(&harness.manager, &detail.rule_set.id, false)
         .await
         .expect("disabling should succeed");
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9045))
+        .await
+        .expect("pre-flight should answer");
+    assert!(
+        !preflight.rules_consulted,
+        "a disabled rule casts no vote, so no rule is consulted"
+    );
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::ManualReview);
     let second = submit(&harness, &library_id, 9045, None).await;
 
     let requests = harness.media_requests.requests.lock().await;
@@ -1064,7 +1061,10 @@ async fn a_held_rule_never_approves() {
     assert_eq!(votes[0]["vote"], "manual");
     assert_eq!(votes[0]["held"], true);
     assert_eq!(votes[0]["rule_set_id"], detail.rule_set.id);
-    assert_eq!(votes[0]["mode"], "enforce");
+    assert!(
+        votes[0].get("mode").is_none(),
+        "a recorded vote carries no evaluation mode"
+    );
     assert!(
         votes[0].get("error").is_none(),
         "a held rule is not an errored rule"
@@ -1218,10 +1218,7 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
     assert_eq!(preflight.tags, vec!["auto-approved"]);
     assert!(!preflight.metadata_partial);
-    assert_eq!(
-        preflight.evaluation_mode,
-        RequestRuleEvaluationMode::Enforce
-    );
+    assert!(preflight.rules_consulted);
 
     harness
         .app

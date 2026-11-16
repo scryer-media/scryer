@@ -28573,10 +28573,6 @@ type RequestPreflightPayload {
 	"""
 	metadataPartial: Boolean!
 	"""
-	`ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-	"""
-	evaluationMode: RequestRuleEvaluationModeValue!
-	"""
 	Why the verdict is a fallback rather than a rule's own `approve` or
 	`deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
 	`library_permission` (the Auto-Approve permission approved),
@@ -28635,10 +28631,6 @@ type RequestRuleDecision {
 	"""
 	evaluatedAt: DateTime!
 	"""
-	`ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-	"""
-	mode: RequestRuleEvaluationModeValue!
-	"""
 	What actually happened to the request.
 	"""
 	effectiveOutcome: RequestDecisionOutcomeValue!
@@ -28678,20 +28670,6 @@ type RequestRuleDecision {
 	nothing.
 	"""
 	shaping: RequestShaping
-}
-
-"""
-Whether an evaluation consulted an enabled request rule.
-"""
-enum RequestRuleEvaluationModeValue {
-	"""
-	No enabled rule took part.
-	"""
-	DISABLED
-	"""
-	An enabled rule was evaluated, recorded, and acted on.
-	"""
-	ENFORCE
 }
 
 """

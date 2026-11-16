@@ -146,7 +146,6 @@ function RequestPreflightBanner({
     <div
       id={REQUEST_PREFLIGHT_BANNER_ID}
       data-preflight-outcome={preflight.outcome}
-      data-preflight-mode={preflight.evaluationMode}
       className={`flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-sm ${className}`}
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />

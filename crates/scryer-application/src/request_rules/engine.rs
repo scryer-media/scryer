@@ -28,7 +28,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use scryer_domain::RequestRuleEvaluationMode;
 use scryer_rules::request::{RequestPolicy, RequestRulesEngine};
 
 use crate::{AppError, AppResult, AppUseCase};
@@ -37,7 +36,6 @@ use crate::{AppError, AppResult, AppUseCase};
 #[derive(Clone, Debug)]
 pub struct RequestRuleScope {
     pub name: String,
-    pub mode: RequestRuleEvaluationMode,
     /// Empty means every library.
     pub library_ids: Vec<String>,
     pub revision_number: i64,
@@ -158,7 +156,7 @@ impl AppUseCase {
 
         let rule_sets: Vec<_> = rule_sets
             .into_iter()
-            .filter(|rule_set| rule_set.evaluation_mode != RequestRuleEvaluationMode::Disabled)
+            .filter(|rule_set| rule_set.enabled)
             .collect();
         let revision_keys: Vec<(String, i64)> = rule_sets
             .iter()
@@ -185,7 +183,6 @@ impl AppUseCase {
                     rule_set.id.clone(),
                     RequestRuleScope {
                         name: rule_set.name,
-                        mode: rule_set.evaluation_mode,
                         library_ids: rule_set.library_ids,
                         revision_number: rule_set.current_revision_number,
                         content_hash: String::new(),
@@ -207,7 +204,6 @@ impl AppUseCase {
                 rule_set.id.clone(),
                 RequestRuleScope {
                     name: rule_set.name,
-                    mode: rule_set.evaluation_mode,
                     library_ids: rule_set.library_ids,
                     revision_number: revision.revision_number,
                     content_hash: revision.matcher_content_hash,

@@ -6743,34 +6743,6 @@ pub struct LifecycleSequenceTerminalMembership {
     pub released_at: Option<DateTime<Utc>>,
 }
 
-/// Whether a request rule set takes part in deciding requests. Operators see
-/// these as Disabled and Enabled.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RequestRuleEvaluationMode {
-    #[default]
-    Disabled,
-    /// Evaluate, record, and act on the decision.
-    Enforce,
-}
-
-impl RequestRuleEvaluationMode {
-    pub const fn as_storage_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Enforce => "enforce",
-        }
-    }
-
-    pub fn parse_storage(value: &str) -> Option<Self> {
-        match value {
-            "disabled" => Some(Self::Disabled),
-            "enforce" => Some(Self::Enforce),
-            _ => None,
-        }
-    }
-}
-
 /// A user-authored request rule set: identity, scope, and evaluation state.
 ///
 /// The matcher lives on [`RequestRuleRevision`], never here, so changing what a
@@ -6780,8 +6752,9 @@ pub struct RequestRuleSet {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Whether the rule set takes part in deciding requests. A disabled rule
+    /// set is not loaded and casts no vote.
     pub enabled: bool,
-    pub evaluation_mode: RequestRuleEvaluationMode,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Revision number of the matcher currently in force.
@@ -6853,7 +6826,6 @@ pub struct RequestRuleDecisionRecord {
     /// pre-flight decision is recorded before any request row exists.
     pub request_id: String,
     pub evaluated_at: DateTime<Utc>,
-    pub mode: RequestRuleEvaluationMode,
     pub effective_outcome: RequestDecisionOutcome,
     pub policy_outcome: RequestDecisionOutcome,
     /// Why the decision fell back rather than following a rule vote

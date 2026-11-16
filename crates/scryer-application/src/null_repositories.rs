@@ -3669,10 +3669,9 @@ impl crate::ports::RequestRuleSetRepository for NullRequestRuleSetRepository {
             REQUEST_RULE_NOT_CONFIGURED.to_string(),
         ))
     }
-    async fn update_rule_set_evaluation_mode(
+    async fn update_rule_set_enabled(
         &self,
         _id: &str,
-        _mode: scryer_domain::RequestRuleEvaluationMode,
         _enabled: bool,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {

@@ -12,8 +12,7 @@
 
 use chrono::Utc;
 use scryer_domain::{
-    AppPermission, ExternalId, Id, MediaFacet, RequestRuleEvaluationMode, RequestRuleRevision,
-    RequestRuleSet, User,
+    AppPermission, ExternalId, Id, MediaFacet, RequestRuleRevision, RequestRuleSet, User,
 };
 use scryer_rules::diagnostic_codes::{
     RULE_AUDIO_LANGUAGE_UNKNOWN, RULE_MONITOR_UNSUPPORTED, RULE_QUALITY_PROFILE_AMBIGUOUS,
@@ -311,7 +310,6 @@ impl AppUseCase {
             description: draft.description,
             // Created disabled: enabling is a second, deliberate call.
             enabled: false,
-            evaluation_mode: RequestRuleEvaluationMode::Disabled,
             library_ids: draft.library_ids,
             current_revision_number: 1,
             created_at: now,
@@ -451,9 +449,6 @@ impl AppUseCase {
     }
 
     /// Enable or disable a rule set.
-    ///
-    /// The stored evaluation mode follows `enabled`, so the two columns never
-    /// disagree.
     pub async fn set_request_rule_enabled(
         &self,
         actor: &User,
@@ -464,20 +459,14 @@ impl AppUseCase {
             .await?;
 
         let mut rule_set = self.require_request_rule_set(rule_set_id).await?;
-        let mode = if enabled {
-            RequestRuleEvaluationMode::Enforce
-        } else {
-            RequestRuleEvaluationMode::Disabled
-        };
         let now = Utc::now();
 
         self.services
             .customization
             .request_rule_sets
-            .update_rule_set_evaluation_mode(&rule_set.id, mode, enabled, now)
+            .update_rule_set_enabled(&rule_set.id, enabled, now)
             .await?;
 
-        rule_set.evaluation_mode = mode;
         rule_set.enabled = enabled;
         rule_set.updated_at = now;
         self.rebuild_request_rules_engine().await?;

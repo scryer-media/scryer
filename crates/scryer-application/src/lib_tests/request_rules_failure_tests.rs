@@ -134,7 +134,6 @@ async fn request_rule_timeout_holds_an_armed_request_and_records_the_error() {
     );
     let traces = harness.request_rule_decisions.recorded().await;
     let trace = traces.last().unwrap();
-    assert_eq!(trace.mode, RequestRuleEvaluationMode::Enforce);
     assert_eq!(trace.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
     assert!(trace.votes_json.contains("error"), "{}", trace.votes_json);
     assert!(harness.titles.store.lock().await.is_empty());
@@ -493,15 +492,14 @@ impl crate::ports::RequestRuleSetRepository for ReadFailingRequestRuleStore {
             .await
     }
 
-    async fn update_rule_set_evaluation_mode(
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<()> {
         self.inner
-            .update_rule_set_evaluation_mode(id, mode, enabled, updated_at)
+            .update_rule_set_enabled(id, enabled, updated_at)
             .await
     }
 

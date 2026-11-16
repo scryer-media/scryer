@@ -3,7 +3,7 @@ use crate::types::*;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::AppError;
 use scryer_application::request_rules::{RequestRuleDraft, RequestRulePreviewMatcher};
-use scryer_domain::{AppPermission, RequestRuleEvaluationMode};
+use scryer_domain::AppPermission;
 
 /// Resolve the rule source a preview should run.
 ///
@@ -286,25 +286,20 @@ impl RequestRuleMutations {
             .await
             .map_err(to_gql_error)?;
 
-        // An unsaved draft has no stored name and no stored mode: it is not
-        // enabled, because it is not stored.
-        let (rule_set_name, mode) = match stored_rule_set_id {
+        // An unsaved draft has no stored name.
+        let rule_set_name = match stored_rule_set_id {
             Some(rule_set_id) => app
                 .get_request_rule_set(&actor, &rule_set_id, false)
                 .await
                 .map_err(to_gql_error)?
-                .map(|detail| (detail.rule_set.name, detail.rule_set.evaluation_mode))
-                .unwrap_or_else(|| (String::new(), RequestRuleEvaluationMode::Disabled)),
-            None => (
-                "Unsaved draft".to_string(),
-                RequestRuleEvaluationMode::Disabled,
-            ),
+                .map(|detail| detail.rule_set.name)
+                .unwrap_or_default(),
+            None => "Unsaved draft".to_string(),
         };
 
         Ok(crate::mappers::from_request_rule_preview_result(
             result,
             rule_set_name,
-            mode,
         ))
     }
 

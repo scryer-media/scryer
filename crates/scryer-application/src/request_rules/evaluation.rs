@@ -18,8 +18,7 @@
 
 use chrono::Utc;
 use scryer_domain::{
-    Id, Library, LibraryPermission, RequestDecisionOutcome, RequestRuleDecisionRecord,
-    RequestRuleEvaluationMode, User,
+    Id, Library, LibraryPermission, RequestDecisionOutcome, RequestRuleDecisionRecord, User,
 };
 use scryer_rules::request::{REQUEST_INPUT_SCHEMA_VERSION, RequestVote};
 use serde::Serialize;
@@ -95,8 +94,10 @@ pub struct RequestEvaluation {
     /// that is the only way to find out why a rule's tag never appeared.
     pub emitted_tags: Vec<String>,
     pub reasons: Vec<RequestDecisionReason>,
-    /// `Enforce` when an enabled rule was consulted, `Disabled` when none was.
-    pub evaluation_mode: RequestRuleEvaluationMode,
+    /// False when no enabled rule covers the library, so the Auto-Approve
+    /// permission alone decided and no trace was written. True whenever
+    /// enabled rules were to be consulted, including when they could not be.
+    pub rules_consulted: bool,
     /// True when the metadata snapshot could not be fully established, so some
     /// facts were unknown.
     pub metadata_partial: bool,
@@ -135,7 +136,7 @@ impl RequestEvaluation {
             tags: Vec::new(),
             emitted_tags: Vec::new(),
             reasons: Vec::new(),
-            evaluation_mode: RequestRuleEvaluationMode::Enforce,
+            rules_consulted: true,
             metadata_partial,
             shaping: ArbitratedShaping::default(),
             resolved_shaping: ResolvedShaping::default(),
@@ -149,8 +150,8 @@ impl RequestEvaluation {
 ///
 /// `vote` is `null` exactly when `error` is set: a rule that failed produced no
 /// vote, and rendering that as an abstain would tell an approver the rule looked
-/// and had no opinion. `mode` rides along so the trace can be
-/// read without joining back to the rule sets, which may have been edited or
+/// and had no opinion. The rule's name and revision ride along so the trace can
+/// be read without joining back to the rule sets, which may have been edited or
 /// deleted since: the trace outlives the rule.
 #[derive(Clone, Debug, Serialize)]
 pub struct RecordedVote {
@@ -158,7 +159,6 @@ pub struct RecordedVote {
     pub rule_set_name: String,
     pub revision_number: i64,
     pub content_hash: String,
-    pub mode: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vote: Option<&'static str>,
     pub held: bool,
@@ -190,7 +190,6 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
             rule_set_name: vote.rule_set_name.clone(),
             revision_number: vote.revision_number,
             content_hash: vote.content_hash.clone(),
-            mode: vote.mode.as_storage_str(),
             vote: Some(vote_name(vote.decision.vote)),
             held: vote.decision.held,
             reason_codes: vote.decision.reason_codes.clone(),
@@ -205,7 +204,6 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
         rule_set_name: error.rule_set_name.clone(),
         revision_number: error.revision_number,
         content_hash: error.content_hash.clone(),
-        mode: error.mode.as_storage_str(),
         vote: None,
         held: false,
         reason_codes: Vec::new(),
@@ -267,7 +265,7 @@ impl AppUseCase {
                 tags: Vec::new(),
                 emitted_tags: Vec::new(),
                 reasons: Vec::new(),
-                evaluation_mode: RequestRuleEvaluationMode::Disabled,
+                rules_consulted: false,
                 metadata_partial,
                 shaping: ArbitratedShaping::default(),
                 resolved_shaping: ResolvedShaping::default(),
@@ -333,7 +331,6 @@ impl AppUseCase {
                 rule_set_name: record.rule_set_name.clone(),
                 revision_number: scope.revision_number,
                 content_hash: scope.content_hash.clone(),
-                mode: scope.mode,
                 decision: record.decision.clone(),
             });
         }
@@ -345,7 +342,6 @@ impl AppUseCase {
                     rule_set_name: scope.name.clone(),
                     revision_number: scope.revision_number,
                     content_hash: scope.content_hash.clone(),
-                    mode: scope.mode,
                     message: message.clone(),
                 });
             }
@@ -362,7 +358,6 @@ impl AppUseCase {
                 rule_set_name: failure.rule_set_name.clone(),
                 revision_number: scope.revision_number,
                 content_hash: scope.content_hash.clone(),
-                mode: scope.mode,
                 message: failure.message.clone(),
             });
         }
@@ -407,7 +402,7 @@ impl AppUseCase {
             tags: applicable_tags,
             emitted_tags: arbitration.tags.clone(),
             reasons: reason_views(&arbitration),
-            evaluation_mode: RequestRuleEvaluationMode::Enforce,
+            rules_consulted: true,
             metadata_partial,
             shaping: arbitration.shaping.clone(),
             resolved_shaping,
@@ -589,7 +584,6 @@ impl AppUseCase {
             id: Id::new().0,
             request_id: purpose.trace_request_id(),
             evaluated_at: now,
-            mode: evaluation.evaluation_mode,
             effective_outcome: evaluation.effective_outcome,
             policy_outcome: evaluation.policy_outcome,
             fallback_reason: evaluation.fallback_reason.clone(),

@@ -17,16 +17,6 @@ use super::{DiscoveryContentRatingPayload, ExternalIdInput, MonitorTypeValue};
 
 // ── Enums ──────────────────────────────────────────────────────────────────
 
-/// Whether an evaluation consulted an enabled request rule.
-#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum RequestRuleEvaluationModeValue {
-    /// No enabled rule took part.
-    Disabled,
-    /// An enabled rule was evaluated, recorded, and acted on.
-    Enforce,
-}
-
 /// What a request evaluation concluded.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -340,8 +330,6 @@ pub struct RequestRuleDecision {
     pub request_id: Option<ID>,
     /// UTC time the evaluation ran.
     pub evaluated_at: DateTime<Utc>,
-    /// `ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-    pub mode: RequestRuleEvaluationModeValue,
     /// What actually happened to the request.
     pub effective_outcome: RequestDecisionOutcomeValue,
     /// What the rules concluded.
@@ -414,8 +402,6 @@ pub struct RequestPreflightPayload {
     /// rests on incomplete facts. A rule that reads a fact that could not be
     /// established is held rather than run.
     pub metadata_partial: bool,
-    /// `ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-    pub evaluation_mode: RequestRuleEvaluationModeValue,
     /// Why the verdict is a fallback rather than a rule's own `approve` or
     /// `deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
     /// `library_permission` (the Auto-Approve permission approved),

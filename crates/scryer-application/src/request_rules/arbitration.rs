@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use scryer_domain::{RequestDecisionOutcome, RequestRuleEvaluationMode};
+use scryer_domain::RequestDecisionOutcome;
 use scryer_rules::request::{RequestRuleDecision, RequestVote};
 use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ pub const ALL_FALLBACKS: [&str; 7] = [
 ];
 
 /// One rule's vote, already narrowed to the rules whose library scope covers
-/// this request (see [`super::engine`]). Carries the rule's identity and mode so
+/// this request (see [`super::engine`]). Carries the rule's identity so
 /// the trace can be read without a second lookup.
 #[derive(Clone, Debug)]
 pub struct ScopedVote {
@@ -73,7 +73,6 @@ pub struct ScopedVote {
     pub rule_set_name: String,
     pub revision_number: i64,
     pub content_hash: String,
-    pub mode: RequestRuleEvaluationMode,
     pub decision: RequestRuleDecision,
 }
 
@@ -84,7 +83,6 @@ pub struct ScopedError {
     pub rule_set_name: String,
     pub revision_number: i64,
     pub content_hash: String,
-    pub mode: RequestRuleEvaluationMode,
     pub message: String,
 }
 

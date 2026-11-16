@@ -26,7 +26,7 @@ use scryer_application::request_rules::{
 use scryer_application::{MediaRequestMetadataSnapshot, RequestPreflight};
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
+    RequestDecisionOutcome, RequestRuleDecisionRecord,
 };
 use scryer_rules::request::{
     REQUEST_INPUT_SCHEMA_VERSION, RequestVote, certification_rank_for_label,
@@ -40,15 +40,6 @@ fn to_graphql_int(value: i64) -> i32 {
 }
 
 // ── Enum projections ────────────────────────────────────────────────────────
-
-pub fn request_rule_evaluation_mode_value(
-    mode: RequestRuleEvaluationMode,
-) -> RequestRuleEvaluationModeValue {
-    match mode {
-        RequestRuleEvaluationMode::Disabled => RequestRuleEvaluationModeValue::Disabled,
-        RequestRuleEvaluationMode::Enforce => RequestRuleEvaluationModeValue::Enforce,
-    }
-}
 
 pub fn request_decision_outcome_value(
     outcome: RequestDecisionOutcome,
@@ -392,7 +383,6 @@ pub fn from_request_rule_decision(
         id: Some(ID::from(record.id)),
         request_id: Some(ID::from(record.request_id)),
         evaluated_at: record.evaluated_at,
-        mode: request_rule_evaluation_mode_value(record.mode),
         effective_outcome: request_decision_outcome_value(record.effective_outcome),
         policy_outcome: request_decision_outcome_value(record.policy_outcome),
         fallback_reason: record.fallback_reason,
@@ -441,12 +431,9 @@ fn preview_fallback_reason(result: &AppPreviewResult) -> Option<String> {
     }
 }
 
-/// `mode` is the stored rule set's mode, or `DISABLED` for an unsaved draft —
-/// an unsaved matcher is not enabled, because it is not stored.
 pub fn from_request_rule_preview_result(
     result: AppPreviewResult,
     rule_set_name: String,
-    mode: RequestRuleEvaluationMode,
 ) -> RequestRulePreviewPayload {
     let outcome = request_decision_outcome_value(preview_outcome(result.vote));
     let fallback_reason = preview_fallback_reason(&result);
@@ -484,7 +471,6 @@ pub fn from_request_rule_preview_result(
             id: None,
             request_id: None,
             evaluated_at: result.evaluated_at,
-            mode: request_rule_evaluation_mode_value(mode),
             effective_outcome: outcome,
             policy_outcome: outcome,
             fallback_reason,
@@ -517,7 +503,6 @@ pub fn from_request_preflight(preflight: RequestPreflight) -> RequestPreflightPa
             .collect(),
         tags: preflight.tags,
         metadata_partial: preflight.metadata_partial,
-        evaluation_mode: request_rule_evaluation_mode_value(preflight.evaluation_mode),
         fallback_reason: preflight.fallback_reason,
         // The requester's own surface: values and conflicts, never a
         // notification.
@@ -764,7 +749,6 @@ mod tests {
             id: "decision-1".to_string(),
             request_id: "request-1".to_string(),
             evaluated_at: Utc::now(),
-            mode: RequestRuleEvaluationMode::Enforce,
             effective_outcome: RequestDecisionOutcome::Deny,
             policy_outcome: RequestDecisionOutcome::Deny,
             fallback_reason: None,
@@ -777,6 +761,8 @@ mod tests {
         }
     }
 
+    // Recorded by an earlier build, when each vote still carried a `mode`;
+    // such rows must keep loading.
     const VOTES: &str = r#"[
         {"rule_set_id":"a","rule_set_name":"Family ratings only","revision_number":3,
          "content_hash":"h","mode":"enforce","vote":"deny","held":false,

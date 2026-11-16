@@ -179,7 +179,6 @@ const DECISION_FIELDS: &str = r#"
     id
     requestId
     evaluatedAt
-    mode
     effectiveOutcome
     policyOutcome
     fallbackReason
@@ -831,7 +830,6 @@ async fn the_author_preview_returns_the_vote_the_reasons_the_tags_and_the_input_
     assert_no_errors(&inline);
     let inline_decision = &inline["data"]["previewRequestRule"]["decision"];
     assert_eq!(inline_decision["policyOutcome"], "DENY");
-    assert_eq!(inline_decision["mode"], "DISABLED");
     assert_eq!(
         inline_decision["reasons"][0]["code"],
         json!("policy_denied")
@@ -887,7 +885,6 @@ async fn the_requester_preflight_returns_an_outcome_without_any_rule_internals()
                 reasons { code ruleName }
                 tags
                 metadataPartial
-                evaluationMode
             }
         }",
         json!({ "input": submit_input(Some(30)) }),
@@ -898,7 +895,6 @@ async fn the_requester_preflight_returns_an_outcome_without_any_rule_internals()
 
     let payload = &body["data"]["previewMyRequestDecision"];
     assert_eq!(payload["outcome"], "DENY");
-    assert_eq!(payload["evaluationMode"], "ENFORCE");
     assert_eq!(payload["reasons"][0]["code"], json!("policy_denied"));
     assert_eq!(payload["reasons"][0]["ruleName"], json!("Deny everything"));
 
@@ -1025,7 +1021,6 @@ async fn an_enforced_approval_leases_the_title_and_explains_itself() {
     let decision = &request["decision"];
     assert_eq!(decision["effectiveOutcome"], "AUTO_APPROVE");
     assert_eq!(decision["policyOutcome"], "AUTO_APPROVE");
-    assert_eq!(decision["mode"], "ENFORCE");
     assert_eq!(decision["tags"], json!(["auto-approved"]));
     // The requester sees the verdict, never the vote table.
     assert!(
