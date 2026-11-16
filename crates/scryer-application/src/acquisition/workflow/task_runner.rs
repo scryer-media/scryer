@@ -39,7 +39,7 @@ const LIFECYCLE_EVALUATION_JITTER_WINDOW: std::time::Duration =
 const LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
-/// Same rationale again for the media-server signal sweep (RFC 137 §7.3). The
+/// Same rationale again for the media-server signal sweep. The
 /// jitter matters more here than for the local passes: every instance in a
 /// fleet would otherwise hit the same Jellyfin server at the same moment.
 const MEDIA_SERVER_SIGNAL_SYNC_JITTER_WINDOW: std::time::Duration =
@@ -6678,7 +6678,7 @@ pub async fn start_background_acquisition_poller(
         advertise_acquisition_job_schedule(&app, true, rss_sync_tick).await;
     }
 
-    // Lifecycle evaluation (RFC 137 section 10) runs on an eight-hour
+    // Lifecycle evaluation runs on an eight-hour
     // cadence, offset by a per-instance jitter so a fleet of instances does not
     // sweep their libraries in lockstep. The jitter window is deliberately much
     // smaller than the cadence: it exists to spread load, not to delay the

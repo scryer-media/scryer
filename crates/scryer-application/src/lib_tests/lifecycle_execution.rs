@@ -1,5 +1,5 @@
 //! The action executor's gate matrix, arming contract, safety rechecks, and
-//! postconditions (RFC 137 sections 8, 9.8, 9.10; tracks D2/D3).
+//! postconditions.
 //!
 //! Every test that makes an action execute also asserts the evidence trail:
 //! the action-run row, the candidate's terminal state, and its reason. The

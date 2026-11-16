@@ -1,7 +1,7 @@
-//! The candidate state machine (RFC 137 sections 7.5 and 8).
+//! The candidate state machine.
 //!
-//! These tests are the specification of what the dark evaluator is allowed to
-//! do to a candidate. Every branch of RFC 7.5 has a test here, and every one of
+//! These tests are the specification of what the evaluator is allowed to
+//! do to a candidate. Every candidate transition has a test here, and every one of
 //! them also asserts what did *not* happen: the grace clock is the thing an
 //! action will eventually fire on, so a test that only checks the happy
 //! transition would not notice the clock being silently restarted.

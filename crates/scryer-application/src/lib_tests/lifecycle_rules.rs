@@ -27,7 +27,7 @@ const NEVER_MATCHER: &str = "package whatever\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
      }\n";
 
-/// Would match, but needs a fact this wave cannot observe, so it must hold.
+/// Would match, but needs a fact Scryer cannot observe, so it must hold.
 ///
 /// No `unknown` rule of its own: reading `input.facts.last_upgraded_at` is
 /// enough, because the engine will not consult a rule whose facts it could not
@@ -1416,7 +1416,7 @@ async fn preview_reports_a_failed_subject_by_code() {
     );
 }
 
-/// The fail-closed property the RFC turns on: a rule that needs a fact Scryer
+/// The fail-closed property lifecycle turns on: a rule that needs a fact Scryer
 /// does not collect holds instead of matching — and it holds without the author
 /// having written a single guard, which is the whole point of the host deriving
 /// unknownness from the facts a rule references.

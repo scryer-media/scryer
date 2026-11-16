@@ -1,5 +1,4 @@
-//! Scheduled dark evaluation of stored lifecycle rules (RFC 137 tracks
-//! C1/C2, sections 7.5, 8, 10, 11).
+//! Scheduled evaluation of stored lifecycle rules.
 //!
 //! # What this module may do
 //!
@@ -11,17 +10,15 @@
 //! Execute an action of any kind. Nothing here mutates media, monitoring, tags,
 //! files, or any external system: the only states it ever writes are
 //! [`LifecycleCandidateState::Observing`], [`LifecycleCandidateState::Canceled`],
-//! and [`LifecycleCandidateState::Excluded`]. The remaining states belong to
-//! the executor wave and are already pinned in the domain enum so that wave
-//! needs no migration.
+//! and [`LifecycleCandidateState::Excluded`]. Execution writes the rest.
 //!
 //! # Fail-closed shape
 //!
 //! Every failure path holds rather than advances. An `unknown` decision, a
 //! per-title evaluation error, and a matcher that no longer compiles all leave
 //! the existing candidate exactly where it was; only a confirmed `no_match`
-//! cancels one. That is the RFC 9.8 rule ("transient rule-evaluation failure
-//! preserves membership and holds action") expressed as code.
+//! cancels one: a transient evaluation failure preserves membership and holds
+//! the action.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -673,7 +670,7 @@ impl AppUseCase {
 
     /// Evaluation runs carry counts and timing, never subjects, so they are not
     /// hidden by the result-display gate: they are how an operator sees that
-    /// dark evaluation is working at all.
+    /// evaluation is working at all.
     pub async fn list_lifecycle_evaluation_runs(
         &self,
         actor: &User,

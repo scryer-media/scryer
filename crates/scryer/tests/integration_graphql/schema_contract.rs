@@ -626,7 +626,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // metadata edit, delete, validate, preview), with nine payload objects, six
     // inputs, and six enums: query 134->138, mutation 197->203, OBJECT 319->328,
     // INPUT_OBJECT 173->179, ENUM 112->118, public types 616->637.
-    // The lifecycle dark evaluator adds four query roots (candidates,
+    // The lifecycle evaluator adds four query roots (candidates,
     // evaluation runs, instance gates, exclusions) and five mutation roots
     // (rule mode, instance gates, exclude, remove exclusion, run now), with six
     // payload objects, three inputs, and one candidate-state enum:
@@ -1702,7 +1702,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"TriggerWantedSearchInput"));
     assert!(!public_type_names.contains(&"ResetWantedItemPayload"));
 
-    // The lifecycle dark-evaluator contract a later web wave is built
+    // The lifecycle evaluator contract the web is built
     // against; these names are pinned, not incidental.
     assert!(query_field_names.contains(&"lifecycleCandidates"));
     assert!(query_field_names.contains(&"lifecycleEvaluationRuns"));
@@ -1722,7 +1722,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"DeleteLifecycleExclusionPayload"));
     assert!(public_type_names.contains(&"LifecycleEvaluationTriggerPayload"));
 
-    // The lifecycle action-executor contract the same web wave binds to.
+    // The lifecycle action-executor contract the web binds to.
     assert!(query_field_names.contains(&"lifecycleActionRuns"));
     assert!(!mutation_field_names.contains(&"setMaintenanceRuleArming"));
     assert!(public_type_names.contains(&"LifecycleRuleState"));

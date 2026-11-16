@@ -15,7 +15,7 @@ pub(crate) mod external_identity {
     pub(crate) use scryer_infrastructure_identity::external_identity::*;
 }
 
-/// Lifecycle safety: live playback observation (RFC 137 §9.10, WP-G).
+/// Lifecycle safety: live playback observation.
 pub(crate) mod media_server_playback {
     pub(crate) use scryer_infrastructure_identity::media_server_playback::*;
 }

@@ -1,11 +1,10 @@
-//! Scheduled execution of due lifecycle candidates (RFC 137 sections 8, 9.6,
-//! 9.8, 9.10, 10; tracks D2/D3, title scope).
+//! Scheduled execution of due lifecycle candidates.
 //!
 //! # What this module may do
 //!
 //! For rules that are enabled, in observe mode, and explicitly armed — and only
-//! while the matching instance effect gate is on — execute the rule's
-//! configured action on candidates whose grace has elapsed, through the same
+//! while the matching instance effect gate is on — run the step sequence built
+//! from each candidate's decided actions once its grace has elapsed, through the same
 //! application use cases a human operator would drive: monitoring setters, the
 //! title metadata/profile path, the acquisition search job, and the
 //! preview-fingerprinted deletion workflow.
@@ -237,8 +236,7 @@ pub mod execution_reason {
     /// A storage-pressure deletion owns the conservative global filesystem
     /// guard. This is a hold because another worker will release it.
     pub const STORAGE_DELETION_IN_PROGRESS: &str = "storage_deletion_in_progress";
-    /// The action needs an application seam that does not exist yet
-    /// (`unmonitor_title_delete_all_files`'s title-preserving file deletion).
+    /// The candidate's subject is not a level this build can act at.
     pub const ACTION_NOT_FULLY_SUPPORTED: &str = "action_not_fully_supported";
     /// The subject no longer exists in the catalog.
     pub const TITLE_MISSING: &str = "title_missing";
@@ -1601,7 +1599,7 @@ impl AppUseCase {
         }
     }
 
-    /// The ordered pre-execution rechecks (RFC 8 step 3, RFC 9.10). Order
+    /// The ordered pre-execution rechecks. Order
     /// matters: eligibility first so a disarmed rule never even re-evaluates,
     /// the matcher before the environment so "stopped matching" reads as a
     /// cancel rather than a hold, and the environment holds last.
@@ -1617,7 +1615,7 @@ impl AppUseCase {
     ) -> SafetyDecision {
         // (1) Re-read the rule and the gates: both can move between selection
         // and execution, and a lowered gate must stop a leased worker before
-        // its first external change (RFC section 8).
+        // its first external change.
         let fresh = match self
             .require_lifecycle_rule_set(&candidate.rule_set_id)
             .await
@@ -2439,7 +2437,7 @@ impl AppUseCase {
             }
         }
 
-        // (4) Playback holds every action kind (RFC 9.10), unknown included.
+        // (4) Playback holds every action kind, unknown included.
         match self.lifecycle_playback_hold().await {
             Ok(LifecyclePlaybackHold::Clear) => {}
             Ok(LifecyclePlaybackHold::Hold { .. }) => {

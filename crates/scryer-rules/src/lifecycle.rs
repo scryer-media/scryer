@@ -2,8 +2,8 @@
 //!
 //! The matcher answers one question — does this subject match this rule right
 //! now — and returns match / no-match / unknown. It never selects, names, or
-//! performs an action: the action comes from the validated rule revision that
-//! owns the matcher, so a malformed or timed-out evaluation can never authorize
+//! performs an action: actions come from the heads the validated rule revision
+//! declares, so a malformed or timed-out evaluation can never authorize
 //! one.
 //!
 //! Media-server play history is in the schema now that a provider-neutral
@@ -249,7 +249,7 @@ pub struct LifecycleFactsDoc {
     pub episode_position_by_air_date: Observation<i64>,
     pub season_position_by_air_date: Observation<i64>,
     pub active_downloads: Observation<bool>,
-    /// Media-server watch signals (RFC 137 section 7.3). Every one of these is
+    /// Media-server watch signals. Every one of these is
     /// unknown unless a signal-sync provider is connected *and* every enabled
     /// connection of it swept cleanly and recently: a partial watch picture
     /// would make "nobody watched this" a lie, and these are the facts a rule

@@ -1,5 +1,5 @@
-//! Dual-dialect storage for the lifecycle evaluator's three tables
-//! (RFC 137 section 11): lifecycle candidates, rule exclusions, and per-rule
+//! Dual-dialect storage for the lifecycle evaluator's three tables:
+//! lifecycle candidates, rule exclusions, and per-rule
 //! evaluation runs.
 //!
 //! The store owns one invariant the callers must not have to remember: a rule
@@ -357,7 +357,7 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         // `first_matched_at` and `due_at` are absent on purpose: a continuing
-        // membership never restarts its own grace clock (RFC 7.5).
+        // membership never restarts its own grace clock.
         let args = vec![
             SqlArg::Timestamp(last_matched_at),
             SqlArg::Timestamp(last_matched_at),

@@ -10981,7 +10981,7 @@ pub struct RuleSetHistoryChange {
     pub actor_id: Option<String>,
 }
 
-/// Persistence for user-authored lifecycle rules (RFC 137 section 11).
+/// Persistence for user-authored lifecycle rules.
 ///
 /// Rule sets and their matcher revisions are two tables but one unit of change:
 /// a rule set with no revision has no matcher and no action, so
@@ -11146,7 +11146,7 @@ pub struct LifecycleCandidateQuery {
     pub limit: Option<usize>,
 }
 
-/// Durable lifecycle candidates (RFC 137 section 8).
+/// Durable lifecycle candidates.
 ///
 /// The store, not just the migration's partial unique index, is responsible for
 /// the one-active-candidate-per-(rule, kind, subject) invariant: a create is refused
@@ -11197,7 +11197,7 @@ pub trait LifecycleCandidateRepository: Send + Sync {
     /// Record a repeat match: advance `last_matched_at` and `last_evaluated_at`,
     /// refresh the reason codes, and clear any hold. `first_matched_at` is
     /// deliberately not a parameter — the grace clock never restarts on a
-    /// continuing membership (RFC 7.5).
+    /// continuing membership.
     async fn record_candidate_match(
         &self,
         id: &str,
@@ -11312,7 +11312,7 @@ pub trait LifecycleCandidateRepository: Send + Sync {
     ) -> AppResult<bool>;
 }
 
-/// Append-only record of action-handler attempts (RFC 137 section 8).
+/// Append-only record of action-handler attempts.
 #[async_trait]
 pub trait LifecycleActionRunRepository: Send + Sync {
     /// Insert the attempt as `running` before anything is mutated, so an
@@ -11556,7 +11556,7 @@ pub trait LifecycleSequenceCompletionRepository: Send + Sync {
     ) -> AppResult<bool>;
 }
 
-/// Subjects a lifecycle rule must never act on (RFC 137 section 11).
+/// Subjects a lifecycle rule must never act on.
 #[async_trait]
 pub trait LifecycleExclusionRepository: Send + Sync {
     /// Every exclusion, newest first, optionally narrowed to the ones that
@@ -11579,8 +11579,7 @@ pub trait LifecycleExclusionRepository: Send + Sync {
     async fn delete_exclusion(&self, id: &str) -> AppResult<()>;
 }
 
-/// Bounded per-rule records of what one evaluation pass did
-/// (RFC 137 section 11).
+/// Bounded per-rule records of what one evaluation pass did.
 #[async_trait]
 pub trait LifecycleEvaluationRunRepository: Send + Sync {
     /// Insert the run as `running`. Recorded before evaluation so an
@@ -14282,7 +14281,7 @@ pub trait SubtitleDownloadRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
-// ── Lifecycle safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+// ── Lifecycle safety probes ─────────────────────────────────────────────
 //
 // Read-only observation ports the lifecycle action executor consults before
 // it touches media. Nothing below writes, schedules, or executes anything.

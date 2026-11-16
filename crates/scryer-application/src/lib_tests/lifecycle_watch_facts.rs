@@ -1,4 +1,4 @@
-//! Watch-signal lifecycle facts (RFC 137 §7.3, WP-N).
+//! Watch-signal lifecycle facts.
 //!
 //! Two things are specified here, and they are deliberately separate concerns:
 //!

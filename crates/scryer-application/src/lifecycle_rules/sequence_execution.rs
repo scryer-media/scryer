@@ -1,7 +1,6 @@
-//! Durable orchestration for v2 lifecycle action sequences.
+//! Durable orchestration for lifecycle action sequences.
 //!
-//! This module deliberately sits beside the v1 action handler. A sequence
-//! keeps one durable row per stable step id, and never reinterprets the legacy
+//! A sequence keeps one durable row per stable step id, and never reinterprets the legacy
 //! action-run journal as sequence completion evidence.
 
 use std::collections::{HashMap, HashSet};

@@ -677,7 +677,7 @@ impl AppServicesBuilder {
         integrations.srrdb_filename_lookup,
         Arc<dyn crate::ports::SrrdbFilenameLookup>
     );
-    // ── Lifecycle safety probes (RFC 137 §9.10, WP-G) ─────────────────────
+    // ── Lifecycle safety probes ─────────────────────────────────────────
     app_services_builder_setter!(
         with_media_server_playback_probe,
         integrations.media_server_playback_probe,

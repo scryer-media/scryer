@@ -115,8 +115,8 @@ pub struct AppIntegrationServices {
     /// in every assembly that does not wire the production adapter, which is
     /// indistinguishable from the admin setting being off.
     pub(crate) srrdb_filename_lookup: RuntimeFeature<Arc<dyn crate::ports::SrrdbFilenameLookup>>,
-    /// Live playback observation across the media-server connections above
-    /// (RFC 137 §9.10, WP-G). Read-only; consulted by lifecycle safety.
+    /// Live playback observation across the media-server connections above.
+    /// Read-only; consulted by lifecycle safety.
     pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
     /// Per-participant played-item reads from the same connections
     /// (RFC 137 §7.3, WP-M). Provider dispatch lives inside the adapter.

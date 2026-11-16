@@ -1,5 +1,4 @@
-//! Wired-up coverage for the lifecycle safety preconditions (RFC 137 §9.10,
-//! WP-G). The pure folds are unit-tested next to them in
+//! Wired-up coverage for the lifecycle safety preconditions. The pure folds are unit-tested next to them in
 //! `lifecycle_rules::safety`; these tests prove the use case reads the ports
 //! it claims to read.
 

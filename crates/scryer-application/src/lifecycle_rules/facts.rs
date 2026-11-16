@@ -1,10 +1,10 @@
-//! Fact snapshots for lifecycle rule evaluation (RFC 137 section 8).
+//! Fact snapshots for lifecycle rule evaluation.
 //!
 //! Every fact the matcher can read is built here, from ports Scryer already
 //! has. A fact Scryer cannot resolve becomes [`Observation::unknown`] with a
 //! stable code rather than a plausible-looking default: the engine holds any
-//! rule that reads an unknown fact, which is the fail-closed behaviour the RFC
-//! demands. Guessing `false`, `0`, or "the newest file" would silently
+//! rule that reads an unknown fact, which is the fail-closed behaviour
+//! lifecycle depends on. Guessing `false`, `0`, or "the newest file" would silently
 //! authorize a destructive action on evidence Scryer never had.
 //!
 //! The distinction between `absent` and `unknown` is what drives that, so it is
@@ -34,7 +34,7 @@ use crate::types::TitleMediaFile;
 /// defines the trim-after-strip resolver semantics reused here.
 pub(crate) const QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
-/// Stable reason codes for facts this wave cannot observe.
+/// Stable reason codes for facts Scryer cannot observe.
 ///
 /// These are part of the rule-authoring contract twice over: they are the
 /// reason codes recorded on a candidate the engine held, and a matcher reading
@@ -43,7 +43,7 @@ pub mod unknown_reason {
     /// Scryer does not record this signal yet. Applies to `last_upgraded_at`
     /// (no distinct upgrade event exists — the newest file timestamp is a
     /// different fact and must not stand in for it), `active_downloads`
-    /// (download-state wiring is out of scope for the foundation wave).
+    /// (download-state wiring does not exist yet).
     pub const NOT_YET_COLLECTED: &str = "not_yet_collected";
 
     /// The title has files, but none of their rows carry a parseable
@@ -1168,7 +1168,7 @@ fn scoped_anyone_observations(
 }
 
 /// Who watched the subject, when it was last watched, and whether its
-/// requesters have (RFC 137 section 7.3).
+/// requesters have.
 ///
 /// Three gates run before any signal is read, in this order, because each one
 /// makes the next question meaningless rather than merely harder:
