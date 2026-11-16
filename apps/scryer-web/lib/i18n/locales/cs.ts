@@ -3089,6 +3089,7 @@ const cs: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "Rozbalování archivů",
   "settings.pluginCategoryNotification": "Oznámení",
   "settings.pluginCategorySubtitleProvider": "Poskytovatel titulků",
+  "settings.pluginCategoryMetadataProvider": "Poskytovatel metadat",
   "settings.pluginOfficialOnly": "Jen oficiální",
   "settings.pluginInstall": "Instalovat",
   "settings.pluginInstalling": "Instalace…",

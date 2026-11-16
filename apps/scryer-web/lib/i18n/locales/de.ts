@@ -1781,6 +1781,7 @@ const de: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "Archivextraktion",
   "settings.pluginCategoryNotification": "Benachrichtigung",
   "settings.pluginCategorySubtitleProvider": "Untertitelanbieter",
+  "settings.pluginCategoryMetadataProvider": "Metadatenanbieter",
   "settings.pluginOfficialOnly": "Nur offizielle",
   "settings.pluginInstall": "Installieren",
   "settings.pluginInstalling": "Wird installiert…",

@@ -1610,6 +1610,7 @@ const zh_CN: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "压缩包提取",
   "settings.pluginCategoryNotification": "通知",
   "settings.pluginCategorySubtitleProvider": "字幕提供程序",
+  "settings.pluginCategoryMetadataProvider": "元数据提供程序",
   "settings.pluginOfficialOnly": "仅官方",
   "settings.pluginInstall": "安装",
   "settings.pluginInstalling": "安装中…",

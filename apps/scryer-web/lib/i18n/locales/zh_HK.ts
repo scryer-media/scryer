@@ -2641,6 +2641,7 @@ const zh_HK: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "壓縮包提取",
   "settings.pluginCategoryNotification": "通知",
   "settings.pluginCategorySubtitleProvider": "字幕提供程序",
+  "settings.pluginCategoryMetadataProvider": "元數據提供程序",
   "settings.pluginOfficialOnly": "僅官方",
   "settings.pluginInstall": "安裝",
   "settings.pluginInstalling": "安裝中…",
