@@ -68,7 +68,6 @@ brotli = { version = "9", optional = true }
 tar = "0.4"
 flate2 = "1"
 zstd = { version = "0.14", default-features = false, optional = true }
-tempfile = "3"
 chardetng = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }
 unicode-normalization = "0.1"
@@ -88,6 +87,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win
 [dev-dependencies]
 application-updater = { git = "https://github.com/scryer-media/application-updater.git", rev = "e55801ce7f66c744667d4fe27dd12432a4697f33", features = ["test-seams"] }
 tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
 wiremock = { workspace = true }
 # Fixed IANA zones so schedule tests can exercise daylight-saving transitions
 # regardless of the host time zone.

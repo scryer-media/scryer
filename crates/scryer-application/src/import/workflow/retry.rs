@@ -118,7 +118,7 @@ async fn validate_import_retry_source(
             return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_STATE_UNAVAILABLE, "the client's current download state could not be established; try again when its history is available"));
         }
     }
-    if !Path::new(&completed.dest_dir).exists() {
+    if Disk::process().follow(&completed.dest_dir).await.exists() != Some(true) {
         return Err(AppError::validation_refused(crate::error_reasons::import::SOURCE_UNAVAILABLE, "the import source is no longer available; restore the download or correct its path before retrying"));
     }
     Ok(canonical)

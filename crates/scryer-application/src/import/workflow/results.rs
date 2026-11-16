@@ -111,7 +111,7 @@ pub async fn retry_failed_import(
     {
         return Err(AppError::validation_refused(crate::error_reasons::import::CHANGED_WHILE_RETRY_REQUESTED, "the import changed while retry was requested; refresh its history"));
     }
-    if !std::path::Path::new(&completed.dest_dir).exists() {
+    if Disk::process().follow(&completed.dest_dir).await.exists() != Some(true) {
         return Err(AppError::validation_refused(crate::error_reasons::import::SOURCE_UNAVAILABLE, "the import source is no longer available; restore the download or correct its path before retrying"));
     }
 
@@ -1460,7 +1460,7 @@ fn file_device_and_inode(_metadata: &std::fs::Metadata) -> (Option<u64>, Option<
 
 fn sample_file_proof(path: &std::path::Path, len: u64) -> std::io::Result<(u64, String)> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path)?;
+    let mut file = Disk::process().open_blocking(path, crate::disk::Open::read())?;
     let mut hasher = blake3::Hasher::new();
     let head = len.min(PAYLOAD_SAMPLE_BYTES);
     let mut buffer = vec![0u8; head as usize];
@@ -1482,6 +1482,9 @@ fn sample_file_proof(path: &std::path::Path, len: u64) -> std::io::Result<(u64, 
     Ok((sampled, hasher.finalize().to_hex().to_string()))
 }
 
+// disk-guard: the inventory records each file's raw device and inode numbers
+// on the cleanup row, and the owner's file identity is opaque.
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn inventory_payload_directory_blocking(
     target: &std::path::Path,
 ) -> AppResult<PayloadInventory> {
@@ -1570,6 +1573,9 @@ fn relative_payload_path_is_safe(relative: &str) -> bool {
 /// and the file's real parent is still inside the job directory and outside
 /// every library and recycle root. An inode-and-hash match alone would follow
 /// a moved directory into a library.
+// disk-guard: these checks gate a deletion and must see a symlink planted a
+// moment ago; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 fn payload_file_location_is_verified(
     target: &std::path::Path,
     canonical_target: &std::path::Path,
@@ -1606,6 +1612,9 @@ fn payload_file_location_is_verified(
         .any(|root| crate::catalog_workflow::library_root_paths_overlap(&canonical_parent, root))
 }
 
+// disk-guard: this check gates a deletion and must see a symlink planted a
+// moment ago; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path::PathBuf> {
     match std::fs::symlink_metadata(target) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
@@ -1634,11 +1643,15 @@ fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path:
 /// identity and content sample, then removes directories only once they are
 /// empty. Never a recursive delete: an unknown, changed, or symlinked entry
 /// keeps itself and every directory above it.
+// disk-guard: the identity check before each removal compares the raw device
+// and inode numbers the inventory recorded, from a current lstat.
+#[allow(clippy::disallowed_methods)]
 fn remove_inventoried_payload_blocking(
     target: &std::path::Path,
     inventory: &PayloadInventory,
     protected_roots: &[String],
 ) -> AppResult<PayloadRemovalResult> {
+    let disk = Disk::process();
     let canonical_target = canonical_payload_directory(target)?;
     let mut removed = 0usize;
     let mut retained = Vec::new();
@@ -1685,19 +1698,10 @@ fn remove_inventoried_payload_blocking(
             retained.push(entry.path.clone());
             continue;
         }
-        #[cfg(windows)]
-        {
-            let mut permissions = metadata.permissions();
-            if permissions.readonly() {
-                // Windows read-only attributes do not alter Unix permission bits.
-                #[allow(clippy::permissions_set_readonly_false)]
-                permissions.set_readonly(false);
-                let _ = std::fs::set_permissions(&path, permissions);
-            }
-        }
-        match std::fs::remove_file(&path) {
-            Ok(()) => removed += 1,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // The owner clears a Windows read-only attribute before removing.
+        match disk.remove_blocking(&path, Remove::File) {
+            Ok(Removal::Removed) => removed += 1,
+            Ok(Removal::AlreadyAbsent) => {}
             Err(error) => {
                 return Err(AppError::Repository(format!(
                     "failed to remove download payload file {}: {error}",
@@ -1718,34 +1722,28 @@ fn remove_inventoried_payload_blocking(
         std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count())
     });
     for directory in directories {
-        let _ = std::fs::remove_dir(target.join(directory));
+        let _ = disk.remove_blocking(&target.join(directory), Remove::EmptyDir);
     }
-    let directory_removed = match std::fs::remove_dir(target) {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(_) => false,
-    };
+    let directory_removed = disk.remove_blocking(target, Remove::EmptyDir).is_ok();
     if !directory_removed {
         // Report what is still there, bounded, so the outcome explains itself.
         let mut leftovers = Vec::new();
         let mut stack = vec![target.to_path_buf()];
         while let Some(directory) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&directory) else {
+            let Ok(entries) = disk.list_blocking(&directory) else {
                 continue;
             };
-            for entry in entries.flatten() {
-                let path = entry.path();
+            for entry in entries {
                 if leftovers.len() >= 50 {
                     break;
                 }
-                let relative = path
+                let relative = entry
+                    .path
                     .strip_prefix(target)
                     .map(|relative| relative.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-                match std::fs::symlink_metadata(&path) {
-                    Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                        stack.push(path);
-                    }
+                    .unwrap_or_else(|_| entry.path.to_string_lossy().into_owned());
+                match entry.reading.kind() {
+                    Some(EntryKind::Directory) => stack.push(entry.path),
                     _ => leftovers.push(relative),
                 }
             }
@@ -1821,6 +1819,9 @@ fn cleanup_retry_log_due(record: Option<&crate::DownloadCleanupRecord>) -> bool 
 // (identity already checked there), even on checkpoint recovery, and the
 // filesystem is inspected now: a recreated directory must never be deleted by
 // an otherwise entry-only retry.
+// disk-guard: a directory recreated a moment ago must be seen before NZBGet is
+// allowed to delete; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn verify_nzbget_entry_cleanup(payload: &crate::DownloadCleanupPayload) -> AppResult<()> {
     for path in &payload.native_delete_paths {
         let path = std::path::Path::new(path);
@@ -1948,6 +1949,10 @@ enum HostPayloadStep {
     clippy::too_many_arguments,
     reason = "host payload deletion carries client identity, the cleanup row, NZBGet's revalidated state, a stored plan, and the plan-only mode"
 )]
+// disk-guard: the payload's kind and size, and each imported source's, decide
+// what is deleted and whether the payload is recorded as gone, so they come
+// from a current lstat; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn run_host_payload_cleanup(
     app: &AppUseCase,
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
@@ -2143,7 +2148,8 @@ async fn run_host_payload_cleanup(
     // The path as reported and, when it resolves differently, the path as it
     // actually lands on disk: a symlinked job folder must not reach a library.
     let mut protected_candidates = vec![target.to_string_lossy().into_owned()];
-    if let Ok(canonical) = tokio::fs::canonicalize(&target).await
+    let disk = Disk::process();
+    if let Ok(canonical) = disk.canonicalize(&target).await
         && canonical != target
     {
         protected_candidates.push(canonical.to_string_lossy().into_owned());
@@ -2463,14 +2469,20 @@ async fn run_host_payload_cleanup(
                             ) {
                                 break;
                             }
-                            if tokio::fs::remove_dir(directory).await.is_err() {
+                            if !matches!(
+                                disk.remove(directory, Remove::EmptyDir).await,
+                                Ok(Removal::Removed)
+                            ) {
                                 break;
                             }
                         }
                     }
                 }
                 // Only ever an empty-directory removal; anything left keeps it.
-                let directory_removed = tokio::fs::remove_dir(&target).await.is_ok();
+                let directory_removed = matches!(
+                    disk.remove(&target, Remove::EmptyDir).await,
+                    Ok(Removal::Removed)
+                );
                 tracing::warn!(client_id, client_type, download_client_item_id,
                     path = %target.display(), removed, directory_removed,
                     "payload directory is not provably this job's; removed only Scryer's own imported files");
@@ -2548,6 +2560,10 @@ async fn run_host_payload_cleanup(
     })))
 }
 
+// disk-guard: the ancestor and symlink checks gate each removal and must see a
+// symlink planted a moment ago; the owner's readings may be reused for up to a
+// second.
+#[allow(clippy::disallowed_methods)]
 fn remove_empty_sab_job_parents(
     target: &std::path::Path,
     source_title: &str,
@@ -2603,10 +2619,9 @@ fn remove_empty_sab_job_parents(
         {
             return Ok(Some(false));
         }
-        match std::fs::remove_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+        match Disk::process().remove_blocking(directory, Remove::EmptyDir) {
+            Ok(_) => {}
+            Err(error) if error.reason() == reason::DISK_DIRECTORY_NOT_EMPTY => {
                 return Ok(Some(false));
             }
             Err(error) => {
@@ -2644,18 +2659,24 @@ fn host_payload_cleanup_checkpoint(
 }
 
 async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> AppResult<()> {
-    match tokio::fs::create_dir(checkpoint).await {
+    let disk = Disk::process();
+    match disk
+        .create_dir(checkpoint, crate::disk::Parents::MustExist)
+        .await
+    {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = tokio::fs::symlink_metadata(checkpoint)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to inspect download client payload cleanup checkpoint {}: {error}",
-                        checkpoint.display()
-                    ))
-                })?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            let reading = disk.fresh(checkpoint).await;
+            let Some(kind) = reading.kind() else {
+                return Err(AppError::Repository(format!(
+                    "failed to inspect download client payload cleanup checkpoint {}: {}",
+                    checkpoint.display(),
+                    reading
+                        .unknown_reason()
+                        .unwrap_or(reason::DISK_PATH_MISSING)
+                )));
+            };
+            if kind != EntryKind::Directory {
                 return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY, format!(
                     "download client payload cleanup checkpoint {} is not a directory",
                     checkpoint.display()
@@ -2671,9 +2692,8 @@ async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) ->
 }
 
 async fn clear_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> AppResult<()> {
-    match tokio::fs::remove_dir(checkpoint).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    match Disk::process().remove(checkpoint, Remove::EmptyDir).await {
+        Ok(_) => Ok(()),
         Err(error) => Err(AppError::Repository(format!(
             "failed to remove download client payload cleanup checkpoint {}: {error}",
             checkpoint.display()
@@ -2681,6 +2701,9 @@ async fn clear_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> 
     }
 }
 
+// disk-guard: this check gates a deletion and must see a symlink planted a
+// moment ago; the owner's readings may be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn ensure_payload_target_parents_are_not_symlinks(
     root: &std::path::Path,
     target: &std::path::Path,

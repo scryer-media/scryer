@@ -73,7 +73,7 @@ pub(crate) async fn write_imported_media_nfo(
     let nfo_path = dest_path.with_extension("nfo");
     // Nothing below is worth doing for a sidecar that will not be written, and
     // the check is a single stat against several repository reads.
-    if tokio::fs::try_exists(&nfo_path).await.unwrap_or(false) {
+    if Disk::process().follow(&nfo_path).await.exists() == Some(true) {
         tracing::debug!(
             path = %nfo_path.display(),
             "NFO sidecar already exists; leaving it as it is"
@@ -177,7 +177,7 @@ fn additional_import_dest_path(
     let hash = &hash.as_str()[..8];
     let base_name = sanitize_filesystem_component(&format!("{stem} - {label} {hash}.{extension}"));
     let mut candidate = parent.join(&base_name);
-    if !candidate.exists() {
+    if Disk::process().follow_blocking(&candidate).exists() != Some(true) {
         return candidate;
     }
 
@@ -186,7 +186,7 @@ fn additional_import_dest_path(
             "{stem} - {label} {hash} ({suffix}).{extension}"
         ));
         candidate = parent.join(name);
-        if !candidate.exists() {
+        if Disk::process().follow_blocking(&candidate).exists() != Some(true) {
             return candidate;
         }
     }

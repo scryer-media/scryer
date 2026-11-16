@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::disk::{Access, Disk, EntryKind, Parents, Replace, reason};
 use crate::{AppError, AppResult, AppUseCase, stored_paths::path_to_stored_string};
 
 const MAX_ENTRIES: usize = 100_000;
@@ -203,8 +204,8 @@ impl SceneSubtitlePlan {
                 ));
             }
             plan.total_bytes += size;
-            if path
-                .canonicalize()
+            if Disk::process()
+                .canonicalize_blocking(&path)
                 .is_ok_and(|canonical| replaced.contains(&canonical))
             {
                 continue;
@@ -488,7 +489,10 @@ fn validate_disk_allowance(available: u64, required: u64) -> AppResult<()> {
     Ok(())
 }
 
+// disk-guard: the subtitle is reached through directory handles, one component
+// at a time without following links; the owner opens only regular files by path.
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)]
 fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::File> {
     use std::os::{
         fd::{AsRawFd, FromRawFd},
@@ -565,7 +569,10 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
     ))
 }
 
+// disk-guard: the subtitle is reached through directory handles, one component
+// at a time without following links; the owner opens only regular files by path.
 #[cfg(windows)]
+#[allow(clippy::disallowed_methods)]
 fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::File> {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     let mut directory_options = std::fs::OpenOptions::new();
@@ -632,7 +639,10 @@ fn final_windows_handle_path(file: &std::fs::File) -> AppResult<String> {
     })
 }
 
+// disk-guard: each component is checked without following links before the
+// open; the owner has no such walk.
 #[cfg(not(any(unix, windows)))]
+#[allow(clippy::disallowed_methods)]
 fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::File> {
     let relative = source.strip_prefix(workspace).map_err(|_| {
         AppError::validation_refused(
@@ -691,6 +701,9 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
 
 /// Open a sidecar the download client reported, refusing a symlink or reparse
 /// point at that path and anything that is not a regular file.
+// disk-guard: the open must not block on a FIFO in the client's folder and, on
+// Windows, shares the file for reading only; the owner opens neither way.
+#[allow(clippy::disallowed_methods)]
 fn open_client_subtitle(source: &Path) -> AppResult<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -743,9 +756,11 @@ fn collect_subtitles(
             "scene subtitle directory nesting limit exceeded",
         ));
     }
-    for entry in std::fs::read_dir(root).map_err(|error| AppError::Repository(error.to_string()))? {
+    let entries = Disk::process()
+        .list_blocking(root)
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    for entry in entries {
         control.check()?;
-        let entry = entry.map_err(|error| AppError::Repository(error.to_string()))?;
         *count += 1;
         if *count > MAX_ENTRIES {
             return Err(AppError::validation_refused(
@@ -753,15 +768,15 @@ fn collect_subtitles(
                 "scene subtitle directory entry limit exceeded",
             ));
         }
-        let kind = entry
-            .file_type()
-            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let kind = entry.reading.kind().ok_or_else(|| {
+            AppError::Repository(format!("could not tell what {} is", entry.path.display()))
+        })?;
         // Directory entries are inspected without following symlinks. A
         // sidecar outside the authorized download or workspace is never read.
-        if kind.is_dir() {
-            collect_subtitles(&entry.path(), depth + 1, count, paths, control)?;
-        } else if kind.is_file() && scryer_domain::is_subtitle_file(&entry.path()) {
-            paths.insert(entry.path());
+        if kind == EntryKind::Directory {
+            collect_subtitles(&entry.path, depth + 1, count, paths, control)?;
+        } else if kind == EntryKind::File && scryer_domain::is_subtitle_file(&entry.path) {
+            paths.insert(entry.path);
         }
     }
     Ok(())
@@ -873,25 +888,23 @@ fn copy_subtitle_with_writer(
     control: &IoControl,
 ) -> AppResult<()> {
     control.check()?;
-    let (mut source_file, staging_root) = match origin {
+    let mut source_file = match origin {
         SubtitleOrigin::ArchiveWorkspace(staging_root) => {
             if !crate::archive_extractor::is_owned_archive_workspace(staging_root) {
                 return Err(AppError::validation_refused(crate::error_reasons::import::SCENE_SUBTITLE_STAGING_REQUIRES_OWNED_ARCHIVE_WORKSPACE, "scene subtitle staging requires an owned archive workspace"));
             }
-            (
-                open_owned_subtitle(source, staging_root)?,
-                staging_root.as_path(),
-            )
+            open_owned_subtitle(source, staging_root)?
         }
-        SubtitleOrigin::ClientReported => (
-            open_client_subtitle(source)?,
-            destination.parent().ok_or_else(|| {
-                AppError::validation_refused(
+        SubtitleOrigin::ClientReported => {
+            let file = open_client_subtitle(source)?;
+            if destination.parent().is_none() {
+                return Err(AppError::validation_refused(
                     crate::error_reasons::import::IMPORTED_VIDEO_NO_PARENT_DIRECTORY,
                     "imported video has no parent directory",
-                )
-            })?,
-        ),
+                ));
+            }
+            file
+        }
     };
     let metadata = source_file
         .metadata()
@@ -923,21 +936,22 @@ fn copy_subtitle_with_writer(
             "scene subtitle size limit exceeded",
         ));
     }
-    let mut staging = tempfile::NamedTempFile::new_in(staging_root)
+    let mut staging = Disk::process()
+        .stage_blocking(destination, Parents::MustExist, Access::Default)
         .map_err(|error| AppError::Repository(error.to_string()))?;
     staging
-        .as_file()
+        .file()
         .set_permissions(metadata.permissions())
         .map_err(|error| AppError::Repository(error.to_string()))?;
-    writer(staging.as_file_mut(), &bytes).map_err(|error| {
+    writer(staging.file(), &bytes).map_err(|error| {
         AppError::Repository(format!(
             "scene subtitle staging failed; source preserved: {error}"
         ))
     })?;
     control.check()?;
-    match staging.persist_noclobber(destination) {
+    match staging.commit_blocking(Replace::Never) {
         Ok(_) => Ok(()),
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
             if existing_subtitle_matches(destination, &bytes, control)? {
                 Ok(())
             } else {
@@ -945,12 +959,14 @@ fn copy_subtitle_with_writer(
             }
         }
         Err(error) => Err(AppError::Repository(format!(
-            "scene subtitle delivery failed; source preserved: {}",
-            error.error
+            "scene subtitle delivery failed; source preserved: {error}"
         ))),
     }
 }
 
+// disk-guard: the open must not block on a FIFO at the destination and, on
+// Windows, shares the file for reading only; the owner opens neither way.
+#[allow(clippy::disallowed_methods)]
 fn existing_subtitle_matches(
     destination: &Path,
     expected: &[u8],

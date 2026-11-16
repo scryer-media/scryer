@@ -436,7 +436,8 @@ async fn relocate_titleless_archive_workspace_for_title(
         return Ok(TitlelessArchiveRelocation::Ready(extracted_dir));
     }
 
-    tokio::fs::create_dir_all(&target_parent)
+    Disk::process()
+        .create_dir(&target_parent, crate::disk::Parents::Create)
         .await
         .map_err(|error| {
             AppError::Repository(format!(
@@ -701,8 +702,8 @@ async fn try_match_titleless_archive_from_inner_video(
             discover_video_files(dest_dir, is_series)?
                 .into_iter()
                 .filter(|file| {
-                    file.path()
-                        .canonicalize()
+                    Disk::process()
+                        .canonicalize_blocking(file.path())
                         .is_ok_and(|path| !replaced.contains(&path))
                 }),
         );
@@ -1097,8 +1098,8 @@ async fn resolve_completed_import_target(
                 discover_video_files(dest_dir, is_series)?
                     .into_iter()
                     .filter(|file| {
-                        file.path()
-                            .canonicalize()
+                        Disk::process()
+                            .canonicalize_blocking(file.path())
                             .is_ok_and(|path| !replaced.contains(&path))
                     }),
             );
@@ -1466,14 +1467,16 @@ async fn existing_additional_import_media_file(
         let mut source_proof = None;
         for candidate in candidates {
             let copy_path = Path::new(&candidate.file_path);
-            match std::fs::metadata(copy_path) {
-                Ok(metadata) if metadata.len() as i64 == source_size => {}
-                Ok(_) => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
+            match Disk::process().follow_blocking(copy_path) {
+                PathReading::Known { len: Some(len), .. } if len as i64 == source_size => {}
+                PathReading::Known { .. } | PathReading::Missing { .. } => continue,
+                reading => {
                     return Err(AppError::Repository(format!(
-                        "failed to stat earlier additional import {}: {error}",
-                        copy_path.display()
+                        "failed to stat earlier additional import {}: {}",
+                        copy_path.display(),
+                        reading
+                            .unknown_reason()
+                            .unwrap_or(reason::DISK_PATH_UNREACHABLE)
                     )));
                 }
             }
@@ -1867,10 +1870,10 @@ async fn import_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = tokio::fs::metadata(&source_video)
-        .await
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let source_size = match Disk::process().follow(&source_video).await {
+        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
+        _ => 0,
+    };
 
     let ImportPathSettings {
         media_root,
@@ -2712,10 +2715,10 @@ async fn import_series_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = tokio::fs::metadata(&source_video)
-        .await
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let source_size = match Disk::process().follow(&source_video).await {
+        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
+        _ => 0,
+    };
 
     let ImportPathSettings {
         media_root,
@@ -3278,7 +3281,9 @@ async fn import_series_movie_download(
     persist_title_folder_path_if_missing(app, title, &full_folder_path).await?;
     // Ensure the configured episodic destination directory exists.
     if let Some(parent) = dest_path.parent()
-        && let Err(err) = tokio::fs::create_dir_all(parent).await
+        && let Err(err) = Disk::process()
+            .create_dir(parent, crate::disk::Parents::Create)
+            .await
     {
         tracing::warn!(error = %err, path = %parent.display(), "failed to create episodic import directory");
     }

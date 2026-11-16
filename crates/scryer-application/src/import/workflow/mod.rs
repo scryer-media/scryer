@@ -1,5 +1,6 @@
 mod sidecars;
 
+use crate::disk::{Disk, EntryKind, PathReading, Removal, Remove, reason};
 use crate::helpers::parse_usable_release_title;
 use crate::import::srrdb::{crc32_iso_hdlc_of_file, srrdb_lookup_applies};
 #[cfg(test)]
@@ -271,8 +272,9 @@ pub(crate) async fn import_file_with_record_progress(
 
     if matches!(&result, Err(AppError::Canceled(_))) {
         let temporary_destination = dest.with_extension("tmp_import");
-        if let Err(error) = std::fs::remove_file(&temporary_destination)
-            && error.kind() != std::io::ErrorKind::NotFound
+        if let Err(error) = Disk::process()
+            .remove(&temporary_destination, Remove::File)
+            .await
         {
             tracing::warn!(
                 import_id,

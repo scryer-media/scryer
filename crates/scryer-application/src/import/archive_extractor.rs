@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use crate::disk::{Access, Disk, EntryKind, Open, Parents, PathReading, Remove, Replace, reason};
 use crate::import::archive_passwords::{ArchivePasswordCandidates, redact_archive_diagnostic};
 use crate::{AppError, AppResult, ArchiveExtractorPluginProvider};
 use scryer_plugin_sdk::{
@@ -141,53 +142,45 @@ fn new_archive_workspace_key() -> [u8; 32] {
 
 fn load_or_create_archive_workspace_key(state_dir: &Path) -> std::io::Result<[u8; 32]> {
     use std::io::{Read, Write};
-    std::fs::create_dir_all(state_dir)?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(state_dir, Parents::Create)?;
     let path = state_dir.join("archive-workspace-key");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    match options.open(&path) {
+    let create = Open::create_new()
+        .with_access(Access::OwnerOnly)
+        .without_following_links();
+    match disk.open_blocking(&path, create) {
         Ok(mut file) => {
             let key = new_archive_workspace_key();
             file.write_all(&key)?;
-            file.sync_all()?;
+            disk.finish_blocking(&path, file)?.required()?;
             Ok(key)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = std::fs::symlink_metadata(&path)?;
-            if !metadata.file_type().is_file() || metadata.len() != 32 {
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            // The kind and length are checked before opening, so a special
+            // file in its place is never opened.
+            if !matches!(
+                disk.fresh_blocking(&path),
+                PathReading::Known {
+                    kind: EntryKind::File,
+                    len: Some(32),
+                    ..
+                }
+            ) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "workspace authority key is not a regular 32-byte file",
                 ));
             }
+            let file = disk.open_blocking(&path, Open::read().without_following_links())?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if metadata.permissions().mode() & 0o077 != 0 {
+                if file.metadata()?.permissions().mode() & 0o077 != 0 {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
                         "workspace authority key must be private to the service",
                     ));
                 }
-            }
-            let mut options = std::fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.custom_flags(libc::O_NOFOLLOW);
-            }
-            let file = options.open(&path)?;
-            if !file.metadata()?.is_file() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "workspace authority key is not a regular file",
-                ));
             }
             let mut bytes = Vec::new();
             file.take(33).read_to_end(&mut bytes)?;
@@ -198,7 +191,7 @@ fn load_or_create_archive_workspace_key(state_dir: &Path) -> std::io::Result<[u8
                 )
             })
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -211,6 +204,9 @@ fn archive_workspace_key() -> Option<&'static [u8; 32]> {
 
 /// Directory identity survives a same-filesystem move but cannot be supplied
 /// by a downloaded marker or copied to another directory.
+// disk-guard: the identity is read from a handle on the directory itself,
+// opened without following a link; the owner opens only regular files.
+#[allow(clippy::disallowed_methods)]
 fn archive_workspace_identity(root: &Path) -> Option<Vec<u8>> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -302,24 +298,27 @@ fn archive_release_proof(root: &Path, release: &ArchiveWorkspaceRelease) -> Opti
 }
 
 fn read_archive_marker<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if !metadata.file_type().is_file() || metadata.len() > 4096 {
+    let disk = Disk::process();
+    // Checked before opening, so a special file in its place is never opened.
+    let PathReading::Known {
+        kind: EntryKind::File,
+        len: Some(len),
+        ..
+    } = disk.fresh_blocking(path)
+    else {
+        return None;
+    };
+    if len > 4096 {
         return None;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options.open(path).ok()?;
+    let file = disk
+        .open_blocking(path, Open::read().without_following_links())
+        .ok()?;
     let mut bounded = std::io::Read::take(file, 4097);
     serde_json::from_reader(&mut bounded).ok()
 }
 
 fn release_archive_workspace(root: &Path) -> std::io::Result<()> {
-    use std::io::Write;
     let owner = archive_workspace_owner(root).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -345,11 +344,7 @@ fn release_archive_workspace(root: &Path) -> std::io::Result<()> {
         .to_string();
     let bytes = serde_json::to_vec(&release)?;
     // A preexisting invalid release file is ambiguous and is preserved.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(marker)?
-        .write_all(&bytes)
+    Ok(Disk::process().write_blocking(&marker, &bytes, Replace::Never, Access::Default)?)
 }
 
 fn archive_workspace_release(root: &Path) -> Option<SystemTime> {
@@ -556,16 +551,12 @@ async fn extract_into_workspace(
     passwords: &ArchivePasswordCandidates,
     provider: &Arc<dyn ArchiveExtractorPluginProvider>,
 ) -> AppResult<bool> {
-    let source = if source.is_file() {
+    let source = if Disk::process().follow(source).await.kind() == Some(EntryKind::File) {
         source.parent().unwrap_or(Path::new("."))
     } else {
         source
     };
-    let input_bytes = archive_inventory(source, MAX_ARCHIVE_DISCOVERY_DEPTH)?
-        .iter()
-        .filter_map(|path| std::fs::symlink_metadata(path).ok())
-        .filter(|metadata| metadata.is_file())
-        .fold(0u64, |sum, metadata| sum.saturating_add(metadata.len()));
+    let input_bytes = inventory_bytes(source, false).await?;
     // Give large scene releases proportionally more decoding time. Queue
     // admission is excluded by the host; all candidate attempts share this cap.
     let mut totals = PluginOutputTotals {
@@ -670,6 +661,39 @@ async fn extract_into_workspace(
     }))
 }
 
+/// The bytes of the regular files in a bounded inventory of `dir`, read on one
+/// blocking thread. With `only_with_par2`, zero unless the inventory holds a
+/// PAR2 file.
+async fn inventory_bytes(dir: &Path, only_with_par2: bool) -> AppResult<u64> {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let disk = Disk::process();
+        let files = archive_inventory(&dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
+        if only_with_par2
+            && !files.iter().any(|path| {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("par2"))
+            })
+        {
+            return Ok(0);
+        }
+        Ok(files
+            .iter()
+            .filter_map(|path| match disk.fresh_blocking(path) {
+                PathReading::Known {
+                    kind: EntryKind::File,
+                    len,
+                    ..
+                } => len,
+                _ => None,
+            })
+            .fold(0u64, u64::saturating_add))
+    })
+    .await
+    .map_err(|e| AppError::Repository(format!("archive detection task failed: {e}")))?
+}
+
 fn nested_archive_sets(outputs: &[PathBuf]) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
     let mut sets = Vec::new();
     for output in outputs {
@@ -703,9 +727,9 @@ impl ArchiveSetExtraction<'_> {
         processed_recovery: &mut std::collections::HashSet<PathBuf>,
     ) -> AppResult<bool> {
         if matches!(self.archive_type, ArchiveType::Par2)
-            && self
-                .archive_path
-                .canonicalize()
+            && Disk::process()
+                .canonicalize(self.archive_path)
+                .await
                 .is_ok_and(|path| processed_recovery.contains(&path))
         {
             return Ok(false);
@@ -830,25 +854,26 @@ async fn prepare_workspace_output_dir(workspace_root: &Path, output_dir: &Path) 
             ),
         ));
     }
-    match tokio::fs::create_dir(output_dir).await {
+    let disk = Disk::process();
+    match disk.create_dir(output_dir, Parents::MustExist).await {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let mut entries = tokio::fs::read_dir(output_dir).await.map_err(|error| {
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            let entries = disk.list(output_dir).await.map_err(|error| {
                 AppError::Repository(format!(
                     "failed to read archive staging output directory {}: {error}",
                     redact_archive_diagnostic(&output_dir.to_string_lossy())
                 ))
             })?;
-            match entries.next_entry().await {
-                Ok(None) => Ok(()),
-                _ => Err(AppError::validation_refused(
-                    crate::error_reasons::import::ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY,
-                    format!(
-                        "archive staging output directory {} is not empty",
-                        redact_archive_diagnostic(&output_dir.to_string_lossy())
-                    ),
-                )),
+            if entries.is_empty() {
+                return Ok(());
             }
+            Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY,
+                format!(
+                    "archive staging output directory {} is not empty",
+                    redact_archive_diagnostic(&output_dir.to_string_lossy())
+                ),
+            ))
         }
         Err(error) => Err(AppError::Repository(format!(
             "failed to create archive staging output directory {}: {error}",
@@ -866,7 +891,7 @@ async fn discard_workspace_output_dir(workspace_root: &Path, output_dir: &Path) 
             .file_name()
             .is_some_and(|name| name.to_str().is_some_and(is_workspace_output_dir_name))
     {
-        let _ = tokio::fs::remove_dir_all(output_dir).await;
+        let _ = Disk::process().remove(output_dir, Remove::Tree).await;
     }
 }
 
@@ -888,12 +913,14 @@ fn is_workspace_output_dir_name(name: &str) -> bool {
 /// archive it is reading.
 fn ensure_source_outside_output(source_dir: &Path, output_dir: &Path) -> AppResult<()> {
     let canonical = |path: &Path| {
-        path.canonicalize().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to canonicalize archive path {}: {error}",
-                redact_archive_diagnostic(&path.to_string_lossy())
-            ))
-        })
+        Disk::process()
+            .canonicalize_blocking(path)
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to canonicalize archive path {}: {error}",
+                    redact_archive_diagnostic(&path.to_string_lossy())
+                ))
+            })
     };
     if canonical(source_dir)?.starts_with(canonical(output_dir)?) {
         return Err(AppError::validation_refused(
@@ -930,16 +957,22 @@ fn plan_archive_extraction(
     dir: &Path,
     _is_sample: fn(&Path) -> bool,
 ) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
-    let metadata = std::fs::symlink_metadata(dir).map_err(|error| {
-        AppError::Repository(format!("archive source inspection failed: {error}"))
-    })?;
-    if metadata.file_type().is_symlink() {
+    let reading = Disk::process().fresh_blocking(dir);
+    let Some(kind) = reading.kind() else {
+        return Err(AppError::Repository(format!(
+            "archive source inspection failed: {}",
+            reading
+                .unknown_reason()
+                .unwrap_or(reason::DISK_PATH_MISSING)
+        )));
+    };
+    if kind == EntryKind::Symlink {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::ARCHIVE_SOURCE_SYMLINK_FORBIDDEN,
             "archive source must not be a symlink",
         ));
     }
-    if metadata.is_file() {
+    if kind == EntryKind::File {
         return Ok(archive_type_for_path(dir)
             .map(|archive_type| (dir.to_path_buf(), archive_type))
             .into_iter()
@@ -1018,21 +1051,8 @@ async fn extract_with_archive_plugin(
     if let Some(space) = scratch_space {
         limits.max_scratch_bytes = limits.max_scratch_bytes.min(space);
     }
-    if archive_storage_is_shared(&output_dir, &scratch_dir) {
-        let source_files = archive_inventory(&source_dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
-        let copies_sources = source_files.iter().any(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("par2"))
-        });
-        let staged_bytes = if copies_sources {
-            source_files
-                .iter()
-                .filter_map(|path| std::fs::symlink_metadata(path).ok())
-                .fold(0u64, |sum, metadata| sum.saturating_add(metadata.len()))
-        } else {
-            0
-        };
+    if archive_storage_is_shared(&output_dir, &scratch_dir).await {
+        let staged_bytes = inventory_bytes(&source_dir, true).await?;
         // Plain streaming decoders do not need another full release copy.
         // Recovery reserves its source bytes once on a shared disk. Split
         // archives are read as streams and do not require a staging copy.
@@ -1077,22 +1097,18 @@ async fn extract_with_archive_plugin(
     match handle_archive_plugin_response(archive_type, output_dir.clone(), response, totals) {
         Ok(()) => {
             if !replacements.is_empty() {
-                use std::io::Write;
-                let mut marker = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(output_dir.parent().unwrap().join(format!(
-                        ".source-replacements-{}.json",
-                        output_dir.file_name().unwrap().to_string_lossy()
-                    )))
+                let marker = output_dir.parent().unwrap().join(format!(
+                    ".source-replacements-{}.json",
+                    output_dir.file_name().unwrap().to_string_lossy()
+                ));
+                let encoded = serde_json::to_vec(&replacements)
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                Disk::process()
+                    .write(marker, encoded, Replace::Never, Access::Default)
+                    .await
                     .map_err(|e| {
                         AppError::Repository(format!("failed to record repaired sources: {e}"))
                     })?;
-                let encoded = serde_json::to_vec(&replacements)
-                    .map_err(|e| AppError::Repository(e.to_string()))?;
-                marker
-                    .write_all(&encoded)
-                    .map_err(|e| AppError::Repository(e.to_string()))?;
             }
             Ok(ArchiveAttempt::Extracted(processed_recovery))
         }
@@ -1105,12 +1121,19 @@ fn usable_archive_space(available: u64) -> u64 {
     available.saturating_sub((512 * 1024 * 1024).min(available / 20))
 }
 
-fn archive_storage_is_shared(output: &Path, scratch: &Path) -> bool {
+async fn archive_storage_is_shared(output: &Path, scratch: &Path) -> bool {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        if let (Ok(output), Ok(scratch)) = (std::fs::metadata(output), std::fs::metadata(scratch)) {
-            return output.dev() == scratch.dev();
+        let disk = Disk::process();
+        let identity = |reading| match reading {
+            PathReading::Known { identity, .. } => identity,
+            _ => None,
+        };
+        if let (Some(output), Some(scratch)) = (
+            identity(disk.follow(output).await),
+            identity(disk.follow(scratch).await),
+        ) {
+            return output.same_device(scratch);
         }
     }
     // Unknown storage identity must not count the same free space twice.
@@ -1125,20 +1148,19 @@ fn validate_reported_sources(source_dir: &Path, paths: &[String]) -> AppResult<V
             "archive source metadata exceeds entry limit",
         ));
     }
-    let source = source_dir
-        .canonicalize()
+    let disk = Disk::process();
+    let source = disk
+        .canonicalize_blocking(source_dir)
         .map_err(|error| AppError::Repository(error.to_string()))?;
     paths
         .iter()
         .map(|relative| {
             let path = safe_archive_output_path(&source, relative)?;
-            if !std::fs::symlink_metadata(&path)
-                .is_ok_and(|metadata| metadata.file_type().is_file())
-            {
+            if disk.fresh_blocking(&path).kind() != Some(EntryKind::File) {
                 return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_SOURCE_METADATA_MUST_IDENTIFY_REGULAR_FILE, "archive source metadata must identify a regular file"));
             }
-            let canonical = path
-                .canonicalize()
+            let canonical = disk
+                .canonicalize_blocking(&path)
                 .map_err(|error| AppError::Repository(error.to_string()))?;
             if !canonical.starts_with(&source) {
                 return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY, "archive source metadata escapes its source directory"));
@@ -1155,10 +1177,12 @@ pub fn replaced_archive_sources(workspace: &Path) -> AppResult<std::collections:
     }
     // Host metadata lives outside plugin-writable output directories. Archive
     // members cannot supply or override this list of replaced source files.
-    let entries = std::fs::read_dir(workspace).map_err(|e| AppError::Repository(e.to_string()))?;
+    let disk = Disk::process();
+    let entries = disk
+        .list_blocking(workspace)
+        .map_err(|e| AppError::Repository(e.to_string()))?;
     for entry in entries {
-        let entry = entry.map_err(|e| AppError::Repository(e.to_string()))?;
-        let path = entry.path();
+        let path = entry.path;
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
@@ -1168,15 +1192,22 @@ pub fn replaced_archive_sources(workspace: &Path) -> AppResult<std::collections:
         else {
             continue;
         };
-        if !is_workspace_output_dir_name(output_name)
-            || !entry
-                .file_type()
-                .map_err(|e| AppError::Repository(e.to_string()))?
-                .is_file()
-        {
+        if !is_workspace_output_dir_name(output_name) {
             continue;
         }
-        let file = std::fs::File::open(path).map_err(|e| AppError::Repository(e.to_string()))?;
+        match entry.reading.kind() {
+            Some(EntryKind::File) => {}
+            Some(_) => continue,
+            None => {
+                return Err(AppError::Repository(format!(
+                    "repaired-source manifest kind is unknown: {}",
+                    path.display()
+                )));
+            }
+        }
+        let file = disk
+            .open_blocking(&path, Open::read())
+            .map_err(|e| AppError::Repository(e.to_string()))?;
         let bounded = std::io::Read::take(file, 8 * 1024 * 1024);
         let replaced: Vec<PathBuf> = serde_json::from_reader(bounded)
             .map_err(|e| AppError::Repository(format!("invalid repaired-source manifest: {e}")))?;
@@ -1187,7 +1218,8 @@ pub fn replaced_archive_sources(workspace: &Path) -> AppResult<std::collections:
 
 impl ArchiveExtractionWorkspace {
     async fn create(destination: &ArchiveExtractionDestination) -> AppResult<Self> {
-        tokio::fs::create_dir_all(&destination.staging_parent)
+        Disk::process()
+            .create_dir(&destination.staging_parent, Parents::Create)
             .await
             .map_err(|error| {
                 AppError::Repository(format!(
@@ -1216,23 +1248,17 @@ impl ArchiveExtractionWorkspace {
                 "archive workspace authority is unavailable".into(),
             ));
         }
-        std::fs::create_dir_all(&destination.staging_parent).map_err(|error| {
-            AppError::Repository(format!("failed to prepare archive staging parent: {error}"))
-        })?;
+        let disk = Disk::process();
+        disk.create_dir_blocking(&destination.staging_parent, Parents::Create)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to prepare archive staging parent: {error}"))
+            })?;
         for _ in 0..ARCHIVE_STAGING_CREATE_ATTEMPTS {
             let root = destination.staging_parent.join(format!(
                 "{ARCHIVE_STAGING_PREFIX}{}",
                 short_staging_suffix()
             ));
-            let directory = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            let directory = {
-                use std::os::unix::fs::DirBuilderExt;
-                let mut directory = directory;
-                directory.mode(0o700);
-                directory
-            };
-            match directory.create(&root) {
+            match disk.create_dir_as_blocking(&root, Parents::MustExist, Access::OwnerOnly) {
                 Ok(()) => {
                     // This guard also runs when an abandoned spawn_blocking
                     // result is dropped after its caller was cancelled.
@@ -1255,31 +1281,28 @@ impl ArchiveExtractionWorkspace {
                     let bytes = serde_json::to_vec(&owner).map_err(|error| {
                         AppError::Repository(format!("failed to encode archive ownership: {error}"))
                     })?;
-                    use std::io::Write;
-                    std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(root.join(ARCHIVE_WORKSPACE_OWNER_FILE))
-                        .and_then(|mut file| file.write_all(&bytes))
+                    let owner_file = root.join(ARCHIVE_WORKSPACE_OWNER_FILE);
+                    disk.write_blocking(&owner_file, &bytes, Replace::Never, Access::Default)
                         .map_err(|error| {
                             AppError::Repository(format!(
                                 "failed to record archive ownership: {error}"
                             ))
                         })?;
                     let output_dir = root.join(ARCHIVE_STAGING_OUTPUT_DIR);
-                    std::fs::create_dir(&output_dir).map_err(|error| {
-                        AppError::Repository(format!(
-                            "failed to create archive staging output directory {}: {error}",
-                            redact_archive_diagnostic(&output_dir.to_string_lossy())
-                        ))
-                    })?;
+                    disk.create_dir_blocking(&output_dir, Parents::MustExist)
+                        .map_err(|error| {
+                            AppError::Repository(format!(
+                                "failed to create archive staging output directory {}: {error}",
+                                redact_archive_diagnostic(&output_dir.to_string_lossy())
+                            ))
+                        })?;
                     return Ok(Self {
                         root,
                         output_dir,
                         lease,
                     });
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => continue,
                 Err(error) => {
                     return Err(AppError::Repository(format!(
                         "failed to create archive staging directory {}: {error}",
@@ -1320,13 +1343,13 @@ async fn cleanup_stale_archive_artifacts(parent: &Path) {
 }
 
 async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) {
-    let mut entries = match tokio::fs::read_dir(parent).await {
-        Ok(entries) => entries,
-        Err(_) => return,
+    let disk = Disk::process();
+    let Ok(entries) = disk.list(parent).await else {
+        return;
     };
     let now = SystemTime::now();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry.path;
         if archive_workspace_owner(&path).is_none() {
             continue;
         }
@@ -1340,7 +1363,7 @@ async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) 
             .duration_since(released_at)
             .is_ok_and(|age| age >= min_age)
         {
-            let _ = tokio::fs::remove_dir_all(path).await;
+            let _ = disk.remove(path, Remove::Tree).await;
         }
     }
 }
@@ -1372,7 +1395,7 @@ fn handle_archive_plugin_response(
                     Ok(())
                 }
                 Err(error) => {
-                    let _ = std::fs::remove_dir_all(&output_dir);
+                    let _ = Disk::process().remove_blocking(&output_dir, Remove::Tree);
                     Err(error)
                 }
             }
@@ -1391,7 +1414,7 @@ fn handle_archive_plugin_response(
             message: format!("{} archive password is invalid", archive_type.as_str()),
         }),
         ArchivePluginStatus::Failed => {
-            let _ = std::fs::remove_dir_all(&output_dir);
+            let _ = Disk::process().remove_blocking(&output_dir, Remove::Tree);
             Err(archive_plugin_failure_error(
                 response.error_code.as_deref(),
                 response.message.as_deref(),
@@ -1465,7 +1488,8 @@ fn validate_archive_plugin_output(
     response: &ArchivePluginProcessResponse,
     totals: PluginOutputTotals,
 ) -> AppResult<PluginOutputTotals> {
-    let output_root = output_dir.canonicalize().map_err(|error| {
+    let disk = Disk::process();
+    let output_root = disk.canonicalize_blocking(output_dir).map_err(|error| {
         AppError::Repository(format!(
             "failed to canonicalize archive plugin output directory {}: {error}",
             redact_archive_diagnostic(&output_dir.to_string_lossy())
@@ -1474,13 +1498,13 @@ fn validate_archive_plugin_output(
 
     for file in &response.files {
         let path = safe_archive_output_path(output_dir, &file.relative_path)?;
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-            AppError::Repository(format!(
-                "archive plugin manifest output '{}' is missing or unreadable: {error}",
+        let PathReading::Known { kind, len, .. } = disk.fresh_blocking(&path) else {
+            return Err(AppError::Repository(format!(
+                "archive plugin manifest output '{}' is missing or unreadable",
                 redact_archive_diagnostic(&path.to_string_lossy())
-            ))
-        })?;
-        if !metadata.file_type().is_file() {
+            )));
+        };
+        if kind != EntryKind::File {
             return Err(AppError::validation_refused(
                 crate::error_reasons::import::ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE,
                 format!(
@@ -1491,7 +1515,7 @@ fn validate_archive_plugin_output(
         }
         ensure_path_under_output_with_root(&path, &output_root)?;
         if let Some(expected_size) = file.size
-            && expected_size != metadata.len()
+            && Some(expected_size) != len
         {
             return Err(AppError::validation_refused(
                 crate::error_reasons::import::ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH,
@@ -1511,8 +1535,10 @@ fn validate_archive_plugin_output(
         execution_time,
         execution_budget,
     } = totals;
-    let mut stack = vec![output_dir.to_path_buf()];
-    while let Some(path) = stack.pop() {
+    // Each entry carries what its directory's listing said about it; only a
+    // file the listing gave no length for is read again.
+    let mut stack = vec![(output_dir.to_path_buf(), PathReading::NotObserved)];
+    while let Some((path, listed)) = stack.pop() {
         entry_count += 1;
         if entry_count > MAX_PLUGIN_OUTPUT_ENTRIES {
             return Err(AppError::validation_refused(
@@ -1520,13 +1546,19 @@ fn validate_archive_plugin_output(
                 "archive plugin output contains too many entries".to_string(),
             ));
         }
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect archive plugin output {}: {error}",
+        let reading = match listed {
+            PathReading::Known { kind, len, .. } if kind != EntryKind::File || len.is_some() => {
+                listed
+            }
+            _ => disk.fresh_blocking(&path),
+        };
+        let PathReading::Known { kind, len, .. } = reading else {
+            return Err(AppError::Repository(format!(
+                "failed to inspect archive plugin output {}",
                 redact_archive_diagnostic(&path.to_string_lossy())
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
+            )));
+        };
+        if kind == EntryKind::Symlink {
             return Err(AppError::validation_refused(
                 crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_SYMLINK,
                 format!(
@@ -1536,30 +1568,25 @@ fn validate_archive_plugin_output(
             ));
         }
         ensure_path_under_output_with_root(&path, &output_root)?;
-        if metadata.is_dir() {
+        if kind == EntryKind::Directory {
             directory_count += 1;
             if directory_count > MAX_PLUGIN_OUTPUT_DIRECTORIES {
                 return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_DIRECTORIES, "archive plugin output contains too many directories".to_string()));
             }
-            for entry in std::fs::read_dir(&path).map_err(|error| {
+            for entry in disk.list_blocking(&path).map_err(|error| {
                 AppError::Repository(format!(
                     "failed to read archive plugin output directory {}: {error}",
                     redact_archive_diagnostic(&path.to_string_lossy())
                 ))
             })? {
-                let entry = entry.map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to read archive plugin output entry: {error}"
-                    ))
-                })?;
                 if entry_count + stack.len() >= MAX_PLUGIN_OUTPUT_ENTRIES {
                     return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_ENTRIES, "archive plugin output contains too many entries".to_string()));
                 }
-                stack.push(entry.path());
+                stack.push((entry.path, entry.reading));
             }
             continue;
         }
-        if !metadata.is_file() {
+        if kind != EntryKind::File {
             return Err(AppError::validation_refused(
                 crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_NOT_REGULAR_FILE,
                 format!(
@@ -1576,7 +1603,13 @@ fn validate_archive_plugin_output(
                 "archive plugin output contains too many files".to_string(),
             ));
         }
-        expanded_bytes = expanded_bytes.checked_add(metadata.len()).ok_or_else(|| {
+        let len = len.ok_or_else(|| {
+            AppError::Repository(format!(
+                "failed to inspect archive plugin output {}",
+                redact_archive_diagnostic(&path.to_string_lossy())
+            ))
+        })?;
+        expanded_bytes = expanded_bytes.checked_add(len).ok_or_else(|| {
             AppError::validation_refused(
                 crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE,
                 "archive plugin output is too large".to_string(),
@@ -1636,7 +1669,7 @@ fn safe_archive_output_path(output_dir: &Path, entry_name: &str) -> AppResult<Pa
 }
 
 fn ensure_path_under_output_with_root(path: &Path, output_root: &Path) -> AppResult<()> {
-    let canonical = path.canonicalize().map_err(|e| {
+    let canonical = Disk::process().canonicalize_blocking(path).map_err(|e| {
         AppError::Repository(format!(
             "failed to canonicalize extraction path {}: {e}",
             redact_archive_diagnostic(&path.to_string_lossy())
@@ -1691,9 +1724,19 @@ fn find_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
 
 /// A bounded inventory that never follows links or silently truncates a source.
 fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
-    let io_error = |error| AppError::Repository(format!("archive discovery failed: {error}"));
-    let metadata = std::fs::symlink_metadata(dir).map_err(io_error)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    let disk = Disk::process();
+    let io_error = |error: &dyn std::fmt::Display| {
+        AppError::Repository(format!("archive discovery failed: {error}"))
+    };
+    let reading = disk.fresh_blocking(dir);
+    if reading.exists() != Some(true) {
+        return Err(io_error(
+            &reading
+                .unknown_reason()
+                .unwrap_or(reason::DISK_PATH_MISSING),
+        ));
+    }
+    if reading.kind() != Some(EntryKind::Directory) {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::ARCHIVE_SOURCE_NOT_REGULAR_DIRECTORY,
             "archive source is not a regular directory",
@@ -1705,8 +1748,10 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
     let mut files = Vec::new();
     while let Some((parent, depth)) = queue.pop_front() {
         let mut children = Vec::new();
-        for entry in std::fs::read_dir(&parent).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
+        for entry in disk
+            .list_blocking(&parent)
+            .map_err(|error| io_error(&error))?
+        {
             entries_seen += 1;
             if entries_seen > MAX_PLUGIN_OUTPUT_ENTRIES {
                 return Err(AppError::validation_refused(
@@ -1714,15 +1759,17 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
                     "archive discovery entry limit exceeded",
                 ));
             }
-            let kind = entry.file_type().map_err(io_error)?;
-            let path = entry.path();
-            if kind.is_dir() && !is_excluded_archive_discovery_dir(&path) {
+            let path = entry.path;
+            let Some(kind) = entry.reading.kind() else {
+                return Err(io_error(&path.display()));
+            };
+            if kind == EntryKind::Directory && !is_excluded_archive_discovery_dir(&path) {
                 directories += 1;
                 if depth >= max_depth || directories > MAX_ARCHIVE_DISCOVERY_DIRECTORIES {
                     return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_DISCOVERY_DIRECTORY_DEPTH_LIMIT_EXCEEDED, "archive discovery directory or depth limit exceeded"));
                 }
                 children.push(path);
-            } else if kind.is_file() {
+            } else if kind == EntryKind::File {
                 files.push(path);
             }
         }
@@ -1842,7 +1889,14 @@ fn archive_type_for_path(path: &Path) -> Option<ArchiveType> {
     {
         "rar" => Some(ArchiveType::Rar),
         "par2" => Some(ArchiveType::Par2),
-        "r00" if !path.with_extension("rar").exists() => Some(ArchiveType::Rar),
+        "r00"
+            if Disk::process()
+                .follow_blocking(&path.with_extension("rar"))
+                .exists()
+                != Some(true) =>
+        {
+            Some(ArchiveType::Rar)
+        }
         "7z" => Some(ArchiveType::SevenZip),
         "zip" => Some(ArchiveType::Zip),
         "xz" => Some(ArchiveType::Xz),
@@ -1870,7 +1924,9 @@ fn split_set_archive_type(first_volume: &Path) -> Option<ArchiveType> {
         _ => {}
     }
     let mut signature = [0u8; 6];
-    let mut file = std::fs::File::open(first_volume).ok()?;
+    let mut file = Disk::process()
+        .open_blocking(first_volume, Open::read())
+        .ok()?;
     std::io::Read::read_exact(&mut file, &mut signature).ok()?;
     if signature.starts_with(SEVEN_ZIP_SIGNATURE) {
         Some(ArchiveType::SevenZip)
@@ -2000,19 +2056,18 @@ fn scan_archive_workspace(root: &Path) -> Option<ArchiveWorkspaceScan> {
         if depth > 64 || entries > MAX_PLUGIN_OUTPUT_ENTRIES {
             return None;
         }
-        let children = std::fs::read_dir(parent).ok()?;
+        let children = Disk::process().list_blocking(&parent).ok()?;
         for child in children {
-            let child = child.ok()?;
             entries += 1;
             if entries > MAX_PLUGIN_OUTPUT_ENTRIES {
                 return None;
             }
-            let kind = child.file_type().ok()?;
-            if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
+            let kind = child.reading.kind()?;
+            if kind != EntryKind::Directory && kind != EntryKind::File {
                 return None;
             }
-            let path = child.path();
-            if kind.is_dir() {
+            let path = child.path;
+            if kind == EntryKind::Directory {
                 stack.push((path, depth + 1));
             } else if path
                 .extension()
@@ -2072,22 +2127,22 @@ pub(crate) fn owned_archive_workspaces_for(
         workspaces: Vec::new(),
         complete: true,
     };
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        lookup.complete = !parent.exists();
-        return lookup;
+    let entries = match Disk::process().list_blocking(parent) {
+        Ok(entries) => entries,
+        Err(error) => {
+            // Only a folder known to be missing holds no workspace; one that
+            // could not be read may hold some.
+            lookup.complete = error.reason() == reason::DISK_PATH_MISSING;
+            return lookup;
+        }
     };
-    for (index, entry) in entries.enumerate() {
+    for (index, entry) in entries.into_iter().enumerate() {
         if index >= MAX_SCANNED_ENTRIES {
             lookup.complete = false;
             break;
         }
-        let Ok(entry) = entry else {
-            lookup.complete = false;
-            continue;
-        };
-        let path = entry.path();
-        if archive_workspace_owned_by(&path, owner_id) {
-            lookup.workspaces.push(path);
+        if archive_workspace_owned_by(&entry.path, owner_id) {
+            lookup.workspaces.push(entry.path);
         }
     }
     lookup
@@ -2130,11 +2185,10 @@ pub(crate) async fn remove_released_held_workspace(
             HeldWorkspacePreserved::HoldsUnimportedVideo
         });
     }
-    cleanup_extracted_dir(root).await;
-    if root.exists() {
-        Err(HeldWorkspacePreserved::RemovalFailed)
-    } else {
+    if remove_owned_workspace(root).await {
         Ok(())
+    } else {
+        Err(HeldWorkspacePreserved::RemovalFailed)
     }
 }
 
@@ -2167,20 +2221,29 @@ fn archive_workspace_keyed_path(root: &Path, path: &Path) -> Option<String> {
 
 /// Clean up the extraction directory after import completes.
 pub async fn cleanup_extracted_dir(dir: &Path) {
+    remove_owned_workspace(dir).await;
+}
+
+/// [`cleanup_extracted_dir`], answering whether the workspace is gone.
+async fn remove_owned_workspace(dir: &Path) -> bool {
     if archive_workspace_owner(dir).is_none() {
-        return;
+        return false;
     }
     // Callers release only after their workflow/selection no longer needs the
     // output. If removal fails, the release record permits a later retry.
     if let Err(error) = release_archive_workspace(dir) {
         tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "archive workspace release could not be authenticated");
-        return;
+        return false;
     }
     if archive_workspace_release(dir).is_none() {
-        return;
+        return false;
     }
-    if let Err(error) = tokio::fs::remove_dir_all(dir).await {
-        tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "released archive workspace could not be removed");
+    match Disk::process().remove(dir, Remove::Tree).await {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "released archive workspace could not be removed");
+            false
+        }
     }
 }
 
@@ -2190,7 +2253,8 @@ pub async fn cleanup_extracted_dir(dir: &Path) {
 /// download that merely carries the generated names is never treated as
 /// scratch.
 pub fn is_archive_workspace_output(source: &Path, dest: &Path) -> bool {
-    let Ok(canonical_source) = source.canonicalize() else {
+    let disk = Disk::process();
+    let Ok(canonical_source) = disk.canonicalize_blocking(source) else {
         return false;
     };
     source.ancestors().skip(1).any(|output_dir| {
@@ -2198,10 +2262,9 @@ pub fn is_archive_workspace_output(source: &Path, dest: &Path) -> bool {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(is_workspace_output_dir_name)
-            && std::fs::symlink_metadata(output_dir)
-                .is_ok_and(|metadata| metadata.file_type().is_dir())
-            && output_dir
-                .canonicalize()
+            && disk.fresh_blocking(output_dir).kind() == Some(EntryKind::Directory)
+            && disk
+                .canonicalize_blocking(output_dir)
                 .is_ok_and(|output| canonical_source.starts_with(output))
             && output_dir.parent().is_some_and(|workspace| {
                 archive_workspace_owner(workspace).is_some()

@@ -937,7 +937,15 @@ async fn cleanup_superseded_episode_incumbents(
         let mut recycle_result = None;
         let old_path =
             crate::stored_paths::stored_path_to_path_buf(&incumbent.media_file.file_path);
-        if old_path.exists() {
+        let Some(old_present) = Disk::process().follow(&old_path).await.exists() else {
+            tracing::warn!(
+                path = %old_path.display(),
+                file_id = %incumbent.media_file.id,
+                "superseded episode incumbent could not be read; keeping its database record"
+            );
+            continue;
+        };
+        if old_present {
             let old_file_recycle_context = match crate::upgrade::resolve_old_file_recycle_context(
                 app,
                 title,
@@ -2685,10 +2693,7 @@ async fn write_series_sidecars(
 ) {
     if nfo_enabled {
         let tvshow_nfo_path = title_folder_path.join("tvshow.nfo");
-        if !tokio::fs::try_exists(&tvshow_nfo_path)
-            .await
-            .unwrap_or(false)
-        {
+        if Disk::process().follow(&tvshow_nfo_path).await.exists() != Some(true) {
             let ratings = app
                 .services
                 .catalog
@@ -2733,12 +2738,21 @@ async fn write_series_sidecars(
     };
     if plexmatch_enabled {
         let plexmatch_path = title_folder_path.join(".plexmatch");
-        if !plexmatch_path.exists() {
+        let disk = Disk::process();
+        if disk.follow(&plexmatch_path).await.exists() != Some(true) {
             if let Some(parent) = plexmatch_path.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
+                let _ = disk.create_dir(parent, crate::disk::Parents::Create).await;
             }
-            let content = render_plexmatch(title);
-            if let Err(err) = tokio::fs::write(&plexmatch_path, content.as_bytes()).await {
+            let content = render_plexmatch(title).into_bytes();
+            if let Err(err) = disk
+                .write(
+                    &plexmatch_path,
+                    content,
+                    crate::disk::Replace::Allowed,
+                    crate::disk::Access::Default,
+                )
+                .await
+            {
                 tracing::warn!(
                     error = %err,
                     path = %plexmatch_path.display(),
@@ -2880,7 +2894,7 @@ pub(crate) fn is_sample_file(path: &Path) -> bool {
     }
 
     if scryer_domain::canonical_video_extension(path) != Some("strm")
-        && std::fs::metadata(path).is_ok_and(|metadata| metadata.len() < SAMPLE_SIZE_THRESHOLD)
+        && matches!(Disk::process().follow_blocking(path), PathReading::Known { len: Some(len), .. } if len < SAMPLE_SIZE_THRESHOLD)
     {
         tracing::debug!(
             path = %path.display(),
@@ -3016,9 +3030,13 @@ pub(crate) const ANIME_NUMBERING_AMBIGUOUS_REASON: &str = "anime_numbering_ambig
 /// between two anime numbering readings. Absent when the file system has no
 /// usable timestamp, in which case the tie simply stands.
 fn file_reference_date(source_video: &Path) -> Option<chrono::NaiveDate> {
-    let modified = std::fs::metadata(source_video)
-        .and_then(|meta| meta.modified())
-        .ok()?;
+    let PathReading::Known {
+        modified: Some(modified),
+        ..
+    } = Disk::process().follow_blocking(source_video)
+    else {
+        return None;
+    };
     Some(chrono::DateTime::<chrono::Utc>::from(modified).date_naive())
 }
 

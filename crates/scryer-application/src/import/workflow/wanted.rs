@@ -99,9 +99,10 @@ async fn execute_resolved_episode_import(
     disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> AppResult<EpisodeImportOutcome> {
     let use_season_folders = app.resolve_use_season_folders(title).await?;
-    let source_size = std::fs::metadata(source_video)
-        .map(|metadata| metadata.len() as i64)
-        .unwrap_or(0);
+    let source_size = match Disk::process().follow(source_video).await {
+        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
+        _ => 0,
+    };
     let target_episode_ids = target_episodes
         .iter()
         .map(|episode| episode.id.clone())
@@ -1035,7 +1036,9 @@ async fn library_copy_holds_episodes(
     {
         return false;
     }
-    tokio::fs::try_exists(crate::stored_paths::stored_path_to_path_buf(&copy.path))
+    Disk::process()
+        .follow(crate::stored_paths::stored_path_to_path_buf(&copy.path))
         .await
-        .unwrap_or(false)
+        .exists()
+        == Some(true)
 }
