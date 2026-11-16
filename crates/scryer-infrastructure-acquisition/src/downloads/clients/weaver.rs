@@ -3,6 +3,7 @@ use base64::Engine as _;
 use chrono::TimeZone;
 use chrono::{DateTime, Utc};
 use reqwest::multipart;
+use scryer_application::disk::{Disk, Open, PathReading};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
     NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction, StagedNzbStore, plugin_codes,
@@ -21,7 +22,6 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::fs::File;
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
@@ -861,12 +861,16 @@ impl WeaverDownloadClient {
                 let content_type = content_type.to_string();
                 let variables = variables.clone();
                 async move {
-                    let file = File::open(&upload_path).await.map_err(|error| {
-                        AppError::Repository(format!(
-                            "failed to open weaver upload artifact {}: {error}",
-                            upload_path.display()
-                        ))
-                    })?;
+                    let file = Disk::process()
+                        .open(&upload_path, Open::read())
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(format!(
+                                "failed to open weaver upload artifact {}: {}",
+                                upload_path.display(),
+                                std::io::Error::from(error)
+                            ))
+                        })?;
                     let part = multipart::Part::stream_with_length(
                         reqwest::Body::wrap_stream(ReaderStream::new(file)),
                         content_length,
@@ -1839,15 +1843,23 @@ impl DownloadClient for WeaverDownloadClient {
             if password_candidates.iter().nth(1).is_some() {
                 variables["input"]["passwordCandidates"] = json!(password_candidates);
             }
-            let content_length = tokio::fs::metadata(&staged.staged_nzb.compressed_path)
+            let content_length = match Disk::process()
+                .follow(&staged.staged_nzb.compressed_path)
                 .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to stat staged nzb {}: {error}",
-                        staged.staged_nzb.compressed_path.display()
-                    ))
-                })?
-                .len();
+            {
+                PathReading::Known { len: Some(len), .. } => len,
+                reading => {
+                    return Err(AppError::Repository(format!(
+                        "failed to stat staged nzb {}: {}",
+                        staged.staged_nzb.compressed_path.display(),
+                        if reading.exists() == Some(false) {
+                            "not found"
+                        } else {
+                            "unreadable"
+                        }
+                    )));
+                }
+            };
 
             debug!(
                 endpoint = self.graphql_url.as_str(),
@@ -1980,12 +1992,14 @@ impl DownloadClient for WeaverDownloadClient {
                         || is_weaver_schema_error(&error, WeaverSchemaFeature::SubmissionJobId)
                         || is_weaver_schema_error(&error, WeaverSchemaFeature::SubmissionErrorCode) =>
                 {
-                    let compressed_bytes = tokio::fs::read(&staged.staged_nzb.compressed_path)
+                    let compressed_bytes = Disk::process()
+                        .read(&staged.staged_nzb.compressed_path)
                         .await
                         .map_err(|read_error| {
                             AppError::Repository(format!(
-                                "failed to read staged nzb {}: {read_error}",
-                                staged.staged_nzb.compressed_path.display()
+                                "failed to read staged nzb {}: {}",
+                                staged.staged_nzb.compressed_path.display(),
+                                std::io::Error::from(read_error)
                             ))
                         })?;
                     let nzb_bytes = zstd::stream::decode_all(std::io::Cursor::new(compressed_bytes))

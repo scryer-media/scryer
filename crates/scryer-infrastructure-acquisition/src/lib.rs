@@ -1,5 +1,5 @@
-// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
-#![allow(clippy::disallowed_methods)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 pub mod delay_profile_store;
 pub mod downloads;

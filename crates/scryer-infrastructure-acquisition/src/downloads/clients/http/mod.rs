@@ -30,6 +30,7 @@ use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use scryer_application::disk::{Disk, DiskError, EntryKind, Open, Parents};
 use scryer_application::{
     AppError, AppResult, ClientJobLocator, DOWNLOAD_ID_PARAMETER, DownloadClient,
     DownloadClientAddRequest, DownloadClientObservation, DownloadGrabResult, DownloadSourceKind,
@@ -343,49 +344,46 @@ pub(crate) async fn test_http_download_dir(config_json: &str) -> AppResult<()> {
     let settings = HttpClientSettings::from_config_json(config_json)?;
     check_download_dir(&settings.download_dir).await?;
     let state_dir = settings.download_dir.join(state::STATE_DIR_NAME);
-    tokio::fs::create_dir_all(&state_dir)
+    let not_writable = |error: DiskError| {
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
+            format!(
+                "the download directory {} is not writable: {}",
+                settings.download_dir.display(),
+                std::io::Error::from(error)
+            ),
+        )
+    };
+    let disk = Disk::process();
+    disk.create_dir(&state_dir, Parents::Create)
         .await
-        .map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
-                format!(
-                    "the download directory {} is not writable: {error}",
-                    settings.download_dir.display()
-                ),
-            )
-        })?;
-    let marker = state_dir.join(WRITE_CHECK_FILE_NAME);
-    tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&marker)
+        .map_err(not_writable)?;
+    // Opened to append, so an existing marker is neither emptied nor read.
+    disk.open(state_dir.join(WRITE_CHECK_FILE_NAME), Open::append())
         .await
         .map(|_| ())
-        .map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
-                format!(
-                    "the download directory {} is not writable: {error}",
-                    settings.download_dir.display()
-                ),
-            )
-        })
+        .map_err(not_writable)
 }
 
 const WRITE_CHECK_FILE_NAME: &str = "write-check";
 
 async fn check_download_dir(dir: &Path) -> AppResult<()> {
-    let metadata = tokio::fs::metadata(dir).await.map_err(|error| {
-        AppError::validation_refused(
+    let reading = Disk::process().follow(dir).await;
+    let Some(kind) = reading.kind() else {
+        return Err(AppError::validation_refused(
             crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_UNREACHABLE,
             format!(
-                "the download directory {} is not reachable: {error}",
-                dir.display()
+                "the download directory {} is not reachable: {}",
+                dir.display(),
+                if reading.exists() == Some(false) {
+                    "it does not exist"
+                } else {
+                    "it could not be read"
+                }
             ),
-        )
-    })?;
-    if !metadata.is_dir() {
+        ));
+    };
+    if kind != EntryKind::Directory {
         return Err(AppError::validation_refused(
             crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_DIRECTORY,
             format!(
@@ -436,10 +434,7 @@ impl DownloadClient for HttpDownloadClient {
             ));
         }
         for file in &planned {
-            if tokio::fs::try_exists(&file.final_path)
-                .await
-                .unwrap_or(false)
-            {
+            if Disk::process().follow(&file.final_path).await.exists() == Some(true) {
                 return Err(AppError::validation_refused(
                     scryer_application::http_release_refusal::DESTINATION_EXISTS,
                     format!(

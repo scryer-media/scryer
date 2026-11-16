@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Utc};
 use futures_util::stream;
+use scryer_application::disk::{Disk, Open};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
     NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction, StagedNzbRef, StagedNzbStore,
@@ -381,12 +382,16 @@ impl NzbgetDownloadClient {
                 let prefix = prefix.clone();
                 let suffix = suffix.clone();
                 async move {
-                    let staged_file = File::open(&compressed_path).await.map_err(|error| {
-                        AppError::Repository(format!(
-                            "failed to open staged nzb {}: {error}",
-                            compressed_path.display()
-                        ))
-                    })?;
+                    let staged_file = Disk::process()
+                        .open(&compressed_path, Open::read())
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(format!(
+                                "failed to open staged nzb {}: {}",
+                                compressed_path.display(),
+                                std::io::Error::from(error)
+                            ))
+                        })?;
                     let mut request = self
                         .outbound_http
                         .client()

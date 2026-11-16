@@ -16,6 +16,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
+use scryer_application::disk::{
+    Disk, EntryKind, Link, LinkOutcome, Open, Parents, PathReading, Removal, Remove, reason,
+};
 use scryer_application::{AppResult, http_release_refusal};
 use scryer_plugin_sdk::{PluginHttpResource, PluginHttpVerify};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter};
@@ -992,21 +995,20 @@ async fn recover_legacy_partial(
         return Ok(());
     }
     let original_part = super::state::part_path_for(&original_final, file.attempt);
-    let metadata = match tokio::fs::symlink_metadata(&original_part).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
+    let disk = Disk::process();
+    let (kind, len) = match disk.fresh(&original_part).await {
+        PathReading::Known { kind, len, .. } => (kind, len.unwrap_or(0)),
+        PathReading::Missing { .. } => return Ok(()),
+        PathReading::Unreachable { .. } | PathReading::NotObserved => {
             return Err(TransferError::Refused(
                 http_release_refusal::RECOVERY_UNVERIFIED,
-                error.to_string(),
+                format!("{} could not be read", original_part.display()),
             ));
         }
     };
-    if !metadata.is_file()
-        || metadata.len() < file.bytes_done
-        || tokio::fs::try_exists(file.part_path())
-            .await
-            .unwrap_or(true)
+    if kind != EntryKind::File
+        || len < file.bytes_done
+        || may_exist(disk.follow(file.part_path()).await)
     {
         return Err(TransferError::Refused(
             http_release_refusal::RECOVERY_UNVERIFIED,
@@ -1023,22 +1025,20 @@ async fn already_in_place(
     context: &TransferContext<'_>,
     file: &HttpJobFile,
 ) -> Result<bool, TransferError> {
-    if tokio::fs::try_exists(file.part_path())
-        .await
-        .unwrap_or(true)
-    {
+    let disk = Disk::process();
+    if may_exist(disk.follow(file.part_path()).await) {
         return Ok(false);
     }
-    match tokio::fs::symlink_metadata(&file.final_path).await {
-        Ok(metadata) => {
+    match disk.fresh(&file.final_path).await {
+        PathReading::Known { kind, len, .. } => {
             if let Some(proof) = &file.publication
                 && proof.attempt == file.attempt
                 && proof.partial_path == file.part_path()
                 && proof.final_path == file.final_path
                 && file.total_bytes == Some(proof.size)
                 && file.bytes_done == proof.size
-                && metadata.is_file()
-                && metadata.len() == proof.size
+                && kind == EntryKind::File
+                && len == Some(proof.size)
                 && hash_file(context, &file.final_path, ChecksumAlgorithm::Sha256).await?
                     == proof.sha256
             {
@@ -1050,12 +1050,24 @@ async fn already_in_place(
                     .into(),
             ))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(TransferError::Permanent(format!(
-            "cannot inspect {}: {error}",
-            file.final_path.display()
-        ))),
+        PathReading::Missing { .. } => Ok(false),
+        PathReading::Unreachable { .. } | PathReading::NotObserved => {
+            Err(cannot_inspect(&file.final_path))
+        }
     }
+}
+
+/// Whether something may be at a path: an answer that is not known counts
+/// as present, so nothing is taken to be free that might not be.
+fn may_exist(reading: PathReading) -> bool {
+    reading.exists() != Some(false)
+}
+
+fn cannot_inspect(path: &Path) -> TransferError {
+    TransferError::Permanent(format!(
+        "cannot inspect {}: it could not be read",
+        path.display()
+    ))
 }
 
 /// The range to ask for: a continuation only when the partial is known to
@@ -1104,13 +1116,10 @@ async fn record(context: &TransferContext<'_>, file: &HttpJobFile) -> Result<(),
 }
 
 async fn existing_len(path: &Path) -> Result<u64, TransferError> {
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => Ok(metadata.len()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(error) => Err(TransferError::Permanent(format!(
-            "cannot inspect {}: {error}",
-            path.display()
-        ))),
+    match Disk::process().follow(path).await {
+        PathReading::Known { len, .. } => Ok(len.unwrap_or(0)),
+        PathReading::Missing { .. } => Ok(0),
+        PathReading::Unreachable { .. } | PathReading::NotObserved => Err(cannot_inspect(path)),
     }
 }
 
@@ -1280,21 +1289,20 @@ async fn stream_body(
     offset: u64,
 ) -> Result<(), StreamError> {
     let part_path = file.part_path();
+    let disk = Disk::process();
     if let Some(parent) = part_path.parent() {
-        tokio::fs::create_dir_all(parent)
+        disk.create_dir(parent, Parents::Create)
             .await
-            .map_err(|error| disk_error(parent, &error))?;
+            .map_err(|error| disk_error(parent, &error.into()))?;
     }
     let mut opened = if offset == 0 {
         open_fresh_part(context, file).await?
     } else {
         // A continuation writes on from the recorded offset of the partial
         // it was judged against; it never creates or truncates one.
-        tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&part_path)
+        disk.open(&part_path, Open::write_existing())
             .await
-            .map_err(|error| disk_error(&part_path, &error))?
+            .map_err(|error| disk_error(&part_path, &error.into()))?
     };
     let part_path = file.part_path();
     opened
@@ -1382,12 +1390,7 @@ async fn open_fresh_part(
 ) -> Result<tokio::fs::File, StreamError> {
     for _ in 0..MAX_PART_NAME_PROBES {
         let part_path = file.part_path();
-        match tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&part_path)
-            .await
-        {
+        match Disk::process().open(&part_path, Open::create_new()).await {
             Ok(opened) => {
                 file.partial_path = Some(part_path);
                 context
@@ -1397,7 +1400,7 @@ async fn open_fresh_part(
                     .map_err(|error| StreamError::Permanent(error.to_string()))?;
                 return Ok(opened);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
                 file.attempt = file.attempt.saturating_add(1);
                 file.partial_path = None;
                 file.publication = None;
@@ -1407,7 +1410,7 @@ async fn open_fresh_part(
                     .await
                     .map_err(|error| StreamError::Permanent(error.to_string()))?;
             }
-            Err(error) => return Err(disk_error(&part_path, &error)),
+            Err(error) => return Err(disk_error(&part_path, &error.into())),
         }
     }
     Err(StreamError::Permanent(format!(
@@ -1542,9 +1545,23 @@ fn destination_exists(final_path: &Path) -> TransferError {
 /// only once its bytes are reachable under the final name. A filesystem that
 /// cannot hard-link refuses publication instead of risking replacement.
 pub(crate) async fn publish_part(part_path: &Path, final_path: &Path) -> Result<(), TransferError> {
-    match tokio::fs::hard_link(part_path, final_path).await {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+    let disk = Disk::process();
+    let publication_failed = |why: String| {
+        TransferError::Refused(
+            http_release_refusal::PUBLICATION_FAILED,
+            format!(
+                "could not publish without replacing a destination: {why}; the partial was preserved"
+            ),
+        )
+    };
+    match disk.link(part_path, final_path, Link::Hard).await {
+        Ok(LinkOutcome::Linked) => {}
+        Ok(LinkOutcome::NotPossible) => {
+            return Err(publication_failed(
+                "the destination cannot hold a hard link to the partial".into(),
+            ));
+        }
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
             // An interruption after the link and before the partial name was
             // dropped leaves the same bytes under both names. Anything else
             // under the final name is not this job's file.
@@ -1552,22 +1569,21 @@ pub(crate) async fn publish_part(part_path: &Path, final_path: &Path) -> Result<
                 return Err(destination_exists(final_path));
             }
         }
-        Err(link_error) => {
-            return Err(TransferError::Refused(
-                http_release_refusal::PUBLICATION_FAILED,
-                format!(
-                    "could not publish without replacing a destination: {link_error}; the partial was preserved"
-                ),
-            ));
-        }
+        Err(error) => return Err(publication_failed(std::io::Error::from(error).to_string())),
     }
-    tokio::fs::remove_file(part_path).await.map_err(|error| {
+    let not_removed = |why: String| {
         TransferError::Permanent(format!(
-            "{} is in place but its partial {} could not be removed: {error}",
+            "{} is in place but its partial {} could not be removed: {why}",
             final_path.display(),
             part_path.display()
         ))
-    })
+    };
+    // A partial already gone is reported as before: this job did not remove it.
+    match disk.remove(part_path, Remove::File).await {
+        Ok(Removal::Removed) => Ok(()),
+        Ok(Removal::AlreadyAbsent) => Err(not_removed("it was already gone".into())),
+        Err(error) => Err(not_removed(std::io::Error::from(error).to_string())),
+    }
 }
 
 /// Both paths hold the same bytes.
@@ -1576,23 +1592,25 @@ async fn same_contents(left: &Path, right: &Path) -> Result<bool, TransferError>
     let inspect = |path: &Path, error: std::io::Error| {
         TransferError::Permanent(format!("cannot inspect {}: {error}", path.display()))
     };
-    let (left_meta, right_meta) = (
-        tokio::fs::symlink_metadata(left)
-            .await
-            .map_err(|error| inspect(left, error))?,
-        tokio::fs::symlink_metadata(right)
-            .await
-            .map_err(|error| inspect(right, error))?,
-    );
-    if !left_meta.is_file() || !right_meta.is_file() || left_meta.len() != right_meta.len() {
+    let disk = Disk::process();
+    // Fresh reads: what they find decides whether the partial is removed.
+    let file_len = |reading: PathReading, path: &Path| match reading {
+        PathReading::Known { kind, len, .. } => Ok((kind == EntryKind::File).then_some(len)),
+        _ => Err(cannot_inspect(path)),
+    };
+    let left_len = file_len(disk.fresh(left).await, left)?;
+    let right_len = file_len(disk.fresh(right).await, right)?;
+    if left_len.is_none() || right_len.is_none() || left_len != right_len {
         return Ok(false);
     }
-    let mut left_file = tokio::fs::File::open(left)
+    let mut left_file = disk
+        .open(left, Open::read())
         .await
-        .map_err(|error| inspect(left, error))?;
-    let mut right_file = tokio::fs::File::open(right)
+        .map_err(|error| inspect(left, error.into()))?;
+    let mut right_file = disk
+        .open(right, Open::read())
         .await
-        .map_err(|error| inspect(right, error))?;
+        .map_err(|error| inspect(right, error.into()))?;
     let mut left_buf = vec![0u8; 64 * 1024];
     let mut right_buf = vec![0u8; 64 * 1024];
     loop {
@@ -1712,7 +1730,10 @@ async fn hash_file(
     let read_error = |error: std::io::Error| {
         TransferError::Permanent(format!("could not read {}: {error}", path.display()))
     };
-    let mut input = tokio::fs::File::open(path).await.map_err(read_error)?;
+    let mut input = Disk::process()
+        .open(path, Open::read())
+        .await
+        .map_err(|error| read_error(error.into()))?;
     let mut buffer = vec![0u8; WRITE_BUFFER_BYTES];
     loop {
         if context.cancel.is_cancelled() {

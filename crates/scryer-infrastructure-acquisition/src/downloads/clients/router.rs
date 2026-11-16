@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use super::native_download_client_http_client;
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use scryer_application::disk::{Disk, EntryKind, Open};
 use scryer_application::grabbed_file_names::{
     GrabbedFileName, long_file_names_from_nzb, long_file_names_from_torrent,
 };
@@ -56,12 +57,14 @@ pub fn download_client_feedback_timeout() -> Duration {
 
 /// Read a staged NZB back out of its zstd frame, for handing to a browser.
 async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
-    let input = tokio::fs::File::open(&staged_nzb.compressed_path)
+    let input = Disk::process()
+        .open(&staged_nzb.compressed_path, Open::read())
         .await
         .map_err(|error| {
             AppError::Repository(format!(
-                "failed to open staged nzb {}: {error}",
-                staged_nzb.compressed_path.display()
+                "failed to open staged nzb {}: {}",
+                staged_nzb.compressed_path.display(),
+                std::io::Error::from(error)
             ))
         })?;
     let mut decoder =
@@ -281,7 +284,9 @@ fn download_client_remote_path_mappings(
 
 fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDownload) {
     let reported_dir = Path::new(item.dest_dir.trim());
-    if !reported_dir.is_dir() {
+    // An empty path would join to a relative one. Any other reported path
+    // that is not a directory fails the one probe of the release directory.
+    if reported_dir.as_os_str().is_empty() {
         return;
     }
 
@@ -298,7 +303,7 @@ fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDo
     }
 
     let release_dir = reported_dir.join(child_name);
-    if !release_dir.is_dir() {
+    if Disk::process().follow_blocking(&release_dir).kind() != Some(EntryKind::Directory) {
         return;
     }
 
