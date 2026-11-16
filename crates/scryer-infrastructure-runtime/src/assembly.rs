@@ -3019,15 +3019,14 @@ mod tests {
                 candidate_score: 100,
                 current_score: None,
                 score_delta: None,
-                explanation_json: Some(
-                    serde_json::json!({
+                explanation_json: Some(scryer_application::ReleaseDecisionExplanation::from_value(
+                    &serde_json::json!({
                         "quality_profile_decision": {
                             "scoring_log": [{"code": "backup_matrix", "delta": 100}],
                         },
                         "fingerprint": coverage_fingerprint,
-                    })
-                    .to_string(),
-                ),
+                    }),
+                )),
                 created_at: now.to_rfc3339(),
             })
             .await?;

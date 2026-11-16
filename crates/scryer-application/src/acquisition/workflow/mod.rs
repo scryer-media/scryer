@@ -10,7 +10,7 @@ use crate::acquisition_decision_helpers::{
 };
 use crate::acquisition_release_search::{
     ReleaseAutoDecisionCode, annotate_auto_decision, automatic_candidate_delay_decision,
-    serialize_decision_explanation,
+    release_decision_explanation, serialize_decision_explanation,
 };
 use crate::contracts::{SubmissionConflictPolicy, SubmissionScopeConflict, WantedSearchOutcome};
 use crate::domain_events::{

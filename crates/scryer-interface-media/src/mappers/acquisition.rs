@@ -591,8 +591,15 @@ pub fn from_release_decision(
         candidate_score: decision.candidate_score,
         current_score: decision.current_score,
         score_delta: decision.score_delta,
-        decided_by: recorded_deciding_step(decision.explanation_json.as_deref()),
-        explanation_json: decision.explanation_json.map(json_string_to_value),
+        decided_by: recorded_deciding_step(
+            decision
+                .explanation_json
+                .as_ref()
+                .map(scryer_application::ReleaseDecisionExplanation::as_str),
+        ),
+        explanation_json: decision
+            .explanation_json
+            .map(|explanation| json_string_to_value(explanation.into_string())),
         created_at: parse_datetime(&decision.created_at, "release decision created_at")
             .map_err(scryer_application::AppError::Repository)?,
     })

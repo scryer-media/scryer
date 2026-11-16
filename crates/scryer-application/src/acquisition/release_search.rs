@@ -1753,6 +1753,18 @@ pub(crate) fn annotate_auto_decision(
 }
 
 pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) -> Option<String> {
+    serde_json::to_string(&decision_explanation_value(candidate)).ok()
+}
+
+/// The explanation a release decision records, serialized once into the
+/// form the store compresses as it is.
+pub(crate) fn release_decision_explanation(
+    candidate: &IndexerSearchResult,
+) -> crate::ReleaseDecisionExplanation {
+    crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value(candidate))
+}
+
+fn decision_explanation_value(candidate: &IndexerSearchResult) -> serde_json::Value {
     let quality = candidate.quality_profile_decision.as_ref();
     let scoring_log = quality
         .map(|decision| {
@@ -1779,7 +1791,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "parse_hints": &parsed.parse_hints,
         })
     });
-    let payload = serde_json::json!({
+    serde_json::json!({
         "candidate": {
             "source": candidate.source.as_str(),
             "source_kind": candidate.source_kind.map(|kind| kind.as_str()),
@@ -1804,9 +1816,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "scoring_log": scoring_log,
         },
         "parsed": parsed,
-    });
-
-    serde_json::to_string(&payload).ok()
+    })
 }
 
 /// Sonarr-style episode anchoring for numbering-scoped subjects: an episode or
@@ -4992,6 +5002,59 @@ mod tests {
             auto_decision_code: None,
             auto_decision_summary: None,
             release_listing_json: None,
+        }
+    }
+
+    /// The recorded explanation is the serializer's own output, and that
+    /// output is already what parse-then-serialize would store, so the store
+    /// may compress it as it is.
+    #[test]
+    fn recorded_decision_explanation_is_already_canonical() {
+        let titles = [
+            "Synthetic.Show.S02E07.1080p.WEB-DL.DDP5.1.H.264-SYNTH",
+            "Synthetic Film 2026 2160p UHD BluRay REMUX HDR \"Cut\" \\ é-ÆON",
+            "Synthetic.Show.S01.COMPLETE.720p.HDTV.x264-PARITY",
+            "",
+        ];
+        for (index, title) in titles.iter().enumerate() {
+            let mut candidate = make_candidate(title, None);
+            candidate.guid = Some(format!("synthetic-guid-{index}\u{1}\t\n"));
+            candidate.download_url = Some(" ".to_string());
+            candidate.auto_eligible = Some(index % 2 == 0);
+            candidate.auto_decision_code = Some("quality_blocked".to_string());
+            candidate.extra.insert(
+                EXTERNAL_ID_CONFLICTS_EXTRA_KEY.to_string(),
+                serde_json::json!({"tvdb": [index, -1.5, 1e300, 0.1, u64::MAX], "z": null, "a": "é"}),
+            );
+            candidate.quality_profile_decision = Some(crate::QualityProfileDecision {
+                release_score: -40 + index as i32,
+                scoring_log: (0..index * 3)
+                    .map(|step| crate::ScoringEntry {
+                        code: format!("synthetic_rule_{step}"),
+                        delta: step as i32 * 7 - 10,
+                        source: crate::ScoringSource::Builtin,
+                        kind: crate::ScoringEntryKind::ScoreContribution,
+                    })
+                    .collect(),
+                allowed: index % 2 == 1,
+                block_codes: vec!["synthetic_block".to_string()],
+                preference_score: 12,
+                tier_index: None,
+                size_fit_penalty: 0,
+                revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
+            });
+            for candidate in [candidate.clone(), make_candidate(title, None)] {
+                let serialized = serialize_decision_explanation(&candidate)
+                    .expect("explanation should serialize");
+                let recorded = release_decision_explanation(&candidate);
+                assert_eq!(recorded.as_str(), serialized);
+                assert_eq!(recorded.canonical_text(), Some(serialized.as_str()));
+                let reparsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(serde_json::to_string(&reparsed).unwrap(), serialized);
+            }
         }
     }
 

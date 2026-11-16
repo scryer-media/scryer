@@ -761,7 +761,9 @@ async fn release_decision_explanations_are_compressed_and_hydrated_across_read_p
             candidate_score: 1050,
             current_score: Some(1000),
             score_delta: Some(50),
-            explanation_json: Some(explanation_json.clone()),
+            explanation_json: Some(scryer_application::ReleaseDecisionExplanation::from_value(
+                &explanation,
+            )),
             created_at: now.to_rfc3339(),
         })
         .await
@@ -858,7 +860,9 @@ async fn release_decision_explanations_are_compressed_and_hydrated_across_read_p
             candidate_score: 0,
             current_score: None,
             score_delta: None,
-            explanation_json: Some("not-json".to_string()),
+            explanation_json: Some(scryer_application::ReleaseDecisionExplanation::untrusted(
+                "not-json",
+            )),
             created_at: (now + chrono::Duration::seconds(1)).to_rfc3339(),
         })
         .await
@@ -1636,11 +1640,8 @@ async fn release_decision_batch_with_explanations_matches_per_row_across_chunks(
             // Every seventh release repeats an earlier one, so it ages that
             // row forward instead of appending.
             let release = if index % 7 == 6 { index - 3 } else { index };
-            let explanation_json = match index % 11 {
-                0 => None,
-                5 => Some("not-json".to_string()),
-                _ => Some(
-                    serde_json::json!({
+            let explanation = || {
+                serde_json::json!({
                         "candidate": {"source": "synthetic-indexer", "guid": format!("guid-{index}")},
                         "auto_decision": {"eligible": false, "code": "quality_blocked"},
                         "quality_profile_decision": {
@@ -1652,8 +1653,19 @@ async fn release_decision_batch_with_explanations_matches_per_row_across_chunks(
                         },
                         "parsed": {"raw_title": format!("Emberfall.S01E{release:03}.1080p-SYNTH")},
                     })
-                    .to_string(),
-                ),
+            };
+            let explanation_json = match index % 11 {
+                0 => None,
+                5 => Some(scryer_application::ReleaseDecisionExplanation::untrusted(
+                    "not-json",
+                )),
+                // Foreign text with whitespace is canonicalized before storing.
+                8 => Some(scryer_application::ReleaseDecisionExplanation::untrusted(
+                    serde_json::to_string_pretty(&explanation()).unwrap(),
+                )),
+                _ => Some(scryer_application::ReleaseDecisionExplanation::from_value(
+                    &explanation(),
+                )),
             };
             scryer_application::ReleaseDecision {
                 id: format!("decision-{index:04}"),
