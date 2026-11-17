@@ -777,7 +777,8 @@ const cs: LocaleDictionary = {
     "Zdroj: standardní preference (BluRay > WEB-DL > WeRip)",
   "persona.trait.balanced.audio": "Zvuk: vyvážené vážení kodeků",
   "persona.trait.balanced.x265": "x265: penalizováno pod 4K",
-  "persona.trait.balanced.size": "Velikost souboru: preferuje větší soubory",
+  "persona.trait.balanced.size":
+    "Velikost souboru: příliš velké soubory jsou penalizovány",
   "persona.trait.balanced.remux": "Remux: standardně nezvýhodněno",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision a HDR10 jsou zvýhodněny",
   "persona.trait.audiophile.source": "Zdroj: silně preferován BluRay",
@@ -793,7 +794,7 @@ const cs: LocaleDictionary = {
     "Zvuk: ztrátové kodeky akceptovány (preferováno DDP)",
   "persona.trait.efficient.x265": "x265: zvýhodněno při všech rozlišeních",
   "persona.trait.efficient.size":
-    "Velikost souboru: preferována kompaktní kódování",
+    "Velikost souboru: preferována kompaktní kódování, příliš velké soubory jsou silně penalizovány",
   "persona.trait.efficient.remux": "Remux: nezvýhodněno",
   "persona.trait.efficient.hdr": "HDR: standardní",
   "persona.trait.compatible.source": "Zdroj: preferováno WEB-DL",

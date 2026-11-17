@@ -695,7 +695,7 @@ const ru: LocaleDictionary = {
   "persona.trait.balanced.x265":
     "x265: пониженный приоритет для разрешений ниже 4K",
   "persona.trait.balanced.size":
-    "Размер файла: предпочтение отдаётся более крупным файлам",
+    "Размер файла: слишком большие файлы получают штраф",
   "persona.trait.balanced.remux": "Remux: по умолчанию не является приоритетом",
   "persona.trait.balanced.hdr":
     "HDR: Dolby Vision и HDR10 получают преимущество",
@@ -716,7 +716,7 @@ const ru: LocaleDictionary = {
   "persona.trait.efficient.x265":
     "x265: получает преимущество при любом разрешении",
   "persona.trait.efficient.size":
-    "Размер файла: предпочтение отдаётся компактным версиям",
+    "Размер файла: предпочтение компактным версиям, слишком большие файлы получают сильный штраф",
   "persona.trait.efficient.remux": "Remux: не является приоритетом",
   "persona.trait.efficient.hdr": "HDR: стандартные настройки",
   "persona.trait.compatible.source": "Источник: предпочтение отдаётся WEB-DL",

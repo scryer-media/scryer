@@ -570,7 +570,8 @@ const pt_BR: LocaleDictionary = {
     "Fonte: preferências padrão (BluRay > WEB-DL > WeRip)",
   "persona.trait.balanced.audio": "Áudio: ponderação de codec equilibrada",
   "persona.trait.balanced.x265": "x265: penalizado abaixo de 4K",
-  "persona.trait.balanced.size": "Tamanho: prefere arquivos maiores",
+  "persona.trait.balanced.size":
+    "Tamanho: arquivos grandes demais são penalizados",
   "persona.trait.balanced.remux": "Remux: não priorizado por padrão",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision e HDR10 recompensados",
   "persona.trait.audiophile.source": "Fonte: BluRay fortemente preferido",
@@ -584,7 +585,8 @@ const pt_BR: LocaleDictionary = {
   "persona.trait.efficient.audio":
     "Áudio: codecs com perdas aceitáveis (DDP preferido)",
   "persona.trait.efficient.x265": "x265: recompensado em todas as resoluções",
-  "persona.trait.efficient.size": "Tamanho: encodes compactos preferidos",
+  "persona.trait.efficient.size":
+    "Tamanho: encodes compactos preferidos, arquivos grandes demais são fortemente penalizados",
   "persona.trait.efficient.remux": "Remux: não priorizado",
   "persona.trait.efficient.hdr": "HDR: padrão",
   "persona.trait.compatible.source": "Fonte: WEB-DL preferido",
