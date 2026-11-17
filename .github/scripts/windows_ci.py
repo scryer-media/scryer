@@ -22,6 +22,7 @@ WINDOWS_TESTS = {
         "a_windows_exclusive_rename_refuses_an_occupied_destination",
         "a_windows_exclusive_rename_moves_to_a_free_name",
         "a_windows_read_only_file_moves_without_a_staging_leftover",
+        "windows_names_a_volume_from_a_handle_and_tells_no_files_apart",
     ],
     "scryer-infrastructure-library": [
         "rename_path_key_folds_case_and_separators_on_windows",

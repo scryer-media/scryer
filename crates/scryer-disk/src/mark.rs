@@ -23,15 +23,6 @@ pub enum Sameness {
     CannotTell,
 }
 
-/// Whether a file has names other than the one read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Links {
-    Sole,
-    Shared,
-    /// The read did not carry a link count.
-    CannotTell,
-}
-
 /// What became of a marked file, from the strongest finding down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Drift {
@@ -47,9 +38,7 @@ pub enum Drift {
     Rewritten,
     /// A different file.
     Replaced,
-    /// Nothing is at the path now. Only a verb that reads a path says this.
-    Gone,
-    /// The path could not be read. Only a verb that reads a path says this.
+    /// One of the marks names a volume only, so there is nothing to compare.
     CannotTell,
 }
 
@@ -96,7 +85,7 @@ pub struct Mark {
 const STORED_TAG: &str = "mark1";
 const UNIX_LANE: &str = "unix-dev:";
 const WINDOWS_LANE: &str = "windows-volume:";
-const UNKNOWN_LANE: &str = "unknown-volume";
+pub(crate) const UNKNOWN_LANE: &str = "unknown-volume";
 
 impl Mark {
     pub(crate) fn of_stat(stat: &RawStat, windows_id: Option<(u64, u64)>) -> Self {
@@ -120,6 +109,23 @@ impl Mark {
         }
     }
 
+    /// The mark of the volume the platform numbers `number`, a unix device
+    /// or a Windows volume serial, for a caller that already holds that
+    /// number from a handle. No probe.
+    pub fn on_volume(number: u64) -> Self {
+        Self {
+            volume: if cfg!(unix) {
+                Volume::Unix(number)
+            } else if cfg!(windows) {
+                Volume::Windows(number)
+            } else {
+                Volume::Unknown
+            },
+            file: None,
+            facts: None,
+        }
+    }
+
     /// The mark of metadata a caller already holds from an open handle. No
     /// probe. It never carries a Windows file index.
     pub fn of(metadata: &std::fs::Metadata) -> Self {
@@ -140,8 +146,9 @@ impl Mark {
         }
     }
 
-    /// Whether both marks are on one volume, so they share its space and a
-    /// name can be moved between them. No probe.
+    /// Whether both marks are on one volume, so they share its space. A
+    /// rename between them can still be refused: two bind mounts of one
+    /// device do not rename across. No probe.
     pub fn same_volume(&self, other: &Self) -> Sameness {
         match (self.volume, other.volume) {
             (Volume::Unknown, _) | (_, Volume::Unknown) => Sameness::CannotTell,
@@ -151,18 +158,17 @@ impl Mark {
     }
 
     /// What differs between this mark and a later one of the same path. No
-    /// probe; never [`Drift::Gone`] or [`Drift::CannotTell`]. What kind of
-    /// entry it is does not enter into it: one file cannot change kind, and
-    /// where the platform cannot tell files apart, a caller that cares
-    /// checks [`Self::kind`] itself.
+    /// probe. What kind of entry it is does not enter into it: one file
+    /// cannot change kind, and where the platform cannot tell files apart, a
+    /// caller that cares checks [`Self::kind`] itself.
     pub fn compare(&self, later: &Self) -> Drift {
+        let (Some(before), Some(after)) = (self.facts, later.facts) else {
+            return Drift::CannotTell;
+        };
         let same = self.same_file(later);
         if same == Sameness::Different {
             return Drift::Replaced;
         }
-        let (Some(before), Some(after)) = (self.facts, later.facts) else {
-            return Drift::SameFacts;
-        };
         if before.len != after.len || before.modified != after.modified {
             Drift::Rewritten
         } else if before.changed != after.changed
@@ -174,15 +180,6 @@ impl Mark {
             Drift::Same
         } else {
             Drift::SameFacts
-        }
-    }
-
-    /// Whether the file had another name when it was read. No probe.
-    pub fn other_links(&self) -> Links {
-        match self.facts.and_then(|facts| facts.links) {
-            Some(count) if count >= 2 => Links::Shared,
-            Some(_) => Links::Sole,
-            None => Links::CannotTell,
         }
     }
 
@@ -211,8 +208,7 @@ impl Mark {
         }
     }
 
-    /// The copy lane for this mark's volume: the text
-    /// [`super::copy::volume_key`] gives a path on the same volume.
+    /// The copy lane for this mark's volume.
     pub(crate) fn lane(&self) -> String {
         match self.volume {
             Volume::Unix(device) => format!("{UNIX_LANE}{device}"),
@@ -260,8 +256,13 @@ impl Mark {
         .join(":")
     }
 
-    /// The mark [`Self::to_stored`] wrote. `None` for text it did not write.
+    /// The mark [`Self::to_stored`] wrote. `None` for text it did not write,
+    /// another spelling of a number it writes included.
     pub fn from_stored(text: &str) -> Option<Self> {
+        Self::parsed(text).filter(|mark| mark.to_stored() == text)
+    }
+
+    fn parsed(text: &str) -> Option<Self> {
         let volume_only = |volume| Self {
             volume,
             file: None,
@@ -304,7 +305,11 @@ impl Mark {
                 return Some(None);
             }
             let (seconds, nanos) = text.split_once('.')?;
-            Some(Some((seconds.parse().ok()?, nanos.parse().ok()?)))
+            let nanos = nanos
+                .parse()
+                .ok()
+                .filter(|nanos: &i64| nanos.abs() < 1_000_000_000)?;
+            Some(Some((seconds.parse().ok()?, nanos)))
         }
         let time = |text| -> Option<Option<SystemTime>> {
             match pair(text)? {
@@ -331,7 +336,8 @@ impl Mark {
                 },
                 len: len.parse().ok()?,
                 modified: time(modified)?,
-                changed: pair(changed)?,
+                // A change time's nanoseconds are a count, never signed.
+                changed: pair(changed)?.filter(|(_, nanos)| *nanos >= 0),
                 created: time(created)?,
                 links: number(links)?,
                 owner: number(owner)?,

@@ -87,7 +87,7 @@ pub use copy::{
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
     RESUMABLE_STAGING_SUFFIX, Verdict, Watch, resumable_staging_path,
 };
-pub use mark::{Drift, Links, Mark, Sameness};
+pub use mark::{Drift, Mark, Sameness};
 pub use pass::DiskPass;
 pub use place::{
     CannotLink, Done, Fallback, FreeNameMove, Method, PlaceRefusal, Placed, Placement, Refused,
@@ -723,37 +723,21 @@ impl Disk {
     /// A [`Mark`] of what is at `path` itself, a link not followed: one
     /// probe, never cached. `Err` is the reading that says why there is no
     /// mark: missing or unreachable, never the two confused.
-    pub fn fingerprint_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
+    pub(crate) fn fingerprint_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
         let result = self.call("lstat", || self.inner.backend.lstat(path));
-        self.mark_of(result, None)
+        self.mark_of(result)
     }
 
     /// [`Self::fingerprint_blocking`] of what `path` resolves to through any
     /// links: one probe.
     pub fn fingerprint_followed_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
         let result = self.call("stat", || self.inner.backend.stat(path));
-        self.mark_of(result, None)
+        self.mark_of(result)
     }
 
-    /// [`Self::fingerprint_blocking`] that also carries the Windows volume
-    /// serial and file index, so two such marks can be told apart there: one
-    /// probe on unix, two on Windows.
-    pub fn fingerprint_identified_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
-        let result = self.call("lstat", || self.inner.backend.lstat(path));
-        let id = result
-            .is_ok()
-            .then(|| self.call("file_id", || self.inner.backend.file_id(path)))
-            .flatten();
-        self.mark_of(result, id)
-    }
-
-    fn mark_of(
-        &self,
-        result: io::Result<backend::RawStat>,
-        windows_id: Option<(u64, u64)>,
-    ) -> Result<Mark, PathReading> {
+    fn mark_of(&self, result: io::Result<backend::RawStat>) -> Result<Mark, PathReading> {
         match &result {
-            Ok(stat) => Ok(Mark::of_stat(stat, windows_id)),
+            Ok(stat) => Ok(Mark::of_stat(stat, None)),
             Err(_) => Err(PathReading::from_result(&result, self.inner.clock.now())),
         }
     }
@@ -772,39 +756,6 @@ impl Disk {
     ) -> Result<Mark, PathReading> {
         self.probe_with(path.into(), Self::fingerprint_followed_blocking, Err)
             .await
-    }
-
-    /// Whether `path` is still the file `mark` was taken of: one probe, a
-    /// link not followed.
-    pub fn still_matches_blocking(&self, mark: &Mark, path: &Path) -> Drift {
-        Self::drift_from(mark, self.fingerprint_blocking(path))
-    }
-
-    /// [`Self::still_matches_blocking`] off the runtime, bounded.
-    pub async fn still_matches(&self, mark: &Mark, path: impl Into<PathBuf>) -> Drift {
-        Self::drift_from(mark, self.fingerprint(path).await)
-    }
-
-    fn drift_from(mark: &Mark, now: Result<Mark, PathReading>) -> Drift {
-        match now {
-            Ok(now) => mark.compare(&now),
-            Err(PathReading::Missing { .. }) => Drift::Gone,
-            Err(_) => Drift::CannotTell,
-        }
-    }
-
-    /// Whether two paths name one file: one probe each on unix and two on
-    /// Windows, links not followed, the second path left unread when the
-    /// first gave no mark. A path that is
-    /// missing or unreadable answers [`Sameness::CannotTell`].
-    pub fn same_file_blocking(&self, left: &Path, right: &Path) -> Sameness {
-        let Ok(left) = self.fingerprint_identified_blocking(left) else {
-            return Sameness::CannotTell;
-        };
-        match self.fingerprint_identified_blocking(right) {
-            Ok(right) => left.same_file(&right),
-            Err(_) => Sameness::CannotTell,
-        }
     }
 
     /// The entries of `dir`. On a configured root the listing seeds a reading

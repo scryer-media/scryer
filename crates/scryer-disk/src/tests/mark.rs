@@ -125,56 +125,15 @@ fn a_later_mark_says_what_differs() {
     assert_eq!(unnumbered.compare(&unnumbered), Drift::SameFacts);
     assert!(Drift::SameFacts.is_untouched() && Drift::Same.is_untouched());
     assert!(Drift::Touched.is_unwritten() && !Drift::Touched.is_untouched());
-    for unshown in [
-        Drift::Rewritten,
-        Drift::Replaced,
-        Drift::Gone,
-        Drift::CannotTell,
-    ] {
+    for unshown in [Drift::Rewritten, Drift::Replaced, Drift::CannotTell] {
         assert!(!unshown.is_unwritten() && !unshown.is_untouched());
     }
-}
-
-#[test]
-fn a_path_is_checked_against_its_mark_with_one_probe() {
-    let (disk, backend) = scripted();
-    backend.stat_is(A, Ok(file(5)));
-    let taken = disk.fingerprint_blocking(&p(A)).unwrap();
-    assert_eq!(disk.still_matches_blocking(&taken, &p(A)), Drift::Same);
-    backend.stat_is(A, Ok(file(6)));
-    assert_eq!(disk.still_matches_blocking(&taken, &p(A)), Drift::Replaced);
-    backend.stat_is(A, Err(io::ErrorKind::NotFound));
-    assert_eq!(disk.still_matches_blocking(&taken, &p(A)), Drift::Gone);
-    backend.stat_is(A, Err(io::ErrorKind::PermissionDenied));
-    assert_eq!(
-        disk.still_matches_blocking(&taken, &p(A)),
-        Drift::CannotTell
-    );
-    assert_eq!(backend.calls_of("lstat"), 5);
-    assert_eq!(backend.calls_of("stat"), 0);
-}
-
-#[test]
-fn two_paths_are_compared_with_one_probe_each() {
-    let (disk, backend) = scripted();
-    backend.stat_is(A, Ok(file(5)));
-    backend.stat_is(B, Ok(file(5)));
-    assert_eq!(disk.same_file_blocking(&p(A), &p(B)), Sameness::Same);
-    assert_eq!(backend.paths_of("lstat"), [p(A), p(B)]);
-    backend.stat_is(B, Ok(file(6)));
-    assert_eq!(disk.same_file_blocking(&p(A), &p(B)), Sameness::Different);
-    backend.stat_is(A, Err(io::ErrorKind::NotFound));
-    assert_eq!(disk.same_file_blocking(&p(A), &p(B)), Sameness::CannotTell);
-    assert_eq!(backend.calls_of("lstat"), 5, "the second path is not read");
-}
-
-#[test]
-fn other_names_are_reported_only_from_a_link_count() {
-    let links = |links| mark(RawStat { links, ..file(5) }).other_links();
-    assert_eq!(links(Some(1)), Links::Sole);
-    assert_eq!(links(Some(2)), Links::Shared);
-    assert_eq!(links(None), Links::CannotTell);
-    assert_eq!(mark(file(5)).volume().other_links(), Links::CannotTell);
+    // A mark of a volume alone says nothing about a file on it.
+    let volume = mark(base).volume();
+    assert_eq!(volume.compare(&mark(base)), Drift::CannotTell);
+    assert_eq!(mark(base).compare(&volume), Drift::CannotTell);
+    let stored = Mark::from_stored("unix-dev:7").expect("volume");
+    assert_eq!(stored.compare(&mark(base)), Drift::CannotTell);
 }
 
 #[test]
@@ -230,6 +189,16 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
         "mark1:f:5:-:-:-:u1:105:1:-:extra",
         "unix-dev:",
         "unix-dev:seven",
+        // Another spelling of a number is not what was written.
+        "unix-dev:+7",
+        "unix-dev:07",
+        "windows-volume:+7",
+        "mark1:f:05:-:-:-:u1:105:1:-",
+        "mark1:f:5:-:-:-:u+1:105:1:-",
+        "mark1:f:5:-:5.-3:-:u1:105:1:-",
+        "mark1:f:5:-:5.1000000000:-:u1:105:1:-",
+        "mark1:f:5:5.1000000000:-:-:u1:105:1:-",
+        "mark1:f:5:-:+5.3:-:u1:105:1:-",
     ] {
         assert!(Mark::from_stored(unread).is_none(), "{unread}");
     }
@@ -246,8 +215,41 @@ async fn a_fingerprint_is_bounded_off_the_runtime() {
     *backend.gate.lock().unwrap() = Some(gate);
     let silent = disk.fingerprint(A).await.expect_err("no answer");
     assert_eq!(silent.unreachable_cause(), Some(reason::DISK_TIMED_OUT));
-    let taken = Mark::of_stat(&file(5), None);
-    assert_eq!(disk.still_matches(&taken, A).await, Drift::CannotTell);
+    open.send(()).unwrap();
+}
+
+/// The volume a path will land on is read through the backend, one probe
+/// for each ancestor tried, and decides both the copy lane and whether a
+/// move can be a rename.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_landing_volume_is_its_nearest_answering_ancestor() {
+    let (disk, backend) = scripted();
+    let folder = "/srv/fixture-media/Fixture Show";
+    backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
+    backend.stat_is(B, Ok(numbered(Some(7), Some(4))));
+    let volume = disk.landing_volume_blocking(&p(A)).expect("volume");
+    assert_eq!(backend.paths_of("stat"), [p(A), p(folder)]);
+    assert_eq!(volume.to_stored(), "unix-dev:7");
+    assert_eq!(disk.copy_lane(&p(A)), "unix-dev:7");
+    assert!(disk.renames_between(&p(B), &p(A)).await);
+    backend.stat_is(B, Ok(numbered(Some(8), Some(4))));
+    assert!(!disk.renames_between(&p(B), &p(A)).await);
+
+    let (nowhere, silent) = scripted();
+    silent.always_fails("stat", io::ErrorKind::PermissionDenied);
+    assert!(nowhere.landing_volume_blocking(&p(A)).is_none());
+    assert_eq!(nowhere.copy_lane(&p(A)), "unknown-volume");
+
+    // A volume that does not answer within the bound shares the unknown lane.
+    disk.install_copy_workers(1);
+    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
+    let (open, gate) = mpsc::channel();
+    *backend.gate.lock().unwrap() = Some(gate);
+    let turn = disk.copy_turn(&p(A)).await;
+    let free = |lane| super::copying::turn_is_free(&disk.copy_admission(), lane);
+    assert!(!free("unknown-volume") && free("unix-dev:7"));
+    drop(turn);
     open.send(()).unwrap();
 }
 
@@ -263,45 +265,33 @@ fn real_links_and_handles_are_recognised() {
     std::fs::write(&first, b"synthetic").unwrap();
     std::fs::write(&other, b"synthetic").unwrap();
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
-    let alone = disk.fingerprint_blocking(&first).unwrap();
-    assert_eq!(alone.other_links(), Links::Sole);
+    let read = |path: &Path| disk.fingerprint_blocking(path).unwrap();
+    let alone = read(&first);
     std::fs::hard_link(&first, &second).unwrap();
-    assert_eq!(disk.same_file_blocking(&first, &second), Sameness::Same);
-    assert_eq!(disk.same_file_blocking(&first, &other), Sameness::Different);
-    let linked = disk.fingerprint_blocking(&second).unwrap();
-    assert_eq!(linked.other_links(), Links::Shared);
-    assert_eq!(alone.same_volume(&linked), Sameness::Same);
+    assert_eq!(alone.same_file(&read(&second)), Sameness::Same);
+    assert_eq!(alone.same_file(&read(&other)), Sameness::Different);
+    assert_eq!(alone.same_volume(&read(&other)), Sameness::Same);
 
     // An open handle's own metadata gives the mark the path gives.
     let handle = std::fs::File::open(&first).unwrap();
     let opened = Mark::of(&handle.metadata().unwrap());
-    assert_eq!(disk.still_matches_blocking(&opened, &second), Drift::Same);
-    assert_eq!(
-        disk.still_matches_blocking(&opened, &other),
-        Drift::Replaced
-    );
+    assert_eq!(opened.compare(&read(&second)), Drift::Same);
+    assert_eq!(opened.compare(&read(&other)), Drift::Replaced);
     std::fs::write(&first, b"synthetic, rewritten").unwrap();
-    assert_eq!(
-        disk.still_matches_blocking(&opened, &first),
-        Drift::Rewritten
-    );
-    std::fs::remove_file(&first).unwrap();
-    assert_eq!(disk.still_matches_blocking(&opened, &first), Drift::Gone);
+    assert_eq!(opened.compare(&read(&first)), Drift::Rewritten);
 }
 
-/// A path's own stat carries no file index on Windows; the identified read
-/// asks for it, and then two names of one file are told as one.
+/// A path's own stat names no volume and no file on Windows; the volume a
+/// path lands on comes from a handle, and two names in one folder share it.
 #[cfg(windows)]
 #[test]
-fn windows_tells_files_apart_only_from_an_identified_read() {
+fn windows_names_a_volume_from_a_handle_and_tells_no_files_apart() {
     let temp = tempfile::tempdir().unwrap();
-    let (first, second, other) = (
+    let (first, second) = (
         temp.path().join("first.mkv"),
         temp.path().join("second.mkv"),
-        temp.path().join("other.mkv"),
     );
     std::fs::write(&first, b"synthetic").unwrap();
-    std::fs::write(&other, b"synthetic").unwrap();
     std::fs::hard_link(&first, &second).unwrap();
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
     let plain = |path: &Path| disk.fingerprint_blocking(path).unwrap();
@@ -309,12 +299,15 @@ fn windows_tells_files_apart_only_from_an_identified_read() {
         plain(&first).same_file(&plain(&second)),
         Sameness::CannotTell
     );
-    assert_eq!(plain(&first).compare(&plain(&first)), Drift::SameFacts);
-    assert_eq!(disk.same_file_blocking(&first, &second), Sameness::Same);
-    assert_eq!(disk.same_file_blocking(&first, &other), Sameness::Different);
-    let identified = disk.fingerprint_identified_blocking(&first).unwrap();
     assert_eq!(
-        identified.volume().to_stored(),
-        crate::copy::volume_key(&first)
+        plain(&first).same_volume(&plain(&second)),
+        Sameness::CannotTell
     );
+    assert_eq!(plain(&first).compare(&plain(&first)), Drift::SameFacts);
+    let volume = disk.landing_volume_blocking(&first).expect("volume");
+    let missing = temp.path().join("not-created/third.mkv");
+    let landing = disk.landing_volume_blocking(&missing).expect("volume");
+    assert_eq!(volume.same_volume(&landing), Sameness::Same);
+    assert!(volume.to_stored().starts_with("windows-volume:"));
+    assert_eq!(volume.to_stored(), disk.copy_lane(&missing));
 }

@@ -39,6 +39,18 @@ fn payload() -> Vec<u8> {
 }
 
 /// Whether a turn in `lane` is free right now, asked without waiting.
+/// How many turns of a lane are out, without waiting for one.
+pub(super) fn turns_held(admission: &CopyAdmission, lane: &str) -> usize {
+    let mut taken = Vec::new();
+    loop {
+        let turn = std::pin::pin!(admission.acquire_keyed(lane));
+        match turn.poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(permit) => taken.push(permit),
+            Poll::Pending => return admission.capacity() - taken.len(),
+        }
+    }
+}
+
 pub(super) fn turn_is_free(admission: &CopyAdmission, lane: &str) -> bool {
     let turn = std::pin::pin!(admission.acquire_keyed(lane));
     matches!(
@@ -97,17 +109,14 @@ async fn copies_share_a_volume_budget() {
     // the mark read back from its stored volume.
     let folder = tempfile::tempdir().unwrap();
     let mark = disk()
-        .fingerprint_identified_blocking(folder.path())
+        .landing_volume_blocking(folder.path())
         .expect("folder");
     let stored = crate::Mark::from_stored(&mark.volume().to_stored()).expect("stored volume");
-    assert_eq!(
-        mark.lane(),
-        crate::copy::volume_key(&folder.path().join("a.mkv"))
-    );
+    assert_eq!(mark.lane(), disk().copy_lane(&folder.path().join("a.mkv")));
     assert_eq!(stored.lane(), mark.lane());
     let (c, d) = (
         admission.acquire_on(&mark).await,
-        admission.acquire_for(&folder.path().join("a.mkv")).await,
+        admission.acquire_keyed(&mark.lane()).await,
     );
     assert!(!turn_is_free(&admission, &stored.lane()));
     drop((c, d));
@@ -115,8 +124,10 @@ async fn copies_share_a_volume_budget() {
     // Asked for by path, two names in one folder are one volume.
     let temp = tempfile::tempdir().unwrap();
     let one = CopyAdmission::new(1);
-    let held = one.acquire_for(&temp.path().join("first.mkv")).await;
-    let lane = crate::copy::volume_key(&temp.path().join("second.mkv"));
+    let held = one
+        .acquire_keyed(&disk().copy_lane(&temp.path().join("first.mkv")))
+        .await;
+    let lane = disk().copy_lane(&temp.path().join("second.mkv"));
     assert!(!turn_is_free(&one, &lane));
     drop(held);
     assert!(turn_is_free(&one, &lane));
@@ -313,7 +324,7 @@ fn a_blocking_recorded_copy_takes_its_own_turn() {
     std::fs::write(&source, b"incoming").unwrap();
     let disk = disk();
     disk.install_copy_workers(1);
-    let lane = crate::copy::volume_key(&dest);
+    let lane = disk.copy_lane(&dest);
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let watch = Watch {
         progress: Progress::to({

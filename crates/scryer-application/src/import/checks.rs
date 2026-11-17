@@ -101,12 +101,6 @@ fn disk_space_verdict_for_measurement(available: Option<u64>, source_size: u64) 
         .unwrap_or(ImportVerdict::Accept)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> &Path {
-    path.ancestors()
-        .find(|candidate| Disk::process().follow_blocking(candidate).exists() == Some(true))
-        .unwrap_or(path)
-}
-
 fn destination_directory(dest_path: &Path) -> &Path {
     match dest_path.parent() {
         Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
@@ -268,7 +262,10 @@ pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict
 #[allow(clippy::disallowed_methods)]
 fn measured_disk_space(ctx: &ImportCheckContext<'_>) -> (ImportVerdict, Option<(u64, String)>) {
     let target_dir = destination_directory(ctx.dest_path);
-    let stat_path = nearest_existing_ancestor(target_dir);
+    let disk = Disk::process();
+    let stat_path = disk
+        .nearest_existing_blocking(target_dir)
+        .unwrap_or(target_dir);
     let available = match available_disk_space(stat_path) {
         Ok(available) => Some(available),
         Err(error) => {
@@ -840,7 +837,10 @@ mod tests {
     fn disk_space_uses_nearest_existing_ancestor() {
         let temp = tempfile::tempdir().expect("create temp directory");
         let missing = temp.path().join("missing").join("destination");
-        assert_eq!(nearest_existing_ancestor(&missing), temp.path());
+        assert_eq!(
+            Disk::process().nearest_existing_blocking(&missing),
+            Some(temp.path())
+        );
     }
 
     #[test]

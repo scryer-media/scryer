@@ -17,7 +17,8 @@ struct RootFacts {
     filesystem_type: Option<String>,
     total_bytes: Option<u64>,
     available_bytes: Option<u64>,
-    device: Option<u64>,
+    /// The root's volume, where the platform names one.
+    volume: Option<String>,
 }
 
 impl AppUseCase {
@@ -254,11 +255,11 @@ impl AppUseCase {
 
         // Devices become small group numbers so the raw device ids, which can
         // be stable host identifiers, are never written.
-        let mut groups: BTreeMap<u64, usize> = BTreeMap::new();
+        let mut groups: BTreeMap<&str, usize> = BTreeMap::new();
         for (_, _, facts) in &probed {
-            if let Some(device) = facts.device {
+            if let Some(volume) = facts.volume.as_deref() {
                 let next = groups.len() + 1;
-                groups.entry(device).or_insert(next);
+                groups.entry(volume).or_insert(next);
             }
         }
         let mut hardlink_pairs = Vec::new();
@@ -268,8 +269,8 @@ impl AppUseCase {
             }
             for (download_pseudonym, other_role, other) in &probed {
                 if *other_role == "download_root"
-                    && facts.device.is_some()
-                    && facts.device == other.device
+                    && facts.volume.is_some()
+                    && facts.volume == other.volume
                 {
                     hardlink_pairs.push(json!([library_pseudonym, download_pseudonym]));
                 }
@@ -285,7 +286,7 @@ impl AppUseCase {
                     "filesystem_type": facts.filesystem_type,
                     "total_bytes": facts.total_bytes,
                     "available_bytes": facts.available_bytes,
-                    "device_group": facts.device.and_then(|device| groups.get(&device).copied()),
+                    "device_group": facts.volume.as_deref().and_then(|volume| groups.get(volume).copied()),
                 })
             })
             .collect::<Vec<_>>();
@@ -305,12 +306,9 @@ impl AppUseCase {
     }
 }
 
-// disk-guard: the report names the root's device number, which the owner's
-// readings do not expose.
-#[allow(clippy::disallowed_methods)]
 fn probe_root(path: &str) -> RootFacts {
     let path = std::path::Path::new(path);
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(mark) = crate::disk::Disk::process().fingerprint_followed_blocking(path) else {
         return RootFacts::default();
     };
     let space = crate::disk::capacity::StorageCapacity::process()
@@ -321,19 +319,11 @@ fn probe_root(path: &str) -> RootFacts {
         filesystem_type: filesystem_type(path),
         total_bytes: space.as_ref().map(|space| space.total_bytes),
         available_bytes: space.as_ref().map(|space| space.available_bytes),
-        device: device_id(&metadata),
+        // A plain read names no volume on Windows, and such a root is in no
+        // group.
+        volume: (mark.same_volume(&mark) == crate::disk::Sameness::Same)
+            .then(|| mark.volume().to_stored()),
     }
-}
-
-#[cfg(unix)]
-fn device_id(metadata: &std::fs::Metadata) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Some(metadata.dev())
-}
-
-#[cfg(not(unix))]
-fn device_id(_metadata: &std::fs::Metadata) -> Option<u64> {
-    None
 }
 
 #[cfg(target_os = "macos")]

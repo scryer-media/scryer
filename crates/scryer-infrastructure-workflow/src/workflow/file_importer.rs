@@ -2029,27 +2029,25 @@ fn prepare_import_placement_blocking(
 /// prepared placement already carries: no probe. A key the service did not
 /// write shares the unknown lane.
 fn copy_lane(volume_key: &str) -> Mark {
-    Mark::from_stored(volume_key)
-        .or_else(|| Mark::from_stored("unknown-volume"))
-        .expect("the unknown lane is always readable")
+    Mark::from_stored(volume_key).unwrap_or_else(|| {
+        tracing::warn!(
+            volume_key,
+            "an import copy's volume key was not read; it shares the unknown lane"
+        );
+        Mark::from_stored("unknown-volume").expect("the unknown lane is always readable")
+    })
 }
 
-#[cfg(unix)]
+/// The key the disk service writes for the volume the approved destination
+/// folder resolved to, from the number its fingerprint already holds.
 fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
-    format!("unix-dev:{}", guard.approved_parent_fingerprint.dev)
-}
-
-#[cfg(windows)]
-fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
-    format!(
-        "windows-volume:{}",
-        guard.approved_parent_fingerprint.volume_serial_number
-    )
-}
-
-#[cfg(not(any(unix, windows)))]
-fn destination_volume_key(_guard: &ImportDestinationGuard) -> String {
-    "unknown-volume".to_string()
+    #[cfg(unix)]
+    let number = guard.approved_parent_fingerprint.dev;
+    #[cfg(windows)]
+    let number = u64::from(guard.approved_parent_fingerprint.volume_serial_number);
+    #[cfg(not(any(unix, windows)))]
+    let number = (guard, 0).1;
+    Mark::on_volume(number).to_stored()
 }
 
 fn finish_prepared_import(
@@ -4070,11 +4068,14 @@ mod tests {
     async fn copy_lanes_are_volume_scoped_and_do_not_block_fast_lanes() {
         let coordinator = ImportPlacementCoordinator::new(1, 2);
         let volume = tempfile::tempdir().expect("tempdir");
-        let first_copy = coordinator.copy.acquire_for(volume.path()).await;
-        let second_copy = coordinator.copy.acquire_for(volume.path()).await;
+        let lane = Disk::process()
+            .landing_volume_blocking(volume.path())
+            .expect("volume");
+        let first_copy = coordinator.copy.acquire_on(&lane).await;
+        let second_copy = coordinator.copy.acquire_on(&lane).await;
         let third_copy = tokio::spawn({
-            let (copy, volume) = (coordinator.copy.clone(), volume.path().to_path_buf());
-            async move { copy.acquire_for(&volume).await }
+            let copy = coordinator.copy.clone();
+            async move { copy.acquire_on(&lane).await }
         });
         run_until_idle().await;
         assert!(
@@ -4156,9 +4157,9 @@ mod tests {
         // The key in hand is the one the disk service gives the same folder,
         // so admission needs no probe of its own.
         let parent = Disk::process()
-            .fingerprint_identified_blocking(&temp.path().join("library-a"))
+            .landing_volume_blocking(&temp.path().join("library-a"))
             .expect("destination parent");
-        assert_eq!(first.volume_key, parent.volume().to_stored());
+        assert_eq!(first.volume_key, parent.to_stored());
         assert_eq!(
             copy_lane(&first.volume_key).to_stored(),
             first.volume_key,

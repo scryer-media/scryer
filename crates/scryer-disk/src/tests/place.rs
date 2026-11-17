@@ -384,17 +384,23 @@ fn a_link_that_falls_back_to_a_recorded_copy_takes_a_turn() {
     let (disk, backend, _) = scripted();
     backend.fails("hard_link", DEST, io::ErrorKind::CrossesDevices);
     copies(&backend, b"synthetic payload", b"synthetic payload");
-    disk.install_copy_workers(1);
-    let lane = crate::copy::volume_key(&p(DEST));
+    // Two workers, so a second turn would be counted instead of parking.
+    disk.install_copy_workers(2);
+    let lane = disk.copy_lane(&p(DEST));
     let held = Arc::new(Mutex::new(None));
+    let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let phases = Arc::new(Mutex::new(Vec::new()));
     let watch = Watch {
         progress: Progress::to({
             let (phases, held, disk) = (phases.clone(), held.clone(), disk.clone());
+            let waits = waits.clone();
             move |phase, _| {
+                if phase == Phase::Waiting {
+                    waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 if phase == Phase::Copying {
-                    let free = super::copying::turn_is_free(&disk.copy_admission(), &lane);
-                    held.lock().unwrap().get_or_insert(!free);
+                    let turns = super::copying::turns_held(&disk.copy_admission(), &lane);
+                    held.lock().unwrap().get_or_insert(turns);
                 }
                 let mut phases = phases.lock().unwrap();
                 if phases.last() != Some(&phase) {
@@ -417,10 +423,11 @@ fn a_link_that_falls_back_to_a_recorded_copy_takes_a_turn() {
     assert_eq!(placed.done, Done::Copied);
     assert!(placed.copied.is_some());
     assert_eq!(*phases.lock().unwrap(), [Phase::Waiting, Phase::Copying]);
+    assert_eq!(waits.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
         *held.lock().unwrap(),
-        Some(true),
-        "the turn is held while copying"
+        Some(1),
+        "one turn is held while copying"
     );
 }
 
@@ -496,8 +503,17 @@ fn failures_are_classified_once_into_typed_refusals() {
     };
     assert_eq!(copied_from(None), Refused::SourceMissing);
     assert_eq!(
-        copied_from(Some(io::ErrorKind::PermissionDenied)),
+        copied_from(Some(io::ErrorKind::NotConnected)),
         Refused::Unreachable(Side::Source)
+    );
+    // A lasting fault is not unreachable storage.
+    assert_eq!(
+        copied_from(Some(io::ErrorKind::PermissionDenied)),
+        Refused::Denied
+    );
+    assert_eq!(
+        copied_from(Some(io::ErrorKind::NotADirectory)),
+        Refused::Failed
     );
 }
 
@@ -694,6 +710,23 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
     assert_eq!(held.refused, Refused::StagingOccupied);
     assert_eq!(backend.paths_of("lstat"), [staged.clone()], "one reading");
     assert_eq!(backend.calls_of("open"), 0);
+
+    // A staged name unread for a lasting reason is not unreachable storage.
+    for (kind, refused) in [
+        (io::ErrorKind::PermissionDenied, Refused::Denied),
+        (io::ErrorKind::NotADirectory, Refused::Failed),
+        (
+            io::ErrorKind::NotConnected,
+            Refused::Unreachable(Side::Destination),
+        ),
+    ] {
+        let (disk, backend, _) = scripted();
+        backend.stat_is(staged.to_str().unwrap(), Err(kind));
+        let policy = recorded_staged(Method::Copy, Fallback::None);
+        let unread = disk.place_watched(SOURCE, DEST, policy, watch()).await;
+        assert_eq!(unread.expect_err("refused").refused, refused, "{kind:?}");
+        assert_eq!(backend.calls_of("open"), 0);
+    }
 
     let (disk, backend, _) = scripted();
     disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));

@@ -61,10 +61,13 @@ use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::mark::UNKNOWN_LANE;
 use super::place::{Fail, Job, Refused, Side};
 use super::reading::reason;
 use super::sample::{ContentSample, SampleStep, sample_reader};
-use super::{Disk, DiskError, DiskVerb, Open, PathReading, Remove, Replace, SyncOutcome};
+use super::{
+    Disk, DiskError, DiskVerb, Mark, Open, PathReading, Remove, Replace, Sameness, SyncOutcome,
+};
 
 /// Bytes moved per copy iteration, and per read-back iteration.
 const CHUNK_BYTES: usize = 1024 * 1024;
@@ -307,27 +310,11 @@ impl CopyAdmission {
         self.capacity
     }
 
-    /// A turn on the volume `destination` will land on.
-    pub async fn acquire_for(&self, destination: &Path) -> CopyPermit {
-        let path = destination.to_path_buf();
-        let key = tokio::task::spawn_blocking(move || volume_key(&path))
-            .await
-            .unwrap_or_else(|_| "unknown-volume".to_owned());
-        self.acquire_keyed(&key).await
-    }
-
-    /// A turn on the volume a mark in hand names: the lane
-    /// [`Self::acquire_for`] gives a path on that volume, without a probe. A
-    /// mark that carries no volume, as a plain Windows read does not, shares
-    /// the unknown lane.
-    pub async fn acquire_on(&self, volume: &super::Mark) -> CopyPermit {
+    /// A turn on the volume a mark names, without a probe. A mark that
+    /// carries no volume, as a plain Windows read does not, shares the
+    /// unknown lane.
+    pub async fn acquire_on(&self, volume: &Mark) -> CopyPermit {
         self.acquire_keyed(&volume.lane()).await
-    }
-
-    /// [`Self::acquire_for`] for a copy already on a blocking thread, which
-    /// waits there for its turn.
-    pub(crate) fn acquire_for_blocking(&self, destination: &Path) -> CopyPermit {
-        wait_parked(self.acquire_keyed(&volume_key(destination)))
     }
 
     /// A turn in a named lane.
@@ -371,29 +358,6 @@ fn wait_parked<T>(turn: impl std::future::Future<Output = T>) -> T {
             std::task::Poll::Pending => std::thread::park(),
         }
     }
-}
-
-/// The volume a path will land on, from its nearest ancestor that answers.
-/// An unavailable identity conservatively shares the unknown lane.
-pub(crate) fn volume_key(path: &Path) -> String {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        for ancestor in path.ancestors() {
-            if let Ok(metadata) = std::fs::metadata(ancestor) {
-                return format!("unix-dev:{}", metadata.dev());
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        for ancestor in path.ancestors() {
-            if let Some((volume, _)) = super::backend::windows_file_id(ancestor) {
-                return format!("windows-volume:{volume}");
-            }
-        }
-    }
-    "unknown-volume".to_owned()
 }
 
 // ── The read-back seam ───────────────────────────────────────────────────────
@@ -756,7 +720,8 @@ impl Job<'_> {
         // that could wait off this thread already holds the turn.
         if self.permit.borrow().is_none() {
             self.watch.progress.report(Phase::Waiting, 0);
-            let turn = disk.copy_admission().acquire_for_blocking(dest);
+            let lane = disk.copy_lane(dest);
+            let turn = wait_parked(disk.copy_admission().acquire_keyed(&lane));
             self.permit.replace(Some(turn));
         }
 
@@ -822,9 +787,9 @@ impl Job<'_> {
 pub(crate) fn staged_name_is_free(staged: &Path, reading: PathReading) -> Result<(), Fail> {
     match reading.exists() {
         Some(false) => Ok(()),
-        None => Err(Fail::new(
-            Refused::Unreachable(Side::Destination),
-            io::ErrorKind::Other,
+        None => Err(Fail::unread(
+            reading,
+            Side::Destination,
             format!(
                 "failed to inspect the destination staging path {}: {}",
                 staged.display(),
@@ -1157,6 +1122,50 @@ impl Disk {
         })
     }
 
+    /// The nearest ancestor of `path`, itself included, that exists, a link
+    /// followed: where something written at `path` would land. One probe for
+    /// each ancestor tried.
+    pub fn nearest_existing_blocking<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+        path.ancestors()
+            .find(|at| self.follow_blocking(at).exists() == Some(true))
+    }
+
+    /// The volume `path` is on or will land on: the one its nearest ancestor
+    /// that answers resolves to, links followed. `None` when none answers.
+    /// One probe for each ancestor tried.
+    pub fn landing_volume_blocking(&self, path: &Path) -> Option<Mark> {
+        path.ancestors().find_map(|at| self.volume_at(at))
+    }
+
+    #[cfg(not(windows))]
+    fn volume_at(&self, path: &Path) -> Option<Mark> {
+        Some(self.fingerprint_followed_blocking(path).ok()?.volume())
+    }
+
+    #[cfg(windows)]
+    fn volume_at(&self, path: &Path) -> Option<Mark> {
+        let serial = self.call("volume_serial", || self.inner.backend.volume_serial(path))?;
+        Some(Mark::on_volume(serial))
+    }
+
+    /// The copy lane of the volume `dest` will land on; the unknown lane when
+    /// no volume answers.
+    pub(crate) fn copy_lane(&self, dest: &Path) -> String {
+        self.landing_volume_blocking(dest)
+            .map_or_else(|| UNKNOWN_LANE.to_owned(), |volume| volume.lane())
+    }
+
+    /// A turn on the volume `dest` will land on. The volume is read within
+    /// the root's bound, and one that does not answer in time shares the
+    /// unknown lane.
+    pub(crate) async fn copy_turn(&self, dest: &Path) -> CopyPermit {
+        let unanswered = |_| UNKNOWN_LANE.to_owned();
+        let lane = self
+            .probe_with(dest.to_path_buf(), Self::copy_lane, unanswered)
+            .await;
+        self.copy_admission().acquire_keyed(&lane).await
+    }
+
     /// Whether a move from `source` to `destination` can be a rename: both
     /// are on one filesystem. An unknown answer is `false`, which only ever
     /// costs a copy. The destination usually does not exist yet, so its
@@ -1172,13 +1181,14 @@ impl Disk {
             .unwrap_or(false)
     }
 
-    #[cfg(unix)]
     fn same_filesystem(&self, source: &Path, destination: &Path) -> bool {
-        use std::os::unix::fs::MetadataExt;
-
+        // Only unix names a volume from a plain read.
+        if !cfg!(unix) {
+            return false;
+        }
         // A symlinked source lives on the filesystem holding the link, not
         // the one holding its target.
-        let Ok(source_metadata) = std::fs::symlink_metadata(source) else {
+        let Ok(source) = self.fingerprint_blocking(source) else {
             return false;
         };
         let mut candidate = Some(destination);
@@ -1187,16 +1197,12 @@ impl Disk {
                 return false;
             }
             if self.fresh_blocking(current).exists() == Some(true) {
-                return std::fs::metadata(current)
-                    .is_ok_and(|metadata| metadata.dev() == source_metadata.dev());
+                return self
+                    .volume_at(current)
+                    .is_some_and(|volume| volume.same_volume(&source) == Sameness::Same);
             }
             candidate = current.parent();
         }
-        false
-    }
-
-    #[cfg(not(unix))]
-    fn same_filesystem(&self, _source: &Path, _destination: &Path) -> bool {
         false
     }
 }

@@ -812,39 +812,24 @@ pub trait VolumeProbe: Send + Sync {
     fn available_bytes(&self, path: &Path) -> Option<u64>;
 }
 
-/// The real probe: `dev` identity on unix, path prefix on Windows, and the
+/// The real probe: the owner's volume on unix, path prefix on Windows, and the
 /// canonical [`crate::disk::capacity::StorageCapacity`] for free space.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemVolumeProbe;
 
-impl SystemVolumeProbe {
-    /// Destination directories usually do not exist yet, so both queries walk up
-    /// to the nearest ancestor that does.
-    fn existing_ancestor(path: &Path) -> Option<PathBuf> {
-        let disk = crate::disk::Disk::process();
-        let mut ancestors = path.ancestors();
-        let found = ancestors.find(|at| disk.follow_blocking(at).exists() == Some(true));
-        found.map(Path::to_path_buf)
-    }
-}
-
 impl VolumeProbe for SystemVolumeProbe {
-    #[allow(clippy::disallowed_methods)] // disk-guard: raw st_dev volume
     fn volume_id(&self, path: &Path) -> Option<VolumeId> {
         #[cfg(unix)]
         {
-            // The first ancestor that answers is the existing one; its own
-            // stat carries the device, so it is not probed twice.
-            use std::os::unix::fs::MetadataExt;
-            let metadata = path.ancestors().find_map(|at| std::fs::metadata(at).ok())?;
-            Some(VolumeId(format!("dev:{}", metadata.dev())))
+            let volume = crate::disk::Disk::process().landing_volume_blocking(path)?;
+            Some(VolumeId(volume.to_stored()))
         }
         #[cfg(not(unix))]
         {
             // Windows has no cheap device id through `std`; the path prefix
             // (drive letter or UNC share) is the volume for the purposes of
             // "will this move be a rename or a copy".
-            let existing = Self::existing_ancestor(path)?;
+            let existing = crate::disk::Disk::process().nearest_existing_blocking(path)?;
             let prefix = existing.components().next()?;
             Some(VolumeId(format!(
                 "prefix:{}",
@@ -854,9 +839,9 @@ impl VolumeProbe for SystemVolumeProbe {
     }
 
     fn available_bytes(&self, path: &Path) -> Option<u64> {
-        let existing = Self::existing_ancestor(path)?;
+        let existing = crate::disk::Disk::process().nearest_existing_blocking(path)?;
         crate::disk::capacity::StorageCapacity::process()
-            .refresh_blocking(&existing)
+            .refresh_blocking(existing)
             .ok()
             .map(|space| space.available_bytes)
     }

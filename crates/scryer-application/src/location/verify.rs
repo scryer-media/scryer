@@ -317,6 +317,23 @@ pub trait FileVerificationRecorder: Send + Sync {
 /// A copy failure is an error. What the destination proved to be is in the
 /// answer, not an error: a mismatched destination is a fact to record and
 /// surface.
+fn copy_refusal(refused: Refused, sentence: String) -> AppError {
+    match refused {
+        Refused::StagingOccupied => AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_OCCUPIED,
+            sentence,
+        ),
+        // Storage that timed out or could not be reached: the transient kind
+        // the runner retries and waits out.
+        Refused::Unreachable(_) => AppError::temporary_unavailable_reason(
+            crate::disk::reason::DISK_PATH_UNREACHABLE,
+            sentence,
+            None,
+        ),
+        _ => AppError::Repository(sentence),
+    }
+}
+
 pub async fn recorded_copy(
     disk: &Disk,
     source: &Path,
@@ -331,16 +348,7 @@ pub async fn recorded_copy(
     let placed = disk
         .place_watched(source, destination, policy, watch)
         .await
-        .map_err(|refusal| match refusal.refused {
-            Refused::StagingOccupied => AppError::validation_refused(
-                crate::error_reasons::location::DESTINATION_OCCUPIED,
-                refusal.to_string(),
-            ),
-            // Coded for the client, and still the transient kind the runner
-            // retries and waits out.
-            Refused::Unreachable(_) => AppError::temporary_unavailable(refusal.to_string(), None),
-            _ => AppError::Repository(refusal.to_string()),
-        })?;
+        .map_err(|refusal| copy_refusal(refusal.refused, refusal.to_string()))?;
     let copied = placed.copied.ok_or_else(|| {
         AppError::Repository(format!("the copy of {} recorded nothing", source.display()))
     })?;
@@ -1231,18 +1239,14 @@ mod tests {
         assert!(!hashes.full_blake3.is_empty());
     }
 
-    /// The FR-032 pre-flight: two paths under one temp directory are on one
-    /// filesystem, and a source that is not there answers "no" rather than
-    /// guessing.
-    /// A copy whose destination could not be read is reported as temporarily
-    /// unavailable, which the runner still retries, not as a bare sentence.
+    /// A copy whose staged name cannot be read for a lasting reason, here a
+    /// parent that is a file, is a plain failure: it is not reported as
+    /// temporarily unavailable and the runner does not wait it out.
     #[tokio::test]
-    async fn an_unreadable_destination_is_reported_as_temporarily_unavailable() {
+    async fn a_destination_under_a_file_is_not_reported_as_temporarily_unavailable() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.bin");
         write_pattern(&source, 16);
-        // The staged name sits under a file, so reading it fails without
-        // saying it is missing.
         let blocker = dir.path().join("not-a-folder");
         write_pattern(&blocker, 1);
         let error = recorded_copy(
@@ -1257,14 +1261,34 @@ mod tests {
         )
         .await
         .expect_err("refused");
-        assert!(
-            matches!(error, AppError::TemporaryUnavailable { .. }),
-            "{error:?}"
-        );
-        assert!(crate::location::executor::move_error_is_transient(&error));
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
         assert_eq!(std::fs::read(&blocker).unwrap().len(), 1);
     }
 
+    /// Storage that did not answer is the one refusal reported as temporarily
+    /// unavailable, with its reason, and the runner waits it out; a denied or
+    /// failed read is not.
+    #[test]
+    fn only_unreachable_storage_is_reported_as_temporarily_unavailable() {
+        let refused = |refused| copy_refusal(refused, "synthetic".to_owned());
+        let unreachable = refused(Refused::Unreachable(crate::disk::Side::Destination));
+        assert!(matches!(
+            unreachable,
+            AppError::TemporaryUnavailable {
+                reason: Some(crate::disk::reason::DISK_PATH_UNREACHABLE),
+                ..
+            }
+        ));
+        assert!(crate::location::executor::move_error_is_transient(
+            &unreachable
+        ));
+        for lasting in [Refused::Denied, Refused::Failed] {
+            assert!(matches!(refused(lasting), AppError::Repository(_)));
+        }
+    }
+
+    /// Two paths under one temp directory are on one filesystem, and a source
+    /// that is not there answers "no" rather than guessing.
     #[tokio::test]
     async fn same_filesystem_probe_answers_for_a_destination_that_does_not_exist_yet() {
         let dir = tempfile::tempdir().unwrap();

@@ -239,6 +239,20 @@ impl Fail {
         Self::of(DiskError::new(DiskVerb::Write, path, error), side)
     }
 
+    /// A path whose reading gave no answer, refused by what stopped the
+    /// reading: only a path that timed out or could not be reached is
+    /// unreachable.
+    pub(crate) fn unread(reading: PathReading, side: Side, detail: String) -> Self {
+        let refused = match reading.unreachable_cause() {
+            Some(reason::DISK_PERMISSION_DENIED) => Refused::Denied,
+            Some(reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT) => {
+                Refused::Unreachable(side)
+            }
+            _ => Refused::Failed,
+        };
+        Self::new(refused, io::ErrorKind::Other, detail)
+    }
+
     pub(crate) fn new(refused: Refused, kind: io::ErrorKind, detail: String) -> Self {
         Self {
             refused,
@@ -402,7 +416,7 @@ impl Disk {
                     staged_free = true;
                 }
                 watch.progress.report(Phase::Waiting, 0);
-                Some(self.copy_admission().acquire_for(&dest).await)
+                Some(self.copy_turn(&dest).await)
             }
             _ => None,
         };
@@ -629,11 +643,7 @@ impl Job<'_> {
             let absence = format!("{}: {}", source.display(), reading.describe_absence());
             return Err(match reading.exists() {
                 Some(false) => Fail::new(Refused::SourceMissing, io::ErrorKind::NotFound, absence),
-                _ => Fail::new(
-                    Refused::Unreachable(Side::Source),
-                    io::ErrorKind::Other,
-                    absence,
-                ),
+                _ => Fail::unread(reading, Side::Source, absence),
             });
         };
         // A symlinked media file is a pointer, not the payload: copying it

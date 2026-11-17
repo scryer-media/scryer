@@ -243,10 +243,10 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn stat(&self, path: &Path) -> io::Result<RawStat>;
     /// Does not follow links.
     fn lstat(&self, path: &Path) -> io::Result<RawStat>;
-    /// The volume serial and file index of the entry at `path` itself, where
-    /// the platform keeps them apart from a stat: one more call on Windows,
-    /// none elsewhere. `None` when there is none to give.
-    fn file_id(&self, _path: &Path) -> Option<(u64, u64)> {
+    /// The serial of the volume `path` resolves to, where the platform keeps
+    /// it apart from a stat: one call.
+    #[cfg(windows)]
+    fn volume_serial(&self, _path: &Path) -> Option<u64> {
         None
     }
     /// Opens a directory for a listing; its entries are read as the
@@ -368,8 +368,8 @@ impl DiskBackend for SystemBackend {
     }
 
     #[cfg(windows)]
-    fn file_id(&self, path: &Path) -> Option<(u64, u64)> {
-        windows_file_id(path)
+    fn volume_serial(&self, path: &Path) -> Option<u64> {
+        windows_volume_serial(path)
     }
 
     fn has_entries(&self, path: &Path) -> io::Result<bool> {
@@ -969,18 +969,18 @@ fn exclusive_rename(_source: &Path, _dest: &Path) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
-/// The volume serial and file index of the entry at `path`, not followed.
+/// The serial of the volume `path` resolves to, a junction or link followed
+/// as a stat follows one on unix.
 #[cfg(windows)]
-pub(crate) fn windows_file_id(path: &Path) -> Option<(u64, u64)> {
+fn windows_volume_serial(path: &Path) -> Option<u64> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        GetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
     };
     let file = std::fs::OpenOptions::new()
         .read(true)
         .access_mode(0)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
         .ok()?;
     let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
@@ -990,10 +990,7 @@ pub(crate) fn windows_file_id(path: &Path) -> Option<(u64, u64)> {
     }
     // SAFETY: the call above filled the structure.
     let information = unsafe { information.assume_init() };
-    Some((
-        u64::from(information.dwVolumeSerialNumber),
-        u64::from(information.nFileIndexHigh) << 32 | u64::from(information.nFileIndexLow),
-    ))
+    Some(u64::from(information.dwVolumeSerialNumber))
 }
 
 #[cfg(test)]
