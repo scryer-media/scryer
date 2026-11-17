@@ -1260,8 +1260,14 @@ const en: LocaleDictionary = {
     "The completed download has not been observed yet; release again once it has.",
   "error.reason.IMPORT_COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY":
     "The completed source has no trustworthy download identity; use manual import.",
+  "error.reason.IMPORT_COPY_KEPT_SOURCE_GONE":
+    "The copy was kept at its destination because the source no longer holds the file.",
+  "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN":
+    "Could not tell whether the existing destination is the source file itself. Nothing was removed.",
+  "error.reason.IMPORT_DESTINATION_IS_SOURCE":
+    "The existing destination is the source file itself, so moving it would remove the only copy. Nothing was removed.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
-    "Refusing to restore the old file's backup because its destination is occupied.",
+    "A file this import did not place is already at the destination. Nothing there was replaced.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":
     "Disc import targets must exactly match its explicit episode mappings.",
   "error.reason.IMPORT_DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET":

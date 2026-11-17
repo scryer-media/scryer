@@ -8146,8 +8146,14 @@ const ru: LocaleDictionary = {
     "Завершённая загрузка ещё не обнаружена; повторно освободите её после обнаружения.",
   "error.reason.IMPORT_COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY":
     "У завершённого источника нет достоверных идентификационных данных загрузки; используйте ручной импорт.",
+  "error.reason.IMPORT_COPY_KEPT_SOURCE_GONE":
+    "Копия оставлена в месте назначения: исходный файл больше не содержит этих данных.",
+  "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN":
+    "Не удалось определить, не является ли существующее место назначения самим исходным файлом. Ничего не удалено.",
+  "error.reason.IMPORT_DESTINATION_IS_SOURCE":
+    "Существующее место назначения — это сам исходный файл; перемещение удалило бы единственную копию. Ничего не удалено.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
-    "Восстановление резервной копии старого файла запрещено: место назначения занято.",
+    "В месте назначения уже есть файл, который не был помещён этим импортом. Ничего не заменено.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":
     "Цели импорта диска должны в точности соответствовать явно заданным сопоставлениям эпизодов.",
   "error.reason.IMPORT_DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET":

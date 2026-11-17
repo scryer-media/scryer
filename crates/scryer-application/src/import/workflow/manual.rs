@@ -243,7 +243,10 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
     let outcome = match execute_queued_manual_import_with_outcome(&app, &record.id, &payload).await
     {
         Ok(result) => result,
-        Err(AppError::ManualReconciliationRequired(message)) => QueuedManualImportOutcome {
+        Err(
+            AppError::ManualReconciliationRequired(message)
+            | AppError::ManualReconciliationRefused { message, .. },
+        ) => QueuedManualImportOutcome {
             status: ImportStatus::Pending,
             result_json: manual_import_pending_result_json(
                 &record.id,
@@ -3129,7 +3132,7 @@ async fn execute_manual_series_movie_import(
     .await
     {
         Ok(file_result) => file_result,
-        Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+        Err(error) if error.requires_manual_reconciliation() => return Err(error),
         Err(error) => {
             let message = error.to_string();
             return Ok(manual_import_file_result(
@@ -3243,7 +3246,7 @@ async fn execute_manual_series_movie_import(
     if let Err(error) =
         finalize_import_source_cleanup(app, import_mode, &file_result, &dest_path, completed).await
     {
-        if matches!(&error, AppError::ManualReconciliationRequired(_)) {
+        if error.requires_manual_reconciliation() {
             return Err(error);
         }
         let message = error.to_string();
@@ -3656,7 +3659,7 @@ async fn execute_manual_import_with_release_evidence_inner(
 
         let target = match manual_import_mapping_target(mapping, &title.facet) {
             Ok(target) => target,
-            Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+            Err(error) if error.requires_manual_reconciliation() => return Err(error),
             Err(err) => {
                 results.push(manual_import_file_result(
                     mapping,
@@ -3753,7 +3756,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                             import_result.error_message,
                         )
                     }
-                    Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+                    Err(error) if error.requires_manual_reconciliation() => return Err(error),
                     Err(error) => {
                         let message = error.to_string();
                         manual_import_file_result(
@@ -4081,7 +4084,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     Some(rejection.message),
                 ));
             }
-            Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+            Err(error) if error.requires_manual_reconciliation() => return Err(error),
             Err(err) => {
                 let error_message = err.to_string();
                 results.push(manual_import_file_result(

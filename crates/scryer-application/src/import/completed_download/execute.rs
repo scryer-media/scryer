@@ -3,7 +3,6 @@ use super::lookup::{
 };
 use super::result_state::apply_import_result_with_completed;
 use super::*;
-use crate::AppError;
 use crate::import_workflow::import_completed_download_for_tracked;
 use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use tracing::Instrument;
@@ -233,7 +232,7 @@ async fn import_inner(
             .await
         }
         Err(error) => {
-            if let AppError::ManualReconciliationRequired(message) = &error {
+            if let Some(message) = error.manual_reconciliation_message() {
                 tracing::error!(
                     id = %td.id,
                     dest_dir = %completed.dest_dir,
@@ -244,7 +243,7 @@ async fn import_inner(
                 td.state = TrackedDownloadState::ImportBlocked;
                 td.status = TrackedDownloadStatus::Error;
                 td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
-                    message.clone(),
+                    message.to_owned(),
                 )];
                 return false;
             }

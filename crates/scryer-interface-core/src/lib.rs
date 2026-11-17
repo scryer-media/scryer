@@ -831,6 +831,13 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::ManualReconciliationRequired(message) => {
             coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED")
         }
+        AppError::ManualReconciliationRefused { message, reason } => {
+            coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED").extend_with(
+                |_, extensions| {
+                    extensions.set("reason", reason);
+                },
+            )
+        }
         // A plugin's failure is the plugin's, not Scryer's, so it is not
         // masked: the sentence is the host's own, the reason names the
         // condition for clients that translate it, and the plugin's own public
@@ -864,6 +871,23 @@ pub fn to_gql_error(err: AppError) -> Error {
             .extend_with(|_, extensions| {
                 extensions.set("reason", reason);
             }),
+        AppError::RepositoryFailedWithFacts {
+            message,
+            reason,
+            facts,
+        } => repository_gql_error(message).extend_with(|_, extensions| {
+            extensions.set("reason", reason);
+            for fact in &facts {
+                match &fact.value {
+                    scryer_application::RefusalFactValue::Text(value) => {
+                        extensions.set(fact.key, value.as_str());
+                    }
+                    scryer_application::RefusalFactValue::List(values) => {
+                        extensions.set(fact.key, values.clone());
+                    }
+                }
+            }
+        }),
     }
 }
 
@@ -901,6 +925,7 @@ pub fn classify_login_error(err: &AppError) -> LoginErrorClassification {
         err,
         AppError::Repository(_)
             | AppError::RepositoryFailed { .. }
+            | AppError::RepositoryFailedWithFacts { .. }
             | AppError::RepositoryFailure { .. }
     ) {
         LoginErrorClassification::InfrastructureFailure
@@ -957,7 +982,8 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::TotpInvalidCode(_) => "TotpInvalidCode",
         AppError::TotpRecoveryCodeUsed(_) => "TotpRecoveryCodeUsed",
         AppError::Canceled(_) => "Canceled",
-        AppError::ManualReconciliationRequired(_) => "ManualReconciliationRequired",
+        AppError::ManualReconciliationRequired(_)
+        | AppError::ManualReconciliationRefused { .. } => "ManualReconciliationRequired",
         AppError::ImportEvidenceUnavailable(_) => "ImportEvidenceUnavailable",
         AppError::ImportSourceInspection { .. } => "ImportSourceInspection",
         AppError::UnsupportedImportSource { .. } => "UnsupportedImportSource",
@@ -966,6 +992,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::PluginFailed { .. } => "PluginFailed",
         AppError::Repository(_)
         | AppError::RepositoryFailed { .. }
+        | AppError::RepositoryFailedWithFacts { .. }
         | AppError::RepositoryFailure { .. } => "Repository",
     }
 }
@@ -978,6 +1005,7 @@ pub fn to_login_gql_error(method: &'static str, err: AppError) -> Error {
             let message = match err {
                 AppError::Repository(message)
                 | AppError::RepositoryFailed { message, .. }
+                | AppError::RepositoryFailedWithFacts { message, .. }
                 | AppError::RepositoryFailure { message, .. } => message,
                 other => return to_gql_error(other),
             };
@@ -1810,6 +1838,47 @@ mod tests {
             Some(reason)
         );
         assert!(graphql_error_extension_string(&error, "errorId").is_some());
+    }
+
+    #[test]
+    fn repository_facts_travel_beside_the_masked_sentence() {
+        let reason = scryer_application::error_reasons::import::COPY_KEPT_SOURCE_GONE;
+        let key = scryer_application::error_reasons::import::KEPT_PATH_FACT;
+        let error = to_gql_error(AppError::RepositoryFailedWithFacts {
+            message: "copy verification failed at private path".into(),
+            reason,
+            facts: vec![scryer_application::RefusalFact::new(
+                key,
+                "/srv/fixture-media/library/Sample.Title.mkv",
+            )],
+        });
+        assert_eq!(error.message, INTERNAL_SERVER_ERROR_MESSAGE);
+        assert_eq!(graphql_error_code(&error), Some(INTERNAL_ERROR_CODE));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some(reason)
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, key),
+            Some("/srv/fixture-media/library/Sample.Title.mkv")
+        );
+    }
+
+    #[test]
+    fn a_named_manual_reconciliation_keeps_its_code_and_names_its_reason() {
+        let reason = scryer_application::error_reasons::import::DESTINATION_IS_SOURCE;
+        let error = to_gql_error(AppError::ManualReconciliationRefused {
+            message: "the destination is the source".into(),
+            reason,
+        });
+        assert_eq!(
+            graphql_error_code(&error),
+            Some("MANUAL_RECONCILIATION_REQUIRED")
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some(reason)
+        );
     }
 
     #[test]

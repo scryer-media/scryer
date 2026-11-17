@@ -1198,6 +1198,16 @@ pub enum AppError {
     #[error("manual reconciliation required: {0}")]
     ManualReconciliationRequired(String),
 
+    /// [`AppError::ManualReconciliationRequired`] with a stable condition.
+    /// The same failure to every workflow that parks or reports it; `reason`
+    /// travels beside the sentence. Match both through
+    /// [`AppError::manual_reconciliation_message`].
+    #[error("manual reconciliation required: {message}")]
+    ManualReconciliationRefused {
+        message: String,
+        reason: &'static str,
+    },
+
     #[error("import evidence unavailable: {0}")]
     ImportEvidenceUnavailable(String),
 
@@ -1242,6 +1252,16 @@ pub enum AppError {
     RepositoryFailed {
         message: String,
         reason: &'static str,
+    },
+
+    /// [`AppError::RepositoryFailed`] that also hands the client values it
+    /// needs, each as its own extension beside `reason`, never only inside
+    /// the masked sentence.
+    #[error("repository: {message}")]
+    RepositoryFailedWithFacts {
+        message: String,
+        reason: &'static str,
+        facts: Vec<RefusalFact>,
     },
 }
 
@@ -1330,12 +1350,28 @@ impl AppError {
         }
     }
 
-    /// The facts a named validation failure carries beside its reason.
+    /// The facts a named failure carries beside its reason.
     pub fn refusal_facts(&self) -> &[RefusalFact] {
         match self {
-            Self::ValidationRefused { facts, .. } => facts,
+            Self::ValidationRefused { facts, .. }
+            | Self::RepositoryFailedWithFacts { facts, .. } => facts,
             _ => &[],
         }
+    }
+
+    /// The sentence of a failure that needs manual reconciliation, named or
+    /// not; `None` for any other failure.
+    pub fn manual_reconciliation_message(&self) -> Option<&str> {
+        match self {
+            Self::ManualReconciliationRequired(message)
+            | Self::ManualReconciliationRefused { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
+    /// Whether the failure needs manual reconciliation, named or not.
+    pub fn requires_manual_reconciliation(&self) -> bool {
+        self.manual_reconciliation_message().is_some()
     }
 
     /// The stable reason a validation failure names, if it names one.
@@ -1351,6 +1387,8 @@ impl AppError {
     pub fn reason(&self) -> Option<&'static str> {
         match self {
             Self::RepositoryFailed { reason, .. }
+            | Self::RepositoryFailedWithFacts { reason, .. }
+            | Self::ManualReconciliationRefused { reason, .. }
             | Self::NotFoundReason { reason, .. }
             | Self::UnauthorizedReason { reason, .. } => Some(reason),
             Self::TemporaryUnavailable { reason, .. } => *reason,

@@ -3612,7 +3612,8 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
             Json(ErrorResponse::new(message)),
         )
             .into_response(),
-        AppError::ManualReconciliationRequired(message) => {
+        AppError::ManualReconciliationRequired(message)
+        | AppError::ManualReconciliationRefused { message, .. } => {
             (StatusCode::CONFLICT, Json(ErrorResponse::new(message))).into_response()
         }
         error @ (AppError::ImportSourceInspection { .. }
@@ -3637,6 +3638,7 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         AppError::ImportEvidenceUnavailable(message)
         | AppError::Repository(message)
         | AppError::RepositoryFailed { message, .. }
+        | AppError::RepositoryFailedWithFacts { message, .. }
         | AppError::RepositoryFailure { message, .. } => {
             let error_id = Id::new().0;
             tracing::error!(

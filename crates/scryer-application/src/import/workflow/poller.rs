@@ -635,7 +635,7 @@ async fn finalize_completed_import_error(
     request: &CompletedImportRequest,
     error: AppError,
 ) -> AppResult<ImportResult> {
-    let requires_reconciliation = matches!(&error, AppError::ManualReconciliationRequired(_));
+    let requires_reconciliation = error.requires_manual_reconciliation();
     let cancelled = matches!(&error, AppError::Canceled(_));
     let skip_reason = completed_import_error_skip_reason(&error);
     let result = ImportResult {

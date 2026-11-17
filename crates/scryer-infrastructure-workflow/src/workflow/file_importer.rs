@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
-    ImportFileTransferProgress, ImportFileTransferProgressSender,
+    ImportFileTransferProgress, ImportFileTransferProgressSender, RefusalFact, RefusalFactValue,
     disk::{
         self, AsideRemoval, Cancel, Disk, Done, Doubt, EntryAlias, EntryKind, LinkAfter, LinkProof,
         Mark, Open, Parents, PathReading, Phase, Placed, Progress, Refused, Removal, Remove,
@@ -77,6 +77,13 @@ fn import_io_error(error: &io::Error, message: String) -> AppError {
 fn import_error_context(error: &AppError, message: String) -> AppError {
     match error {
         AppError::RepositoryFailed { reason, .. } => AppError::RepositoryFailed { message, reason },
+        AppError::RepositoryFailedWithFacts { reason, facts, .. } => {
+            AppError::RepositoryFailedWithFacts {
+                message,
+                reason,
+                facts: facts.clone(),
+            }
+        }
         _ => AppError::Repository(message),
     }
 }
@@ -1574,10 +1581,40 @@ fn ensure_import_destination_absent(dest: &Path) -> AppResult<()> {
 /// Something other than this import holds the destination name, so nothing
 /// is copied to it.
 fn import_destination_occupied(dest: &Path) -> AppError {
-    AppError::Repository(format!(
-        "import destination appeared before copy execution: {}",
-        dest.display()
-    ))
+    AppError::RepositoryFailed {
+        message: format!(
+            "import destination appeared before copy execution: {}",
+            dest.display()
+        ),
+        reason: scryer_application::error_reasons::import::DESTINATION_OCCUPIED,
+    }
+}
+
+/// The existing destination is the source's own entry: a move that removed
+/// the source would remove the only copy, so it is refused for manual
+/// reconciliation.
+fn import_destination_is_source(source: &Path, dest: &Path) -> AppError {
+    AppError::ManualReconciliationRefused {
+        message: format!(
+            "import destination {} is the source {} itself, so a move would remove the only copy; nothing was removed",
+            dest.display(),
+            source.display()
+        ),
+        reason: scryer_application::error_reasons::import::DESTINATION_IS_SOURCE,
+    }
+}
+
+/// Whether the existing destination is the source's own entry could not be
+/// told; `why` says which read or rename failed.
+fn import_destination_alias_unknown(source: &Path, dest: &Path, why: &str) -> AppError {
+    AppError::RepositoryFailed {
+        message: format!(
+            "could not tell whether import destination {} names the source {} itself: {why}; nothing was removed",
+            dest.display(),
+            source.display()
+        ),
+        reason: scryer_application::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+    }
 }
 
 // disk-guard: a failure's own error kind names the import reason, which a
@@ -2138,20 +2175,34 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
 /// is kept because the source no longer holds the data or did not read. The
 /// failure's routing fact is kept.
 fn took_back(error: AppError, source: &Path, dest: &Path, landed: Landed<'_>) -> AppError {
-    let why = match take_back_placed(source, dest, landed) {
+    let taken_back = take_back_placed(source, dest, landed);
+    let why = match taken_back {
         TakeBack::KeptForSource => "the source no longer holds this file",
         TakeBack::KeptSourceUnread => "the source did not read",
         TakeBack::Removed | TakeBack::Kept => return error,
     };
-    match &error {
-        AppError::Repository(_) | AppError::RepositoryFailed { .. } => import_error_context(
-            &error,
-            format!(
-                "{error}; {why}, so {} is kept as what may be its only copy",
-                dest.display()
-            ),
-        ),
-        _ => error,
+    if !matches!(
+        error,
+        AppError::Repository(_)
+            | AppError::RepositoryFailed { .. }
+            | AppError::RepositoryFailedWithFacts { .. }
+    ) {
+        return error;
+    }
+    let message = format!(
+        "{error}; {why}, so {} is kept as what may be its only copy",
+        dest.display()
+    );
+    match (taken_back, landed) {
+        (TakeBack::KeptForSource, Landed::Copy { .. }) => AppError::RepositoryFailedWithFacts {
+            message,
+            reason: scryer_application::error_reasons::import::COPY_KEPT_SOURCE_GONE,
+            facts: vec![RefusalFact {
+                key: scryer_application::error_reasons::import::KEPT_PATH_FACT,
+                value: RefusalFactValue::Text(dest.display().to_string()),
+            }],
+        },
+        _ => import_error_context(&error, message),
     }
 }
 
@@ -2250,11 +2301,11 @@ fn remove_source_beside_adopted_destination(
     options: &ImportFileOptions,
 ) -> AppResult<()> {
     let Some(adopted) = Mark::from_stored(stored) else {
-        return Err(AppError::Repository(format!(
-            "could not tell whether import destination {} names the source {} itself: its adopted mark does not read; nothing was removed",
-            dest.display(),
-            source.display()
-        )));
+        return Err(import_destination_alias_unknown(
+            source,
+            dest,
+            "its adopted mark does not read",
+        ));
     };
     if force_delete_failure(options) {
         return Err(AppError::Repository(format!(
@@ -2264,35 +2315,33 @@ fn remove_source_beside_adopted_destination(
     }
     match Disk::process().remove_source_beside_blocking(source, dest, &adopted) {
         AsideRemoval::Removed => Ok(()),
-        AsideRemoval::SameEntry => Err(AppError::ManualReconciliationRequired(format!(
-            "import destination {} is the source {} itself, so a move would remove the only copy; nothing was removed",
-            dest.display(),
-            source.display()
-        ))),
+        AsideRemoval::SameEntry => Err(import_destination_is_source(source, dest)),
         AsideRemoval::DestinationChanged => Err(AppError::Repository(format!(
             "import source cleanup failed because destination changed: {}; nothing was removed",
             dest.display()
         ))),
-        AsideRemoval::DestinationUnread(reading) => Err(AppError::Repository(format!(
-            "could not tell whether import destination {} names the source {} itself: {}; nothing was removed",
-            dest.display(),
-            source.display(),
-            reading.describe_absence()
-        ))),
-        AsideRemoval::NotSetAside(error) => Err(AppError::Repository(format!(
-            "could not tell whether import destination {} names the source {} itself: {error}; nothing was removed",
-            dest.display(),
-            source.display()
-        ))),
+        AsideRemoval::DestinationUnread(reading) => Err(import_destination_alias_unknown(
+            source,
+            dest,
+            &reading.describe_absence().to_string(),
+        )),
+        AsideRemoval::NotSetAside(error) => Err(import_destination_alias_unknown(
+            source,
+            dest,
+            &error.to_string(),
+        )),
         AsideRemoval::NotRemoved(error) => Err(AppError::Repository(format!(
             "import source cleanup failed after destination verification; failed to remove source {}: {error}",
             source.display()
         ))),
-        AsideRemoval::PutBackFailed { at, error } => Err(AppError::Repository(format!(
-            "import source {} was set aside at {} and could not be put back: {error}; nothing was removed",
-            source.display(),
-            at.display()
-        ))),
+        AsideRemoval::PutBackFailed { at, error } => Err(import_destination_alias_unknown(
+            source,
+            dest,
+            &format!(
+                "the source was set aside at {} and could not be put back: {error}",
+                at.display()
+            ),
+        )),
     }
 }
 
@@ -2755,18 +2804,13 @@ fn reconcile_existing_destination(
     if source_cleanup_required {
         match Disk::process().entry_alias_blocking(source, dest, &existing) {
             EntryAlias::Distinct => {}
-            EntryAlias::Same => {
-                return Err(AppError::ManualReconciliationRequired(format!(
-                    "import destination {} names the source itself, so a move would remove the only copy; nothing was removed",
-                    dest.display()
-                )));
-            }
+            EntryAlias::Same => return Err(import_destination_is_source(source, dest)),
             EntryAlias::CannotTell => {
-                return Err(AppError::Repository(format!(
-                    "could not tell whether import destination {} names the source {} itself; nothing was removed",
-                    dest.display(),
-                    source.display()
-                )));
+                return Err(import_destination_alias_unknown(
+                    source,
+                    dest,
+                    "the source did not read",
+                ));
             }
         }
     }
@@ -3239,9 +3283,14 @@ enum ImportFileWorkerError {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// Where a failed copy was kept, for a failure that names one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept_path: Option<String>,
     },
     ManualReconciliationRequired {
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     Canceled {
         message: String,
@@ -3251,23 +3300,48 @@ enum ImportFileWorkerError {
 impl From<AppError> for ImportFileWorkerError {
     fn from(error: AppError) -> Self {
         match error {
-            AppError::ManualReconciliationRequired(message) => {
-                Self::ManualReconciliationRequired { message }
+            AppError::ManualReconciliationRequired(message) => Self::ManualReconciliationRequired {
+                message,
+                reason: None,
+            },
+            AppError::ManualReconciliationRefused { message, reason } => {
+                Self::ManualReconciliationRequired {
+                    message,
+                    reason: Some(reason.to_string()),
+                }
             }
             AppError::Canceled(message) => Self::Canceled { message },
             AppError::Repository(message) | AppError::RepositoryFailure { message, .. } => {
                 Self::Repository {
                     message,
                     reason: None,
+                    kept_path: None,
                 }
             }
             AppError::RepositoryFailed { message, reason } => Self::Repository {
                 message,
                 reason: Some(reason.to_string()),
+                kept_path: None,
+            },
+            AppError::RepositoryFailedWithFacts {
+                message,
+                reason,
+                facts,
+            } => Self::Repository {
+                message,
+                reason: Some(reason.to_string()),
+                kept_path: facts.into_iter().find_map(|fact| match fact {
+                    RefusalFact {
+                        key: scryer_application::error_reasons::import::KEPT_PATH_FACT,
+                        value: RefusalFactValue::Text(path),
+                    } => Some(path),
+                    _ => None,
+                }),
             },
             other => Self::Repository {
                 message: other.to_string(),
                 reason: None,
+                kept_path: None,
             },
         }
     }
@@ -3278,6 +3352,7 @@ impl From<io::Error> for ImportFileWorkerError {
         Self::Repository {
             message: format!("failed to write import worker event: {error}"),
             reason: Some(import_io_reason(&error).to_string()),
+            kept_path: None,
         }
     }
 }
@@ -3285,26 +3360,41 @@ impl From<io::Error> for ImportFileWorkerError {
 impl From<ImportFileWorkerError> for AppError {
     fn from(error: ImportFileWorkerError) -> Self {
         match error {
-            ImportFileWorkerError::Repository { message, reason } => {
-                use scryer_application::error_reasons::import;
-                let reason = match reason.as_deref() {
-                    Some("IMPORT_FILE_NOT_FOUND") => Some(import::FILE_NOT_FOUND),
-                    Some("IMPORT_PERMISSION_DENIED") => Some(import::PERMISSION_DENIED),
-                    Some("IMPORT_DISK_FULL") => Some(import::DISK_FULL),
-                    Some("IMPORT_IO_FAILED") => Some(import::IO_FAILED),
-                    _ => None,
-                };
-                match reason {
-                    Some(reason) => AppError::RepositoryFailed { message, reason },
-                    None => AppError::Repository(message),
+            ImportFileWorkerError::Repository {
+                message,
+                reason,
+                kept_path,
+            } => match (import_reason(reason.as_deref()), kept_path) {
+                (Some(reason), Some(path)) => AppError::RepositoryFailedWithFacts {
+                    message,
+                    reason,
+                    facts: vec![RefusalFact {
+                        key: scryer_application::error_reasons::import::KEPT_PATH_FACT,
+                        value: RefusalFactValue::Text(path),
+                    }],
+                },
+                (Some(reason), None) => AppError::RepositoryFailed { message, reason },
+                (None, _) => AppError::Repository(message),
+            },
+            ImportFileWorkerError::ManualReconciliationRequired { message, reason } => {
+                match import_reason(reason.as_deref()) {
+                    Some(reason) => AppError::ManualReconciliationRefused { message, reason },
+                    None => AppError::ManualReconciliationRequired(message),
                 }
-            }
-            ImportFileWorkerError::ManualReconciliationRequired { message } => {
-                AppError::ManualReconciliationRequired(message)
             }
             ImportFileWorkerError::Canceled { message } => AppError::Canceled(message),
         }
     }
+}
+
+/// The import reason a worker named, as this build knows it; `None` for one
+/// it does not.
+fn import_reason(reason: Option<&str>) -> Option<&'static str> {
+    let reason = reason?;
+    scryer_application::error_reasons::import::ALL
+        .iter()
+        .copied()
+        .find(|known| *known == reason)
 }
 
 fn write_import_worker_event(
@@ -3371,6 +3461,7 @@ pub fn run_import_file_worker() -> i32 {
                     error: ImportFileWorkerError::Repository {
                         message: error,
                         reason: None,
+                        kept_path: None,
                     },
                 },
             );
@@ -3386,6 +3477,7 @@ pub fn run_import_file_worker() -> i32 {
                 error: ImportFileWorkerError::Repository {
                     message: format!("unsupported import worker protocol version {version}"),
                     reason: None,
+                    kept_path: None,
                 },
             },
         );
@@ -4432,6 +4524,49 @@ mod tests {
                 round_trip_worker_error(import_io_error(&error, "context may change".into()));
             assert_eq!(result.reason(), Some(reason));
         }
+    }
+
+    /// A refusal's import reason, and the path a failed copy was kept at,
+    /// cross the worker's stdout as themselves; a reason this build does not
+    /// know falls back to the bare failure.
+    #[test]
+    fn worker_error_round_trip_preserves_import_reasons_and_the_kept_path() {
+        use scryer_application::error_reasons::import;
+        let source = Path::new("/srv/fixture-media/downloads/sample.mkv");
+        let dest = Path::new("/srv/fixture-media/library/Sample.Title.mkv");
+
+        let error = round_trip_worker_error(import_destination_is_source(source, dest));
+        assert!(error.requires_manual_reconciliation(), "{error:?}");
+        assert_eq!(error.reason(), Some(import::DESTINATION_IS_SOURCE));
+
+        for error in [
+            import_destination_alias_unknown(source, dest, "the source did not read"),
+            import_destination_occupied(dest),
+        ] {
+            let reason = error.reason();
+            assert_eq!(round_trip_worker_error(error).reason(), reason);
+        }
+
+        let kept = AppError::RepositoryFailedWithFacts {
+            message: "copy verification failed".into(),
+            reason: import::COPY_KEPT_SOURCE_GONE,
+            facts: vec![RefusalFact {
+                key: import::KEPT_PATH_FACT,
+                value: RefusalFactValue::Text(dest.display().to_string()),
+            }],
+        };
+        let error = round_trip_worker_error(kept.clone());
+        assert_eq!(error.reason(), Some(import::COPY_KEPT_SOURCE_GONE));
+        assert_eq!(error.refusal_facts(), kept.refusal_facts());
+
+        let unknown = ImportFileWorkerError::ManualReconciliationRequired {
+            message: "x".into(),
+            reason: Some("IMPORT_NOT_A_CODE_THIS_BUILD_KNOWS".into()),
+        };
+        assert!(matches!(
+            AppError::from(unknown),
+            AppError::ManualReconciliationRequired(_)
+        ));
     }
 
     #[test]
@@ -5547,8 +5682,10 @@ mod tests {
         let accepted = match finished {
             Ok(()) => true,
             Err(error) => {
-                assert!(
-                    matches!(error, AppError::ManualReconciliationRequired(_)),
+                assert!(error.requires_manual_reconciliation(), "{error:?}");
+                assert_eq!(
+                    error.reason(),
+                    Some(scryer_application::error_reasons::import::DESTINATION_IS_SOURCE),
                     "{error:?}"
                 );
                 false
@@ -6829,7 +6966,7 @@ mod tests {
             let dest = temp.path().join("Sample.Title.mkv");
             std::fs::write(&source, b"synthetic video bytes").expect("write source");
 
-            import_file_blocking_at_depth(
+            let error = import_file_blocking_at_depth(
                 source.clone(),
                 dest.clone(),
                 ImportMode::Move,
@@ -6845,6 +6982,15 @@ mod tests {
             )
             .expect_err("the source no longer holds the file");
 
+            use scryer_application::error_reasons::import;
+            assert_eq!(error.reason(), Some(import::COPY_KEPT_SOURCE_GONE));
+            assert_eq!(
+                error.refusal_facts(),
+                [RefusalFact {
+                    key: import::KEPT_PATH_FACT,
+                    value: RefusalFactValue::Text(dest.display().to_string()),
+                }]
+            );
             assert_eq!(
                 std::fs::read(&dest).expect("the copy is kept"),
                 b"synthetic video bytes"
@@ -7113,10 +7259,11 @@ mod tests {
                 true => Err(fast_lane_error(&source, &dest, options)),
                 false => import_in_one_process(&source, &dest, options),
             };
-            let said = outcome.err().expect("the name is occupied").to_string();
-            assert!(
-                said.contains("import destination appeared before copy execution"),
-                "fast {fast}: {said}"
+            let error = outcome.err().expect("the name is occupied");
+            assert_eq!(
+                error.reason(),
+                Some(scryer_application::error_reasons::import::DESTINATION_OCCUPIED),
+                "fast {fast}: {error}"
             );
             assert_eq!(
                 std::fs::read(&dest).expect("dest"),
