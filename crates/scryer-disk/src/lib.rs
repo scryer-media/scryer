@@ -53,6 +53,7 @@
 // the filesystem.
 #![allow(clippy::disallowed_methods)]
 
+mod aside;
 pub(crate) mod backend;
 pub(crate) mod cache;
 pub mod capacity;
@@ -77,6 +78,7 @@ use backend::{DiskBackend, SystemBackend};
 use cache::{StatCache, key_of};
 use volume::Volumes;
 
+pub use aside::{AsideRemoval, aside_path_for};
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
 #[doc(hidden)]

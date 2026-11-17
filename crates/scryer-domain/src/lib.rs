@@ -3940,6 +3940,12 @@ pub struct ImportSourceCleanupGuard {
     pub source_identity: ImportSourceIdentity,
     pub source_proof: ImportContentProof,
     pub dest_proof: ImportContentProof,
+    /// The stored mark of a destination that was already there and was
+    /// adopted rather than placed, read with links not followed. Its source
+    /// is removed only once the filesystem shows the two are separate
+    /// entries. Absent when this import placed the destination itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_destination_mark: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

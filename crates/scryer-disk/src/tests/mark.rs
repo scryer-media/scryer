@@ -455,15 +455,6 @@ async fn windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies()
     assert!(!disk.shares_volume(&missing, &nested).await);
 }
 
-/// A folder read as a file, numbered on its volume.
-fn folder(device: u64, inode: u64) -> RawStat {
-    RawStat {
-        kind: EntryKind::Directory,
-        links: Some(2),
-        ..numbered(Some(device), Some(inode))
-    }
-}
-
 /// A file with `links` names, numbered on its volume.
 fn named(inode: u64, links: u64) -> RawStat {
     RawStat {
@@ -472,396 +463,83 @@ fn named(inode: u64, links: u64) -> RawStat {
     }
 }
 
-/// A link, numbered on its volume, with one name.
-fn link(inode: u64) -> RawStat {
-    RawStat {
-        kind: EntryKind::Symlink,
-        links: Some(1),
-        ..numbered(Some(1), Some(inode))
-    }
-}
-
-const DOWNLOADS: &str = "/srv/fixture-media/downloads";
 const SOURCE: &str = "/srv/fixture-media/downloads/sample.mkv";
 
-/// One folder reached by two spellings, as one volume mounted at two paths
-/// shows it, holds one entry under each: when the destination shows another
-/// name, the folders are read as files, one stat each, and nothing is
-/// resolved; when it does not, the one read of the source shows one file.
+/// Paths that are one as written are one entry and read nothing; a
+/// destination that shows another name reads nothing and is not judged here.
 #[test]
-fn one_folder_under_two_mounts_holds_one_entry() {
-    let (source, dest) = (
-        p("/srv/fixture-media/mount-a/downloads/sample.mkv"),
-        p("/srv/fixture-media/mount-b/downloads/sample.mkv"),
-    );
-    let (disk, backend) = scripted();
-    backend.stat_is("/srv/fixture-media/mount-a/downloads", Ok(folder(1, 50)));
-    backend.stat_is("/srv/fixture-media/mount-b/downloads", Ok(folder(1, 50)));
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(named(7, 2))),
-        EntryAlias::Same
-    );
-    assert_eq!(backend.calls_of("stat"), 2);
-    assert_eq!(
-        backend.calls_of("lstat") + backend.calls_of("canonicalize"),
-        0
-    );
-
-    let (disk, backend) = scripted();
-    backend.stat_is(
-        "/srv/fixture-media/mount-a/downloads/sample.mkv",
-        Ok(named(7, 1)),
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(named(7, 1))),
-        EntryAlias::Same
-    );
-    assert_eq!(backend.paths_of("lstat"), [source]);
-    assert_eq!(
-        backend.calls_of("stat") + backend.calls_of("canonicalize"),
-        0
-    );
-}
-
-/// Another folder under another name is another entry, a second name of the
-/// source's own file included, and a destination that shows another name
-/// costs no read at all. Under the same name the folders are read, and
-/// resolved when their numbers say two folders.
-#[test]
-fn a_second_name_in_another_folder_is_another_entry() {
+fn the_early_look_reads_nothing_for_matching_paths_or_a_named_destination() {
     let source = p(SOURCE);
     let (disk, backend) = scripted();
-    let renamed = p("/srv/fixture-media/library/renamed.mkv");
     assert_eq!(
-        disk.entry_alias_blocking(&source, &renamed, &mark(named(7, 2))),
+        disk.entry_alias_blocking(&source, &p(SOURCE), &mark(named(7, 1))),
+        EntryAlias::Same
+    );
+    let second_name = p("/srv/fixture-media/library/second.mkv");
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &second_name, &mark(named(7, 2))),
         EntryAlias::Distinct
     );
     assert!(backend.calls.lock().unwrap().is_empty());
-
-    let (disk, backend) = scripted();
-    backend.stat_is(DOWNLOADS, Ok(folder(1, 50)));
-    backend.stat_is("/srv/fixture-media/library", Ok(folder(1, 51)));
-    let same_name = p("/srv/fixture-media/library/sample.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &same_name, &mark(named(7, 2))),
-        EntryAlias::Distinct
-    );
-    assert_eq!(backend.calls_of("stat"), 2);
-    assert_eq!(backend.calls_of("canonicalize"), 2);
-    assert_eq!(backend.calls_of("lstat"), 0);
 }
 
-/// Another file under another name, in another folder, is another entry:
-/// the one read of the source tells, and nothing else is read.
+/// Otherwise the source is read once, links not followed: one file with one
+/// name is one entry, another file is not, and a read that fails cannot tell.
+/// No folder is read or resolved, and no link followed.
 #[test]
-fn another_file_under_another_name_costs_one_read_of_the_source() {
+fn the_early_look_reads_the_source_once() {
     let source = p(SOURCE);
-    let (disk, backend) = scripted();
-    backend.stat_is(SOURCE, Ok(named(7, 1)));
-    let dest = p("/srv/fixture-media/library/renamed.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(named(8, 1))),
-        EntryAlias::Distinct
-    );
-    assert_eq!(backend.paths_of("lstat"), [source]);
-    assert_eq!(
-        backend.calls_of("stat") + backend.calls_of("canonicalize"),
-        0
-    );
-}
-
-/// One file with one name is one entry wherever its two paths are, under
-/// any two names: there is no second entry for the other path to be.
-#[test]
-fn one_file_with_one_name_is_one_entry_anywhere() {
-    let source = p(SOURCE);
-    let (disk, backend) = scripted();
-    backend.stat_is(SOURCE, Ok(named(7, 1)));
     let dest = p("/srv/fixture-media/elsewhere/SAMPLE~1.MKV");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(named(7, 1))),
-        EntryAlias::Same
-    );
-    assert_eq!(backend.paths_of("lstat"), [source]);
-    assert_eq!(
-        backend.calls_of("stat") + backend.calls_of("canonicalize"),
-        0
-    );
-}
-
-/// In one folder, two spellings of one name are one entry, whatever the
-/// files read: a file with a second name elsewhere (a seeding copy) is still
-/// one entry here, and two files the numbers tell apart are taken as one,
-/// since the resolved paths match. Two names that differ otherwise are two
-/// entries unless they are one file with one name.
-#[test]
-fn two_spellings_in_one_folder_are_one_entry() {
-    let source = p(SOURCE);
-    let answer = |dest: &str, source_file: RawStat, dest_file: RawStat| {
+    let answer = |source_read: Result<RawStat, io::ErrorKind>, dest_read: RawStat| {
         let (disk, backend) = scripted();
-        backend.stat_is(DOWNLOADS, Ok(folder(1, 50)));
-        backend.stat_is(SOURCE, Ok(source_file));
-        let alias = disk.entry_alias_blocking(&source, &p(dest), &mark(dest_file));
-        assert_eq!(backend.calls_of("canonicalize"), 0);
+        backend.stat_is(SOURCE, source_read);
+        let alias = disk.entry_alias_blocking(&source, &dest, &mark(dest_read));
+        assert_eq!(backend.paths_of("lstat"), [source.clone()]);
+        assert_eq!(backend.calls.lock().unwrap().len(), 1);
         alias
     };
-    let spelled = "/srv/fixture-media/downloads/SAMPLE.mkv";
-    assert_eq!(answer(spelled, named(7, 1), named(7, 1)), EntryAlias::Same);
-    assert_eq!(answer(spelled, named(7, 2), named(7, 2)), EntryAlias::Same);
-    assert_eq!(answer(spelled, named(7, 1), named(8, 1)), EntryAlias::Same);
-    let other = "/srv/fixture-media/downloads/other.mkv";
+    assert_eq!(answer(Ok(named(7, 1)), named(7, 1)), EntryAlias::Same);
+    assert_eq!(answer(Ok(named(7, 1)), named(8, 1)), EntryAlias::Distinct);
     assert_eq!(
-        answer(other, named(7, 1), named(8, 1)),
-        EntryAlias::Distinct
-    );
-    assert_eq!(
-        answer(other, named(7, 2), named(7, 2)),
-        EntryAlias::Distinct
-    );
-    assert_eq!(answer(other, named(7, 1), named(7, 1)), EntryAlias::Same);
-}
-
-/// A filesystem that numbers each path anew (CIFS without `serverino`)
-/// gives two numbers for one folder; the folders, resolved, match, so the
-/// entry is one. The resolution is made only because the numbers said two.
-#[test]
-fn folders_numbered_per_path_are_one_folder_when_they_resolve_alike() {
-    let source = p(SOURCE);
-    let (disk, backend) = scripted();
-    backend.stat_is(SOURCE, Ok(named(7, 1)));
-    backend.stat_is(DOWNLOADS, Ok(folder(1, 50)));
-    backend.stat_is("/srv/fixture-media/share", Ok(folder(1, 60)));
-    backend.resolves_to("/srv/fixture-media/share", "/srv/fixture-media/Downloads");
-    let dest = p("/srv/fixture-media/share/sample.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(named(9, 1))),
-        EntryAlias::Same
-    );
-    assert_eq!(backend.calls_of("lstat"), 1);
-    assert_eq!(backend.calls_of("stat"), 2);
-    assert_eq!(backend.calls_of("canonicalize"), 2);
-}
-
-/// Folders that cannot be told apart, as on a platform that gives no file
-/// numbers, are resolved and the paths compared ignoring case.
-#[test]
-fn folders_without_numbers_are_compared_by_their_resolved_paths() {
-    let source = p(SOURCE);
-    let (disk, backend) = scripted();
-    backend.stat_is(SOURCE, Ok(numbered(None, None)));
-    backend.stat_is(DOWNLOADS, Ok(dir()));
-    backend.stat_is("/srv/fixture-media/library", Ok(dir()));
-    let other = p("/srv/fixture-media/library/sample.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &other, &mark(numbered(None, None))),
-        EntryAlias::Distinct
-    );
-    assert_eq!(
-        backend.paths_of("canonicalize"),
-        [p(DOWNLOADS), p("/srv/fixture-media/library")]
-    );
-    let other_case = p("/srv/fixture-media/downloads/SAMPLE.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &other_case, &mark(numbered(None, None))),
-        EntryAlias::Same
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &source.clone(), &mark(numbered(None, None))),
-        EntryAlias::Same
-    );
-}
-
-/// A read the answer needs that fails is not guessed past, and a path that
-/// names no entry of its own answers nothing either.
-#[test]
-fn a_failed_read_cannot_tell() {
-    let source = p(SOURCE);
-    let same_name = p("/srv/fixture-media/library/sample.mkv");
-
-    let (disk, backend) = scripted();
-    backend.stat_is(SOURCE, Err(io::ErrorKind::TimedOut));
-    let renamed = p("/srv/fixture-media/library/renamed.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &renamed, &mark(named(8, 1))),
+        answer(Err(io::ErrorKind::TimedOut), named(8, 1)),
         EntryAlias::CannotTell
     );
+}
 
+/// What the early look no longer refuses: two files whose names differ only
+/// in case in one folder, two files a share numbers alike, a folder that
+/// cannot be resolved, and a destination link. Each is left to the set-aside
+/// removal, which asks the filesystem.
+#[test]
+fn the_early_look_leaves_separate_files_to_the_set_aside() {
+    let source = p(SOURCE);
+    let other_case = p("/srv/fixture-media/downloads/Sample.mkv");
     let (disk, backend) = scripted();
     backend.stat_is(SOURCE, Ok(named(7, 1)));
-    backend.stat_is(DOWNLOADS, Ok(folder(1, 50)));
-    backend.stat_is("/srv/fixture-media/library", Err(io::ErrorKind::TimedOut));
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &same_name, &mark(named(8, 1))),
-        EntryAlias::CannotTell
-    );
-
-    let (disk, backend) = scripted();
-    backend.stat_is(SOURCE, Ok(numbered(None, None)));
-    backend.stat_is(DOWNLOADS, Ok(dir()));
-    backend.stat_is("/srv/fixture-media/library", Ok(dir()));
     backend.fails(
         "canonicalize",
-        "/srv/fixture-media/library",
+        "/srv/fixture-media/downloads",
         io::ErrorKind::TimedOut,
     );
+    let mut link = named(9, 1);
+    link.kind = EntryKind::Symlink;
+    let separate = p("/srv/fixture-media/other/sample.mkv");
+    for (dest, read) in [
+        (&other_case, named(8, 1)),
+        (&separate, numbered(Some(1), Some(0))),
+        (&separate, numbered(None, None)),
+        (&separate, link),
+    ] {
+        assert_eq!(
+            disk.entry_alias_blocking(&source, dest, &mark(read)),
+            EntryAlias::Distinct,
+            "{}",
+            dest.display()
+        );
+    }
+    assert_eq!(backend.calls_of("lstat"), 4);
     assert_eq!(
-        disk.entry_alias_blocking(&source, &same_name, &mark(numbered(None, None))),
-        EntryAlias::CannotTell
-    );
-
-    let (disk, _) = scripted();
-    let up = p("/srv/fixture-media/downloads/..");
-    assert_eq!(
-        disk.entry_alias_blocking(&up, &same_name, &mark(named(8, 1))),
-        EntryAlias::CannotTell
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &up, &mark(folder(1, 40))),
-        EntryAlias::CannotTell
-    );
-}
-
-/// A link at the destination is followed one link at a time: a link to a
-/// link that is the source is the source's entry; a link to nothing is
-/// another entry; a step that fails, or a chain that does not end, cannot
-/// tell.
-#[test]
-fn a_destination_link_is_followed_one_link_at_a_time() {
-    let source = p("/srv/fixture-media/downloads/linked.mkv");
-    let dest = p("/srv/fixture-media/library/link.mkv");
-    let hop = "/srv/fixture-media/hops/hop.mkv";
-    let chain = |backend: &Scripted| {
-        backend.stat_is("/srv/fixture-media/downloads/linked.mkv", Ok(link(7)));
-        backend.links_to("/srv/fixture-media/library/link.mkv", hop);
-        backend.stat_is(hop, Ok(link(10)));
-    };
-
-    let (disk, backend) = scripted();
-    chain(&backend);
-    backend.links_to(hop, "../downloads/linked.mkv");
-    backend.stat_is(
-        "/srv/fixture-media/hops/../downloads/linked.mkv",
-        Ok(link(7)),
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(link(9))),
-        EntryAlias::Same
-    );
-    assert_eq!(backend.calls_of("read_link"), 2);
-    assert_eq!(backend.calls_of("lstat"), 3);
-
-    let (disk, backend) = scripted();
-    chain(&backend);
-    backend.links_to(hop, "/srv/fixture-media/gone.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(link(9))),
-        EntryAlias::Distinct
-    );
-
-    let (disk, backend) = scripted();
-    chain(&backend);
-    backend.links_to(hop, "/srv/fixture-media/stuck.mkv");
-    backend.stat_is("/srv/fixture-media/stuck.mkv", Err(io::ErrorKind::TimedOut));
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(link(9))),
-        EntryAlias::CannotTell
-    );
-
-    let (disk, backend) = scripted();
-    chain(&backend);
-    backend.fails("read_link", hop, io::ErrorKind::TimedOut);
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(link(9))),
-        EntryAlias::CannotTell
-    );
-
-    // A link that names itself never ends; it is given up after a bound.
-    let (disk, backend) = scripted();
-    backend.stat_is("/srv/fixture-media/downloads/linked.mkv", Ok(link(7)));
-    backend.stat_is("/srv/fixture-media/library/link.mkv", Ok(link(9)));
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &dest, &mark(link(9))),
-        EntryAlias::CannotTell
-    );
-    assert_eq!(backend.calls_of("read_link"), 40);
-}
-
-/// On a real volume: the source's own entry reached through a symlinked
-/// folder, and a link to the source, are one entry with it; a second name
-/// of the same file, a link to another file, and a second link to what a
-/// linked source reaches, are not.
-#[cfg(unix)]
-#[test]
-fn a_linked_folder_or_a_link_to_the_source_is_the_source_entry() {
-    let temp = tempfile::tempdir().unwrap();
-    let downloads = temp.path().join("downloads");
-    let library = temp.path().join("library");
-    std::fs::create_dir_all(&downloads).unwrap();
-    std::fs::create_dir_all(&library).unwrap();
-    let source = downloads.join("sample.mkv");
-    let elsewhere = temp.path().join("elsewhere.mkv");
-    std::fs::write(&source, b"payload").unwrap();
-    std::fs::write(&elsewhere, b"payload").unwrap();
-    let alias = temp.path().join("alias");
-    std::os::unix::fs::symlink(&downloads, &alias).unwrap();
-    let (link, second, other) = (
-        library.join("link.mkv"),
-        library.join("second.mkv"),
-        library.join("other.mkv"),
-    );
-    std::os::unix::fs::symlink(&source, &link).unwrap();
-    std::fs::hard_link(&source, &second).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, &other).unwrap();
-    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
-
-    let read = |path: &Path| disk.fingerprint_blocking(path).unwrap();
-
-    let through_alias = alias.join("sample.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &through_alias, &read(&through_alias)),
-        EntryAlias::Same
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &link, &read(&link)),
-        EntryAlias::Same
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &second, &read(&second)),
-        EntryAlias::Distinct
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source, &other, &read(&other)),
-        EntryAlias::Distinct
-    );
-
-    // A source that is itself a link is its own entry: a second link to
-    // its target is another entry, and so is the target.
-    let source_link = downloads.join("linked.mkv");
-    std::os::unix::fs::symlink(&elsewhere, &source_link).unwrap();
-    assert_eq!(
-        disk.entry_alias_blocking(&source_link, &other, &read(&other)),
-        EntryAlias::Distinct
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source_link, &elsewhere, &read(&elsewhere)),
-        EntryAlias::Distinct
-    );
-    let through_alias = alias.join("linked.mkv");
-    assert_eq!(
-        disk.entry_alias_blocking(&source_link, &through_alias, &read(&through_alias)),
-        EntryAlias::Same
-    );
-    // A link to the linked source, named absolutely or from its own
-    // folder, is the source's entry.
-    let (chained, relative) = (library.join("chained.mkv"), library.join("relative.mkv"));
-    std::os::unix::fs::symlink(&source_link, &chained).unwrap();
-    std::os::unix::fs::symlink("../downloads/linked.mkv", &relative).unwrap();
-    assert_eq!(
-        disk.entry_alias_blocking(&source_link, &chained, &read(&chained)),
-        EntryAlias::Same
-    );
-    assert_eq!(
-        disk.entry_alias_blocking(&source_link, &relative, &read(&relative)),
-        EntryAlias::Same
+        backend.calls_of("stat") + backend.calls_of("canonicalize") + backend.calls_of("read_link"),
+        0
     );
 }

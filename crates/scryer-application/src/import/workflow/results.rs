@@ -3190,6 +3190,7 @@ mod move_import_source_cleanup_gate_tests {
             },
             source_proof: proof(),
             dest_proof: proof(),
+            adopted_destination_mark: None,
         }
     }
 
