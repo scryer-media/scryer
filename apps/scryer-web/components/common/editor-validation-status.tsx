@@ -2,7 +2,14 @@ import {
   regoDiagnosticMessage,
   type RuleValidationDiagnostic,
 } from "@/lib/utils/rego-diagnostics";
-import { useId, useRef, useState, type ComponentProps } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { Check, X } from "lucide-react";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -19,13 +26,31 @@ type EditorValidationStatusProps = ComponentProps<"div"> & {
   formatError?: (error: string) => string;
 };
 
+/// Where the status sits. Over a code editor it is a corner badge that opens
+/// on demand; anywhere else (the rule builder) it is a plain block in the
+/// flow, with its messages always shown.
+export const EditorValidationPlacement = createContext<"editor" | "inline">(
+  "editor",
+);
+
 export function EditorValidationStatus({
   checking,
   result,
   formatError,
   ...props
 }: EditorValidationStatusProps) {
+  const placement = useContext(EditorValidationPlacement);
   if (!checking && !result) return null;
+  if (placement === "inline") {
+    return (
+      <InlineValidationStatus
+        checking={checking}
+        result={result}
+        formatError={formatError}
+        {...props}
+      />
+    );
+  }
   return (
     <ValidationBadge
       key={JSON.stringify([checking, result])}
@@ -155,6 +180,64 @@ function ValidationBadge({
           )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function InlineValidationStatus({
+  checking,
+  result,
+  formatError,
+  className,
+  ...props
+}: EditorValidationStatusProps) {
+  const t = useTranslate();
+  const failed = !checking && result?.valid === false;
+  const errorMessages = result?.diagnostics?.length
+    ? result.diagnostics.map((diagnostic) =>
+        regoDiagnosticMessage(diagnostic, t),
+      )
+    : (result?.errors ?? []);
+  return (
+    <div
+      {...props}
+      role="status"
+      aria-live="polite"
+      data-editor-validation={
+        checking ? "checking" : failed ? "failed" : "passed"
+      }
+      className={cn(
+        "flex items-start gap-2 rounded-md border px-3 py-2 text-sm",
+        checking
+          ? "border-border text-muted-foreground"
+          : failed
+            ? "border-[var(--scry-danger-border)] text-[var(--scry-danger-text)]"
+            : "border-[var(--scry-success-border)] text-[var(--scry-success-text)]",
+        className,
+      )}
+    >
+      {checking ? (
+        <LoadingMark className="mt-0.5 h-4 w-4 shrink-0" />
+      ) : failed ? (
+        <X className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      ) : (
+        <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      )}
+      {failed && errorMessages.length > 0 ? (
+        <ul className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
+          {errorMessages.map((error, index) => (
+            <li key={index}>{formatError ? formatError(error) : error}</li>
+          ))}
+        </ul>
+      ) : (
+        <span>
+          {checking
+            ? t("settings.ruleValidating")
+            : failed
+              ? t("settings.regoValidationFailed")
+              : t("settings.ruleValid")}
+        </span>
+      )}
     </div>
   );
 }

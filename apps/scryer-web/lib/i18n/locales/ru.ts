@@ -5146,8 +5146,7 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "Редактировать это правило как Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
     "После изменения кода правило останется расширенным и больше не откроется в простом режиме, даже после сохранения.",
-  "settings.ruleBuilderIncomplete":
-    "Перед сохранением заполните условия и результаты.",
+  "settings.ruleBuilderIncomplete": "Некоторые параметры не заполнены. Исправьте отмеченные в конструкторе пункты и сохраните.",
   "settings.ruleBuilderConditions": "Условия",
   "settings.lifecycleBuilderConditionsHelp":
     "Каждое условие проверяет один факт об объекте. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применились действия.",

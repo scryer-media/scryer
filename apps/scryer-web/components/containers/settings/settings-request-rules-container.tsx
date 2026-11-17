@@ -1,4 +1,5 @@
 import { graphQlRuleValidationResult } from "@/lib/utils/rego-diagnostics";
+import { revealFirstRuleBuilderProblem } from "@/components/views/settings/rule-builder";
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useRegoValidation } from "@/lib/hooks/use-rego-validation";
 import {
@@ -271,7 +272,10 @@ export function SettingsRequestRulesContainer() {
         whenSchemaReady(),
       ]);
       if (!detail) return;
-      const next = requestRuleDraftFromDetail(detail, requestRuleBuilder(schema));
+      const next = requestRuleDraftFromDetail(
+        detail,
+        requestRuleBuilder(schema),
+      );
       setEditingRuleSetId(record.id);
       setRuleSetDraft(next);
       setRuleSetDraftBaseline(next);
@@ -279,7 +283,12 @@ export function SettingsRequestRulesContainer() {
       setValidationResult(null);
       setIsEditorOpen(true);
     },
-    [beginBuilderSession, setValidationResult, fetchRuleSetDetail, whenSchemaReady],
+    [
+      beginBuilderSession,
+      setValidationResult,
+      fetchRuleSetDetail,
+      whenSchemaReady,
+    ],
   );
 
   const openCopyEditor = useCallback(
@@ -297,7 +306,12 @@ export function SettingsRequestRulesContainer() {
       setValidationResult(null);
       setIsEditorOpen(true);
     },
-    [beginBuilderSession, setValidationResult, fetchRuleSetDetail, whenSchemaReady],
+    [
+      beginBuilderSession,
+      setValidationResult,
+      fetchRuleSetDetail,
+      whenSchemaReady,
+    ],
   );
 
   /// Load a starter template into the create-rule editor. A template prefills
@@ -573,6 +587,10 @@ export function SettingsRequestRulesContainer() {
         valid: false,
         errors: [t("settings.ruleBuilderIncomplete")],
       });
+      // The problems are marked in the builder: show it and go to the first.
+      builderEditor.setMode("simple");
+      if (builderBinding.schema)
+        revealFirstRuleBuilderProblem(builderBinding.schema);
       return;
     }
     if (!ruleSetDraft.name.trim() || !ruleSetDraft.regoSource.trim()) {

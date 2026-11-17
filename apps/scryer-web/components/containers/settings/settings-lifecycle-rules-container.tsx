@@ -1,4 +1,5 @@
 import { graphQlRuleValidationResult } from "@/lib/utils/rego-diagnostics";
+import { revealFirstRuleBuilderProblem } from "@/components/views/settings/rule-builder";
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useRegoValidation } from "@/lib/hooks/use-rego-validation";
 import {
@@ -717,6 +718,10 @@ export function SettingsLifecycleRulesContainer({
         valid: false,
         errors: [t("settings.ruleBuilderIncomplete")],
       });
+      // The problems are marked in the builder: show it and go to the first.
+      builderEditor.setMode("simple");
+      if (builderBinding.schema)
+        revealFirstRuleBuilderProblem(builderBinding.schema);
       return;
     }
     if (!ruleSetDraft.name.trim() || !ruleSetDraft.regoSource.trim()) {

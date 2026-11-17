@@ -4795,7 +4795,7 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "要以 Rego 編輯此規則嗎？",
   "settings.ruleBuilderEditAsRegoIntro":
     "一旦修改程式碼，此規則就必須維持為進階規則，之後無法再以簡易模式開啟，儲存後也是如此。",
-  "settings.ruleBuilderIncomplete": "請先完成條件與結果再儲存。",
+  "settings.ruleBuilderIncomplete": "部分選項尚未完成。請修正建構器中標示的項目後再儲存。",
   "settings.ruleBuilderConditions": "條件",
   "settings.lifecycleBuilderConditionsHelp":
     "每個條件檢查項目的一項事實。請選擇必須符合所有條件，或只要符合任一條件，動作才會套用。",

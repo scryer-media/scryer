@@ -1,4 +1,5 @@
 import { graphQlRuleValidationResult } from "@/lib/utils/rego-diagnostics";
+import { revealFirstRuleBuilderProblem } from "@/components/views/settings/rule-builder";
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import {
   hasGraphQlErrorCode,
@@ -234,7 +235,13 @@ export function SettingsRulesContainer({
       setIsEditorOpen(true);
       setGlobalStatus(t("status.editingRule", { name: record.name }));
     },
-    [beginBuilderSession, setValidationResult, setGlobalStatus, t, whenSchemaReady],
+    [
+      beginBuilderSession,
+      setValidationResult,
+      setGlobalStatus,
+      t,
+      whenSchemaReady,
+    ],
   );
 
   const openCopyRuleEditor = useCallback(
@@ -314,7 +321,12 @@ export function SettingsRulesContainer({
           shownDraftRef.current === draft,
       });
     },
-    [beginBuilderSession, servedSchema.schema, setValidationResult, whenSchemaReady],
+    [
+      beginBuilderSession,
+      servedSchema.schema,
+      setValidationResult,
+      whenSchemaReady,
+    ],
   );
 
   const openImportedRuleEditor = useCallback(
@@ -777,6 +789,10 @@ export function SettingsRulesContainer({
         valid: false,
         errors: [t("settings.ruleBuilderIncomplete")],
       });
+      // The problems are marked in the builder: show it and go to the first.
+      builderEditor.setMode("simple");
+      if (builderBinding.schema)
+        revealFirstRuleBuilderProblem(builderBinding.schema);
       return;
     }
     const payload = {
@@ -807,7 +823,11 @@ export function SettingsRulesContainer({
       if (editingRuleSetId) {
         const { error } = await client
           .mutation(updateRuleSetMutation, {
-            input: updateRuleSetInput(editingRuleSetId, payload, builderBinding),
+            input: updateRuleSetInput(
+              editingRuleSetId,
+              payload,
+              builderBinding,
+            ),
           })
           .toPromise();
         if (error) throw error;

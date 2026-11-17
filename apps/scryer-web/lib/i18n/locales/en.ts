@@ -10217,8 +10217,7 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "Edit this rule as Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
     "Once you edit the code, it must stay an Advanced rule and can no longer be opened in Simple, even after you save it.",
-  "settings.ruleBuilderIncomplete":
-    "Finish the conditions and outcomes before saving.",
+  "settings.ruleBuilderIncomplete": "Some choices are unfinished. Fix the items marked in the builder, then save.",
   "settings.ruleBuilderConditions": "Conditions",
   "settings.lifecycleBuilderConditionsHelp":
     "Each condition checks one fact about the subject. Choose whether every condition or any one of them must hold for the actions to apply.",

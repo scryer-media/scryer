@@ -5557,8 +5557,7 @@ const cs: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "Upravit toto pravidlo jako Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
     "Jakmile kód upravíte, pravidlo musí zůstat pokročilé a už ho nebude možné otevřít v jednoduchém režimu, ani po uložení.",
-  "settings.ruleBuilderIncomplete":
-    "Před uložením dokončete podmínky a výsledky.",
+  "settings.ruleBuilderIncomplete": "Některé volby nejsou dokončené. Opravte položky označené v editoru pravidla a pak uložte.",
   "settings.ruleBuilderConditions": "Podmínky",
   "settings.lifecycleBuilderConditionsHelp":
     "Každá podmínka ověřuje jeden údaj o položce. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se akce použily.",

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
+import { EditorValidationPlacement } from "@/components/common/editor-validation-status";
 import { HelpLabel } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -108,7 +109,11 @@ function ProblemText({
     }),
   );
   return (
-    <p id={id} className="text-xs text-[var(--scry-warning-text)]">
+    <p
+      id={id}
+      data-rule-builder-problem
+      className="text-xs text-[var(--scry-warning-text)]"
+    >
       {[...new Set(messages)].join(" ")}
     </p>
   );
@@ -431,6 +436,7 @@ function OutputValuePicker({
       <p
         id={selectorId(`${schema.idPrefix}-action-catalog-missing`, output.id)}
         data-problem-code="BUILDER_VALUE_NOT_IN_CATALOG"
+        data-rule-builder-problem
         className="mt-1 text-xs text-[var(--scry-warning-text)]"
       >
         {t(RULE_BUILDER_PROBLEM_KEYS.BUILDER_VALUE_NOT_IN_CATALOG, {
@@ -1041,7 +1047,20 @@ export function RuleBuilder({
         problems={general}
       />
 
-      {feedback}
+      <EditorValidationPlacement.Provider value="inline">
+        {feedback}
+      </EditorValidationPlacement.Provider>
     </div>
+  );
+}
+
+/// Scroll the builder's first marked problem into view, once the render that
+/// shows it has landed. Used when a save is held for unfinished choices.
+export function revealFirstRuleBuilderProblem(schema: RuleBuilderSchema) {
+  window.setTimeout(() =>
+    document
+      .getElementById(schema.idPrefix)
+      ?.querySelector("[data-rule-builder-problem]")
+      ?.scrollIntoView({ block: "center" }),
   );
 }
