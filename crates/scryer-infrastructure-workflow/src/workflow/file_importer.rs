@@ -4,8 +4,8 @@ use scryer_application::{
     ImportFileTransferProgress, ImportFileTransferProgressSender,
     disk::{
         self, Cancel, Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Open, Parents,
-        PathReading, Phase, Placed, Progress, Refused, Removal, Remove, StagedCause, StagedCopy,
-        StagedCopyRefusal, StagedStep, Unproven, Watch,
+        PathReading, Phase, Placed, Progress, Refused, Removal, Remove, Sameness, StagedCause,
+        StagedCopy, StagedCopyRefusal, StagedStep, Unproven, Watch,
     },
     fs_integrity::import_content_proof,
     location::verify::persisted_hashes,
@@ -2401,17 +2401,22 @@ fn reconcile_existing_destination(
     destination_guard: &ImportDestinationGuard,
     source_cleanup_required: bool,
 ) -> AppResult<Option<ImportFileResult>> {
-    let existing = Disk::process().uncached_blocking(dest);
-    let kind = match (existing.exists(), existing.kind()) {
-        (Some(false), _) => return Ok(None),
-        (Some(true), Some(kind)) => kind,
-        _ => {
+    let existing = match Disk::process().fingerprint_blocking(dest) {
+        Ok(mark) => mark,
+        Err(reading) if reading.exists() == Some(false) => return Ok(None),
+        Err(reading) => {
             return Err(AppError::Repository(format!(
                 "failed to inspect existing import destination {}: {}",
                 dest.display(),
-                existing.describe_absence()
+                reading.describe_absence()
             )));
         }
+    };
+    let Some(kind) = existing.kind() else {
+        return Err(AppError::Repository(format!(
+            "failed to inspect existing import destination {}: no kind was read",
+            dest.display()
+        )));
     };
     if source == dest {
         return Err(AppError::ManualReconciliationRequired(format!(
@@ -2426,7 +2431,16 @@ fn reconcile_existing_destination(
         )));
     }
 
-    ensure_same_source(source, source_fingerprint)?;
+    // A symlink at the destination reads as the file it names, so a link to
+    // the source proves equal to it; a move that then removed the source
+    // would leave the link naming nothing.
+    if kind == EntryKind::Symlink && source_cleanup_required {
+        return Err(AppError::ManualReconciliationRequired(format!(
+            "import destination is a symlink and a move would remove what it may name: {}",
+            dest.display()
+        )));
+    }
+    let source_mark = same_source_mark(source, source_fingerprint)?;
     validate_import_destination_parent(destination_guard, dest)?;
     validate_import_destination_file(destination_guard)?;
     let source_proof = import_content_proof(source).map_err(|error| {
@@ -2454,7 +2468,11 @@ fn reconcile_existing_destination(
         )));
     }
 
-    let source_cleanup = if source_cleanup_required {
+    // A destination that is the source file under a second name, or that
+    // cannot be told apart from it, is kept as the import, and the source
+    // name is not removed: removing it could leave the bytes nowhere else.
+    let distinct = existing.same_file(&source_mark) == Sameness::Different;
+    let source_cleanup = if source_cleanup_required && distinct {
         Some(cleanup_guard(source, dest, source_fingerprint, size)?)
     } else {
         None
@@ -5046,6 +5064,61 @@ mod tests {
             std::fs::read(&dest).expect("destination"),
             b"same video bytes"
         );
+    }
+
+    /// A destination that is the source under another name is not a copy of
+    /// it: a move that removed the source would leave no file behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_is_the_source_never_lets_a_move_remove_the_source() {
+        let moved = |link: &dyn Fn(&Path, &Path)| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let source = dir.path().join("source.mkv");
+            let dest = dir.path().join("library").join("Imported.Movie.mkv");
+            std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
+            std::fs::write(&source, b"only video bytes").expect("write source");
+            link(&source, &dest);
+            let result = import_file_blocking(
+                source.clone(),
+                dest.clone(),
+                ImportMode::Move,
+                ImportFileOptions::default(),
+                None,
+                None,
+                ImportFilePermissions::default(),
+            );
+            let cleanup = match &result {
+                Ok(result) => result.source_cleanup.clone(),
+                Err(_) => None,
+            };
+            if let Some(guard) = cleanup {
+                let _ = remove_import_source_after_verified_import_blocking(
+                    guard,
+                    dest.clone(),
+                    ImportFileOptions::default(),
+                );
+            }
+            let kept = std::fs::read(&source).ok();
+            let through_dest = std::fs::read(&dest).ok();
+            (result.is_ok(), kept, through_dest, dir)
+        };
+
+        // A symlink to the source: refused, both names kept.
+        let (imported, kept, through_dest, _dir) = moved(&|source, dest| {
+            std::os::unix::fs::symlink(source, dest).expect("symlink");
+        });
+        assert!(!imported, "a symlink to the source is not the import");
+        assert_eq!(kept.as_deref(), Some(&b"only video bytes"[..]));
+        assert_eq!(through_dest.as_deref(), Some(&b"only video bytes"[..]));
+
+        // A second name of the source file: kept as the import, and the
+        // source name is not removed.
+        let (imported, kept, through_dest, _dir) = moved(&|source, dest| {
+            std::fs::hard_link(source, dest).expect("hard link");
+        });
+        assert!(imported);
+        assert_eq!(kept.as_deref(), Some(&b"only video bytes"[..]));
+        assert_eq!(through_dest.as_deref(), Some(&b"only video bytes"[..]));
     }
 
     #[test]

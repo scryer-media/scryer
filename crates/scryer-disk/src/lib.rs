@@ -736,7 +736,7 @@ impl Disk {
     /// A [`Mark`] of what is at `path` itself, a link not followed: one
     /// probe, never cached. `Err` is the reading that says why there is no
     /// mark: missing or unreachable, never the two confused.
-    pub(crate) fn fingerprint_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
+    pub fn fingerprint_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
         let result = self.call("lstat", || self.inner.backend.lstat(path));
         self.mark_of(result)
     }
