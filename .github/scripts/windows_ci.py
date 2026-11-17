@@ -18,6 +18,10 @@ WINDOWS_TESTS = {
     "scryer-disk": [
         "non_utf8_windows_paths_round_trip",
         "unix_paths_decode_lossily_on_windows",
+        "a_windows_cross_device_move_unlinks_a_read_only_source",
+        "a_windows_exclusive_rename_refuses_an_occupied_destination",
+        "a_windows_exclusive_rename_moves_to_a_free_name",
+        "a_windows_read_only_file_moves_without_a_staging_leftover",
     ],
     "scryer-infrastructure-library": [
         "rename_path_key_folds_case_and_separators_on_windows",
