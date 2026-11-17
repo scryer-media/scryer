@@ -4723,6 +4723,22 @@ impl FileImporter for FsFileImporter {
             .map_err(|e| AppError::Repository(format!("import snapshot task panicked: {}", e)))?
     }
 
+    async fn library_file_is_import_source(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<bool> {
+        // The set-aside test moves the source for a moment: no placement,
+        // snapshot or cleanup of it runs meanwhile.
+        let _turn = SourceTurns::shared().take(source).await;
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            scryer_application::library_file_is_import_source_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
+
     async fn import_file(
         &self,
         source: &Path,
@@ -8486,6 +8502,33 @@ mod tests {
             b"synthetic video bytes"
         );
         assert!(!aside.exists());
+    }
+
+    /// The check of whether a library file is the download's file waits for
+    /// the source's turn, as an import does, since it may set the source
+    /// aside.
+    #[tokio::test]
+    async fn the_library_file_check_waits_for_the_source_turn() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let library = temp.path().join("sample-library.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("source");
+        std::fs::write(&library, b"other synthetic bytes").expect("library file");
+        let importer = FsFileImporter::new();
+
+        let cleanup_turn = SourceTurns::shared().take(&source).await;
+        let mut check = std::pin::pin!(importer.library_file_is_import_source(&source, &library));
+        tokio::select! {
+            biased;
+            _ = &mut check => panic!("the check ran during the cleanup's turn"),
+            () = std::future::ready(()) => {}
+        }
+        drop(cleanup_turn);
+        assert!(!check.await.expect("told"), "separate files");
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"synthetic video bytes"
+        );
     }
 
     /// A hard link whose source name is removed, or made to name another

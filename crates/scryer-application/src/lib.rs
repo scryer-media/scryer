@@ -210,6 +210,7 @@ pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
+pub use import::import::library_file_is_import_source_blocking;
 pub(crate) use import::parameters as import_parameters;
 pub(crate) use import::post_download_gate;
 pub(crate) use import::seeding_gate;

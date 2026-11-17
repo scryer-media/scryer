@@ -414,7 +414,7 @@ pub(crate) async fn recover_import_retry(
 
 #[cfg(all(test, unix))]
 mod already_imported_entry_tests {
-    use super::already_imported_is_source_entry;
+    use super::library_file_is_import_source_blocking as already_imported_is_source_entry;
     use std::path::Path;
 
     fn download(root: &Path) -> std::path::PathBuf {

@@ -383,6 +383,9 @@ pub(crate) async fn record_library_file_for_download(
 /// nothing. A check that cannot tell refuses as an unknown alias, keeping
 /// everything, so the download is not removed with its data.
 ///
+/// The check runs through the file importer, in the source's turn, since
+/// the set-aside test moves the source for a moment.
+///
 /// Probes: one read of each file; where file numbers on one volume off a
 /// share cannot tell, the set-aside test besides (two renames, one read of
 /// the library file, a second when it is a link, and one listing of its
@@ -393,19 +396,26 @@ pub(crate) async fn settle_already_imported_source(
     source: &Path,
     library_path: &Path,
 ) -> AppResult<()> {
-    let (owned_source, owned_library) = (source.to_path_buf(), library_path.to_path_buf());
-    let same = tokio::task::spawn_blocking(move || {
-        already_imported_is_source_entry(&owned_source, &owned_library)
-    })
-    .await
-    .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))??;
+    let same = app
+        .services
+        .workflow
+        .file_importer
+        .library_file_is_import_source(source, library_path)
+        .await?;
     if same {
         record_library_file_for_download(app, import_id, source, library_path).await?;
     }
     Ok(())
 }
 
-fn already_imported_is_source_entry(source: &Path, library_path: &Path) -> AppResult<bool> {
+/// Whether the library file at `library_path` is the download's file
+/// `source` itself, as [`settle_already_imported_source`] asks. The caller
+/// keeps any other work on `source` in this process from running meanwhile:
+/// the set-aside test moves the source for a moment.
+pub fn library_file_is_import_source_blocking(
+    source: &Path,
+    library_path: &Path,
+) -> AppResult<bool> {
     use crate::disk::{AsideRemoval, Sameness};
     let unknown = |why: &str| AppError::RepositoryFailed {
         message: format!(

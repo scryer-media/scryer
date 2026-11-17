@@ -307,8 +307,8 @@ async fn archive_preservation_refuses_active_cleanup_but_accepts_retained_attemp
 }
 
 /// That a download's file is the library file is read back with its holds,
-/// survives a retry replacing the import's payload, and is refused while a
-/// cleanup owns the download.
+/// survives a retry or a requeue replacing the import's payload, and is
+/// refused while a cleanup owns the download.
 #[tokio::test]
 async fn library_file_mark_is_read_with_the_holds_and_survives_a_retry() {
     let (store, cleanup, claim, expected) = retry_fixture().await;
@@ -347,6 +347,22 @@ async fn library_file_mark_is_read_with_the_holds_and_survives_a_retry() {
         store.download_import_sources(&claim.download_id).await.unwrap(),
         marked
     );
+    let requeued = store
+        .queue_import_request_with_identity_for_download(
+            source_identity("job-1"),
+            "movie_download".into(),
+            "{\"requeued\":true}".into(),
+            None,
+            Some(&claim.download_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(requeued, claim.import_id, "the requeue lands on the same import");
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        marked,
+        "a requeue replacing the payload keeps the mark"
+    );
     drop(cleanup);
 
     let (store, cleanup, claim, _) = retry_fixture().await;
@@ -364,6 +380,21 @@ async fn library_file_mark_is_read_with_the_holds_and_survives_a_retry() {
     assert_eq!(
         refused.validation_reason(),
         Some(crate::error_reasons::WORKFLOW_SOURCE_CLEANUP_ALREADY_CLAIMED)
+    );
+    store
+        .queue_import_request_with_identity_for_download(
+            source_identity("job-1"),
+            "movie_download".into(),
+            "{\"requeued\":true}".into(),
+            None,
+            Some(&claim.download_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        scryer_application::DownloadImportSources::default(),
+        "a requeue adds no mark the import did not carry"
     );
 }
 

@@ -9849,6 +9849,24 @@ pub trait FileImporter: Send + Sync {
         self.remove_import_source_after_verified_import(guard, final_dest_path)
             .await
     }
+
+    /// Whether the library file a re-run found already imported is the
+    /// download's file itself; see
+    /// [`crate::library_file_is_import_source_blocking`]. An importer that
+    /// gives each source a turn runs it in that turn, since the check may
+    /// set the source aside for a moment. The default has no turns to take.
+    async fn library_file_is_import_source(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<bool> {
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            crate::library_file_is_import_source_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
 }
 
 #[async_trait]
