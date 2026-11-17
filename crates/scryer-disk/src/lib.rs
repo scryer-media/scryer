@@ -87,7 +87,7 @@ pub use copy::{
     RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep,
     Verdict, Watch, resumable_staging_path,
 };
-pub use mark::{Drift, Mark, Sameness};
+pub use mark::{Drift, EntryAlias, Mark, Sameness};
 pub use place::{
     CannotLink, Done, Doubt, Fallback, FreeNameMove, Leftover, LinkAfter, LinkProof, Method,
     PlaceRefusal, Placed, Placement, ReadBefore, Refused, Side, Unproven, Verify,

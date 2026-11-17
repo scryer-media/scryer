@@ -8,6 +8,7 @@
 //! tells no two files apart; and length and times everywhere. Each answer
 //! says when the platform's facts were not enough to tell.
 
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::backend::RawStat;
@@ -21,6 +22,74 @@ pub enum Sameness {
     /// The platform gave no file number for one of them, or gave zero for
     /// both, which some network and FUSE filesystems report for every file.
     CannotTell,
+}
+
+/// Whether two paths name one directory entry, so that removing the entry
+/// one names removes what the other names too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryAlias {
+    /// One entry: reached through a linked or mounted folder on the way, or
+    /// by a link at the second path that resolves to the first.
+    Same,
+    /// Two entries, whatever file they hold: two names of one file are two
+    /// entries.
+    Distinct,
+    /// A folder on the way, or the link at the second path, did not answer.
+    CannotTell,
+}
+
+impl super::Disk {
+    /// Whether `dest` names the directory entry `source` names. Each path's
+    /// folder is resolved and the final names compared, ignoring case, which
+    /// a volume may ignore. When `dest_is_link`, its resolved target is also
+    /// compared with `source`'s entry and with `source` resolved, so a link
+    /// that reaches the source, directly or through it, is the same entry.
+    ///
+    /// Reads two paths, both folders; four when `dest_is_link`. Each is
+    /// one resolution of a path.
+    pub fn entry_alias_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+        dest_is_link: bool,
+    ) -> EntryAlias {
+        let entry = |path: &Path| {
+            let name = path.file_name()?;
+            let folder = path
+                .parent()
+                .filter(|folder| !folder.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let folder = self.canonicalize_blocking(folder).ok()?;
+            Some(folder.join(name))
+        };
+        let (Some(source_entry), Some(dest_entry)) = (entry(source), entry(dest)) else {
+            return EntryAlias::CannotTell;
+        };
+        if super::place::paths_are_same_file(&source_entry, &dest_entry) {
+            return EntryAlias::Same;
+        }
+        if !dest_is_link {
+            return EntryAlias::Distinct;
+        }
+        let target = match self.canonicalize_blocking(dest) {
+            Ok(target) => target,
+            // A link that names nothing reaches nothing of the source's.
+            Err(error) if error.reason() == super::reason::DISK_PATH_MISSING => {
+                return EntryAlias::Distinct;
+            }
+            Err(_) => return EntryAlias::CannotTell,
+        };
+        if super::place::paths_are_same_file(&target, &source_entry) {
+            return EntryAlias::Same;
+        }
+        match self.canonicalize_blocking(source) {
+            Ok(resolved) if super::place::paths_are_same_file(&target, &resolved) => {
+                EntryAlias::Same
+            }
+            Ok(_) => EntryAlias::Distinct,
+            Err(_) => EntryAlias::CannotTell,
+        }
+    }
 }
 
 /// What became of a marked file, from the strongest finding down.

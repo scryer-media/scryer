@@ -454,3 +454,111 @@ async fn windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies()
     let missing = temp.path().join("missing.mkv");
     assert!(!disk.shares_volume(&missing, &nested).await);
 }
+
+/// Two entries are told apart by their resolved folders and names alone,
+/// whatever file numbers they answer: two folder resolutions, four for a
+/// link, and no other read. A folder or link that does not answer cannot
+/// tell.
+#[test]
+fn whether_two_paths_name_one_entry_reads_only_their_folders() {
+    let (source, dest) = (
+        p("/srv/fixture-media/downloads/sample.mkv"),
+        p("/srv/fixture-media/library/sample.mkv"),
+    );
+    let (disk, backend) = scripted();
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &dest, false),
+        EntryAlias::Distinct
+    );
+    assert_eq!(
+        backend.paths_of("canonicalize"),
+        [
+            p("/srv/fixture-media/downloads"),
+            p("/srv/fixture-media/library")
+        ]
+    );
+    assert_eq!(backend.calls_of("lstat") + backend.calls_of("stat"), 0);
+
+    let (disk, backend) = scripted();
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &dest, true),
+        EntryAlias::Distinct
+    );
+    assert_eq!(backend.calls_of("canonicalize"), 4);
+
+    let (disk, backend) = scripted();
+    backend.fails(
+        "canonicalize",
+        "/srv/fixture-media/library",
+        io::ErrorKind::TimedOut,
+    );
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &dest, false),
+        EntryAlias::CannotTell
+    );
+
+    let (disk, backend) = scripted();
+    backend.fails(
+        "canonicalize",
+        "/srv/fixture-media/library/sample.mkv",
+        io::ErrorKind::PermissionDenied,
+    );
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &dest, true),
+        EntryAlias::CannotTell
+    );
+
+    // The same name in the same folder, in another case, may be one entry.
+    let (disk, _) = scripted();
+    let other_case = p("/srv/fixture-media/downloads/SAMPLE.mkv");
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &other_case, false),
+        EntryAlias::Same
+    );
+}
+
+/// On a real volume: the source's own entry reached through a symlinked
+/// folder, and a link to the source, are one entry with it; a second name
+/// of the same file, and a link to another file, are not.
+#[cfg(unix)]
+#[test]
+fn a_linked_folder_or_a_link_to_the_source_is_the_source_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    let downloads = temp.path().join("downloads");
+    let library = temp.path().join("library");
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::create_dir_all(&library).unwrap();
+    let source = downloads.join("sample.mkv");
+    let elsewhere = temp.path().join("elsewhere.mkv");
+    std::fs::write(&source, b"payload").unwrap();
+    std::fs::write(&elsewhere, b"payload").unwrap();
+    let alias = temp.path().join("alias");
+    std::os::unix::fs::symlink(&downloads, &alias).unwrap();
+    let (link, second, other) = (
+        library.join("link.mkv"),
+        library.join("second.mkv"),
+        library.join("other.mkv"),
+    );
+    std::os::unix::fs::symlink(&source, &link).unwrap();
+    std::fs::hard_link(&source, &second).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &other).unwrap();
+    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+
+    let through_alias = alias.join("sample.mkv");
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &through_alias, false),
+        EntryAlias::Same
+    );
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &link, true),
+        EntryAlias::Same
+    );
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &second, false),
+        EntryAlias::Distinct
+    );
+    assert_eq!(
+        disk.entry_alias_blocking(&source, &other, true),
+        EntryAlias::Distinct
+    );
+}
