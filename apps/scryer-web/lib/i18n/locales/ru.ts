@@ -2561,7 +2561,7 @@ const ru: LocaleDictionary = {
   "settings.refSubtitle":
     "Нажмите, чтобы развернуть полный справочник всех полей, доступных в правилах Rego.",
   "settings.refIntro":
-    "Каждое правило получает объект input, содержащий пять документов верхнего уровня. Код Rego обращается к ним через input.release, input.profile, input.context, input.builtin_score и input.file. Объект input.file имеет значение null во время оценки перед загрузкой и заполняется только после загрузки во время проверки импорта.",
+    "Каждое правило получает объект input, содержащий пять документов верхнего уровня. Код Rego обращается к ним через input.release, input.profile, input.context, input.builtin_score и input.file. input.file имеет значение null, когда оценивается результат индексатора, и заполняется всякий раз, когда был проанализирован сам файл: при проверке импорта после загрузки и при повторной оценке файла, уже находящегося в библиотеке.",
   "settings.refColField": "Поле",
   "settings.refColType": "Тип",
   "settings.refColDescription": "Описание",
@@ -2571,12 +2571,12 @@ const ru: LocaleDictionary = {
   "settings.refReleaseRawTitle":
     "Исходное необработанное название релиза, полученное от индексатора",
   "settings.refReleaseQuality":
-    "Определённый уровень качества (например, 2160P, 1080P, 720P)",
+    "Определённый уровень качества, в нижнем регистре (например, 2160p, 1080p, 720p)",
   "settings.refReleaseSource":
-    "Источник медиаконтента (например, WEB-DL, BLURAY, HDTV)",
+    "Источник медиаконтента, разобранный из имени (например, WEB-DL, WEBRip, BluRay, HDTV). scryer.normalize_source возвращает форму в верхнем регистре (WEBDL, WEBRIP, BLURAY)",
   "settings.refReleaseVideoCodec": "Видеокодек (например, H.265, H.264, AV1)",
   "settings.refReleaseAudio":
-    "Основной аудиокодек (например, DDP, AAC, TrueHD)",
+    "Основной аудиокодек (например, DDP, AAC, TRUEHD, DTSMA)",
   "settings.refReleaseAudioCodecs":
     "Все обнаруженные аудиокодеки в виде массива",
   "settings.refReleaseGuideFacts":
@@ -2584,12 +2584,12 @@ const ru: LocaleDictionary = {
   "settings.refReleaseAudioChannels":
     "Конфигурация аудиоканалов (например, 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
-    "Коды языков аудио ISO 639-3 (например, eng, jpn). Включают языки из листинга индексатора, зафиксированные при захвате релиза; файлы, найденные сканированием, принятые или импортированные до того, как начали сохраняться снимки листинга, дают только то, что видно по имени и самому файлу",
+    "Коды языков аудио ISO 639-3 (например, eng, jpn). Включают языки из листинга индексатора, зафиксированные при захвате релиза, и языки, которые выводит Scryer: метка dual-audio или MULTi добавляет язык оригинала тайтла (и eng, если язык не указан), а релиз без метки добавляет язык оригинала, когда профиль требует языки аудио. Файлы, найденные сканированием, принятые или импортированные до того, как начали сохраняться снимки листинга, дают только то, что видно по имени и самому файлу",
   "settings.refReleaseIndexerLanguages":
     "Коды языков аудио ISO 639-3, которые сообщил сам листинг индексатора, зафиксированные при захвате релиза. Никогда не выводятся из имени или тайтла; пусто, если индексатор ничего не сообщил",
   "settings.refReleaseLangsSub": "Коды языков субтитров ISO 639-3",
   "settings.refReleaseIsDualAudio":
-    "Истинно, если обнаружено несколько звуковых дорожек",
+    "Истинно, если имя релиза содержит метку dual-audio",
   "settings.refReleaseIsAtmos": "Истинно, если присутствует звук Dolby Atmos",
   "settings.refReleaseIsDV": "Истинно, если обнаружены метаданные Dolby Vision",
   "settings.refReleaseDetectedHdr":
@@ -2696,25 +2696,26 @@ const ru: LocaleDictionary = {
   "settings.refCtxTags":
     "Пользовательские теги материала в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
   "settings.refCtxHasExisting":
-    "Истинно, если для этого материала уже существует файл",
+    "Истинно, если этот слот уже занят файлом. Задаётся только при проверке импорта после загрузки; при оценке результата индексатора всегда false",
   "settings.refCtxExistingScore":
-    "Встроенная оценка существующего файла (если он существует)",
+    "Полная оценка файла, уже находящегося в слоте, с учётом правил. Задаётся только при проверке импорта после загрузки; в остальных случаях null",
   "settings.refCtxSearchMode":
-    "Режим оценки. Текущие значения: auto и post_download",
-  "settings.refCtxRuntimeMin": "Продолжительность контента в минутах",
+    "Где используется оценка: canonical (поиск, захват и оценка библиотеки) или post_download (проверка импорта загруженного файла)",
+  "settings.refCtxRuntimeMin":
+    "Продолжительность оцениваемого контента в минутах; для релиза из нескольких серий или целого сезона суммируется по сериям",
   "settings.refCtxIsAnime":
     "Истинно, если материал относится к категории аниме",
   "settings.refCtxIsFiller": "Истинно, если эпизод помечен как филлер",
   "settings.refSectionBuiltinScore":
     "— Результаты встроенного механизма оценки",
   "settings.refBuiltinTotal":
-    "Общая оценка, рассчитанная встроенным механизмом",
+    "Общая оценка, рассчитанная встроенным механизмом. Если есть базовые правила (baseline), последующие правила видят здесь вместо этого промежуточный итог базовых правил, а само базовое правило видит 0",
   "settings.refBuiltinBlocked":
     "Истинно, если встроенные правила заблокировали этот релиз",
   "settings.refBuiltinCodes":
-    "Список применённых кодов оценки (например, quality_tier_0)",
+    "Список применённых кодов оценки (например, quality_resolution_1080p). Если есть базовые правила (baseline), их коды тоже включены",
   "settings.refSectionFile":
-    "— Метаданные фактически проанализированного файла (до загрузки значение равно null)",
+    "— Метаданные проанализированного файла (null, когда оценивается результат индексатора)",
   "settings.refFileVideoCodec":
     "Подтверждённый видеокодек, полученный в результате анализа файла",
   "settings.refFileVideoWidth": "Подтверждённая ширина видео в пикселях",
@@ -2776,7 +2777,7 @@ const ru: LocaleDictionary = {
     "Истинно, если поток субтитров помечен как используемый по умолчанию",
   "settings.refSectionBuiltins": "Пользовательские функции Scryer",
   "settings.refBuiltinsIntro":
-    "Эти вспомогательные функции доступны в ваших правилах Rego в дополнение ко всем стандартным встроенным функциям OPA.",
+    "Эти вспомогательные функции доступны в ваших правилах Rego в дополнение к основным встроенным функциям Rego, regex и time. Другие группы встроенных функций OPA, например encoding, glob, semver, net и http, недоступны.",
   "settings.refFnBlockScore":
     "Возвращает штраф -10000, который можно компенсировать другими баллами",
   "settings.refFnSizeGib":
@@ -2793,7 +2794,7 @@ const ru: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "Нет доступа к сети или файловой системе — правила не могут выполнять HTTP-запросы, читать файлы или выполнять другие операции ввода-вывода. Стандартные встроенные функции OPA, такие как http.send, недоступны.",
   "settings.refSandboxPkgIsolation":
-    "Изоляция пакетов — каждое правило автоматически помещается в собственное пространство имён. Правила не могут читать или изменять данные других правил.",
+    "Изоляция пакетов — каждое правило автоматически помещается в собственное пространство имён и не может изменять другое правило. Правило, не являющееся базовым (baseline), может читать вывод другого правила через data.scryer.rules.user.<id>.",
   "settings.refSandboxReadOnly":
     "Входные данные доступны только для чтения — правила могут только читать документ input. Они не могут изменять состояние приложения или сохранять данные между выполнениями.",
   "settings.refSandboxOutputRestricted":
@@ -2803,7 +2804,7 @@ const ru: LocaleDictionary = {
   "settings.refSandboxValidation":
     "Проверка перед сохранением — правила компилируются и тестируются на синтетических входных данных перед сохранением. Некорректные правила отклоняются.",
   "settings.refSandboxErrorIsolation":
-    "Изоляция ошибок — если одно правило завершается с ошибкой во время выполнения, все остальные правила продолжают оцениваться в обычном режиме. Ошибки записываются в журнал, но не прерывают процесс оценки.",
+    "Изоляция ошибок — если одно правило завершается с ошибкой во время выполнения, все остальные правила продолжают оцениваться в обычном режиме. При оценке ошибка записывается в журнал, а правило даёт 0. При проверке импорта после загрузки ошибка в вашем правиле откладывает импорт для проверки.",
   "settings.refSectionOutput": "Формат вывода правила",
   "settings.refOutputIntro":
     "Правила должны определять правило score_entry, которое возвращает карту со строковыми ключами (кодами оценки) и целочисленными значениями (изменениями баллов). Положительные значения повышают оценку релиза, отрицательные — снижают её, а scryer.block_score() добавляет штраф -10000, который можно компенсировать. Решение принимается после суммирования всех баллов; обязательные требования профиля остаются в силе. Правила, основанные на файлах, до загрузки автоматически ничего не делают, поскольку input.file имеет значение null до этапа оценки после загрузки.",
@@ -4655,7 +4656,8 @@ const ru: LocaleDictionary = {
     "Отменить несохранённые изменения?",
   "settings.lifecycleRuleConfirmDiscardDescription":
     "В редакторе правил жизненного цикла есть несохранённые изменения, которые будут потеряны.",
-  "settings.lifecycleRuleDeleting": "Удалить правило жизненного цикла {{name}}?",
+  "settings.lifecycleRuleDeleting":
+    "Удалить правило жизненного цикла {{name}}?",
   "settings.noLifecycleRulesFound": "Правил жизненного цикла пока нет.",
   "settings.lifecycleRuleRevision": "Ревизия",
   "settings.lifecycleActionDoNothing": "Ничего не делать",
@@ -4757,8 +4759,7 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRunStarted": "Запуск начат.",
   "settings.lifecycleRunNotStarted": "Ничего не запущено: {{message}}",
   "settings.lifecycleEvaluationRunsTitle": "Запуски оценки",
-  "settings.lifecycleEvaluationRunsEmpty":
-    "Запусков оценки пока не записано.",
+  "settings.lifecycleEvaluationRunsEmpty": "Запусков оценки пока не записано.",
   "settings.lifecycleActionRunsTitle": "Запуски действий",
   "settings.lifecycleActionRunsEmpty": "Запусков действий пока не записано.",
   "settings.lifecycleRunColStarted": "Начат",
@@ -4798,7 +4799,8 @@ const ru: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "Почему этот тайтл исключается (необязательно)",
   "settings.lifecycleExcludeConfirm": "Исключить",
-  "settings.lifecycleExcluded": "{{title}} исключён из правил жизненного цикла.",
+  "settings.lifecycleExcluded":
+    "{{title}} исключён из правил жизненного цикла.",
   "settings.refLifecycleTitle": "Справочник входных данных жизненного цикла",
   "settings.refLifecycleIntro":
     "Каждое правило жизненного цикла получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
@@ -4808,7 +4810,7 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleOutputUnknown":
     "unknown — логическое значение. Устанавливайте его, когда само правило не может принять решение; unknown всегда имеет приоритет над совпадением. Факты, которые Scryer не смог наблюдать, уже обрабатываются автоматически.",
   "settings.refLifecycleOutputReasons":
-    "reasons — набор коротких машинных кодов, объясняющих решение. Они сохраняются у кандидата и показываются в предпросмотре.",
+    "reasons — список или набор не более чем из 32 коротких машинных кодов длиной до 120 символов каждый, объясняющих решение. Они сохраняются у кандидата и показываются в предпросмотре.",
   "settings.refLifecycleOutputNoPackage":
     "Не пишите строки package или import. Scryer добавляет их при сохранении правила и удаляет обратно для редактора.",
   "settings.refLifecycleSectionInput": "— Конверт оценки",
@@ -4816,7 +4818,8 @@ const ru: LocaleDictionary = {
     "Версия документа входных данных жизненного цикла, под которую написано правило",
   "settings.refLifecycleInputEvaluationTime":
     "Момент времени в формате RFC3339, фиксируемый один раз за прогон, чтобы все субъекты сравнивались с одними и теми же часами. Используйте его для вычислений с датами: time.now_ns() существует, но тогда один и тот же субъект при повторе решался бы иначе.",
-  "settings.refLifecycleSectionSubject": "— Оцениваемый тайтл, сезон или эпизод",
+  "settings.refLifecycleSectionSubject":
+    "— Оцениваемый тайтл, сезон или эпизод",
   "settings.refLifecycleSubjectKind": "Уровень оценки: тайтл, сезон или эпизод",
   "settings.refLifecycleSubjectTitleId":
     "Идентификатор Scryer для тайтла, к которому относится субъект",
@@ -4824,30 +4827,42 @@ const ru: LocaleDictionary = {
     "Номер сезона; присутствует только для субъектов-сезонов",
   "settings.refLifecycleSubjectEpisodeId":
     "Идентификатор эпизода; присутствует только для субъектов-эпизодов",
-  "settings.refLifecycleSubjectFacet": "Медиа-фасет тайтла (фильм, сериал, аниме)",
+  "settings.refLifecycleSubjectFacet":
+    "Медиа-фасет тайтла (фильм, сериал, аниме)",
   "settings.refLifecycleSubjectName": "Отображаемое название тайтла",
   "settings.refLifecycleSubjectYear": "Год выпуска тайтла, если он известен",
   "settings.refLifecycleSectionLibrary":
     "— Библиотека, в которой находится субъект",
-  "settings.refLifecycleLibraryId": "Идентификатор библиотеки, содержащей субъект",
+  "settings.refLifecycleLibraryId":
+    "Идентификатор библиотеки, содержащей субъект",
   "settings.refLifecycleLibraryName": "Отображаемое имя этой библиотеки",
   "settings.refLifecycleSectionSeason": "Сезон (только действия для сезона)",
   "settings.refLifecycleSeasonId": "Id рассматриваемого сезона.",
-  "settings.refLifecycleSeasonFacts": "Собственные факты сезона, которые читают действия для сезона, например delete_season_files.",
-  "settings.refLifecycleSeasonObservations": "Конверты наблюдений для фактов сезона.",
+  "settings.refLifecycleSeasonFacts":
+    "Собственные факты сезона, которые читают действия для сезона, например delete_season_files.",
+  "settings.refLifecycleSeasonObservations":
+    "Конверты наблюдений для фактов сезона.",
   "settings.refLifecycleSectionEpisode": "Эпизод (только действия для эпизода)",
   "settings.refLifecycleEpisodeId": "Id рассматриваемого эпизода.",
-  "settings.refLifecycleEpisodeNumber": "Номер эпизода в сезоне, если известен.",
-  "settings.refLifecycleEpisodeFacts": "Собственные факты эпизода, которые читают действия для эпизода, например delete_episode_files.",
-  "settings.refLifecycleEpisodeObservations": "Конверты наблюдений для фактов эпизода.",
-  "settings.refLifecycleFactsStorageRoots": "По одной записи на каждую настроенную корневую папку, где лежат файлы субъекта, со свободным местом этой папки. Неизвестно, если хотя бы одну из этих папок не удалось прочитать.",
+  "settings.refLifecycleEpisodeNumber":
+    "Номер эпизода в сезоне, если известен.",
+  "settings.refLifecycleEpisodeFacts":
+    "Собственные факты эпизода, которые читают действия для эпизода, например delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations":
+    "Конверты наблюдений для фактов эпизода.",
+  "settings.refLifecycleFactsStorageRoots":
+    "По одной записи на каждую настроенную корневую папку, где лежат файлы субъекта, со свободным местом этой папки. Неизвестно, если хотя бы одну из этих папок не удалось прочитать.",
   "settings.refLifecycleSectionStorageRoots": "Корневая папка хранилища",
   "settings.refLifecycleStorageRootId": "Id настроенной корневой папки.",
   "settings.refLifecycleStorageRootPath": "Путь настроенной корневой папки.",
-  "settings.refLifecycleStorageRootAvailableBytes": "Свободные байты на томе корневой папки.",
-  "settings.refLifecycleStorageRootTotalBytes": "Всего байтов на томе корневой папки.",
-  "settings.refLifecycleStorageRootAvailablePercent": "Свободное место на томе корневой папки в процентах от общего объёма.",
-  "settings.refLifecycleFactsStorageRootsValue": "Корневые папки, где лежат файлы субъекта, если известны.",
+  "settings.refLifecycleStorageRootAvailableBytes":
+    "Свободные байты на томе корневой папки.",
+  "settings.refLifecycleStorageRootTotalBytes":
+    "Всего байтов на томе корневой папки.",
+  "settings.refLifecycleStorageRootAvailablePercent":
+    "Свободное место на томе корневой папки в процентах от общего объёма.",
+  "settings.refLifecycleFactsStorageRootsValue":
+    "Корневые папки, где лежат файлы субъекта, если известны.",
   "settings.refLifecycleSectionFacts":
     "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
   "settings.refLifecycleFactsMonitored": "Отслеживается ли субъект",
@@ -4855,12 +4870,14 @@ const ru: LocaleDictionary = {
     "Пользовательские теги субъекта в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
   "settings.refLifecycleFactsQualityProfileId":
     "Профиль качества, назначенный субъекту",
-  "settings.refLifecycleFactsAddedAt": "Когда субъект был добавлен в библиотеку",
+  "settings.refLifecycleFactsAddedAt":
+    "Когда субъект был добавлен в библиотеку",
   "settings.refLifecycleFactsAddedByUserId":
     "Какой пользователь добавил субъект; отсутствует, если его создало сканирование или обнаружение",
   "settings.refLifecycleFactsAddedByUsername":
     "Имя пользователя, добавившего субъект",
-  "settings.refLifecycleFactsRequested": "Был ли субъект создан по медиа-запросу",
+  "settings.refLifecycleFactsRequested":
+    "Был ли субъект создан по медиа-запросу",
   "settings.refLifecycleFactsRequestedByUserIds":
     "Пользователи, запросившие субъект: автор запроса и все дополнительные запросившие",
   "settings.refLifecycleFactsRequestedByUsernames":
@@ -4868,7 +4885,7 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsFirstImportedAt":
     "Когда для субъекта был впервые импортирован файл",
   "settings.refLifecycleFactsLastUpgradedAt":
-    "Когда субъект в последний раз получал улучшение",
+    "Когда субъект в последний раз получал улучшение. Пока не собирается, поэтому всегда неизвестно.",
   "settings.refLifecycleFactsHasFile":
     "Есть ли у субъекта хотя бы один файл на диске",
   "settings.refLifecycleFactsFileCount":
@@ -4877,15 +4894,16 @@ const ru: LocaleDictionary = {
     "Суммарный размер файлов субъекта на диске",
   "settings.refLifecycleFactsFiles":
     "Файлы субъекта с подробностями по каждому файлу",
-  "settings.refLifecycleFactsEpisodeCount": "Сколько эпизодов охватывает субъект",
+  "settings.refLifecycleFactsEpisodeCount":
+    "Сколько эпизодов охватывает субъект",
   "settings.refLifecycleFactsEpisodeFileCount":
     "Сколько из этих эпизодов имеют файл",
   "settings.refLifecycleFactsMonitoredEpisodeCount":
     "Сколько из этих эпизодов отслеживается",
   "settings.refLifecycleFactsActiveDownloads":
-    "Есть ли у субъекта активная загрузка",
+    "Есть ли у субъекта активная загрузка. Пока не собирается, поэтому всегда неизвестно.",
   "settings.refLifecycleFactsWatchedByUserIds":
-    "Пользователи, которые смотрели субъект на подключённом медиасервере",
+    "Пользователи, которые смотрели субъект. Для сезона или всего сериала — только пользователи, посмотревшие каждую вышедшую в нём серию, включая серии с отсутствующими файлами. Будущие серии исключаются; неустановленные даты выхода или неполные сигналы дают unknown. Сезон или сериал без вышедших серий никогда не считается завершённым.",
   "settings.refLifecycleFactsLastWatchedAt":
     "Когда субъект в последний раз кто-либо смотрел",
   "settings.refLifecycleFactsWatchedByAnyRequester":
@@ -4908,7 +4926,8 @@ const ru: LocaleDictionary = {
     "Когда значение было получено, если источник записал время",
   "settings.refLifecycleObsReason":
     "Устойчивый машинный код, объясняющий, почему факт неизвестен или почему у отсутствующего факта нет значения",
-  "settings.refLifecycleFactsMonitoredValue": "True, когда субъект отслеживается",
+  "settings.refLifecycleFactsMonitoredValue":
+    "True, когда субъект отслеживается",
   "settings.refLifecycleFactsTagsValue":
     "Имена пользовательских тегов в нижнем регистре из реестра тегов администратора; никогда не служебные записи с префиксом scryer:",
   "settings.refLifecycleFactsQualityProfileIdValue":
@@ -4928,7 +4947,7 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsFirstImportedAtValue":
     "Метка времени RFC3339 первого импорта",
   "settings.refLifecycleFactsLastUpgradedAtValue":
-    "Метка времени RFC3339 последнего улучшения",
+    "Всегда unknown с причиной not_yet_collected: Scryer пока не записывает улучшения, поэтому правило, которое читает это значение, откладывается",
   "settings.refLifecycleFactsHasFileValue":
     "True, когда на диске есть хотя бы один файл",
   "settings.refLifecycleFactsFileCountValue": "Количество файлов на диске",
@@ -4943,15 +4962,15 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "Количество этих эпизодов, которые отслеживаются",
   "settings.refLifecycleFactsActiveDownloadsValue":
-    "True, когда для субъекта выполняется загрузка",
+    "Всегда unknown с причиной not_yet_collected: состояние загрузок пока не считывается, поэтому правило, которое читает это значение, откладывается",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
-    "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Факты о просмотрах неизвестны для сериалов (show_watch_rollup_unavailable), когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
+    "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Для сезона или сериала человек учитывается только после просмотра каждой вышедшей в нём серии, включая отсутствующие файлы. Будущие серии исключаются; отсутствующая история серий или неустановленные даты выхода дают unknown. Факты о просмотрах неизвестны, когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел, и unknown с причиной play_time_missing, если у просмотра нет записанного времени",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
-    "True, когда субъект смотрел хотя бы один запросивший; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
+    "True, когда субъект смотрел хотя бы один запросивший; известное false для сезона или сериала без вышедших серий; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
   "settings.refLifecycleFactsWatchedByAllRequestersValue":
-    "True, когда субъект смотрели все запросившие; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
+    "True, когда субъект смотрели все запросившие; известное false для сезона или сериала без вышедших серий; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
   "settings.refLifecycleFactsRequestLeaseStateValue":
     "none, когда для субъекта никогда не записывалось хранение по запросу; dormant, когда хранение ждёт первого импорта; active, пока хранение действует; expired, когда все сроки истекли. Снятое или заменённое хранение считается отозванным, а не истёкшим, поэтому оно не делает состояние expired. Истечение измеряется относительно времени оценки, поэтому хранение читается как expired в тот же момент, когда закрывается его окно.",
   "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
@@ -4998,7 +5017,8 @@ const ru: LocaleDictionary = {
     "Количество вышедших отслеживаемых эпизодов сериала без файла",
   "settings.refLifecycleFactsAiredEpisodeFilePercent":
     "Доля вышедших эпизодов с файлом, в процентах от вышедших эпизодов",
-  "settings.refLifecycleFactsLatestSeasonNumber": "Номер последнего сезона сериала",
+  "settings.refLifecycleFactsLatestSeasonNumber":
+    "Номер последнего сезона сериала",
   "settings.refLifecycleFactsLatestAiredEpisodeDate":
     "Дата выхода последнего вышедшего эпизода сериала (YYYY-MM-DD)",
   "settings.refLifecycleFactsNextEpisodeAirDate":
@@ -5054,9 +5074,9 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsOriginalLanguageValue":
     "Язык оригинала; отсутствует, если поставщик метаданных не дал значения",
   "settings.refLifecycleFactsSeriesStatusValue":
-    "Статус сериала по данным поставщика; отсутствует, если поставщик не дал значения",
+    "Статус сериала в том виде, в каком его дал поставщик; отсутствует для фильма или если поставщик не дал значения",
   "settings.refLifecycleFactsFirstAiredValue":
-    "Дата премьеры (YYYY-MM-DD) — дата, а не метка времени; отсутствует, если поставщик не дал значения",
+    "Дата премьеры (YYYY-MM-DD) — дата, а не метка времени; отсутствует для фильма или если поставщик не дал значения",
   "settings.refLifecycleFactsNetworkValue":
     "Название телеканала; отсутствует, если поставщик не дал значения",
   "settings.refLifecycleFactsStudioValue":
@@ -5066,11 +5086,11 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsPopularityValue":
     "Оценка популярности; отсутствует, если поставщик не дал значения",
   "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "Дата выхода в кинотеатрах (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
+    "Дата выхода в кинотеатрах (YYYY-MM-DD): самая ранняя для рынка релиза, иначе самая ранняя на любом рынке. Отсутствует для сериала или если даты выхода в кинотеатрах нет; unknown с причиной not_yet_collected, пока даты выхода фильма не получены",
   "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "Дата цифрового релиза (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
+    "Дата цифрового релиза (YYYY-MM-DD): самая ранняя для рынка релиза, иначе самая ранняя на любом рынке, иначе цифровая дата, указанная у тайтла. Отсутствует для сериала или если цифровой даты нет; unknown с причиной not_yet_collected, пока даты выхода фильма не получены и у тайтла нет цифровой даты",
   "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "Дата выхода на физических носителях (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
+    "Дата выхода на физических носителях (YYYY-MM-DD): самая ранняя для рынка релиза, иначе самая ранняя на любом рынке. Отсутствует для сериала или если даты выхода на физических носителях нет; unknown с причиной not_yet_collected, пока даты выхода фильма не получены",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "Полных дней с момента добавления субъекта по часам оценки",
   "settings.refLifecycleFactsMaxVideoHeightValue":
@@ -5130,7 +5150,8 @@ const ru: LocaleDictionary = {
     "— По одной записи на привязанный фильм в input.facts.series_movies",
   "settings.refLifecycleSectionObsSeriesMovies":
     "— По одной записи на привязанный фильм в input.observations.series_movies.value",
-  "settings.refLifecycleSeriesMovieLinkId": "Идентификатор связи сериала и фильма",
+  "settings.refLifecycleSeriesMovieLinkId":
+    "Идентификатор связи сериала и фильма",
   "settings.refLifecycleSeriesMovieName": "Название привязанного фильма",
   "settings.refLifecycleSeriesMovieYear":
     "Год выпуска привязанного фильма, если известен",
@@ -5148,7 +5169,8 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "Редактировать это правило как Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
     "После изменения кода правило останется расширенным и больше не откроется в простом режиме, даже после сохранения.",
-  "settings.ruleBuilderIncomplete": "Некоторые параметры не заполнены. Исправьте отмеченные в конструкторе пункты и сохраните.",
+  "settings.ruleBuilderIncomplete":
+    "Некоторые параметры не заполнены. Исправьте отмеченные в конструкторе пункты и сохраните.",
   "settings.ruleBuilderConditions": "Условия",
   "settings.ruleBuilderJoinAll": "Выполняются все условия",
   "settings.ruleBuilderJoinAny": "Выполняется любое условие",
@@ -5157,8 +5179,10 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderAction": "Действие",
   "settings.ruleBuilderActionPlaceholder": "Выберите действие",
   "settings.ruleBuilderActionConditions": "Только если",
-  "settings.ruleBuilderActionConditionsHelp": "Это действие выполняется, только если выполнены и эти условия, помимо условий правила. На другие действия это не влияет.",
-  "settings.ruleBuilderAddActionCondition": "Добавить условие только для этого действия",
+  "settings.ruleBuilderActionConditionsHelp":
+    "Это действие выполняется, только если выполнены и эти условия, помимо условий правила. На другие действия это не влияет.",
+  "settings.ruleBuilderAddActionCondition":
+    "Добавить условие только для этого действия",
   "settings.ruleBuilderAddAction": "Добавить действие",
   "settings.ruleBuilderProblemActionRequired": "Выберите действие.",
   "settings.ruleBuilderFact": "Факт",
@@ -5259,9 +5283,9 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRuleWarningLocation":
     "Строка {{line}}, столбец {{column}}:",
   "settings.refLifecycleOutputFlagHeads":
-    "Действия без значения (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) логические: определите их через if, и действие применяется, когда тело выполняется.",
+    "Действия без значения логические: определите их через if, и действие применяется, когда тело выполняется. Для тайтла: unmonitor, monitor, search, fetch_subtitles, delete_files и delete_title. Для одного сезона сериала: monitor_season, unmonitor_season, delete_season_files и fetch_season_subtitles. Для одной серии: monitor_episode, unmonitor_episode, delete_episode_files и fetch_episode_subtitles.",
   "settings.refLifecycleOutputValueHeads":
-    "Действия со значением (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) присваивают простой литерал через :=. Цепочка else может выбирать между литералами; вычисляемое значение отклоняется.",
+    "Действия со значением присваивают литерал через :=. set_quality_profile, move_to_library, move_to_root, notify, notify_season и notify_episode принимают строку; add_tags и remove_tags принимают список строк. Цепочка else может выбирать между литералами; вычисляемое значение отклоняется.",
   "settings.refLifecycleOutputHelpers":
     "Любое другое имя правила — ваш собственный помощник. Он влияет на результат, только если его использует действие, unknown или reasons.",
   "settings.refLifecycleActionsTitle": "Действия",
@@ -5270,7 +5294,7 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleActionsDaysSince":
     "days_since(timestamp) возвращает число полных дней между меткой времени RFC3339 и временем вычисления, поэтому days_since(input.facts.added_at) > 180 означает «добавлено более 180 дней назад».",
   "settings.refLifecycleActionsNotify":
-    "notify отправляет сообщение один раз, когда действия применяются. Предпросмотр и пробные запуски его не отправляют.",
+    "notify отправляет сообщение один раз — после того как остальные действия правила действительно что-то изменили, или сразу, если notify — единственное действие правила. Если все действия уже были выполнены, ничего не отправляется. Предпросмотр и пробные запуски его не отправляют.",
   "settings.refLifecycleActionsConflicts":
     "Противоречащие действия удерживаются с указанием причины вместо применения любого из них. Это касается одного объекта, например monitor вместе с unmonitor или одного и того же тега, который и добавляется, и удаляется, а также тайтла против его сезонов или эпизодов и сезона против его эпизодов, например когда сериал ставится на мониторинг, а файлы одного из его сезонов удаляются.",
   "settings.refLifecycleTagActionsTitle": "Действия с тегами",
@@ -5308,16 +5332,14 @@ const ru: LocaleDictionary = {
   "settings.lifecycleTemplateDepartedRequesterTitle": "Ушедший заказчик",
   "settings.lifecycleTemplateDepartedRequesterDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, запрошенными одним указанным пользователем — замените заполнитель «departed-user» на нужное имя пользователя до сохранения, иначе правило не совпадёт ни с чем.",
-  "settings.lifecycleTemplateSystemAddedTitle":
-    "Очистка добавленного системой",
+  "settings.lifecycleTemplateSystemAddedTitle": "Очистка добавленного системой",
   "settings.lifecycleTemplateSystemAddedDescription":
     "Тайтлы, которые обнаружило сканирование, а не добавил человек, и у которых есть файл. Через 60 дней область снимается с отслеживания, а файлы остаются на месте.",
   "settings.lifecycleTemplateWatchedRequestedTitle":
     "Посмотрели все, кто запрашивал",
   "settings.lifecycleTemplateWatchedRequestedDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с запрошенными фильмами, которые посмотрели все запросившие их пользователи, после отсрочки в 30 дней. Только фильмы: Scryer записывает просмотры по фильмам и эпизодам, но не по сериалам, поэтому сериал удерживается, а не совпадает. Правило также удерживается, если у запросившего нет привязанной учётной записи медиасервера или последняя синхронизация сигналов старше 48 часов — неполная картина просмотров не является основанием для удаления.",
-  "settings.lifecycleTemplateExpiredLeasesTitle":
-    "Истёкшее хранение запросов",
+  "settings.lifecycleTemplateExpiredLeasesTitle": "Истёкшее хранение запросов",
   "settings.lifecycleTemplateExpiredLeasesDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, у которых истекли все сроки хранения по запросам, после отсрочки в 7 дней. Хранение, которое ещё не началось — тайтл не импортирован, — остаётся нетронутым, как и тайтл, у которого срока хранения никогда не было.",
   "settings.lifecycleTemplateNoProfileTitle": "Без профиля качества",
@@ -5449,9 +5471,9 @@ const ru: LocaleDictionary = {
   "settings.refReqOutputApprove":
     "approve — запрос можно удовлетворить без участия человека.",
   "settings.refReqOutputDeny":
-    "deny — запрос отклоняется. Отказ перевешивает любой другой голос.",
+    "deny — запрос отклоняется. Между правилами отказ перевешивает любой другой голос; внутри одного правила manual имеет приоритет над deny.",
   "settings.refReqOutputManual":
-    "manual — запрос уходит к человеку, что бы ни решили остальные.",
+    "manual — запрос уходит к человеку, если другое правило его не отклонит. Правило, завершившееся ошибкой или отложенное, считается как manual.",
   "settings.refReqOutputTags":
     'add_tags := ["…"] — теги для тайтла, применяются только при одобрении.',
   "settings.refReqOutputSetQualityProfile":
@@ -5576,7 +5598,7 @@ const ru: LocaleDictionary = {
   "settings.refReqRequesterUsername":
     "Имя пользователя запросившей учётной записи",
   "settings.refReqRequesterAccountKind":
-    "Как учётная запись входит в систему (например, локально или через связанного поставщика)",
+    "Как была создана учётная запись: local или external_auto_provisioned для учётной записи, созданной при первом входе через поставщика удостоверений",
   "settings.refReqRequesterAppPermissions":
     "Общие права приложения, которыми обладает учётная запись",
   "settings.refReqRequesterLibraryPermissions":
@@ -5593,7 +5615,7 @@ const ru: LocaleDictionary = {
   "settings.refReqLibraryId": "Идентификатор библиотеки",
   "settings.refReqLibraryName": "Название библиотеки",
   "settings.refReqLibraryFacet":
-    "Вид медиа в библиотеке (MOVIE, SERIES или ANIME)",
+    "Вид медиа в библиотеке (movie, series или anime)",
   "settings.refReqLibraryIsDefault":
     "Истина, когда это библиотека по умолчанию для своего вида",
   "settings.refReqSectionRequest": "— Что было запрошено",
@@ -5607,7 +5629,7 @@ const ru: LocaleDictionary = {
     "Идентификатор профиля качества, выбранного запросившим",
   "settings.refReqRequestQualityProfileName": "Название этого профиля",
   "settings.refReqRequestMonitorType":
-    "Отслеживание, которое запросил пользователь (например, ALL_EPISODES)",
+    "Отслеживание, которое запросил пользователь, в нижнем регистре, без пробелов, дефисов и подчёркиваний (например, allepisodes)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "Сколько сезонов названо в расширенном выборе отслеживания",
   "settings.refReqRequestMonitorSelectionSeasons":
@@ -5615,7 +5637,7 @@ const ru: LocaleDictionary = {
   "settings.refReqRequestLeaseForever":
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
-    "Сколько дней запросивший просил хранить медиа; отсутствует, когда он попросил хранить вечно",
+    "Сколько дней запросивший просил хранить медиа; null, когда он попросил хранить вечно",
   "settings.refReqRequestRequiredAudioLanguages":
     "Языки аудио, которые, по словам запросившего, должны быть у тайтла. null оставляет выбор библиотеке; пустой список означает отсутствие требования",
   "settings.refReqRequestPreferredAudioLanguages":
@@ -5674,7 +5696,7 @@ const ru: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIds":
     "Библиотеки, в которых этот тайтл уже есть",
   "settings.refReqFactsPreviousRequestCount":
-    "Сколько раз этот пользователь уже запрашивал этот тайтл",
+    "Сколько раз кто-либо уже запрашивал этот тайтл",
   "settings.refReqFactsPreviouslyDenied":
     "Был ли один из тех прежних запросов отклонён",
   "settings.refReqFactsPreviouslyApproved":
@@ -5775,9 +5797,10 @@ const ru: LocaleDictionary = {
   "settings.refReqFactsStudioValue": "Название студии",
   "settings.refReqFactsContentStatusValue":
     "Строка статуса контента у поставщика",
-  "settings.refReqFactsReleaseDateValue": "Дата выхода в формате RFC3339",
+  "settings.refReqFactsReleaseDateValue":
+    "Дата выхода в том виде, в каком её сообщает источник, в формате RFC3339 или YYYY-MM-DD",
   "settings.refReqFactsFirstAiredValue":
-    "Дата первого показа в формате RFC3339",
+    "Дата первого показа в том виде, в каком её сообщает источник, в формате RFC3339 или YYYY-MM-DD",
   "settings.refReqFactsReleaseAgeDaysValue":
     "Целых дней с выхода или первого показа",
   "settings.refReqFactsAwardCountValue":
@@ -5791,7 +5814,7 @@ const ru: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIdsValue":
     "Идентификаторы библиотек, в которых тайтл уже есть; пустой список, когда таких нет",
   "settings.refReqFactsPreviousRequestCountValue":
-    "Число прежних запросов этого пользователя на этот тайтл",
+    "Число прежних запросов любых пользователей на этот тайтл",
   "settings.refReqFactsPreviouslyDeniedValue":
     "Истина, когда один из тех прежних запросов был отклонён",
   "settings.refReqFactsPreviouslyApprovedValue":
@@ -6702,7 +6725,8 @@ const ru: LocaleDictionary = {
     "Названия включённых публичных списков, которые ещё содержат объект",
   "settings.refLifecycleFactsListsLeftAll":
     "Убрали ли объект все списки, которые когда-либо его содержали",
-  "settings.refLifecycleFactsListsLeftAt": "Когда последний список убрал объект",
+  "settings.refLifecycleFactsListsLeftAt":
+    "Когда последний список убрал объект",
   "settings.refLifecycleFactsListsLastListName":
     "Публичный список, из которого объект выбыл последним",
   "settings.refLifecycleFactsListsAddedByListValue":
@@ -9183,8 +9207,7 @@ const ru: LocaleDictionary = {
     "Период ожидания должен составлять ноль или более дней.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Период ожидания не должен превышать 3650 дней (десять лет).",
-  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
-    "У фильмов нет списка серий.",
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES": "У фильмов нет списка серий.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения требуется право управления разрешениями. Попросите администратора сохранить правило или перепишите его без этих сведений.",
   "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
@@ -12367,8 +12390,7 @@ const ru: LocaleDictionary = {
   "settings.lifecycleSequenceStepSearch": "Поиск",
   "settings.lifecycleSequenceStepAddTags": "Добавить теги",
   "settings.lifecycleSequenceStepRemoveTags": "Удалить теги",
-  "settings.lifecycleSequenceStepDeleteTitleAndFiles":
-    "Удалить тайтл и файлы",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles": "Удалить тайтл и файлы",
   "settings.lifecycleRuleState": "Состояние",
   "settings.lifecycleRuleStateHelp":
     "Отключённые правила никогда не проверяются. Пробный запуск фиксирует кандидатов без выполнения действий. Включённые правила выполняют действия над кандидатами по окончании периода отсрочки для каждого из них.",
@@ -12406,8 +12428,7 @@ const ru: LocaleDictionary = {
     "Все правила отключены, поэтому проверка не выполняется. Сначала переведите правило в режим пробного запуска.",
   "settings.lifecycleArmDestructiveIntro":
     "Правило «{{name}}» удаляет файлы. После включения оно будет выполнять действия над указанными ниже кандидатами по окончании периода отсрочки для каждого из них, если действия не приостановлены.",
-  "settings.lifecycleArmDestructiveTitle":
-    "Включить правило, удаляющее файлы?",
+  "settings.lifecycleArmDestructiveTitle": "Включить правило, удаляющее файлы?",
   "settings.lifecycleArmDestructiveConfirm": "Включить",
   "settings.lifecycleCandidatesTitle": "Скоро будут удалены",
   "settings.lifecycleCandidatesSubtitle":
@@ -12515,7 +12536,7 @@ const ru: LocaleDictionary = {
   "settings.refReqRequestListIsWatchlist":
     "True, если это собственный список «смотреть позже» владельца в привязанной учётной записи",
   "settings.refReqRequestListSourceType":
-    "Тип списка у провайдера, в нижнем регистре (например watchlist или user_list)",
+    "Тип списка у провайдера, в нижнем регистре (например watchlist, plantowatch или list)",
   "move.gatheringInfo": "Сбор всех сведений...",
   "move.methodManaged": "Scryer переместит файлы",
   "move.methodManual": "Я перемещу файлы сам",

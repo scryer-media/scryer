@@ -2234,7 +2234,7 @@ const nl: LocaleDictionary = {
   "settings.refSubtitle":
     "Klik om de volledige referentie uit te klappen voor alle velden die beschikbaar zijn voor je Rego-regels.",
   "settings.refIntro":
-    "Elke regel ontvangt een inputobject met vijf top-level documenten. Je Rego-code benadert deze via input.release, input.profile, input.context, input.builtin_score en input.file. input.file is null tijdens pre-download scoring en alleen gevuld tijdens post-download importevaluatie.",
+    "Elke regel ontvangt een inputobject met vijf top-level documenten. Je Rego-code benadert deze via input.release, input.profile, input.context, input.builtin_score en input.file. input.file is null wanneer een indexer-resultaat wordt gescoord, en is gevuld zodra het bestand zelf is geanalyseerd: bij de importcontrole na download, en wanneer een bestand dat al in de bibliotheek staat opnieuw wordt gescoord.",
   "settings.refColField": "Veld",
   "settings.refColType": "Type",
   "settings.refColDescription": "Beschrijving",
@@ -2245,22 +2245,24 @@ const nl: LocaleDictionary = {
   "settings.refReleaseRawTitle":
     "Originele ongeparseerde releasetitel van de indexer",
   "settings.refReleaseQuality":
-    "Gedetecteerd kwaliteitsniveau (bijv. 2160P, 1080P, 720P)",
-  "settings.refReleaseSource": "Mediabron (bijv. WEB-DL, BLURAY, HDTV)",
+    "Gedetecteerd kwaliteitsniveau, in kleine letters (bijv. 2160p, 1080p, 720p)",
+  "settings.refReleaseSource":
+    "Mediabron zoals uit de naam geparsed (bijv. WEB-DL, WEBRip, BluRay, HDTV). scryer.normalize_source geeft de vorm in hoofdletters (WEBDL, WEBRIP, BLURAY)",
   "settings.refReleaseVideoCodec": "Video-codec (bijv. H.265, H.264, AV1)",
-  "settings.refReleaseAudio": "Primaire audio-codec (bijv. DDP, AAC, TrueHD)",
+  "settings.refReleaseAudio":
+    "Primaire audio-codec (bijv. DDP, AAC, TRUEHD, DTSMA)",
   "settings.refReleaseAudioCodecs": "Alle gedetecteerde audio-codecs als array",
   "settings.refReleaseGuideFacts":
     "Guide facts gedetecteerd uit de release-metadata",
   "settings.refReleaseAudioChannels":
     "Audiokanaalconfiguratie (bijv. 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
-    "ISO 639-3 audiotaalcodes (bijv. eng, jpn). Bevat de talen die de indexer-listing meldde, vastgelegd toen de release werd gegrabd; bestanden die zijn ingescand, overgenomen of geïmporteerd voordat listing-snapshots werden bewaard, dragen alleen bij wat de naam en het bestand tonen",
+    "ISO 639-3 audiotaalcodes (bijv. eng, jpn). Bevat de talen die de indexer-listing meldde, vastgelegd toen de release werd gegrabd, en talen die Scryer afleidt: een dual-audio- of MULTi-markering voegt de oorspronkelijke taal van de titel toe (en eng wanneer geen taal wordt genoemd), en een release zonder label voegt de oorspronkelijke taal toe wanneer het profiel audiotalen vereist. Bestanden die zijn ingescand, overgenomen of geïmporteerd voordat listing-snapshots werden bewaard, dragen alleen bij wat de naam en het bestand tonen",
   "settings.refReleaseIndexerLanguages":
     "ISO 639-3 audiotaalcodes die de indexer-listing zelf meldde, vastgelegd toen de release werd gegrabd. Nooit afgeleid uit de naam of de titel; leeg als de indexer niets meldde",
   "settings.refReleaseLangsSub": "ISO 639-3 ondertitelingstaalcodes",
   "settings.refReleaseIsDualAudio":
-    "True wanneer meerdere audiotracks gedetecteerd zijn",
+    "True wanneer de releasenaam een dual-audio-markering bevat",
   "settings.refReleaseIsAtmos": "True wanneer Dolby Atmos-audio aanwezig is",
   "settings.refReleaseIsDV":
     "True wanneer Dolby Vision-metadata gedetecteerd is",
@@ -2365,12 +2367,13 @@ const nl: LocaleDictionary = {
     "Genormaliseerde originele audiotaal afgeleid voor releases zonder label",
   "settings.refCtxTags": "Door de gebruiker gedefinieerde tags op de titel",
   "settings.refCtxHasExisting":
-    "True wanneer er al een bestand bestaat voor deze titel",
+    "True wanneer er al een bestand in dit slot staat. Alleen gezet bij de importcontrole na download; altijd false wanneer een indexer-resultaat wordt gescoord",
   "settings.refCtxExistingScore":
-    "Ingebouwde score van het bestaande bestand (indien aanwezig)",
+    "Volledige score van het bestand dat al in het slot staat, inclusief regels. Alleen gezet bij de importcontrole na download; anders null",
   "settings.refCtxSearchMode":
-    "Evaluatiemodus. Huidige waarden zijn auto en post_download",
-  "settings.refCtxRuntimeMin": "Speelduur van de content in minuten",
+    "Waar de score wordt gebruikt: canonical (zoeken, grabben en bibliotheekscoring) of post_download (de importcontrole van het gedownloade bestand)",
+  "settings.refCtxRuntimeMin":
+    "Speelduur in minuten van wat wordt gescoord; opgeteld over de afleveringen bij een release met meerdere afleveringen of een volledig seizoen",
   "settings.refCtxIsAnime":
     "True wanneer de titel als anime is gecategoriseerd",
   "settings.refCtxIsFiller":
@@ -2378,14 +2381,15 @@ const nl: LocaleDictionary = {
 
   "settings.refSectionBuiltinScore":
     "— Resultaten van de ingebouwde scoring-engine",
-  "settings.refBuiltinTotal": "Totale score van de ingebouwde scoring-engine",
+  "settings.refBuiltinTotal":
+    "Totale score van de ingebouwde scoring-engine. Wanneer er baseline-regels zijn, zien latere regels hier in plaats daarvan het baseline-subtotaal, en een baseline-regel zelf ziet 0",
   "settings.refBuiltinBlocked":
     "True wanneer ingebouwde regels deze release hebben geblokkeerd",
   "settings.refBuiltinCodes":
-    "Lijst van toegepaste scoringcodes (bijv. quality_tier_0)",
+    "Lijst van toegepaste scoringcodes (bijv. quality_resolution_1080p). Wanneer er baseline-regels zijn, zijn hun codes inbegrepen",
 
   "settings.refSectionFile":
-    "— Geanalyseerde bestandsmetadata (null vóór download)",
+    "— Geanalyseerde bestandsmetadata (null wanneer een indexer-resultaat wordt gescoord)",
   "settings.refFileVideoCodec": "Geverifieerde video codec uit media-analyse",
   "settings.refFileVideoWidth": "Geverifieerde videobreedte in pixels",
   "settings.refFileVideoHeight": "Geverifieerde videohoogte in pixels",
@@ -2445,7 +2449,7 @@ const nl: LocaleDictionary = {
 
   "settings.refSectionBuiltins": "Aangepaste Scryer-functies",
   "settings.refBuiltinsIntro":
-    "Deze helperfuncties zijn beschikbaar in je Rego-regels naast alle standaard OPA builtins.",
+    "Deze helperfuncties zijn beschikbaar in je Rego-regels naast de kern-builtins van Rego, regex en time. Andere OPA-builtingroepen, zoals encoding, glob, semver, net en http, zijn niet beschikbaar.",
   "settings.refFnBlockScore":
     "Geeft -10000 terug, de constante om een release hard te blokkeren",
   "settings.refFnSizeGib":
@@ -2463,7 +2467,7 @@ const nl: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "Geen netwerk- of bestandssysteemtoegang — regels kunnen geen HTTP-requests doen, bestanden lezen of I/O uitvoeren. Standaard OPA builtins zoals http.send zijn niet beschikbaar.",
   "settings.refSandboxPkgIsolation":
-    "Package-isolatie — elke regel wordt automatisch in een eigen package geplaatst. Regels kunnen geen data van andere regels lezen of wijzigen.",
+    "Package-isolatie — elke regel wordt automatisch in een eigen package geplaatst en kan geen andere regel wijzigen. Een regel die geen baseline-regel is, kan de uitvoer van een andere regel lezen via data.scryer.rules.user.<id>.",
   "settings.refSandboxReadOnly":
     "Alleen-lezen input — regels kunnen alleen het inputdocument lezen. Ze kunnen geen applicatiestatus wijzigen of data bewaren tussen evaluaties.",
   "settings.refSandboxOutputRestricted":
@@ -2473,7 +2477,7 @@ const nl: LocaleDictionary = {
   "settings.refSandboxValidation":
     "Validatie vóór opslaan — regels worden gecompileerd en dry-run getest tegen synthetische input voordat ze kunnen worden opgeslagen. Ongeldige regels worden geweigerd.",
   "settings.refSandboxErrorIsolation":
-    "Foutisolatie — als één regel faalt tijdens runtime, blijven alle andere regels normaal evalueren. Fouten worden gelogd maar stoppen scoring nooit.",
+    "Foutisolatie — als één regel faalt tijdens runtime, blijven alle andere regels normaal evalueren. Tijdens scoring wordt een fout gelogd en draagt de regel 0 bij. Bij de importcontrole na download houdt een fout in je regel de import vast voor beoordeling.",
 
   "settings.refSectionOutput": "Regel-outputformaat",
   "settings.refOutputIntro":

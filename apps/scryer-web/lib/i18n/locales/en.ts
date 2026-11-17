@@ -7244,7 +7244,7 @@ const en: LocaleDictionary = {
   "settings.refSubtitle":
     "Click to expand the full reference for all fields available to your Rego rules.",
   "settings.refIntro":
-    "Every rule receives an input object with five top-level documents. Your Rego code accesses these via input.release, input.profile, input.context, input.builtin_score, and input.file. input.file is null during pre-download scoring and populated only during post-download import evaluation.",
+    "Every rule receives an input object with five top-level documents. Your Rego code accesses these via input.release, input.profile, input.context, input.builtin_score, and input.file. input.file is null when an indexer result is scored, and is filled whenever the file itself has been analyzed: at the post-download import check, and when a file already in the library is re-scored.",
   "settings.refColField": "Field",
   "settings.refColType": "Type",
   "settings.refColDescription": "Description",
@@ -7255,10 +7255,12 @@ const en: LocaleDictionary = {
   "settings.refReleaseRawTitle":
     "Original unparsed release title from the indexer",
   "settings.refReleaseQuality":
-    "Detected quality tier (e.g. 2160P, 1080P, 720P)",
-  "settings.refReleaseSource": "Media source (e.g. WEB-DL, BLURAY, HDTV)",
+    "Detected quality tier, in lower case (e.g. 2160p, 1080p, 720p)",
+  "settings.refReleaseSource":
+    "Media source as parsed from the name (e.g. WEB-DL, WEBRip, BluRay, HDTV). scryer.normalize_source gives the upper-case form (WEBDL, WEBRIP, BLURAY)",
   "settings.refReleaseVideoCodec": "Video codec (e.g. H.265, H.264, AV1)",
-  "settings.refReleaseAudio": "Primary audio codec (e.g. DDP, AAC, TrueHD)",
+  "settings.refReleaseAudio":
+    "Primary audio codec (e.g. DDP, AAC, TRUEHD, DTSMA)",
   "settings.refReleaseAudioCodecs": "All detected audio codecs as an array",
   "settings.refReleaseGuideFacts":
     "Guide facts detected from the release metadata",
@@ -7267,11 +7269,12 @@ const en: LocaleDictionary = {
   "settings.refReleaseAudioChannels":
     "Audio channel configuration (e.g. 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
-    "ISO 639-3 audio language codes (e.g. eng, jpn). Includes the languages the indexer listing reported, frozen when the release was grabbed; files that were scanned in, adopted, or imported before listing snapshots were kept contribute only what the name and file show",
+    "ISO 639-3 audio language codes (e.g. eng, jpn). Includes the languages the indexer listing reported, frozen when the release was grabbed, and languages Scryer infers: a dual-audio or MULTi marker adds the title's original language (and eng when no language is named), and an unlabeled release adds the original language when the profile requires audio languages. Files that were scanned in, adopted, or imported before listing snapshots were kept contribute only what the name and file show",
   "settings.refReleaseIndexerLanguages":
     "ISO 639-3 audio language codes the indexer listing itself reported, frozen when the release was grabbed. Never inferred from the name or title; empty when the indexer said nothing",
   "settings.refReleaseLangsSub": "ISO 639-3 subtitle language codes",
-  "settings.refReleaseIsDualAudio": "True when multiple audio tracks detected",
+  "settings.refReleaseIsDualAudio":
+    "True when the release name carries a dual-audio marker",
   "settings.refReleaseIsAtmos": "True when Dolby Atmos audio is present",
   "settings.refReleaseIsDV": "True when Dolby Vision metadata is detected",
   "settings.refReleaseHasHdrFallback":
@@ -7452,23 +7455,25 @@ const en: LocaleDictionary = {
   "settings.refCtxTags":
     "User-defined tags on the title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refCtxHasExisting":
-    "True when a file already exists for this title",
+    "True when a file already fills this slot. Only set at the post-download import check; always false when an indexer result is scored",
   "settings.refCtxExistingScore":
-    "Built-in score of the existing file (if any)",
+    "Full score of the file already in the slot, rules included. Only set at the post-download import check; null otherwise",
   "settings.refCtxSearchMode":
-    "Evaluation mode. Current values are auto and post_download",
-  "settings.refCtxRuntimeMin": "Content runtime in minutes",
+    "Where the score is used: canonical (search, grab and library scoring) or post_download (the import check on the downloaded file)",
+  "settings.refCtxRuntimeMin":
+    "Runtime in minutes of what is being scored; summed across episodes for a multi-episode or season release",
   "settings.refCtxIsAnime": "True when the title is categorized as anime",
   "settings.refCtxIsFiller": "True when the episode is marked as filler",
 
   "settings.refSectionBuiltinScore": "— Built-in scoring engine results",
-  "settings.refBuiltinTotal": "Total score from the built-in scoring engine",
+  "settings.refBuiltinTotal":
+    "Total score from the built-in scoring engine. When baseline rules exist, later rules see the baseline subtotal here instead, and a baseline rule itself sees 0",
   "settings.refBuiltinBlocked": "True when built-in rules blocked this release",
   "settings.refBuiltinCodes":
-    "List of scoring codes that were applied (e.g. quality_tier_0)",
+    "List of scoring codes that were applied (e.g. quality_resolution_1080p). When baseline rules exist, their codes are included",
 
   "settings.refSectionFile":
-    "— Actual analyzed file metadata (null pre-download)",
+    "— Analyzed file metadata (null when an indexer result is scored)",
   "settings.refFileVideoCodec": "Verified video codec from media analysis",
   "settings.refFileVideoWidth": "Verified video width in pixels",
   "settings.refFileVideoHeight": "Verified video height in pixels",
@@ -7526,7 +7531,7 @@ const en: LocaleDictionary = {
 
   "settings.refSectionBuiltins": "Custom Scryer Functions",
   "settings.refBuiltinsIntro":
-    "These helper functions are available in your Rego rules in addition to all standard OPA builtins.",
+    "These helper functions are available in your Rego rules in addition to the core Rego builtins, regex and time. Other OPA builtin groups, such as encoding, glob, semver, net and http, are not available.",
   "settings.refFnBlockScore":
     "Returns -10000 as a penalty that other scores can offset",
   "settings.refFnSizeGib":
@@ -7544,7 +7549,7 @@ const en: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "No network or filesystem access — rules cannot make HTTP requests, read files, or perform any I/O. Standard OPA builtins like http.send are not available.",
   "settings.refSandboxPkgIsolation":
-    "Package isolation — each rule is automatically namespaced to its own package. Rules cannot read or modify data from other rules.",
+    "Package isolation — each rule is automatically namespaced to its own package and cannot modify another rule. A rule that is not a baseline rule can read another rule's output through data.scryer.rules.user.<id>.",
   "settings.refSandboxReadOnly":
     "Read-only input — rules can only read the input document. They cannot modify application state or persist data between evaluations.",
   "settings.refSandboxOutputRestricted":
@@ -7554,7 +7559,7 @@ const en: LocaleDictionary = {
   "settings.refSandboxValidation":
     "Pre-save validation — rules are compiled and dry-run tested against synthetic input before they can be saved. Invalid rules are rejected.",
   "settings.refSandboxErrorIsolation":
-    "Error isolation — if one rule fails at runtime, all other rules continue to evaluate normally. Failures are logged but never abort scoring.",
+    "Error isolation — if one rule fails at runtime, all other rules continue to evaluate normally. While scoring, a failure is logged and the rule contributes 0. At the post-download import check, a failure in your rule holds the import for review.",
 
   "settings.refSectionOutput": "Rule Output Format",
   "settings.refOutputIntro":
@@ -9548,8 +9553,7 @@ const en: LocaleDictionary = {
   "settings.lifecycleSequenceStepSearch": "Search",
   "settings.lifecycleSequenceStepAddTags": "Add tags",
   "settings.lifecycleSequenceStepRemoveTags": "Remove tags",
-  "settings.lifecycleSequenceStepDeleteTitleAndFiles":
-    "Delete title and files",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles": "Delete title and files",
   "settings.lifecycleRuleGraceDays": "Grace days",
   "settings.lifecycleRuleGraceDaysHelp":
     "Days after each subject first matches before its action becomes due.",
@@ -9658,8 +9662,7 @@ const en: LocaleDictionary = {
     "Every rule is Disabled, so nothing is being evaluated. Set a rule to Dry run first.",
   "settings.lifecycleArmDestructiveIntro":
     "{{name}} deletes files. Once enabled it acts on the candidates below as each grace period elapses, unless actions are paused.",
-  "settings.lifecycleArmDestructiveTitle":
-    "Enable a rule that deletes files?",
+  "settings.lifecycleArmDestructiveTitle": "Enable a rule that deletes files?",
   "settings.lifecycleArmDestructiveLoading":
     "Counting the candidates this rule already holds…",
   "settings.lifecycleArmDestructiveCount":
@@ -9755,8 +9758,7 @@ const en: LocaleDictionary = {
   "settings.lifecycleExclusionScopeGlobal": "Every rule",
   "settings.lifecycleExclusionRemove": "Remove exclusion",
   "settings.lifecycleExclusionRemoved": "Exclusion for {{title}} removed.",
-  "settings.lifecycleExclusionRemoving":
-    "Remove the exclusion for {{title}}?",
+  "settings.lifecycleExclusionRemoving": "Remove the exclusion for {{title}}?",
   "settings.lifecycleExcludeTitle": "Exclude from lifecycle rules",
   "settings.lifecycleExcludeBody":
     "{{title}} will be excluded from the next evaluation onward, and its candidate moves to excluded.",
@@ -9778,7 +9780,7 @@ const en: LocaleDictionary = {
   "settings.refLifecycleOutputUnknown":
     "unknown — boolean. Set it when the rule itself cannot see enough to decide; unknown always beats a match. Facts Scryer could not observe are already handled for you, so this is only for judgements of your own.",
   "settings.refLifecycleOutputReasons":
-    "reasons — a set of short machine codes explaining the decision. They are stored on the candidate and shown in preview.",
+    "reasons — a list or set of up to 32 short machine codes, each at most 120 characters, explaining the decision. They are stored on the candidate and shown in preview.",
   "settings.refLifecycleOutputNoPackage":
     "Do not write a package or import line. Scryer adds both when it stores the rule and strips them back off for the editor.",
   "settings.refLifecycleSectionInput": "— The evaluation envelope",
@@ -9820,25 +9822,36 @@ const en: LocaleDictionary = {
     "Display label of the title, season, or episode",
   "settings.refLifecycleSubjectYear": "Release year of the title, when known",
   "settings.refLifecycleSectionLibrary": "— The library the subject lives in",
-  "settings.refLifecycleLibraryId": "Identifier of the library holding the subject",
+  "settings.refLifecycleLibraryId":
+    "Identifier of the library holding the subject",
   "settings.refLifecycleLibraryName": "Display name of that library",
   "settings.refLifecycleSectionSeason": "Season (season heads only)",
   "settings.refLifecycleSeasonId": "Id of the season being decided.",
-  "settings.refLifecycleSeasonFacts": "The season's own facts, read by season heads such as delete_season_files.",
-  "settings.refLifecycleSeasonObservations": "Observation envelopes for the season's facts.",
+  "settings.refLifecycleSeasonFacts":
+    "The season's own facts, read by season heads such as delete_season_files.",
+  "settings.refLifecycleSeasonObservations":
+    "Observation envelopes for the season's facts.",
   "settings.refLifecycleSectionEpisode": "Episode (episode heads only)",
   "settings.refLifecycleEpisodeId": "Id of the episode being decided.",
-  "settings.refLifecycleEpisodeNumber": "Episode number within its season, when known.",
-  "settings.refLifecycleEpisodeFacts": "The episode's own facts, read by episode heads such as delete_episode_files.",
-  "settings.refLifecycleEpisodeObservations": "Observation envelopes for the episode's facts.",
-  "settings.refLifecycleFactsStorageRoots": "One entry for each configured root the subject's files are on, with that root's free space. Unknown when any of those roots cannot be read.",
+  "settings.refLifecycleEpisodeNumber":
+    "Episode number within its season, when known.",
+  "settings.refLifecycleEpisodeFacts":
+    "The episode's own facts, read by episode heads such as delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations":
+    "Observation envelopes for the episode's facts.",
+  "settings.refLifecycleFactsStorageRoots":
+    "One entry for each configured root the subject's files are on, with that root's free space. Unknown when any of those roots cannot be read.",
   "settings.refLifecycleSectionStorageRoots": "Storage root",
   "settings.refLifecycleStorageRootId": "Id of the configured root.",
   "settings.refLifecycleStorageRootPath": "Path of the configured root.",
-  "settings.refLifecycleStorageRootAvailableBytes": "Bytes free on the root's volume.",
-  "settings.refLifecycleStorageRootTotalBytes": "Total bytes on the root's volume.",
-  "settings.refLifecycleStorageRootAvailablePercent": "Free space on the root's volume, as a percentage of its total.",
-  "settings.refLifecycleFactsStorageRootsValue": "The roots the subject's files are on, when known.",
+  "settings.refLifecycleStorageRootAvailableBytes":
+    "Bytes free on the root's volume.",
+  "settings.refLifecycleStorageRootTotalBytes":
+    "Total bytes on the root's volume.",
+  "settings.refLifecycleStorageRootAvailablePercent":
+    "Free space on the root's volume, as a percentage of its total.",
+  "settings.refLifecycleFactsStorageRootsValue":
+    "The roots the subject's files are on, when known.",
   "settings.refLifecycleSectionFacts":
     "— The fact snapshot; each fact is a plain value, and the key is missing when the fact is absent or could not be observed",
   "settings.refLifecycleFactsMonitored": "Whether the subject is monitored",
@@ -9846,7 +9859,8 @@ const en: LocaleDictionary = {
     "User-defined tags inherited from the owning title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refLifecycleFactsQualityProfileId":
     "Quality profile inherited from the owning title",
-  "settings.refLifecycleFactsAddedAt": "When the subject was added to the library",
+  "settings.refLifecycleFactsAddedAt":
+    "When the subject was added to the library",
   "settings.refLifecycleFactsAddedByUserId":
     "Which user added the subject; absent when a scan or discovery created it",
   "settings.refLifecycleFactsAddedByUsername":
@@ -9859,15 +9873,17 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsFirstImportedAt":
     "When a file was first imported for the subject",
   "settings.refLifecycleFactsLastUpgradedAt":
-    "When the subject last received an upgrade",
+    "When the subject last received an upgrade. Not collected yet, so it is always unknown.",
   "settings.refLifecycleFactsHasFile":
     "Whether the subject has at least one file on disk",
-  "settings.refLifecycleFactsFileCount": "How many files the subject has on disk",
+  "settings.refLifecycleFactsFileCount":
+    "How many files the subject has on disk",
   "settings.refLifecycleFactsTotalFileSizeBytes":
     "Combined on-disk size of the subject's files",
   "settings.refLifecycleFactsFiles":
     "The subject's files, with per-file media detail",
-  "settings.refLifecycleFactsEpisodeCount": "How many episodes the subject covers",
+  "settings.refLifecycleFactsEpisodeCount":
+    "How many episodes the subject covers",
   "settings.refLifecycleFactsEpisodeFileCount":
     "How many of those episodes have a file",
   "settings.refLifecycleFactsMonitoredEpisodeCount":
@@ -9877,9 +9893,9 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Season rank by newest eligible downloaded episode",
   "settings.refLifecycleFactsActiveDownloads":
-    "Whether the subject has a download in flight",
+    "Whether the subject has a download in flight. Not collected yet, so it is always unknown.",
   "settings.refLifecycleFactsWatchedByUserIds":
-    "Users who watched this episode; for seasons, the same users must have watched every aired episode, including missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. Empty seasons are never completed.",
+    "Users who watched the subject. For a season or a whole show, only users who watched every aired episode in it, including episodes with missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. A season or show with no aired episodes is never completed.",
   "settings.refLifecycleFactsLastWatchedAt":
     "When the subject was last played by anyone",
   "settings.refLifecycleFactsWatchedByAnyRequester":
@@ -9900,7 +9916,8 @@ const en: LocaleDictionary = {
     "Names of the enabled public lists that still list the subject",
   "settings.refLifecycleFactsListsLeftAll":
     "Whether every list that ever listed the subject has dropped it",
-  "settings.refLifecycleFactsListsLeftAt": "When the last list dropped the subject",
+  "settings.refLifecycleFactsListsLeftAt":
+    "When the last list dropped the subject",
   "settings.refLifecycleFactsListsLastListName":
     "The public list the subject most recently left",
   "settings.refLifecycleFactsListsEnabledIds":
@@ -9937,7 +9954,8 @@ const en: LocaleDictionary = {
     "When the value was observed, if the source recorded a time",
   "settings.refLifecycleObsReason":
     "Stable machine code explaining why the fact is unknown, or why an absent fact has no value",
-  "settings.refLifecycleFactsMonitoredValue": "True when the subject is monitored",
+  "settings.refLifecycleFactsMonitoredValue":
+    "True when the subject is monitored",
   "settings.refLifecycleFactsTagsValue":
     "Lowercase user-defined tag names from the admin tag registry; never reserved scryer: settings entries",
   "settings.refLifecycleFactsQualityProfileIdValue":
@@ -9957,7 +9975,7 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsFirstImportedAtValue":
     "RFC3339 timestamp of the first import",
   "settings.refLifecycleFactsLastUpgradedAtValue":
-    "RFC3339 timestamp of the last upgrade",
+    "Always unknown with reason not_yet_collected: Scryer does not record upgrades yet, so a rule that reads it is held",
   "settings.refLifecycleFactsHasFileValue":
     "True when at least one file is on disk",
   "settings.refLifecycleFactsFileCountValue": "Number of files on disk",
@@ -9975,15 +9993,15 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Rank 1 is the season with the newest eligible downloaded, aired non-special episode. Protected files still occupy a rank.",
   "settings.refLifecycleFactsActiveDownloadsValue":
-    "True when a download for the subject is in flight",
+    "Always unknown with reason not_yet_collected: download state is not read yet, so a rule that reads it is held",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
-    "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. Season completion requires the same person to have watched every aired episode, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown for title-scoped shows (show_watch_rollup_unavailable), when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
+    "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. For a season or show, a person counts only after watching every aired episode in it, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing when a play has no recorded time",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
-    "True when at least one requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
+    "True when at least one requester played it; known false for a season or show with no aired episodes; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
   "settings.refLifecycleFactsWatchedByAllRequestersValue":
-    "True when every requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
+    "True when every requester played it; known false for a season or show with no aired episodes; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
   "settings.refLifecycleFactsRequestLeaseStateValue":
     "none when no request lease was ever written for the subject, dormant when a lease is waiting for the first import, active while a lease is running, and expired once every lease has run out. A lease that was released or converted is withdrawn rather than spent, so it does not make the state expired. Expiry is measured against the evaluation time, so a lease reads as expired the moment its window closes.",
   "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
@@ -10026,7 +10044,8 @@ const en: LocaleDictionary = {
     "One of manual, public_list or personal_list; absent with reason title_not_requested when no request created the title",
   "settings.refLifecycleFactsRequestListNameValue":
     "Name of that public list; absent with reason no_public_request_list for manual and personal-list requests, because a personal list is never named",
-  "settings.refLifecycleSectionFiles": "— One entry per file in input.facts.files",
+  "settings.refLifecycleSectionFiles":
+    "— One entry per file in input.facts.files",
   "settings.refLifecycleFileSizeBytes": "Size of the file in bytes",
   "settings.refLifecycleFileQuality":
     "Detected quality of the file (for example 2160P, 1080P)",
@@ -10038,10 +10057,12 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFileVideoHeight": "Video height in pixels",
   "settings.refLifecycleFactsRuntimeMinutes":
     "Runtime in minutes, as the metadata provider gave it",
-  "settings.refLifecycleFactsOriginalLanguage": "Original language of the title",
+  "settings.refLifecycleFactsOriginalLanguage":
+    "Original language of the title",
   "settings.refLifecycleFactsSeriesStatus":
     "Status of a show as the metadata provider gave it, such as continuing or ended",
-  "settings.refLifecycleFactsFirstAired": "Date the show first aired (YYYY-MM-DD)",
+  "settings.refLifecycleFactsFirstAired":
+    "Date the show first aired (YYYY-MM-DD)",
   "settings.refLifecycleFactsNetwork": "Network that airs the show",
   "settings.refLifecycleFactsStudio": "Studio that made the title",
   "settings.refLifecycleFactsCountry": "Country of origin",
@@ -10124,9 +10145,9 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsOriginalLanguageValue":
     "Original language; absent when the metadata provider gave no value",
   "settings.refLifecycleFactsSeriesStatusValue":
-    "Show status as the provider gave it; absent when the provider gave no value",
+    "Show status as the provider gave it; absent for a movie, or when the provider gave no value",
   "settings.refLifecycleFactsFirstAiredValue":
-    "First air date (YYYY-MM-DD), a date rather than a timestamp; absent when the provider gave no value",
+    "First air date (YYYY-MM-DD), a date rather than a timestamp; absent for a movie, or when the provider gave no value",
   "settings.refLifecycleFactsNetworkValue":
     "Network name; absent when the provider gave no value",
   "settings.refLifecycleFactsStudioValue":
@@ -10136,11 +10157,11 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsPopularityValue":
     "Popularity score; absent when the provider gave no value",
   "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "Theatrical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+    "Theatrical release date (YYYY-MM-DD): the earliest for the release market, otherwise the earliest from any market. Absent for a show, or when there is no theatrical date; unknown with reason not_yet_collected until the movie's release dates have been fetched",
   "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "Digital release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+    "Digital release date (YYYY-MM-DD): the earliest for the release market, otherwise the earliest from any market, otherwise the digital date on the title. Absent for a show, or when there is no digital date; unknown with reason not_yet_collected until the movie's release dates have been fetched and the title has no digital date",
   "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "Physical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+    "Physical release date (YYYY-MM-DD): the earliest for the release market, otherwise the earliest from any market. Absent for a show, or when there is no physical date; unknown with reason not_yet_collected until the movie's release dates have been fetched",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "Whole days since the subject was added, counted against the evaluation clock",
   "settings.refLifecycleFactsMaxVideoHeightValue":
@@ -10189,7 +10210,8 @@ const en: LocaleDictionary = {
     "True when a favorite read from Jellyfin or Emby covers the subject, counted as for favorited_by_user_ids, whether or not the account is linked to a Scryer user. False once every account on every enabled Jellyfin and Emby server has had its favorites read in full recently and none covers the subject. Unknown with reason audience_favorites_not_read while some account on such a server has no recent complete read, with reason audience_favorites_unsupported while a Plex server is enabled, since Plex accounts could have favorites Scryer cannot read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
   "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
     "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account, with reason favorites_member_not_read when a requester's favorites have no recent complete read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
-  "settings.refLifecycleFileAudioLanguages": "Audio languages present in the file",
+  "settings.refLifecycleFileAudioLanguages":
+    "Audio languages present in the file",
   "settings.refLifecycleFileSubtitleLanguages":
     "Subtitle languages present in the file",
   "settings.refLifecycleFileAddedAt": "RFC3339 timestamp the file was added",
@@ -10201,7 +10223,8 @@ const en: LocaleDictionary = {
     "— One entry per linked movie in input.facts.series_movies",
   "settings.refLifecycleSectionObsSeriesMovies":
     "— One entry per linked movie in input.observations.series_movies.value",
-  "settings.refLifecycleSeriesMovieLinkId": "Identifier of the series-movie link",
+  "settings.refLifecycleSeriesMovieLinkId":
+    "Identifier of the series-movie link",
   "settings.refLifecycleSeriesMovieName": "Title of the linked movie",
   "settings.refLifecycleSeriesMovieYear":
     "Release year of the linked movie, when known",
@@ -10219,7 +10242,8 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "Edit this rule as Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
     "Once you edit the code, it must stay an Advanced rule and can no longer be opened in Simple, even after you save it.",
-  "settings.ruleBuilderIncomplete": "Some choices are unfinished. Fix the items marked in the builder, then save.",
+  "settings.ruleBuilderIncomplete":
+    "Some choices are unfinished. Fix the items marked in the builder, then save.",
   "settings.ruleBuilderConditions": "Conditions",
   "settings.ruleBuilderJoinAll": "All conditions match",
   "settings.ruleBuilderJoinAny": "Any condition matches",
@@ -10228,8 +10252,10 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderAction": "Action",
   "settings.ruleBuilderActionPlaceholder": "Choose an action",
   "settings.ruleBuilderActionConditions": "Only when",
-  "settings.ruleBuilderActionConditionsHelp": "This action runs only when these match too, on top of the rule's conditions. Other actions are not affected.",
-  "settings.ruleBuilderAddActionCondition": "Add a condition for this action only",
+  "settings.ruleBuilderActionConditionsHelp":
+    "This action runs only when these match too, on top of the rule's conditions. Other actions are not affected.",
+  "settings.ruleBuilderAddActionCondition":
+    "Add a condition for this action only",
   "settings.ruleBuilderAddAction": "Add action",
   "settings.ruleBuilderProblemActionRequired": "Choose an action.",
   "settings.ruleBuilderFact": "Fact",
@@ -10325,12 +10351,11 @@ const en: LocaleDictionary = {
   "settings.lifecycleDeclaredActionsNone": "No actions",
   "settings.lifecycleDecidedActionsNone": "No actions",
   "settings.lifecycleRuleWarningsTitle": "Warnings",
-  "settings.lifecycleRuleWarningLocation":
-    "Line {{line}}, column {{column}}:",
+  "settings.lifecycleRuleWarningLocation": "Line {{line}}, column {{column}}:",
   "settings.refLifecycleOutputFlagHeads":
-    "Actions without a value (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) are booleans: define them with if, and the action applies when the body holds.",
+    "Actions without a value are booleans: define them with if, and the action applies when the body holds. For the title: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title. For one season of a series: monitor_season, unmonitor_season, delete_season_files and fetch_season_subtitles. For one episode: monitor_episode, unmonitor_episode, delete_episode_files and fetch_episode_subtitles.",
   "settings.refLifecycleOutputValueHeads":
-    "Actions with a value (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) assign a plain literal with :=. An else chain may choose between literals; a computed value is rejected.",
+    "Actions with a value assign a literal with :=. set_quality_profile, move_to_library, move_to_root, notify, notify_season and notify_episode take a string; add_tags and remove_tags take a list of strings. An else chain may choose between literals; a computed value is rejected.",
   "settings.refLifecycleOutputHelpers":
     "Any other rule name is a helper of your own. It only has an effect when an action, unknown or reasons uses it.",
   "settings.refLifecycleActionsTitle": "Actions",
@@ -10339,7 +10364,7 @@ const en: LocaleDictionary = {
   "settings.refLifecycleActionsDaysSince":
     "days_since(timestamp) returns the whole days between an RFC3339 timestamp and the evaluation time, so days_since(input.facts.added_at) > 180 means added more than 180 days ago.",
   "settings.refLifecycleActionsNotify":
-    "notify sends its message once, when the actions are applied. Previews and dry runs never send it.",
+    "notify sends its message once, after the rule's other actions have actually changed something, or right away when notify is the rule's only action. Nothing is sent when every action was already in place. Previews and dry runs never send it.",
   "settings.refLifecycleActionsConflicts":
     "Conflicting actions hold with a reason instead of applying either. That covers one subject, such as monitor with unmonitor or the same tag both added and removed, and also a title against its seasons or episodes and a season against its episodes, such as monitoring a show while deleting one of its seasons' files.",
   "settings.refLifecycleTagActionsTitle": "Tag actions",
@@ -10524,9 +10549,9 @@ const en: LocaleDictionary = {
   "settings.refReqOutputApprove":
     "approve — the request may be granted without a person seeing it.",
   "settings.refReqOutputDeny":
-    "deny — the request is refused. A denial beats every other vote.",
+    "deny — the request is refused. Across rules, a denial beats every other vote; within one rule, manual outranks deny.",
   "settings.refReqOutputManual":
-    "manual — the request goes to a person, whatever else voted.",
+    "manual — the request goes to a person unless another rule denies it. A rule that errors or is held counts as manual.",
   "settings.refReqOutputTags":
     'add_tags := ["…"] — tags for the title, applied only on an approval.',
   "settings.refReqOutputSetQualityProfile":
@@ -10663,7 +10688,7 @@ const en: LocaleDictionary = {
   "settings.refReqRequesterUserId": "Identifier of the requesting account",
   "settings.refReqRequesterUsername": "Username of the requesting account",
   "settings.refReqRequesterAccountKind":
-    "How the account signs in (for example local, or a linked provider)",
+    "How the account was created: local, or external_auto_provisioned for an account made on first sign-in through an identity provider",
   "settings.refReqRequesterAppPermissions":
     "Application-wide permissions the account holds",
   "settings.refReqRequesterLibraryPermissions":
@@ -10680,7 +10705,7 @@ const en: LocaleDictionary = {
   "settings.refReqLibraryId": "Identifier of the library",
   "settings.refReqLibraryName": "Name of the library",
   "settings.refReqLibraryFacet":
-    "Kind of media the library holds (MOVIE, SERIES or ANIME)",
+    "Kind of media the library holds (movie, series or anime)",
   "settings.refReqLibraryIsDefault":
     "True when this is the default library for its kind",
   "settings.refReqSectionRequest": "— What was asked for",
@@ -10694,7 +10719,7 @@ const en: LocaleDictionary = {
     "Identifier of the quality profile the requester chose",
   "settings.refReqRequestQualityProfileName": "Name of that profile",
   "settings.refReqRequestMonitorType":
-    "Monitoring the requester asked for (for example ALL_EPISODES)",
+    "Monitoring the requester asked for, in lower case with spaces, dashes and underscores removed (for example allepisodes)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "How many seasons an advanced monitoring selection named",
   "settings.refReqRequestMonitorSelectionSeasons":
@@ -10702,7 +10727,7 @@ const en: LocaleDictionary = {
   "settings.refReqRequestLeaseForever":
     "True when the requester asked to keep the media forever",
   "settings.refReqRequestLeaseDays":
-    "How many days the requester asked to keep it for; absent when they asked for forever",
+    "How many days the requester asked to keep it for; null when they asked for forever",
   "settings.refReqRequestRequiredAudioLanguages":
     "Audio languages the requester said the title must have. null leaves it to the library; an empty list asks for no requirement",
   "settings.refReqRequestPreferredAudioLanguages":
@@ -10729,7 +10754,7 @@ const en: LocaleDictionary = {
   "settings.refReqRequestListIsWatchlist":
     "True when the list is the owner's own watch-later list on a linked account",
   "settings.refReqRequestListSourceType":
-    "The kind of list at the provider, in lower case (for example watchlist or user_list)",
+    "The kind of list at the provider, in lower case (for example watchlist, plantowatch or list)",
   "settings.refReqExternalIdsTmdb":
     "TMDB identifier, when the provider had one",
   "settings.refReqExternalIdsImdb":
@@ -10780,7 +10805,7 @@ const en: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIds":
     "Libraries that already hold this title",
   "settings.refReqFactsPreviousRequestCount":
-    "How many times this requester has asked for this title before",
+    "How many times anyone has asked for this title before",
   "settings.refReqFactsPreviouslyDenied":
     "Whether one of those earlier requests was denied",
   "settings.refReqFactsPreviouslyApproved":
@@ -10883,8 +10908,10 @@ const en: LocaleDictionary = {
   "settings.refReqFactsStudioValue": "Name of the studio",
   "settings.refReqFactsContentStatusValue":
     "The provider's content status string",
-  "settings.refReqFactsReleaseDateValue": "RFC3339 release date",
-  "settings.refReqFactsFirstAiredValue": "RFC3339 first air date",
+  "settings.refReqFactsReleaseDateValue":
+    "Release date as the source reports it, RFC3339 or YYYY-MM-DD",
+  "settings.refReqFactsFirstAiredValue":
+    "First air date as the source reports it, RFC3339 or YYYY-MM-DD",
   "settings.refReqFactsReleaseAgeDaysValue":
     "Whole days since release or first airing",
   "settings.refReqFactsAwardCountValue":
@@ -10898,7 +10925,7 @@ const en: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIdsValue":
     "Identifiers of libraries already holding the title; an empty list when none do",
   "settings.refReqFactsPreviousRequestCountValue":
-    "Number of earlier requests by this requester for this title",
+    "Number of earlier requests by any requester for this title",
   "settings.refReqFactsPreviouslyDeniedValue":
     "True when one of those earlier requests was denied",
   "settings.refReqFactsPreviouslyApprovedValue":
@@ -12356,8 +12383,7 @@ const en: LocaleDictionary = {
     "Held by an earlier run that had used up its action steps. Runs no longer have that limit; the action runs on the next run.",
   "settings.lifecycleExecutionReason.passHighRiskStepBudget":
     "Held: deletions failed repeatedly in this run, so the remaining deletions wait for the next run.",
-  "settings.lifecycleExecutionReason.actionSucceeded":
-    "The action completed.",
+  "settings.lifecycleExecutionReason.actionSucceeded": "The action completed.",
   "settings.lifecycleExecutionReason.alreadySatisfied":
     "Nothing to change: the title was already as the action would leave it.",
   "settings.lifecycleExecutionReason.retryPending":
@@ -12380,14 +12406,12 @@ const en: LocaleDictionary = {
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
   "settings.lifecycleRuleMaxTitlesPerRunNone": "No limit",
-  "settings.lifecycleRuleLoadRefused":
-    "This rule cannot run as it is stored.",
+  "settings.lifecycleRuleLoadRefused": "This rule cannot run as it is stored.",
   "settings.lifecycleSequenceStepMonitor": "Monitor",
   "settings.lifecycleSequenceStepFetchSubtitles": "Fetch subtitles",
   "settings.lifecycleSequenceStepMoveToLibrary": "Move to library",
   "settings.lifecycleSequenceStepMoveToRoot": "Move to root folder",
-  "settings.notificationEvent.lifecycleRuleNotified":
-    "Lifecycle Rule Notified",
+  "settings.notificationEvent.lifecycleRuleNotified": "Lifecycle Rule Notified",
   "settings.lifecycleExecutionReason.tagNotDefined":
     "Held: a tag this rule writes is no longer defined in Settings › Tags.",
   "settings.lifecycleExecutionReason.tagPatchConflict":

@@ -99,7 +99,7 @@ score_entry["hevc_bonus"] := 100 if {
 }
 
 score_entry["x264_4k_penalty"] := -200 if {
-    input.release.quality == "2160P"
+    input.release.quality == "2160p"
     scryer.normalize_codec(input.release.video_codec) == "H.264"
 }`,
   },

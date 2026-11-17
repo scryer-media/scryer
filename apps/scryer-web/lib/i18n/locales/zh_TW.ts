@@ -875,8 +875,7 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同級最小分數差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一品質級別的資源必須比當前檔案的分數至少高出此值。",
-  "qualityProfile.minMissingEpisodesForPack":
-    "劇集包所需的最少缺失集數",
+  "qualityProfile.minMissingEpisodesForPack": "劇集包所需的最少缺失集數",
   "qualityProfile.minMissingEpisodesForPackInfo":
     "只有當該季缺失至少這麼多集時才搜尋季包。預設 2。設為 1 時，針對單一缺失集的自動搜尋也可以選擇劇集包，這可能會下載你已有的劇集。",
   "qualityProfile.minMissingPercentForSeriesPack":
@@ -2347,7 +2346,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refTitle": "輸入情境參考",
   "settings.refSubtitle": "點擊以展開適用於您的 Rego 規則的所有欄位完整參考。",
   "settings.refIntro":
-    "每條規則都會收到一個包含五個最上層文件的 input 物件。您的 Rego 程式碼可透過 input.release、input.profile、input.context、input.builtin_score 與 input.file 存取這些文件。input.file 在下載前評分期間為 null，僅在下載後匯入評估時填入。",
+    "每條規則都會收到一個包含五個最上層文件的 input 物件。您的 Rego 程式碼可透過 input.release、input.profile、input.context、input.builtin_score 與 input.file 存取這些文件。為索引器結果評分時 input.file 為 null；只要檔案本身經過分析就會填入：在下載後的匯入檢查時，以及重新為媒體庫中已有的檔案評分時。",
   "settings.refColField": "欄位",
   "settings.refColType": "類型",
   "settings.refColDescription": "說明",
@@ -2355,19 +2354,24 @@ const zh_TW: LocaleDictionary = {
   "settings.refColReturns": "回傳值",
   "settings.refSectionRelease": "— 已解析的發行版本中繼資料",
   "settings.refReleaseRawTitle": "來自索引器的原始未解析發行版本標題",
-  "settings.refReleaseQuality": "偵測到的品質層級（例如 2160P、1080P、720P）",
-  "settings.refReleaseSource": "媒體來源（例如 WEB-DL、BLURAY、HDTV）",
+  "settings.refReleaseQuality":
+    "偵測到的品質層級，小寫（例如 2160p、1080p、720p）",
+  "settings.refReleaseSource":
+    "從名稱解析出的媒體來源（例如 WEB-DL、WEBRip、BluRay、HDTV）。scryer.normalize_source 會提供大寫形式（WEBDL、WEBRIP、BLURAY）",
   "settings.refReleaseVideoCodec": "視訊編解碼器（例如 H.265、H.264、AV1）",
-  "settings.refReleaseAudio": "主要音訊編解碼器（例如 DDP、AAC、TrueHD）",
+  "settings.refReleaseAudio":
+    "主要音訊編解碼器（例如 DDP、AAC、TRUEHD、DTSMA）",
   "settings.refReleaseAudioCodecs": "以陣列形式列出所有偵測到的音訊編解碼器",
   "settings.refReleaseGuideFacts": "從發行版本中繼資料偵測到的指南事實",
   "settings.refReleaseNormalizedTokens": "發行版本解析器產生的已排序正規化標記",
   "settings.refReleaseAudioChannels": "聲道設定（例如 5.1、7.1、2.0）",
-  "settings.refReleaseLangsAudio": "ISO 639-3 音訊語言代碼（例如 eng、jpn）",
+  "settings.refReleaseLangsAudio":
+    "ISO 639-3 音訊語言代碼（例如 eng、jpn）。包含索引器清單回報、在抓取版本時凍結的語言，以及 Scryer 推斷的語言：dual-audio 或 MULTi 標記會加入作品的原始語言（未指明語言時另加 eng），未標示語言的版本在設定檔要求音訊語言時會加入原始語言。在保留清單快照之前掃描、採用或匯入的檔案，只提供名稱與檔案本身顯示的資訊",
   "settings.refReleaseIndexerLanguages":
     "索引器列表本身回報的 ISO 639-3 音訊語言代碼，於抓取發行時凍結；從不由名稱或作品推斷，索引器未回報時為空",
   "settings.refReleaseLangsSub": "ISO 639-3 字幕語言代碼",
-  "settings.refReleaseIsDualAudio": "偵測到多個音軌時為 true",
+  "settings.refReleaseIsDualAudio":
+    "版本名稱帶有雙音軌（dual-audio）標記時為 true",
   "settings.refReleaseIsAtmos": "存在杜比全景聲 (Dolby Atmos) 音訊時為 true",
   "settings.refReleaseIsDV": "偵測到杜比視界 (Dolby Vision) 中繼資料時為 true",
   "settings.refReleaseHasHdrFallback":
@@ -2470,17 +2474,24 @@ const zh_TW: LocaleDictionary = {
     "為未標記發行版本推斷的正規化原始音訊語言",
   "settings.refCtxTags":
     "作品上的使用者自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
-  "settings.refCtxHasExisting": "此作品已存在檔案時為 true",
-  "settings.refCtxExistingScore": "現有檔案的內建評分（若有）",
-  "settings.refCtxSearchMode": "評估模式。目前的值為 auto 與 post_download",
-  "settings.refCtxRuntimeMin": "內容播放長度（分鐘）",
+  "settings.refCtxHasExisting":
+    "已有檔案佔用此槽位時為 true。僅在下載後的匯入檢查時設定；為索引器結果評分時一律為 false",
+  "settings.refCtxExistingScore":
+    "槽位中現有檔案的完整評分（包含規則）。僅在下載後的匯入檢查時設定；其他情況為 null",
+  "settings.refCtxSearchMode":
+    "評分的使用場合：canonical（搜尋、抓取與媒體庫評分）或 post_download（對已下載檔案的匯入檢查）",
+  "settings.refCtxRuntimeMin":
+    "受評內容的播放長度（分鐘）；多集或整季版本會將各集加總",
   "settings.refCtxIsAnime": "作品分類為動漫時為 true",
   "settings.refCtxIsFiller": "單集標記為過場/動畫原創時為 true",
   "settings.refSectionBuiltinScore": "— 內建評分引擎結果",
-  "settings.refBuiltinTotal": "來自內建評分引擎的總分",
+  "settings.refBuiltinTotal":
+    "來自內建評分引擎的總分。存在基準規則（baseline）時，後續規則在此看到的是基準小計，而基準規則本身看到的是 0",
   "settings.refBuiltinBlocked": "內建規則封鎖此發行版本時為 true",
-  "settings.refBuiltinCodes": "已套用的評分代碼清單（例如 quality_tier_0）",
-  "settings.refSectionFile": "— 實際分析的檔案中繼資料（下載前為 null）",
+  "settings.refBuiltinCodes":
+    "已套用的評分代碼清單（例如 quality_resolution_1080p）。存在基準規則（baseline）時，也包含其代碼",
+  "settings.refSectionFile":
+    "— 已分析的檔案中繼資料（為索引器結果評分時為 null）",
   "settings.refFileVideoCodec": "透過媒體分析驗證的視訊編解碼器",
   "settings.refFileVideoWidth": "以像素為單位的已驗證視訊寬度",
   "settings.refFileVideoHeight": "以像素為單位的已驗證視訊高度",
@@ -2523,7 +2534,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refSubtitleStreamDefault": "字幕串流標記為預設 (Default) 時為 true",
   "settings.refSectionBuiltins": "自訂 Scryer 函式",
   "settings.refBuiltinsIntro":
-    "除了所有標準 OPA 內建函式之外，您的 Rego 規則亦可使用這些輔助函式。",
+    "除了核心 Rego 內建函式、regex 與 time 之外，您的 Rego 規則亦可使用這些輔助函式。其他 OPA 內建函式群組，例如 encoding、glob、semver、net 與 http，則無法使用。",
   "settings.refFnBlockScore": "返回可由其他加分抵消的 -10000 分懲罰",
   "settings.refFnSizeGib":
     "將位元組數轉換為 GiB（例如 scryer.size_gib(input.release.size_bytes) > 50）",
@@ -2539,7 +2550,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "無網路或檔案系統存取權限 — 規則無法發出 HTTP 請求、讀取檔案或執行任何 I/O。如 http.send 等標準 OPA 內建函式皆無法使用。",
   "settings.refSandboxPkgIsolation":
-    "套件隔離 — 每條規則會自動命名空間隔離至其獨立的 package。規則無法讀取或修改其他規則的資料。",
+    "套件隔離 — 每條規則會自動命名空間隔離至其獨立的 package，且無法修改其他規則。非基準（baseline）規則可透過 data.scryer.rules.user.<id> 讀取其他規則的輸出。",
   "settings.refSandboxReadOnly":
     "唯讀輸入 — 規則僅能讀取輸入文件。規則無法修改應用程式狀態或在多次評估之間保留資料。",
   "settings.refSandboxOutputRestricted":
@@ -2549,7 +2560,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refSandboxValidation":
     "儲存前驗證 — 規則在儲存前會針對合成輸入進行編譯與模擬試行測試。無效的規則將被拒絕。",
   "settings.refSandboxErrorIsolation":
-    "錯誤隔離 — 若單一規則在執行階段失敗，所有其他規則仍會繼續正常評估。失敗會記錄在日誌中，但絕不會中斷評分流程。",
+    "錯誤隔離 — 若單一規則在執行階段失敗，所有其他規則仍會繼續正常評估。評分時，失敗會記錄在日誌中，且該規則貢獻 0 分。在下載後的匯入檢查時，您的規則失敗會暫緩匯入以待審查。",
   "settings.refSectionOutput": "規則輸出格式",
   "settings.refOutputIntro":
     "規則必須定義一個 score_entry 規則，回傳一個將字串索引鍵（評分代碼）對應至整數值（分數增減）的 map。正值提升發行版本，負值懲罰發行版本，而 scryer.block_score() 則提供可復原的 -10000 懲罰分。資格是在計算所有貢獻後決定的；強制的品質設定檔要求仍具阻擋性。以檔案為基礎的規則在下載前自然會成為無操作 (no-op)，因為 input.file 在下載後評估之前皆為 null。",
@@ -4223,8 +4234,7 @@ const zh_TW: LocaleDictionary = {
   "settings.noLifecycleRulesFound": "暫無生命週期規則。",
   "settings.lifecycleRuleRevision": "修訂版",
   "settings.lifecycleActionDoNothing": "不執行任何操作",
-  "settings.lifecycleActionUnmonitorScopeKeepFiles":
-    "取消監控該範圍，保留檔案",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles": "取消監控該範圍，保留檔案",
   "settings.lifecycleActionDeleteTitleAndFiles": "刪除該標題及其檔案",
   "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "取消監控該標題，刪除全部檔案",
@@ -4264,8 +4274,7 @@ const zh_TW: LocaleDictionary = {
   "settings.lifecycleRuleCreated": "生命週期規則已建立，並以停用狀態儲存。",
   "settings.lifecycleRuleDeleted": "生命週期規則 {{name}} 已刪除。",
   "settings.lifecycleArmDestructiveLoading": "正在統計該規則已持有的候選項…",
-  "settings.lifecycleArmDestructiveCount":
-    "有 {{count}} 個候選項可能被處理。",
+  "settings.lifecycleArmDestructiveCount": "有 {{count}} 個候選項可能被處理。",
   "settings.lifecycleArmDestructiveNoCandidates":
     "該規則目前沒有可被處理的候選項。",
   "settings.lifecycleArmDestructiveCountChanged":
@@ -4355,7 +4364,8 @@ const zh_TW: LocaleDictionary = {
     "規則已符合的作品，最早到期的排在最前。這裡的項目都尚未被處理。",
   "settings.lifecycleRuleTemplate": "範本",
   "settings.lifecycleRuleTemplatePlaceholder": "從範本開始",
-  "settings.refLifecycleFactsListsAddedByList": "主體是否由清單而非人員加入媒體庫",
+  "settings.refLifecycleFactsListsAddedByList":
+    "主體是否由清單而非人員加入媒體庫",
   "settings.refLifecycleFactsListsOnEnabledList":
     "是否仍有任何已啟用的清單（公開或個人）列有此主體",
   "settings.refLifecycleFactsListsNames": "仍列有此主體的已啟用公開清單名稱",
@@ -4481,11 +4491,12 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleOutputUnknown":
     "unknown — 布林值。當規則本身資訊不足無法決策時進行設定；unknown 永遠優先於 match。Scryer 無法觀察到的事實已為您自動處理，因此這僅用於您自己的判斷。",
   "settings.refLifecycleOutputReasons":
-    "reasons — 一組用於說明決策的簡短機器代碼。它們會儲存在候選項目上並顯示在預覽中。",
+    "reasons — 由最多 32 個簡短機器代碼組成的清單或集合，每個最多 120 個字元，用於說明決策。它們會儲存在候選項目上並顯示在預覽中。",
   "settings.refLifecycleOutputNoPackage":
     "請勿撰寫 package 或 import 行。Scryer 在儲存規則時會自動新增這兩者，並在載入編輯器時將其去除。",
   "settings.refLifecycleSectionInput": "— 評估外層封裝",
-  "settings.refLifecycleInputSchemaVersion": "此規則所依據撰寫的生命週期輸入文件版本",
+  "settings.refLifecycleInputSchemaVersion":
+    "此規則所依據撰寫的生命週期輸入文件版本",
   "settings.refLifecycleInputEvaluationTime":
     "每次執行擷取一次的 RFC3339 時間戳記，讓每個主體與相同的時鐘進行比較。請將其用於日期計算 — 雖然存在 time.now_ns()，但它會讓同一主體在重試時產生不同決策。",
   "settings.refLifecycleSectionSubject": "— 評估中的作品、季或單集",
@@ -4502,11 +4513,13 @@ const zh_TW: LocaleDictionary = {
   "settings.lifecycleFileProgress":
     "已刪除 {{completed}} 個 · 剩餘 {{remaining}} 個",
   "settings.refLifecycleSubjectId": "所選範圍的 Scryer 作品、合集或單集識別碼",
-  "settings.refLifecycleCollectionId": "季與單集主體所屬的季度合集 ID（若已知）",
+  "settings.refLifecycleCollectionId":
+    "季與單集主體所屬的季度合集 ID（若已知）",
   "settings.refLifecycleSubjectKind":
     "評估中的細微程度：title（作品）、season（季）或 episode（單集）",
   "settings.refLifecycleSubjectTitleId": "主體所屬作品的 Scryer 識別碼",
-  "settings.refLifecycleSubjectSeasonNumber": "季與單集主體的季度編號（若已知）",
+  "settings.refLifecycleSubjectSeasonNumber":
+    "季與單集主體的季度編號（若已知）",
   "settings.refLifecycleSubjectEpisodeId": "單集識別碼；僅存在於單集主體",
   "settings.refLifecycleSubjectFacet":
     "作品的媒體面向（movie 電影、series 影集、anime 動漫）",
@@ -4517,21 +4530,27 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleLibraryName": "該媒體庫的顯示名稱",
   "settings.refLifecycleSectionSeason": "季（僅限季動作）",
   "settings.refLifecycleSeasonId": "正在判斷的季 ID。",
-  "settings.refLifecycleSeasonFacts": "季本身的事實，由季動作（例如 delete_season_files）讀取。",
+  "settings.refLifecycleSeasonFacts":
+    "季本身的事實，由季動作（例如 delete_season_files）讀取。",
   "settings.refLifecycleSeasonObservations": "季事實的觀察封套。",
   "settings.refLifecycleSectionEpisode": "集數（僅限集數動作）",
   "settings.refLifecycleEpisodeId": "正在判斷的集數 ID。",
   "settings.refLifecycleEpisodeNumber": "集數在該季內的編號（若已知）。",
-  "settings.refLifecycleEpisodeFacts": "集數本身的事實，由集數動作（例如 delete_episode_files）讀取。",
+  "settings.refLifecycleEpisodeFacts":
+    "集數本身的事實，由集數動作（例如 delete_episode_files）讀取。",
   "settings.refLifecycleEpisodeObservations": "集數事實的觀察封套。",
-  "settings.refLifecycleFactsStorageRoots": "主體檔案所在的每個已設定根目錄各一項，連同該根目錄的可用空間。任何一個根目錄無法讀取時為未知。",
+  "settings.refLifecycleFactsStorageRoots":
+    "主體檔案所在的每個已設定根目錄各一項，連同該根目錄的可用空間。任何一個根目錄無法讀取時為未知。",
   "settings.refLifecycleSectionStorageRoots": "儲存空間根目錄",
   "settings.refLifecycleStorageRootId": "已設定根目錄的 ID。",
   "settings.refLifecycleStorageRootPath": "已設定根目錄的路徑。",
-  "settings.refLifecycleStorageRootAvailableBytes": "根目錄所在磁碟區的可用位元組。",
+  "settings.refLifecycleStorageRootAvailableBytes":
+    "根目錄所在磁碟區的可用位元組。",
   "settings.refLifecycleStorageRootTotalBytes": "根目錄所在磁碟區的總位元組。",
-  "settings.refLifecycleStorageRootAvailablePercent": "根目錄所在磁碟區的可用空間佔總量的百分比。",
-  "settings.refLifecycleFactsStorageRootsValue": "主體檔案所在的根目錄（若已知）。",
+  "settings.refLifecycleStorageRootAvailablePercent":
+    "根目錄所在磁碟區的可用空間佔總量的百分比。",
+  "settings.refLifecycleFactsStorageRootsValue":
+    "主體檔案所在的根目錄（若已知）。",
   "settings.refLifecycleSectionFacts":
     "— 事實快照；每個事實為純值，當事實不存在或無法觀察到時，該欄位會缺失",
   "settings.refLifecycleFactsMonitored": "該主體是否受到監控",
@@ -4547,21 +4566,24 @@ const zh_TW: LocaleDictionary = {
     "請求該主體的使用者：提交者加上任何其他請求者",
   "settings.refLifecycleFactsRequestedByUsernames": "這些請求者的使用者名稱",
   "settings.refLifecycleFactsFirstImportedAt": "主體首次匯入檔案的時間",
-  "settings.refLifecycleFactsLastUpgradedAt": "主體上次升級的時間",
+  "settings.refLifecycleFactsLastUpgradedAt":
+    "主體上次升級的時間。目前尚未收集，因此一律為 unknown。",
   "settings.refLifecycleFactsHasFile": "主體在硬碟上是否至少有一個檔案",
   "settings.refLifecycleFactsFileCount": "主體在硬碟上有多少個檔案",
   "settings.refLifecycleFactsTotalFileSizeBytes": "主體檔案在硬碟上的總大小",
   "settings.refLifecycleFactsFiles": "主體的檔案，包含各檔案媒體詳細資訊",
   "settings.refLifecycleFactsEpisodeCount": "主體涵蓋多少單集",
   "settings.refLifecycleFactsEpisodeFileCount": "這些單集中有多少個具備檔案",
-  "settings.refLifecycleFactsMonitoredEpisodeCount": "這些單集中有多少個受到監控",
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
+    "這些單集中有多少個受到監控",
   "settings.refLifecycleFactsEpisodePositionByAirDate":
     "單集在其節目中按播出日期的排名",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "依最新符合資格的已下載單集排名的季度順序",
-  "settings.refLifecycleFactsActiveDownloads": "主體是否有正在進行中的下載",
+  "settings.refLifecycleFactsActiveDownloads":
+    "主體是否有正在進行中的下載。目前尚未收集，因此一律為 unknown。",
   "settings.refLifecycleFactsWatchedByUserIds":
-    "觀看過此單集的使用者；對於季，相同使用者必須觀看過每一集已播出的單集（包括遺失的檔案）。未來單集已排除；未確定的播出日期或不完整的信號為未知。空季度永遠不會完成。",
+    "觀看過此主體的使用者。對於一季或整部影集，僅計入看過其中每一集已播出單集的使用者，包括檔案遺失的單集。未來單集已排除；未確定的播出日期或不完整的信號為 unknown。沒有已播出單集的季或影集永遠不會算作完成。",
   "settings.refLifecycleFactsLastWatchedAt": "任何使用者上次播放該主體的時間",
   "settings.refLifecycleFactsWatchedByAnyRequester":
     "主體的請求者中是否至少有一人播放過它",
@@ -4571,7 +4593,8 @@ const zh_TW: LocaleDictionary = {
     "主體請求租約的聚合狀態：none、dormant、active 或 expired",
   "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "主體最後一筆有效租約到期的時間",
-  "settings.refLifecycleFactsActiveRetentionClaims": "仍鎖定該主體的請求租約數量",
+  "settings.refLifecycleFactsActiveRetentionClaims":
+    "仍鎖定該主體的請求租約數量",
   "settings.refLifecycleObsStatus":
     "known、absent 或 unknown。absent 表示來源已回應且無值；unknown 表示 Scryer 無法查明。在讀取 value 之前請先測試此項 — unknown 事實絕不會強制轉型為 false、0 或空字串。",
   "settings.refLifecycleSectionObservations":
@@ -4596,11 +4619,14 @@ const zh_TW: LocaleDictionary = {
     "去除重複後的請求者識別碼；若主體未被請求則為空清單",
   "settings.refLifecycleFactsRequestedByUsernamesValue":
     "請求者使用者名稱；若其中任何帳號已不存在則為 unknown，原因為 user_not_found",
-  "settings.refLifecycleFactsFirstImportedAtValue": "首次匯入時的 RFC3339 時間戳記",
-  "settings.refLifecycleFactsLastUpgradedAtValue": "上次升級時的 RFC3339 時間戳記",
+  "settings.refLifecycleFactsFirstImportedAtValue":
+    "首次匯入時的 RFC3339 時間戳記",
+  "settings.refLifecycleFactsLastUpgradedAtValue":
+    "一律為 unknown，原因為 not_yet_collected：Scryer 目前尚未記錄升級，因此讀取此值的規則會被暫緩",
   "settings.refLifecycleFactsHasFileValue": "硬碟上至少有一個檔案時為 true",
   "settings.refLifecycleFactsFileCountValue": "硬碟上的檔案數量",
-  "settings.refLifecycleFactsTotalFileSizeBytesValue": "這些檔案的總大小（位元組）",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
+    "這些檔案的總大小（位元組）",
   "settings.refLifecycleFactsFilesValue":
     "每個檔案對應一項；請參閱下方的 input.observations.files.value[]",
   "settings.refLifecycleFactsEpisodeCountValue": "範圍內的單集數量",
@@ -4611,15 +4637,16 @@ const zh_TW: LocaleDictionary = {
     "第 1 名是最新符合資格已下載且已播出的非特別篇單集。播出日期相同時依季與單集編號排序，然後使用穩定 ID。",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "第 1 名是具有最新符合資格已下載且已播出非特別篇單集的季度。受保護的檔案仍佔據排名。",
-  "settings.refLifecycleFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
+  "settings.refLifecycleFactsActiveDownloadsValue":
+    "一律為 unknown，原因為 not_yet_collected：目前尚未讀取下載狀態，因此讀取此值的規則會被暫緩",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
-    "播放過它的所有人的識別碼，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的單集，包括遺失的檔案。未來單集已排除；缺少單集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 使用者 (signal_identity_missing)。",
+    "播放過它的所有人的識別碼，已排序並去重；空清單表示無人播放。對於季或影集，一個人必須看過其中每一集已播出的單集（包括遺失的檔案）才會被計入。未來單集已排除；缺少單集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 使用者 (signal_identity_missing)。",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "最近一次播放的 RFC3339 時間戳記；若無人播放過則 absent，原因為 never_watched；若有播放沒有記錄時間則 unknown，原因為 play_time_missing",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
-    "至少有一位請求者播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
+    "至少有一位請求者播放過時為 true；對於沒有已播出單集的季或影集，已知為 false；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
   "settings.refLifecycleFactsWatchedByAllRequestersValue":
-    "每一位請求者皆播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
+    "每一位請求者皆播放過時為 true；對於沒有已播出單集的季或影集，已知為 false；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked；若請求者的關聯帳號尚未被同步讀取則 unknown，原因為 requester_not_yet_swept",
   "settings.refLifecycleFactsRequestLeaseStateValue":
     "從未為主體寫入請求租約時為 none，租約等待首次匯入時為 dormant，租約有效進行中時為 active，且所有租約皆已用盡時為 expired。已釋放或已轉換的租約視為撤回而非耗盡，因此不會使狀態變為 expired。過期是以評估時間為基準，因此租約在視窗關閉的瞬間即被視為過期。",
   "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
@@ -4629,12 +4656,14 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleSectionFiles": "— input.facts.files 中每個檔案對應一項",
   "settings.refLifecycleFileSizeBytes": "檔案大小位元組數",
   "settings.refLifecycleFileQuality": "偵測到的檔案品質（例如 2160P、1080P）",
-  "settings.refLifecycleFileVideoCodec": "檔案的視訊編解碼器（例如 H.265、H.264）",
+  "settings.refLifecycleFileVideoCodec":
+    "檔案的視訊編解碼器（例如 H.265、H.264）",
   "settings.refLifecycleFileIs3d":
     "媒體中繼資料宣告 3D 視訊時為 true。False 表示未偵測到，包含尚未分析的檔案。",
   "settings.refLifecycleFileVideoWidth": "以像素為單位的視訊寬度",
   "settings.refLifecycleFileVideoHeight": "以像素為單位的視訊高度",
-  "settings.refLifecycleFactsRuntimeMinutes": "中繼資料提供者給出的片長（分鐘）",
+  "settings.refLifecycleFactsRuntimeMinutes":
+    "中繼資料提供者給出的片長（分鐘）",
   "settings.refLifecycleFactsOriginalLanguage": "作品的原始語言",
   "settings.refLifecycleFactsSeriesStatus":
     "中繼資料提供者給出的影集狀態，例如連載中或已完結",
@@ -4645,8 +4674,10 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleFactsPopularity": "中繼資料提供者給出的熱門度分數",
   "settings.refLifecycleFactsTheatricalReleaseDate":
     "電影院線上映日期（YYYY-MM-DD）",
-  "settings.refLifecycleFactsDigitalReleaseDate": "電影數位發行日期（YYYY-MM-DD）",
-  "settings.refLifecycleFactsPhysicalReleaseDate": "電影實體發行日期（YYYY-MM-DD）",
+  "settings.refLifecycleFactsDigitalReleaseDate":
+    "電影數位發行日期（YYYY-MM-DD）",
+  "settings.refLifecycleFactsPhysicalReleaseDate":
+    "電影實體發行日期（YYYY-MM-DD）",
   "settings.refLifecycleFactsDaysSinceAdded": "主體加入後經過的完整天數",
   "settings.refLifecycleFactsMaxVideoHeight":
     "主體檔案中最高的視訊串流高度（像素）",
@@ -4667,7 +4698,8 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleFactsRatings": "綜合評分背後的每一項外部評分",
   "settings.refLifecycleFactsPlayCountTotal":
     "所有已啟用媒體伺服器上所有帳戶播放主體的次數總和；不指名任何人",
-  "settings.refLifecycleFactsWatchlistedByUserIds": "待看清單中有此作品的使用者",
+  "settings.refLifecycleFactsWatchlistedByUserIds":
+    "待看清單中有此作品的使用者",
   "settings.refLifecycleFactsWatchlistedByUsernames":
     "待看清單中有此作品的使用者名稱",
   "settings.refLifecycleFactsWatchlistedByAnyone":
@@ -4676,7 +4708,8 @@ const zh_TW: LocaleDictionary = {
     "作品的請求者中是否有人的待看清單中有此作品",
   "settings.refLifecycleFactsWatchlistAddedAt":
     "Scryer 首次在任何待看清單上看到此作品的時間",
-  "settings.refLifecycleFactsWatchlistOrigins": "目前待看清單中有此作品的提供者",
+  "settings.refLifecycleFactsWatchlistOrigins":
+    "目前待看清單中有此作品的提供者",
   "settings.refLifecycleFactsFavoritedByUserIds":
     "在 Jellyfin 或 Emby 上將主體標為最愛的使用者",
   "settings.refLifecycleFactsFavoritedByUsernames":
@@ -4698,26 +4731,28 @@ const zh_TW: LocaleDictionary = {
     "— input.observations.ratings.value 中每項外部評分一個項目",
   "settings.refLifecycleRatingSource": "評分來源",
   "settings.refLifecycleRatingValue": "來源自身尺度上的評分（來源有提供時）",
-  "settings.refLifecycleRatingNormalized": "Scryer 共同尺度上的評分，可跨來源比較",
+  "settings.refLifecycleRatingNormalized":
+    "Scryer 共同尺度上的評分，可跨來源比較",
   "settings.refLifecycleRatingVotes": "評分背後的投票數（來源有提供時）",
   "settings.refLifecycleFactsRuntimeMinutesValue":
     "片長（分鐘）；中繼資料提供者未給出值時缺失",
   "settings.refLifecycleFactsOriginalLanguageValue":
     "原始語言；中繼資料提供者未給出值時缺失",
   "settings.refLifecycleFactsSeriesStatusValue":
-    "提供者給出的影集狀態；提供者未給出值時缺失",
+    "提供者給出的原始影集狀態；電影或提供者未給出值時缺失",
   "settings.refLifecycleFactsFirstAiredValue":
-    "首播日期（YYYY-MM-DD），是日期而非時間戳記；提供者未給出值時缺失",
+    "首播日期（YYYY-MM-DD），是日期而非時間戳記；電影或提供者未給出值時缺失",
   "settings.refLifecycleFactsNetworkValue": "電視網名稱；提供者未給出值時缺失",
   "settings.refLifecycleFactsStudioValue": "工作室名稱；提供者未給出值時缺失",
   "settings.refLifecycleFactsCountryValue": "出品國家；提供者未給出值時缺失",
-  "settings.refLifecycleFactsPopularityValue": "熱門度分數；提供者未給出值時缺失",
+  "settings.refLifecycleFactsPopularityValue":
+    "熱門度分數；提供者未給出值時缺失",
   "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "院線上映日期（YYYY-MM-DD）；影集或提供者未給出值時缺失",
+    "院線上映日期（YYYY-MM-DD）：取發行市場的最早日期，否則取任一市場的最早日期。影集或沒有院線日期時缺失；在取得電影的發行日期之前為 unknown，原因為 not_yet_collected",
   "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "數位發行日期（YYYY-MM-DD）；影集或提供者未給出值時缺失",
+    "數位發行日期（YYYY-MM-DD）：取發行市場的最早日期，否則取任一市場的最早日期，再否則取作品上的數位日期。影集或沒有數位日期時缺失；在取得電影的發行日期之前且作品沒有數位日期時為 unknown，原因為 not_yet_collected",
   "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "實體發行日期（YYYY-MM-DD）；影集或提供者未給出值時缺失",
+    "實體發行日期（YYYY-MM-DD）：取發行市場的最早日期，否則取任一市場的最早日期。影集或沒有實體日期時缺失；在取得電影的發行日期之前為 unknown，原因為 not_yet_collected",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "主體加入後經過的完整天數，依評估時鐘計算",
   "settings.refLifecycleFactsMaxVideoHeightValue":
@@ -4792,7 +4827,8 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleBuilderEditAsRegoTitle": "要以 Rego 編輯此規則嗎？",
   "settings.ruleBuilderEditAsRegoIntro":
     "一旦修改程式碼，此規則就必須維持為進階規則，之後無法再以簡易模式開啟，儲存後也是如此。",
-  "settings.ruleBuilderIncomplete": "部分選項尚未完成。請修正建構器中標示的項目後再儲存。",
+  "settings.ruleBuilderIncomplete":
+    "部分選項尚未完成。請修正建構器中標示的項目後再儲存。",
   "settings.ruleBuilderConditions": "條件",
   "settings.ruleBuilderJoinAll": "符合所有條件",
   "settings.ruleBuilderJoinAny": "符合任一條件",
@@ -4801,7 +4837,8 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleBuilderAction": "動作",
   "settings.ruleBuilderActionPlaceholder": "選擇動作",
   "settings.ruleBuilderActionConditions": "僅限於",
-  "settings.ruleBuilderActionConditionsHelp": "除了規則的條件外，還要符合這些條件，此動作才會執行。其他動作不受影響。",
+  "settings.ruleBuilderActionConditionsHelp":
+    "除了規則的條件外，還要符合這些條件，此動作才會執行。其他動作不受影響。",
   "settings.ruleBuilderAddActionCondition": "新增僅限此動作的條件",
   "settings.ruleBuilderAddAction": "新增動作",
   "settings.ruleBuilderProblemActionRequired": "請選擇動作。",
@@ -4891,12 +4928,11 @@ const zh_TW: LocaleDictionary = {
   "settings.lifecycleDeclaredActionsNone": "沒有操作",
   "settings.lifecycleDecidedActionsNone": "沒有操作",
   "settings.lifecycleRuleWarningsTitle": "警告",
-  "settings.lifecycleRuleWarningLocation":
-    "第 {{line}} 行，第 {{column}} 欄：",
+  "settings.lifecycleRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
   "settings.refLifecycleOutputFlagHeads":
-    "不帶值的操作（unmonitor、monitor、search、fetch_subtitles、delete_files、delete_title）是布林值：以 if 定義，主體成立時即套用。",
+    "不帶值的操作是布林值：以 if 定義，主體成立時即套用。作品層級：unmonitor、monitor、search、fetch_subtitles、delete_files 與 delete_title。影集的單一季：monitor_season、unmonitor_season、delete_season_files 與 fetch_season_subtitles。單一單集：monitor_episode、unmonitor_episode、delete_episode_files 與 fetch_episode_subtitles。",
   "settings.refLifecycleOutputValueHeads":
-    "帶值的操作（set_quality_profile、add_tags、remove_tags、move_to_library、move_to_root、notify）以 := 指派純字面值。else 鏈可在字面值之間選擇；計算出的值會被拒絕。",
+    "帶值的操作以 := 指派字面值。set_quality_profile、move_to_library、move_to_root、notify、notify_season 與 notify_episode 接受字串；add_tags 與 remove_tags 接受字串清單。else 鏈可在字面值之間選擇；計算出的值會被拒絕。",
   "settings.refLifecycleOutputHelpers":
     "其他任何規則名稱都是您自己的輔助規則，只有在操作、unknown 或 reasons 使用它時才有作用。",
   "settings.refLifecycleActionsTitle": "操作",
@@ -4905,7 +4941,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleActionsDaysSince":
     "days_since(timestamp) 回傳 RFC3339 時間戳記與評估時間之間的完整天數，因此 days_since(input.facts.added_at) > 180 表示加入已超過 180 天。",
   "settings.refLifecycleActionsNotify":
-    "notify 會在套用操作時傳送一次訊息。預覽與試執行絕不會傳送。",
+    "notify 會在規則的其他操作確實變更了某些內容後傳送一次訊息；若 notify 是規則唯一的操作，則立即傳送。若每個操作都已經就緒，則不會傳送任何訊息。預覽與試執行絕不會傳送。",
   "settings.refLifecycleActionsConflicts":
     "衝突的操作會附上原因暫緩，而不套用其中任何一項。這包括同一對象的衝突（例如同時 monitor 與 unmonitor，或同一標籤既加入又移除），也包括作品與其季或集之間、季與其集之間的衝突（例如監控一部影集的同時刪除其中一季的檔案）。",
   "settings.refLifecycleTagActionsTitle": "標籤操作",
@@ -5055,9 +5091,10 @@ const zh_TW: LocaleDictionary = {
     "規則必須定義一個投票、一個調整核准內容的數值，或 add_tags；三者皆未定義的規則會在儲存時被拒絕。帶值的項目以 := 指派純字面值。",
   "settings.refReqOutputApprove":
     "approve — 該請求可以在無人員審核的情況下獲准。",
-  "settings.refReqOutputDeny": "deny — 該請求被拒絕。拒絕票優先於任何其他票。",
+  "settings.refReqOutputDeny":
+    "deny — 該請求被拒絕。跨規則而言，拒絕票優先於任何其他票；在同一條規則內，manual 優先於 deny。",
   "settings.refReqOutputManual":
-    "manual — 無論其他規則如何投票，該請求都會轉交由人員處理。",
+    "manual — 除非其他規則拒絕，否則該請求會轉交由人員處理。發生錯誤或被暫緩的規則視為 manual。",
   "settings.refReqOutputTags":
     'add_tags := ["…"] — 作品的標籤，僅在獲准時套用。',
   "settings.refReqOutputSetQualityProfile":
@@ -5110,8 +5147,7 @@ const zh_TW: LocaleDictionary = {
   "requests.fallbackShapingInvalid":
     "規則原本會核准，但其設定的數值無法套用到此請求，因此由人工決定。",
   "requests.fallbackLibraryPermission": "由請求者的「自動核准請求」權限核准。",
-  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
-    "無法建立請求規則引擎。",
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED": "無法建立請求規則引擎。",
   "error.reason.REQUEST_RULE_FIELD_REQUIRED": "必填欄位為空。",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "租期必須為 1 至 3650 天（十年），或為永久。",
@@ -5135,8 +5171,7 @@ const zh_TW: LocaleDictionary = {
   "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND": "找不到範例媒體庫。",
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND": "找不到範例請求者。",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "找不到請求規則集。",
-  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
-    "標籤最多 64 個字元。",
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG": "標籤最多 64 個字元。",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "標籤含有不支援的字元；請使用字母、數字、'.'、'_'、'-' 或空格。",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "標籤不可為空。",
@@ -5219,7 +5254,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequesterUserId": "發起請求的帳號識別碼",
   "settings.refReqRequesterUsername": "發起請求的帳號使用者名稱",
   "settings.refReqRequesterAccountKind":
-    "該帳號的登入方式（例如 local 本機，或已關聯的提供者）",
+    "帳號的建立方式：local，或 external_auto_provisioned（首次透過身分提供者登入時建立的帳號）",
   "settings.refReqRequesterAppPermissions": "該帳號所擁有的全應用程式權限",
   "settings.refReqRequesterLibraryPermissions":
     "該帳號在被請求媒體庫上所擁有的權限",
@@ -5235,7 +5270,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqLibraryId": "媒體庫識別碼",
   "settings.refReqLibraryName": "媒體庫名稱",
   "settings.refReqLibraryFacet":
-    "媒體庫收錄的媒體類型（MOVIE 電影、SERIES 影集或 ANIME 動漫）",
+    "媒體庫收錄的媒體類型（movie 電影、series 影集或 anime 動漫）",
   "settings.refReqLibraryIsDefault":
     "此媒體庫為其所屬類型的預設媒體庫時為 true",
   "settings.refReqSectionRequest": "— 請求的內容",
@@ -5247,7 +5282,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequestQualityProfileId": "請求者選取的品質設定檔識別碼",
   "settings.refReqRequestQualityProfileName": "該設定檔的名稱",
   "settings.refReqRequestMonitorType":
-    "請求者要求的監控類型（例如 ALL_EPISODES）",
+    "請求者要求的監控類型，小寫且移除空格、連字號與底線（例如 allepisodes）",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "進階監控選擇所指定的季度數",
   "settings.refReqRequestMonitorSelectionSeasons":
@@ -5255,10 +5290,10 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequestListIsWatchlist":
     "當清單是擁有者在已連結帳號上的稍後觀看清單時為 true",
   "settings.refReqRequestListSourceType":
-    "提供者端的清單類型，小寫（例如 watchlist 或 user_list）",
+    "提供者端的清單類型，小寫（例如 watchlist、plantowatch 或 list）",
   "settings.refReqRequestLeaseForever": "請求者要求永久保留媒體時為 true",
   "settings.refReqRequestLeaseDays":
-    "請求者要求保留的天數；若要求永久保留則缺失",
+    "請求者要求保留的天數；若要求永久保留則為 null",
   "settings.refReqRequestRequiredAudioLanguages":
     "請求者要求作品必須具備的音訊語言。null 表示交由媒體庫決定；空清單表示不設要求",
   "settings.refReqRequestPreferredAudioLanguages":
@@ -5305,7 +5340,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsQualityProfileAllowsUpgrades":
     "該設定檔在首次抓取後是否持續升級",
   "settings.refReqFactsExistsInLibraryIds": "已收錄此作品的媒體庫",
-  "settings.refReqFactsPreviousRequestCount": "此請求者先前請求此作品的次數",
+  "settings.refReqFactsPreviousRequestCount": "此前任何人請求此作品的次數",
   "settings.refReqFactsPreviouslyDenied": "先前的請求中是否有一次被拒絕",
   "settings.refReqFactsPreviouslyApproved": "先前的請求中是否有一次獲准",
   "settings.refReqFactsPendingRequestCount": "此請求者仍處於等待狀態的請求數量",
@@ -5382,8 +5417,10 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsNetworkValue": "電視網/串流網路名稱",
   "settings.refReqFactsStudioValue": "片廠/工作室名稱",
   "settings.refReqFactsContentStatusValue": "提供者的內容狀態字串",
-  "settings.refReqFactsReleaseDateValue": "RFC3339 上映日期",
-  "settings.refReqFactsFirstAiredValue": "RFC3339 首播日期",
+  "settings.refReqFactsReleaseDateValue":
+    "來源回報的上映日期，格式為 RFC3339 或 YYYY-MM-DD",
+  "settings.refReqFactsFirstAiredValue":
+    "來源回報的首播日期，格式為 RFC3339 或 YYYY-MM-DD",
   "settings.refReqFactsReleaseAgeDaysValue": "上映或首播至今的完整天數",
   "settings.refReqFactsAwardCountValue": "記錄的得獎數量；若無則確認為零",
   "settings.refReqFactsQualityProfileTiersValue":
@@ -5395,7 +5432,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIdsValue":
     "已收錄此作品的媒體庫識別碼；若無則為空清單",
   "settings.refReqFactsPreviousRequestCountValue":
-    "此請求者先前對此作品發起請求的次數",
+    "所有請求者先前對此作品發起請求的次數",
   "settings.refReqFactsPreviouslyDeniedValue":
     "先前請求中曾有一次被拒絕時為 true",
   "settings.refReqFactsPreviouslyApprovedValue":
@@ -6257,14 +6294,14 @@ const zh_TW: LocaleDictionary = {
     "DeleteFiles 需要先前的 Unmonitor 步驟。",
   "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND": "找不到生命週期排除項目。",
   "error.reason.LIFECYCLE_FIELD_REQUIRED": "必填欄位為空。",
-  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED": "生命週期的檔案擁有權已變更。",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "生命週期的檔案擁有權已變更。",
   "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
     "生命週期的目標檔案已變更；需要再次評估。",
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID": "寬限期必須為零天或以上。",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "寬限期最多為 3650 天（十年）。",
-  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
-    "電影作品沒有集數清單。",
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES": "電影作品沒有集數清單。",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
   "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
@@ -6400,8 +6437,7 @@ const zh_TW: LocaleDictionary = {
     "規則未定義任何動作，因此永遠不會有作為。",
   "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
     "此移動指定的媒體庫存放的作品種類與規則的媒體庫不同。",
-  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
-    "此移動指定的媒體庫不存在。",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND": "此移動指定的媒體庫不存在。",
   "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
     "此移動指定的根資料夾不是已設定的媒體庫根目錄。",
   "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
