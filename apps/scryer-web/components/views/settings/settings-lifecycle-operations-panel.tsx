@@ -49,7 +49,7 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { parseLifecycleFileResults } from "@/lib/utils/lifecycle-file-results";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { HelpLabel, InfoHelp } from "@/components/common/info-help";
+import { InfoHelp } from "@/components/common/info-help";
 import { LifecycleDecidedActionsSummary } from "@/components/views/settings/lifecycle-action-summary";
 
 export type LifecycleLibraryOption = { id: string; name: string };
@@ -262,12 +262,16 @@ export function LifecycleInstanceSwitches({
       {INSTANCE_SWITCHES.map(({ key, label, help }) => (
         <div
           key={key}
-          className="flex items-center justify-between gap-3 rounded border border-border bg-muted/30 px-3 py-2.5"
+          className="flex items-center justify-between gap-4 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] px-5 py-4"
         >
-          <div className="space-y-1">
-            <Label htmlFor={selectorId("settings-lifecycle-switch", key)}>
-              <HelpLabel label={t(label)} help={t(help)} />
+          <div className="min-w-0 space-y-1">
+            <Label
+              htmlFor={selectorId("settings-lifecycle-switch", key)}
+              className="font-display text-[16px] font-bold text-[var(--scry-ink)]"
+            >
+              {t(label)}
             </Label>
+            <p className="text-[13px] text-[var(--scry-muted)]">{t(help)}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {savingSwitch === key ? (
@@ -275,6 +279,7 @@ export function LifecycleInstanceSwitches({
             ) : null}
             <SettingsToggleSwitch
               id={selectorId("settings-lifecycle-switch", key)}
+              size="lg"
               checked={gates[key]}
               disabled={savingSwitch !== null}
               ariaLabel={t(label)}

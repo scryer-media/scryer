@@ -100,6 +100,7 @@ import {
   LifecycleRuleScheduleSummary,
 } from "@/components/views/settings/lifecycle-rule-schedule";
 import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
+import { LifecycleRulesTabs } from "@/components/views/settings/lifecycle-rules-tabs";
 
 export type LifecycleLibraryOption = { id: string; name: string };
 
@@ -870,15 +871,23 @@ export function SettingsLifecycleRulesSection({
   );
   const rulePage = lifecycleRulePage(sortedRules, rulePageIndex);
 
-  // Candidates and history are one pane each. They keep the instance switches,
-  // because what the instance is allowed to do explains every row they show,
-  // but they get the full column: there is no editor to sit beside and no rule
-  // being written for the reference rail to describe.
+  // The instance switches govern every tab, so they sit above the tab strip,
+  // and the tabs sit directly on the pane they open.
+  const pageHead = (
+    <div className="space-y-5">
+      {instanceSwitches}
+      <LifecycleRulesTabs activeSection={section} />
+    </div>
+  );
+
+  // Candidates and history are one pane each, and get the full column: there
+  // is no editor to sit beside and no rule being written for the reference
+  // rail to describe.
   if (section !== "rules") {
     return (
-      <div id="settings-lifecycle-rules-section" className="space-y-4 text-sm">
+      <div id="settings-lifecycle-rules-section" className="space-y-6 text-sm">
+        {pageHead}
         <div className="mx-auto w-full max-w-[1600px] space-y-8">
-          {instanceSwitches}
           {operationsPanels}
         </div>
       </div>
@@ -886,12 +895,11 @@ export function SettingsLifecycleRulesSection({
   }
 
   return (
-    <div id="settings-lifecycle-rules-section" className="space-y-4 text-sm">
+    <div id="settings-lifecycle-rules-section" className="space-y-6 text-sm">
+      {pageHead}
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 2xl:flex-row 2xl:items-start">
         <div className="min-w-0 basis-[900px] flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
-            {instanceSwitches}
-
             <div className="overflow-hidden rounded border border-border bg-card">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <CardTitle className="text-base text-foreground">

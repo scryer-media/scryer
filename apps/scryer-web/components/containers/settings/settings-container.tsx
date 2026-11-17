@@ -20,9 +20,7 @@ import {
   Database,
   Download,
   FolderCog,
-  History,
   Inbox,
-  ListChecks,
   Puzzle,
   Rss,
   Server,
@@ -37,7 +35,6 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { INDEXER_SETTINGS_TAB_ITEMS } from "@/components/views/settings/indexer-settings-tabs";
 import { UnderlineTabLink } from "@/components/common/underline-filter-button";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +46,6 @@ import {
 import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
 import type {
   IndexerSettingsTab,
-  LifecycleRulesSection,
   SettingsSection,
 } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
@@ -62,7 +58,6 @@ import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
   buildIndexerSettingsPath,
-  buildRulesPath,
   indexerSettingsTabFromPath,
   INDEXER_SETTINGS_TABS,
   lifecycleRulesSectionFromPath,
@@ -260,56 +255,6 @@ function IndexerSettingsTabs({
             />
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-const LIFECYCLE_RULES_SECTIONS: {
-  section: LifecycleRulesSection;
-  labelKey: string;
-  icon: LucideIcon;
-}[] = [
-  { section: "rules", labelKey: "settings.lifecycleNavRules", icon: Wrench },
-  {
-    section: "candidates",
-    labelKey: "settings.lifecycleCandidatesTitle",
-    icon: ListChecks,
-  },
-  {
-    section: "history",
-    labelKey: "settings.lifecycleNavHistory",
-    icon: History,
-  },
-];
-
-/// The Lifecycle Rules page's panes, as route tabs under its header. The rule
-/// list is the default tab, so a bare lifecycle-rules link opens it.
-function LifecycleRulesTabs({
-  activeSection,
-  t,
-}: {
-  activeSection: LifecycleRulesSection;
-  t: ReturnType<typeof useTranslate>;
-}) {
-  return (
-    <div className="mb-6 flex flex-wrap items-end gap-3 border-b border-[var(--scry-border3)]">
-      <div
-        id="settings-lifecycle-rules-tabs"
-        role="tablist"
-        aria-label={t("settings.lifecycleRules")}
-        className="relative top-px flex min-h-12 flex-wrap gap-x-2"
-      >
-        {LIFECYCLE_RULES_SECTIONS.map((item) => (
-          <UnderlineTabLink
-            key={item.section}
-            id={selectorId("settings-lifecycle-rules-tab", item.section)}
-            to={buildRulesPath("lifecycle", item.section)}
-            selected={activeSection === item.section}
-            icon={<item.icon className="h-4 w-4" />}
-            label={t(item.labelKey)}
-          />
-        ))}
       </div>
     </div>
   );
@@ -707,7 +652,9 @@ export const SettingsContainer = memo(function SettingsContainer({
                     <h1 className="flex flex-wrap items-center gap-2.5 text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
                       {pageLabel}
                       {isRulesSection &&
-                      BETA_RULES_SECTIONS.has(rulesSectionFromPath(pathname)) ? (
+                      BETA_RULES_SECTIONS.has(
+                        rulesSectionFromPath(pathname),
+                      ) ? (
                         <Badge
                           id="settings-rules-beta"
                           tone="warning"
@@ -760,12 +707,6 @@ export const SettingsContainer = memo(function SettingsContainer({
               </div>
               {settingsSection === "indexers" ? (
                 <IndexerSettingsTabs activeTab={indexerSettingsTab} t={t} />
-              ) : null}
-              {settingsSection === "lifecycleRules" ? (
-                <LifecycleRulesTabs
-                  activeSection={lifecycleRulesSection}
-                  t={t}
-                />
               ) : null}
               <GutterPanelContext.Provider
                 value={showReferenceRail ? referencePanelContext : null}
