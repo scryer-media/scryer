@@ -942,6 +942,10 @@ struct ImportFileOptions {
     /// that refuses the cache-bypassed re-read would, which lands on the quick floor.
     #[cfg(test)]
     force_read_back_unsupported: bool,
+    /// Make the read of the destination name right after a copy took it
+    /// fail, as a name that briefly does not read would.
+    #[cfg(test)]
+    force_destination_read_failure: bool,
     #[cfg(test)]
     force_delete_failure: bool,
     #[cfg(all(test, unix))]
@@ -2084,7 +2088,18 @@ fn copy_regular_source_to_destination(
     if let Some(after_promoted) = options.after_copy_promoted {
         after_promoted(source, dest);
     }
-    let (dest_fingerprint, landed) = match read_import_source_marked(dest) {
+    #[cfg(test)]
+    let read_dest = if options.force_destination_read_failure {
+        Err(AppError::Repository(format!(
+            "forced destination read failure for test: {}",
+            dest.display()
+        )))
+    } else {
+        read_import_source_marked(dest)
+    };
+    #[cfg(not(test))]
+    let read_dest = read_import_source_marked(dest);
+    let (dest_fingerprint, landed) = match read_dest {
         Ok((fingerprint, named)) => {
             let landed = match promoted {
                 Some(mark)
@@ -2098,10 +2113,23 @@ fn copy_regular_source_to_destination(
             };
             (fingerprint.file, landed)
         }
-        // A destination that does not read, or a source that changed while
-        // it was copied, leaves the copy where it is: neither says the copy is
-        // not the data the source last held.
-        Err(error) => return Err(error),
+        // A destination that does not read cannot be proven, so the copy is
+        // taken back: only while the source still reads as the file it was
+        // copied from, and only while the name still holds the file the copy
+        // promoted. A source that changed while it was copied leaves the copy
+        // where it is: that does not say the copy is not the data the source
+        // last held.
+        Err(error) => {
+            return Err(took_back(
+                error,
+                source,
+                dest,
+                Landed::Copy {
+                    placed: promoted.as_ref(),
+                    source: source_mark,
+                },
+            ));
+        }
     };
     ensure_same_source(source, source_fingerprint)?;
 
@@ -7140,6 +7168,108 @@ mod tests {
         assert_eq!(
             std::fs::read(&source).expect("source"),
             b"synthetic bytes, rewritten and longer"
+        );
+    }
+
+    /// A copy whose name does not read once it landed cannot be proven, so
+    /// it is taken back while the source is still the file it was copied
+    /// from and the name still holds the copy; the source and everything
+    /// beside the copy are kept.
+    #[test]
+    fn a_copy_whose_name_does_not_read_once_it_landed_is_taken_back() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("Sample.Title.mkv");
+        let neighbour = temp.path().join("Sample.Other.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        std::fs::write(&neighbour, b"unrelated").expect("write neighbour");
+        let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
+        let size = std::fs::metadata(&source).expect("source metadata").len();
+        let options = ImportFileOptions {
+            force_destination_read_failure: true,
+            ..Default::default()
+        };
+
+        let error = copy_regular_source_to_destination(
+            &source,
+            &dest,
+            &fingerprint,
+            &mark,
+            size,
+            options,
+            VerificationDepth::Quick,
+            None,
+            None,
+        )
+        .expect_err("the copy did not read");
+
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        assert_eq!(error.reason(), None, "{error:?}");
+        assert!(!dest.exists(), "the copy this import landed is taken back");
+        assert!(!scryer_application::import_staging_path(&dest).exists());
+        assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");
+        assert_eq!(
+            std::fs::read(&source).expect("the source is kept"),
+            b"synthetic video bytes"
+        );
+    }
+
+    /// A copy whose name does not read once it landed is kept when the
+    /// source was swapped meanwhile for a look-alike of the same length and
+    /// modification time: the copy may hold the only original bytes.
+    #[test]
+    fn a_copy_whose_name_does_not_read_is_kept_beside_a_look_alike_source() {
+        use scryer_application::error_reasons::import;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("Sample.Title.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
+        let size = std::fs::metadata(&source).expect("source metadata").len();
+        let options = ImportFileOptions {
+            force_destination_read_failure: true,
+            after_copy_promoted: Some(|source, _| {
+                let modified = std::fs::metadata(source)
+                    .and_then(|metadata| metadata.modified())
+                    .expect("source time");
+                let swap = source.with_extension("swap");
+                std::fs::write(&swap, b"other synthetic bytes").expect("write look-alike");
+                std::fs::File::options()
+                    .write(true)
+                    .open(&swap)
+                    .and_then(|file| file.set_modified(modified))
+                    .expect("match the time");
+                std::fs::rename(&swap, source).expect("swap the look-alike in");
+            }),
+            ..Default::default()
+        };
+
+        let error = copy_regular_source_to_destination(
+            &source,
+            &dest,
+            &fingerprint,
+            &mark,
+            size,
+            options,
+            VerificationDepth::Quick,
+            None,
+            None,
+        )
+        .expect_err("the copy did not read");
+
+        assert_eq!(
+            error.reason(),
+            Some(import::COPY_KEPT_SOURCE_GONE),
+            "{error:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("the landed copy is kept"),
+            b"synthetic video bytes"
+        );
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"other synthetic bytes"
         );
     }
 
