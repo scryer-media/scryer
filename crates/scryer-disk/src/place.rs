@@ -1365,20 +1365,24 @@ impl Job<'_> {
     }
 
     /// Where the file is after putting it back from `from` under the source
-    /// name reported failure. A rename can apply and lose its reply, so one
-    /// look at `from`, on this failure alone, says which: gone means the
-    /// file reached the source name; anything else leaves it at `from`, with
-    /// whatever the failed call itself left at the source name.
+    /// name reported failure. A put-back never replaces anything, so one
+    /// that found the source name taken left the file at `from`, unread. A
+    /// rename can otherwise apply and lose its reply, so one look at the
+    /// source, on this failure alone, says which: present means the file
+    /// reached it. Anything else leaves the file reported at `from`, the
+    /// last name it is known to hold, with whatever the failed call itself
+    /// left at the source name. A name that is gone says nothing of where
+    /// the file went: an earlier promotion that reported failure may have
+    /// taken it.
     fn after_failed_put_back(&self, from: &Path, error: &DiskError) -> Leftover {
-        match self.disk.uncached_blocking(from).exists() {
-            Some(false) => Leftover::PutBack {
+        let taken = error.reason() == reason::DISK_DESTINATION_EXISTS;
+        if !taken && self.disk.uncached_blocking(self.source).exists() == Some(true) {
+            return Leftover::PutBack {
                 at: self.source.into(),
-            },
-            _ => {
-                self.note_left(error);
-                Leftover::PutBackFailed { at: from.into() }
-            }
+            };
         }
+        self.note_left(error);
+        Leftover::PutBackFailed { at: from.into() }
     }
 
     /// Undoes a failed move without destroying the file.

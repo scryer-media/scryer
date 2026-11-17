@@ -2014,31 +2014,55 @@ async fn a_folder_gone_since_it_was_read_is_made_again() {
 }
 
 /// A put-back that reports failure may still have applied. One look at the
-/// name it left says where the file is: gone means it is back under the
-/// source's name, and only then; present or unread means it stayed.
+/// source says where the file is: present means it is back under the
+/// source's name, and only then; gone or unread means it is reported where
+/// it was last known. A put-back refused because the source name is taken
+/// left it where it was, without a look.
 #[cfg(unix)]
 #[test]
 fn a_failed_put_back_says_where_the_file_is() {
-    let staged = p(STAGED);
-    let unread = Err(io::ErrorKind::PermissionDenied);
-    for (after, expected) in [
+    let (source, staged) = (p(SOURCE), p(STAGED));
+    let stayed = Leftover::PutBackFailed { at: staged.clone() };
+    for (failure, after, expected, looks) in [
         (
-            Err(io::ErrorKind::NotFound),
-            Leftover::PutBack { at: p(SOURCE) },
+            io::ErrorKind::TimedOut,
+            Ok(file(9)),
+            Leftover::PutBack { at: source.clone() },
+            2,
         ),
-        (Ok(file(9)), Leftover::PutBackFailed { at: staged.clone() }),
-        (unread, Leftover::PutBackFailed { at: staged.clone() }),
+        (
+            io::ErrorKind::TimedOut,
+            Err(io::ErrorKind::NotFound),
+            stayed.clone(),
+            2,
+        ),
+        (
+            io::ErrorKind::TimedOut,
+            Err(io::ErrorKind::PermissionDenied),
+            stayed.clone(),
+            2,
+        ),
+        (io::ErrorKind::AlreadyExists, Ok(file(9)), stayed.clone(), 1),
     ] {
         let (disk, backend, _) = scripted();
-        backend.stats_in_turn(&staged, &[Ok(file(9)), after]);
-        backend.fails("rename_no_replace", STAGED, io::ErrorKind::TimedOut);
+        backend.stat_is(STAGED, Ok(file(9)));
+        backend.stats_in_turn(&source, &[Err(io::ErrorKind::NotFound), after]);
+        backend.fails("rename_no_replace", STAGED, failure);
         let policy = policy(Method::Move, Fallback::Copy);
-        let (source, dest) = (p(SOURCE), p(DEST));
+        let dest = p(DEST);
         let failed = job(&disk, &source, &dest, policy);
         let said = failed.roll_back(&staged, StagedHolds::Copy { proven: true });
         assert_eq!(said, None);
-        assert_eq!(failed.left.take(), vec![expected]);
+        assert_eq!(failed.left.take(), vec![expected], "{failure:?}");
         assert_eq!(backend.calls_of("remove_file"), 0, "nothing is removed");
+        let source_looks = backend
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, path)| path == &source)
+            .count();
+        assert_eq!(source_looks, looks, "{failure:?}");
     }
 }
 
