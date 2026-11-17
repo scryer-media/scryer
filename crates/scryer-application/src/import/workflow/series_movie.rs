@@ -137,7 +137,7 @@ async fn run_import(
             .as_ref()
             .is_ok_and(|result| result.decision == ImportDecision::Imported)
     {
-        match complete_deferred_import_source_cleanup(app, source_cleanups).await {
+        match complete_deferred_import_source_cleanup(app, import_id, source_cleanups).await {
             Ok(()) => {}
             Err(DeferredCleanupFailure::NeedsReconciliation(error)) => {
                 tracing::error!(

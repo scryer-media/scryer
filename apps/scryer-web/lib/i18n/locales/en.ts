@@ -1263,9 +1263,9 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_COPY_KEPT_SOURCE_GONE":
     "The copy was kept at its destination because the source no longer holds the file.",
   "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN":
-    "Could not tell whether the existing destination is the source file itself. Nothing was removed.",
+    "Could not tell whether the existing destination is the source file itself, and the source could not be put back at its name. Nothing was removed.",
   "error.reason.IMPORT_DESTINATION_IS_SOURCE":
-    "The existing destination is the source file itself, so moving it would remove the only copy. Nothing was removed.",
+    "The existing destination is the source file itself, and the download client could not be kept from deleting it. Nothing was removed.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
     "A file this import did not place is already at the destination. Nothing there was replaced.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":

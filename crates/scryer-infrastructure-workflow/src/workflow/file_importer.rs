@@ -582,7 +582,7 @@ fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> 
 }
 
 /// `read`, [`fingerprint_import_source`] or [`read_import_source_marked`],
-/// as an import starts. A source that reads missing may be a file an
+/// as an import or its source cleanup starts. A source that reads missing may be a file an
 /// interrupted cleanup set aside beside it: a regular file at its set-aside
 /// name is renamed back, never replacing anything, and the source is read
 /// again. Every caller runs under the source's [`SourceTurns`] turn, so no
@@ -1744,9 +1744,10 @@ fn import_destination_occupied(dest: &Path) -> AppError {
     }
 }
 
-/// The existing destination is the source's own entry: a move that removed
-/// the source would remove the only copy, so it is refused for manual
-/// reconciliation.
+/// The existing destination is the source's own entry: removing the source
+/// would remove the only copy, so nothing is removed. A deferred cleanup with
+/// the download's identity finishes on it and keeps the download's data;
+/// anywhere else it waits for manual reconciliation.
 fn import_destination_is_source(source: &Path, dest: &Path) -> AppError {
     AppError::ManualReconciliationRefused {
         message: format!(
@@ -1762,6 +1763,20 @@ fn import_destination_is_source(source: &Path, dest: &Path) -> AppError {
 /// told; `why` says which read or rename failed.
 fn import_destination_alias_unknown(source: &Path, dest: &Path, why: &str) -> AppError {
     AppError::RepositoryFailed {
+        message: format!(
+            "could not tell whether import destination {} names the source {} itself: {why}; nothing was removed",
+            dest.display(),
+            source.display()
+        ),
+        reason: scryer_application::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+    }
+}
+
+/// A source set aside to tell whether the destination names it could not be
+/// put back: it is not at its own name, so it waits for an operator instead
+/// of a retry. `why` says where it was left.
+fn import_source_left_aside(source: &Path, dest: &Path, why: &str) -> AppError {
+    AppError::ManualReconciliationRefused {
         message: format!(
             "could not tell whether import destination {} names the source {} itself: {why}; nothing was removed",
             dest.display(),
@@ -2473,10 +2488,10 @@ fn prove_import_source_cleanup_blocking(
     options: ImportFileOptions,
 ) -> AppResult<SourceCleanup> {
     if guard.source_path == final_dest_path {
-        return Err(AppError::Repository(format!(
-            "refusing to remove import source because it is the library file: {}",
-            guard.source_path.display()
-        )));
+        return Err(import_destination_is_source(
+            &guard.source_path,
+            &final_dest_path,
+        ));
     }
 
     let dest_proof = import_content_proof(&final_dest_path).map_err(|_| {
@@ -2504,12 +2519,34 @@ fn prove_import_source_cleanup_blocking(
         }
         None => |path: &Path| fingerprint_import_source(path).map(|read| (read, None)),
     };
-    let (source_fingerprint, source_mark) = read_source(&guard.source_path).map_err(|_| {
-        AppError::Repository(format!(
-            "import source cleanup failed because source is missing or inaccessible: {}",
-            guard.source_path.display()
-        ))
-    })?;
+    // A source an interrupted cleanup set aside is put back first. One that
+    // is still missing is already gone, and the destination was just proven,
+    // so there is nothing left to remove. Reads are added only on that
+    // failure path: the set-aside name, and a rename and read again when a
+    // file was put back.
+    let (source_fingerprint, source_mark) = match read_import_source_at_start(
+        &guard.source_path,
+        read_source,
+    ) {
+        Ok(read) => read,
+        Err(error)
+            if error.reason()
+                == Some(scryer_application::error_reasons::import::FILE_NOT_FOUND) =>
+        {
+            tracing::info!(
+                source = %guard.source_path.display(),
+                destination = %final_dest_path.display(),
+                "import source was already gone at cleanup and the destination is proven; nothing to remove"
+            );
+            return Ok(SourceCleanup::Done);
+        }
+        Err(_) => {
+            return Err(AppError::Repository(format!(
+                "import source cleanup failed because source is inaccessible: {}",
+                guard.source_path.display()
+            )));
+        }
+    };
     if source_identity_from_fingerprint(&source_fingerprint) != guard.source_identity {
         return Err(AppError::Repository(format!(
             "import source cleanup failed because source changed: {}",
@@ -2633,7 +2670,7 @@ fn aside_removal_result(source: &Path, dest: &Path, answer: AsideRemoval) -> App
             "import source cleanup could not confirm removing source {}: {error}; it no longer reads at its set-aside name",
             source.display()
         ))),
-        AsideRemoval::PutBackFailed { at, error } => Err(import_destination_alias_unknown(
+        AsideRemoval::PutBackFailed { at, error } => Err(import_source_left_aside(
             source,
             dest,
             &format!(
@@ -2641,7 +2678,7 @@ fn aside_removal_result(source: &Path, dest: &Path, answer: AsideRemoval) -> App
                 at.display()
             ),
         )),
-        AsideRemoval::SetAsideMoved { at, error } => Err(import_destination_alias_unknown(
+        AsideRemoval::SetAsideMoved { at, error } => Err(import_source_left_aside(
             source,
             dest,
             &format!(
@@ -3096,10 +3133,15 @@ fn reconcile_existing_destination(
         )));
     };
     if source == dest {
-        return Err(AppError::ManualReconciliationRequired(format!(
-            "import source and destination are the same path: {}",
-            dest.display()
-        )));
+        return library_file_result(
+            source,
+            dest,
+            source_fingerprint,
+            size,
+            destination_guard,
+            source_cleanup_required,
+        )
+        .map(Some);
     }
     if !matches!(kind, EntryKind::File | EntryKind::Symlink) {
         return Err(AppError::ManualReconciliationRequired(format!(
@@ -3109,18 +3151,27 @@ fn reconcile_existing_destination(
     }
 
     // A destination that names the source's own entry, through a linked or
-    // mounted folder, another spelling, or a link that resolves to it, proves
-    // equal to the source; a move that then removed the source would leave
-    // nothing there, and a copy or link import that adopted it would leave a
-    // library file the download client still owns and may remove. One cheap
-    // look refuses the plain cases here in every mode; a destination with
-    // another name, such as a link an earlier import made, reads as distinct
-    // without it. The rest is settled when a move removes the source: it is
-    // set aside first, and removed only while the destination still holds
-    // the file adopted here.
+    // mounted folder, another spelling, or a link that resolves to it, is the
+    // library file already: nothing is placed and nothing is removed, and the
+    // download client may later remove its entry but never its data. One
+    // cheap look settles the plain cases here in every mode; a destination
+    // with another name, such as a link an earlier import made, reads as
+    // distinct without it. The rest is settled when a move removes the
+    // source: it is set aside first, and removed only while the destination
+    // still holds the file adopted here.
     match Disk::process().entry_alias_blocking(source, dest, &existing) {
         EntryAlias::Distinct => {}
-        EntryAlias::Same => return Err(import_destination_is_source(source, dest)),
+        EntryAlias::Same => {
+            return library_file_result(
+                source,
+                dest,
+                source_fingerprint,
+                size,
+                destination_guard,
+                source_cleanup_required,
+            )
+            .map(Some);
+        }
         EntryAlias::CannotTell => {
             return Err(import_destination_alias_unknown(
                 source,
@@ -3181,6 +3232,37 @@ fn reconcile_existing_destination(
         // proved equal to the source by the sampled proof above.
         verification: None,
     }))
+}
+
+/// The destination is the source's own entry. The library row points at the
+/// file as it stands; no cleanup guard is built, so no later step removes it.
+fn library_file_result(
+    source: &Path,
+    dest: &Path,
+    source_fingerprint: &ImportSourceFingerprint,
+    size: u64,
+    destination_guard: &ImportDestinationGuard,
+    source_cleanup_required: bool,
+) -> AppResult<ImportFileResult> {
+    ensure_same_source(source, source_fingerprint)?;
+    validate_import_destination_parent(destination_guard, dest)?;
+    validate_import_destination_file(destination_guard)?;
+    Ok(ImportFileResult {
+        strategy: if source_cleanup_required {
+            ImportStrategy::Move
+        } else {
+            ImportStrategy::Copy
+        },
+        source_path: source.to_path_buf(),
+        dest_path: dest.to_path_buf(),
+        size_bytes: size,
+        destination_disposition: ImportDestinationDisposition::AlreadyPresent,
+        source_disposition: ImportSourceDisposition::IsLibraryFile,
+        source_cleanup: None,
+        // Nothing was copied, and the file is compared with nothing: it is
+        // the one file both names reach.
+        verification: None,
+    })
 }
 
 fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult<ImportFileResult> {
@@ -4895,6 +4977,10 @@ mod tests {
             assert_eq!(round_trip_worker_error(error).reason(), reason);
         }
 
+        let error = round_trip_worker_error(import_source_left_aside(source, dest, "left aside"));
+        assert!(error.requires_manual_reconciliation(), "{error:?}");
+        assert_eq!(error.reason(), Some(import::DESTINATION_ALIAS_UNKNOWN));
+
         let kept = AppError::RepositoryFailedWithFacts {
             message: "copy verification failed".into(),
             reason: import::COPY_KEPT_SOURCE_GONE,
@@ -5980,11 +6066,11 @@ mod tests {
 
     /// The shape the application layer accepts from a move: a source cleanup
     /// guard, beside a verification that permits removal when there is one,
-    /// or a rename that needs neither.
+    /// or a rename or the library file itself, which need neither.
     #[cfg(unix)]
     fn application_accepts_move(result: &ImportFileResult) -> bool {
         match result.source_disposition {
-            ImportSourceDisposition::RenamedIntoPlace => {
+            ImportSourceDisposition::RenamedIntoPlace | ImportSourceDisposition::IsLibraryFile => {
                 result.source_cleanup.is_none() && result.verification.is_none()
             }
             _ => {
@@ -5997,13 +6083,30 @@ mod tests {
         }
     }
 
+    /// How a move onto an existing destination ended.
+    #[cfg(unix)]
+    #[derive(Debug, PartialEq, Eq)]
+    enum MoveEnding {
+        /// The source was removed beside a destination that is another entry.
+        Moved,
+        /// The destination is the source's own entry: the import is done on
+        /// it and nothing is removed, whether placement saw that or the
+        /// cleanup did, which a deferred cleanup ends the same way.
+        LibraryFile,
+    }
+
     /// Moves a source onto a destination `arrange` made beside it, equal in
-    /// content, and finishes the move as the application does. Says whether
-    /// the import was accepted, and what then reads through each name.
+    /// content, and finishes the move as the application does. Says how the
+    /// import ended, and what then reads through each name.
     #[cfg(unix)]
     fn move_onto_existing(
         arrange: &dyn Fn(&Path, &Path) -> PathBuf,
-    ) -> (bool, Option<Vec<u8>>, Option<Vec<u8>>, tempfile::TempDir) {
+    ) -> (
+        MoveEnding,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = dir.path().join("downloads").join("source.mkv");
         std::fs::create_dir_all(source.parent().expect("parent")).expect("downloads");
@@ -6020,15 +6123,19 @@ mod tests {
         );
         let finished = result.and_then(|result| {
             assert!(application_accepts_move(&result), "{result:?}");
+            if result.source_disposition == ImportSourceDisposition::IsLibraryFile {
+                return Ok(MoveEnding::LibraryFile);
+            }
             let guard = result.source_cleanup.clone().expect("a move guard");
             remove_import_source_after_verified_import_blocking(
                 guard,
                 dest.clone(),
                 ImportFileOptions::default(),
             )
+            .map(|()| MoveEnding::Moved)
         });
-        let accepted = match finished {
-            Ok(()) => true,
+        let ending = match finished {
+            Ok(ending) => ending,
             Err(error) => {
                 assert!(error.requires_manual_reconciliation(), "{error:?}");
                 assert_eq!(
@@ -6036,7 +6143,7 @@ mod tests {
                     Some(scryer_application::error_reasons::import::DESTINATION_IS_SOURCE),
                     "{error:?}"
                 );
-                false
+                MoveEnding::LibraryFile
             }
         };
         assert!(
@@ -6045,12 +6152,12 @@ mod tests {
         );
         let kept = std::fs::read(&source).ok();
         let through_dest = std::fs::read(&dest).ok();
-        (accepted, kept, through_dest, dir)
+        (ending, kept, through_dest, dir)
     }
 
     /// A destination that names the source's own entry is not a copy of it:
-    /// a move that removed the source would leave nothing behind, so it is
-    /// refused and both names are kept.
+    /// a move that removed the source would leave nothing behind, so the
+    /// import ends on that file and both names are kept.
     #[cfg(unix)]
     #[test]
     fn a_destination_that_names_the_source_itself_never_lets_a_move_remove_it() {
@@ -6062,42 +6169,43 @@ mod tests {
         };
 
         // A symlink to the source.
-        let (accepted, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
+        let (ending, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
             let dest = library(root).join("Imported.Movie.mkv");
             std::os::unix::fs::symlink(source, &dest).expect("symlink");
             dest
         });
-        assert!(!accepted, "a symlink to the source is not the import");
+        assert_eq!(ending, MoveEnding::LibraryFile, "a symlink to the source");
         assert_eq!((kept, through_dest), (bytes.clone(), bytes.clone()));
 
         // The source's own name, reached through a symlinked folder.
-        let (accepted, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
+        let (ending, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
             let alias = root.join("library");
             std::os::unix::fs::symlink(source.parent().expect("parent"), &alias)
                 .expect("folder symlink");
             alias.join("source.mkv")
         });
-        assert!(!accepted, "the source's own entry is not the import");
+        assert_eq!(ending, MoveEnding::LibraryFile, "the source's own entry");
         assert_eq!((kept, through_dest), (bytes.clone(), bytes.clone()));
 
         // A link to a link to the source.
-        let (accepted, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
+        let (ending, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
             let hop = root.join("hop.mkv");
             std::os::unix::fs::symlink(source, &hop).expect("hop");
             let dest = library(root).join("Imported.Movie.mkv");
             std::os::unix::fs::symlink(&hop, &dest).expect("symlink");
             dest
         });
-        assert!(
-            !accepted,
-            "a chain of links to the source is not the import"
+        assert_eq!(
+            ending,
+            MoveEnding::LibraryFile,
+            "a chain of links to the source"
         );
         assert_eq!((kept, through_dest), (bytes.clone(), bytes));
     }
 
     /// Another spelling of the source's own name, in its own folder: on a
     /// volume that does not tell case apart it is the source's entry, and the
-    /// move is refused with both kept; on one that does, it is another file,
+    /// import ends on it with both kept; on one that does, it is another file,
     /// and the move finishes as it did before any alias check.
     #[cfg(unix)]
     #[test]
@@ -6106,7 +6214,7 @@ mod tests {
         std::fs::write(probe.path().join("probe"), b"").expect("probe");
         let folds_case = probe.path().join("PROBE").exists();
 
-        let (accepted, kept, through_dest, _dir) = move_onto_existing(&|_, source| {
+        let (ending, kept, through_dest, _dir) = move_onto_existing(&|_, source| {
             let dest = source.with_file_name("SOURCE.mkv");
             if !folds_case {
                 std::fs::write(&dest, b"only video bytes").expect("second file");
@@ -6115,22 +6223,22 @@ mod tests {
         });
         let bytes = Some(b"only video bytes".to_vec());
         if folds_case {
-            assert!(!accepted, "one entry under two spellings is not the import");
+            assert_eq!(ending, MoveEnding::LibraryFile, "one entry, two spellings");
             assert_eq!((kept, through_dest), (bytes.clone(), bytes));
         } else {
-            assert!(accepted, "another file under another case is the import");
+            assert_eq!(ending, MoveEnding::Moved, "another file under another case");
             assert_eq!((kept, through_dest), (None, bytes));
         }
     }
 
-    /// A link import is refused when its destination is the source's own
-    /// entry under another spelling, since the client may later remove the
-    /// data the library would point at. A destination that is a second link
-    /// of the source, which an earlier link import made, is still that
-    /// import, as it was before. Nothing is removed in either case.
+    /// A link import whose destination is the source's own entry under
+    /// another spelling ends on that file, marked so the client may remove
+    /// its entry but never its data. A destination that is a second link of
+    /// the source, which an earlier link import made, is still that import,
+    /// as it was before. Nothing is removed in either case.
     #[cfg(unix)]
     #[test]
-    fn a_link_import_onto_the_sources_own_entry_is_refused_but_a_second_link_is_kept() {
+    fn a_link_import_onto_the_sources_own_entry_is_the_library_file_and_a_second_link_is_kept() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = dir.path().join("downloads").join("source.mkv");
         std::fs::create_dir_all(source.parent().expect("parent")).expect("downloads");
@@ -6152,13 +6260,16 @@ mod tests {
         let alias = dir.path().join("library");
         std::os::unix::fs::symlink(source.parent().expect("parent"), &alias)
             .expect("folder symlink");
-        let error = link_import(&alias.join("source.mkv")).expect_err("one entry, two spellings");
-        assert!(error.requires_manual_reconciliation(), "{error:?}");
+        let result = link_import(&alias.join("source.mkv")).expect("one entry, two spellings");
         assert_eq!(
-            error.reason(),
-            Some(scryer_application::error_reasons::import::DESTINATION_IS_SOURCE),
-            "{error:?}"
+            result.source_disposition,
+            ImportSourceDisposition::IsLibraryFile
         );
+        assert_eq!(
+            result.destination_disposition,
+            ImportDestinationDisposition::AlreadyPresent
+        );
+        assert!(result.source_cleanup.is_none(), "{result:?}");
         assert_eq!(std::fs::read(&source).ok(), bytes);
 
         // A second link an earlier import made.
@@ -6171,6 +6282,7 @@ mod tests {
             result.destination_disposition,
             ImportDestinationDisposition::AlreadyPresent
         );
+        assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
         assert!(result.source_cleanup.is_none(), "{result:?}");
         assert_eq!(std::fs::read(&source).ok(), bytes);
         assert_eq!(std::fs::read(&linked).ok(), bytes);
@@ -6190,25 +6302,25 @@ mod tests {
 
         // A second name of the source file, as an interrupted hard-link move
         // leaves it.
-        let (accepted, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
+        let (ending, kept, through_dest, _dir) = move_onto_existing(&|root, source| {
             let dest = library(root).join("Imported.Movie.mkv");
             std::fs::hard_link(source, &dest).expect("hard link");
             dest
         });
-        assert!(accepted, "a second name of the source is the import");
+        assert_eq!(ending, MoveEnding::Moved, "a second name of the source");
         assert_eq!(kept, None, "the source name is removed");
         assert_eq!(through_dest.as_deref(), Some(&b"only video bytes"[..]));
 
         // A symlink to an unrelated file with the same content, as a library
         // built from symlinks holds.
-        let (accepted, kept, through_dest, dir) = move_onto_existing(&|root, _| {
+        let (ending, kept, through_dest, dir) = move_onto_existing(&|root, _| {
             let elsewhere = root.join("elsewhere.mkv");
             std::fs::write(&elsewhere, b"only video bytes").expect("elsewhere");
             let dest = library(root).join("Imported.Movie.mkv");
             std::os::unix::fs::symlink(&elsewhere, &dest).expect("symlink");
             dest
         });
-        assert!(accepted, "a link to another equal file is the import");
+        assert_eq!(ending, MoveEnding::Moved, "a link to another equal file");
         assert_eq!(kept, None, "the source name is removed");
         assert_eq!(through_dest.as_deref(), Some(&b"only video bytes"[..]));
         assert_eq!(
@@ -8065,8 +8177,11 @@ mod tests {
         assert!(dest.exists());
     }
 
+    /// A source already gone at cleanup, beside a destination that is proven,
+    /// leaves nothing to remove: the cleanup is done. Beside a destination
+    /// that no longer proves, it still refuses, and the destination is kept.
     #[test]
-    fn move_mode_cleanup_refuses_missing_source() {
+    fn move_mode_cleanup_with_a_missing_source_is_done_only_beside_a_proven_destination() {
         let source_dir = tempfile::tempdir().expect("source tempdir");
         let dest_dir = tempfile::tempdir().expect("dest tempdir");
         let source = source_dir.path().join("source.mkv");
@@ -8088,15 +8203,62 @@ mod tests {
         .expect("place file");
 
         std::fs::remove_file(&source).expect("remove source");
-        let error = remove_import_source_after_verified_import_blocking(
-            result.source_cleanup.expect("cleanup guard"),
+        let guard = result.source_cleanup.expect("cleanup guard");
+        remove_import_source_after_verified_import_blocking(
+            guard.clone(),
             dest.clone(),
             ImportFileOptions::default(),
         )
-        .expect_err("missing source should fail cleanup");
+        .expect("a source already gone beside a proven destination is done");
+        assert_eq!(
+            std::fs::read(&dest).ok(),
+            Some(b"fake video bytes".to_vec())
+        );
+        assert!(!disk::aside_path_for(&source).exists());
 
-        assert!(error.to_string().contains("source is missing"));
-        assert!(dest.exists());
+        std::fs::write(&dest, b"other video bytes").expect("rewrite destination");
+        let error = remove_import_source_after_verified_import_blocking(
+            guard,
+            dest.clone(),
+            ImportFileOptions::default(),
+        )
+        .expect_err("a destination that no longer proves refuses");
+        assert!(!error.requires_manual_reconciliation(), "{error:?}");
+        assert_eq!(
+            std::fs::read(&dest).ok(),
+            Some(b"other video bytes".to_vec())
+        );
+    }
+
+    /// An import whose destination is its source's own path ends on that file
+    /// in every mode, with nothing placed and nothing to remove.
+    #[test]
+    fn an_import_onto_its_own_path_is_the_library_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        std::fs::write(&source, b"fake video bytes").expect("write source");
+        for mode in [ImportMode::Move, ImportMode::HardlinkOrCopy] {
+            let result = import_file_blocking(
+                source.clone(),
+                source.clone(),
+                mode,
+                ImportFileOptions::default(),
+                None,
+                None,
+                ImportFilePermissions::default(),
+            )
+            .expect("one path");
+            assert_eq!(
+                result.source_disposition,
+                ImportSourceDisposition::IsLibraryFile,
+                "{mode:?}"
+            );
+            assert!(result.source_cleanup.is_none(), "{mode:?}");
+            assert_eq!(
+                std::fs::read(&source).ok(),
+                Some(b"fake video bytes".to_vec())
+            );
+        }
     }
 
     #[test]
@@ -8238,7 +8400,10 @@ mod tests {
         )
         .expect_err("same source and final dest should fail cleanup");
 
-        assert!(error.to_string().contains("library file"));
+        assert_eq!(
+            error.reason(),
+            Some(scryer_application::error_reasons::import::DESTINATION_IS_SOURCE)
+        );
         assert!(source.exists());
         assert!(dest.exists());
     }

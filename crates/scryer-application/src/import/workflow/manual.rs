@@ -508,6 +508,7 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
     // working off its goal is left alone; the tracked poller picks it up and
     // parks it in `ImportedSeeding`. While an archive or subtitle delivery of
     // the same download still holds its sources, nothing is removed yet.
+    let mut library_holds_payload = false;
     if let Some(download_id) = completed
         .download_id
         .as_deref()
@@ -517,11 +518,11 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
             .services
             .workflow
             .imports
-            .archive_processing_pending_for_download(&download_id)
+            .download_import_sources(&download_id)
             .await
         {
-            Ok(false) => {}
-            Ok(true) => return,
+            Ok(sources) if sources.held => return,
+            Ok(sources) => library_holds_payload = sources.library_holds_payload,
             Err(error) => {
                 tracing::warn!(%download_id, error = %error,
                     "could not tell whether the download's sources are still held; cleanup deferred");
@@ -546,6 +547,7 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
         // Outside the reconcile tick: no shared prefetch, per-row reads.
         None,
         None,
+        library_holds_payload,
     )
     .await;
 }
@@ -3443,7 +3445,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             .iter()
             .any(manual_file_has_scene_subtitle_hold);
     if can_release {
-        let cleanup_succeeded = match complete_deferred_import_source_cleanup(app, cleanups).await
+        let cleanup_succeeded = match complete_deferred_import_source_cleanup(app, import_id, cleanups).await
         {
             Ok(()) => true,
             // Ends the import needing reconciliation, with no hold recorded

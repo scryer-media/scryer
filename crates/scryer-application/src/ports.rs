@@ -8998,6 +8998,21 @@ pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reaso
 /// interrupted release can be told apart from an import that never held.
 pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released";
 
+/// Import payload key set when the download's file turned out to be the
+/// library file itself. While any import of a download carries it, the
+/// download's client entry is removed without its data.
+pub const LIBRARY_HOLDS_PAYLOAD_KEY: &str = "library_holds_download_payload";
+
+/// What the imports of one download say about its sources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DownloadImportSources {
+    /// An import still holds the download's sources, so nothing is removed.
+    pub held: bool,
+    /// An import found that the download's file is the library file, so the
+    /// client entry may go but never its data.
+    pub library_holds_payload: bool,
+}
+
 /// Which downloads of a batch an import still holds the sources of.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HeldDownloadSources {
@@ -9057,6 +9072,30 @@ pub trait ImportRepository: Send + Sync {
         _download_id: &DownloadId,
     ) -> AppResult<bool> {
         Ok(false)
+    }
+
+    /// Whether an import holds `download_id`'s sources, and whether one found
+    /// that the download's file is the library file, in one read. A store
+    /// that keeps no such mark answers the hold alone.
+    async fn download_import_sources(
+        &self,
+        download_id: &DownloadId,
+    ) -> AppResult<DownloadImportSources> {
+        Ok(DownloadImportSources {
+            held: self
+                .archive_processing_pending_for_download(download_id)
+                .await?,
+            library_holds_payload: false,
+        })
+    }
+
+    /// Mark the import `import_id` as one whose download's file is the
+    /// library file. Answers `false`, changing nothing, when the import has
+    /// no download identity that a later cleanup could read the mark by.
+    async fn record_library_holds_download_payload(&self, _import_id: &str) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
     }
 
     /// Which of `download_ids` an import still holds the sources of, as
@@ -13618,6 +13657,10 @@ pub struct DownloadCleanupRecord {
     /// was rescheduled with; `None` after any other outcome. Lets the next
     /// failure back off further without counting holds and deferrals.
     pub previous_failure_retry_seconds: Option<i64>,
+    /// Not stored: read with the import holds right before the cleanup runs.
+    /// An import found the download's file is the library file, so the
+    /// client entry may go but never its data.
+    pub library_holds_payload: bool,
 }
 
 /// The catalog references one download submission holds, exactly as stored.

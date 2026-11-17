@@ -70,8 +70,13 @@ IMPORTED_SEEDING, IMPORT_BLOCKED, FAILED_PENDING, FAILED, IGNORED.
 `download_password_retry`. A download blocked for manual reconciliation
 (`trackedState` IMPORT_BLOCKED) carries the import's refusal instead:
 `IMPORT_DESTINATION_IS_SOURCE` (the existing destination is the source's own
-file) or `IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it
-is). Nothing was removed in either case. After a client refresh or a restart
+file, and Scryer could not record that the client must keep its data) or
+`IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it is, and
+the source it set aside to find out could not be put back at its name).
+Nothing was removed in either case. When the destination is the source's own
+file and that is recorded, the import completes on that file and the client
+entry is later removed without its data. When Scryer only could not tell yet,
+the import retries. After a client refresh or a restart
 the block may show only its sentence. `passwordFailureCode`:
 ARCHIVE_PASSWORD_REQUIRED, ARCHIVE_PASSWORD_OR_CORRUPTION.
 

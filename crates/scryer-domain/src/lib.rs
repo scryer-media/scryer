@@ -3721,6 +3721,10 @@ pub enum ImportSourceDisposition {
     /// The source was archive extraction output and was renamed into place, so
     /// nothing is left at its path and there is nothing to clean up.
     RenamedIntoPlace,
+    /// The destination is the source's own entry: the download's file is the
+    /// library file. Nothing was placed and nothing is removed, and the
+    /// download client may remove its entry only, never its data.
+    IsLibraryFile,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

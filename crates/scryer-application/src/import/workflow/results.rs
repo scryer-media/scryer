@@ -595,6 +595,9 @@ async fn reconcile_terminal_download_cleanup(
     // (manual import), which take the per-row path.
     cache: Option<&TerminalCleanupTickCache>,
     record: Option<&crate::DownloadCleanupRecord>,
+    // An import of the download found its file is the library file, so the
+    // entry may go but never its data. The hold read below adds to it.
+    library_holds_payload: bool,
 ) -> TerminalDownloadCleanup {
     let client_id = client_id.trim();
     let manual_cleanup = state == TrackedDownloadState::Failed
@@ -753,14 +756,19 @@ async fn reconcile_terminal_download_cleanup(
     // read per tick; a "not held" is always read for this download alone, now.
     // The reads write nothing, so a tick that finds every download held does
     // no write.
+    let mut library_holds_payload = library_holds_payload;
     if record.is_none()
         && let Some(download_id) = canonical_download_id
     {
-        let held = match cache {
+        let sources = match cache {
             Some(cache) => cache.sources_held(app, download_id).await,
             None => sources_held_by_import(app, download_id).await,
         };
+        let held = sources.as_ref().map(|sources| sources.held).map_err(Clone::clone);
         let first_unread = note_held_sources(download_id, &held);
+        if let Ok(sources) = &sources {
+            library_holds_payload |= sources.library_holds_payload;
+        }
         match held {
             Ok(false) => {}
             Ok(true) => {
@@ -813,7 +821,16 @@ async fn reconcile_terminal_download_cleanup(
         && !client_type
             .trim()
             .eq_ignore_ascii_case(crate::seeding_gate::TORRENT_BLACKHOLE_CLIENT_TYPE);
-    let remove_data = match state {
+    // - A download whose file is the library file removes only the entry,
+    //   whatever its state: its data is the library's.
+    if library_holds_payload {
+        tracing::info!(
+            client_id,
+            download_client_item_id,
+            "the download's file is the library file; removing the client entry without its data"
+        );
+    }
+    let remove_data = !library_holds_payload && match state {
         TrackedDownloadState::Failed if manual_cleanup => true,
         TrackedDownloadState::Imported | TrackedDownloadState::ImportedSeeding => {
             !is_torrent || torrent_data_removal_allowed
@@ -841,7 +858,9 @@ async fn reconcile_terminal_download_cleanup(
     // so it can never fall through to entry removal (a HistoryDelete) with
     // the payload unverified. This is the attempt's only NZBGet cleanup
     // read: payload removal and the native-deletion check both use it.
-    let nzbget_payload = if client_type == "nzbget" && remove_data {
+    // An entry-only removal of a payload the library holds reads it too, so
+    // a history state NZBGet would delete DestDir for is refused below.
+    let nzbget_payload = if client_type == "nzbget" && (remove_data || library_holds_payload) {
         match revalidate_nzbget_cleanup_state(
             app,
             canonical_download_id,
@@ -2893,10 +2912,23 @@ async fn skip_reason_for_import_check_rejection(
 }
 
 /// The guard a move import must hand to source removal, or `None` when the
-/// source was renamed into place and nothing is left at its path.
+/// source was renamed into place and nothing is left at its path, or when the
+/// source is the library file and nothing may be removed.
 fn move_import_source_cleanup_guard(
     file_result: &scryer_domain::ImportFileResult,
 ) -> AppResult<Option<scryer_domain::ImportSourceCleanupGuard>> {
+    // The destination is the source's own entry: nothing was placed and
+    // nothing is removed. That answer never comes with a guard or a copy.
+    if file_result.source_disposition == scryer_domain::ImportSourceDisposition::IsLibraryFile {
+        if file_result.source_cleanup.is_some() || file_result.verification.is_some() {
+            return Err(AppError::Repository(format!(
+                "move import of {} reported the library file together with a source cleanup or copy verification",
+                file_result.source_path.display()
+            )));
+        }
+        return Ok(None);
+    }
+
     // Archive extraction output renamed into place: the move already happened.
     // Only that rename sets this disposition, and it never comes with a guard
     // or a copy to verify, so either one means the result cannot be trusted.
@@ -2973,21 +3005,12 @@ pub(crate) fn defer_import_source_cleanup(
 
 /// The failure of a deferred source cleanup that must reach the operator
 /// as an import needing reconciliation, with its reason, rather than as a
-/// hold an operator may release: a cleanup that found the library file is
-/// the source's own entry, or could not tell. Releasing such a hold would
-/// let the download client's removal take the library file with the
-/// download. `None` for any other failure, which stays a releasable hold.
+/// hold an operator may release, such as a source set aside that could not
+/// be put back. A cleanup that could not yet tell whether the destination
+/// names the source is a hold that retries. `None` for any failure that
+/// stays a releasable hold.
 fn deferred_cleanup_needing_reconciliation(error: &AppError) -> Option<AppError> {
-    if error.requires_manual_reconciliation() {
-        return Some(error.clone());
-    }
-    let reason = error.reason()?;
-    (reason == crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN).then(|| {
-        AppError::ManualReconciliationRefused {
-            message: error.to_string(),
-            reason,
-        }
-    })
+    error.requires_manual_reconciliation().then(|| error.clone())
 }
 
 /// The deferred source cleanups of one import, in order. A failure that
@@ -2997,9 +3020,10 @@ fn deferred_cleanup_needing_reconciliation(error: &AppError) -> Option<AppError>
 /// sources held.
 async fn complete_deferred_import_source_cleanup(
     app: &AppUseCase,
+    import_id: &str,
     pending: Vec<DeferredImportSourceCleanup>,
 ) -> Result<(), DeferredCleanupFailure> {
-    run_deferred_import_source_cleanups(app, pending)
+    run_deferred_import_source_cleanups(app, import_id, pending)
         .await
         .map_err(|error| match deferred_cleanup_needing_reconciliation(&error) {
             Some(escalated) => DeferredCleanupFailure::NeedsReconciliation(escalated),
@@ -3019,16 +3043,45 @@ enum DeferredCleanupFailure {
 
 async fn run_deferred_import_source_cleanups(
     app: &AppUseCase,
+    import_id: &str,
     pending: Vec<DeferredImportSourceCleanup>,
 ) -> AppResult<()> {
     for cleanup in pending {
-        finalize_deferred_import_source_cleanup(
+        let source = cleanup.guard.source_path.clone();
+        let removed = finalize_deferred_import_source_cleanup(
             app,
             Some(cleanup.guard),
             &cleanup.destination,
             cleanup.completed.as_ref(),
         )
-        .await?;
+        .await;
+        match removed {
+            Ok(()) => {}
+            // The cleanup found the library file is the source's own entry:
+            // the source is the library file, so nothing is removed and the
+            // import is done. A download client's removal then takes its
+            // entry only; with no client, nothing else reaches the file.
+            Err(error)
+                if error.reason() == Some(crate::error_reasons::import::DESTINATION_IS_SOURCE) =>
+            {
+                if cleanup.completed.is_some() {
+                    record_library_file_for_download(
+                        app,
+                        import_id,
+                        &source,
+                        &cleanup.destination,
+                    )
+                    .await?;
+                }
+                tracing::info!(
+                    import_id,
+                    source = %source.display(),
+                    destination = %cleanup.destination.display(),
+                    "import source is the library file; nothing removed"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -3296,37 +3349,40 @@ mod move_import_source_cleanup_gate_tests {
         }
     }
 
-    /// A deferred cleanup that found the library file is the source's own
-    /// entry, or could not tell, ends the import needing reconciliation with
-    /// its reason; any other cleanup failure stays a releasable hold.
+    /// A deferred cleanup refusal that waits for an operator, such as a source
+    /// left at its set-aside name, ends the import needing reconciliation
+    /// with its reason. One that could not yet tell whether the destination
+    /// names the source retries, as does any other cleanup failure.
     #[test]
     fn a_deferred_cleanup_refusal_needs_reconciliation_and_keeps_its_reason() {
         use crate::AppError;
         use crate::error_reasons::import;
 
-        let is_source = AppError::ManualReconciliationRefused {
-            message: "the destination is the source".into(),
-            reason: import::DESTINATION_IS_SOURCE,
-        };
-        let raised = super::deferred_cleanup_needing_reconciliation(&is_source)
-            .expect("raised, not held");
-        assert!(raised.requires_manual_reconciliation());
-        assert_eq!(raised.reason(), Some(import::DESTINATION_IS_SOURCE));
-
-        let unknown = AppError::RepositoryFailed {
-            message: "could not tell".into(),
-            reason: import::DESTINATION_ALIAS_UNKNOWN,
-        };
-        let raised = super::deferred_cleanup_needing_reconciliation(&unknown)
-            .expect("raised, not held");
-        assert!(raised.requires_manual_reconciliation());
-        assert_eq!(raised.reason(), Some(import::DESTINATION_ALIAS_UNKNOWN));
+        for refused in [
+            AppError::ManualReconciliationRefused {
+                message: "the destination is the source".into(),
+                reason: import::DESTINATION_IS_SOURCE,
+            },
+            AppError::ManualReconciliationRefused {
+                message: "the source was left at its set-aside name".into(),
+                reason: import::DESTINATION_ALIAS_UNKNOWN,
+            },
+        ] {
+            let raised = super::deferred_cleanup_needing_reconciliation(&refused)
+                .expect("raised, not held");
+            assert!(raised.requires_manual_reconciliation());
+            assert_eq!(raised.reason(), refused.reason());
+        }
 
         for held in [
             AppError::Repository("the source could not be removed".into()),
             AppError::RepositoryFailed {
                 message: "the source could not be removed".into(),
                 reason: import::PERMISSION_DENIED,
+            },
+            AppError::RepositoryFailed {
+                message: "could not tell".into(),
+                reason: import::DESTINATION_ALIAS_UNKNOWN,
             },
         ] {
             assert!(

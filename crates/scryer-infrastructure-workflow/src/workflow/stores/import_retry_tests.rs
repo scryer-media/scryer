@@ -306,6 +306,67 @@ async fn archive_preservation_refuses_active_cleanup_but_accepts_retained_attemp
     );
 }
 
+/// That a download's file is the library file is read back with its holds,
+/// survives a retry replacing the import's payload, and is refused while a
+/// cleanup owns the download.
+#[tokio::test]
+async fn library_file_mark_is_read_with_the_holds_and_survives_a_retry() {
+    let (store, cleanup, claim, expected) = retry_fixture().await;
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        scryer_application::DownloadImportSources::default()
+    );
+    assert!(
+        store
+            .record_library_holds_download_payload(&claim.import_id)
+            .await
+            .unwrap()
+    );
+    let marked = scryer_application::DownloadImportSources {
+        held: false,
+        library_holds_payload: true,
+    };
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        marked
+    );
+    assert!(
+        !store
+            .record_library_holds_download_payload("missing-import")
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_import_retry(&claim, expected, "{\"replacement\":true}")
+            .await
+            .unwrap()
+            .is_claimed()
+    );
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        marked
+    );
+    drop(cleanup);
+
+    let (store, cleanup, claim, _) = retry_fixture().await;
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Claimed(_)
+    ));
+    let refused = store
+        .record_library_holds_download_payload(&claim.import_id)
+        .await
+        .expect_err("a cleanup owns the download");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::WORKFLOW_SOURCE_CLEANUP_ALREADY_CLAIMED)
+    );
+}
+
 async fn retry_record_result(store: &ImportStore, claim: &ImportRetryClaim) {
     store
         .update_import_status(

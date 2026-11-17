@@ -5854,9 +5854,9 @@ pub mod import {
     pub const EPISODE_LOOKUP_FAILED: &str = "IMPORT_EPISODE_LOOKUP_FAILED";
     /// The source download failed.
     pub const SOURCE_JOB_FAILED: &str = "IMPORT_SOURCE_JOB_FAILED";
-    /// The existing destination is the source's own entry, so a move that removed the source would remove the only copy. Nothing was removed.
+    /// The existing destination is the source's own entry, so removing the source would remove the only copy. Nothing was removed. An import of a download ends on that file, and the client may remove its entry but not its data; the import is held only when that could not be recorded.
     pub const DESTINATION_IS_SOURCE: &str = "IMPORT_DESTINATION_IS_SOURCE";
-    /// Could not tell whether the existing destination is the source's own entry: a read failed, or the source could not be set aside or put back. Nothing was removed.
+    /// Could not tell whether the existing destination is the source's own entry: a read failed, or the source could not be set aside or put back. Nothing was removed. The import retries, and is held only when a set-aside source could not be put back at its name.
     pub const DESTINATION_ALIAS_UNKNOWN: &str = "IMPORT_DESTINATION_ALIAS_UNKNOWN";
     /// A copy that failed was kept at its destination, named by [`KEPT_PATH_FACT`], because the source no longer holds the file.
     pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";

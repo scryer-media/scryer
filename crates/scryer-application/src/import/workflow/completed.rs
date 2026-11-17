@@ -757,7 +757,7 @@ impl TerminalCleanupTickCache {
         &self,
         app: &AppUseCase,
         download_id: &scryer_domain::download_identity::DownloadId,
-    ) -> Result<bool, String> {
+    ) -> Result<crate::DownloadImportSources, String> {
         if self.remembered_set.contains(download_id) {
             let batch = self
                 .held_sources
@@ -771,7 +771,12 @@ impl TerminalCleanupTickCache {
                 })
                 .await;
             match batch {
-                Ok(batch) if batch.held.contains(download_id) => return Ok(true),
+                Ok(batch) if batch.held.contains(download_id) => {
+                    return Ok(crate::DownloadImportSources {
+                        held: true,
+                        library_holds_payload: false,
+                    });
+                }
                 Ok(batch) if batch.unreadable.contains(download_id) => {
                     return Err("an import record of the download could not be read".to_string());
                 }
@@ -783,16 +788,17 @@ impl TerminalCleanupTickCache {
     }
 }
 
-/// Whether an import still holds `download_id`'s sources, read on its own,
-/// or why the store could not tell.
+/// Whether an import still holds `download_id`'s sources, and whether one
+/// found its file is the library file, read on its own, or why the store
+/// could not tell.
 pub(crate) async fn sources_held_by_import(
     app: &AppUseCase,
     download_id: &scryer_domain::download_identity::DownloadId,
-) -> Result<bool, String> {
+) -> Result<crate::DownloadImportSources, String> {
     app.services
         .workflow
         .imports
-        .archive_processing_pending_for_download(download_id)
+        .download_import_sources(download_id)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1030,13 +1036,14 @@ async fn reconcile_unclaimed_terminal_cleanup(
         ),
         cache,
         record,
+        record.is_some_and(|record| record.library_holds_payload),
     )
     .await
 }
 
 pub(crate) async fn run_claimed_download_cleanup(
     app: &AppUseCase,
-    record: crate::DownloadCleanupRecord,
+    mut record: crate::DownloadCleanupRecord,
     cache: Option<&TerminalCleanupTickCache>,
 ) -> Option<(
     scryer_domain::download_identity::DownloadId,
@@ -1049,7 +1056,9 @@ pub(crate) async fn run_claimed_download_cleanup(
         &record.item_id,
     );
     let result = async {
-        if app.services.workflow.imports.archive_processing_pending_for_download(&record.download_id).await? {
+        let sources = app.services.workflow.imports.download_import_sources(&record.download_id).await?;
+        record.library_holds_payload = sources.library_holds_payload;
+        if sources.held {
             finish_cleanup_attempt(app, &record, CleanupSettlement::CleanupDeferred, false, record.history_offset,
                 Some("archive or subtitle delivery is pending; sources preserved")).await;
             return Ok(None);
@@ -1598,6 +1607,7 @@ mod settlement_tests {
             history_offset: 0,
             payload_checkpoint: None,
             previous_failure_retry_seconds,
+            library_holds_payload: false,
         }
     }
 

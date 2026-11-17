@@ -1573,6 +1573,43 @@ impl ImportRepository for TrackingImportRepo {
         }))
     }
 
+    async fn download_import_sources(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadImportSources> {
+        self.held_reads_per_download
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let canonical_ids = self.canonical_ids.lock().await;
+        let mut answer = crate::DownloadImportSources::default();
+        for record in self.records.lock().await.iter() {
+            if canonical_ids.get(&record.id) != Some(download_id) {
+                continue;
+            }
+            let payload =
+                serde_json::from_str::<serde_json::Value>(&record.payload_json).unwrap_or_default();
+            answer.held |= payload["archive_processing_pending"] == true;
+            answer.library_holds_payload |= payload[crate::LIBRARY_HOLDS_PAYLOAD_KEY] == true;
+        }
+        Ok(answer)
+    }
+
+    async fn record_library_holds_download_payload(&self, import_id: &str) -> AppResult<bool> {
+        if !self.canonical_ids.lock().await.contains_key(import_id) {
+            return Ok(false);
+        }
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(false);
+        };
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(crate::LIBRARY_HOLDS_PAYLOAD_KEY.into(), true.into());
+        }
+        record.payload_json = payload.to_string();
+        Ok(true)
+    }
+
     async fn archive_processing_pending_downloads(
         &self,
         download_ids: &[scryer_domain::download_identity::DownloadId],

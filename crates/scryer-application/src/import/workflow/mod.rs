@@ -316,6 +316,11 @@ pub(crate) async fn import_file_with_record_progress(
     active_stream.finish().await;
 
     let result = result?;
+    if result.source_disposition == scryer_domain::ImportSourceDisposition::IsLibraryFile
+        && completed.is_some()
+    {
+        record_library_file_for_download(app, import_id, source, dest).await?;
+    }
     let finalization_permit = app
         .runtime
         .imports
@@ -328,6 +333,43 @@ pub(crate) async fn import_file_with_record_progress(
         _finalization_permit: finalization_permit,
         destination_permit: Arc::new(destination_permit),
     })
+}
+
+/// The import's file is the library file, and a download client still holds
+/// an entry for it. The import's row records that the client may remove its
+/// entry but never its data; a terminal cleanup reads that with the download's
+/// holds. With no download identity to record it under, or a record that does
+/// not land, the import refuses as the destination being its own source, so
+/// nothing is left for a client to remove with its data.
+pub(crate) async fn record_library_file_for_download(
+    app: &AppUseCase,
+    import_id: &str,
+    source: &Path,
+    dest: &Path,
+) -> AppResult<()> {
+    let recorded = app
+        .services
+        .workflow
+        .imports
+        .record_library_holds_download_payload(import_id)
+        .await;
+    match recorded {
+        Ok(true) => Ok(()),
+        outcome => {
+            if let Err(error) = &outcome {
+                tracing::warn!(import_id, error = %error,
+                    "could not record that the download's file is the library file");
+            }
+            Err(AppError::ManualReconciliationRefused {
+                message: format!(
+                    "import destination {} is the source {} itself, and the download's data could not be kept from its client; nothing was removed",
+                    dest.display(),
+                    source.display()
+                ),
+                reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
+            })
+        }
+    }
 }
 
 impl AppUseCase {
