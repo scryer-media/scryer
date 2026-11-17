@@ -235,6 +235,9 @@ pub enum Refused {
     /// placement went to remove it.
     DestinationMissing,
     Unreachable(Side),
+    /// The name is a link the placement does not go through: a name the
+    /// caller holds is written only when it is the file itself.
+    LinkNotFollowed,
     /// Any other failure.
     Failed,
 }
@@ -255,6 +258,7 @@ impl Refused {
             Self::Denied(_) => reason::DISK_PERMISSION_DENIED,
             Self::SourceMissing | Self::DestinationMissing => reason::DISK_PATH_MISSING,
             Self::Unreachable(_) => reason::DISK_PATH_UNREACHABLE,
+            Self::LinkNotFollowed => reason::DISK_LINK_NOT_FOLLOWED,
             Self::Failed => reason::DISK_OPERATION_FAILED,
         }
     }
@@ -298,6 +302,7 @@ impl Fail {
             reason::DISK_PATH_MISSING if side == Side::Destination => Refused::DestinationMissing,
             reason::DISK_PATH_MISSING => Refused::SourceMissing,
             reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT => Refused::Unreachable(side),
+            reason::DISK_LINK_NOT_FOLLOWED => Refused::LinkNotFollowed,
             _ => Refused::Failed,
         };
         Self {

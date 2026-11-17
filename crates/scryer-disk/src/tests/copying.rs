@@ -267,6 +267,28 @@ fn a_direct_copy_writes_only_onto_a_name_the_caller_holds() {
     assert_eq!(std::fs::read(&dest).unwrap(), b"incoming");
 }
 
+/// A held name that is a link is refused, so a copy never writes through it
+/// into, or empties, the file it points at.
+#[cfg(unix)]
+#[test]
+fn a_copy_never_writes_through_a_link_at_a_held_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let (source, dest) = (temp.path().join("source.mkv"), temp.path().join("dest.mkv"));
+    let elsewhere = temp.path().join("elsewhere.mkv");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&elsewhere, b"someone else's file").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &dest).unwrap();
+
+    let policy = recorded(Depth::Quick, Landing::Direct, Replace::Allowed);
+    let refusal = disk()
+        .place_watched_blocking(&source, &dest, policy, &Watch::nobody())
+        .expect_err("a link is not a held file");
+    assert_eq!(refusal.refused.reason(), reason::DISK_LINK_NOT_FOLLOWED);
+    assert_eq!(std::fs::read(&elsewhere).unwrap(), b"someone else's file");
+    assert!(std::fs::symlink_metadata(&dest).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&source).unwrap(), b"incoming");
+}
+
 /// The turn on the volume is given back once the copy has landed, before it
 /// is proven, and progress says which phase the copy is in.
 #[tokio::test]

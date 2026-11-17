@@ -661,8 +661,10 @@ pub(crate) fn write_copy(
             .open_blocking(target, Open::create_new())
             .map_err(|error| fail(Step::OpenTarget, Cause::Disk(error), false))?,
         Opening::Held => {
+            // A link at the held name is refused, never written through or
+            // emptied: the reservation covers the name, not what it points at.
             let file = disk
-                .open_blocking(target, Open::write_existing())
+                .open_blocking(target, Open::write_existing().without_following_links())
                 .map_err(|error| fail(Step::OpenTarget, Cause::Disk(error), false))?;
             file.set_len(0)
                 .map_err(|error| fail(Step::OpenTarget, Cause::Io(error), false))?;

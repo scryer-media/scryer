@@ -530,13 +530,15 @@ impl FileMoveRetry {
 }
 
 /// Whether an error is the transient, I/O-shaped kind a retry can help with.
-/// A source that is not there, or that Scryer may not read, is not: neither
-/// comes back on a retry.
+/// A source that is not there, one that Scryer may not read, and a link where
+/// a held name was to be written are not: none comes back on a retry.
 pub(super) fn move_error_is_transient(error: &AppError) -> bool {
     match error {
         AppError::RepositoryFailed { reason, .. } => !matches!(
             *reason,
-            crate::disk::reason::DISK_PATH_MISSING | crate::disk::reason::DISK_PERMISSION_DENIED
+            crate::disk::reason::DISK_PATH_MISSING
+                | crate::disk::reason::DISK_PERMISSION_DENIED
+                | crate::disk::reason::DISK_LINK_NOT_FOLLOWED
         ),
         AppError::Repository(_)
         | AppError::TemporaryUnavailable { .. }
@@ -5246,6 +5248,7 @@ mod tests {
             (Refused::Denied(Side::Destination), false),
             (Refused::Denied(Side::Source), false),
             (Refused::SourceMissing, false),
+            (Refused::LinkNotFollowed, false),
             (Refused::Unreachable(Side::Destination), true),
         ] {
             let store = FakeStore::with_operation(operation());

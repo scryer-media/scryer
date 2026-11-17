@@ -326,8 +326,11 @@ pub(super) fn copy_refusal(refused: Refused, sentence: String) -> AppError {
             sentence,
         ),
         // A source Scryer may not read, and one that is not there, do not
-        // come back on a retry either.
-        Refused::Denied(crate::disk::Side::Source) | Refused::SourceMissing => {
+        // come back on a retry either, nor does a link where the copy was to
+        // write into a name it holds.
+        Refused::Denied(crate::disk::Side::Source)
+        | Refused::SourceMissing
+        | Refused::LinkNotFollowed => {
             AppError::RepositoryFailed {
                 message: sentence,
                 reason: refused.reason(),
@@ -1365,6 +1368,10 @@ mod tests {
             (
                 Refused::SourceMissing,
                 crate::disk::reason::DISK_PATH_MISSING,
+            ),
+            (
+                Refused::LinkNotFollowed,
+                crate::disk::reason::DISK_LINK_NOT_FOLLOWED,
             ),
         ] {
             let error = refused(lasting);
