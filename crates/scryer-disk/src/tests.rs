@@ -437,6 +437,7 @@ mod guard;
 mod link;
 mod mark;
 mod place;
+mod stored_version;
 
 #[test]
 fn an_observed_read_never_calls_the_backend() {

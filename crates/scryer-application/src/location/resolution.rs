@@ -59,7 +59,9 @@ impl FileResolution {
             return destination_version.as_deref() == Some(expected)
                 || (self.disposition == ResolutionDisposition::Hardlink
                     && destination_version.as_deref().is_some_and(|actual| {
-                        actual.split(':').take(5).eq(expected.split(':').take(5))
+                        crate::disk::StoredVersion::new(actual)
+                            .same_content(crate::disk::StoredVersion::new(expected))
+                            == crate::disk::Sameness::Same
                     }));
         }
         if self.disposition == ResolutionDisposition::Hardlink {

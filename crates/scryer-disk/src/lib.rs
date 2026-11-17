@@ -64,6 +64,7 @@ mod place;
 mod reading;
 mod sample;
 pub mod stored_paths;
+mod stored_version;
 mod volume;
 
 use std::io;
@@ -97,6 +98,7 @@ pub use place::{
 pub use reading::{DiskError, EntryKind, FileIdentity, PathReading, reason};
 pub(crate) use reading::{DiskVerb, is_cross_device_error};
 pub use sample::{CONTENT_SAMPLE_BYTES, ContentSample, SampleStep, sample_reader};
+pub use stored_version::{StoredVersion, restore_target_state};
 pub use volume::VolumeClass;
 #[doc(hidden)]
 pub use volume::{configured_volumes, path_is_under_configured_root};

@@ -78,19 +78,7 @@ async fn restore_target(path: &Path) -> AppResult<PathReading> {
 }
 
 fn restore_target_fingerprint(reading: PathReading) -> String {
-    match reading.kind() {
-        Some(EntryKind::Symlink) => "symlink".to_string(),
-        Some(EntryKind::File) => {
-            let modified = reading
-                .modified()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
-                .unwrap_or_else(|| "unknown".to_string());
-            format!("file:{}:{modified}", reading.size().unwrap_or(0))
-        }
-        Some(_) => "non-file".to_string(),
-        None => "missing".to_string(),
-    }
+    scryer_disk::restore_target_state(reading)
 }
 
 /// Whether the file `reading` shows at `path` may be replaced.

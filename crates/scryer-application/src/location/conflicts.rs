@@ -17,7 +17,7 @@ use super::preview::{
     LocationPlan, LocationPlanBuilder, LocationPlanHeader, PlanItem, PlanItemKind,
 };
 use super::root_move::{RootMoveExecutionPlan, RootMoveFileExecution, RootMoveTitleExecution};
-use crate::disk::{Disk, EntryKind, PathReading, Removal, Remove};
+use crate::disk::{Disk, EntryKind, PathReading, Removal, Remove, Sameness, StoredVersion};
 use crate::stored_paths::{folder_paths_match, path_to_stored_string, stored_path_to_path_buf};
 use crate::{
     AppError, AppResult, AppUseCase, InsertMediaFileInput, MediaFileRole, PendingImportStatus,
@@ -1065,9 +1065,9 @@ impl AppUseCase {
                 if let Some(link_count) =
                     super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
                     && link_count > 1
-                    && !hardlink_proofs
-                        .iter()
-                        .any(|proof| same_inode_version(&proof.version, &file.version))
+                    && !hardlink_proofs.iter().any(|proof| {
+                        same_inode_version(&proof.version, &file.version) == Sameness::Same
+                    })
                 {
                     hardlink_proofs.push(ConflictHardlinkProof {
                         version: file.version.clone(),
@@ -1656,11 +1656,10 @@ fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
 
 /// The `dev:ino` prefix of a unix file version; `None` where versions carry no inode.
 fn inode_key(version: &str) -> Option<String> {
-    if !cfg!(unix) || version.starts_with("symlink:") {
+    if !cfg!(unix) {
         return None;
     }
-    let mut parts = version.split(':');
-    Some(format!("{}:{}", parts.next()?, parts.next()?))
+    StoredVersion::new(version).file_key()
 }
 
 /// A directory's physical `(dev, ino)`, or `None` on platforms without inodes.
@@ -1681,12 +1680,21 @@ async fn directory_identity(path: &std::path::Path) -> AppResult<Option<(u64, u6
     }
 }
 
-fn same_inode_version(left: &str, right: &str) -> bool {
-    cfg!(unix) && left.split(':').take(2).eq(right.split(':').take(2))
+/// Whether two unix file versions name one file. Versions on other platforms
+/// carry no file number and are never one file.
+fn same_inode_version(left: &str, right: &str) -> Sameness {
+    if !cfg!(unix) {
+        return Sameness::Different;
+    }
+    StoredVersion::new(left).same_file(StoredVersion::new(right))
 }
 
-fn same_content_version(left: &str, right: &str) -> bool {
-    cfg!(unix) && left.split(':').take(5).eq(right.split(':').take(5))
+/// Whether two unix file versions name one file with the recorded content.
+fn same_content_version(left: &str, right: &str) -> Sameness {
+    if !cfg!(unix) {
+        return Sameness::Different;
+    }
+    StoredVersion::new(left).same_content(StoredVersion::new(right))
 }
 
 async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
@@ -1731,7 +1739,7 @@ async fn disposal_version_current(
             let proof = disposal_proof(row)?;
             row.source_version
                 .as_deref()
-                .filter(|version| same_inode_version(version, expected))?;
+                .filter(|version| same_inode_version(version, expected) == Sameness::Same)?;
             Some((row, proof))
         })
         .max_by_key(|(_, proof)| proof.sequence)
@@ -1740,7 +1748,7 @@ async fn disposal_version_current(
     };
     let native = stored_path_to_path_buf(path);
     let actual = super::resolution::file_version(&native).await?;
-    if !same_content_version(&actual, expected) {
+    if same_content_version(&actual, expected) != Sameness::Same {
         return Ok(false);
     }
     let source = stored_path_to_path_buf(&row.source_path);
@@ -1772,7 +1780,7 @@ async fn disposal_version_current(
         {
             return Ok(false);
         }
-        if same_inode_version(&version, expected) {
+        if same_inode_version(&version, expected) == Sameness::Same {
             expected_count = proof.before_link_count;
         }
     }
@@ -1837,14 +1845,13 @@ async fn preview_version_current(
     if let Some(proof) = conflict
         .hardlink_proofs
         .iter()
-        .find(|proof| same_inode_version(&proof.version, &file.version))
+        .find(|proof| same_inode_version(&proof.version, &file.version) == Sameness::Same)
     {
         if resolutions.iter().any(|row| {
             row.is_disposal()
-                && row
-                    .source_version
-                    .as_deref()
-                    .is_some_and(|version| same_inode_version(version, &file.version))
+                && row.source_version.as_deref().is_some_and(|version| {
+                    same_inode_version(version, &file.version) != Sameness::Different
+                })
         }) {
             return Ok(false);
         }
@@ -1853,19 +1860,18 @@ async fn preview_version_current(
         for row in resolutions.iter().filter(|row| {
             row.completed
                 && row.disposition == super::resolution::ResolutionDisposition::Hardlink
-                && row
-                    .source_version
-                    .as_deref()
-                    .is_some_and(|version| same_inode_version(version, &file.version))
+                && row.source_version.as_deref().is_some_and(|version| {
+                    same_inode_version(version, &file.version) != Sameness::Different
+                })
         }) {
             if !row.proof_is_current().await
-                || !same_inode_version(
+                || same_inode_version(
                     &super::resolution::file_version(&stored_path_to_path_buf(
                         &row.destination_path,
                     ))
                     .await?,
                     &file.version,
-                )
+                ) != Sameness::Same
             {
                 return Ok(false);
             }
@@ -1882,7 +1888,7 @@ async fn preview_version_current(
             }
         }
         return Ok((!added.is_empty() || !removed.is_empty())
-            && same_content_version(&actual, &file.version)
+            && same_content_version(&actual, &file.version) == Sameness::Same
             && super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
                 == proof
                     .link_count
@@ -1890,12 +1896,7 @@ async fn preview_version_current(
                     .and_then(|count| count.checked_sub(removed.len() as u64))
             && conflict_hash(&file.path, &actual).await? == proof.full_blake3);
     }
-    #[cfg(unix)]
-    if actual
-        .split(':')
-        .take(5)
-        .eq(file.version.split(':').take(5))
-    {
+    if same_content_version(&actual, &file.version) == Sameness::Same {
         for resolution in resolutions.iter().filter(|row| {
             row.destination_path == file.path
                 && row.disposition == super::resolution::ResolutionDisposition::Hardlink
@@ -2868,7 +2869,7 @@ impl AppUseCase {
         let proof = conflict
             .hardlink_proofs
             .iter()
-            .find(|proof| same_inode_version(&proof.version, &version))
+            .find(|proof| same_inode_version(&proof.version, &version) == Sameness::Same)
             .ok_or_else(|| {
                 refused(
                     refusal::FILE_CHANGED,
@@ -2900,7 +2901,7 @@ impl AppUseCase {
             let native = stored_path_to_path_buf(&path);
             if Disk::process().uncached(&native).await.is(EntryKind::File) {
                 let current = super::resolution::file_version(&native).await?;
-                if same_inode_version(&version, &current) {
+                if same_inode_version(&version, &current) != Sameness::Different {
                     before_versions.insert(path, current);
                 }
             }
@@ -2977,7 +2978,7 @@ impl AppUseCase {
                     "The reserved recycled copy changed; remaining files were preserved",
                 ));
             }
-            if same_inode_version(&version, source_version) {
+            if same_inode_version(&version, source_version) == Sameness::Same {
                 expected_count = proof.before_link_count;
             }
             row.destination_version = Some(version);
@@ -3011,10 +3012,10 @@ impl AppUseCase {
                 Some(true) => {}
             }
             let version = super::resolution::file_version(&native).await?;
-            if !same_inode_version(&version, source_version) {
+            if same_inode_version(&version, source_version) == Sameness::Different {
                 continue;
             }
-            if !same_content_version(&version, source_version)
+            if same_content_version(&version, source_version) != Sameness::Same
                 || super::hardlinks::link_count(&native)?.count() != Some(expected_count)
                 || (!verified_content
                     && conflict_hash(&path, &version).await?.as_str()
@@ -3125,8 +3126,8 @@ impl AppUseCase {
                         continue;
                     }
                     let version = super::resolution::file_version(&native).await?;
-                    if same_inode_version(&version, &proof.version) {
-                        if !same_content_version(&version, &proof.version)
+                    if same_inode_version(&version, &proof.version) != Sameness::Different {
+                        if same_content_version(&version, &proof.version) != Sameness::Same
                             || conflict_hash(&path, &version).await? != proof.full_blake3
                         {
                             return Err(refused(
@@ -3144,7 +3145,7 @@ impl AppUseCase {
                 conflict
                     .hardlink_proofs
                     .iter()
-                    .find(|proof| same_inode_version(&proof.version, version))
+                    .find(|proof| same_inode_version(&proof.version, version) == Sameness::Same)
             });
             if !conflict_resolution_current(row, &resolutions).await?
                 || (disposal_remaining
@@ -3196,7 +3197,7 @@ impl AppUseCase {
             let linked = conflict
                 .hardlink_proofs
                 .iter()
-                .any(|proof| same_inode_version(&proof.version, &file.version));
+                .any(|proof| same_inode_version(&proof.version, &file.version) == Sameness::Same);
             let mut disposal_index = resolutions
                 .iter()
                 .position(|row| row.is_disposal() && row.source_path == *path);
