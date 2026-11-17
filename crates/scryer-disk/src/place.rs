@@ -21,6 +21,7 @@ use super::copy::{
     Cause, Copied, CopyPermit, Evidence, Landing, Opening, Phase, Step, Watch, WriteFail, Writing,
     resumable_staging_path, staged_name_is_free, write_copy,
 };
+use super::mark::Mark;
 use super::sample::{ContentSample, sample_reader};
 use super::{
     Disk, DiskError, DiskVerb, EntryKind, Link, LinkOutcome, Offloaded, Open, Parents, PathReading,
@@ -139,6 +140,52 @@ pub enum CannotLink {
     DifferentVolume,
     /// The filesystem has no hard links, or no room for another.
     NotSupported,
+    /// The link was made, but its new name did not prove to be the file the
+    /// caller saw, and the link was removed again. Only a placement that
+    /// asks for the proof answers this.
+    Unverifiable,
+}
+
+/// How far a new hard link is proven before it counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkProof {
+    /// The new name is read once, itself, and must be the file the caller
+    /// saw.
+    Name,
+    /// And what the new name resolves to is read as well, and must have the
+    /// length the caller saw.
+    NameAndLength,
+}
+
+/// Why a hard link that was made did not prove.
+#[derive(Debug)]
+pub enum Doubt {
+    /// The new name could not be read.
+    Unread(DiskError),
+    /// The new name read as something other than the file the caller saw.
+    /// Filesystems that number files by path report this for a true link.
+    OtherFile { linked: Mark },
+    /// What the new name resolves to has another length, or could not be
+    /// read; the reading says which.
+    OtherLength(PathReading),
+}
+
+/// What became of the name an unproven hard link was made under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkAfter {
+    /// The placement removed the name it had created.
+    Removed,
+    /// The removal failed or found the name already gone, and that failure
+    /// is the refusal. The name may still be there.
+    NotRemoved,
+}
+
+/// A hard link this placement made and could not prove. The placement then
+/// went to remove the name it had just created, and nothing else.
+#[derive(Debug)]
+pub struct Unproven {
+    pub doubt: Doubt,
+    pub after: LinkAfter,
 }
 
 /// Which path a refusal is about, where the disk's answer says.
@@ -186,6 +233,7 @@ impl Refused {
             Self::DestinationExists => reason::DISK_DESTINATION_EXISTS,
             Self::CannotLink(CannotLink::DifferentVolume) => reason::DISK_LINK_DIFFERENT_VOLUME,
             Self::CannotLink(CannotLink::NotSupported) => reason::DISK_LINK_NOT_SUPPORTED,
+            Self::CannotLink(CannotLink::Unverifiable) => reason::DISK_LINK_UNVERIFIABLE,
             Self::NeedsCopy => reason::DISK_MOVE_NEEDS_COPY,
             Self::NotVerified => reason::DISK_COPY_NOT_VERIFIED,
             Self::StagingOccupied => reason::DISK_COPY_STAGING_OCCUPIED,
@@ -206,6 +254,9 @@ impl Refused {
 pub struct PlaceRefusal {
     pub asked: Method,
     pub refused: Refused,
+    /// The link this placement made, could not prove and went to remove,
+    /// and whether the name is gone.
+    pub unproven: Option<Unproven>,
     detail: io::Error,
 }
 
@@ -331,7 +382,61 @@ impl Disk {
         policy: Placement,
         watch: &Watch,
     ) -> Result<Placed, PlaceRefusal> {
-        self.place_admitted(source, dest, policy, watch, None, false)
+        self.place_admitted(source, dest, policy, watch, None, false, None)
+    }
+
+    /// [`Self::place_blocking`] for a hard link that must prove itself.
+    ///
+    /// Once the link is made its new name is read, itself, and must be the
+    /// file `seen` was read as before the link: the same device and file
+    /// number where the platform gives them, a zero number compared as
+    /// given, and the same length and modification time where it gives
+    /// none. [`LinkProof::NameAndLength`] reads what the name resolves to as
+    /// well.
+    ///
+    /// A link that does not prove is removed: only the name this call
+    /// created, and only when the link call itself succeeded. A name that
+    /// was there before the call is refused as a destination that exists and
+    /// is never removed. A removal that fails, or finds the name already
+    /// gone, is the refusal, and [`PlaceRefusal::unproven`] says what did
+    /// not prove. Once the name is removed the policy's fallback copy runs,
+    /// or the answer is [`CannotLink::Unverifiable`].
+    ///
+    /// Nothing is remembered about the volume. A policy that asks for
+    /// another method is placed as [`Self::place_blocking`] places it.
+    pub fn place_proven_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+        policy: Placement,
+        seen: &Mark,
+        proof: LinkProof,
+    ) -> Result<Placed, PlaceRefusal> {
+        let prove = Some((seen, proof));
+        self.place_admitted(source, dest, policy, &Watch::nobody(), None, false, prove)
+    }
+
+    /// [`Self::place_proven_blocking`] off the async runtime. Once started
+    /// it runs to its end even if the caller stops waiting.
+    pub async fn place_proven(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+        policy: Placement,
+        seen: Mark,
+        proof: LinkProof,
+    ) -> Result<Placed, PlaceRefusal> {
+        let (disk, source, dest) = (self.clone(), source.into(), dest.into());
+        let job = move || disk.place_proven_blocking(&source, &dest, policy, &seen, proof);
+        match offload(None, job).await {
+            Offloaded::Done(result) => result,
+            Offloaded::TimedOut | Offloaded::Failed(_) => Err(PlaceRefusal {
+                asked: policy.method,
+                refused: Refused::Failed,
+                unproven: None,
+                detail: io::Error::other("the placement did not run to its end"),
+            }),
+        }
     }
 
     fn place_admitted(
@@ -342,6 +447,7 @@ impl Disk {
         watch: &Watch,
         permit: Option<CopyPermit>,
         staged_free: bool,
+        prove: Option<(&Mark, LinkProof)>,
     ) -> Result<Placed, PlaceRefusal> {
         let job = Job {
             disk: self,
@@ -352,6 +458,8 @@ impl Disk {
             permit: RefCell::new(permit),
             staged_free,
             copied: RefCell::new(None),
+            prove,
+            unproven: RefCell::new(None),
         };
         match job.run() {
             Ok(done) => Ok(Placed {
@@ -362,6 +470,7 @@ impl Disk {
             Err(fail) => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: fail.refused,
+                unproven: job.unproven.take(),
                 detail: fail.detail,
             }),
         }
@@ -411,6 +520,7 @@ impl Disk {
         let refuse = |fail: Fail| PlaceRefusal {
             asked: policy.method,
             refused: fail.refused,
+            unproven: None,
             detail: fail.detail,
         };
         let permit = match policy {
@@ -452,17 +562,20 @@ impl Disk {
             }
             _ => None,
         };
-        let job = move || disk.place_admitted(&source, &dest, policy, &watch, permit, staged_free);
+        let job =
+            move || disk.place_admitted(&source, &dest, policy, &watch, permit, staged_free, None);
         match offload(None, job).await {
             Offloaded::Done(result) => result,
             Offloaded::TimedOut => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: Refused::Failed,
+                unproven: None,
                 detail: io::Error::other("the placement did not run to its end"),
             }),
             Offloaded::Failed(said) => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: Refused::Failed,
+                unproven: None,
                 detail: io::Error::other(match recorded {
                     true => format!("verified copy task failed to join: {said}"),
                     false => "the placement did not run to its end".to_string(),
@@ -578,6 +691,12 @@ pub(crate) struct Job<'a> {
     /// Whether the staged name of a recorded copy was already read as free.
     pub(crate) staged_free: bool,
     pub(crate) copied: RefCell<Option<Copied>>,
+    /// What a hard link must prove to be once it is made; `None` for a link
+    /// the caller proves, or does not.
+    pub(crate) prove: Option<(&'a Mark, LinkProof)>,
+    /// The link this job made and could not prove, when that is why it
+    /// failed.
+    pub(crate) unproven: RefCell<Option<Unproven>>,
 }
 
 impl Job<'_> {
@@ -759,7 +878,12 @@ impl Job<'_> {
 
     fn hard_link(&self) -> Result<Done, Fail> {
         let refusal = match self.disk.hard_link_unclassified(self.source, self.dest) {
-            Ok(()) => return Ok(Done::HardLinked),
+            Ok(()) => {
+                return match self.prove {
+                    Some((seen, proof)) => self.prove_link(seen, proof),
+                    None => Ok(Done::HardLinked),
+                };
+            }
             Err(error) => error,
         };
         let cannot = if super::is_cross_device_error(&refusal) {
@@ -792,6 +916,53 @@ impl Job<'_> {
             },
             None => fail,
         })
+    }
+
+    /// Proves the link this job has just made at the destination, and
+    /// removes it when it does not prove. Only a successful link call leads
+    /// here, so the name removed is one this job created.
+    fn prove_link(&self, seen: &Mark, proof: LinkProof) -> Result<Done, Fail> {
+        let (disk, dest) = (self.disk, self.dest);
+        let read = disk.call("lstat", || disk.inner.backend.lstat(dest));
+        let doubt = match read.map(|stat| Mark::of_stat(&stat)) {
+            Err(error) => Doubt::Unread(DiskError::new(DiskVerb::Read, dest, error)),
+            Ok(linked) if !linked.is_link_of(seen) => Doubt::OtherFile { linked },
+            Ok(_) if proof == LinkProof::Name => return Ok(Done::HardLinked),
+            Ok(_) => {
+                let resolved = disk.follow_blocking(dest);
+                if resolved.size().is_some() && resolved.size() == seen.len() {
+                    return Ok(Done::HardLinked);
+                }
+                Doubt::OtherLength(resolved)
+            }
+        };
+        // Strict: an unproven link left behind would be taken for the file.
+        let removed = match disk.remove_blocking(dest, Remove::File) {
+            Ok(Removal::Removed) => Ok(()),
+            Ok(Removal::AlreadyAbsent) => Err(Fail::new(
+                Refused::Failed,
+                io::ErrorKind::NotFound,
+                format!("{} is already gone", dest.display()),
+            )),
+            Err(error) => Err(Fail::of(error, Side::Destination)),
+        };
+        if let Err(fail) = removed {
+            let after = LinkAfter::NotRemoved;
+            self.unproven.replace(Some(Unproven { doubt, after }));
+            return Err(fail);
+        }
+        // A fallback copy that is then refused still says what did not prove.
+        let after = LinkAfter::Removed;
+        self.unproven.replace(Some(Unproven { doubt, after }));
+        if self.policy.fallback == Fallback::Copy {
+            return self.copy_keeping_source();
+        }
+        let detail = format!("the hard link at {} could not be proven", dest.display());
+        Err(Fail::new(
+            Refused::CannotLink(CannotLink::Unverifiable),
+            io::ErrorKind::Other,
+            detail,
+        ))
     }
 
     /// Reserves `path` so no other writer can take it, failing if it is

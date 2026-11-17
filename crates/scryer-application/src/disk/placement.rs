@@ -49,6 +49,20 @@ pub(crate) fn recycle_restore_link() -> Placement {
     }
 }
 
+/// Giving a file a second name that must prove to be that file, asked
+/// through [`Disk::place_proven`](super::Disk::place_proven). A name already
+/// taken is refused, and so is a link the volume cannot hold or one that
+/// does not prove: the caller has its own verified copy for those.
+pub fn proven_link() -> Placement {
+    Placement {
+        method: Method::HardLink,
+        fallback: Fallback::None,
+        replace: Replace::Never,
+        verify: Verify::None,
+        parents: Parents::MustExist,
+    }
+}
+
 /// Copying a file and recording what the copy streamed and proved, at the
 /// operation's configured verification depth. The source is left alone and
 /// nothing is replaced: a copy that claims its own name is written beside it

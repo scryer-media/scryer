@@ -149,6 +149,34 @@ impl Mark {
         }
     }
 
+    /// Whether this mark, read of a name just hard-linked, is the file `seen`
+    /// was read as before the link. Where the platform numbers files, the
+    /// device and the number must match, and a zero number is compared as
+    /// given: a filesystem that numbers every file zero links truly. Where
+    /// it gives none, the length and modification time must match. No probe.
+    pub(crate) fn is_link_of(&self, seen: &Self) -> bool {
+        let (Some(linked), Some(before)) = (self.facts, seen.facts) else {
+            return false;
+        };
+        if linked.kind != EntryKind::File {
+            return false;
+        }
+        match (self.volume, seen.volume) {
+            (Volume::Unix(here), Volume::Unix(there)) => {
+                here == there && self.file.is_some() && self.file == seen.file
+            }
+            (Volume::Unknown, Volume::Unknown) => {
+                linked.len == before.len && linked.modified == before.modified
+            }
+            _ => false,
+        }
+    }
+
+    /// The length read; `None` for a mark that names a volume only.
+    pub(crate) fn len(&self) -> Option<u64> {
+        self.facts.map(|facts| facts.len)
+    }
+
     /// Whether both marks are on one volume, so they share its space. A
     /// rename between them can still be refused: two bind mounts of one
     /// device do not rename across. No probe.

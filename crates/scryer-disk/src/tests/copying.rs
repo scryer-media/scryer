@@ -304,6 +304,8 @@ async fn the_turn_is_given_back_before_the_copy_is_proven() {
         permit: std::cell::RefCell::new(Some(permit)),
         staged_free: Default::default(),
         copied: Default::default(),
+        prove: None,
+        unproven: Default::default(),
     };
     job.recorded_copy(Evidence {
         depth: Depth::Full,
@@ -406,6 +408,8 @@ fn a_move_that_would_need_a_recorded_copy_is_refused() {
         permit: Default::default(),
         staged_free: Default::default(),
         copied: Default::default(),
+        prove: None,
+        unproven: Default::default(),
     };
     let crossing = DiskError::new(
         DiskVerb::Move,

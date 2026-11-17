@@ -90,8 +90,8 @@ pub use copy::{
 pub use mark::{Drift, Mark, Sameness};
 pub use pass::DiskPass;
 pub use place::{
-    CannotLink, Done, Fallback, FreeNameMove, Method, PlaceRefusal, Placed, Placement, Refused,
-    Side, Verify,
+    CannotLink, Done, Doubt, Fallback, FreeNameMove, LinkAfter, LinkProof, Method, PlaceRefusal,
+    Placed, Placement, Refused, Side, Unproven, Verify,
 };
 pub use reading::{DiskError, EntryKind, FileIdentity, PathReading, reason};
 pub(crate) use reading::{DiskVerb, is_cross_device_error};

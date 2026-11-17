@@ -62,6 +62,8 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         permit: Default::default(),
         staged_free: Default::default(),
         copied: Default::default(),
+        prove: None,
+        unproven: Default::default(),
     }
 }
 

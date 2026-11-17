@@ -50,6 +50,9 @@ pub mod reason {
     /// The destination's filesystem has no hard links, or no room for
     /// another one to this file.
     pub const DISK_LINK_NOT_SUPPORTED: &str = "DISK_LINK_NOT_SUPPORTED";
+    /// A hard link was made, but its new name did not prove to be the file
+    /// linked, so the link was removed again.
+    pub const DISK_LINK_UNVERIFIABLE: &str = "DISK_LINK_UNVERIFIABLE";
     /// A copy did not match its source, so it does not count and the source
     /// was kept.
     pub const DISK_COPY_NOT_VERIFIED: &str = "DISK_COPY_NOT_VERIFIED";
@@ -77,6 +80,7 @@ pub mod reason {
         DISK_LINK_NOT_FOLLOWED,
         DISK_LINK_DIFFERENT_VOLUME,
         DISK_LINK_NOT_SUPPORTED,
+        DISK_LINK_UNVERIFIABLE,
         DISK_COPY_NOT_VERIFIED,
         DISK_COPY_STAGING_OCCUPIED,
         DISK_COPY_CANCELLED,

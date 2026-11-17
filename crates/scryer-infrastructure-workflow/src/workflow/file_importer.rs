@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
     ImportFileTransferProgress, ImportFileTransferProgressSender,
-    disk::{Disk, EntryKind, Link, LinkOutcome, Mark, Open, Parents, Removal, Remove},
+    disk::{
+        self, Disk, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Open, Parents, PathReading,
+        Refused, Removal, Remove, Unproven,
+    },
     fs_integrity::import_content_proof,
     location::verify::StreamedContentHasher,
 };
@@ -249,16 +252,16 @@ impl ImportPlacementCoordinator {
             tracing::warn!(
                 volume_key = %opaque_lane_key(volume_key),
                 dest = %dest.display(),
-                source_identity = %file_identity_label(&mismatch.source),
-                linked_identity = %file_identity_label(&mismatch.linked),
+                source_identity = %mismatch.source,
+                linked_identity = %mismatch.linked,
                 "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), so imports to this volume copy instead of hard linking until restart"
             );
         } else {
             tracing::debug!(
                 volume_key = %opaque_lane_key(volume_key),
                 dest = %dest.display(),
-                source_identity = %file_identity_label(&mismatch.source),
-                linked_identity = %file_identity_label(&mismatch.linked),
+                source_identity = %mismatch.source,
+                linked_identity = %mismatch.linked,
                 "hard link identity is unverifiable on this volume; copying"
             );
         }
@@ -520,10 +523,16 @@ fn import_file_identity_from_fingerprint(file: &FileFingerprint) -> ImportFileId
     }
 }
 
+fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> {
+    read_import_source(path).map(|(fingerprint, _)| fingerprint)
+}
+
+/// The fingerprint, and the mark of the name itself from the same read, for
+/// a hard link to be proven against.
 // disk-guard: the fingerprint holds the raw device, inode and owner uid, and a
 // failure's own error kind names the import reason; a reading carries neither.
 #[allow(clippy::disallowed_methods)]
-fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> {
+fn read_import_source(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)> {
     let link_meta = std::fs::symlink_metadata(path).map_err(|e| {
         import_io_error(
             &e,
@@ -558,13 +567,14 @@ fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> 
                 ),
             )
         })?;
-        return Ok(ImportSourceFingerprint {
+        let fingerprint = ImportSourceFingerprint {
             file: fingerprint_from_metadata(&target_meta)?,
             kind: ImportSourceKind::Symlink {
                 source_link_target,
                 resolved_target,
             },
-        });
+        };
+        return Ok((fingerprint, Mark::of(&link_meta)));
     }
     if !file_type.is_file() {
         return Err(AppError::Repository(format!(
@@ -572,10 +582,11 @@ fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> 
             path.display()
         )));
     }
-    Ok(ImportSourceFingerprint {
+    let fingerprint = ImportSourceFingerprint {
         file: fingerprint_from_metadata(&link_meta)?,
         kind: ImportSourceKind::Regular,
-    })
+    };
+    Ok((fingerprint, Mark::of(&link_meta)))
 }
 
 fn fingerprint_from_metadata(metadata: &std::fs::Metadata) -> AppResult<FileFingerprint> {
@@ -662,14 +673,20 @@ fn directory_fingerprint_from_path(path: &Path) -> AppResult<DirectoryFingerprin
 }
 
 fn ensure_same_source(path: &Path, expected: &ImportSourceFingerprint) -> AppResult<()> {
-    let actual = fingerprint_import_source(path)?;
+    same_source_mark(path, expected).map(drop)
+}
+
+/// [`ensure_same_source`], handing back the mark of the source's name from
+/// that same read.
+fn same_source_mark(path: &Path, expected: &ImportSourceFingerprint) -> AppResult<Mark> {
+    let (actual, mark) = read_import_source(path)?;
     if &actual != expected {
         return Err(AppError::Repository(format!(
             "import source changed during import: {}",
             path.display()
         )));
     }
-    Ok(())
+    Ok(mark)
 }
 
 #[cfg(unix)]
@@ -682,16 +699,6 @@ fn same_file_identity(actual: &FileFingerprint, expected: &FileFingerprint) -> b
     actual == expected
 }
 
-#[cfg(unix)]
-fn file_identity_label(fingerprint: &FileFingerprint) -> String {
-    format!("dev={} ino={}", fingerprint.dev, fingerprint.ino)
-}
-
-#[cfg(not(unix))]
-fn file_identity_label(fingerprint: &FileFingerprint) -> String {
-    format!("{fingerprint:?}")
-}
-
 /// A hard link that succeeded but whose destination reports a different file
 /// identity than its source.
 ///
@@ -701,23 +708,30 @@ fn file_identity_label(fingerprint: &FileFingerprint) -> String {
 /// verified. The link is never trusted; the import goes to the copy lane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HardLinkIdentityMismatch {
-    source: FileFingerprint,
-    linked: FileFingerprint,
+    /// The source as it was read before the link, for the log.
+    source: String,
+    /// The new name as it was read after the link, for the log.
+    linked: String,
 }
 
-fn linked_file_identity_mismatch(
-    dest: &Path,
-    expected: &FileFingerprint,
-    options: &ImportFileOptions,
-) -> AppResult<Option<HardLinkIdentityMismatch>> {
-    let linked = linked_file_fingerprint(dest, options)?;
-    if same_file_identity(&linked, expected) {
-        return Ok(None);
-    }
-    Ok(Some(HardLinkIdentityMismatch {
-        source: expected.clone(),
-        linked,
-    }))
+/// What became of an attempt to hard link an import source.
+enum ImportLink {
+    /// Linked, and the new name proved to be the source at its length.
+    Proven,
+    /// This destination cannot hold a hard link to the source.
+    NotPossible,
+    /// The link was not made, in the disk's own words.
+    Failed(String),
+    /// Linked but not proven. The disk service removed the link again.
+    Unproven(LinkDoubt),
+}
+
+/// Why a hard link that was made is not trusted.
+enum LinkDoubt {
+    Identity(HardLinkIdentityMismatch),
+    /// What the new name resolves to has another length or could not be
+    /// read.
+    Length(PathReading),
 }
 
 fn io_other(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
@@ -831,37 +845,80 @@ enum RenameFault {
 }
 
 #[cfg(test)]
-fn linked_file_fingerprint(dest: &Path, options: &ImportFileOptions) -> AppResult<FileFingerprint> {
-    let mut linked = fingerprint_import_source(dest)?.file;
-    if options.force_hard_link_identity_mismatch {
-        #[cfg(unix)]
-        {
-            linked.ino = linked.ino.wrapping_add(1);
-        }
-        #[cfg(not(unix))]
-        {
-            linked.len = linked.len.wrapping_add(1);
-        }
-    }
-    Ok(linked)
-}
-
-#[cfg(not(test))]
-fn linked_file_fingerprint(dest: &Path, _: &ImportFileOptions) -> AppResult<FileFingerprint> {
-    Ok(fingerprint_import_source(dest)?.file)
-}
-
-#[cfg(test)]
 thread_local! {
     static HARD_LINK_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// `Ok(false)` when this destination cannot hold a hard link to the source.
-fn hard_link_import_source(source: &Path, dest: &Path) -> io::Result<bool> {
+/// Hard links the source to `dest` and has the disk service prove the new
+/// name against `seen`, the source as this import last read it. A link that
+/// does not prove is removed by the service before it answers; one it could
+/// not remove is an error, as is a new name that cannot be read or is no
+/// regular file.
+#[cfg_attr(not(test), allow(unused_variables))]
+fn hard_link_import_source(
+    source: &Path,
+    dest: &Path,
+    seen: &Mark,
+    options: &ImportFileOptions,
+) -> AppResult<ImportLink> {
     #[cfg(test)]
     HARD_LINK_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
-    let linked = Disk::process().link_blocking(source, dest, Link::Hard)?;
-    Ok(linked == LinkOutcome::Linked)
+    #[cfg(test)]
+    let forced = Mark::from_stored("unknown-volume").expect("the unknown lane is readable");
+    #[cfg(test)]
+    let seen = match options.force_hard_link_identity_mismatch {
+        true => &forced,
+        false => seen,
+    };
+    let policy = disk::placement::proven_link();
+    let proof = LinkProof::NameAndLength;
+    let refusal = match Disk::process().place_proven_blocking(source, dest, policy, seen, proof) {
+        Ok(_) => return Ok(ImportLink::Proven),
+        Err(refusal) => refusal,
+    };
+    let words = refusal.to_string();
+    let doubt = match refusal.unproven {
+        None if matches!(refusal.refused, Refused::CannotLink(_)) => {
+            return Ok(ImportLink::NotPossible);
+        }
+        None => return Ok(ImportLink::Failed(words)),
+        Some(Unproven {
+            after: LinkAfter::NotRemoved,
+            ..
+        }) => {
+            return Err(AppError::Repository(format!(
+                "failed to remove partial hardlink destination {} before copy: {words}",
+                dest.display()
+            )));
+        }
+        Some(Unproven { doubt, .. }) => doubt,
+    };
+    match doubt {
+        Doubt::Unread(error) => {
+            let error = io::Error::from(error);
+            Err(import_io_error(
+                &error,
+                format!(
+                    "import path not found or inaccessible: {}: {}",
+                    dest.display(),
+                    error
+                ),
+            ))
+        }
+        Doubt::OtherFile { linked } if linked.kind() != Some(EntryKind::File) => {
+            Err(AppError::Repository(format!(
+                "import path is not a regular file: {}",
+                dest.display()
+            )))
+        }
+        Doubt::OtherFile { linked } => Ok(ImportLink::Unproven(LinkDoubt::Identity(
+            HardLinkIdentityMismatch {
+                source: seen.to_stored(),
+                linked: linked.to_stored(),
+            },
+        ))),
+        Doubt::OtherLength(resolved) => Ok(ImportLink::Unproven(LinkDoubt::Length(resolved))),
+    }
 }
 
 /// Renames over the empty reservation the rename lane made at `dest`.
@@ -1284,7 +1341,18 @@ fn prepare_import_destination(
     dest: &Path,
     permissions: &ImportFilePermissions,
 ) -> AppResult<(ImportSourceFingerprint, u64, ImportDestinationGuard)> {
-    let source_fingerprint = fingerprint_import_source(source)?;
+    prepare_marked_import_destination(source, dest, permissions)
+        .map(|(fingerprint, _, size, guard)| (fingerprint, size, guard))
+}
+
+/// [`prepare_import_destination`], handing back the mark of the source's
+/// name from the read that fingerprinted it.
+fn prepare_marked_import_destination(
+    source: &Path,
+    dest: &Path,
+    permissions: &ImportFilePermissions,
+) -> AppResult<(ImportSourceFingerprint, Mark, u64, ImportDestinationGuard)> {
+    let (source_fingerprint, source_mark) = read_import_source(source)?;
     let size = source_fingerprint.file.len;
     if size == 0 {
         return Err(AppError::Repository(format!(
@@ -1331,7 +1399,7 @@ fn prepare_import_destination(
     }
     validate_import_destination_parent(&destination_guard, dest)?;
 
-    Ok((source_fingerprint, size, destination_guard))
+    Ok((source_fingerprint, source_mark, size, destination_guard))
 }
 
 fn validate_import_destination_parent(
@@ -2094,7 +2162,7 @@ fn finish_renamed_archive_output(prepared: PreparedImportPlacement) -> ImportFil
 fn try_fast_import_placement_blocking(
     prepared: PreparedImportPlacement,
 ) -> AppResult<FastPlacementResult> {
-    ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
+    let source_mark = same_source_mark(&prepared.source, &prepared.source_fingerprint)?;
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
     if let Some(existing) = reconcile_existing_destination(
         &prepared.source,
@@ -2133,7 +2201,6 @@ fn try_fast_import_placement_blocking(
         ));
     }
 
-    let mut partial_destination_created = false;
     let mut hard_link_identity_mismatch = None;
     if prepared.hard_link_identity_unverifiable {
         tracing::debug!(
@@ -2141,68 +2208,60 @@ fn try_fast_import_placement_blocking(
             "hard link identity is unverifiable on this volume; handing import to copy lane"
         );
     } else if !force_cross_device_move(&prepared.options) && hardlink_uid_safe {
-        match hard_link_import_source(&prepared.source, &prepared.dest) {
-            Ok(true) => {
-                partial_destination_created = true;
-                let identity = ensure_same_source(&prepared.source, &prepared.source_fingerprint)
-                    .and_then(|_| {
-                        linked_file_identity_mismatch(
-                            &prepared.dest,
-                            &prepared.source_fingerprint.file,
-                            &prepared.options,
-                        )
-                    });
-                match identity {
-                    Err(error) => {
-                        let _ = Disk::process().remove_blocking(&prepared.dest, Remove::File);
-                        return Err(error);
-                    }
-                    Ok(Some(mismatch)) => hard_link_identity_mismatch = Some(mismatch),
-                    Ok(None) => match Disk::process().follow_blocking(&prepared.dest) {
-                        linked if linked.size() == Some(prepared.size) => {
-                            validate_import_destination_guard_after_placement(
-                                &prepared.destination_guard,
-                                &prepared.dest,
-                            )?;
-                            finalize_imported_regular_destination(
-                                &prepared.dest,
-                                &prepared.options,
-                                &prepared.permissions,
-                            );
-                            return finish_prepared_import(prepared, ImportStrategy::HardLink)
-                                .map(FastPlacementResult::Finished);
-                        }
-                        linked => match linked.size() {
-                            Some(destination_size) => tracing::warn!(
-                                source_size = prepared.size,
-                                destination_size,
-                                "hard link size mismatch; handing import to copy lane"
-                            ),
-                            None => tracing::warn!(
-                                error = linked.describe_absence(),
-                                "hard link destination stat failed; handing import to copy lane"
-                            ),
-                        },
-                    },
-                }
+        let linked = hard_link_import_source(
+            &prepared.source,
+            &prepared.dest,
+            &source_mark,
+            &prepared.options,
+        )?;
+        // The source is read again whether or not the link proved. A link
+        // that did not prove is already gone.
+        let proven = matches!(linked, ImportLink::Proven);
+        if matches!(linked, ImportLink::Proven | ImportLink::Unproven(_))
+            && let Err(error) = ensure_same_source(&prepared.source, &prepared.source_fingerprint)
+        {
+            if proven {
+                let _ = Disk::process().remove_blocking(&prepared.dest, Remove::File);
             }
-            Ok(false) => {
+            return Err(error);
+        }
+        match linked {
+            ImportLink::Proven => {
+                validate_import_destination_guard_after_placement(
+                    &prepared.destination_guard,
+                    &prepared.dest,
+                )?;
+                finalize_imported_regular_destination(
+                    &prepared.dest,
+                    &prepared.options,
+                    &prepared.permissions,
+                );
+                return finish_prepared_import(prepared, ImportStrategy::HardLink)
+                    .map(FastPlacementResult::Finished);
+            }
+            ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => {
+                hard_link_identity_mismatch = Some(mismatch);
+            }
+            ImportLink::Unproven(LinkDoubt::Length(linked)) => match linked.size() {
+                Some(destination_size) => tracing::warn!(
+                    source_size = prepared.size,
+                    destination_size,
+                    "hard link size mismatch; handing import to copy lane"
+                ),
+                None => tracing::warn!(
+                    error = linked.describe_absence(),
+                    "hard link destination stat failed; handing import to copy lane"
+                ),
+            },
+            ImportLink::NotPossible => {
                 tracing::debug!("hard link is ineligible; handing import to copy lane");
             }
-            Err(error) => {
+            ImportLink::Failed(error) => {
                 tracing::warn!(error = %error, "hard link failed; handing import to copy lane");
             }
         }
     }
 
-    if partial_destination_created {
-        remove_placed_file(&prepared.dest).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to remove partial hardlink destination {} before copy: {error}",
-                prepared.dest.display()
-            ))
-        })?;
-    }
     ensure_import_destination_absent(&prepared.dest)?;
     Ok(FastPlacementResult::CopyRequired {
         prepared,
@@ -2451,8 +2510,8 @@ fn import_hardlink_or_copy_blocking(
     progress: Option<ImportFileTransferProgressSender>,
     permissions: ImportFilePermissions,
 ) -> AppResult<ImportFileResult> {
-    let (source_fingerprint, size, destination_guard) =
-        prepare_import_destination(&source, &dest, &permissions)?;
+    let (source_fingerprint, source_mark, size, destination_guard) =
+        prepare_marked_import_destination(&source, &dest, &permissions)?;
     ensure_expected_source_snapshot(&source, &source_fingerprint, expected_source.as_ref())?;
     if let Some(existing) = reconcile_existing_destination(
         &source,
@@ -2497,82 +2556,72 @@ fn import_hardlink_or_copy_blocking(
     }
 
     if !force_cross_device_move(&options) && hardlink_uid_safe {
-        match hard_link_import_source(&source, &dest) {
-            Ok(true) => {
-                let identity = ensure_same_source(&source, &source_fingerprint).and_then(|_| {
-                    linked_file_identity_mismatch(&dest, &source_fingerprint.file, &options)
-                });
-                match identity {
-                    Err(error) => {
-                        let _ = Disk::process().remove_blocking(&dest, Remove::File);
-                        return Err(error);
-                    }
-                    Ok(Some(mismatch)) => {
-                        let _ = Disk::process().remove_blocking(&dest, Remove::File);
-                        tracing::warn!(
-                            dest = %dest.display(),
-                            source_identity = %file_identity_label(&mismatch.source),
-                            linked_identity = %file_identity_label(&mismatch.linked),
-                            "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
-                        );
-                    }
-                    Ok(None) => match Disk::process().follow_blocking(&dest) {
-                        linked if linked.size() == Some(size) => {
-                            validate_import_destination_guard_after_placement(
-                                &destination_guard,
-                                &dest,
-                            )?;
-                            if file_permission_metadata_changes(&permissions) {
-                                tracing::info!(
-                                    source = %source.display(),
-                                    dest = %dest.display(),
-                                    "applying import permissions to hardlink; metadata changes affect the shared download-side inode"
-                                );
-                            }
-                            finalize_imported_regular_destination(&dest, &options, &permissions);
-                            let source_cleanup = cleanup_guard_after_placement(
-                                source_cleanup_required,
-                                &source,
-                                &dest,
-                                &source_fingerprint,
-                                size,
-                            )?;
-                            return Ok(ImportFileResult {
-                                strategy: ImportStrategy::HardLink,
-                                source_path: source,
-                                dest_path: dest,
-                                size_bytes: size,
-                                destination_disposition: ImportDestinationDisposition::Created,
-                                source_disposition: ImportSourceDisposition::Retained,
-                                source_cleanup,
-                                verification: None,
-                            });
-                        }
-                        linked => match linked.size() {
-                            Some(dest_len) => {
-                                let _ = Disk::process().remove_blocking(&dest, Remove::File);
-                                tracing::warn!(
-                                    "hard link size mismatch: source={} dest={}, falling back to copy",
-                                    size,
-                                    dest_len
-                                );
-                            }
-                            None => tracing::warn!(
-                                "hard link created but dest stat failed: {}, falling back to copy",
-                                linked.describe_absence()
-                            ),
-                        },
-                    },
-                }
+        let linked = hard_link_import_source(&source, &dest, &source_mark, &options)?;
+        // The source is read again whether or not the link proved. A link
+        // that did not prove is already gone.
+        let proven = matches!(linked, ImportLink::Proven);
+        if matches!(linked, ImportLink::Proven | ImportLink::Unproven(_))
+            && let Err(error) = ensure_same_source(&source, &source_fingerprint)
+        {
+            if proven {
+                let _ = Disk::process().remove_blocking(&dest, Remove::File);
             }
-            Ok(false) => {
+            return Err(error);
+        }
+        match linked {
+            ImportLink::Proven => {
+                validate_import_destination_guard_after_placement(&destination_guard, &dest)?;
+                if file_permission_metadata_changes(&permissions) {
+                    tracing::info!(
+                        source = %source.display(),
+                        dest = %dest.display(),
+                        "applying import permissions to hardlink; metadata changes affect the shared download-side inode"
+                    );
+                }
+                finalize_imported_regular_destination(&dest, &options, &permissions);
+                let source_cleanup = cleanup_guard_after_placement(
+                    source_cleanup_required,
+                    &source,
+                    &dest,
+                    &source_fingerprint,
+                    size,
+                )?;
+                return Ok(ImportFileResult {
+                    strategy: ImportStrategy::HardLink,
+                    source_path: source,
+                    dest_path: dest,
+                    size_bytes: size,
+                    destination_disposition: ImportDestinationDisposition::Created,
+                    source_disposition: ImportSourceDisposition::Retained,
+                    source_cleanup,
+                    verification: None,
+                });
+            }
+            ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => tracing::warn!(
+                dest = %dest.display(),
+                source_identity = %mismatch.source,
+                linked_identity = %mismatch.linked,
+                "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
+            ),
+            ImportLink::Unproven(LinkDoubt::Length(linked)) => match linked.size() {
+                Some(dest_len) => tracing::warn!(
+                    "hard link size mismatch: source={} dest={}, falling back to copy",
+                    size,
+                    dest_len
+                ),
+                None => tracing::warn!(
+                    "hard link created but dest stat failed: {}, falling back to copy",
+                    linked.describe_absence()
+                ),
+            },
+            ImportLink::NotPossible => {
                 tracing::info!(
                     "hard link is not possible here, falling back to copy: {} -> {}",
                     source.display(),
                     dest.display()
                 );
             }
-            Err(e) => {
+            ImportLink::Failed(e) => {
                 tracing::warn!(
                     "hard link failed: {}, falling back to copy: {} -> {}",
                     e,
@@ -2676,7 +2725,7 @@ fn import_file_blocking_at_depth(
     }
 }
 
-const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 2;
+const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 3;
 static IMPORT_FILE_WORKER_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]

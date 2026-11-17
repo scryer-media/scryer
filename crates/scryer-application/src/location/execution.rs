@@ -15,8 +15,8 @@
 //! A cross-volume move copies. Removing the source is [`RootMoveReconciler`]'s
 //! cleanup step, and it reads the *persisted verification records* to decide —
 //! not the absence of an error. A file whose record says anything other than
-//! `verified` keeps its source, which is what makes SC-006 (a byte flipped
-//! after write) end with both copies intact rather than with a corrupted
+//! `verified` keeps its source, which is what makes a byte flipped after
+//! write end with both copies intact rather than with a corrupted
 //! survivor.
 //!
 //! # Why cleanup is idempotent
@@ -34,7 +34,9 @@ use async_trait::async_trait;
 use scryer_domain::MediaFacet;
 
 use crate::disk::reason::DISK_PATH_MISSING;
-use crate::disk::{Disk, EntryKind, Parents, Removal, Remove};
+use crate::disk::{
+    Disk, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, Removal, Remove, Unproven,
+};
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
     TitleFileMover, TitleReconciler, TitleStepOutcome,
@@ -234,8 +236,8 @@ pub trait RootMoveCatalog: Send + Sync {
     /// destination-title detection reads. A title transferred without
     /// it would keep answering identity lookups from the library it left.
     ///
-    /// `converted_facet` is the third half of the same indivisible write
-    /// (FR-057). A title's facet and its library's facet are one invariant, not
+    /// `converted_facet` is the third half of the same indivisible write.
+    /// A title's facet and its library's facet are one invariant, not
     /// two values that may briefly disagree: `title_root_folder_path` refuses a
     /// title whose facet does not match its library
     /// (`crate::catalog::workflow::roots`), so a series that reached an anime
@@ -253,7 +255,7 @@ pub trait RootMoveCatalog: Send + Sync {
     ) -> AppResult<()>;
 
     /// Persist the hashes the copy pass produced onto the moved media file
-    /// (FR-041, migration 0205).
+    /// (migration 0205).
     ///
     /// The operation's own per-file record (0206) is the audit trail; this is
     /// the *read model* the dedup gate and the backfill queue consult. Without
@@ -323,7 +325,7 @@ pub enum SourceDisposal {
     /// removed it).
     AlreadyAbsent,
     /// Recycling was not available, so the verified-redundant source was
-    /// removed. Always warned about, never silent (C3).
+    /// removed. Always warned about, never silent.
     RemovedRecycleUnavailable(&'static str),
     /// The recycle bin refused the file; the extra source copy remains.
     PreservedRecycleUnavailable,
@@ -359,20 +361,20 @@ pub trait SourceRecycler: Send + Sync {
 /// Different filesystem → [`VerifiedCopier::copy_and_verify`] at the
 /// operation's configured depth. The source is left exactly where it is; only
 /// [`RootMoveReconciler`] removes it, and only against a persisted verification
-/// record (FR-044).
+/// record.
 #[derive(Clone)]
 pub struct RootMoveFileMover {
     resolver: Option<Arc<super::resolution::ConflictResolver>>,
     copier: Disk,
     permissions: Arc<dyn PlacedContentPermissions>,
-    /// Where the streamed hashes are persisted (FR-041, migration 0205).
+    /// Where the streamed hashes are persisted (migration 0205).
     ///
     /// The mover is the only place that ever holds them, so it is the only
     /// place that can hand them to the read model. `None` for a mover wired
     /// without a catalog, in which case the backfill job picks the files up
     /// later — a missing hash costs a re-read, never correctness.
     catalog: Option<Arc<dyn RootMoveCatalog>>,
-    /// Skip the FR-032 rename fast path and always copy.
+    /// Skip the rename fast path and always copy.
     ///
     /// The mover decides rename-vs-copy from the actual device ids, so a test
     /// living inside one temp directory can never reach the copy path — which
@@ -411,7 +413,7 @@ impl RootMoveFileMover {
     }
 
     /// Persist each copy's hashes onto its media file, so a moved file leaves
-    /// the backfill queue instead of being read a second time (D4).
+    /// the backfill queue instead of being read a second time.
     pub fn with_catalog(mut self, catalog: Arc<dyn RootMoveCatalog>) -> Self {
         self.catalog = Some(catalog);
         self
@@ -423,12 +425,12 @@ impl RootMoveFileMover {
         Self::new(Disk::process(), Arc::new(NoPlacedContentPermissions))
     }
 
-    /// FR-041/D4: the hashes the copy already computed go onto the media file
+    /// The hashes the copy already computed go onto the media file
     /// (0205) as well as into the operation's audit record (0206).
     ///
     /// Only for a verified destination — a hash of bytes that failed their
     /// check describes content we are about to refuse to trust. A
-    /// same-filesystem rename carries no hashes at all (FR-032), and a
+    /// same-filesystem rename carries no hashes at all, and a
     /// companion asset has no media-file row.
     async fn persist_content_hashes(&self, request: &FileMoveRequest<'_>, verified: &VerifiedFile) {
         let Some(catalog) = self.catalog.as_ref() else {
@@ -599,25 +601,44 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             SharedInode::Distinct => Ok(false),
         };
     }
-    match tokio::fs::hard_link(source, destination).await {
-        Ok(()) => {
-            let placed = tokio::fs::symlink_metadata(destination)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "cannot inspect {}: {error}",
-                        destination.display()
-                    ))
-                })?;
-            if !same_regular_file(&source_metadata, &placed) {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
-                    "source changed during file placement",
-                ));
-            }
-            Ok(true)
-        }
-        Err(_) => Ok(false),
+    // The new name is read once and must be the file read above. A link that
+    // does not prove is removed by the disk service before it answers.
+    let linked = Disk::process()
+        .place_proven(
+            source,
+            destination,
+            crate::disk::placement::proven_link(),
+            Mark::of(&source_metadata),
+            LinkProof::Name,
+        )
+        .await;
+    let refusal = match linked {
+        Ok(_) => return Ok(true),
+        Err(refusal) => refusal,
+    };
+    let words = refusal.to_string();
+    match refusal.unproven {
+        // No link was made: the ordinary verified copy takes over.
+        None => Ok(false),
+        Some(Unproven {
+            after: LinkAfter::NotRemoved,
+            ..
+        }) => Err(AppError::Repository(format!(
+            "cannot remove the unproven link {}: {words}",
+            destination.display()
+        ))),
+        Some(Unproven {
+            doubt: Doubt::Unread(error),
+            ..
+        }) => Err(AppError::Repository(format!(
+            "cannot inspect {}: {}",
+            destination.display(),
+            error.words()
+        ))),
+        Some(_) => Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
+            "source changed during file placement",
+        )),
     }
 }
 
@@ -753,7 +774,7 @@ pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metad
 /// runs (it refuses to continue otherwise), so `reconcile_title` never has to
 /// re-check verification. `clean_up_title` does, because it is the step that
 /// touches the source: it reads the persisted verification records and skips
-/// any file that is not recorded `verified` (FR-044).
+/// any file that is not recorded `verified`.
 pub struct RootMoveReconciler<'a> {
     plan: &'a RootMoveExecutionPlan,
     catalog: &'a dyn RootMoveCatalog,
@@ -787,7 +808,7 @@ impl<'a> RootMoveReconciler<'a> {
         self
     }
 
-    /// The US7 merge engine. Required for a plan holding any merge title; a
+    /// The merge engine. Required for a plan holding any merge title; a
     /// plan with none never reaches it.
     pub fn with_merges(mut self, merges: &'a dyn TitleMergeRepository) -> Self {
         self.merges = Some(merges);
@@ -838,7 +859,7 @@ impl<'a> RootMoveReconciler<'a> {
         })
     }
 
-    /// US7's catalog step: the merge transaction, then the source title's
+    /// The merge's catalog step: the merge transaction, then the source title's
     /// logical retirement handed to the delete path.
     ///
     /// # Why the plan is re-derived here rather than read off the confirmed one
@@ -847,7 +868,7 @@ impl<'a> RootMoveReconciler<'a> {
     /// the user agreed to and what the fingerprint covers. The transaction has
     /// to run against the catalog as it is at this instant — this title's media
     /// files have just been repointed at their new paths. Re-deriving is also
-    /// what makes the FR-081 fingerprint meaningful: if the two disagreed, start
+    /// what makes the confirmation fingerprint meaningful: if the two disagreed, start
     /// would have refused the confirmation before reaching here.
     ///
     /// # Resume idempotence
@@ -887,7 +908,7 @@ impl<'a> RootMoveReconciler<'a> {
             )
             .await?;
         let plan = plan_merge(&snapshot);
-        // FR-066 again, at the last possible moment: the preview refused a
+        // Checked again, at the last possible moment: the preview refused a
         // blocked merge, and anything that became unmappable since is a failed
         // title rather than a merge attached to a guess. A failed title is
         // contained — the rest of the operation runs on.
@@ -907,7 +928,7 @@ impl<'a> RootMoveReconciler<'a> {
         let identity_map = plan.require_identity_map()?.clone();
         execute_merge(merges, &plan).await?;
         // The merge is the plan's designed outcome, so it is stated, not warned
-        // about (FR-064): the user confirmed it in the preview.
+        // about: the user confirmed it in the preview.
         outcome.notes.push(merge_note(
             &planned.title_name,
             plan.summary.destination_title_name.as_deref(),
@@ -920,8 +941,8 @@ impl<'a> RootMoveReconciler<'a> {
 
     /// Whether this title's merge already committed.
     ///
-    /// The source title row is the evidence, and it is sound evidence: FR-084
-    /// gives this operation exclusive ownership of the title for its whole
+    /// The source title row is the evidence, and it is sound evidence: this
+    /// operation holds exclusive ownership of the title for its whole
     /// duration, so nothing else can have removed it. Requiring the destination
     /// to be present too keeps the answer from being "yes" for a catalog that
     /// lost both.
@@ -982,8 +1003,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         let mut outcome = TitleStepOutcome::clean();
 
         // Destination directories are destination content: the operator's
-        // configured folder modes apply before the catalog points at them
-        // (FR-031).
+        // configured folder modes apply before the catalog points at them.
         if operation.mode != crate::location::model::LocationExecutionMode::UserMovedFiles
             && let Some(folder) = planned.destination_folder_path.as_deref()
         {
@@ -993,7 +1013,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }
         }
 
-        // US7, before anything else: a merge whose transaction already
+        // A merge, before anything else: one whose transaction already
         // committed has nothing left to reconcile. Its media-file paths were
         // written *before* that transaction, so re-writing them here would
         // reach for rows the merge has already repointed. Asking first is what
@@ -1028,7 +1048,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 ));
             }
             if let Some(warning) = &resolution.warning {
-                // A transfer-time rename is FR-074/FR-075 doing its job, not a
+                // A transfer-time rename is conflict resolution doing its job, not a
                 // departure from the plan.
                 outcome.notes.push(warning.clone());
             }
@@ -1123,8 +1143,8 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         }
         self.flush_media_file_paths(&mut pending_paths).await?;
 
-        // US7: for a merge there is no source title left to point anywhere —
-        // the destination title owns the folder (FR-063) and keeps the one it
+        // For a merge there is no source title left to point anywhere —
+        // the destination title owns the folder and keeps the one it
         // already had, which is the folder this title's files just moved into.
         // Groups 1–5 repoint everything else, in one transaction, and the
         // checkpoint's `merged_into_title_id` records where the title went.
@@ -1141,9 +1161,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        // FR-056/FR-057: the transfer's catalog flip is library + root + facet
+        // The transfer's catalog flip is library + root + facet
         // together, after the completeness gate the runner already applied. A
-        // same-library root move keeps its narrower write, so nothing about US2
+        // same-library root move keeps its narrower write, so nothing about it
         // changes.
         if planned.crosses_libraries() {
             self.catalog
@@ -1181,7 +1201,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         let mut outcome = TitleStepOutcome::clean();
 
         // The persisted records are the gate, not the absence of an error: only
-        // a file recorded `verified` may have its source touched (FR-044).
+        // a file recorded `verified` may have its source touched.
         let records = self
             .store
             .list_location_file_verifications(&operation.id, Some(&title.title_id))
@@ -1224,10 +1244,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }) {
                 // The transfer proved this source byte-identical to the
                 // destination's copy while both existed, and the proof was
-                // re-checked above (C4). The source is a redundant copy of
+                // re-checked above. The source is a redundant copy of
                 // content the library already holds, not user data that can be
                 // lost, so it is dropped outright rather than recycled
-                // (FR-073) — the destination copy is the survivor.
+                // — the destination copy is the survivor.
                 //
                 // "The destination copy is the survivor" is the whole
                 // justification, so it is proven rather than assumed: the file
@@ -1366,7 +1386,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        // 2. Only *empty* source directories, deepest first (FR-031). A
+        // 2. Only *empty* source directories, deepest first. A
         //    directory that still holds anything — unmanaged content, a file
         //    this operation never planned — is left exactly as it is.
         let mut kept = Vec::new();
@@ -1494,7 +1514,7 @@ pub(super) enum DirectoryPrune {
 ///
 /// `remove_dir` already refuses a non-empty directory, but reading the entries
 /// first is what lets the caller *report* "still holds content" rather than an
-/// errno the user cannot act on (C3).
+/// errno the user cannot act on.
 pub(super) async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
     let disk = Disk::process();
     match disk.has_entries(path).await {
@@ -1512,7 +1532,7 @@ pub(super) async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
 
 // ── TitleAdmissionCheck ──────────────────────────────────────────────────────
 
-/// The FR-089 staleness rule for a root move.
+/// The staleness rule for a root move.
 ///
 /// Asked once per title, immediately before that title starts, and never for a
 /// title that already settled. The two sides of the rule:
@@ -1556,12 +1576,12 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         };
 
         let Some(placement) = self.catalog.title_placement(title_id).await? else {
-            // US7: a merge title whose source row is gone is this operation's
+            // A merge title whose source row is gone is this operation's
             // own completed Groups 1–5 transaction, not a foreign deletion —
-            // FR-084 gives it exclusive ownership of the title, so nothing else
+            // it holds exclusive ownership of the title, so nothing else
             // could have removed it. Admitting it lets the reconciler recognize
             // the merge as already applied and settle the checkpoint that the
-            // crash left behind (FR-033, FR-089).
+            // crash left behind.
             if let Some(destination_title_id) = planned.merge_target_title_id.as_deref()
                 && self
                     .catalog
@@ -1580,7 +1600,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
 
         // The catalog inputs the plan was built from. A transfer that already
         // flipped this title's library is this operation's own footprint, not a
-        // foreign change (FR-089) — the same reasoning the root check below
+        // foreign change — the same reasoning the root check below
         // uses, and what lets a run interrupted after a title's checkpoint
         // re-enter that title and converge.
         if placement.library_id != planned.source_library_id
@@ -1628,7 +1648,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         // the plan would move, so the plan no longer describes reality.
         //
         // A deduplicated source counts as planned even though it moves no
-        // bytes: FR-073 decided at preview time that its destination twin
+        // bytes: the plan decided at preview time that its destination twin
         // already exists, so its catalog row is content the plan accounted for
         // and is about to recycle — not a file that appeared underneath it.
         let planned_media: BTreeSet<String> = planned
@@ -1659,7 +1679,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
 
         // Unprocessed content must still be there. Content that is gone because
         // this operation already verified its destination is the operation's own
-        // footprint (FR-089), not a foreign change.
+        // footprint, not a foreign change.
         for file in &planned.files {
             if context
                 .verified_destinations
@@ -1711,9 +1731,9 @@ fn stale(change: PlanInputChange, detail: String) -> TitleAdmission {
 ///
 /// This is only ever reached for a file whose destination copy is *proven*
 /// present and correct, which is the difference between this and a deletion
-/// (C4: destruction requires proof). A source proven identical to content the
+/// (destruction requires proof). A source proven identical to content the
 /// destination already held never reaches any recycler: cleanup drops it
-/// directly (FR-073).
+/// directly.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemoveVerifiedSource;
 
