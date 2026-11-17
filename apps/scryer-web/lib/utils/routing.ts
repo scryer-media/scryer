@@ -50,8 +50,8 @@ const AUTOMATION_SETTINGS_SECTION_PATH: Partial<
 };
 
 /// Panes of the Rules page. Scoring, lifecycle and request rules all hang off
-/// `/automation/rules`, so the sidebar carries one entry and the page's own
-/// gutter picks the kind.
+/// `/automation/rules`, so the sidebar carries one entry with the kinds listed
+/// under it.
 export const RULES_SECTION_PATH: Record<RulesSection, string> = {
   scoring: "scoring",
   lifecycle: "lifecycle",

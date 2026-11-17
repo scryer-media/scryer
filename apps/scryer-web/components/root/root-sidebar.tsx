@@ -69,9 +69,13 @@ import { Link, useLocation } from "react-router";
 import { INDEXER_SETTINGS_TAB_ITEMS } from "@/components/views/settings/indexer-settings-tabs";
 import {
   buildIndexerSettingsPath,
+  buildRulesPath,
   indexerSettingsTabFromPath,
   INDEXER_SETTINGS_TABS,
+  RULES_SECTIONS,
+  rulesSectionFromPath,
 } from "@/lib/utils/routing";
+import type { RulesSection } from "@/components/root/types";
 import { PalettePicker } from "@/components/views/settings/palette-picker";
 import { QuickHighlightColorPicker } from "@/components/views/settings/quick-highlight-color-picker";
 import {
@@ -121,6 +125,16 @@ type TopNavGroup = {
   id: string;
   label: string | null;
   items: TopNavGroupItem[];
+};
+
+/// The kinds of rule listed under the sidebar's Rules entry.
+const RULES_SECTION_ITEMS: Record<
+  RulesSection,
+  { labelKey: string; icon: LucideIcon }
+> = {
+  scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
+  lifecycle: { labelKey: "settings.lifecycleRules", icon: Wrench },
+  request: { labelKey: "settings.requestRules", icon: Inbox },
 };
 
 type TopNavGroupItemDefinition =
@@ -221,8 +235,8 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "lists" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
-      // Scoring, lifecycle and request rules share this entry; the Rules
-      // page's own gutter picks the kind, so the sidebar names the subject once.
+      // Scoring, lifecycle and request rules share this entry; while one is
+      // open, the three kinds are listed under it.
       {
         kind: "settings",
         id: "rules",
@@ -1059,6 +1073,7 @@ function RootSidebarContent({
 
   const { pathname } = useLocation();
   const activeIndexerSettingsTab = indexerSettingsTabFromPath(pathname);
+  const activeRulesSection = rulesSectionFromPath(pathname);
   const handleNavigate = React.useCallback(
     (
       event: React.MouseEvent,
@@ -1354,6 +1369,43 @@ function RootSidebarContent({
                                           >
                                             <tabItem.icon className="h-3.5 w-3.5 shrink-0" />
                                             <span>{t(tabItem.labelKey)}</span>
+                                          </Link>
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    );
+                                  })}
+                                </SidebarMenuSub>
+                              </SidebarGroupContent>
+                            ) : null}
+                            {item.id === "rules" &&
+                            view === "settings" &&
+                            isSettingsNavEntryActive("rules", settingsSection) ? (
+                              <SidebarGroupContent>
+                                <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
+                                  {RULES_SECTIONS.map((section) => {
+                                    const rulesItem = RULES_SECTION_ITEMS[section];
+                                    return (
+                                      <SidebarMenuSubItem key={section}>
+                                        <SidebarMenuSubButton
+                                          asChild
+                                          isActive={
+                                            activeRulesSection === section
+                                          }
+                                          className={SUB_NAV_BUTTON_CLASS}
+                                        >
+                                          <Link
+                                            id={selectorId(
+                                              "root-sidebar-rules",
+                                              section,
+                                            )}
+                                            to={buildRulesPath(section)}
+                                            onClick={() => {
+                                              if (isMobile)
+                                                setOpenMobile(false);
+                                            }}
+                                          >
+                                            <rulesItem.icon className="h-3.5 w-3.5 shrink-0" />
+                                            <span>{t(rulesItem.labelKey)}</span>
                                           </Link>
                                         </SidebarMenuSubButton>
                                       </SidebarMenuSubItem>

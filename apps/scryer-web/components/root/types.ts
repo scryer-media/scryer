@@ -46,13 +46,13 @@ export type SettingsSection =
   | "subtitles";
 
 /// Panes of the Rules page. Scoring, lifecycle and request rules are three
-/// kinds of the same subject, so they share one nav entry and one gutter rather
-/// than sitting beside each other in the sidebar. Each pane keeps its own
+/// kinds of the same subject, so they share one sidebar entry and are listed
+/// under it. Each pane keeps its own
 /// `SettingsSection` underneath, so permissions and the settings shell are
 /// untouched.
 export type RulesSection = "scoring" | "lifecycle" | "request";
 
-/// Panes of the Lifecycle Rules page, reached through a second gutter. The
+/// Panes of the Lifecycle Rules page, reached through its route tabs. The
 /// rule list is the default, so `/automation/rules/lifecycle` still means
 /// what a bare lifecycle-rules link always meant. Exclusions live with the
 /// gates because both answer "what is this instance allowed to do", not "what

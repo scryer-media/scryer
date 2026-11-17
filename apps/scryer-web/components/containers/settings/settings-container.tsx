@@ -50,7 +50,6 @@ import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
 import type {
   IndexerSettingsTab,
   LifecycleRulesSection,
-  RulesSection,
   SettingsSection,
 } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
@@ -68,7 +67,6 @@ import {
   INDEXER_SETTINGS_TABS,
   lifecycleRulesSectionFromPath,
   BETA_RULES_SECTIONS,
-  RULES_SECTIONS,
   rulesSectionFromPath,
 } from "@/lib/utils/routing";
 import {
@@ -267,15 +265,6 @@ function IndexerSettingsTabs({
   );
 }
 
-const RULES_SECTION_ITEMS: Record<
-  RulesSection,
-  { labelKey: string; icon: LucideIcon }
-> = {
-  scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
-  lifecycle: { labelKey: "settings.lifecycleRules", icon: Wrench },
-  request: { labelKey: "settings.requestRules", icon: Inbox },
-};
-
 const LIFECYCLE_RULES_SECTIONS: {
   section: LifecycleRulesSection;
   labelKey: string;
@@ -294,109 +283,35 @@ const LIFECYCLE_RULES_SECTIONS: {
   },
 ];
 
-/// Kind switcher for the Rules page. Scoring and lifecycle rules are two
-/// kinds of the same subject, so they share a page instead of taking a sidebar
-/// entry each. Same shape as the Wanted view's section rail.
-function RulesSubnav({
+/// The Lifecycle Rules page's panes, as route tabs under its header. The rule
+/// list is the default tab, so a bare lifecycle-rules link opens it.
+function LifecycleRulesTabs({
   activeSection,
-  lifecycleRulesSection,
-  sections,
   t,
 }: {
-  activeSection: RulesSection;
-  lifecycleRulesSection: LifecycleRulesSection;
-  sections: readonly RulesSection[];
+  activeSection: LifecycleRulesSection;
   t: ReturnType<typeof useTranslate>;
 }) {
-  // With only one kind on offer there is nothing to switch between, so the rail
-  // is a column of dead space rather than navigation.
-  if (sections.length < 2) {
-    return null;
-  }
   return (
-    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 2xl:h-full 2xl:w-[218px] 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r 2xl:p-[22px_14px]">
-      <nav
-        id="settings-rules-subnav"
-        className="flex gap-2 overflow-x-auto pb-1 2xl:flex-col 2xl:overflow-visible 2xl:pb-0"
-        aria-label={t("nav.rules")}
+    <div className="mb-6 flex flex-wrap items-end gap-3 border-b border-[var(--scry-border3)]">
+      <div
+        id="settings-lifecycle-rules-tabs"
+        role="tablist"
+        aria-label={t("settings.lifecycleRules")}
+        className="relative top-px flex min-h-12 flex-wrap gap-x-2"
       >
-        {sections.map((section) => {
-          const item = RULES_SECTION_ITEMS[section];
-          const Icon = item.icon;
-          const active = activeSection === section;
-          return (
-            <div key={section} className="contents">
-              <Link
-                id={selectorId("settings-rules-subnav", section)}
-                to={buildRulesPath(section)}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
-                  active &&
-                    "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-                )}
-              >
-                <Icon
-                  className={cn(
-                    "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                    active && "text-[var(--scry-accent-text)]",
-                  )}
-                />
-                <span className="whitespace-nowrap">{t(item.labelKey)}</span>
-                {BETA_RULES_SECTIONS.has(section) ? (
-                  <Badge
-                    id={selectorId("settings-rules-subnav-beta", section)}
-                    tone="warning"
-                    className="text-[11px]"
-                  >
-                    {t("settings.pluginBeta")}
-                  </Badge>
-                ) : null}
-              </Link>
-              {section === "lifecycle" && active ? (
-                <div className="flex shrink-0 gap-2 2xl:ml-3 2xl:flex-col 2xl:border-l 2xl:border-[var(--scry-border3)] 2xl:pl-3">
-                  {LIFECYCLE_RULES_SECTIONS.map((lifecycleItem) => {
-                    const LifecycleIcon = lifecycleItem.icon;
-                    const lifecycleActive =
-                      lifecycleRulesSection === lifecycleItem.section;
-                    return (
-                      <Link
-                        key={lifecycleItem.section}
-                        id={selectorId(
-                          "settings-lifecycle-rules-subnav",
-                          lifecycleItem.section,
-                        )}
-                        to={buildRulesPath(
-                          "lifecycle",
-                          lifecycleItem.section,
-                        )}
-                        aria-current={lifecycleActive ? "page" : undefined}
-                        className={cn(
-                          "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
-                          lifecycleActive &&
-                            "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-                        )}
-                      >
-                        <LifecycleIcon
-                          className={cn(
-                            "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                            lifecycleActive &&
-                              "text-[var(--scry-accent-text)]",
-                          )}
-                        />
-                        <span className="whitespace-nowrap">
-                          {t(lifecycleItem.labelKey)}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </nav>
-    </aside>
+        {LIFECYCLE_RULES_SECTIONS.map((item) => (
+          <UnderlineTabLink
+            key={item.section}
+            id={selectorId("settings-lifecycle-rules-tab", item.section)}
+            to={buildRulesPath("lifecycle", item.section)}
+            selected={activeSection === item.section}
+            icon={<item.icon className="h-4 w-4" />}
+            label={t(item.labelKey)}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -431,9 +346,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   // can be linked to and reloaded into.
   const pathname = useLocation().pathname;
   const indexerSettingsTab = indexerSettingsTabFromPath(pathname);
-  // Same for the Rules page's two levels of pane. The kind is derivable from
-  // the settings section, but the lifecycle pane exists only in the path.
-  const rulesSection = rulesSectionFromPath(pathname);
+  // Same for the Lifecycle Rules page's tabs.
   const lifecycleRulesSection = lifecycleRulesSectionFromPath(pathname);
   const [
     indexerDownloadClientMappingCatalogResource,
@@ -703,20 +616,8 @@ export const SettingsContainer = memo(function SettingsContainer({
         );
     }
   })();
-  // The Lifecycle Rules panes are pages in their own right, so the header
-  // and the breadcrumb name the pane rather than the section that hosts it.
-  // The rule list is the page itself rather than a pane of it, so it adds no
-  // crumb and keeps the page's icon.
-  const activeLifecyclePane =
-    settingsSection === "lifecycleRules" &&
-    lifecycleRulesSection !== "rules"
-      ? LIFECYCLE_RULES_SECTIONS.find(
-          (item) => item.section === lifecycleRulesSection,
-        )
-      : undefined;
-  const activePane = activeLifecyclePane;
-  const pageLabel = activePane ? t(activePane.labelKey) : settingsSectionLabel;
-  const PageIcon = activePane ? activePane.icon : SettingsSectionIcon;
+  const pageLabel = settingsSectionLabel;
+  const PageIcon = SettingsSectionIcon;
   const breadcrumbRootLabel = usesAutomationHeader
     ? t("nav.group.automation")
     : usesIntegrationsHeader
@@ -743,26 +644,13 @@ export const SettingsContainer = memo(function SettingsContainer({
     subscribeToProviderCatalog,
   );
 
-  // The Rules rail only becomes a side column at 2xl; below that it is a
-  // full-width strip, so the row has to stack or the strip takes the whole
-  // row and leaves the page content zero wide.
-  const showSectionSubnav = isRulesSection && RULES_SECTIONS.length >= 2;
-
   return (
     <div
       className={cn(
         "flex min-h-0 w-full flex-1 flex-col overflow-visible bg-transparent min-[1280px]:overflow-hidden",
-        showSectionSubnav ? "2xl:flex-row" : "md:flex-row",
+        "md:flex-row",
       )}
     >
-      {isRulesSection ? (
-        <RulesSubnav
-          activeSection={rulesSection}
-          lifecycleRulesSection={lifecycleRulesSection}
-          sections={RULES_SECTIONS}
-          t={t}
-        />
-      ) : null}
       <main
         ref={settingsContentRef}
         data-slot="settings-main-scroll"
@@ -797,17 +685,6 @@ export const SettingsContainer = memo(function SettingsContainer({
               <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
                 <span>{breadcrumbRootLabel}</span>
                 <ChevronRight className="h-3.5 w-3.5" />
-                {activePane ? (
-                  <>
-                    <Link
-                      to={buildRulesPath("lifecycle")}
-                      className="transition hover:text-[var(--scry-ink2)]"
-                    >
-                      {settingsSectionLabel}
-                    </Link>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </>
-                ) : null}
                 <span className="font-semibold text-[var(--scry-accent-text)]">
                   {pageLabel}
                 </span>
@@ -829,6 +706,16 @@ export const SettingsContainer = memo(function SettingsContainer({
                   <div className="min-w-0">
                     <h1 className="flex flex-wrap items-center gap-2.5 text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
                       {pageLabel}
+                      {isRulesSection &&
+                      BETA_RULES_SECTIONS.has(rulesSectionFromPath(pathname)) ? (
+                        <Badge
+                          id="settings-rules-beta"
+                          tone="warning"
+                          className="text-[11px]"
+                        >
+                          {t("settings.pluginBeta")}
+                        </Badge>
+                      ) : null}
                     </h1>
                     {!usesAutomationHeader &&
                     !usesIntegrationsHeader &&
@@ -873,6 +760,12 @@ export const SettingsContainer = memo(function SettingsContainer({
               </div>
               {settingsSection === "indexers" ? (
                 <IndexerSettingsTabs activeTab={indexerSettingsTab} t={t} />
+              ) : null}
+              {settingsSection === "lifecycleRules" ? (
+                <LifecycleRulesTabs
+                  activeSection={lifecycleRulesSection}
+                  t={t}
+                />
               ) : null}
               <GutterPanelContext.Provider
                 value={showReferenceRail ? referencePanelContext : null}
