@@ -4228,6 +4228,40 @@ file = "postgres/migrations/0352_title_content_ratings.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 353
+description = "download submissions client item id index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0353_download_submissions_client_item_id_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0353_download_submissions_client_item_id_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 354
+description = "index audit"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0354_index_audit.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0354_index_audit.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

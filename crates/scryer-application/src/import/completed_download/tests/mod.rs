@@ -1215,6 +1215,21 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
             .collect())
     }
 
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .filter(|(submission, _)| item_ids.contains(&submission.download_client_item_id))
+            .map(|(submission, _)| submission.clone())
+            .collect())
+    }
+
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
         Ok(self
             .rows

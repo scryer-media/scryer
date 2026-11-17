@@ -5199,6 +5199,179 @@ async fn plugin_catalog_status_returns_cached_status_without_rewriting_it() {
     );
 }
 
+async fn seed_plugin_catalog_status(
+    h: &TestHarness,
+    status_json: &str,
+    checked_at: chrono::DateTime<Utc>,
+) {
+    h.plugin_repo
+        .upsert_plugin_catalog_status(&scryer_domain::PluginCatalogStatusRecord {
+            status_key: CATALOG_STATUS_KEY.to_string(),
+            status_json: status_json.to_string(),
+            checked_at,
+        })
+        .await
+        .unwrap();
+}
+
+async fn stored_plugin_catalog_status(h: &TestHarness) -> scryer_domain::PluginCatalogStatusRecord {
+    h.plugin_repo
+        .get_plugin_catalog_status(CATALOG_STATUS_KEY)
+        .await
+        .unwrap()
+        .expect("stored plugin catalog status")
+}
+
+#[tokio::test]
+async fn dismissing_restore_warnings_clears_only_the_warnings() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let checked_at = Utc::now() - chrono::Duration::minutes(10);
+    let cached_payload = serde_json::json!({
+        "githubAvailable": false,
+        "blockedActions": ["install", "upgrade"],
+        "message": "cached outage",
+        "restoreWarnings": ["cached restore warning", "second restore warning"],
+        "lastError": "cached probe failure",
+    });
+    seed_plugin_catalog_status(&h, &cached_payload.to_string(), checked_at).await;
+
+    let status = h
+        .app
+        .dismiss_plugin_restore_warnings(&config_admin())
+        .await
+        .unwrap();
+
+    assert!(status.restore_warnings.is_empty());
+    assert_eq!(status.refresh_state, "degraded");
+    assert!(!status.github_available);
+    assert_eq!(
+        status.last_checked_at.as_deref(),
+        Some(checked_at.to_rfc3339().as_str())
+    );
+    assert_eq!(status.outage_message.as_deref(), Some("cached outage"));
+    assert_eq!(status.blocked_actions, vec!["install", "upgrade"]);
+    assert_eq!(status.last_error.as_deref(), Some("cached probe failure"));
+
+    let stored = stored_plugin_catalog_status(&h).await;
+    assert_eq!(
+        stored.checked_at, checked_at,
+        "dismissing is not a catalog check"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored.status_json).unwrap(),
+        serde_json::json!({
+            "githubAvailable": false,
+            "blockedActions": ["install", "upgrade"],
+            "message": "cached outage",
+            "restoreWarnings": [],
+            "lastError": "cached probe failure",
+        })
+    );
+}
+
+#[tokio::test]
+async fn dismissing_restore_warnings_with_none_stored_writes_nothing() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+
+    let status = h
+        .app
+        .dismiss_plugin_restore_warnings(&config_admin())
+        .await
+        .unwrap();
+    assert!(status.restore_warnings.is_empty());
+    assert!(
+        h.plugin_repo
+            .get_plugin_catalog_status(CATALOG_STATUS_KEY)
+            .await
+            .unwrap()
+            .is_none(),
+        "no status row is created just to record that nothing was dismissed"
+    );
+
+    // Spacing and key order a rewrite would not reproduce, so any write shows.
+    let checked_at = Utc::now() - chrono::Duration::minutes(10);
+    let status_json = r#"{ "message": "cached outage",  "githubAvailable": true }"#;
+    seed_plugin_catalog_status(&h, status_json, checked_at).await;
+
+    let status = h
+        .app
+        .dismiss_plugin_restore_warnings(&config_admin())
+        .await
+        .unwrap();
+
+    assert!(status.restore_warnings.is_empty());
+    assert_eq!(status.outage_message.as_deref(), Some("cached outage"));
+    let stored = stored_plugin_catalog_status(&h).await;
+    assert_eq!(stored.status_json, status_json);
+    assert_eq!(stored.checked_at, checked_at);
+}
+
+#[tokio::test]
+async fn a_catalog_refresh_after_dismissal_does_not_bring_restore_warnings_back() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let cached_payload = serde_json::json!({
+        "githubAvailable": true,
+        "restoreWarnings": ["cached restore warning"],
+    });
+    seed_plugin_catalog_status(&h, &cached_payload.to_string(), Utc::now()).await;
+
+    // Until it is dismissed, a refresh carries the warning forward.
+    h.app
+        .record_plugin_catalog_refresh_success(Utc::now())
+        .await
+        .unwrap();
+    let status = h.app.plugin_catalog_status(&config_admin()).await.unwrap();
+    assert_eq!(
+        status.restore_warnings,
+        vec!["cached restore warning".to_string()]
+    );
+
+    h.app
+        .dismiss_plugin_restore_warnings(&config_admin())
+        .await
+        .unwrap();
+
+    h.app
+        .record_plugin_catalog_refresh_success(Utc::now())
+        .await
+        .unwrap();
+    let status = h.app.plugin_catalog_status(&config_admin()).await.unwrap();
+    assert!(status.restore_warnings.is_empty());
+
+    h.app
+        .record_plugin_catalog_refresh_failure(&AppError::Repository(
+            "synthetic catalog outage".to_string(),
+        ))
+        .await;
+    let status = h.app.plugin_catalog_status(&config_admin()).await.unwrap();
+    assert!(status.restore_warnings.is_empty());
+    assert_eq!(status.refresh_state, "degraded");
+}
+
+#[tokio::test]
+async fn dismissing_restore_warnings_rejects_viewer() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let cached_payload = serde_json::json!({
+        "restoreWarnings": ["cached restore warning"],
+    });
+    let checked_at = Utc::now() - chrono::Duration::minutes(10);
+    seed_plugin_catalog_status(&h, &cached_payload.to_string(), checked_at).await;
+
+    let err = h
+        .app
+        .dismiss_plugin_restore_warnings(&viewer())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
+    let stored = stored_plugin_catalog_status(&h).await;
+    assert_eq!(stored.status_json, cached_payload.to_string());
+    assert_eq!(stored.checked_at, checked_at);
+}
+
 // ── Scheduled plugin auto-update ─────────────────────────────────────────────
 
 /// Answers exactly the one system setting the auto-update scheduler reads.

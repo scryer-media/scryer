@@ -8052,6 +8052,18 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         Ok(submissions)
     }
 
+    /// The submissions whose client item id is one of `item_ids`, whatever
+    /// their client or title, newest submission first. For a caller that
+    /// holds item ids without a client type. SQL stores read them through the
+    /// item-id index, so callers may pass a selection of any size. There is
+    /// no default: the failed-download check finds its work through this
+    /// read, so a wrapper that did not forward it would silently turn that
+    /// check off.
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>>;
+
     /// On-demand recovery rows for durable password retries with an active,
     /// matching client binding, including jobs absent from the native queue.
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
@@ -10455,6 +10467,39 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(true)
     }
 
+    /// [`Self::complete_acquisition_scope_for_title`] for the row stored under
+    /// any scope key, such as a series-movie link's: the row is completed
+    /// whatever its status, with `last_search_at` set and the in-flight grab
+    /// cleared only when `landed_import`. Returns whether a row was there.
+    /// SQL stores complete it in one keyed statement, so a transition between
+    /// a read and the write cannot be overwritten with stale values. The
+    /// default reads the row and then writes it.
+    async fn complete_acquisition_scope_for_key(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<bool> {
+        let Some(wanted) = self
+            .get_acquisition_scope_state_for_scope(title_id, scope)
+            .await?
+        else {
+            return Ok(false);
+        };
+        self.transition_acquisition_scope_to_completed(&AcquisitionScopeCompleteTransition {
+            id: wanted.id,
+            last_search_at: last_search_at.map(str::to_string),
+            grabbed_release: if landed_import {
+                None
+            } else {
+                wanted.grabbed_release
+            },
+        })
+        .await?;
+        Ok(true)
+    }
+
     /// `complete_acquisition_scope_for_title` for each episode of one title.
     /// The SQL store writes them in one statement, so on an error nothing is
     /// kept and a caller can replay the episodes one by one. The default runs
@@ -10696,6 +10741,28 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         for state in &mut states {
             state.latest_release_decision = None;
         }
+        Ok(states)
+    }
+
+    /// The `grabbed` scopes of the titles in `title_ids`, newest `updated_at`
+    /// first and then by id, with `latest_release_decision` left empty. The
+    /// default filters
+    /// [`Self::list_acquisition_scope_states_for_title_ids_without_decisions`];
+    /// SQL stores override it with a read that filters on the status.
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states_for_title_ids_without_decisions(title_ids)
+            .await?;
+        states.retain(|state| state.status == AcquisitionScopeStatus::Grabbed);
+        states.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok(states)
     }
 

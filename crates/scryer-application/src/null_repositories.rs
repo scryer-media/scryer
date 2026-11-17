@@ -2833,6 +2833,9 @@ impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     async fn list_for_title(&self, _: &str) -> AppResult<Vec<DownloadSubmission>> {
         Ok(vec![])
     }
+    async fn list_for_client_item_ids(&self, _: &[String]) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(vec![])
+    }
     async fn find_by_title_and_request_signature(
         &self,
         _: &str,

@@ -403,6 +403,15 @@ fn opt_json_arg_for_datastore(
     }
 }
 
+/// A scope's `updated_at`, as read back through `timestamp_text`, as an
+/// instant, so rows of several statements order the way one statement orders
+/// them. Text that is not RFC 3339 has none and orders by its text.
+fn wanted_updated_at_instant(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
 fn wanted_seed_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
     let status = row.text("status")?;
     Ok(AcquisitionScopeState {
@@ -488,6 +497,13 @@ impl ReleaseDecisionIdentityArgs {
 
 /// Newest first, so a table that still holds pre-dedupe duplicates collapses
 /// onto the row a reader would have seen anyway.
+///
+/// The sort key is wrapped so the planner cannot read it from
+/// `idx_release_decisions_wanted`: that plan walks every decision of the
+/// scope, newest first, until one matches, and all of them when none does.
+/// With the wrapped key the equalities are sought in
+/// `idx_release_decisions_identity` and the few rows found are sorted. The
+/// order is the same either way.
 const RELEASE_DECISION_IDENTITY_SELECT_SQL: &str = "SELECT id
        FROM release_decisions
       WHERE wanted_item_id = {}
@@ -495,7 +511,7 @@ const RELEASE_DECISION_IDENTITY_SELECT_SQL: &str = "SELECT id
         AND COALESCE(release_url, '') = {}
         AND release_title = {}
         AND COALESCE(release_size_bytes, -1) = {}
-      ORDER BY created_at DESC
+      ORDER BY COALESCE(created_at, created_at) DESC, id DESC
       LIMIT 1";
 
 fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
@@ -636,8 +652,8 @@ const WANTED_LATEST_DECISION_COLUMNS_SQL: &str = "
 
 /// Whether the wanted row `w` is eligible for title-mismatch recovery: it is
 /// wanted, has a release decision, and every one of its decisions is a title
-/// mismatch. Both probes are served by the `(wanted_item_id, created_at)`
-/// index on `release_decisions`.
+/// mismatch. Both probes are answered from `idx_release_decisions_identity`,
+/// which holds the scope and the decision code.
 const WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL: &str = "(w.status = 'wanted'
                  AND EXISTS (
                      SELECT 1
@@ -806,6 +822,61 @@ async fn execute_wanted_upsert_tx(
 /// that names it matches that index.
 const PENDING_RELEASE_ACTIVE_STATUSES_SQL: &str =
     "('waiting', 'standby', 'processing', 'needs_review')";
+
+/// The grabbed scopes of `count` titles, newest first.
+///
+/// The status is compared through an expression so no index can be sought on
+/// it. Written as a bare column, sqlite reads `idx_wanted_items_status_updated_at`
+/// for its ready-made order, which is every grabbed scope of the library; this
+/// way the titles are sought and their rows filtered and sorted. A scope
+/// always has a status, so the rows are the same.
+fn grabbed_scopes_for_titles_sql(select: &str, count: usize) -> String {
+    format!(
+        "{select} WHERE w.title_id IN ({}) AND COALESCE(w.status, '') = 'grabbed'
+                 ORDER BY w.updated_at DESC, w.id",
+        placeholders(count)
+    )
+}
+
+/// One page of a title's mismatch-recovery scopes in id order. The title
+/// filter, the id cursor and the id order are all read from
+/// `idx_wanted_items_title_id_id`, so no page sorts.
+fn mismatch_recovery_scopes_for_title_statement(
+    title_id: &str,
+    after_id: Option<&str>,
+    limit: i64,
+) -> (String, Vec<SqlArg>) {
+    let mut sql = format!(
+        "{} WHERE w.title_id = {{}} AND {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL}",
+        wanted_item_projection_sql(WantedProjection::WithoutLatestDecision)
+    );
+    let mut args = vec![SqlArg::Text(title_id.to_string())];
+    if let Some(after_id) = after_id {
+        sql.push_str(" AND w.id > {}");
+        args.push(SqlArg::Text(after_id.to_string()));
+    }
+    sql.push_str(" ORDER BY w.id LIMIT {}");
+    args.push(SqlArg::I64(limit));
+    (sql, args)
+}
+
+/// The active pending releases whose age is unknown. The flag is written as
+/// each engine's own literal, exactly as the partial index
+/// `idx_pending_releases_active_unknown_age` states it: a bound value there
+/// keeps the planner from proving the index applies.
+fn active_release_age_unknown_pending_releases_sql(datastore: &StoreDatastore) -> String {
+    let age_unknown = match datastore {
+        StoreDatastore::Sqlite { .. } => "release_age_unknown = 1",
+        StoreDatastore::Postgres { .. } => "release_age_unknown",
+    };
+    format!(
+        "SELECT {PENDING_RELEASE_COLUMNS}
+              FROM pending_releases
+              WHERE {age_unknown}
+                AND status IN {PENDING_RELEASE_ACTIVE_STATUSES_SQL}
+              ORDER BY indexer_id ASC, added_at ASC, id ASC"
+    )
+}
 
 async fn execute_datastore_write(
     datastore: &StoreDatastore,
@@ -1305,25 +1376,50 @@ impl AcquisitionScopeStateRepository for WantedStore {
         after_id: Option<&str>,
         limit: i64,
     ) -> AppResult<Vec<AcquisitionScopeState>> {
-        // The title filter is served by the leading column of the
-        // `(title_id, episode_id)` unique key; the id order is a sort of that
-        // one title's rows.
-        let mut sql = format!(
-            "{} WHERE w.title_id = {{}} AND {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL}",
-            wanted_item_projection_sql(WantedProjection::WithoutLatestDecision)
-        );
-        let mut args = vec![SqlArg::Text(title_id.to_string())];
-        if let Some(after_id) = after_id {
-            sql.push_str(" AND w.id > {}");
-            args.push(SqlArg::Text(after_id.to_string()));
-        }
-        sql.push_str(" ORDER BY w.id LIMIT {}");
-        args.push(SqlArg::I64(limit));
+        let (sql, args) = mismatch_recovery_scopes_for_title_statement(title_id, after_id, limit);
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
             .map(|row| wanted_projected_row_to_item(row, WantedProjection::WithoutLatestDecision))
             .collect()
+    }
+
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // The titles are sought through an index that leads with `title_id`;
+        // the status is checked on those titles' rows and the order is a sort
+        // of what is left.
+        let projection = WantedProjection::WithoutLatestDecision;
+        let select = wanted_item_projection_sql(projection);
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) =
+            id_list_statements(title_ids, 1, 0, max_binds(&exec), ID_LIST_CHUNK);
+        let mut states = Vec::new();
+        let mut statements = 0usize;
+        for chunk in ids.chunks(per_statement) {
+            statements += 1;
+            let sql = grabbed_scopes_for_titles_sql(&select, chunk.len());
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                states.push(wanted_projected_row_to_item(&row, projection)?);
+            }
+        }
+        if statements > 1 {
+            // Each statement is ordered; a list read in several is merged
+            // into the one order here.
+            states.sort_by(|left, right| {
+                wanted_updated_at_instant(&right.updated_at)
+                    .cmp(&wanted_updated_at_instant(&left.updated_at))
+                    .then_with(|| right.updated_at.cmp(&left.updated_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        }
+        Ok(states)
     }
 
     async fn list_acquisition_scope_coordinates_for_statuses(
@@ -1364,46 +1460,35 @@ impl AcquisitionScopeStateRepository for WantedStore {
         last_search_at: Option<&str>,
         landed_import: bool,
     ) -> AppResult<bool> {
+        let scope = episode_id.map_or(AcquisitionScopeKey::Title, AcquisitionScopeKey::Episode);
+        self.complete_acquisition_scope_for_key(title_id, scope, last_search_at, landed_import)
+            .await
+    }
+
+    async fn complete_acquisition_scope_for_key(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<bool> {
         let now = Utc::now().to_rfc3339();
-        let (sql, args) = if let Some(episode_id) = episode_id {
-            (
-                "UPDATE wanted_items
-                    SET status = {},
-                        last_search_at = {},
-                        grabbed_release = CASE WHEN {} THEN NULL ELSE grabbed_release END,
-                        updated_at = {}
-                  WHERE title_id = {} AND episode_id = {}"
-                    .to_string(),
-                vec![
-                    SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
-                    self.datastore.opt_timestamp_text_arg(last_search_at)?,
-                    SqlArg::Bool(landed_import),
-                    self.datastore.timestamp_text_arg(&now)?,
-                    SqlArg::Text(title_id.to_string()),
-                    SqlArg::Text(episode_id.to_string()),
-                ],
-            )
-        } else {
-            (
-                "UPDATE wanted_items
-                    SET status = {},
-                        last_search_at = {},
-                        grabbed_release = CASE WHEN {} THEN NULL ELSE grabbed_release END,
-                        updated_at = {}
-                  WHERE title_id = {}
-                    AND episode_id IS NULL
-                    AND collection_id IS NULL
-                    AND series_movie_link_id IS NULL"
-                    .to_string(),
-                vec![
-                    SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
-                    self.datastore.opt_timestamp_text_arg(last_search_at)?,
-                    SqlArg::Bool(landed_import),
-                    self.datastore.timestamp_text_arg(&now)?,
-                    SqlArg::Text(title_id.to_string()),
-                ],
-            )
-        };
+        let (predicate, key_args) = wanted_scope_predicate("", title_id, scope);
+        let sql = format!(
+            "UPDATE wanted_items
+                SET status = {{}},
+                    last_search_at = {{}},
+                    grabbed_release = CASE WHEN {{}} THEN NULL ELSE grabbed_release END,
+                    updated_at = {{}}
+              WHERE {predicate}"
+        );
+        let mut args = vec![
+            SqlArg::Text(AcquisitionScopeStatus::Completed.as_str().to_string()),
+            self.datastore.opt_timestamp_text_arg(last_search_at)?,
+            SqlArg::Bool(landed_import),
+            self.datastore.timestamp_text_arg(&now)?,
+        ];
+        args.extend(key_args);
         let rows = execute_datastore_write(
             &self.datastore,
             "complete_acquisition_scope_for_title",
@@ -2796,18 +2881,12 @@ impl PendingReleaseRepository for PendingReleaseStore {
     async fn list_active_release_age_unknown_pending_releases(
         &self,
     ) -> AppResult<Vec<PendingRelease>> {
-        let sql = format!(
-            "SELECT {PENDING_RELEASE_COLUMNS}
-              FROM pending_releases
-              WHERE release_age_unknown = {{}}
-                AND status IN {PENDING_RELEASE_ACTIVE_STATUSES_SQL}
-              ORDER BY indexer_id ASC, added_at ASC, id ASC"
-        );
+        let sql = active_release_age_unknown_pending_releases_sql(&self.datastore);
         let encryption_key = self.encryption_key()?;
         fetch_pending_releases(
             self.datastore.read_exec(),
             &sql,
-            &[SqlArg::Bool(true)],
+            &[],
             encryption_key.as_ref(),
         )
         .await
@@ -4408,5 +4487,319 @@ mod pending_release_fill_tests {
             status_and_unknown(&datastore, &matched_id).await,
             ("grabbed".to_string(), true)
         );
+    }
+}
+
+#[cfg(test)]
+mod keyed_scope_completion_tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use scryer_application::{
+        AcquisitionScopeKey, AcquisitionScopeState, AcquisitionScopeStateRepository,
+        AcquisitionScopeStatus,
+    };
+
+    use super::WantedStore;
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    const TITLE_ID: &str = "t-link-completion";
+    const RELEASE: &str = "{\"title\":\"Synthetic.Feature.2031.1080p-GROUP\"}";
+    const SEEDED_AT: &str = "2031-02-01T00:00:00+00:00";
+
+    async fn store() -> (StoreDatastore, WantedStore) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .unwrap();
+        let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        // The statement under test is keyed on the scope columns; the title
+        // and link rows the foreign keys name are not part of it.
+        SqlRuntime::execute(datastore.read_exec(), "PRAGMA foreign_keys = OFF", &[])
+            .await
+            .unwrap();
+        (datastore.clone(), WantedStore::new(datastore))
+    }
+
+    async fn seed_link_scope(
+        datastore: &StoreDatastore,
+        id: &str,
+        link_id: &str,
+        status: AcquisitionScopeStatus,
+    ) {
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO wanted_items
+             (id, title_id, series_movie_link_id, media_type, last_search_at, status,
+              grabbed_release, created_at, updated_at)
+             VALUES ({}, {}, {}, 'series_movie', '2031-01-01T00:00:00+00:00', {}, {}, {}, {})",
+            &[
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(TITLE_ID.to_string()),
+                SqlArg::Text(link_id.to_string()),
+                SqlArg::Text(status.as_str().to_string()),
+                SqlArg::Text(RELEASE.to_string()),
+                SqlArg::Text(SEEDED_AT.to_string()),
+                SqlArg::Text(SEEDED_AT.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn link_scope(store: &WantedStore, link_id: &str) -> AcquisitionScopeState {
+        store
+            .get_acquisition_scope_state_for_scope(
+                TITLE_ID,
+                AcquisitionScopeKey::SeriesMovieLink(link_id),
+            )
+            .await
+            .unwrap()
+            .expect("the link scope exists")
+    }
+
+    /// The fields the completion writes, and nothing it leaves alone.
+    fn written(scope: &AcquisitionScopeState) -> impl std::fmt::Debug + PartialEq {
+        (
+            scope.status,
+            scope.last_search_at.clone(),
+            scope.grabbed_release.clone(),
+            scope.episode_id.clone(),
+            scope.collection_id.clone(),
+            scope.series_movie_link_id.is_some(),
+            scope.media_type.clone(),
+            scope.created_at.clone(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_keyed_link_completion_writes_what_the_read_then_write_path_wrote_in_every_status() {
+        let (datastore, store) = store().await;
+        let now = Utc::now().to_rfc3339();
+        for status in [
+            AcquisitionScopeStatus::Wanted,
+            AcquisitionScopeStatus::Grabbed,
+            AcquisitionScopeStatus::Paused,
+            AcquisitionScopeStatus::Completed,
+        ] {
+            for landed_import in [true, false] {
+                let case = format!("{}-{landed_import}", status.as_str());
+                let old_link = format!("old-link-{case}");
+                let new_link = format!("new-link-{case}");
+                seed_link_scope(&datastore, &format!("old-{case}"), &old_link, status).await;
+                seed_link_scope(&datastore, &format!("new-{case}"), &new_link, status).await;
+
+                // The path the import used: read the row, then complete it by id.
+                let read = link_scope(&store, &old_link).await;
+                store
+                    .update_acquisition_scope_status(
+                        &read.id,
+                        AcquisitionScopeStatus::Completed.as_str(),
+                        Some(&now),
+                        if landed_import {
+                            None
+                        } else {
+                            read.grabbed_release.as_deref()
+                        },
+                    )
+                    .await
+                    .unwrap();
+
+                let found = store
+                    .complete_acquisition_scope_for_key(
+                        TITLE_ID,
+                        AcquisitionScopeKey::SeriesMovieLink(&new_link),
+                        Some(&now),
+                        landed_import,
+                    )
+                    .await
+                    .unwrap();
+                assert!(found, "{case}: the row is there");
+
+                let old = link_scope(&store, &old_link).await;
+                let new = link_scope(&store, &new_link).await;
+                assert_eq!(written(&new), written(&old), "{case}");
+                assert_eq!(new.status, AcquisitionScopeStatus::Completed, "{case}");
+                assert_eq!(
+                    new.grabbed_release.as_deref(),
+                    (!landed_import).then_some(RELEASE),
+                    "{case}"
+                );
+                assert_ne!(new.updated_at, SEEDED_AT, "{case}: the row is stamped");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_keyed_link_completion_without_a_row_writes_nothing() {
+        let (datastore, store) = store().await;
+        seed_link_scope(
+            &datastore,
+            "kept",
+            "kept-link",
+            AcquisitionScopeStatus::Grabbed,
+        )
+        .await;
+        let before = link_scope(&store, "kept-link").await;
+
+        let found = store
+            .complete_acquisition_scope_for_key(
+                TITLE_ID,
+                AcquisitionScopeKey::SeriesMovieLink("link-without-row"),
+                Some(&Utc::now().to_rfc3339()),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(!found);
+        assert_eq!(
+            format!("{:?}", link_scope(&store, "kept-link").await),
+            format!("{before:?}")
+        );
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), "SELECT id FROM wanted_items", &[])
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "no row is created");
+    }
+}
+
+#[cfg(test)]
+mod index_plan_tests {
+    use std::sync::Arc;
+
+    use super::{
+        RELEASE_DECISION_IDENTITY_SELECT_SQL, WantedProjection,
+        active_release_age_unknown_pending_releases_sql, grabbed_scopes_for_titles_sql,
+        mismatch_recovery_scopes_for_title_statement, wanted_item_projection_sql,
+    };
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    /// The plans are sqlite's, over the full migration catalog.
+    async fn datastore() -> StoreDatastore {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .unwrap();
+        StoreDatastore::sqlite(pool, Arc::new(tokio::sync::Mutex::new(())))
+    }
+
+    async fn query_plan(datastore: &StoreDatastore, sql: &str, args: &[SqlArg]) -> Vec<String> {
+        SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            args,
+        )
+        .await
+        .expect("query plan should read")
+        .iter()
+        .map(|row| row.text("detail").expect("plan detail"))
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn unknown_age_pending_releases_are_read_through_their_partial_index() {
+        let datastore = datastore().await;
+        let sql = active_release_age_unknown_pending_releases_sql(&datastore);
+        let plan = query_plan(&datastore, &sql, &[]).await;
+        assert!(
+            plan.iter().any(
+                |line| line.starts_with("SEARCH pending_releases USING INDEX ")
+                    && line.contains("idx_pending_releases_active_unknown_age ")
+            ),
+            "unknown-age pending releases must be sought in the partial index: {plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.starts_with("SCAN")),
+            "the pending releases table must not be scanned: {plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn release_decision_identity_lookup_seeks_the_identity_index() {
+        let datastore = datastore().await;
+        let args = [
+            SqlArg::Text("scope-1".to_string()),
+            SqlArg::Text("title_mismatch".to_string()),
+            SqlArg::Text(String::new()),
+            SqlArg::Text("Synthetic.Release".to_string()),
+            SqlArg::I64(-1),
+        ];
+        let plan = query_plan(&datastore, RELEASE_DECISION_IDENTITY_SELECT_SQL, &args).await;
+        assert!(
+            plan.iter().any(|line| line
+                == "SEARCH release_decisions USING INDEX idx_release_decisions_identity \
+                    (wanted_item_id=? AND release_title=? AND decision_code=?)"),
+            "a decision's identity must be sought on scope, release and code: {plan:#?}"
+        );
+    }
+
+    /// The literal status and the newest-first order must not pull the read
+    /// onto the status index, which holds every grabbed scope of the library.
+    #[tokio::test]
+    async fn grabbed_scopes_for_titles_are_sought_by_title() {
+        let datastore = datastore().await;
+        let select = wanted_item_projection_sql(WantedProjection::WithoutLatestDecision);
+        for count in [1, 3, 1_000] {
+            let sql = grabbed_scopes_for_titles_sql(&select, count);
+            let args = (0..count)
+                .map(|n| SqlArg::Text(format!("title-{n}")))
+                .collect::<Vec<_>>();
+            let plan = query_plan(&datastore, &sql, &args).await;
+            assert!(
+                plan.iter().any(|line| {
+                    // The `(title_id, episode_id)` unique key or the
+                    // `(title_id, id)` index: both lead with the title.
+                    line == "SEARCH w USING INDEX sqlite_autoindex_wanted_items_2 (title_id=?)"
+                        || line == "SEARCH w USING INDEX idx_wanted_items_title_id_id (title_id=?)"
+                }),
+                "{count} titles: grabbed scopes must be sought by title id: {plan:#?}"
+            );
+            assert!(
+                !plan
+                    .iter()
+                    .any(|line| line.contains("idx_wanted_items_status_updated_at")),
+                "{count} titles: the status index reads every grabbed scope: {plan:#?}"
+            );
+            assert!(
+                !plan.iter().any(|line| line.starts_with("SCAN w")),
+                "{count} titles: the wanted table must not be scanned: {plan:#?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mismatch_recovery_pages_read_a_title_in_id_order_without_sorting() {
+        let datastore = datastore().await;
+        for after_id in [None, Some("scope-1")] {
+            let (sql, args) = mismatch_recovery_scopes_for_title_statement("title-1", after_id, 50);
+            let plan = query_plan(&datastore, &sql, &args).await;
+            assert!(
+                plan.iter()
+                    .any(|line| line.starts_with("SEARCH w USING INDEX ")
+                        && line.contains("idx_wanted_items_title_id_id ")),
+                "a title's page must be sought in the title and id index: {plan:#?}"
+            );
+            assert!(
+                !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+                "a title's page must come back in id order without a sort: {plan:#?}"
+            );
+            assert!(
+                !plan.iter().any(|line| line.starts_with("SCAN w")),
+                "the wanted table must not be scanned: {plan:#?}"
+            );
+        }
     }
 }

@@ -60,14 +60,36 @@ const LIST_FAILED_SIGNATURES_FOR_TITLE_SQL: &str =
     ORDER BY attempted_at DESC
     LIMIT {}";
 
-const GET_LATEST_SOURCE_PASSWORD_SQL: &str = "SELECT source_password
+/// The newest stored password among the attempts matching every supplied
+/// argument. Only the supplied arguments become terms, each a plain equality,
+/// so a title id is sought through `idx_release_download_attempts_title`
+/// instead of scanning the table.
+fn latest_source_password_statement(
+    title_id: Option<String>,
+    source_hint: Option<String>,
+    source_title: Option<String>,
+) -> (String, Vec<SqlArg>) {
+    let mut sql = String::from(
+        "SELECT source_password
     FROM release_download_attempts
-    WHERE source_password IS NOT NULL
-      AND (CAST({} AS TEXT) IS NULL OR title_id = {})
-      AND (CAST({} AS TEXT) IS NULL OR source_hint = {})
-      AND (CAST({} AS TEXT) IS NULL OR source_title = {})
-    ORDER BY attempted_at DESC
-    LIMIT 1";
+    WHERE source_password IS NOT NULL",
+    );
+    let mut args = Vec::new();
+    for (column, value) in [
+        ("title_id", title_id),
+        ("source_hint", source_hint),
+        ("source_title", source_title),
+    ] {
+        if let Some(value) = value {
+            sql.push_str("\n      AND ");
+            sql.push_str(column);
+            sql.push_str(" = {}");
+            args.push(SqlArg::Text(value));
+        }
+    }
+    sql.push_str("\n    ORDER BY attempted_at DESC\n    LIMIT 1");
+    (sql, args)
+}
 
 const LIST_STORED_SOURCE_PASSWORDS_SQL: &str = "SELECT id, source_password
     FROM release_download_attempts
@@ -228,19 +250,8 @@ impl ReleaseAttemptRepository for ReleaseStore {
         let source_hint = source_hint.map(redact_url_credentials);
         let source_title = source_title.map(str::to_string);
         let encryption_key = self.encryption_key()?;
-        let row = SqlRuntime::fetch_optional(
-            self.datastore.read_exec(),
-            GET_LATEST_SOURCE_PASSWORD_SQL,
-            &[
-                SqlArg::OptText(title_id.clone()),
-                SqlArg::OptText(title_id),
-                SqlArg::OptText(source_hint.clone()),
-                SqlArg::OptText(source_hint),
-                SqlArg::OptText(source_title.clone()),
-                SqlArg::OptText(source_title),
-            ],
-        )
-        .await?;
+        let (sql, args) = latest_source_password_statement(title_id, source_hint, source_title);
+        let row = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?;
 
         match row {
             Some(row) => decrypt_release_source_password(
@@ -324,6 +335,16 @@ mod tests {
         .execute(&pool)
         .await
         .expect("release attempt fixture table should be created");
+        // The indexes the table keeps after migration 0354.
+        sqlx::raw_sql(
+            "CREATE INDEX idx_release_download_attempts_outcome_attempted
+                 ON release_download_attempts (outcome, attempted_at DESC);
+             CREATE INDEX idx_release_download_attempts_title
+                 ON release_download_attempts (title_id);",
+        )
+        .execute(&pool)
+        .await
+        .expect("release attempt fixture indexes should be created");
         let store = ReleaseStore::new(
             StoreDatastore::Sqlite {
                 pool: pool.clone(),
@@ -368,5 +389,146 @@ mod tests {
             .await
             .expect("password lookup should succeed");
         assert_eq!(password.as_deref(), Some("nzb-password"));
+    }
+
+    /// The statement this lookup ran before its terms were built from the
+    /// supplied arguments. Kept as the oracle for the rewrite.
+    const PREVIOUS_LATEST_SOURCE_PASSWORD_SQL: &str = "SELECT source_password
+    FROM release_download_attempts
+    WHERE source_password IS NOT NULL
+      AND (CAST({} AS TEXT) IS NULL OR title_id = {})
+      AND (CAST({} AS TEXT) IS NULL OR source_hint = {})
+      AND (CAST({} AS TEXT) IS NULL OR source_title = {})
+    ORDER BY attempted_at DESC
+    LIMIT 1";
+
+    fn lookup_argument_combinations() -> Vec<(Option<String>, Option<String>, Option<String>)> {
+        let mut combinations = Vec::new();
+        for title_id in [None, Some("title-1"), Some("title-2"), Some("title-absent")] {
+            for source_hint in [None, Some("hint-a"), Some("hint-b"), Some("hint-absent")] {
+                for source_title in [
+                    None,
+                    Some("Release.A"),
+                    Some("Release.B"),
+                    Some("Release.X"),
+                ] {
+                    combinations.push((
+                        title_id.map(str::to_string),
+                        source_hint.map(str::to_string),
+                        source_title.map(str::to_string),
+                    ));
+                }
+            }
+        }
+        combinations
+    }
+
+    #[tokio::test]
+    async fn latest_source_password_matches_the_previous_statement_for_every_argument_combination()
+    {
+        let (store, pool) = store().await;
+        // Every row has its own attempt time, so "newest" is never a tie.
+        let mut minute = 0;
+        for title_id in [None, Some("title-1"), Some("title-2")] {
+            for source_hint in [None, Some("hint-a"), Some("hint-b")] {
+                for source_title in [None, Some("Release.A"), Some("Release.B")] {
+                    for password in [None, Some("older"), Some("newer")] {
+                        minute += 1;
+                        sqlx::query(
+                            "INSERT INTO release_download_attempts
+                                 (id, title_id, source_hint, source_title, outcome,
+                                  source_password, attempted_at, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, 'failed', ?, ?, ?, ?)",
+                        )
+                        .bind(format!("attempt-{minute}"))
+                        .bind(title_id)
+                        .bind(source_hint)
+                        .bind(source_title)
+                        .bind(password.map(|password| format!("{password}-{minute}")))
+                        .bind(format!(
+                            "2031-01-01T{:02}:{:02}:00Z",
+                            minute / 60,
+                            minute % 60
+                        ))
+                        .bind("2031-01-01T00:00:00Z")
+                        .bind("2031-01-01T00:00:00Z")
+                        .execute(&pool)
+                        .await
+                        .expect("attempt row should insert");
+                    }
+                }
+            }
+        }
+
+        let mut found = 0;
+        for (title_id, source_hint, source_title) in lookup_argument_combinations() {
+            let previous = SqlRuntime::fetch_optional(
+                store.datastore.read_exec(),
+                PREVIOUS_LATEST_SOURCE_PASSWORD_SQL,
+                &[
+                    SqlArg::OptText(title_id.clone()),
+                    SqlArg::OptText(title_id.clone()),
+                    SqlArg::OptText(source_hint.clone()),
+                    SqlArg::OptText(source_hint.clone()),
+                    SqlArg::OptText(source_title.clone()),
+                    SqlArg::OptText(source_title.clone()),
+                ],
+            )
+            .await
+            .expect("previous statement should run")
+            .map(|row| row.opt_text("source_password").expect("password column"));
+            let (sql, args) = latest_source_password_statement(
+                title_id.clone(),
+                source_hint.clone(),
+                source_title.clone(),
+            );
+            let current = SqlRuntime::fetch_optional(store.datastore.read_exec(), &sql, &args)
+                .await
+                .expect("current statement should run")
+                .map(|row| row.opt_text("source_password").expect("password column"));
+            assert_eq!(
+                current, previous,
+                "lookup for {title_id:?} / {source_hint:?} / {source_title:?}"
+            );
+            found += usize::from(current.is_some());
+        }
+        assert!(
+            found >= 27,
+            "the seeded rows must answer the present-value lookups: {found}"
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_source_password_seeks_the_title_index_when_a_title_id_is_given() {
+        let (store, _pool) = store().await;
+        for (title_id, source_hint, source_title) in lookup_argument_combinations() {
+            let (sql, args) = latest_source_password_statement(
+                title_id.clone(),
+                source_hint.clone(),
+                source_title.clone(),
+            );
+            let plan: Vec<String> = SqlRuntime::fetch_all(
+                store.datastore.read_exec(),
+                &format!("EXPLAIN QUERY PLAN {sql}"),
+                &args,
+            )
+            .await
+            .expect("query plan should read")
+            .iter()
+            .map(|row| row.text("detail").expect("plan detail"))
+            .collect();
+            if title_id.is_some() {
+                assert!(
+                    plan.iter().any(|line| line
+                        == "SEARCH release_download_attempts USING INDEX \
+                            idx_release_download_attempts_title (title_id=?)"),
+                    "a title id must be sought through the title index: {plan:#?}"
+                );
+                assert!(
+                    !plan.iter().any(|line| line.starts_with("SCAN")),
+                    "a title-scoped lookup must not scan: {plan:#?}"
+                );
+            }
+        }
     }
 }

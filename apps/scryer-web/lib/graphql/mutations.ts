@@ -2290,6 +2290,14 @@ export const dismissPendingReleaseMutation = `mutation DismissPendingRelease($id
 
 // ── Plugins ──────────────────────────────────────────────────────────────
 
+export const dismissPluginRestoreWarningsMutation = `mutation DismissPluginRestoreWarnings {
+  dismissPluginRestoreWarnings {
+    outageMessage
+    blockedActions
+    restoreWarnings
+  }
+}`;
+
 export const refreshPluginCatalogMutation = `mutation RefreshPluginCatalog {
   refreshPluginCatalog {
     id

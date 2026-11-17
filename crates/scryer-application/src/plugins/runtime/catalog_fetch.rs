@@ -933,33 +933,60 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Stores the degraded status for a refresh that could not fetch the
+    /// catalog. Restore warnings are carried forward; a refresh never writes
+    /// or clears them.
+    async fn record_plugin_catalog_refresh_failure(&self, error: &AppError) {
+        let stored_status = self
+            .load_stored_plugin_catalog_status_payload()
+            .await
+            .unwrap_or_default();
+        let last_error = error.to_string();
+        if let Err(persist_error) = self
+            .persist_plugin_catalog_status_payload(
+                StoredPluginCatalogStatusPayload {
+                    github_available: false,
+                    blocked_actions: plugin_catalog_blocked_actions(),
+                    message: Some(format!("Plugin catalog refresh failed: {last_error}")),
+                    restore_warnings: stored_status.restore_warnings,
+                    last_error: Some(last_error),
+                },
+                Utc::now(),
+            )
+            .await
+        {
+            warn!(
+                error = %persist_error,
+                "failed to persist degraded plugin catalog status"
+            );
+        }
+    }
+
+    /// Stores the healthy status for a refresh that fetched the catalog,
+    /// carrying the stored restore warnings forward.
+    async fn record_plugin_catalog_refresh_success(
+        &self,
+        checked_at: chrono::DateTime<Utc>,
+    ) -> AppResult<()> {
+        let stored_status = self.load_stored_plugin_catalog_status_payload().await?;
+        self.persist_plugin_catalog_status_payload(
+            StoredPluginCatalogStatusPayload {
+                github_available: true,
+                blocked_actions: Vec::new(),
+                message: None,
+                restore_warnings: stored_status.restore_warnings,
+                last_error: None,
+            },
+            checked_at,
+        )
+        .await
+    }
+
     pub async fn refresh_plugin_catalog_internal(&self) -> AppResult<()> {
         let (central, redirect_url, _) = match self.fetch_verified_catalog_v3().await {
             Ok(fetched) => fetched,
             Err(error) => {
-                let stored_status = self
-                    .load_stored_plugin_catalog_status_payload()
-                    .await
-                    .unwrap_or_default();
-                let last_error = error.to_string();
-                if let Err(persist_error) = self
-                    .persist_plugin_catalog_status_payload(
-                        StoredPluginCatalogStatusPayload {
-                            github_available: false,
-                            blocked_actions: plugin_catalog_blocked_actions(),
-                            message: Some(format!("Plugin catalog refresh failed: {last_error}")),
-                            restore_warnings: stored_status.restore_warnings,
-                            last_error: Some(last_error),
-                        },
-                        Utc::now(),
-                    )
-                    .await
-                {
-                    warn!(
-                        error = %persist_error,
-                        "failed to persist degraded plugin catalog status"
-                    );
-                }
+                self.record_plugin_catalog_refresh_failure(&error).await;
                 return Err(error);
             }
         };
@@ -987,18 +1014,7 @@ impl AppUseCase {
                 updated_at: now,
             })
             .await?;
-        let stored_status = self.load_stored_plugin_catalog_status_payload().await?;
-        self.persist_plugin_catalog_status_payload(
-            StoredPluginCatalogStatusPayload {
-                github_available: true,
-                blocked_actions: Vec::new(),
-                message: None,
-                restore_warnings: stored_status.restore_warnings,
-                last_error: None,
-            },
-            now,
-        )
-        .await?;
+        self.record_plugin_catalog_refresh_success(now).await?;
 
         let sources = self
             .services

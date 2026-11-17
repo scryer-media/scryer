@@ -931,8 +931,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Guided tours record what an account has seen with `recordMyUiTours`:
     // 295->296.
     assert!(mutation_field_names.contains(&"recordMyUiTours"));
+    // Clearing the warnings a backup restore left on the plugin catalog adds
+    // `dismissPluginRestoreWarnings`, which returns the existing catalog
+    // status payload: 296->297.
+    assert!(mutation_field_names.contains(&"dismissPluginRestoreWarnings"));
     assert_eq!(
-        mutation_field_count, 296,
+        mutation_field_count, 297,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1936,6 +1940,7 @@ async fn graphql_introspection_plugin_mutations_use_progress_api() {
     let names: Vec<&str> = fields.iter().filter_map(|f| f["name"].as_str()).collect();
 
     assert!(names.contains(&"refreshPluginCatalog"));
+    assert!(names.contains(&"dismissPluginRestoreWarnings"));
     assert!(names.contains(&"beginInstallPlugin"));
     assert!(names.contains(&"beginUpgradePlugin"));
     assert!(names.contains(&"installManualPlugin"));

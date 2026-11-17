@@ -3368,7 +3368,7 @@ async fn episode_set_pack_failure_reopens_only_its_covered_wanted_items() {
 }
 
 #[tokio::test]
-async fn acquisition_cycle_looks_up_submissions_once_per_title_for_grabbed_items() {
+async fn acquisition_cycle_reads_no_grabbed_scope_for_a_failed_item_without_a_submission() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -3459,19 +3459,186 @@ async fn acquisition_cycle_looks_up_submissions_once_per_title_for_grabbed_items
         .await
         .expect("record shared submission");
 
-    // The failure sweep only runs when the client reports a failed item; one
-    // for another job makes it check the grabbed rows, and the title's two
-    // rows share one submissions read.
+    // The failure sweep only runs when the client reports a failed item. One
+    // for a job nothing submitted is looked up by its item id in one read,
+    // and with no submission to match no title or grabbed row is read.
     *download_client.history_items.lock().await =
         vec![failed_history_item("unrelated-job", "Unrelated.Release")];
     app.run_background_acquisition_cycle_once().await;
 
-    let calls = download_submissions
-        .list_for_title_calls
-        .lock()
+    assert_eq!(
+        download_submissions
+            .list_for_client_item_ids_calls
+            .lock()
+            .await
+            .len(),
+        1
+    );
+    assert!(
+        download_submissions
+            .list_for_title_calls
+            .lock()
+            .await
+            .is_empty()
+    );
+    assert!(
+        wanted_items
+            .grabbed_scopes_for_titles_calls
+            .lock()
+            .await
+            .is_empty(),
+        "a failed item without a submission reads no grabbed scope"
+    );
+    let stored = wanted_items.store.lock().await.clone();
+    assert!(
+        stored
+            .iter()
+            .all(|item| item.status == AcquisitionScopeStatus::Grabbed)
+    );
+}
+
+#[tokio::test]
+async fn acquisition_cycle_handles_a_failed_grab_older_than_the_newest_two_hundred_grabbed_scopes()
+{
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Larchmere Grabbed Run".into(),
+                facet: MediaFacet::Anime,
+                monitored: true,
+                ..Default::default()
+            },
+        )
         .await
-        .clone();
-    assert_eq!(calls, vec![title.id.clone()]);
+        .expect("create title");
+
+    // 250 grabbed episode scopes; the failed one is the oldest, so it sorts
+    // after the newest 200.
+    const SCOPES: i64 = 250;
+    let base = Utc::now() - chrono::Duration::days(1);
+    for n in 0..SCOPES {
+        wanted_items
+            .upsert_acquisition_scope_state(&AcquisitionScopeState {
+                id: format!("grabbed-run-{n:03}"),
+                title_id: title.id.clone(),
+                title_name: Some(title.name.clone()),
+                title_slug: None,
+                title_facet: None,
+                library_id: None,
+                library_name: None,
+                library_slug: None,
+                episode_id: Some(format!("grabbed-run-episode-{n:03}")),
+                collection_id: None,
+                series_movie_link_id: None,
+                season_number: Some("1".to_string()),
+                episode_number: None,
+                media_type: "episode".to_string(),
+                last_search_at: Some(base.to_rfc3339()),
+                status: AcquisitionScopeStatus::Grabbed,
+                grabbed_release: Some(
+                    serde_json::json!({
+                        "title": format!("Larchmere.Grabbed.Run.S01E{n:03}"),
+                        "score": 100,
+                    })
+                    .to_string(),
+                ),
+                landed_bar: None,
+                latest_release_decision: None,
+                mismatch_recovery_eligible: false,
+                created_at: base.to_rfc3339(),
+                updated_at: (base + chrono::Duration::seconds(n)).to_rfc3339(),
+            })
+            .await
+            .expect("seed grabbed scope");
+    }
+    let failed_release = "Larchmere.Grabbed.Run.S01E000";
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "anime".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "grabbed-run-oldest-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some(failed_release.to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Episode {
+                episode_id: "grabbed-run-episode-000".to_string(),
+            },
+            release_listing_json: None,
+        })
+        .await
+        .expect("record the oldest scope's submission");
+    *download_client.history_items.lock().await = vec![DownloadQueueItem {
+        title_id: Some(title.id.clone()),
+        facet: Some("anime".to_string()),
+        ..failed_history_item("grabbed-run-oldest-job", failed_release)
+    }];
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let blocklist = app
+        .list_title_release_blocklist(&user, &title.id, 10)
+        .await
+        .expect("list title release blocklist");
+    assert_eq!(
+        blocklist
+            .iter()
+            .map(|entry| entry.release_name.to_ascii_lowercase())
+            .collect::<Vec<_>>(),
+        vec![failed_release.to_ascii_lowercase()],
+        "the failure of the oldest grabbed scope is handled"
+    );
+    assert_eq!(
+        download_submissions
+            .get_tracked_state(&ClientJobLocator::new(
+                Some("primary"),
+                "nzbget",
+                "grabbed-run-oldest-job",
+            ))
+            .await
+            .expect("load tracked state")
+            .as_deref(),
+        Some("failed")
+    );
+    // One read of the failed item's submissions, then one of its title's
+    // grabbed scopes.
+    assert_eq!(
+        download_submissions
+            .list_for_client_item_ids_calls
+            .lock()
+            .await
+            .clone(),
+        vec![vec![
+            "grabbed-run-oldest-job".to_string(),
+            "primary:grabbed-run-oldest-job".to_string(),
+        ]]
+    );
+    assert_eq!(
+        wanted_items
+            .grabbed_scopes_for_titles_calls
+            .lock()
+            .await
+            .clone(),
+        vec![vec![title.id.clone()]]
+    );
 }
 
 #[tokio::test]
@@ -3534,6 +3701,20 @@ async fn acquisition_cycle_reads_no_submissions_when_no_client_item_failed() {
     assert!(
         download_submissions
             .list_for_title_calls
+            .lock()
+            .await
+            .is_empty()
+    );
+    assert!(
+        download_submissions
+            .list_for_client_item_ids_calls
+            .lock()
+            .await
+            .is_empty()
+    );
+    assert!(
+        wanted_items
+            .grabbed_scopes_for_titles_calls
             .lock()
             .await
             .is_empty()
