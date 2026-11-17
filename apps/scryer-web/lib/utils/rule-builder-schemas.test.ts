@@ -371,7 +371,10 @@ for (const [name, payload] of SERVED) {
   });
 }
 
-test("lifecycle conditions offer every fact except object lists", () => {
+/// Facts the server does not collect yet: a condition on one is always unknown.
+const UNCOLLECTED_LIFECYCLE_FACTS = new Set(["last_upgraded_at", "active_downloads"]);
+
+test("lifecycle conditions offer every collected fact except object lists", () => {
   const section = LIFECYCLE_CONTRACT_SCHEMA.contract.sections.find(
     (entry) => entry.path === "input.facts",
   );
@@ -384,7 +387,8 @@ test("lifecycle conditions offer every fact except object lists", () => {
   );
   for (const field of section.fields) {
     const objectList = field.type.endsWith("[]") && field.type !== "string[]";
-    assert.equal(offered.has(field.field), !objectList, field.field);
+    const uncollected = UNCOLLECTED_LIFECYCLE_FACTS.has(field.field);
+    assert.equal(offered.has(field.field), !objectList && !uncollected, field.field);
   }
   assert.equal(offered.get("added_at"), "timestamp");
   assert.equal(offered.get("tags"), "string_list");

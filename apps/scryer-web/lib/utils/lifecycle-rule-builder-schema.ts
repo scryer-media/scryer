@@ -21,6 +21,9 @@ export const LIFECYCLE_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
     {
       section: "input.facts",
       label: "field",
+      // The server never collects these yet, so a condition on one would
+      // hold every title as unknown.
+      exclude: ["last_upgraded_at", "active_downloads"],
       // Facts that hold an id are picked by name.
       fields: {
         added_by_user_id: { options: "users" },
