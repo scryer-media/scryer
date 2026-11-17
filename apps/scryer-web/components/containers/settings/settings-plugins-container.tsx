@@ -20,6 +20,7 @@ import {
 import {
   beginInstallPluginMutation,
   beginUpgradePluginMutation,
+  dismissPluginRestoreWarningsMutation,
   refreshPluginCatalogMutation,
   inspectManualPluginRepoMutation,
   installManualPluginMutation,
@@ -177,6 +178,8 @@ export function SettingsPluginsContainer() {
     Record<string, PluginInstallProgressRecord>
   >({});
   const [refreshing, setRefreshing] = useState(false);
+  const [dismissingRestoreWarnings, setDismissingRestoreWarnings] =
+    useState(false);
   const [upgradingAll, setUpgradingAll] = useState(false);
   const [pendingUninstall, setPendingUninstall] =
     useState<RegistryPluginRecord | null>(null);
@@ -562,6 +565,34 @@ export function SettingsPluginsContainer() {
     }
   };
 
+  const dismissRestoreWarnings = async () => {
+    setDismissingRestoreWarnings(true);
+    try {
+      const { data, error } = await client
+        .mutation(dismissPluginRestoreWarningsMutation, {})
+        .toPromise();
+      if (error) throw error;
+      const dismissed = data?.dismissPluginRestoreWarnings as
+        | Pick<
+            PluginCatalogStatusRecord,
+            "outageMessage" | "blockedActions" | "restoreWarnings"
+          >
+        | undefined;
+      if (dismissed) {
+        setCatalogStatus((current) =>
+          current ? { ...current, ...dismissed } : current,
+        );
+      }
+    } catch (error) {
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
+    } finally {
+      setDismissingRestoreWarnings(false);
+    }
+  };
+
   const togglePlugin = useCallback(
     async (plugin: RegistryPluginRecord) => {
       beginPluginMutation(plugin.id);
@@ -889,6 +920,7 @@ export function SettingsPluginsContainer() {
         pluginProgress={pluginProgress}
         pluginErrors={pluginErrors}
         refreshing={refreshing}
+        dismissingRestoreWarnings={dismissingRestoreWarnings}
         upgradingAll={upgradingAll}
         manualRepoUrl={manualRepoUrl}
         manualFileName={manualPluginFile?.name ?? null}
@@ -915,6 +947,7 @@ export function SettingsPluginsContainer() {
         onRequestInstallUploadedPlugin={requestInstallUploadedPlugin}
         onInstallManualPlugin={installManualPlugin}
         onRefreshRegistry={refreshRegistry}
+        onDismissRestoreWarnings={dismissRestoreWarnings}
         onUpgradeAllPlugins={upgradeAllPlugins}
         onTogglePlugin={togglePlugin}
         onInstallPlugin={installPlugin}

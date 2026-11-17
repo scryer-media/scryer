@@ -22008,6 +22008,10 @@ type MutationRoot {
 	"""
 	refreshPluginCatalog: [RegistryPluginPayload!]!
 	"""
+	Clear the warnings left by the last backup restore and return the resulting plugin catalog status. Nothing else in the status changes.
+	"""
+	dismissPluginRestoreWarnings: PluginCatalogStatusPayload!
+	"""
 	Start background installation of a catalog plugin and return the initial progress snapshot.
 	"""
 	beginInstallPlugin(

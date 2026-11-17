@@ -1930,6 +1930,7 @@ async fn graphql_introspection_plugin_mutations_use_progress_api() {
     let names: Vec<&str> = fields.iter().filter_map(|f| f["name"].as_str()).collect();
 
     assert!(names.contains(&"refreshPluginCatalog"));
+    assert!(names.contains(&"dismissPluginRestoreWarnings"));
     assert!(names.contains(&"beginInstallPlugin"));
     assert!(names.contains(&"beginUpgradePlugin"));
     assert!(names.contains(&"installManualPlugin"));
