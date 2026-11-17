@@ -26,7 +26,7 @@ WINDOWS_TESTS = {
         "windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial",
         "windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies",
         "windows_a_held_copy_refuses_a_reparse_point_at_its_name",
-        "windows_a_read_refuses_only_links_and_junctions",
+        "windows_a_no_follow_read_opens_a_file_and_refuses_a_file_symlink",
     ],
     "scryer-infrastructure-library": [
         "rename_path_key_folds_case_and_separators_on_windows",
