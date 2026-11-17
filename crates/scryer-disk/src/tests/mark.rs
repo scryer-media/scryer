@@ -150,6 +150,33 @@ fn a_mark_answers_about_its_length_without_handing_it_out() {
     assert!(!taken.volume().is_len(5) && !taken.volume().exceeds(0));
 }
 
+/// A time before the epoch carries one sign, in front, however near the
+/// epoch it is.
+#[test]
+fn a_label_writes_a_time_on_either_side_of_the_epoch() {
+    let epoch = std::time::UNIX_EPOCH;
+    let pause = std::time::Duration::new;
+    let label = |modified| {
+        let unnumbered = RawStat {
+            modified,
+            ..numbered(None, None)
+        };
+        mark(unnumbered).label()
+    };
+    assert_eq!(label(None), "len=5 modified=unknown");
+    for (modified, written) in [
+        (
+            epoch + pause(1_700_000_000, 123_456_789),
+            "1700000000.123456789",
+        ),
+        (epoch + pause(0, 500_000_000), "0.500000000"),
+        (epoch - pause(0, 500_000_000), "-0.500000000"),
+        (epoch - pause(5, 300_000_000), "-5.300000000"),
+    ] {
+        assert_eq!(label(Some(modified)), format!("len=5 modified={written}"));
+    }
+}
+
 #[test]
 fn a_stored_mark_reads_back_as_the_same_mark() {
     let epoch = std::time::UNIX_EPOCH;

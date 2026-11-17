@@ -265,7 +265,11 @@ impl Mark {
             (_, _, Some(facts)) => {
                 let modified = facts.modified.map(since_epoch).map_or_else(
                     || "unknown".to_owned(),
-                    |(seconds, nanos)| format!("{seconds}.{nanos:09}"),
+                    |(seconds, nanos)| {
+                        let sign = if seconds < 0 || nanos < 0 { "-" } else { "" };
+                        let (seconds, nanos) = (seconds.unsigned_abs(), nanos.unsigned_abs());
+                        format!("{sign}{seconds}.{nanos:09}")
+                    },
                 );
                 format!("len={} modified={modified}", facts.len)
             }

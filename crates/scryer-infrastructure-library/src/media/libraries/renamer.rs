@@ -228,7 +228,20 @@ async fn prepare_move_target(
         // Season and title folders created by a rename get the configured
         // permissions, the way the importer already treats folders it creates
         // and Sonarr treats every folder it makes during a move.
-        let created = crate::workflow::file_importer::missing_destination_dirs(parent);
+        // The look at each ancestor is a blocking read, so it runs off the
+        // runtime.
+        let walked = parent.to_path_buf();
+        let missing = tokio::task::spawn_blocking(move || {
+            crate::workflow::file_importer::missing_destination_dirs(&walked)
+        });
+        let created = missing.await.unwrap_or_else(|error| {
+            tracing::warn!(
+                parent = %parent.display(),
+                error = %error,
+                "could not tell which folders a rename creates; none gets the configured permissions"
+            );
+            Vec::new()
+        });
         let made = Disk::process().create_dir(parent, Parents::Create).await;
         made.map_err(std::io::Error::from).map_err(|err| {
             (

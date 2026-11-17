@@ -157,12 +157,44 @@ fn a_reserved_name_is_released_when_the_move_is_refused() {
     let (disk, backend, _) = scripted();
     backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
     backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+    backend.stat_is(SOURCE, Ok(file(9)));
     *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
     assert_eq!(
         refusal(&disk, policy(Method::Move, Fallback::None)),
         Refused::NeedsCopy
     );
     assert_eq!(removed_only_staging(&backend), 1);
+    assert_eq!(backend.paths_of("lstat").last(), Some(&p(SOURCE)));
+    assert_eq!(
+        backend.calls_of("lstat"),
+        2,
+        "the reserved name, then the source"
+    );
+}
+
+/// An empty source can be renamed onto the reserved name by a rename whose
+/// reply is lost. The empty file there is then the only copy, so it is not
+/// released unless the source still reads as present, and the refusal says
+/// that it was left.
+#[test]
+fn an_empty_file_at_the_reserved_name_is_kept_when_the_source_is_not_there() {
+    for source in [None, Some(Err(io::ErrorKind::PermissionDenied))] {
+        let (disk, backend, _) = scripted();
+        backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+        // The rename landed and its reply did not come back.
+        backend.fails("rename", SOURCE, io::ErrorKind::TimedOut);
+        *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
+        if let Some(stat) = source {
+            backend.stat_is(SOURCE, stat);
+        }
+        let refused = place(&disk, policy(Method::Move, Fallback::Copy)).expect_err("refused");
+        assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
+        assert_eq!(backend.calls_of("remove_file"), 0, "{source:?}");
+        assert_eq!(backend.calls_of("lstat"), 2, "one look at each name");
+        let said = refused.to_string();
+        assert!(said.contains("is left in place"), "{said}");
+        assert!(said.contains(SOURCE), "{said}");
+    }
 }
 
 /// A move never takes the recorded copy, whichever rename found that it
@@ -542,8 +574,12 @@ fn a_rollback_removes_only_a_copy_or_an_empty_claim_and_puts_the_only_copy_back(
     let unproven = StagedHolds::Copy { proven: false };
     let proven = StagedHolds::Copy { proven: true };
     // (held, staged reads, source reads) -> (removed, put back)
-    let cases: [(StagedHolds, Stat, Stat, bool, bool); 14] = [
-        (StagedHolds::EmptyClaim, claim, None, true, false),
+    let cases: [(StagedHolds, Stat, Stat, bool, bool); 16] = [
+        // An empty file may be an empty source: it goes only while the
+        // source reads as present.
+        (StagedHolds::EmptyClaim, claim, present, true, false),
+        (StagedHolds::EmptyClaim, claim, None, false, false),
+        (StagedHolds::EmptyClaim, claim, unread, false, false),
         (StagedHolds::EmptyClaim, None, None, false, false),
         // An unread claim goes back only when the source reads as gone.
         (StagedHolds::EmptyClaim, unread, None, false, true),
@@ -569,8 +605,10 @@ fn a_rollback_removes_only_a_copy_or_an_empty_claim_and_puts_the_only_copy_back(
             backend.stat_is(SOURCE, stat);
         }
         let (source, dest) = (p(SOURCE), p(DEST));
-        job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
+        let left = job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
             .roll_back(&p(STAGED), held);
+        // Only an empty file that was kept adds to the refusal.
+        assert_eq!(left.is_some(), matches!(index, 1 | 2), "case {index}");
         let removals = backend.paths_of("remove_file");
         assert_eq!(
             removals,
@@ -663,6 +701,27 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
     assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
     assert_eq!(backend.calls_of("rename"), 1, "no second attempt");
     assert_eq!(backend.calls_of("remove_file"), 0);
+
+    // An empty intermediate name is released, and the rename tried again,
+    // only while the source still reads as present: it may be an empty
+    // source.
+    for (source_stat, attempts) in [(Some(Ok(file(0))), 10), (None, 1)] {
+        let (disk, backend, _) = scripted();
+        backend.fails("rename", SOURCE, io::ErrorKind::TimedOut);
+        *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
+        if let Some(stat) = source_stat {
+            backend.stat_is(SOURCE, stat);
+        }
+        let refused = disk
+            .place_blocking(&source, &dest, policy(Method::Move, Fallback::Copy))
+            .expect_err("refused");
+        assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
+        assert_eq!(backend.calls_of("rename"), attempts);
+        let released = usize::from(source_stat.is_some()) * attempts;
+        assert_eq!(removed_only_staging(&backend), released);
+        let said = refused.to_string();
+        assert_eq!(said.contains("is left in place"), source_stat.is_none());
+    }
 }
 
 #[tokio::test]
@@ -1178,7 +1237,7 @@ mod real {
     fn rollbacks_never_remove_the_only_copy() {
         type Held = Option<&'static [u8]>;
         let unproven = StagedHolds::Copy { proven: false };
-        let cases: [(StagedHolds, Held, Held, Held, Held); 6] = [
+        let cases: [(StagedHolds, Held, Held, Held, Held); 8] = [
             // The source survived, so the staged file is a partial.
             (
                 unproven,
@@ -1196,8 +1255,25 @@ mod real {
                 Some(b"newcomer"),
                 Some(b"only"),
             ),
-            // An empty claim is released, never put under the source's name.
-            (StagedHolds::EmptyClaim, None, Some(b""), None, None),
+            // An empty claim is released while the source is there.
+            (
+                StagedHolds::EmptyClaim,
+                Some(b"payload"),
+                Some(b""),
+                Some(b"payload"),
+                None,
+            ),
+            // Beside an empty source too: nothing tells the two apart.
+            (
+                StagedHolds::EmptyClaim,
+                Some(b""),
+                Some(b""),
+                Some(b""),
+                None,
+            ),
+            // With no source it may be an empty source that a rename moved:
+            // it is kept, and never put under the source's name.
+            (StagedHolds::EmptyClaim, None, Some(b""), None, Some(b"")),
             // An unproven copy is not promoted even when the source is gone.
             (unproven, None, Some(b"half"), None, Some(b"half")),
             // A claim that holds data may be the source: it goes back, and

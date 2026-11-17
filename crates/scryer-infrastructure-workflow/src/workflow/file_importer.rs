@@ -899,29 +899,18 @@ fn hard_link_import_source(
         );
         import_io_error(&error, said)
     };
-    let doubt = match refusal.unproven {
-        None if matches!(refusal.refused, Refused::CannotLink(_)) => {
-            return Ok(ImportLink::NotPossible);
-        }
-        None => return Ok(ImportLink::Failed(words)),
-        // The read that failed names the reason, whatever became of the name.
-        Some(Unproven {
-            doubt: Doubt::Unread(error),
-            ..
-        }) => return Err(unread(error.into())),
-        Some(Unproven {
-            after: LinkAfter::NotRemoved,
-            ..
-        }) => return Err(link_not_removed(dest, &words)),
-        Some(Unproven {
-            after: LinkAfter::AlreadyGone,
-            ..
-        }) => return Ok(ImportLink::UnprovenGone(words)),
-        Some(Unproven { doubt, .. }) => doubt,
+    let Some(Unproven { doubt, after, .. }) = refusal.unproven else {
+        return Ok(match refusal.refused {
+            Refused::CannotLink(_) => ImportLink::NotPossible,
+            _ => ImportLink::Failed(words),
+        });
     };
-    match doubt {
-        Doubt::Unread(error) => Err(unread(error.into())),
-        Doubt::OtherFile { linked } if linked.kind() != Some(EntryKind::File) => {
+    match (doubt, after) {
+        // The read that failed names the reason, whatever became of the name.
+        (Doubt::Unread(error), _) => Err(unread(error.into())),
+        (_, LinkAfter::NotRemoved) => Err(link_not_removed(dest, &words)),
+        (_, LinkAfter::AlreadyGone) => Ok(ImportLink::UnprovenGone(words)),
+        (Doubt::OtherFile { linked }, _) if linked.kind() != Some(EntryKind::File) => {
             // A source swapped for something else before the link call is a
             // source that changed. The name is left as it is either way.
             ensure_same_source(source, fingerprint)?;
@@ -930,13 +919,13 @@ fn hard_link_import_source(
                 dest.display()
             )))
         }
-        Doubt::OtherFile { linked } => Ok(ImportLink::Unproven(LinkDoubt::Identity(
+        (Doubt::OtherFile { linked }, _) => Ok(ImportLink::Unproven(LinkDoubt::Identity(
             HardLinkIdentityMismatch {
                 source: seen.to_stored(),
                 linked: linked.to_stored(),
             },
         ))),
-        Doubt::OtherLength(resolved) => Ok(ImportLink::Unproven(LinkDoubt::Length(resolved))),
+        (Doubt::OtherLength(resolved), _) => Ok(ImportLink::Unproven(LinkDoubt::Length(resolved))),
     }
 }
 
@@ -2105,9 +2094,6 @@ fn try_fast_import_placement_blocking(
             &source_mark,
             &prepared.options,
         )?;
-        if let ImportLink::UnprovenGone(words) = &linked {
-            return Err(link_not_removed(&prepared.dest, words));
-        }
         // The source is read again whether or not the link proved. A link
         // that did not prove is already gone.
         let proven = matches!(linked, ImportLink::Proven);
@@ -2147,7 +2133,11 @@ fn try_fast_import_placement_blocking(
                     "hard link destination stat failed; handing import to copy lane"
                 ),
             },
-            ImportLink::NotPossible | ImportLink::UnprovenGone(_) => {
+            // Nothing is read or written for this one before it is refused.
+            ImportLink::UnprovenGone(words) => {
+                return Err(link_not_removed(&prepared.dest, &words));
+            }
+            ImportLink::NotPossible => {
                 tracing::debug!("hard link is ineligible; handing import to copy lane");
             }
             ImportLink::Failed(error) => {

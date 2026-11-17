@@ -319,6 +319,24 @@ impl Fail {
             detail: io::Error::new(kind, detail),
         }
     }
+
+    /// The same refusal, saying also what the failed step left behind.
+    fn noting(self, left: &str) -> Self {
+        Self {
+            refused: self.refused,
+            detail: io::Error::new(self.detail.kind(), format!("{}; {left}", self.detail)),
+        }
+    }
+}
+
+/// What a refusal says of an empty reserved name that was not released.
+fn left_as_the_source(name: &Path, source: &Path, source_reads: PathReading) -> String {
+    format!(
+        "the empty file at {} may be the source and is left in place ({}: {})",
+        name.display(),
+        source.display(),
+        source_reads.describe_absence()
+    )
 }
 
 fn needs_copy(error: &DiskError) -> bool {
@@ -787,10 +805,10 @@ impl Job<'_> {
             }
             Err(error) => (Err(Fail::of(error, Side::Either)), StagedHolds::EmptyClaim),
         };
-        if outcome.is_err() {
-            self.roll_back(&staged, held);
-        }
-        outcome
+        outcome.map_err(|fail| match self.roll_back(&staged, held) {
+            Some(left) => fail.noting(&left),
+            None => fail,
+        })
     }
 
     /// Whether a move a rename cannot make may be copied. A move never takes
@@ -1017,18 +1035,32 @@ impl Job<'_> {
     /// draws the same line: `RollbackPartialMove` deletes the target only
     /// after confirming the source still exists, and `RollbackMove` moves the
     /// file back when it does not.
-    pub(crate) fn roll_back(&self, staged: &Path, held: StagedHolds) {
+    ///
+    /// Returns what the refusal should add when an empty reserved name was
+    /// left in place rather than released.
+    pub(crate) fn roll_back(&self, staged: &Path, held: StagedHolds) -> Option<String> {
         let (disk, source) = (self.disk, self.source);
         let reading = disk.uncached_blocking(staged);
         let held = match held {
-            // Only the empty claim this move created is removed. Anything
-            // else there may be the source, moved by a rename that reported
-            // failure, so it is treated as the only copy.
+            // Only the empty claim this move created is removed. An empty
+            // file there may also be an empty source, moved by a rename that
+            // reported failure, so it goes only while the source still reads
+            // as present: one look at the source, on this failure alone.
             StagedHolds::EmptyClaim if holds_only_the_claim(reading) => {
-                let _ = disk.remove_blocking(staged, Remove::File);
-                return;
+                let source_reads = disk.uncached_blocking(source);
+                if source_reads.exists() == Some(true) {
+                    let _ = disk.remove_blocking(staged, Remove::File);
+                    return None;
+                }
+                tracing::error!(
+                    staged = %staged.display(),
+                    source = %source.display(),
+                    state = source_reads.describe_absence(),
+                    "the source of a failed move does not read as present; the empty file at its reserved name is left in place"
+                );
+                return Some(left_as_the_source(staged, source, source_reads));
             }
-            StagedHolds::EmptyClaim if reading.exists() == Some(false) => return,
+            StagedHolds::EmptyClaim if reading.exists() == Some(false) => return None,
             // An unread claim may be the source, moved by a rename that
             // reported failure. It goes back only when the source reads as
             // gone, and never over anything: an empty file under a source
@@ -1043,7 +1075,7 @@ impl Job<'_> {
                         "the claim of a failed move could not be read; it is left in place"
                     );
                 }
-                return;
+                return None;
             }
             StagedHolds::EmptyClaim => StagedHolds::OnlyCopy,
             held => held,
@@ -1063,7 +1095,7 @@ impl Job<'_> {
                 state = reading.describe_absence(),
                 "the staged file of a failed move does not read as present; nothing was rolled back"
             );
-            return;
+            return None;
         }
 
         // The only copy goes back whatever is at the source now: the
@@ -1099,6 +1131,7 @@ impl Job<'_> {
                 "could not tell whether the source survived a failed move; the staged file is left in place"
             ),
         }
+        None
     }
 
     /// Finishes a move whose destination is in place by unlinking the source.
@@ -1269,7 +1302,8 @@ impl Job<'_> {
                 }
                 // The rename may have landed and lost its reply, so only the
                 // empty claim is released; anything else there may be the
-                // only copy.
+                // only copy. An empty file may be an empty source, so it is
+                // released only while the source still reads as present.
                 Err(error) => {
                     let reading = disk.uncached_blocking(&intermediate);
                     if !holds_only_the_claim(reading) {
@@ -1279,6 +1313,17 @@ impl Job<'_> {
                             "a case-only rename reported failure and its intermediate name is not the empty claim; it is left in place"
                         );
                         return Err(Fail::of(error, Side::Either));
+                    }
+                    let source_reads = disk.uncached_blocking(source);
+                    if source_reads.exists() != Some(true) {
+                        tracing::error!(
+                            intermediate = %intermediate.display(),
+                            source = %source.display(),
+                            state = source_reads.describe_absence(),
+                            "a case-only rename reported failure and its source does not read as present; the empty file at its intermediate name is left in place"
+                        );
+                        let left = left_as_the_source(&intermediate, source, source_reads);
+                        return Err(Fail::of(error, Side::Either).noting(&left));
                     }
                     let _ = disk.remove_blocking(&intermediate, Remove::File);
                     last_failure = Some(Fail::of(error, Side::Either));
