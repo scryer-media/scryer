@@ -56,73 +56,115 @@ pub fn file_source_signature_from_metadata(
     }
 }
 
-/// The modification time a signature in this platform's scheme records, read
-/// back from its text. `None` for another platform's scheme or text this
-/// build did not write.
-pub fn modified_from_signature(scheme: &str, value: &str) -> Option<std::time::SystemTime> {
-    use std::time::{Duration, UNIX_EPOCH};
+/// The signature a file modified at `modified` carries in this platform's
+/// scheme, spelled exactly as [`file_source_signature_from_metadata`] spells
+/// it, so a signature taken from a mark and one read from metadata compare
+/// equal. `None` for a time the scheme cannot spell.
+pub fn file_source_signature_from_modified(
+    modified: std::time::SystemTime,
+) -> Option<FileSourceSignature> {
+    use std::time::UNIX_EPOCH;
 
-    if scheme != MEDIA_FILE_SOURCE_SIGNATURE_SCHEME {
-        return None;
-    }
+    // Nanoseconds from the epoch, negative before it.
+    let nanos: i128 = match modified.duration_since(UNIX_EPOCH) {
+        Ok(after) => i128::try_from(after.as_nanos()).ok()?,
+        Err(before) => -i128::try_from(before.duration().as_nanos()).ok()?,
+    };
 
     #[cfg(windows)]
-    {
+    let value = {
         // 100-nanosecond intervals since 1601-01-01, the FILETIME epoch.
-        const FILETIME_TO_UNIX_SECS: u64 = 11_644_473_600;
-        let ticks: u64 = value.trim().parse().ok()?;
-        let since_1601 = Duration::new(ticks / 10_000_000, ((ticks % 10_000_000) * 100) as u32);
-        let filetime_epoch = UNIX_EPOCH.checked_sub(Duration::from_secs(FILETIME_TO_UNIX_SECS))?;
-        filetime_epoch.checked_add(since_1601)
-    }
+        const FILETIME_EPOCH_TO_UNIX_TICKS: i128 = 116_444_736_000_000_000;
+        let ticks = nanos.div_euclid(100) + FILETIME_EPOCH_TO_UNIX_TICKS;
+        u64::try_from(ticks).ok()?.to_string()
+    };
 
-    #[cfg(not(windows))]
-    {
-        let (secs, nanos) = value.trim().split_once(':')?;
-        let nanos: u32 = nanos.parse().ok().filter(|nanos| *nanos < 1_000_000_000)?;
-        // A time before the epoch is spelled with a negative seconds count,
-        // and the nanoseconds still count forward from it.
-        if let Some(before) = secs.strip_prefix('-') {
-            let secs: u64 = before.parse().ok()?;
-            #[cfg(unix)]
-            {
-                UNIX_EPOCH
-                    .checked_sub(Duration::from_secs(secs))?
-                    .checked_add(Duration::from_nanos(u64::from(nanos)))
-            }
-            #[cfg(not(unix))]
-            {
-                UNIX_EPOCH.checked_sub(Duration::new(secs, nanos))
-            }
-        } else {
-            let secs: u64 = secs.parse().ok()?;
-            UNIX_EPOCH.checked_add(Duration::new(secs, nanos))
-        }
-    }
+    // Seconds round down and the nanoseconds count forward from them, as
+    // `st_mtime` and `st_mtime_nsec` do for a time before the epoch.
+    #[cfg(unix)]
+    let value = {
+        let secs = i64::try_from(nanos.div_euclid(1_000_000_000)).ok()?;
+        format!("{}:{}", secs, nanos.rem_euclid(1_000_000_000))
+    };
+
+    #[cfg(all(not(unix), not(windows)))]
+    let value = {
+        let magnitude = nanos.unsigned_abs();
+        let sign = if nanos < 0 { "-" } else { "" };
+        format!(
+            "{sign}{}:{}",
+            magnitude / 1_000_000_000,
+            magnitude % 1_000_000_000
+        )
+    };
+
+    Some(FileSourceSignature {
+        scheme: MEDIA_FILE_SOURCE_SIGNATURE_SCHEME.to_string(),
+        value,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
 
-    #[test]
-    fn a_signature_reads_back_as_the_modification_time_it_records() {
+    fn signatures_at(
+        modified: std::time::SystemTime,
+    ) -> (FileSourceSignature, FileSourceSignature) {
         let file = tempfile::NamedTempFile::new().expect("temp file");
+        file.as_file().set_modified(modified).expect("set modified");
         let metadata = file.as_file().metadata().expect("metadata");
-        let signature = file_source_signature_from_metadata(&metadata).expect("signature");
-
-        assert_eq!(
-            modified_from_signature(&signature.scheme, &signature.value),
-            Some(metadata.modified().expect("modified"))
-        );
+        let from_metadata = file_source_signature_from_metadata(&metadata).expect("signature");
+        let from_modified =
+            file_source_signature_from_modified(metadata.modified().expect("modified"))
+                .expect("signature from modified time");
+        (from_metadata, from_modified)
     }
 
     #[test]
-    fn another_scheme_or_foreign_text_reads_as_nothing() {
-        assert_eq!(modified_from_signature("another_scheme_v1", "1:2"), None);
+    fn a_time_after_the_epoch_is_spelled_as_metadata_spells_it() {
+        let (from_metadata, from_modified) =
+            signatures_at(UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789));
+        assert_eq!(from_modified, from_metadata);
+    }
+
+    #[test]
+    fn a_time_before_the_epoch_is_spelled_as_metadata_spells_it() {
+        for before in [Duration::new(5, 0), Duration::new(5, 250_000_000)] {
+            let (from_metadata, from_modified) = signatures_at(UNIX_EPOCH - before);
+            assert_eq!(from_modified, from_metadata, "{before:?} before the epoch");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_time_before_the_epoch_rounds_its_seconds_down() {
+        let spelled = |before| {
+            file_source_signature_from_modified(UNIX_EPOCH - before)
+                .expect("signature")
+                .value
+        };
+        assert_eq!(spelled(Duration::new(5, 0)), "-5:0");
+        assert_eq!(spelled(Duration::new(5, 250_000_000)), "-6:750000000");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_time_is_spelled_in_filetime_ticks() {
+        let spelled = |modified| {
+            file_source_signature_from_modified(modified)
+                .expect("signature")
+                .value
+        };
+        assert_eq!(spelled(UNIX_EPOCH), "116444736000000000");
         assert_eq!(
-            modified_from_signature(MEDIA_FILE_SOURCE_SIGNATURE_SCHEME, "not a time"),
-            None
+            spelled(UNIX_EPOCH + Duration::new(1, 500)),
+            "116444736010000005"
+        );
+        assert_eq!(
+            spelled(UNIX_EPOCH - Duration::from_secs(1)),
+            "116444735990000000"
         );
     }
 }

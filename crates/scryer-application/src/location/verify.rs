@@ -242,6 +242,10 @@ pub struct VerifiedFile {
     pub depth: AppliedVerificationDepth,
     pub outcome: FileVerificationOutcome,
     pub detail: Option<String>,
+    /// The stored mark of the destination the copy wrote, read through its
+    /// handle after the sync, which a hash of it is stored with. `None` when
+    /// nothing was copied or the handle could not say.
+    pub destination_mark: Option<String>,
 }
 
 impl VerifiedFile {
@@ -269,6 +273,7 @@ impl VerifiedFile {
                 "same-filesystem rename: no bytes were copied, so no verification pass was needed (FR-032)"
                     .to_string(),
             ),
+            destination_mark: None,
         }
     }
 
@@ -364,6 +369,7 @@ pub async fn recorded_copy(
 ) -> AppResult<(StreamedContentHashes, Option<VerificationAssessment>)> {
     recorded_copy_reporting(disk, source, destination, policy, progress)
         .await
+        .map(|copied| (copied.hashes, copied.proof))
         .map_err(|failure| failure.error)
 }
 
@@ -381,7 +387,7 @@ async fn recorded_copy_reporting(
     destination: &Path,
     policy: Placement,
     progress: &CopyProgress,
-) -> Result<(StreamedContentHashes, Option<VerificationAssessment>), CopyFailure> {
+) -> Result<RecordedCopy, CopyFailure> {
     let watch = Watch {
         progress: progress.disk_progress(),
         cancel: crate::disk::Cancel::never(),
@@ -397,10 +403,19 @@ async fn recorded_copy_reporting(
         error: AppError::Repository(format!("the copy of {} recorded nothing", source.display())),
         destination_written: true,
     })?;
-    Ok((
-        persisted_hashes(copied.hashes),
-        copied.proof.map(assessment),
-    ))
+    Ok(RecordedCopy {
+        hashes: persisted_hashes(copied.hashes),
+        proof: copied.proof.map(assessment),
+        mark: copied.mark.map(|mark| mark.to_stored()),
+    })
+}
+
+/// What a recorded copy streamed, what its destination proved to be, and the
+/// stored mark of the file it wrote.
+struct RecordedCopy {
+    hashes: StreamedContentHashes,
+    proof: Option<VerificationAssessment>,
+    mark: Option<String>,
 }
 
 /// [`recorded_copy`] under a policy that proves the copy, as the file the
@@ -426,8 +441,11 @@ pub async fn copy_and_verify_reporting(
     policy: Placement,
     progress: &CopyProgress,
 ) -> Result<VerifiedFile, CopyFailure> {
-    let (hashes, proof) =
-        recorded_copy_reporting(disk, source, destination, policy, progress).await?;
+    let RecordedCopy {
+        hashes,
+        proof,
+        mark,
+    } = recorded_copy_reporting(disk, source, destination, policy, progress).await?;
     let proof = proof.ok_or_else(|| CopyFailure {
         error: AppError::Repository(format!("the copy of {} was not proven", source.display())),
         destination_written: true,
@@ -439,6 +457,7 @@ pub async fn copy_and_verify_reporting(
         depth: proof.depth,
         outcome: proof.outcome,
         detail: proof.detail,
+        destination_mark: mark,
     })
 }
 

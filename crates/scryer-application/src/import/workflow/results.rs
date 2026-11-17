@@ -749,48 +749,6 @@ async fn reconcile_terminal_download_cleanup(
         }
     }
 
-    // A claimed cleanup waits while an archive or subtitle delivery of the
-    // download still holds its sources. A cleanup without a claim of its own
-    // waits here the same way before anything is removed.
-    // Downloads still held from an earlier tick are answered by one batched
-    // read per tick; a "not held" is always read for this download alone, now.
-    // The reads write nothing, so a tick that finds every download held does
-    // no write.
-    let mut library_holds_payload = library_holds_payload;
-    if record.is_none()
-        && let Some(download_id) = canonical_download_id
-    {
-        let sources = match cache {
-            Some(cache) => cache.sources_held(app, download_id).await,
-            None => sources_held_by_import(app, download_id).await,
-        };
-        let held = sources.as_ref().map(|sources| sources.held).map_err(Clone::clone);
-        let first_unread = note_held_sources(download_id, &held);
-        if let Ok(sources) = &sources {
-            library_holds_payload |= sources.library_holds_payload;
-        }
-        match held {
-            Ok(false) => {}
-            Ok(true) => {
-                return TerminalDownloadCleanup::bare(
-                    TerminalDownloadCleanupOutcome::RetryableFailure,
-                );
-            }
-            Err(error) => {
-                if first_unread {
-                    tracing::warn!(%download_id, error = %error,
-                        "could not tell whether the download's sources are still held; cleanup deferred until they read");
-                } else {
-                    tracing::debug!(%download_id, error = %error,
-                        "the download's held sources still do not read; cleanup deferred");
-                }
-                return TerminalDownloadCleanup::bare(
-                    TerminalDownloadCleanupOutcome::RetryableFailure,
-                );
-            }
-        }
-    }
-
     let is_history = matches!(
         state,
         TrackedDownloadState::Imported
@@ -821,16 +779,7 @@ async fn reconcile_terminal_download_cleanup(
         && !client_type
             .trim()
             .eq_ignore_ascii_case(crate::seeding_gate::TORRENT_BLACKHOLE_CLIENT_TYPE);
-    // - A download whose file is the library file removes only the entry,
-    //   whatever its state: its data is the library's.
-    if library_holds_payload {
-        tracing::info!(
-            client_id,
-            download_client_item_id,
-            "the download's file is the library file; removing the client entry without its data"
-        );
-    }
-    let remove_data = !library_holds_payload && match state {
+    let remove_data_by_state = match state {
         TrackedDownloadState::Failed if manual_cleanup => true,
         TrackedDownloadState::Imported | TrackedDownloadState::ImportedSeeding => {
             !is_torrent || torrent_data_removal_allowed
@@ -844,14 +793,56 @@ async fn reconcile_terminal_download_cleanup(
         }
         _ => false,
     };
-
     // Under that one "remove files" decision, a client that can delete its
     // own files is always asked to, and the host deletion follows as the
     // backup for whatever it left. A client that cannot (NZBGet, entry-only
     // torrent plugins) gets the host deletion before its entry is removed
     // instead: NZBGet's history removal deletes DestDir on its own.
-    let client_deletes_payload =
-        remove_data && client_deletes_its_payload(app, client_id, client_type).await;
+    let client_can_delete_payload =
+        remove_data_by_state && client_deletes_its_payload(app, client_id, client_type).await;
+
+    // A claimed cleanup waits while an archive or subtitle delivery of the
+    // download still holds its sources. A cleanup without a claim of its own
+    // waits here the same way before anything is removed, on a read of this
+    // download made now. It is the last read before the removal that can use
+    // its answer: after it run only the "remove files" decision, the NZBGet
+    // history-state read (NZBGet only), the NZBGet entry check, and, when the
+    // client deletes its own files, the host backup's plan and the intent
+    // checkpoint; then the host payload removal or the client's delete.
+    // The read writes nothing, so a tick that finds every download held does
+    // no write.
+    let mut library_holds_payload = library_holds_payload;
+    if record.is_none()
+        && let Some(download_id) = canonical_download_id
+    {
+        match sources_held_by_import(app, download_id).await {
+            Ok(sources) if sources.held => {
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+            Ok(sources) => library_holds_payload |= sources.library_holds_payload,
+            Err(error) => {
+                tracing::warn!(%download_id, error = %error,
+                    "could not tell whether the download's sources are still held; cleanup deferred until they read");
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+        }
+    }
+
+    // - A download whose file is the library file removes only the entry,
+    //   whatever its state: its data is the library's.
+    if library_holds_payload {
+        tracing::info!(
+            client_id,
+            download_client_item_id,
+            "the download's file is the library file; removing the client entry without its data"
+        );
+    }
+    let remove_data = !library_holds_payload && remove_data_by_state;
+    let client_deletes_payload = remove_data && client_can_delete_payload;
     let mut payload_disposition = None;
     // A retained, unreadable or unavailable NZBGet state is not a host
     // payload failure. It retries without spending the give-up budget below,

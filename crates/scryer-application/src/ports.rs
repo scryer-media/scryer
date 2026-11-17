@@ -9013,16 +9013,6 @@ pub struct DownloadImportSources {
     pub library_holds_payload: bool,
 }
 
-/// Which downloads of a batch an import still holds the sources of.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HeldDownloadSources {
-    /// Downloads an import still holds.
-    pub held: HashSet<DownloadId>,
-    /// Downloads not held by any readable import that have an import whose
-    /// record could not be read. Each waits on its own.
-    pub unreadable: HashSet<DownloadId>,
-}
-
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
     async fn set_archive_processing_pending(
@@ -9098,31 +9088,6 @@ pub trait ImportRepository: Send + Sync {
         ))
     }
 
-    /// Which of `download_ids` an import still holds the sources of, as
-    /// [`Self::archive_processing_pending_for_download`] answers each, and
-    /// which of them have an import whose record could not be read. A store
-    /// answers the set in bounded statements; this default asks per id.
-    async fn archive_processing_pending_downloads(
-        &self,
-        download_ids: &[DownloadId],
-    ) -> AppResult<HeldDownloadSources> {
-        let mut answer = HeldDownloadSources::default();
-        for download_id in download_ids {
-            match self
-                .archive_processing_pending_for_download(download_id)
-                .await
-            {
-                Ok(true) => {
-                    answer.held.insert(*download_id);
-                }
-                Ok(false) => {}
-                Err(_) => {
-                    answer.unreadable.insert(*download_id);
-                }
-            }
-        }
-        Ok(answer)
-    }
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,
@@ -9913,17 +9878,6 @@ pub struct MediaFileHashCandidate {
     pub size_bytes: i64,
 }
 
-/// The whole-file hash a media file row stores, with the facts the row
-/// judges it by: the recorded size, and the source signature for a hash
-/// stored without a mark.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredMediaFileHash {
-    pub size_bytes: i64,
-    pub source_signature_scheme: Option<String>,
-    pub source_signature_value: Option<String>,
-    pub hashes: crate::location::model::PersistedContentHashes,
-}
-
 #[async_trait]
 pub trait MediaFileRepository: Send + Sync {
     /// Stable, bounded pages of files in an explicit score-refresh selection.
@@ -9972,10 +9926,16 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(ids)
     }
 
+    /// Catalog an import's destination, or reuse the row already there, in
+    /// one transaction. A reused row takes the input's size and signature,
+    /// and its stored hash is cleared unless both are unchanged. `hashes`,
+    /// when given, are written in the same transaction as what the import
+    /// proved about the file the row now describes.
     async fn claim_import_destination(
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<ClaimedMediaFile>;
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()>;
@@ -10325,7 +10285,7 @@ pub trait MediaFileRepository: Send + Sync {
     async fn stored_media_file_full_hash(
         &self,
         row: &crate::disk::HashRow,
-    ) -> AppResult<Option<StoredMediaFileHash>> {
+    ) -> AppResult<Option<crate::location::model::PersistedContentHashes>> {
         let _ = row;
         Ok(None)
     }

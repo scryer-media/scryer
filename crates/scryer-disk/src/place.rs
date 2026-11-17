@@ -100,7 +100,7 @@ pub enum Done {
 }
 
 /// A finished placement: what was asked, and what was done to honour it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Placed {
     pub asked: Method,
     pub done: Done,

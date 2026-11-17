@@ -4439,13 +4439,7 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
         .iter()
         .filter_map(|tracked| tracked_download_source_identity(tracked))
         .collect();
-    let download_ids = settled
-        .iter()
-        .filter_map(|tracked| tracked.canonical_download_id().copied())
-        .collect();
-    let cache = crate::import::import::TerminalCleanupTickCache::prefetch(app, &identities)
-        .await
-        .with_download_ids(download_ids);
+    let cache = crate::import::import::TerminalCleanupTickCache::prefetch(app, &identities).await;
 
     for (download_id, state) in terminal_ids {
         finalize_tracked_terminal_state_for_download_with(

@@ -2188,8 +2188,10 @@ fn copy_regular_source_to_destination(
     };
     #[cfg(not(test))]
     let read_dest = read_import_source_marked(dest);
-    let (dest_fingerprint, landed) = match read_dest {
+    let (dest_fingerprint, landed, destination_mark) = match read_dest {
         Ok((fingerprint, named)) => {
+            let destination_mark = (named.kind() == Some(EntryKind::File) && named.is_len(size))
+                .then(|| named.to_stored());
             let landed = match promoted {
                 Some(mark)
                     if mark.same_file(&mark) == Sameness::CannotTell
@@ -2200,7 +2202,7 @@ fn copy_regular_source_to_destination(
                 }
                 promoted => promoted,
             };
-            (fingerprint.file, landed)
+            (fingerprint.file, landed, destination_mark)
         }
         // A destination that does not read cannot be proven, so the copy is
         // taken back: only while the source still reads as the file it was
@@ -2282,6 +2284,7 @@ fn copy_regular_source_to_destination(
         depth: assessment.depth,
         outcome: assessment.outcome,
         detail: assessment.detail,
+        destination_mark,
     };
 
     if !verification.permits_source_removal() {
@@ -2653,6 +2656,9 @@ impl SourceCleanup {
     }
 }
 
+/// The checks and the removal in one call, as the tests drive them; the
+/// worker proves first and reports the proof before it removes.
+#[cfg(test)]
 fn remove_import_source_after_verified_import_blocking(
     guard: ImportSourceCleanupGuard,
     final_dest_path: PathBuf,

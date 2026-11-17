@@ -561,14 +561,19 @@ impl CoordinatedImportFileResult {
             self.result.destination_disposition,
             scryer_domain::ImportDestinationDisposition::Created
         );
+        let (input, hashes) = self.with_landed_facts(input);
         let claimed = app
             .services
             .library
             .media_files
-            .claim_import_destination(input, &associations)
+            .claim_import_destination(&input, &associations, hashes.as_ref())
             .await?;
-        self.persist_content_hashes(app, &claimed.media_file_id)
-            .await;
+        if hashes.is_some() {
+            tracing::debug!(
+                media_file_id = %claimed.media_file_id,
+                "recorded import content hashes with the destination's size and signature"
+            );
+        }
         Ok(CoordinatedMediaFilePersistence {
             media_file_id: claimed.media_file_id,
             reused_existing: matches!(
@@ -579,46 +584,48 @@ impl CoordinatedImportFileResult {
         })
     }
 
-    /// Persist what the copy proved about this file (FR-041/045, migration
-    /// 0205).
+    /// The row as the copy left the file: the destination's signature read
+    /// from the mark taken once it landed, and what the copy proved about its
+    /// bytes. The claim writes the size, the signature and the hashes
+    /// together, so a row never pairs a hash with another file's signature.
     ///
-    /// Only a copy has hashes to persist: a hardlink or same-filesystem rename
-    /// moved no bytes, so it carries no verification and leaves the columns
-    /// alone for the backfill job (FR-047) to fill in later.
-    ///
-    /// A write failure is logged, never propagated. The bytes are already
-    /// placed and proven; losing the hash costs a later backfill pass, while
-    /// failing the import here would cost the user a completed download.
-    async fn persist_content_hashes(&self, app: &AppUseCase, media_file_id: &str) {
+    /// Only a proven copy has hashes: a hardlink or same-filesystem rename
+    /// moved no bytes and leaves the columns for the backfill job to fill.
+    /// A destination with no mark keeps no signature, so its hash is read
+    /// again before the disk owner answers with it.
+    fn with_landed_facts(
+        &self,
+        input: &crate::InsertMediaFileInput,
+    ) -> (
+        crate::InsertMediaFileInput,
+        Option<crate::location::model::PersistedContentHashes>,
+    ) {
+        let mut input = input.clone();
         let Some(verification) = self.result.verification.as_ref() else {
-            return;
+            return (input, None);
         };
-        if !verification.permits_source_removal() {
-            return;
-        }
-
-        let hashes = crate::location::model::PersistedContentHashes::from_streamed(
-            &verification.hashes,
-            Utc::now(),
-        );
-        match app
-            .services
-            .library
-            .media_files
-            .update_media_file_content_hashes(media_file_id, &hashes)
-            .await
-        {
-            Ok(()) => tracing::debug!(
-                media_file_id,
-                depth = %verification.depth.label(),
-                "persisted import content hashes"
-            ),
-            Err(error) => tracing::warn!(
-                error = %error,
-                media_file_id,
-                "failed to persist import content hashes; the backfill job will recompute them"
-            ),
-        }
+        let mark = verification
+            .destination_mark
+            .as_deref()
+            .and_then(crate::disk::Mark::from_stored)
+            .filter(|mark| {
+                mark.len()
+                    .is_some_and(|len| i64::try_from(len).ok() == Some(input.size_bytes))
+            });
+        let signature = mark
+            .as_ref()
+            .and_then(crate::disk::Mark::modified)
+            .and_then(crate::file_source_signature::file_source_signature_from_modified);
+        input.source_signature_scheme = signature.as_ref().map(|s| s.scheme.clone());
+        input.source_signature_value = signature.map(|s| s.value);
+        let hashes = verification.permits_source_removal().then(|| {
+            crate::location::model::PersistedContentHashes::from_streamed(
+                &verification.hashes,
+                mark.as_ref(),
+                Utc::now(),
+            )
+        });
+        (input, hashes)
     }
 
     pub(crate) fn destination_permit(&self) -> ImportDestinationPermit {

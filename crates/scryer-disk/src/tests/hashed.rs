@@ -6,17 +6,18 @@ use std::sync::atomic::AtomicUsize;
 use super::*;
 use crate::backend::Extra;
 
-/// A table the tests fill and inspect.
+/// A table the tests fill and inspect. A recorded hash is what the row then
+/// holds.
 #[derive(Default)]
 struct FakeStore {
-    rows: Mutex<HashMap<HashRow, KnownHash>>,
+    rows: Mutex<HashMap<HashRow, StoredHash>>,
     asked: AtomicUsize,
     recorded: Mutex<Vec<(HashRow, KnownHash)>>,
 }
 
 impl FakeStore {
-    fn holds(&self, row: &HashRow, known: KnownHash) {
-        self.rows.lock().unwrap().insert(row.clone(), known);
+    fn holds(&self, row: &HashRow, stored: StoredHash) {
+        self.rows.lock().unwrap().insert(row.clone(), stored);
     }
     fn asked(&self) -> usize {
         self.asked.load(std::sync::atomic::Ordering::SeqCst)
@@ -27,12 +28,20 @@ impl FakeStore {
 }
 
 impl HashStore for FakeStore {
-    fn stored<'a>(&'a self, row: &'a HashRow) -> StoreFuture<'a, Option<KnownHash>> {
+    fn stored<'a>(&'a self, row: &'a HashRow) -> StoreFuture<'a, Option<StoredHash>> {
         self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let stored = self.rows.lock().unwrap().get(row).cloned();
         Box::pin(async move { stored })
     }
     fn record<'a>(&'a self, row: &'a HashRow, hash: &'a KnownHash) -> StoreFuture<'a, ()> {
+        self.holds(
+            row,
+            StoredHash {
+                blake3: hash.blake3.clone(),
+                crc: hash.crc,
+                mark: Some(hash.mark.clone()),
+            },
+        );
         self.recorded
             .lock()
             .unwrap()
@@ -77,8 +86,11 @@ impl Fixture {
     fn row() -> HashRow {
         HashRow::Id("fixture-row".into())
     }
-    fn reuse(&self) -> HashAsk {
-        HashAsk::new(&self.path, Some(self.mark()), Fresh::MayReuse).of_row(Self::row())
+    fn of_row(&self) -> HashAsk {
+        HashAsk::new(&self.path).of_row(Self::row())
+    }
+    fn rowless(&self) -> HashAsk {
+        HashAsk::new(&self.path)
     }
     /// Gives the file `seconds` as its modification time.
     fn set_modified(&self, seconds: u64) {
@@ -89,6 +101,13 @@ impl Fixture {
             .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
             .unwrap();
     }
+    fn stored(&self, blake3: &str, mark: Option<Mark>) -> StoredHash {
+        StoredHash {
+            blake3: blake3.into(),
+            crc: None,
+            mark,
+        }
+    }
 }
 
 fn expected_blake3() -> String {
@@ -96,10 +115,10 @@ fn expected_blake3() -> String {
 }
 
 #[tokio::test]
-async fn a_second_ask_is_answered_from_the_cache_without_a_read() {
+async fn a_file_with_no_row_is_answered_from_the_cache_while_it_fits() {
     let fixture = fixture();
 
-    let first = fixture.disk.full_hash(fixture.reuse()).await;
+    let first = fixture.disk.full_hash(fixture.rowless()).await;
     let FullHashAnswer::Read(read) = first else {
         panic!("the first ask reads: {first:?}");
     };
@@ -107,35 +126,39 @@ async fn a_second_ask_is_answered_from_the_cache_without_a_read() {
     assert_eq!(read.size_bytes, BYTES.len() as u64);
     assert_eq!(fixture.reads(), 1);
 
-    let second = fixture.disk.full_hash(fixture.reuse()).await;
+    let second = fixture.disk.full_hash(fixture.rowless()).await;
     assert!(
         matches!(second, FullHashAnswer::Cached(ref known) if known.blake3 == expected_blake3())
     );
     assert_eq!(fixture.reads(), 1, "the second ask read nothing");
     assert_eq!(
         fixture.store.asked(),
-        1,
-        "the cache answered before the table"
+        0,
+        "a file with no row never asks the table"
     );
+    assert!(fixture.store.recorded().is_empty());
+
+    fixture.set_modified(1_000_000);
+    assert!(matches!(
+        fixture.disk.full_hash(fixture.rowless()).await,
+        FullHashAnswer::Read(_)
+    ));
     assert_eq!(
-        fixture.store.recorded().len(),
-        1,
-        "only the read was recorded"
+        fixture.reads(),
+        2,
+        "another modification time is read again"
     );
 }
 
 #[tokio::test]
-async fn a_stored_hash_answers_while_the_mark_holds_and_is_read_again_once_it_does_not() {
+async fn a_stored_hash_answers_while_the_file_fits_its_mark_and_is_read_again_once_it_does_not() {
     let fixture = fixture();
-    let stored = KnownHash {
-        size_bytes: BYTES.len() as u64,
-        blake3: "stored-hash".into(),
-        crc: None,
-        mark: fixture.mark(),
-    };
-    fixture.store.holds(&Fixture::row(), stored);
+    fixture.store.holds(
+        &Fixture::row(),
+        fixture.stored("stored-hash", Some(fixture.mark())),
+    );
 
-    let answer = fixture.disk.full_hash(fixture.reuse()).await;
+    let answer = fixture.disk.full_hash(fixture.of_row()).await;
     assert!(matches!(answer, FullHashAnswer::Stored(ref known) if known.blake3 == "stored-hash"));
     assert_eq!(fixture.reads(), 0);
     assert!(
@@ -144,98 +167,71 @@ async fn a_stored_hash_answers_while_the_mark_holds_and_is_read_again_once_it_do
     );
 
     fixture.set_modified(1_000_000);
-    let answer = fixture.disk.full_hash(fixture.reuse()).await;
+    let answer = fixture.disk.full_hash(fixture.of_row()).await;
     assert!(matches!(answer, FullHashAnswer::Read(ref known) if known.blake3 == expected_blake3()));
     assert_eq!(fixture.reads(), 1);
     let recorded = fixture.store.recorded();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, Fixture::row());
     assert_eq!(recorded[0].1.blake3, expected_blake3());
-}
-
-#[tokio::test]
-async fn a_hash_stored_without_a_mark_is_judged_by_length_and_modification_time() {
-    let fixture = fixture();
-    fixture.set_modified(2_000_000);
-    let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2_000_000);
-    let legacy = |len| KnownHash {
-        size_bytes: len,
-        blake3: "legacy-hash".into(),
-        crc: None,
-        mark: Mark::of_length_and_modified(len, modified),
-    };
-
-    fixture
-        .store
-        .holds(&Fixture::row(), legacy(BYTES.len() as u64));
-    let answer = fixture.disk.full_hash(fixture.reuse()).await;
-    assert!(matches!(answer, FullHashAnswer::Stored(ref known) if known.blake3 == "legacy-hash"));
-    assert_eq!(fixture.reads(), 0);
-
-    // Another length, same time: not this file's hash.
-    let fixture = self::fixture();
-    fixture.set_modified(2_000_000);
-    fixture
-        .store
-        .holds(&Fixture::row(), legacy(BYTES.len() as u64 + 1));
-    let answer = fixture.disk.full_hash(fixture.reuse()).await;
-    assert!(matches!(answer, FullHashAnswer::Read(_)));
-    assert_eq!(fixture.reads(), 1);
-}
-
-#[tokio::test]
-async fn a_must_read_ask_always_reads_and_records() {
-    let fixture = fixture();
-    fixture.store.holds(
-        &Fixture::row(),
-        KnownHash {
-            size_bytes: BYTES.len() as u64,
-            blake3: "stored-hash".into(),
-            crc: None,
-            mark: fixture.mark(),
-        },
-    );
-    let must = || {
-        HashAsk::new(&fixture.path, Some(fixture.mark()), Fresh::MustRead).of_row(Fixture::row())
-    };
-
-    assert!(matches!(
-        fixture.disk.full_hash(must()).await,
-        FullHashAnswer::Read(_)
-    ));
-    assert!(matches!(
-        fixture.disk.full_hash(must()).await,
-        FullHashAnswer::Read(_)
-    ));
+    assert_eq!(recorded[0].1.mark.modified(), fixture.mark().modified());
     assert_eq!(
-        fixture.reads(),
-        2,
-        "never answered from the cache or the table"
+        fixture.disk.inner.cache.hashes.len(),
+        0,
+        "a hash with a row is kept on the row only"
     );
-    assert_eq!(fixture.store.asked(), 0);
-    assert_eq!(fixture.store.recorded().len(), 2);
 }
 
 #[tokio::test]
-async fn an_ask_without_a_mark_reads() {
+async fn a_hash_stored_without_a_mark_is_read_once_and_recorded_with_one() {
     let fixture = fixture();
-    let unmarked = || HashAsk::new(&fixture.path, None, Fresh::MayReuse).of_row(Fixture::row());
+    fixture
+        .store
+        .holds(&Fixture::row(), fixture.stored("unmarked-hash", None));
 
-    assert!(matches!(
-        fixture.disk.full_hash(unmarked()).await,
-        FullHashAnswer::Read(_)
-    ));
-    assert!(matches!(
-        fixture.disk.full_hash(unmarked()).await,
-        FullHashAnswer::Read(_)
-    ));
-    assert_eq!(fixture.reads(), 2);
-    assert_eq!(fixture.store.asked(), 0);
+    let answer = fixture.disk.full_hash(fixture.of_row()).await;
+    assert!(matches!(answer, FullHashAnswer::Read(ref known) if known.blake3 == expected_blake3()));
+    assert_eq!(fixture.reads(), 1);
+    assert_eq!(fixture.store.recorded().len(), 1);
+
+    let answer = fixture.disk.full_hash(fixture.of_row()).await;
+    assert!(
+        matches!(answer, FullHashAnswer::Stored(ref known) if known.blake3 == expected_blake3())
+    );
+    assert_eq!(fixture.reads(), 1, "the recorded mark answers the next ask");
+}
+
+#[tokio::test]
+async fn asks_of_one_path_at_once_read_it_once() {
+    let fixture = fixture();
+    let (left, right) = tokio::join!(
+        fixture.disk.full_hash(fixture.rowless()),
+        fixture.disk.full_hash(fixture.rowless()),
+    );
+    let answers = [left, right];
+    assert_eq!(
+        answers
+            .iter()
+            .filter(|answer| matches!(answer, FullHashAnswer::Read(_)))
+            .count(),
+        1
+    );
+    assert!(
+        answers
+            .iter()
+            .any(|answer| matches!(answer, FullHashAnswer::Cached(_)))
+    );
+    assert_eq!(fixture.reads(), 1);
+    assert_eq!(
+        fixture.disk.inner.hash_turns.paths_out(),
+        0,
+        "a path's turn is dropped with its last ask"
+    );
 }
 
 #[tokio::test]
 async fn a_file_that_changes_while_it_is_read_records_nothing() {
-    for marked in [false, true] {
+    for with_row in [false, true] {
         let fixture = fixture();
         let path = fixture.path.clone();
         let touched = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -250,10 +246,11 @@ async fn a_file_that_changes_while_it_is_read_records_nothing() {
                     .unwrap();
             }
         });
-        let mark = marked.then(|| fixture.mark());
-        let ask = HashAsk::new(&fixture.path, mark, Fresh::MustRead)
-            .of_row(Fixture::row())
-            .progress(progress);
+        let ask = match with_row {
+            true => fixture.of_row(),
+            false => fixture.rowless(),
+        }
+        .progress(progress);
 
         let answer = fixture.disk.full_hash(ask).await;
         assert!(touched.load(std::sync::atomic::Ordering::SeqCst));
@@ -266,9 +263,7 @@ async fn a_file_that_changes_while_it_is_read_records_nothing() {
 #[tokio::test]
 async fn a_cancelled_ask_reads_nothing_and_records_nothing() {
     let fixture = fixture();
-    let ask = HashAsk::new(&fixture.path, None, Fresh::MustRead)
-        .of_row(Fixture::row())
-        .cancel(Cancel::when(|| true));
+    let ask = fixture.of_row().cancel(Cancel::when(|| true));
 
     assert!(matches!(
         fixture.disk.full_hash(ask).await,
@@ -282,7 +277,7 @@ async fn a_cancelled_ask_reads_nothing_and_records_nothing() {
 async fn a_change_through_the_owner_forgets_the_cached_hash() {
     let fixture = fixture();
     assert!(matches!(
-        fixture.disk.full_hash(fixture.reuse()).await,
+        fixture.disk.full_hash(fixture.rowless()).await,
         FullHashAnswer::Read(_)
     ));
     assert_eq!(fixture.disk.inner.cache.hashes.len(), 1);
@@ -295,46 +290,55 @@ async fn a_change_through_the_owner_forgets_the_cached_hash() {
     std::fs::write(&fixture.path, BYTES).unwrap();
 
     assert!(matches!(
-        fixture.disk.full_hash(fixture.reuse()).await,
+        fixture.disk.full_hash(fixture.rowless()).await,
         FullHashAnswer::Read(_)
     ));
     assert_eq!(fixture.reads(), 2);
 }
 
-#[tokio::test]
-async fn the_blocking_ask_answers_from_the_cache_and_never_touches_the_table() {
-    let fixture = fixture();
-    let ask = fixture.reuse();
+#[test]
+fn a_read_that_began_before_an_eviction_is_not_kept() {
+    let cache = crate::cache::StatCache::default();
+    let path = Path::new("/srv/fixture-media/a.mkv");
+    let known = KnownHash {
+        size_bytes: 1,
+        blake3: "read-before".into(),
+        crc: None,
+        mark: stat(1, 5, 1, 7, 100),
+    };
+    let epoch = cache.epoch();
+    cache.evict(path);
+    cache.record_hash(path, known.clone(), epoch);
+    assert_eq!(cache.hashes.len(), 0);
 
-    assert!(matches!(
-        fixture.disk.full_hash_blocking(&ask),
-        FullHashAnswer::Read(_)
-    ));
-    assert!(matches!(
-        fixture.disk.full_hash_blocking(&ask),
-        FullHashAnswer::Cached(_)
-    ));
-    assert_eq!(fixture.reads(), 1);
-    assert_eq!(fixture.store.asked(), 0);
-    assert!(fixture.store.recorded().is_empty());
+    cache.record_hash(path, known, cache.epoch());
+    assert_eq!(cache.hashes.len(), 1);
 }
 
 #[test]
-fn the_cache_holds_a_bounded_number_of_hashes() {
+fn the_cache_holds_a_bounded_number_of_hashes_and_drops_the_oldest_first() {
     let cache = crate::hashed::HashCache::default();
-    let mark = Mark::of_length_and_modified(1, std::time::UNIX_EPOCH);
-    for index in 0..=crate::hashed::HASH_CACHE_MAX {
-        cache.record(
-            Path::new(&format!("/srv/fixture-media/{index}.mkv")),
-            KnownHash {
-                size_bytes: 1,
-                blake3: index.to_string(),
-                crc: None,
-                mark: mark.clone(),
-            },
-        );
+    let known = |index: usize| KnownHash {
+        size_bytes: 1,
+        blake3: index.to_string(),
+        crc: None,
+        mark: stat(1, 5, 1, index as u64 + 1, 100),
+    };
+    let path = |index: usize| PathBuf::from(format!("/srv/fixture-media/{index}.mkv"));
+    for index in 0..crate::hashed::HASH_CACHE_MAX {
+        cache.record_if(&path(index), known(index), || true);
     }
+    // The first path recorded again is now the newest, not the oldest.
+    cache.record_if(&path(0), known(0), || true);
+    let past = crate::hashed::HASH_CACHE_MAX;
+    cache.record_if(&path(past), known(past), || true);
     assert!(cache.len() <= crate::hashed::HASH_CACHE_MAX * 3 / 4 + 1);
+    assert!(cache.len() >= crate::hashed::HASH_CACHE_MAX * 3 / 4);
+    assert!(
+        cache.kept(&path(0)).is_some(),
+        "a path recorded again outlives older ones"
+    );
+    assert!(cache.kept(&path(1)).is_none());
 }
 
 fn stat(len: u64, modified: u64, device: u64, inode: u64, changed: i64) -> Mark {
@@ -354,39 +358,44 @@ fn stat(len: u64, modified: u64, device: u64, inode: u64, changed: i64) -> Mark 
 }
 
 #[test]
-fn a_hash_describes_a_file_by_length_time_and_number_never_by_volume_or_change_time() {
+fn a_hash_fits_a_file_by_length_and_modification_time_alone() {
+    let fits = crate::hashed::fits_for_test;
     let recorded = stat(10, 5, 1, 7, 100);
 
+    assert!(fits(&recorded, &stat(10, 5, 2, 7, 100)), "another volume");
     assert!(
-        stat(10, 5, 2, 7, 100).content_unchanged_since(&recorded),
-        "a remount"
+        fits(&recorded, &stat(10, 5, 1, 7, 900)),
+        "another change time"
     );
     assert!(
-        stat(10, 5, 1, 7, 900).content_unchanged_since(&recorded),
-        "a rename"
+        fits(&recorded, &stat(10, 5, 1, 8, 100)),
+        "another file number"
     );
-    assert!(
-        !stat(10, 5, 1, 8, 100).content_unchanged_since(&recorded),
-        "another file"
-    );
-    assert!(
-        !stat(11, 5, 1, 7, 100).content_unchanged_since(&recorded),
-        "another length"
-    );
-    assert!(
-        !stat(10, 6, 1, 7, 100).content_unchanged_since(&recorded),
-        "another time"
-    );
+    assert!(!fits(&recorded, &stat(11, 5, 1, 7, 100)), "another length");
+    assert!(!fits(&recorded, &stat(10, 6, 1, 7, 100)), "another time");
 
-    // A zero number tells nothing, so length and time decide.
-    assert!(stat(10, 5, 1, 0, 100).content_unchanged_since(&stat(10, 5, 1, 0, 1)));
-    let legacy = Mark::of_length_and_modified(
-        10,
-        std::time::UNIX_EPOCH + std::time::Duration::from_secs(5),
+    let no_time = Mark::of_stat(&RawStat {
+        kind: EntryKind::File,
+        len: 10,
+        modified: None,
+        identity: None,
+        links: Some(1),
+        extra: Extra::default(),
+    });
+    assert!(
+        !fits(&no_time, &no_time),
+        "no modification time fits nothing"
     );
-    assert!(stat(10, 5, 1, 7, 100).content_unchanged_since(&legacy));
-    assert!(!stat(10, 6, 1, 7, 100).content_unchanged_since(&legacy));
+    let folder = Mark::of_stat(&RawStat {
+        kind: EntryKind::Directory,
+        len: 10,
+        modified: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(5)),
+        identity: None,
+        links: Some(1),
+        extra: Extra::default(),
+    });
+    assert!(!fits(&recorded, &folder), "a folder is no file");
     // A stored mark reads back to the same judgement.
     let stored = Mark::from_stored(&recorded.to_stored()).unwrap();
-    assert!(stat(10, 5, 3, 7, 4).content_unchanged_since(&stored));
+    assert!(fits(&stored, &stat(10, 5, 3, 9, 4)));
 }

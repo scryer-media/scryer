@@ -657,59 +657,6 @@ pub(crate) struct TerminalCleanupTickCache {
     /// itself rather than only the shape of the key.
     routing_scope_reads: std::sync::atomic::AtomicUsize,
     remove_completed_reads: std::sync::atomic::AtomicUsize,
-    /// The downloads of this tick's rows that an earlier check found held, or
-    /// could not read. Their sources are read in one batch the first time one
-    /// of them asks, and only then.
-    remembered: Vec<scryer_domain::download_identity::DownloadId>,
-    remembered_set: std::collections::HashSet<scryer_domain::download_identity::DownloadId>,
-    /// That one read's answer, or why it failed.
-    held_sources: tokio::sync::OnceCell<Result<crate::HeldDownloadSources, String>>,
-}
-
-/// What the held-source checks last found for the downloads they could not
-/// clean up yet: held by an import, or unreadable. Every reconcile tick keeps
-/// only the downloads it still settles, so a download that leaves the path
-/// leaves this too.
-#[derive(Default)]
-struct HeldSourceMemory {
-    held: std::collections::HashSet<scryer_domain::download_identity::DownloadId>,
-    unread: std::collections::HashSet<scryer_domain::download_identity::DownloadId>,
-}
-
-static HELD_SOURCE_MEMORY: std::sync::LazyLock<std::sync::Mutex<HeldSourceMemory>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// Record what a held-source check found for `download_id`. Returns whether
-/// this is the first failed read since the download's sources last read.
-pub(crate) fn note_held_sources(
-    download_id: &scryer_domain::download_identity::DownloadId,
-    held: &Result<bool, String>,
-) -> bool {
-    let Ok(mut memory) = HELD_SOURCE_MEMORY.lock() else {
-        return true;
-    };
-    match held {
-        Ok(true) => {
-            memory.unread.remove(download_id);
-            memory.held.insert(*download_id);
-            false
-        }
-        Ok(false) => {
-            memory.unread.remove(download_id);
-            memory.held.remove(download_id);
-            false
-        }
-        Err(_) => memory.unread.insert(*download_id),
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn held_sources_remembered(
-    download_id: &scryer_domain::download_identity::DownloadId,
-) -> bool {
-    HELD_SOURCE_MEMORY.lock().is_ok_and(|memory| {
-        memory.held.contains(download_id) || memory.unread.contains(download_id)
-    })
 }
 
 impl TerminalCleanupTickCache {
@@ -722,69 +669,21 @@ impl TerminalCleanupTickCache {
             remove_completed: std::sync::Mutex::new(HashMap::new()),
             routing_scope_reads: std::sync::atomic::AtomicUsize::new(0),
             remove_completed_reads: std::sync::atomic::AtomicUsize::new(0),
-            remembered: Vec::new(),
-            remembered_set: std::collections::HashSet::new(),
-            held_sources: tokio::sync::OnceCell::new(),
         }
     }
 
-    /// The downloads of this tick's rows. What earlier checks remembered of
-    /// any other download is dropped; the ones of these that an earlier check
-    /// found held or unreadable are read together the first time one asks.
-    pub(crate) fn with_download_ids(
-        mut self,
-        download_ids: Vec<scryer_domain::download_identity::DownloadId>,
-    ) -> Self {
-        let settled: std::collections::HashSet<_> = download_ids.into_iter().collect();
-        if let Ok(mut memory) = HELD_SOURCE_MEMORY.lock() {
-            memory.held.retain(|download_id| settled.contains(download_id));
-            memory.unread.retain(|download_id| settled.contains(download_id));
-            self.remembered = memory.held.union(&memory.unread).copied().collect();
-        }
-        self.remembered_set = self.remembered.iter().copied().collect();
-        self
+    pub(crate) fn goal_batch(&self) -> &crate::seeding_gate::SeedGoalBatch {
+        &self.goals
     }
 
-    /// Whether an import still holds `download_id`'s sources, or why the
-    /// store could not tell.
-    ///
-    /// A download an earlier check found held is answered from one batched
-    /// read per tick while it stays held: that answer only defers. Every
-    /// "not held" comes from a read of that one download made now, right
-    /// before its cleanup removes anything, so a hold set after the batch
-    /// was read is still seen.
-    pub(crate) async fn sources_held(
-        &self,
-        app: &AppUseCase,
-        download_id: &scryer_domain::download_identity::DownloadId,
-    ) -> Result<crate::DownloadImportSources, String> {
-        if self.remembered_set.contains(download_id) {
-            let batch = self
-                .held_sources
-                .get_or_init(|| async {
-                    app.services
-                        .workflow
-                        .imports
-                        .archive_processing_pending_downloads(&self.remembered)
-                        .await
-                        .map_err(|error| error.to_string())
-                })
-                .await;
-            match batch {
-                Ok(batch) if batch.held.contains(download_id) => {
-                    return Ok(crate::DownloadImportSources {
-                        held: true,
-                        library_holds_payload: false,
-                    });
-                }
-                Ok(batch) if batch.unreadable.contains(download_id) => {
-                    return Err("an import record of the download could not be read".to_string());
-                }
-                Ok(_) => {}
-                Err(error) => return Err(error.clone()),
-            }
-        }
-        sources_held_by_import(app, download_id).await
+    /// `(routing-scope reads, remove-completed reads)` that missed the memo.
+    #[cfg(test)]
+    pub(crate) fn memo_reads(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering;
+        (
+            self.routing_scope_reads.load(Ordering::Relaxed),
+            self.remove_completed_reads.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -801,23 +700,6 @@ pub(crate) async fn sources_held_by_import(
         .download_import_sources(download_id)
         .await
         .map_err(|error| error.to_string())
-}
-
-impl TerminalCleanupTickCache {
-
-    pub(crate) fn goal_batch(&self) -> &crate::seeding_gate::SeedGoalBatch {
-        &self.goals
-    }
-
-    /// `(routing-scope reads, remove-completed reads)` that missed the memo.
-    #[cfg(test)]
-    pub(crate) fn memo_reads(&self) -> (usize, usize) {
-        use std::sync::atomic::Ordering;
-        (
-            self.routing_scope_reads.load(Ordering::Relaxed),
-            self.remove_completed_reads.load(Ordering::Relaxed),
-        )
-    }
 }
 
 /// `cleanup_routing_scope_for_title_id`, answering from the tick cache when the

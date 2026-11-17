@@ -548,6 +548,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
             depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
             outcome: FileVerificationOutcome::Verified,
             detail: Some("Full content verified; original source preserved".into()),
+            destination_mark: None,
         })
     }
 }

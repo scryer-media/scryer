@@ -91,7 +91,7 @@ pub use copy::{
     Verdict, Watch, resumable_staging_path,
 };
 pub use hashed::{
-    Fresh, FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture,
+    FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture, StoredHash,
 };
 pub use mark::{Drift, EntryAlias, Mark, Sameness};
 pub use place::{
@@ -553,6 +553,8 @@ struct Inner {
     copies: std::sync::OnceLock<CopyAdmission>,
     /// The table of full hashes, once installed.
     hash_store: std::sync::OnceLock<Arc<dyn HashStore>>,
+    /// Whole-hash asks, one per path at a time, and the whole reads they run.
+    hash_turns: hashed::HashTurns,
     /// Whole-file reads by path, once a test asked for the count.
     whole_reads: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, usize>>>,
     #[cfg(test)]
@@ -616,6 +618,7 @@ impl Disk {
                 cache: StatCache::default(),
                 copies: std::sync::OnceLock::new(),
                 hash_store: std::sync::OnceLock::new(),
+                hash_turns: hashed::HashTurns::default(),
                 whole_reads: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 calls: Mutex::default(),

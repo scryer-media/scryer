@@ -328,21 +328,26 @@ pub struct PersistedContentHashes {
     /// [`crate::location::collisions::FullHash`]).
     pub hash_computed_at: Option<DateTime<Utc>>,
     /// The stored mark of the file the hash was read of, written and cleared
-    /// with the hash. Absent for a hash stored without one, which is judged
-    /// by the row's size and source signature.
+    /// with the hash. Absent for a hash stored without one, which the disk
+    /// owner reads again before it answers with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark: Option<String>,
 }
 
 impl PersistedContentHashes {
-    /// The write side: what one streaming pass produced, stamped with when.
-    pub fn from_streamed(hashes: &StreamedContentHashes, computed_at: DateTime<Utc>) -> Self {
+    /// The write side: what one streaming pass produced, the mark of the file
+    /// it streamed where the writer read one, stamped with when.
+    pub fn from_streamed(
+        hashes: &StreamedContentHashes,
+        mark: Option<&crate::disk::Mark>,
+        computed_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             full_blake3: hashes.full_blake3.clone(),
             move_crc: Some(hashes.move_crc),
             crc_algorithm: Some(hashes.crc_algorithm),
             hash_computed_at: Some(computed_at),
-            mark: None,
+            mark: mark.map(crate::disk::Mark::to_stored),
         }
     }
 
@@ -356,12 +361,6 @@ impl PersistedContentHashes {
             hash_computed_at: Some(computed_at),
             mark: Some(known.mark.to_stored()),
         }
-    }
-
-    /// The same hash, held to `mark`.
-    pub fn with_mark(mut self, mark: &crate::disk::Mark) -> Self {
-        self.mark = Some(mark.to_stored());
-        self
     }
 }
 

@@ -2870,6 +2870,7 @@ mod tests {
                 },
                 outcome,
                 detail: fell_back.then(|| "a cache-bypassed read-back could not run".to_string()),
+                destination_mark: None,
             })
         }
     }
@@ -3071,6 +3072,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -3097,6 +3099,7 @@ mod tests {
                     depth: AppliedVerificationDepth::exact(request.depth),
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
+                    destination_mark: None,
                 })
             }
         }
@@ -3181,6 +3184,7 @@ mod tests {
                     depth: AppliedVerificationDepth::exact(request.depth),
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
+                    destination_mark: None,
                 })
             }
         }
@@ -3338,6 +3342,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -3660,6 +3665,7 @@ mod tests {
                     depth: AppliedVerificationDepth::exact(request.depth),
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
+                    destination_mark: None,
                 })
             }
         }
@@ -3747,6 +3753,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -5174,6 +5181,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -5328,6 +5336,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -5361,6 +5370,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -5446,6 +5456,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }

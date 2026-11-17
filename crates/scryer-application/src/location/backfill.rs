@@ -651,7 +651,7 @@ impl AppUseCase {
             .media_files
             .update_media_file_content_hashes_if_unchanged(
                 &current,
-                &PersistedContentHashes::from_streamed(&hashes, Utc::now()),
+                &PersistedContentHashes::from_streamed(&hashes, Some(&after), Utc::now()),
             )
             .await
             .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;

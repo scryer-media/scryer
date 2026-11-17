@@ -411,52 +411,10 @@ impl Mark {
             && matches!((self.file, other.file), (Some(here), Some(there)) if here != 0 && there != 0)
     }
 
-    /// Whether a hash recorded against `recorded` still describes the file
-    /// this mark was read of: one length and one modification time and,
-    /// where both marks carry a nonzero file number, one file number. The
-    /// volume, the change and creation times and the owner never decide it:
-    /// a remount renumbers a volume, and a rename or a new hard link moves
-    /// the change time without touching a byte. With no usable file number
-    /// on either side, the length and the modification time decide, so a
-    /// mark built from those two alone is judged the same way. A mark with
-    /// no modification time, or one that names a volume only, describes
-    /// nothing. No probe.
-    pub fn content_unchanged_since(&self, recorded: &Self) -> bool {
-        let (Some(now), Some(then)) = (self.facts, recorded.facts) else {
-            return false;
-        };
-        if now.kind != EntryKind::File
-            || then.kind != EntryKind::File
-            || now.len != then.len
-            || now.modified.is_none()
-            || now.modified != then.modified
-        {
-            return false;
-        }
-        let usable = |file: Option<u64>| file.filter(|&number| number != 0);
-        match (usable(self.file), usable(recorded.file)) {
-            (Some(here), Some(there)) => here == there,
-            _ => true,
-        }
-    }
-
-    /// The mark of a regular file known only by its length and modification
-    /// time, for a hash recorded before hashes carried a mark. No probe.
-    pub fn of_length_and_modified(len: u64, modified: SystemTime) -> Self {
-        Self {
-            volume: Volume::Unknown,
-            file: None,
-            facts: Some(Facts {
-                kind: EntryKind::File,
-                len,
-                modified: Some(modified),
-                changed: None,
-                created: None,
-                owner: None,
-                links: None,
-            }),
-            fresh: false,
-        }
+    /// The modification time read; `None` where the platform gave none or
+    /// for a mark that names a volume only.
+    pub fn modified(&self) -> Option<SystemTime> {
+        self.facts.and_then(|facts| facts.modified)
     }
 
     /// Whether the read said the file has a name besides this one.

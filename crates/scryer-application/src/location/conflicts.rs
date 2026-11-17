@@ -2683,8 +2683,12 @@ impl AppUseCase {
             {
                 repo.update_media_file_content_hashes(
                     &file_id,
+                    // A receipt from the operation's record carries no mark
+                    // of the file, so the hash is stored without one and is
+                    // read again before the disk owner answers with it.
                     &super::model::PersistedContentHashes::from_streamed(
                         hashes,
+                        None,
                         chrono::Utc::now(),
                     ),
                 )

@@ -159,6 +159,7 @@ impl MediaFileRepository for FailingPathUpdateMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &scryer_application::MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<scryer_application::ClaimedMediaFile> {
         if self.fail_insert {
             return Err(AppError::Repository(
@@ -166,7 +167,7 @@ impl MediaFileRepository for FailingPathUpdateMediaFileRepo {
             ));
         }
         self.inner
-            .claim_import_destination(input, associations)
+            .claim_import_destination(input, associations, hashes)
             .await
     }
 

@@ -241,9 +241,9 @@ impl super::Disk {
     ///    view of one folder can name another volume, and two volumes can
     ///    number a file alike. The source goes back either way.
     /// 4. Unless `kept` and the source both carry nonzero file numbers on
-    ///    one known volume, and on Windows `kept`'s path names no network
-    ///    share, `kept`'s folder is listed once and must hold `kept`'s name,
-    ///    byte for byte.
+    ///    one known volume, and on Windows neither `kept`'s path nor the
+    ///    source's names a network share, `kept`'s folder is listed once and
+    ///    must hold `kept`'s name, byte for byte.
     ///    A second view of a folder can keep answering a renamed name from
     ///    its cache; the listing is the folder's own word. A name the listing
     ///    lacks as spelled cannot tell, since the folder may hold it in
@@ -264,8 +264,8 @@ impl super::Disk {
     ///
     /// Probes, for one adopted destination: one rename and one read of
     /// `kept`, a second read when `kept` is a link, then one removal. Unless
-    /// both carry numbers on one known volume off a named share, one listing
-    /// of `kept`'s folder besides. A put-back adds one rename. A put-back that
+    /// both carry numbers on one known volume and neither path names a share,
+    /// one listing of `kept`'s folder besides. A put-back adds one rename. A put-back that
     /// fails is retried, each retry one read of the set-aside name and one
     /// rename, plus one read of the source's name when the set-aside name no
     /// longer marks the file; see [`PUT_BACK_RETRY_PAUSES`].
@@ -293,7 +293,7 @@ impl super::Disk {
     ///
     /// Probes: two renames and one read of `kept`, a second read when `kept`
     /// is a link, and one listing of `kept`'s folder unless both carry
-    /// numbers on one known volume off a named share. A put-back that fails
+    /// numbers on one known volume and neither path names a share. A put-back that fails
     /// is retried as a removal's is, pausing on the calling thread.
     pub fn tell_apart_by_set_aside_blocking(
         &self,

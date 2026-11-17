@@ -3929,6 +3929,11 @@ pub struct ImportVerification {
     pub outcome: FileVerificationOutcome,
     /// Why the outcome is not a plain pass, or why the depth fell back.
     pub detail: Option<String>,
+    /// The stored mark of the destination as it read once the copy landed:
+    /// the size and times the copy's hashes describe. Absent when the
+    /// destination did not read as a regular file of the copied length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_mark: Option<String>,
 }
 
 impl ImportVerification {

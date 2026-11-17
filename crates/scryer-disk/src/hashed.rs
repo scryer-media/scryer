@@ -1,32 +1,27 @@
 //! Whole-file hashes: the one read that computes them, and the one answer to
 //! what a file's full hash is.
 //!
-//! A caller asks [`Disk::full_hash`] with a [`HashAsk`]: the path, a mark of
-//! it the caller read in this unit of work after its last write to the path,
-//! the catalog row the file has, if any, and whether a hash recorded earlier
-//! may answer ([`Fresh::MayReuse`]) or the bytes must be read now
-//! ([`Fresh::MustRead`]). The answer is typed: from the in-process cache,
-//! from the stored table, read now, or why not.
+//! [`Disk::full_hash`] answers with a hash recorded earlier while the file's
+//! length and modification time now equal the length and modification time
+//! recorded when that hash was taken, and otherwise reads the whole file and
+//! records what it read with the length and modification time it read them
+//! at. One function, [`still_fits`], holds that test; the file number, the
+//! change time and the volume are not part of it.
 //!
-//! [`Fresh::MayReuse`] asks the cache, then the table, then reads. A
-//! recorded hash answers only while [`Mark::content_unchanged_since`] holds
-//! between the caller's mark and the mark it was recorded against. A call
-//! with no mark always reads: nothing is reused on a guess, and the service
-//! never probes for a mark itself. [`Fresh::MustRead`] always reads; it is for
-//! a check that decides a removal, which bytes and not metadata must decide.
+//! A file with a catalog row has its hash recorded on that row, in the
+//! installed [`HashStore`], which only loads and saves: a stored hash with no
+//! mark, or a mark this build cannot read, is read once and recorded. A file
+//! with no row, or any file while no store is installed, has its hash kept in
+//! a bounded in-process cache, judged by the same test.
 //!
-//! Every read that completes is recorded: in the cache, and, when the ask
-//! names a row and a store is installed, in the table. A read that saw the
-//! file change, failed or was cancelled records nothing. The table is
-//! written only from [`Disk::full_hash`] and [`Disk::record_full_hash`],
-//! which run on the async runtime, never on a blocking thread, and the
-//! caller must not hold the database's writer while it awaits them.
+//! Asks of one path take turns, so a second ask waits for the first read and
+//! answers from what it recorded. At most [`HASH_READS_AT_ONCE`] whole reads
+//! run at a time, each on a blocking thread.
 //!
-//! The cache is bounded and in memory. It is keyed by path, holds the mark
-//! each hash was recorded against, and forgets a path whenever the owner
-//! changes it, as the stat cache does. It has no time-based reuse.
+//! Probes: one followed stat of the path when a recorded hash is there to be
+//! judged; a read adds one open and two stats of its handle.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -37,20 +32,12 @@ use std::sync::{Arc, Mutex};
 use super::cache::{climbs, key_of, slot_of};
 use super::copy::{CHUNK_BYTES, ContentHasher, HashRefusal};
 use super::reading::DiskVerb;
-use super::{Cancel, Disk, DiskError, Mark, Open, Phase, Progress, reason};
+use super::{Cancel, Disk, DiskError, EntryKind, Mark, Open, Phase, Progress, reason};
 
-/// Whether a hash recorded earlier may answer an ask.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fresh {
-    /// A recorded hash answers while the file is still the file it was
-    /// recorded of. For a caller that does not decide a removal.
-    MayReuse,
-    /// Read the bytes now, whatever is recorded, and record what was read.
-    MustRead,
-}
+/// Whole reads that run at once, across every ask.
+pub(crate) const HASH_READS_AT_ONCE: usize = 2;
 
-/// The catalog row a file's hash is stored on. There is no lookup by path
-/// alone: nothing indexes it.
+/// The catalog row a file's hash is stored on.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum HashRow {
     /// The media file row's id.
@@ -59,7 +46,7 @@ pub enum HashRow {
     TitlePath { title_id: String, path: String },
 }
 
-/// A whole-file hash and the mark of the file it describes.
+/// A whole-file hash and the mark of the file it was taken of.
 #[derive(Clone, Debug)]
 pub struct KnownHash {
     pub size_bytes: u64,
@@ -67,24 +54,27 @@ pub struct KnownHash {
     pub blake3: String,
     /// The whole-file CRC-64/NVME, where it was taken or stored.
     pub crc: Option<u64>,
-    /// The file the hash was taken of, read with links followed.
+    /// The file the hash was taken of, read through the handle that read it.
     pub mark: Mark,
 }
 
-impl KnownHash {
-    /// Whether this hash still describes the file `now` was read of. See
-    /// [`Mark::content_unchanged_since`].
-    pub fn describes(&self, now: &Mark) -> bool {
-        now.content_unchanged_since(&self.mark) && now.is_len(self.size_bytes)
-    }
+/// What a row holds, as the store loaded it.
+#[derive(Clone, Debug)]
+pub struct StoredHash {
+    /// The whole-file BLAKE3, in hex.
+    pub blake3: String,
+    pub crc: Option<u64>,
+    /// The mark the hash was stored with; `None` when it was stored without
+    /// one or with text this build cannot read.
+    pub mark: Option<Mark>,
 }
 
 /// What [`Disk::full_hash`] answered.
 #[derive(Debug)]
 pub enum FullHashAnswer {
-    /// Recorded in this process, of the file the caller's mark describes.
+    /// Kept in this process, of a file the path still fits.
     Cached(KnownHash),
-    /// Stored on the row, of the file the caller's mark describes.
+    /// Stored on the row, of a file the path still fits.
     Stored(KnownHash),
     /// Read end to end now, and recorded.
     Read(KnownHash),
@@ -118,12 +108,12 @@ impl FullHashAnswer {
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The persisted table of full hashes, which the application keeps on its
-/// catalog rows. Installed once with [`Disk::install_hash_store`].
+/// catalog rows. Installed once with [`Disk::install_hash_store`]. It loads
+/// and saves; whether a stored hash answers is decided here, never there.
 pub trait HashStore: Send + Sync {
-    /// The hash stored on `row` and the mark it was stored against. `None`
-    /// when there is none or the table could not say; a failure is never an
-    /// answer.
-    fn stored<'a>(&'a self, row: &'a HashRow) -> StoreFuture<'a, Option<KnownHash>>;
+    /// What `row` holds. `None` when it holds no hash or the table could not
+    /// say; a failure is never an answer.
+    fn stored<'a>(&'a self, row: &'a HashRow) -> StoreFuture<'a, Option<StoredHash>>;
     /// Store `hash`, read now, on `row`. A failure is logged by the store and
     /// never fails the ask.
     fn record<'a>(&'a self, row: &'a HashRow, hash: &'a KnownHash) -> StoreFuture<'a, ()>;
@@ -141,28 +131,20 @@ pub struct ReadTimes {
 #[derive(Clone)]
 pub struct HashAsk {
     path: PathBuf,
-    mark: Option<Mark>,
     row: Option<HashRow>,
-    fresh: Fresh,
     cancel: Cancel,
     progress: Progress,
-    background: Option<fn()>,
     times: Option<Arc<ReadTimes>>,
 }
 
 impl HashAsk {
-    /// Ask for `path`'s hash. `mark` is a read of the path the caller took in
-    /// this unit of work after its last write to it, with links followed;
-    /// without one, the file is read.
-    pub fn new(path: impl Into<PathBuf>, mark: Option<Mark>, fresh: Fresh) -> Self {
+    /// Ask for `path`'s hash.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            mark,
             row: None,
-            fresh,
             cancel: Cancel::never(),
             progress: Progress::none(),
-            background: None,
             times: None,
         }
     }
@@ -184,17 +166,22 @@ impl HashAsk {
         self
     }
 
-    /// Background work: the read runs on a thread of its own, which
-    /// `lower_priority` lowers before it reads.
-    pub fn in_background(mut self, lower_priority: fn()) -> Self {
-        self.background = Some(lower_priority);
-        self
-    }
-
     pub fn timed(mut self, times: Arc<ReadTimes>) -> Self {
         self.times = Some(times);
         self
     }
+}
+
+/// Whether a hash taken of the file `recorded` marks still describes the file
+/// `now` marks: both regular files of one length and one modification time.
+/// Nothing else decides it. No probe.
+fn still_fits(recorded: &Mark, now: &Mark) -> bool {
+    recorded.kind() == Some(EntryKind::File)
+        && now.kind() == Some(EntryKind::File)
+        && recorded.len().is_some()
+        && recorded.len() == now.len()
+        && now.modified().is_some()
+        && recorded.modified() == now.modified()
 }
 
 // ── The cache ────────────────────────────────────────────────────────────────
@@ -205,14 +192,17 @@ pub(crate) const HASH_CACHE_MAX: usize = 4096;
 
 #[derive(Debug, Default)]
 struct Held {
-    /// Keyed by the slot of the spelling; the spelling and the hash.
-    entries: BTreeMap<PathBuf, (PathBuf, KnownHash)>,
-    /// Slots in the order they were recorded, oldest first; a slot recorded
-    /// again or forgotten may still appear and is skipped.
-    order: VecDeque<PathBuf>,
+    /// Keyed by the slot of the spelling; the spelling, the hash, and when it
+    /// was recorded.
+    entries: BTreeMap<PathBuf, (PathBuf, KnownHash, u64)>,
+    /// Slots in the order they were recorded, oldest first, with when. An
+    /// entry whose slot was recorded again later or forgotten is skipped.
+    order: VecDeque<(PathBuf, u64)>,
+    next: u64,
 }
 
-/// Whole-file hashes recorded in this process. See the module text.
+/// Whole-file hashes of files with no row, kept in this process. See the
+/// module text.
 #[derive(Debug, Default)]
 pub(crate) struct HashCache {
     held: Mutex<Held>,
@@ -223,35 +213,46 @@ impl HashCache {
         self.held.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    /// The hash recorded for exactly `path` that still describes `now`.
-    fn answer(&self, path: &Path, now: &Mark) -> Option<KnownHash> {
+    /// The hash kept for exactly `path`.
+    pub(crate) fn kept(&self, path: &Path) -> Option<KnownHash> {
         let key = key_of(path);
         let held = self.lock();
-        let (spelling, known) = held.entries.get(&slot_of(&key))?;
-        (*spelling == key && known.describes(now)).then(|| known.clone())
+        let (spelling, known, _) = held.entries.get(&slot_of(&key))?;
+        (*spelling == key).then(|| known.clone())
     }
 
-    pub(crate) fn record(&self, path: &Path, known: KnownHash) {
+    /// Keep `known` for `path` when `current` still holds once this cache's
+    /// lock is taken. An eviction changes what `current` reads before it
+    /// forgets under the same lock, so a read that began before it is never
+    /// kept after it.
+    pub(crate) fn record_if(&self, path: &Path, known: KnownHash, current: impl FnOnce() -> bool) {
         let key = key_of(path);
         if climbs(&key) {
             return;
         }
         let slot = slot_of(&key);
         let mut held = self.lock();
-        held.entries.insert(slot.clone(), (key, known));
-        held.order.push_back(slot);
+        if !current() {
+            return;
+        }
+        let at = held.next;
+        held.next += 1;
+        held.entries.insert(slot.clone(), (key, known, at));
+        held.order.push_back((slot, at));
         if held.entries.len() > HASH_CACHE_MAX {
             let keep = HASH_CACHE_MAX * 3 / 4;
             while held.entries.len() > keep {
-                let Some(oldest) = held.order.pop_front() else {
+                let Some((oldest, at)) = held.order.pop_front() else {
                     break;
                 };
-                held.entries.remove(&oldest);
+                if held.entries.get(&oldest).is_some_and(|entry| entry.2 == at) {
+                    held.entries.remove(&oldest);
+                }
             }
         }
         if held.order.len() > HASH_CACHE_MAX * 2 {
-            let Held { entries, order } = &mut *held;
-            order.retain(|slot| entries.contains_key(slot));
+            let Held { entries, order, .. } = &mut *held;
+            order.retain(|(slot, at)| entries.get(slot).is_some_and(|entry| entry.2 == *at));
         }
     }
 
@@ -293,6 +294,72 @@ impl HashCache {
     }
 }
 
+// ── Turns and the read budget ────────────────────────────────────────────────
+
+/// The asks of each path, one at a time, and the whole reads, a few at a
+/// time. An entry lives only while an ask of its path is out.
+#[derive(Debug)]
+pub(crate) struct HashTurns {
+    paths: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    reads: tokio::sync::Semaphore,
+}
+
+impl Default for HashTurns {
+    fn default() -> Self {
+        Self {
+            paths: Mutex::default(),
+            reads: tokio::sync::Semaphore::new(HASH_READS_AT_ONCE),
+        }
+    }
+}
+
+/// An ask's turn at its path; the path's entry is dropped with the last one.
+struct Turn<'a> {
+    turns: &'a HashTurns,
+    slot: PathBuf,
+    flight: Option<Arc<tokio::sync::Mutex<()>>>,
+    held: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl HashTurns {
+    fn paths(&self) -> std::sync::MutexGuard<'_, HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> {
+        self.paths.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    async fn take(&self, path: &Path) -> Turn<'_> {
+        let slot = slot_of(&key_of(path));
+        let flight = self.paths().entry(slot.clone()).or_default().clone();
+        // Made before the wait, so an ask dropped while it waits still lets
+        // go of its path's entry.
+        let mut turn = Turn {
+            turns: self,
+            slot,
+            flight: Some(flight.clone()),
+            held: None,
+        };
+        turn.held = Some(flight.lock_owned().await);
+        turn
+    }
+
+    #[cfg(test)]
+    pub(crate) fn paths_out(&self) -> usize {
+        self.paths().len()
+    }
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        drop(self.held.take());
+        let flight = self.flight.take();
+        let mut paths = self.turns.paths();
+        // The map's own handle and this one: no other ask holds or waits,
+        // and another ask takes its handle only under this lock.
+        if flight.is_some_and(|flight| Arc::strong_count(&flight) == 2) {
+            paths.remove(&self.slot);
+        }
+    }
+}
+
 // ── The read ─────────────────────────────────────────────────────────────────
 
 /// How a read ended short of a hash.
@@ -303,127 +370,74 @@ enum Short {
 }
 
 impl Disk {
-    /// Install the table [`Self::full_hash`] consults and records to. Only
-    /// the first call has an effect. With none installed, the table step is
-    /// skipped.
+    /// Install the table [`Self::full_hash`] loads from and saves to. Only
+    /// the first call has an effect. With none installed, every hash is kept
+    /// in the in-process cache.
     pub fn install_hash_store(&self, store: Arc<dyn HashStore>) {
         let _ = self.inner.hash_store.set(store);
     }
 
-    fn hash_store(&self) -> Option<&Arc<dyn HashStore>> {
-        self.inner.hash_store.get()
-    }
-
-    /// The full hash of `ask`'s path. See the module text. Reads run off the
-    /// async runtime.
+    /// The full hash of `ask`'s path. See the module text. The caller must
+    /// not hold the database's writer while it awaits this.
     pub async fn full_hash(&self, ask: HashAsk) -> FullHashAnswer {
-        if let Some(answer) = self.recorded(&ask) {
-            return answer;
-        }
-        if ask.fresh == Fresh::MayReuse
-            && let (Some(now), Some(row), Some(store)) = (&ask.mark, &ask.row, self.hash_store())
-            && let Some(stored) = store.stored(row).await
-            && stored.describes(now)
+        let _turn = self.inner.hash_turns.take(&ask.path).await;
+        let store = ask.row.clone().zip(self.inner.hash_store.get().cloned());
+
+        let recorded = match &store {
+            Some((row, store)) => store.stored(row).await.and_then(|stored| {
+                let mark = stored.mark?;
+                Some(FullHashAnswer::Stored(KnownHash {
+                    size_bytes: mark.len()?,
+                    blake3: stored.blake3,
+                    crc: stored.crc,
+                    mark,
+                }))
+            }),
+            None => self
+                .inner
+                .cache
+                .hashes
+                .kept(&ask.path)
+                .map(FullHashAnswer::Cached),
+        };
+        if let Some(recorded) = recorded
+            && let Ok(now) = self.fingerprint_followed(ask.path.clone()).await
+            && recorded
+                .known()
+                .is_some_and(|known| still_fits(&known.mark, &now))
         {
-            self.inner.cache.hashes.record(&ask.path, stored.clone());
-            return FullHashAnswer::Stored(stored);
+            return recorded;
         }
-        let row = ask.row.clone();
-        let disk = self.clone();
-        let answer = match ask.background {
-            Some(lower_priority) => {
-                let (send, receive) = tokio::sync::oneshot::channel();
-                let spawned = std::thread::Builder::new()
-                    .name("full-hash-read".into())
-                    .spawn(move || {
-                        lower_priority();
-                        let _ = send.send(disk.read_and_record_blocking(&ask));
-                    });
-                match spawned {
-                    Ok(_) => receive.await.ok(),
-                    Err(_) => None,
-                }
-            }
-            None => tokio::task::spawn_blocking(move || disk.read_and_record_blocking(&ask))
-                .await
-                .ok(),
+
+        let Ok(_read) = self.inner.hash_turns.reads.acquire().await else {
+            return could_not_run();
         };
-        let Some(answer) = answer else {
-            return FullHashAnswer::Unreadable(HashRefusal {
-                reason: reason::DISK_OPERATION_FAILED,
-                sentence: "the full-hash read could not run".to_owned(),
-            });
-        };
-        if let (FullHashAnswer::Read(known), Some(row)) = (&answer, &row) {
-            self.record_full_hash(row, known).await;
-        }
-        answer
-    }
-
-    /// [`Self::full_hash`] on a blocking thread: the cache, then a read. The
-    /// table is neither consulted nor written; an async caller that holds the
-    /// row stores a read with [`Self::record_full_hash`].
-    pub fn full_hash_blocking(&self, ask: &HashAsk) -> FullHashAnswer {
-        self.recorded(ask)
-            .unwrap_or_else(|| self.read_and_record_blocking(ask))
-    }
-
-    /// Store `known`, read now, on `row`, when a store is installed. The
-    /// caller must not hold the database's writer.
-    pub async fn record_full_hash(&self, row: &HashRow, known: &KnownHash) {
-        if let Some(store) = self.hash_store() {
-            store.record(row, known).await;
-        }
-    }
-
-    /// Record `known`, a hash of `path` taken by a whole read the caller ran
-    /// through this owner, in the cache.
-    pub fn note_full_hash(&self, path: &Path, known: KnownHash) {
-        self.inner.cache.hashes.record(path, known);
-    }
-
-    /// The cached answer `ask` may take.
-    fn recorded(&self, ask: &HashAsk) -> Option<FullHashAnswer> {
-        if ask.fresh != Fresh::MayReuse {
-            return None;
-        }
-        let now = ask.mark.as_ref()?;
-        self.inner
-            .cache
-            .hashes
-            .answer(&ask.path, now)
-            .map(FullHashAnswer::Cached)
-    }
-
-    fn read_and_record_blocking(&self, ask: &HashAsk) -> FullHashAnswer {
         let epoch = self.inner.cache.epoch();
-        match self.read_whole_blocking(ask) {
-            Ok(known) => {
-                if self.inner.cache.epoch() == epoch {
-                    self.inner.cache.hashes.record(&ask.path, known.clone());
-                }
-                FullHashAnswer::Read(known)
-            }
-            Err(Short::Changed) => FullHashAnswer::Changed,
-            Err(Short::Unreadable(refusal)) => FullHashAnswer::Unreadable(refusal),
-            Err(Short::Cancelled) => FullHashAnswer::Cancelled,
+        let disk = self.clone();
+        let path = ask.path.clone();
+        let Ok(read) = tokio::task::spawn_blocking(move || disk.read_whole_blocking(&ask)).await
+        else {
+            return could_not_run();
+        };
+        let known = match read {
+            Ok(known) => known,
+            Err(Short::Changed) => return FullHashAnswer::Changed,
+            Err(Short::Unreadable(refusal)) => return FullHashAnswer::Unreadable(refusal),
+            Err(Short::Cancelled) => return FullHashAnswer::Cancelled,
+        };
+        match &store {
+            Some((row, store)) => store.record(row, &known).await,
+            None => self.inner.cache.record_hash(&path, known.clone(), epoch),
         }
+        FullHashAnswer::Read(known)
     }
 
-    /// Read the file end to end once, hashing every byte.
+    /// Read the file end to end once, hashing every byte, and mark it through
+    /// the handle as it opens and again at the end. The two marks must show
+    /// the file untouched and of the length read; the hash is recorded
+    /// against the first.
     ///
-    /// A mark of the handle is taken as it opens. With no mark from the
-    /// caller, one followed stat of the name after the read must show the
-    /// same file untouched: it binds the name to the bytes read, and is the
-    /// mark the hash is recorded against. A caller that passed a mark
-    /// brackets the read of the name itself: the opened handle must still
-    /// hold the content the caller's mark describes, a second mark of the
-    /// handle at the end must show it untouched, and the hash is recorded
-    /// against the caller's mark, with no stat of the name.
-    ///
-    /// Probes: one open and one stat of the handle; then one followed stat
-    /// of the name with no mark from the caller, or a second stat of the
-    /// handle with one.
+    /// Probes: one open and two stats of the handle.
     fn read_whole_blocking(&self, ask: &HashAsk) -> Result<KnownHash, Short> {
         let path = ask.path.as_path();
         if ask.cancel.is_cancelled() {
@@ -449,11 +463,6 @@ impl Disk {
                 .map_err(|error| refusal("read", DiskError::new(DiskVerb::Read, path, error)))
         };
         let opened = handle_mark(&file)?;
-        if let Some(seen) = &ask.mark
-            && !opened.content_unchanged_since(seen)
-        {
-            return Err(Short::Changed);
-        }
         let mut hasher = ContentHasher::new();
         let mut buffer = vec![0u8; CHUNK_BYTES];
         loop {
@@ -483,40 +492,34 @@ impl Disk {
             ask.progress.report(Phase::Verifying, hasher.size_bytes());
         }
         let hashes = hasher.finalize();
-        let mark = match &ask.mark {
-            Some(seen) => {
-                let closing = handle_mark(&file)?;
-                if !opened.compare(&closing).is_untouched() {
-                    return Err(Short::Changed);
-                }
-                seen.clone()
-            }
-            None => {
-                drop(file);
-                let after = self
-                    .fingerprint_followed_blocking(path)
-                    .map_err(|_| Short::Changed)?;
-                if !opened.compare(&after).is_untouched() {
-                    return Err(Short::Changed);
-                }
-                after
-            }
-        };
+        let closing = handle_mark(&file)?;
+        if !opened.compare(&closing).is_untouched() || !opened.is_len(hashes.size_bytes) {
+            return Err(Short::Changed);
+        }
         if ask.cancel.is_cancelled() {
             return Err(Short::Cancelled);
-        }
-        if !mark.is_len(hashes.size_bytes) {
-            return Err(Short::Changed);
         }
         Ok(KnownHash {
             size_bytes: hashes.size_bytes,
             blake3: hashes.blake3,
             crc: Some(hashes.crc),
-            mark,
+            mark: opened,
         })
     }
 }
 
+fn could_not_run() -> FullHashAnswer {
+    FullHashAnswer::Unreadable(HashRefusal {
+        reason: reason::DISK_OPERATION_FAILED,
+        sentence: "the full-hash read could not run".to_owned(),
+    })
+}
+
 fn elapsed_ns(started: std::time::Instant) -> u64 {
     started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(test)]
+pub(crate) fn fits_for_test(recorded: &Mark, now: &Mark) -> bool {
+    still_fits(recorded, now)
 }

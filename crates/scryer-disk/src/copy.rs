@@ -228,11 +228,15 @@ pub struct Proof {
 }
 
 /// What a recorded copy produced.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Copied {
     pub hashes: ContentHashes,
     /// Absent at [`Depth::Unproven`].
     pub proof: Option<Proof>,
+    /// The file written, read through its handle after the sync, so a hash
+    /// of it can be stored with the length and modification time it was
+    /// taken at. `None` when the handle could not say.
+    pub mark: Option<Mark>,
 }
 
 /// What a watched copy is doing.
@@ -894,11 +898,14 @@ impl Job<'_> {
             chunk_bytes: CHUNK_BYTES,
             seen: None,
             phases: false,
-            mark_target: false,
+            mark_target: true,
             watch: self.watch,
         };
-        let hashes = match write_copy(disk, source, target, writing) {
-            Ok(written) => written.hashes.expect("a recorded copy hashes"),
+        let (hashes, mark) = match write_copy(disk, source, target, writing) {
+            Ok(written) => (
+                written.hashes.expect("a recorded copy hashes"),
+                written.target,
+            ),
             Err(fail) => {
                 // The source is untouched, so an incomplete staged file this
                 // attempt created is worth nothing to anyone. One it never
@@ -944,7 +951,11 @@ impl Job<'_> {
         let proof = (evidence.depth != Depth::Unproven).then(|| {
             disk.prove_copy_blocking(source, dest, &hashes, evidence.depth, &self.watch.progress)
         });
-        self.copied.replace(Some(Copied { hashes, proof }));
+        self.copied.replace(Some(Copied {
+            hashes,
+            proof,
+            mark,
+        }));
         Ok(())
     }
 }

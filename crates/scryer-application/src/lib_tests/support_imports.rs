@@ -447,6 +447,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<crate::ClaimedMediaFile> {
         let mut files = self.store.lock().await;
         if let Some(existing) = files
@@ -486,6 +487,21 @@ impl MediaFileRepository for MockMediaFileRepo {
             if input.release_listing_json.is_some() {
                 existing.release_listing_json = input.release_listing_json.clone();
             }
+            // Like the store: the row takes the input's size and signature,
+            // and keeps its hash only when both are unchanged.
+            let unchanged = existing.size_bytes == input.size_bytes
+                && input.source_signature_value.is_some()
+                && existing.source_signature_scheme == input.source_signature_scheme
+                && existing.source_signature_value == input.source_signature_value;
+            if !unchanged {
+                existing.content_hashes = None;
+            }
+            existing.size_bytes = input.size_bytes;
+            existing.source_signature_scheme = input.source_signature_scheme.clone();
+            existing.source_signature_value = input.source_signature_value.clone();
+            if let Some(hashes) = hashes {
+                existing.content_hashes = Some(hashes.clone());
+            }
             return Ok(crate::ClaimedMediaFile {
                 media_file_id: existing.id.clone(),
                 disposition: crate::MediaFileCatalogDisposition::Reused,
@@ -496,6 +512,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         let mut file = mock_media_file(id.clone(), input);
         file.episode_id = associations.episode_ids.first().cloned();
         file.series_movie_link_ids = associations.series_movie_link_ids.clone();
+        file.content_hashes = hashes.cloned();
         files.push(file);
         self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(crate::ClaimedMediaFile {
@@ -1427,12 +1444,8 @@ pub(super) struct TrackingImportRepo {
     pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
     /// The tracked state each finished history retry settled on.
     pub(super) retry_finished_states: Arc<Mutex<Vec<TrackedDownloadState>>>,
-    /// Held-source reads of one download, and batched ones.
+    /// Held-source reads of one download.
     pub(super) held_reads_per_download: Arc<std::sync::atomic::AtomicUsize>,
-    pub(super) held_reads_batched: Arc<std::sync::atomic::AtomicUsize>,
-    /// What a batched held-source read answers instead of the records, for a
-    /// test whose holds change between the batch and the per-download read.
-    pub(super) batched_held_answer: Arc<Mutex<Option<crate::HeldDownloadSources>>>,
 }
 
 fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
@@ -1608,29 +1621,6 @@ impl ImportRepository for TrackingImportRepo {
         }
         record.payload_json = payload.to_string();
         Ok(true)
-    }
-
-    async fn archive_processing_pending_downloads(
-        &self,
-        download_ids: &[scryer_domain::download_identity::DownloadId],
-    ) -> AppResult<crate::HeldDownloadSources> {
-        self.held_reads_batched
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some(answer) = self.batched_held_answer.lock().await.clone() {
-            return Ok(answer);
-        }
-        let canonical_ids = self.canonical_ids.lock().await;
-        let mut answer = crate::HeldDownloadSources::default();
-        for record in self.records.lock().await.iter() {
-            if let Some(download_id) = canonical_ids.get(&record.id)
-                && download_ids.contains(download_id)
-                && serde_json::from_str::<serde_json::Value>(&record.payload_json)
-                    .is_ok_and(|payload| payload["archive_processing_pending"] == true)
-            {
-                answer.held.insert(*download_id);
-            }
-        }
-        Ok(answer)
     }
 
     async fn queue_import_request_with_identity_for_download(

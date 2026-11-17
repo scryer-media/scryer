@@ -854,6 +854,7 @@ pub async fn compare_existing(
             depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
             outcome: FileVerificationOutcome::Verified,
             detail: None,
+            destination_mark: None,
         });
     }
     let source_size = source_metadata.len();
@@ -892,6 +893,7 @@ pub async fn compare_existing(
         depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
         outcome: FileVerificationOutcome::Verified,
         detail: None,
+        destination_mark: None,
     })
 }
 
@@ -925,6 +927,7 @@ fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
             "{} contains different content. Both files were preserved.",
             destination.display()
         )),
+        destination_mark: None,
     }
 }
 

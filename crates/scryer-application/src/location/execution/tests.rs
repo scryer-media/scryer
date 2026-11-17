@@ -1322,6 +1322,7 @@ async fn corruption_at_full_depth_blocks_source_removal() {
                 depth: assessment.depth,
                 outcome: assessment.outcome,
                 detail: assessment.detail,
+                destination_mark: None,
             })
         }
     }
@@ -2300,6 +2301,7 @@ impl TitleFileMover for CopyThenCorrupt {
             depth: assessment.depth,
             outcome: assessment.outcome,
             detail: assessment.detail,
+            destination_mark: None,
         })
     }
 }

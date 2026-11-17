@@ -447,8 +447,13 @@ impl RootMoveFileMover {
             return;
         };
 
+        let mark = verified
+            .destination_mark
+            .as_deref()
+            .and_then(crate::disk::Mark::from_stored);
         let persisted = crate::location::model::PersistedContentHashes::from_streamed(
             hashes,
+            mark.as_ref(),
             chrono::Utc::now(),
         );
         if let Err(error) = catalog

@@ -161,32 +161,40 @@ impl StatCache {
 
     /// Forget `key` and its parent.
     pub(crate) fn evict(&self, key: &Path) {
-        self.hashes.forget(key, false);
         self.forget(key, |entries, slot| {
             entries.remove(slot);
         });
+        self.hashes.forget(key, false);
     }
 
     /// Forget `key`, everything under it, and its parent.
     pub(crate) fn evict_subtree(&self, key: &Path) {
-        self.hashes.forget(key, true);
         self.forget(key, |entries, slot| {
             let doomed: Vec<PathBuf> = subtree(entries, slot).collect();
             for path in doomed {
                 entries.remove(&path);
             }
         });
+        self.hashes.forget(key, true);
     }
 
     /// Forget `key` and every ancestor, for a change that may have created
     /// any of them.
     pub(crate) fn evict_ancestors(&self, key: &Path) {
-        self.hashes.forget(key, false);
         self.forget(key, |entries, slot| {
             for ancestor in slot.ancestors() {
                 entries.remove(ancestor);
             }
         });
+        self.hashes.forget(key, false);
+    }
+
+    /// Keep a whole-file hash read since `epoch`, unless an eviction happened
+    /// since. Every eviction advances the epoch before it forgets hashes, and
+    /// the epoch is read under the hash cache's lock, so a hash read before a
+    /// change is either refused here or forgotten by that change.
+    pub(crate) fn record_hash(&self, path: &Path, known: super::KnownHash, epoch: u64) {
+        self.hashes.record_if(path, known, || self.epoch() == epoch);
     }
 
     /// Advance the epoch, apply `evict` to the slot of `key`, and forget its

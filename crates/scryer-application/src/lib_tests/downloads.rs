@@ -5227,10 +5227,6 @@ async fn external_weaver_idless_bad_observed_item_blocks_after_history_retry() {
         .expect("download queue poller should stop cleanly");
 }
 
-/// Runs the cleanup of a failed tracked download that holds no cleanup claim
-/// of its own. With `held`, an import of the same download still holds its
-/// sources for an archive or subtitle delivery. Returns the outcome and the
-/// client removals asked for.
 /// How one unclaimed failed cleanup is set up.
 #[derive(Clone, Copy, Default)]
 struct HeldSourceCase {
@@ -5238,16 +5234,15 @@ struct HeldSourceCase {
     held: bool,
     /// The cleanup runs in a reconcile tick.
     tick: bool,
-    /// An earlier check found the download held.
-    remembered: bool,
-    /// The tick's batched read finds the download not held, whatever the
-    /// records say: a hold set after the batch was read.
-    batch_missed_hold: bool,
 }
 
-/// Held-source reads that reached the repository: (one download, batched).
-type HeldSourceReads = (usize, usize);
+/// Held-source reads of the one download that reached the repository.
+type HeldSourceReads = usize;
 
+/// Runs the cleanup of a failed tracked download that holds no cleanup claim
+/// of its own. With `held`, an import of the same download still holds its
+/// sources for an archive or subtitle delivery. Returns the outcome, the
+/// client removals asked for, the client id and the held-source reads.
 async fn run_unclaimed_failed_tracked_cleanup(
     case: HeldSourceCase,
 ) -> (
@@ -5256,12 +5251,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
     String,
     HeldSourceReads,
 ) {
-    let HeldSourceCase {
-        held,
-        tick,
-        remembered,
-        batch_missed_hold,
-    } = case;
+    let HeldSourceCase { held, tick } = case;
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -5381,21 +5371,8 @@ async fn run_unclaimed_failed_tracked_cleanup(
         retained_in_client_after_cleanup: false,
     };
 
-    if remembered {
-        crate::import::import::note_held_sources(&download_id, &Ok(true));
-    }
-    if batch_missed_hold {
-        *import_repo.batched_held_answer.lock().await = Some(crate::HeldDownloadSources::default());
-    }
     let cache = match tick {
-        true => Some(
-            crate::import::import::TerminalCleanupTickCache::prefetch(&app, &[])
-                .await
-                .with_download_ids(vec![
-                    scryer_domain::download_identity::DownloadId::new(),
-                    download_id,
-                ]),
-        ),
+        true => Some(crate::import::import::TerminalCleanupTickCache::prefetch(&app, &[]).await),
         false => None,
     };
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
@@ -5406,21 +5383,9 @@ async fn run_unclaimed_failed_tracked_cleanup(
     )
     .await;
     let deleted = download_client.deleted_requests.lock().await.clone();
-    let reads = (
-        import_repo
-            .held_reads_per_download
-            .load(std::sync::atomic::Ordering::Relaxed),
-        import_repo
-            .held_reads_batched
-            .load(std::sync::atomic::Ordering::Relaxed),
-    );
-    // What the check found is remembered for the next tick: a held download
-    // until its sources free, a cleaned-up one not at all.
-    assert_eq!(
-        crate::import::import::held_sources_remembered(&download_id),
-        held,
-        "the check remembers a held download, and only a held one"
-    );
+    let reads = import_repo
+        .held_reads_per_download
+        .load(std::sync::atomic::Ordering::Relaxed);
     (outcome, deleted, config.id, reads)
 }
 
@@ -5448,77 +5413,24 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
 
 /// A download without a cleanup claim of its own waits, as a claimed one
 /// does, while an import of it still holds its sources: nothing is removed
-/// from the client, and the cleanup is tried again later. A download a tick
-/// already knows to be held is answered by the tick's one batched read; any
-/// other is read on its own, right before its cleanup.
+/// from the client, and the cleanup is tried again later. Each attempt reads
+/// that one download's sources, right before its cleanup, in a tick or not.
 #[tokio::test]
 async fn unclaimed_tracked_cleanup_waits_while_an_import_holds_the_sources() {
     use crate::import::import::TerminalDownloadCleanupOutcome::{Removed, RetryableFailure};
 
-    // First sight of a held download, with and without a tick: its own read.
     for tick in [false, true] {
-        let (outcome, deleted, _, reads) = run_unclaimed_failed_tracked_cleanup(HeldSourceCase {
-            held: true,
-            tick,
-            ..Default::default()
-        })
-        .await;
+        let (outcome, deleted, _, reads) =
+            run_unclaimed_failed_tracked_cleanup(HeldSourceCase { held: true, tick }).await;
         assert_eq!(outcome, RetryableFailure);
         assert!(deleted.is_empty(), "{deleted:?}");
-        assert_eq!(reads, (1, 0));
+        assert_eq!(reads, 1);
+
+        let (outcome, _, _, reads) =
+            run_unclaimed_failed_tracked_cleanup(HeldSourceCase { held: false, tick }).await;
+        assert_eq!(outcome, Removed);
+        assert_eq!(reads, 1);
     }
-
-    // Still held on a later tick: the batch answers, and nothing else is read.
-    let (outcome, deleted, _, reads) = run_unclaimed_failed_tracked_cleanup(HeldSourceCase {
-        held: true,
-        tick: true,
-        remembered: true,
-        ..Default::default()
-    })
-    .await;
-    assert_eq!(outcome, RetryableFailure);
-    assert!(deleted.is_empty(), "{deleted:?}");
-    assert_eq!(reads, (0, 1));
-
-    // Freed since: the batch says so, and the download's own read confirms
-    // it before anything is removed.
-    let (outcome, _, _, reads) = run_unclaimed_failed_tracked_cleanup(HeldSourceCase {
-        tick: true,
-        remembered: true,
-        ..Default::default()
-    })
-    .await;
-    assert_eq!(outcome, Removed);
-    assert_eq!(reads, (1, 1));
-
-    // Nothing held and nothing remembered: one read of its own, no batch.
-    let (outcome, _, _, reads) = run_unclaimed_failed_tracked_cleanup(HeldSourceCase {
-        tick: true,
-        ..Default::default()
-    })
-    .await;
-    assert_eq!(outcome, Removed);
-    assert_eq!(reads, (1, 0));
-}
-
-/// A hold set after the tick's batched read is still seen: the batch's "not
-/// held" is never acted on without the download's own read, so the payload
-/// of a download an import has just taken hold of stays.
-#[tokio::test]
-async fn unclaimed_tracked_cleanup_sees_a_hold_set_after_the_batched_read() {
-    let (outcome, deleted, _, reads) = run_unclaimed_failed_tracked_cleanup(HeldSourceCase {
-        held: true,
-        tick: true,
-        remembered: true,
-        batch_missed_hold: true,
-    })
-    .await;
-    assert_eq!(
-        outcome,
-        crate::import::import::TerminalDownloadCleanupOutcome::RetryableFailure
-    );
-    assert!(deleted.is_empty(), "{deleted:?}");
-    assert_eq!(reads, (1, 1));
 }
 
 #[tokio::test]

@@ -1105,6 +1105,7 @@ impl MediaFileRepository for NullMediaFileRepository {
         &self,
         _input: &InsertMediaFileInput,
         _associations: &crate::MediaFileAssociations,
+        _hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<crate::ClaimedMediaFile> {
         Err(AppError::Repository(
             "media file repository is not configured".to_string(),

@@ -30,7 +30,7 @@ pub use scryer_disk::{
     Verdict, Watch, resumable_staging_path,
 };
 pub use scryer_disk::{
-    Fresh, FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture,
+    FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture, StoredHash,
 };
 
 #[cfg(test)]
