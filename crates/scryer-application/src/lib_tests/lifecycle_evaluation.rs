@@ -2522,7 +2522,7 @@ async fn swap_source_in_place(
                 ),
                 rule_set_id,
             ),
-            action_spec_json: r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
+            declared_actions_json: r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
                 .to_string(),
             grace_days: reference.grace_days,
             source_content_hash: reference.source_content_hash.clone(),

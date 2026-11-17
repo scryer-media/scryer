@@ -12932,9 +12932,6 @@ const en: LocaleDictionary = {
   "jobs.builtin.LifecycleRuleEvaluation.name": "Lifecycle Rule Evaluation",
   "jobs.builtin.LifecycleRuleEvaluation.description":
     "Start and expire request leases on schedule. Each lifecycle rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
-  "jobs.builtin.LifecycleActionHandling.name": "Lifecycle Action Handling",
-  "jobs.builtin.LifecycleActionHandling.description":
-    "Each lifecycle rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule.",
   "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
   "jobs.builtin.MediaServerSignalSync.description":
     "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",

@@ -908,7 +908,7 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
     assert_eq!(detail.revision.grace_days, 7);
     assert_eq!(detail.revision.created_by, None);
     assert_eq!(
-        detail.revision.action_spec_json,
+        detail.revision.declared_actions_json,
         r#"{"schema_version":3,"heads":["delete_title"],"destructive":true,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
     );
     assert_eq!(

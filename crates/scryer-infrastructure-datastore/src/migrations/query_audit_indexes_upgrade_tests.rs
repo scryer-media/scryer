@@ -119,7 +119,7 @@ async fn assert_plan_uses_without_sort(
     );
 }
 
-/// The name an index added here carries after the full catalog: 0358 renames
+/// The name an index added here carries after the full catalog: 0348 renames
 /// the lifecycle rule tables' indexes.
 fn current_index_name(name: &str) -> String {
     match name.strip_prefix("idx_maintenance_") {

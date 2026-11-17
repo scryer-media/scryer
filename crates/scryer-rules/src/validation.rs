@@ -1764,7 +1764,7 @@ pub fn validate_managed_rule(
 /// [`crate::lifecycle::rewrite_package_declaration`] on the source.
 ///
 /// Checks:
-/// 1. Package declaration matches `scryer.maintenance.user.<rule_set_id>`.
+/// 1. Package declaration matches `scryer.lifecycle.user.<rule_set_id>`.
 /// 2. Source and the generated decision wrapper both compile.
 /// 3. No import pulls part of `input` into scope, `input` is never referenced
 ///    as a whole value, and every fact is selected by a literal name. All three

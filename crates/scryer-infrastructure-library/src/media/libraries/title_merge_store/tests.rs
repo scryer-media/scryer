@@ -441,7 +441,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, matcher_content_hash,
+        "INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, source_content_hash,
                                             title_id, library_id, facet, subject_id)
          VALUES ('candidate-1', 'rule-1', 1, 'hash', {}, 'library-a', 'series', {})",
         vec![
@@ -495,7 +495,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     run(
         &datastore,
         "INSERT INTO lifecycle_sequence_terminal_memberships
-             (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id, subject_kind,
+             (id, candidate_id, rule_set_id, revision_number, source_content_hash, title_id, subject_kind,
               subject_id, match_generation, sequence_content_hash, outcome, created_at)
          VALUES ('terminal-membership-1', 'candidate-1', 'rule-1', 1, 'hash', {}, 'title', {}, 1,
                  'sequence-hash', 'succeeded', '2026-01-01T00:00:00Z')",

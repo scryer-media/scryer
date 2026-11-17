@@ -1,20 +1,19 @@
-//! Maintenance rules become lifecycle rules: their tables and indexes take the
-//! new name with every row kept, the gates keep their stored values, job
-//! history follows the new job key, builder documents name the new family,
-//! and stored reason codes take the new prefix. Everything outside that is
-//! left as it was. Exercised through the real upgrade runner, with and
-//! without foreign-key enforcement.
+//! Maintenance rules become lifecycle rules: the system-owned rule's tables
+//! and indexes take the new name with every row kept, columns take their
+//! final names and shape, the gates keep their stored values, job history
+//! follows the new job key, the retired action handling job's runs go, stored
+//! sources declare the lifecycle package, and stored reason codes take their
+//! current names. Everything outside that is left as it was. Exercised
+//! through the real upgrade runner, with and without foreign-key enforcement.
 
 use sqlx::SqlitePool;
 
-const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0358_rename_maintenance_to_lifecycle.sql");
-const POSTGRES: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0358_rename_maintenance_to_lifecycle.sql"
-);
+const SQLITE: &str = include_str!("../../../scryer/src/db/migrations/0348_lifecycle_rules.sql");
+const POSTGRES: &str =
+    include_str!("../../../scryer/src/db/postgres/migrations/0348_lifecycle_rules.sql");
 
 /// Version the catalog is replayed to before the rename is applied.
-const PRE_UPGRADE_VERSION: i64 = 357;
+const PRE_UPGRADE_VERSION: i64 = 347;
 
 const RULE: &str = "rule-emberfall";
 const CANDIDATE: &str = "rule-emberfall-candidate";
@@ -71,7 +70,51 @@ const INDEXES: &[&str] = &[
     "idx_lifecycle_action_job_receipts_accepted_request",
     "idx_lifecycle_sequence_terminal_memberships_active",
     "idx_lifecycle_sequence_terminal_memberships_active_page",
+    "idx_lifecycle_candidates_rule_due",
 ];
+
+/// Columns of the renamed tables after the upgrade: present or gone.
+const COLUMNS: &[(&str, &str, bool)] = &[
+    ("lifecycle_rule_sets", "state", true),
+    ("lifecycle_rule_sets", "edited_since_enabled", true),
+    (
+        "lifecycle_rule_sets",
+        "destructive_confirmed_revision",
+        true,
+    ),
+    ("lifecycle_rule_sets", "schedule_json", true),
+    ("lifecycle_rule_sets", "max_titles_per_run", true),
+    ("lifecycle_rule_sets", "enabled", false),
+    ("lifecycle_rule_sets", "evaluation_mode", false),
+    ("lifecycle_rule_sets", "effect_arming", false),
+    ("lifecycle_rule_sets", "destructive_rearm_required", false),
+    ("lifecycle_rule_sets", "subject_kind", false),
+    ("lifecycle_rule_revisions", "source_content_hash", true),
+    ("lifecycle_rule_revisions", "declared_actions_json", true),
+    ("lifecycle_rule_revisions", "builder_model_json", true),
+    ("lifecycle_rule_revisions", "matcher_content_hash", false),
+    ("lifecycle_rule_revisions", "action_spec", false),
+    ("lifecycle_rule_revisions", "storage_root_id", false),
+    ("lifecycle_candidates", "source_content_hash", true),
+    ("lifecycle_candidates", "decided_actions_json", true),
+    ("lifecycle_candidates", "actions_conflict_json", true),
+    ("lifecycle_candidates", "matcher_content_hash", false),
+    ("lifecycle_evaluation_runs", "source_content_hash", true),
+    ("lifecycle_evaluation_runs", "matcher_content_hash", false),
+    (
+        "lifecycle_sequence_terminal_memberships",
+        "source_content_hash",
+        true,
+    ),
+    (
+        "lifecycle_sequence_terminal_memberships",
+        "matcher_content_hash",
+        false,
+    ),
+];
+
+/// The claim index the upgrade drops.
+const DROPPED_INDEX: &str = "idx_lifecycle_claims_live_operator_keep";
 
 const GATES: &[&str] = &[
     "evaluation",
@@ -149,7 +192,8 @@ async fn seed(pool: &SqlitePool) {
     exec(
         pool,
         &format!(
-            "INSERT INTO maintenance_rule_sets (id, name) VALUES ('{RULE}', 'Emberfall rule')"
+            "INSERT INTO maintenance_rule_sets (id, name, system_owned)
+             VALUES ('{RULE}', 'Emberfall rule', 1)"
         ),
     )
     .await;
@@ -158,9 +202,10 @@ async fn seed(pool: &SqlitePool) {
         &format!(
             "INSERT INTO maintenance_rule_revisions
                 (id, rule_set_id, revision_number, rego_source, action_spec,
-                 matcher_content_hash, builder_model_json)
-             VALUES ('{RULE}-revision', '{RULE}', 1, 'package scryer.maintenance.user', '{{}}',
-                 'hash', '{{\"family\":\"maintenance\",\"join\":\"ALL\",\"version\":2}}')"
+                 matcher_content_hash)
+             VALUES ('{RULE}-revision', '{RULE}', 1,
+                 'package scryer.maintenance.user.emberfall\nimport data.scryer.maintenance.wrapper',
+                 '{{\"steps\":[]}}', 'hash')"
         ),
     )
     .await;
@@ -316,14 +361,17 @@ async fn seed(pool: &SqlitePool) {
          VALUES ('job-run-lifecycle', 'maintenance_rule_evaluation', 'completed',
                  'maintenance_rule_evaluation', '2026-09-01', '2026-09-01'),
                 ('job-run-other', 'housekeeping', 'completed', 'housekeeping',
-                 '2026-09-01', '2026-09-01')",
+                 '2026-09-01', '2026-09-01'),
+                ('job-run-handling-1', 'lifecycle_action_handling', 'completed',
+                 'lifecycle_action_handling', '2026-09-01', '2026-09-01'),
+                ('job-run-handling-2', 'lifecycle_action_handling', 'failed',
+                 'lifecycle_action_handling', '2026-09-02', '2026-09-02')",
     )
     .await;
     exec(
         pool,
-        "INSERT INTO rule_sets (id, name, rego_source, builder_model_json)
-         VALUES ('scoring-kept', 'Scoring', 'package s',
-                 '{\"family\":\"maintenance\",\"version\":2}')",
+        "INSERT INTO rule_sets (id, name, rego_source)
+         VALUES ('scoring-kept', 'Scoring', 'package scryer.maintenance.user.scoring')",
     )
     .await;
 }
@@ -357,6 +405,52 @@ async fn assert_renamed(pool: &SqlitePool, context: &str) {
             "{context}: {index}"
         );
     }
+    assert_eq!(
+        object_count(pool, "index", DROPPED_INDEX).await,
+        0,
+        "{context}: {DROPPED_INDEX}"
+    );
+    for (table, column, present) in COLUMNS {
+        assert_eq!(
+            scalar_i64(
+                pool,
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'"
+                )
+            )
+            .await,
+            i64::from(*present),
+            "{context}: {table}.{column}"
+        );
+    }
+    assert_eq!(
+        text(
+            pool,
+            &format!(
+                "SELECT state || '|' || edited_since_enabled || '|'
+                     || coalesce(destructive_confirmed_revision, 'none') || '|'
+                     || max_titles_per_run || '|' || coalesce(schedule_json, 'none')
+                 FROM lifecycle_rule_sets WHERE id = '{RULE}'"
+            )
+        )
+        .await
+        .as_deref(),
+        Some("disabled|0|none|10|none"),
+        "{context}: a disabled system rule stays disabled and acts on ten titles"
+    );
+    assert_eq!(
+        text(
+            pool,
+            &format!(
+                "SELECT source_content_hash || '|' || declared_actions_json
+                 FROM lifecycle_rule_revisions WHERE id = '{RULE}-revision'"
+            )
+        )
+        .await
+        .as_deref(),
+        Some("hash|{\"steps\":[]}"),
+        "{context}: renamed columns keep their values"
+    );
     assert_eq!(
         scalar_i64(pool, "SELECT COUNT(*) FROM pragma_foreign_key_check").await,
         0,
@@ -409,6 +503,22 @@ async fn assert_renamed(pool: &SqlitePool, context: &str) {
         "{context}: job history follows the job key"
     );
     assert_eq!(
+        scalar_i64(
+            pool,
+            "SELECT COUNT(*) FROM workflow_operations
+             WHERE job_key = 'lifecycle_action_handling'
+                OR operation_type = 'lifecycle_action_handling'"
+        )
+        .await,
+        0,
+        "{context}: the retired job's runs are removed"
+    );
+    assert_eq!(
+        scalar_i64(pool, "SELECT COUNT(*) FROM workflow_operations").await,
+        2,
+        "{context}: every other run is kept"
+    );
+    assert_eq!(
         text(
             pool,
             "SELECT job_key || '|' || operation_type FROM workflow_operations
@@ -428,10 +538,9 @@ async fn assert_renamed(pool: &SqlitePool, context: &str) {
                  WHERE id = '{RULE}-revision'"
             )
         )
-        .await
-        .as_deref(),
-        Some("{\"family\":\"lifecycle\",\"join\":\"ALL\",\"version\":2}"),
-        "{context}: builder family"
+        .await,
+        None,
+        "{context}: a revision written before the builder has no builder document"
     );
     assert_eq!(
         text(
@@ -442,17 +551,17 @@ async fn assert_renamed(pool: &SqlitePool, context: &str) {
         )
         .await
         .as_deref(),
-        Some("package scryer.maintenance.user"),
-        "{context}: rule sources are left as written"
+        Some("package scryer.lifecycle.user.emberfall\nimport data.scryer.lifecycle.wrapper"),
+        "{context}: stored sources declare the lifecycle package"
     );
     assert_eq!(
         text(
             pool,
-            "SELECT builder_model_json FROM rule_sets WHERE id = 'scoring-kept'"
+            "SELECT rego_source FROM rule_sets WHERE id = 'scoring-kept'"
         )
         .await
         .as_deref(),
-        Some("{\"family\":\"maintenance\",\"version\":2}"),
+        Some("package scryer.maintenance.user.scoring"),
         "{context}: scoring rules are not touched"
     );
 
@@ -469,7 +578,7 @@ async fn assert_renamed(pool: &SqlitePool, context: &str) {
             format!(
                 "SELECT state_reason FROM lifecycle_candidates WHERE id = '{CANDIDATE}-repeated'"
             ),
-            "LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE".to_string(),
+            "LIFECYCLE_FILE_COVERAGE_AMBIGUOUS".to_string(),
         ),
         (
             format!("SELECT hold_reason FROM lifecycle_action_runs WHERE id = '{CANDIDATE}-action'"),
@@ -499,7 +608,7 @@ async fn assert_renamed(pool: &SqlitePool, context: &str) {
         ),
         (
             "SELECT reconciliation_evidence_json FROM lifecycle_action_job_receipts".to_string(),
-            "{\"reason\":\"LIFECYCLE_ACTION_INVALID\",\"coverage\":\"LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE\"}"
+            "{\"reason\":\"LIFECYCLE_ACTION_INVALID\",\"coverage\":\"LIFECYCLE_FILE_COVERAGE_AMBIGUOUS\"}"
                 .to_string(),
         ),
     ] {
@@ -522,6 +631,12 @@ async fn run_upgrade(foreign_keys: bool) {
             "{context}: seeded {old}"
         );
     }
+
+    assert_eq!(
+        object_count(&pool, "index", DROPPED_INDEX).await,
+        1,
+        "{context}: {DROPPED_INDEX} exists before the upgrade"
+    );
 
     crate::migrations::run_upgrade_migrations_through(&pool, PRE_UPGRADE_VERSION + 1)
         .await
@@ -564,8 +679,8 @@ async fn the_rename_keeps_every_row_without_foreign_keys() {
 }
 
 /// The Postgres statements are the SQLite ones, except that Postgres renames
-/// indexes and constraints in place, and spells case-sensitive matching with
-/// `LIKE` and `strpos`.
+/// indexes and constraints in place, spells case-sensitive matching with
+/// `LIKE` and `strpos`, and has its own boolean and integer types.
 #[test]
 fn postgres_statements_match_sqlite() {
     let section = |sql: &'static str, from: &str, to: &str| -> &'static str {
@@ -580,7 +695,8 @@ fn postgres_statements_match_sqlite() {
     let tables = |sql: &'static str| section(sql, "ALTER TABLE maintenance_rule_sets", "\n\n--");
     assert_eq!(tables(POSTGRES), tables(SQLITE));
 
-    let sqlite_updates = section(SQLITE, "-- The instance gates keep", "");
+    let tail_start = "-- The monitoring-conflict check";
+    let sqlite_updates = section(SQLITE, tail_start, "");
     let mut converted = String::with_capacity(sqlite_updates.len());
     let mut rest = sqlite_updates;
     while let Some(start) = rest.find("GLOB '") {
@@ -599,11 +715,24 @@ fn postgres_statements_match_sqlite() {
     converted.push_str(rest);
     let converted = converted
         .replace("instr(", "strpos(")
-        .replace("GLOB is case-sensitive", "LIKE is case-sensitive");
-    assert_eq!(
-        section(POSTGRES, "-- The instance gates keep", ""),
-        converted
-    );
+        .replace("GLOB is case-sensitive", "LIKE is case-sensitive")
+        .replace("max_titles_per_run INTEGER;", "max_titles_per_run bigint;")
+        .replace("system_owned = 1;", "system_owned = true;")
+        .replace(
+            "edited_since_enabled INTEGER NOT NULL DEFAULT 0",
+            "edited_since_enabled BOOLEAN NOT NULL DEFAULT false",
+        )
+        .replace(
+            "destructive_confirmed_revision INTEGER;",
+            "destructive_confirmed_revision BIGINT;",
+        )
+        .replace("enabled = 0 OR", "enabled = false OR")
+        .replace(
+            "destructive_rearm_required = 0 THEN",
+            "destructive_rearm_required = false THEN",
+        )
+        .replace("WHEN enabled = 1\n", "WHEN enabled = true\n");
+    assert_eq!(section(POSTGRES, tail_start, ""), converted);
 
     for index in INDEXES {
         assert!(SQLITE.contains(&format!(" {index}\n")), "{index}");

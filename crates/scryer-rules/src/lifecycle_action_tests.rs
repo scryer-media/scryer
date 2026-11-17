@@ -50,7 +50,7 @@ fn validate(body: &str) -> ValidationResult {
 /// A complete source with nothing rewritten, so line numbers in a test are the
 /// line numbers in the string.
 fn source(body: &str) -> String {
-    format!("package scryer.maintenance.user.fixture_rule\nimport rego.v1\n{body}")
+    format!("package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n{body}")
 }
 
 fn literal(value: &str, line: usize, column: usize) -> LifecycleActionLiteral {
@@ -946,7 +946,7 @@ fn helpers_that_are_used_and_contract_heads_do_not_warn() {
              \tinput.facts.file_count > limits.files\n\
              \tlabels[\"stale\"]\n\
              }\n\
-             by_path if data.scryer.maintenance.user.fixture_rule.archive\n\
+             by_path if data.scryer.lifecycle.user.fixture_rule.archive\n\
              search if by_path\n\
              unknown if input.observations.added_at.status == \"unknown\"\n\
              reasons contains \"archived\" if archive\n\
@@ -966,7 +966,7 @@ fn with_may_not_replace_input_data_or_a_helper_name() {
         &source(
             "old if input.facts.file_count > 5\n\
              unmonitor if old with input.facts.file_count as 9\n\
-             search if old with data.scryer.maintenance.user.fixture_rule.old as true\n\
+             search if old with data.scryer.lifecycle.user.fixture_rule.old as true\n\
              delete_files if days_since(input.facts.added_at) > 1 with time.now_ns as 0\n\
              add_tags := [\"a\"] if count([x | x := 1; old with input as {}]) > 0\n\
              remove_tags := [\"b\"] if every x in [1] { old with floor as 1 }\n\
@@ -998,8 +998,8 @@ fn with_may_not_replace_input_data_or_a_helper_name() {
 fn a_helper_used_through_an_import_alias_does_not_warn() {
     let scan = scan_lifecycle_action_heads(
         &source(
-            "import data.scryer.maintenance.user.fixture_rule as me\n\
-             import data.scryer.maintenance.user.fixture_rule.stale as is_stale\n\
+            "import data.scryer.lifecycle.user.fixture_rule as me\n\
+             import data.scryer.lifecycle.user.fixture_rule.stale as is_stale\n\
              old if input.facts.file_count > 5\n\
              stale if input.facts.file_count > 9\n\
              unused_helper := 1\n\
@@ -1172,7 +1172,7 @@ fn the_engine_refuses_a_source_the_scan_refuses() {
             diagnostic_codes::RULE_HOST_HELPER_REDEFINED,
         ),
         (
-            "unmonitor if data.scryer.maintenance.user.other_rule.match\n",
+            "unmonitor if data.scryer.lifecycle.user.other_rule.match\n",
             diagnostic_codes::RULE_FOREIGN_DATA_REFERENCE,
         ),
         (
@@ -1197,11 +1197,11 @@ fn the_engine_refuses_a_source_the_scan_refuses() {
 fn a_read_of_data_outside_the_rule_package_is_refused_with_its_position() {
     for (body, line, column) in [
         (
-            "unmonitor if data.scryer.maintenance.user.other_rule.match\n",
+            "unmonitor if data.scryer.lifecycle.user.other_rule.match\n",
             3,
             14,
         ),
-        ("unmonitor if data.scryer.maintenance\n", 3, 14),
+        ("unmonitor if data.scryer.lifecycle\n", 3, 14),
         ("unmonitor if count(data) > 0\n", 3, 20),
         ("unmonitor if data[\"scryer\"]\n", 3, 14),
         ("unmonitor if {\n\tsome x in data.scryer\n\tx\n}\n", 4, 12),
@@ -1215,8 +1215,8 @@ fn a_read_of_data_outside_the_rule_package_is_refused_with_its_position() {
 
     let scan = scan_lifecycle_action_heads(
         &format!(
-            "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
-             import data.scryer.maintenance.user.other_rule\n\
+            "package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n\
+             import data.scryer.lifecycle.user.other_rule\n\
              unmonitor if other_rule.match\n"
         ),
         "fixture_rule",
@@ -1233,7 +1233,7 @@ fn a_read_of_data_outside_the_rule_package_is_refused_with_its_position() {
     let own = scan_lifecycle_action_heads(
         &source(
             "archive if input.facts.has_file\n\
-             unmonitor if data.scryer.maintenance.user.fixture_rule.archive\n",
+             unmonitor if data.scryer.lifecycle.user.fixture_rule.archive\n",
         ),
         "fixture_rule",
     )
@@ -1272,7 +1272,7 @@ fn a_name_the_day_count_helper_calls_cannot_be_redefined() {
     }
 
     let aliased = scan_lifecycle_action_heads(
-        "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
+        "package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n\
          import input.facts as time\n\
          unmonitor if input.facts.has_file\n",
         "fixture_rule",

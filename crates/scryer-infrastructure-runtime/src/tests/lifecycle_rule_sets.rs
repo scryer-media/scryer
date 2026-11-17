@@ -568,11 +568,12 @@ async fn a_deleting_rule_is_never_stored_without_a_maximum() {
         .unwrap();
     let deleting = |number| {
         let mut revision = revision("bounded", number);
-        revision.action_spec_json = scryer_application::lifecycle_rules::LifecycleDeclaredActions {
-            destructive: true,
-            ..scryer_application::lifecycle_rules::LifecycleDeclaredActions::none()
-        }
-        .to_persisted_json();
+        revision.declared_actions_json =
+            scryer_application::lifecycle_rules::LifecycleDeclaredActions {
+                destructive: true,
+                ..scryer_application::lifecycle_rules::LifecycleDeclaredActions::none()
+            }
+            .to_persisted_json();
         revision
     };
     let required = scryer_application::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_REQUIRED;
@@ -656,8 +657,9 @@ fn revision(rule_set_id: &str, number: i64) -> LifecycleRuleRevision {
         id: format!("{rule_set_id}-rev-{number}"),
         rule_set_id: rule_set_id.to_string(),
         revision_number: number,
-        rego_source: format!("package scryer.maintenance.user.{rule_set_id}\nmatch := true\n"),
-        action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#.to_string(),
+        rego_source: format!("package scryer.lifecycle.user.{rule_set_id}\nmatch := true\n"),
+        declared_actions_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#
+            .to_string(),
         grace_days: 7 * number,
         source_content_hash: format!("hash-{number}"),
         created_by: Some("user-1".to_string()),
@@ -668,7 +670,7 @@ fn revision(rule_set_id: &str, number: i64) -> LifecycleRuleRevision {
 
 fn title_and_season_revision(rule_set_id: &str, number: i64) -> LifecycleRuleRevision {
     LifecycleRuleRevision {
-        action_spec_json: format!(
+        declared_actions_json: format!(
             r#"{{"schema_version":{},"heads":["unmonitor","unmonitor_season"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}}"#,
             scryer_application::lifecycle_rules::LIFECYCLE_DECLARED_ACTIONS_SCHEMA_VERSION
         ),
@@ -725,15 +727,21 @@ async fn rule_sets_and_revisions_round_trip() {
         .expect("revision exists");
     let expected = first;
     assert_eq!(stored_revision.rego_source, expected.rego_source);
-    assert_eq!(stored_revision.action_spec_json, expected.action_spec_json);
+    assert_eq!(
+        stored_revision.declared_actions_json,
+        expected.declared_actions_json
+    );
     let declared = |json: &str| {
         scryer_application::lifecycle_rules::LifecycleDeclaredActions::from_persisted_json(json)
             .expect("declared actions parse")
             .expect("declared actions are current")
     };
-    let stored_levels = declared(&stored_revision.action_spec_json).levels();
+    let stored_levels = declared(&stored_revision.declared_actions_json).levels();
     assert_eq!(stored_levels.len(), 2, "title and season levels survive");
-    assert_eq!(stored_levels, declared(&expected.action_spec_json).levels());
+    assert_eq!(
+        stored_levels,
+        declared(&expected.declared_actions_json).levels()
+    );
     assert_eq!(stored_revision.source_content_hash, "hash-1");
     assert_eq!(stored_revision.grace_days, 7);
     assert_eq!(stored_revision.created_by.as_deref(), Some("user-1"));

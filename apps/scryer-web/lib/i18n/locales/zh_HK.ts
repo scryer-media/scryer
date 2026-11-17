@@ -6321,9 +6321,6 @@ const zh_HK: LocaleDictionary = {
   "jobs.builtin.LifecycleRuleEvaluation.name": "生命週期規則評估",
   "jobs.builtin.LifecycleRuleEvaluation.description":
     "依排程開始與結束請求租期。每條生命週期規則依自己的排程評估；立即執行會評估所有已啟用的規則，且永遠不會執行動作。",
-  "jobs.builtin.LifecycleActionHandling.name": "生命週期動作處理",
-  "jobs.builtin.LifecycleActionHandling.description":
-    "每條生命週期規則會在其排程評估後，或該規則被手動執行時，對到期的候選項目採取動作，並受執行個體效果閘門與完整安全重新檢查把關。此工作不代表任何規則採取動作。",
   "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
     "已暫緩：自上次讀取最愛以來，媒體伺服器上有帳號將此項目，或所檢查集數的劇集或季，標為最愛。",
   "settings.lifecycleExecutionReason.ruleNotEligible":

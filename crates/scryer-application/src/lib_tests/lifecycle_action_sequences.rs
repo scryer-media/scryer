@@ -72,8 +72,8 @@ fn source_draft(rego_source: &str, grace_days: i64) -> LifecycleSourceDraft {
     }
 }
 
-fn persisted_heads(action_spec_json: &str) -> Vec<LifecycleActionHead> {
-    LifecycleDeclaredActions::from_persisted_json(action_spec_json)
+fn persisted_heads(declared_actions_json: &str) -> Vec<LifecycleActionHead> {
+    LifecycleDeclaredActions::from_persisted_json(declared_actions_json)
         .expect("persisted actions decode")
         .expect("persisted actions are declared")
         .heads
@@ -96,13 +96,13 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
     assert_eq!(created.revision.grace_days, 19);
     assert_eq!(created.load_refusal, None);
     assert_eq!(
-        persisted_heads(&created.revision.action_spec_json),
+        persisted_heads(&created.revision.declared_actions_json),
         vec![LifecycleActionHead::Unmonitor, LifecycleActionHead::Search],
         "heads are recorded in source order"
     );
     assert_eq!(
         created.declared_actions.heads,
-        persisted_heads(&created.revision.action_spec_json)
+        persisted_heads(&created.revision.declared_actions_json)
     );
 
     let updated = app
@@ -125,7 +125,7 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
         .expect("first revision remains available");
     assert_eq!(first.grace_days, 19);
     assert_eq!(
-        persisted_heads(&first.action_spec_json),
+        persisted_heads(&first.declared_actions_json),
         vec![LifecycleActionHead::Unmonitor, LifecycleActionHead::Search]
     );
 }

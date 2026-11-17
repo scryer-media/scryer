@@ -2,12 +2,12 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePoolOptions;
 
 /// The migration that adds the audience favourites tables.
-const AUDIENCE_FAVORITES_VERSION: i64 = 356;
+const AUDIENCE_FAVORITES_VERSION: i64 = 351;
 
 const SQLITE_MIGRATION: &str =
-    include_str!("../../../scryer/src/db/migrations/0356_media_server_audience_favorites.sql");
+    include_str!("../../../scryer/src/db/migrations/0351_media_server_audience_favorites.sql");
 const POSTGRES_MIGRATION: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0356_media_server_audience_favorites.sql"
+    "../../../scryer/src/db/postgres/migrations/0351_media_server_audience_favorites.sql"
 );
 
 async fn pool_before_upgrade() -> sqlx::SqlitePool {

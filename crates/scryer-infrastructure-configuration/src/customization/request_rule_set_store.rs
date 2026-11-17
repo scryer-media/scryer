@@ -232,10 +232,9 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
             &self.datastore,
             "update_request_rule_set_enabled",
             "UPDATE request_rule_sets
-                SET evaluation_mode = {}, enabled = {}, updated_at = {}
+                SET enabled = {}, updated_at = {}
               WHERE id = {}",
             vec![
-                legacy_evaluation_mode_arg(enabled),
                 SqlArg::Bool(enabled),
                 SqlArg::Timestamp(updated_at),
                 SqlArg::Text(id.to_string()),
@@ -262,18 +261,18 @@ const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled,
     LEFT JOIN request_rule_set_libraries scope ON scope.rule_set_id = request_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source,
-    matcher_content_hash, created_by, created_at";
+    source_content_hash, created_by, created_at";
 
 /// Revision keys per statement: two binds each, well under every engine's ceiling.
 const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO request_rule_sets
-        (id, name, description, enabled, evaluation_mode,
+        (id, name, description, enabled,
          current_revision_number, created_at, updated_at, builder_model_json)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO request_rule_revisions
-        (id, rule_set_id, revision_number, rego_source, matcher_content_hash,
+        (id, rule_set_id, revision_number, rego_source, source_content_hash,
          created_by, created_at)
      VALUES ({}, {}, {}, {}, {}, {}, {})";
 
@@ -293,20 +292,12 @@ async fn execute_write(
     .await
 }
 
-/// `request_rule_sets.evaluation_mode` is a retired NOT NULL column. Nothing
-/// reads it; it is written to mirror `enabled` so the stored row stays
-/// self-consistent until a migration drops the column.
-fn legacy_evaluation_mode_arg(enabled: bool) -> SqlArg {
-    SqlArg::Text(if enabled { "enforce" } else { "disabled" }.to_string())
-}
-
 fn rule_set_args(rule_set: &RequestRuleSet) -> Vec<SqlArg> {
     vec![
         SqlArg::Text(rule_set.id.clone()),
         SqlArg::Text(rule_set.name.clone()),
         SqlArg::Text(rule_set.description.clone()),
         SqlArg::Bool(rule_set.enabled),
-        legacy_evaluation_mode_arg(rule_set.enabled),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
@@ -344,7 +335,7 @@ fn row_to_revision(row: &SqlRow) -> AppResult<RequestRuleRevision> {
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
         rego_source: row.text("rego_source")?,
-        source_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("source_content_hash")?,
         created_by: row.opt_text("created_by")?,
         created_at: row.timestamp_or_now("created_at")?,
     })

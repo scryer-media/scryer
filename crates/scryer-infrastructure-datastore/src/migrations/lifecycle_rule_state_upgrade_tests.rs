@@ -1,17 +1,17 @@
 //! A lifecycle rule's enabled flag, evaluation mode, effect arming and re-arm
 //! flag collapse into one stored state, an edited-since-enabled flag and the
 //! revision deletion was confirmed for. Every stored combination is seeded
-//! before the upgrade and read back after it through the real upgrade runner.
+//! on a system-owned rule, the one kind of rule the upgrade keeps, before the
+//! upgrade and read back after it through the real upgrade runner.
 
 use sqlx::SqlitePool;
 
-const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0361_lifecycle_rule_state.sql");
+const SQLITE: &str = include_str!("../../../scryer/src/db/migrations/0348_lifecycle_rules.sql");
 const POSTGRES: &str =
-    include_str!("../../../scryer/src/db/postgres/migrations/0361_lifecycle_rule_state.sql");
+    include_str!("../../../scryer/src/db/postgres/migrations/0348_lifecycle_rules.sql");
 
-/// Version the catalog is replayed to before 0361 is applied.
-const PRE_UPGRADE_VERSION: i64 = 360;
+/// Version the catalog is replayed to before 0348 is applied.
+const PRE_UPGRADE_VERSION: i64 = 347;
 
 /// One stored combination and what it must read as after the upgrade.
 struct Case {
@@ -180,16 +180,16 @@ async fn pre_upgrade_pool() -> SqlitePool {
         true,
     )
     .await
-    .expect("pre-0361 migration fixture should apply");
+    .expect("pre-0348 migration fixture should apply");
     pool
 }
 
 async fn seed(pool: &SqlitePool, case: &Case) {
     sqlx::query(
-        "INSERT INTO lifecycle_rule_sets
+        "INSERT INTO maintenance_rule_sets
             (id, name, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
-             current_revision_number)
-         VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6)",
+             current_revision_number, system_owned)
+         VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, 1)",
     )
     .bind(case.id)
     .bind(case.enabled)
@@ -222,7 +222,7 @@ async fn every_stored_combination_maps_to_one_state() {
 
     crate::migrations::run_upgrade_migrations_through(&pool, PRE_UPGRADE_VERSION + 1)
         .await
-        .expect("0361 upgrade should apply");
+        .expect("0348 upgrade should apply");
 
     for case in CASES {
         assert_eq!(
@@ -253,7 +253,7 @@ async fn a_new_rule_row_defaults_to_disabled() {
     let pool = pre_upgrade_pool().await;
     crate::migrations::run_upgrade_migrations_through(&pool, PRE_UPGRADE_VERSION + 1)
         .await
-        .expect("0361 upgrade should apply");
+        .expect("0348 upgrade should apply");
     sqlx::query("INSERT INTO lifecycle_rule_sets (id, name) VALUES ('rule-fresh', 'Fresh')")
         .execute(&pool)
         .await
@@ -264,13 +264,23 @@ async fn a_new_rule_row_defaults_to_disabled() {
     );
 }
 
-/// The Postgres statements are the SQLite ones with Postgres's boolean and
-/// 64-bit revision column.
+/// The Postgres statements for the state are the SQLite ones with
+/// Postgres's boolean and 64-bit revision column.
 #[test]
 fn postgres_statements_match_sqlite() {
+    let state = |sql: &'static str| {
+        let start = sql
+            .find("-- A rule stores one state")
+            .expect("state section start");
+        let end = start
+            + sql[start..]
+                .find("-- A stored source declares")
+                .expect("state section end");
+        &sql[start..end]
+    };
     assert_eq!(
-        POSTGRES,
-        SQLITE
+        state(POSTGRES),
+        state(SQLITE)
             .replace(
                 "edited_since_enabled INTEGER NOT NULL DEFAULT 0",
                 "edited_since_enabled BOOLEAN NOT NULL DEFAULT false"

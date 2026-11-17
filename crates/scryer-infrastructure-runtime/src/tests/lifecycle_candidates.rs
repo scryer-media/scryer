@@ -48,9 +48,9 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 id: format!("{id}-rev-1"),
                 rule_set_id: id.to_string(),
                 revision_number: 1,
-                rego_source: format!("package scryer.maintenance.user.{id}\nmatch := true\n"),
-                action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#
-                    .to_string(),
+                rego_source: format!("package scryer.lifecycle.user.{id}\nmatch := true\n"),
+                declared_actions_json:
+                    r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#.to_string(),
                 grace_days: 7,
                 source_content_hash: "hash-1".to_string(),
                 created_by: None,
@@ -2398,7 +2398,7 @@ async fn action_sequence_migration_preserves_pre_0232_in_flight_legacy_rows() {
     "#).await;
     // Every step up to the one that removes rules written before rules
     // declared their own actions; that step is checked at the end.
-    crate::migrations::run_upgrade_migrations_through(&pool, 345)
+    crate::migrations::run_upgrade_migrations_through(&pool, 347)
         .await
         .unwrap();
     let row = sqlx::query("SELECT subject_kind, subject_id, first_matched_at, due_at, match_generation, action_attempts FROM lifecycle_candidates WHERE id = 'candidate'").fetch_one(&pool).await.unwrap();
@@ -2577,7 +2577,7 @@ async fn seed_sequence_memberships(
         let created_at = at + chrono::Duration::seconds(created_offset);
         sqlx::query(
             "INSERT INTO lifecycle_sequence_terminal_memberships
-             (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
+             (id, candidate_id, rule_set_id, revision_number, source_content_hash, title_id,
               subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
               created_at, released_at)
              VALUES (?, ?, 'rule-a', 1, 'hash-1', ?, 'title', ?, 1, 'sequence-hash',

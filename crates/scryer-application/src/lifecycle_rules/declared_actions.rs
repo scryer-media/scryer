@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn a_decided_action_is_defined_only_at_the_level_its_head_acts_at() {
         let scan = scryer_rules::lifecycle_actions::scan_lifecycle_action_heads(
-            "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
+            "package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n\
              unmonitor if input.facts.monitored\n\
              delete_season_files if input.season.facts.has_file\n",
             "fixture_rule",
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn the_declared_document_keeps_source_order_and_distinct_values() {
         let scan = scryer_rules::lifecycle_actions::scan_lifecycle_action_heads(
-            "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
+            "package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n\
              add_tags := [\"stale\", \"stale\"] if input.facts.has_file\n\
              delete_files if input.facts.has_file\n\
              set_quality_profile := \"Fixture HD\" if input.facts.has_file\n\

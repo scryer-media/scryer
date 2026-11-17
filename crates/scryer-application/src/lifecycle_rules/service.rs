@@ -473,7 +473,7 @@ impl AppUseCase {
             BuilderFamily::Lifecycle,
         )?;
         if rule_set.system_owned
-            && (prepared.action_spec_json != current_revision.action_spec_json
+            && (prepared.declared_actions_json != current_revision.declared_actions_json
                 || scryer_rules::strip_editor_source(&prepared.rego_source)
                     != scryer_rules::strip_editor_source(&current_revision.rego_source))
         {
@@ -1727,7 +1727,7 @@ impl AppUseCase {
 struct PreparedSource {
     rego_source: String,
     content_hash: String,
-    action_spec_json: String,
+    declared_actions_json: String,
     declared: LifecycleDeclaredActions,
     scan: scryer_rules::lifecycle_actions::LifecycleActionScan,
 }
@@ -1779,12 +1779,12 @@ fn prepare_source(rule_id: &str, rego_source: &str, grace_days: i64) -> AppResul
     })?;
 
     let declared = LifecycleDeclaredActions::from_scan(&scan);
-    let action_spec_json = declared.to_persisted_json();
+    let declared_actions_json = declared.to_persisted_json();
 
     Ok(PreparedSource {
         content_hash: content_hash(&rewritten),
         rego_source: rewritten,
-        action_spec_json,
+        declared_actions_json,
         declared,
         scan,
     })
@@ -1872,7 +1872,7 @@ fn build_revision(
         rule_set_id: rule_set_id.to_string(),
         revision_number,
         rego_source: prepared.rego_source.clone(),
-        action_spec_json: prepared.action_spec_json.clone(),
+        declared_actions_json: prepared.declared_actions_json.clone(),
         grace_days,
         source_content_hash: prepared.content_hash.clone(),
         created_by,
@@ -1935,12 +1935,14 @@ pub(crate) fn stored_actions_refused(reason: &'static str) -> AppError {
 fn decode_declared_actions(
     revision: &LifecycleRuleRevision,
 ) -> AppResult<Option<LifecycleDeclaredActions>> {
-    LifecycleDeclaredActions::from_persisted_json(&revision.action_spec_json).map_err(|error| {
-        AppError::Repository(format!(
-            "lifecycle rule revision {} has an unreadable action definition: {error}",
-            revision.id
-        ))
-    })
+    LifecycleDeclaredActions::from_persisted_json(&revision.declared_actions_json).map_err(
+        |error| {
+            AppError::Repository(format!(
+                "lifecycle rule revision {} has an unreadable action definition: {error}",
+                revision.id
+            ))
+        },
+    )
 }
 
 fn format_lifecycle_validation_errors(validation: &ValidationResult) -> String {

@@ -61,6 +61,8 @@ pub mod repair_root_title_folders;
 mod request_rule_actions_upgrade_tests;
 #[cfg(test)]
 mod request_rules_enable_only_upgrade_tests;
+#[cfg(test)]
+mod rule_migrations_dialect_parity_tests;
 pub mod rule_set_runtime_wrapper;
 #[cfg(test)]
 mod single_connection_runner_tests;

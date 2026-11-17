@@ -10472,10 +10472,6 @@ enum JobKeyValue {
 	"""
 	LIFECYCLE_RULE_EVALUATION
 	"""
-	Scheduled lifecycle action handling.
-	"""
-	LIFECYCLE_ACTION_HANDLING
-	"""
 	Scheduled media-server watch-signal synchronization.
 	"""
 	MEDIA_SERVER_SIGNAL_SYNC

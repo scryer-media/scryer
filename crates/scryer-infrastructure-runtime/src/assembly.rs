@@ -3065,7 +3065,7 @@ mod tests {
         sequence
             .validate(LifecycleSubjectKind::Movie)
             .map_err(|error| AppError::Validation(error.to_string()))?;
-        let action_spec = serde_json::to_string(&sequence)
+        let declared_actions_json = serde_json::to_string(&sequence)
             .map_err(|error| AppError::Repository(error.to_string()))?;
         let sequence_hash = sequence
             .content_hash()
@@ -3088,15 +3088,15 @@ mod tests {
         SqlRuntime::execute(
             datastore.read_exec(),
             "INSERT INTO lifecycle_rule_revisions (
-                 id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
-                 matcher_content_hash, created_at
+                 id, rule_set_id, revision_number, rego_source, declared_actions_json, grace_days,
+                 source_content_hash, created_at
              ) VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
             &[
                 SqlArg::Text("backup-sequence-revision".to_string()),
                 SqlArg::Text("backup-sequence-rule".to_string()),
                 SqlArg::I64(1),
                 SqlArg::Text("match := true".to_string()),
-                SqlArg::Text(action_spec),
+                SqlArg::Text(declared_actions_json),
                 SqlArg::I64(0),
                 SqlArg::Text("backup-sequence-matcher".to_string()),
                 SqlArg::Timestamp(now),
@@ -3106,7 +3106,7 @@ mod tests {
         SqlRuntime::execute(
             datastore.read_exec(),
             "INSERT INTO lifecycle_candidates (
-                 id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id,
+                 id, rule_set_id, revision_number, source_content_hash, title_id, library_id,
                  facet, subject_kind, subject_id, match_generation, state, state_reason,
                  reason_codes, action_kind, grace_days, first_matched_at, last_matched_at,
                  due_at, last_evaluated_at, created_at, updated_at, action_attempts
@@ -3221,7 +3221,7 @@ mod tests {
         SqlRuntime::execute(
             datastore.read_exec(),
             "INSERT INTO lifecycle_sequence_terminal_memberships (
-                 id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
+                 id, candidate_id, rule_set_id, revision_number, source_content_hash, title_id,
                  subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
                  expected_step_ids_json, completed_step_ids_json, created_at
              ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
@@ -3454,7 +3454,7 @@ mod tests {
     ) -> AppResult<()> {
         let sequence = SqlRuntime::fetch_optional(
             datastore.read_exec(),
-            "SELECT revision.action_spec,
+            "SELECT revision.declared_actions_json,
                     candidate.action_kind,
                     step.sequence_content_hash,
                     step.intent_json,
@@ -3511,7 +3511,10 @@ mod tests {
         let expected_evidence =
             backup_matrix_sequence_evidence(&expected_sequence, &expected_sequence_hash);
 
-        assert_eq!(sequence.text("action_spec")?, expected_action_spec);
+        assert_eq!(
+            sequence.text("declared_actions_json")?,
+            expected_action_spec
+        );
         assert_eq!(sequence.text("action_kind")?, "action_sequence");
         assert_eq!(
             sequence.text("sequence_content_hash")?,

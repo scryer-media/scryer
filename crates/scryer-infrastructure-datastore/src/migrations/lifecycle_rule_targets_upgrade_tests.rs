@@ -1,28 +1,30 @@
 //! Lifecycle rules name their level in their action heads and read every
-//! storage root. A user rule saved with a season or episode scope, or confined
-//! to one storage root in any of its revisions, is removed with its history;
-//! a whole-title rule with no root and the system-owned rule keep everything.
-//! Exercised through the real upgrade runner, with and without foreign-key
-//! enforcement, and run twice to prove the second run changes nothing.
+//! storage root, so neither a rule-set subject kind nor a revision storage
+//! root is stored. Every user rule, whatever its scope or root, is removed
+//! with its history; a system-owned rule keeps everything whatever its stored
+//! scope or root, and only the two columns go. Exercised through the real
+//! upgrade runner, with and without foreign-key enforcement, and run twice to
+//! prove the second run changes nothing.
 
 use sqlx::SqlitePool;
 
-const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0359_lifecycle_rule_targets.sql");
+const SQLITE: &str = include_str!("../../../scryer/src/db/migrations/0348_lifecycle_rules.sql");
 const POSTGRES: &str =
-    include_str!("../../../scryer/src/db/postgres/migrations/0359_lifecycle_rule_targets.sql");
+    include_str!("../../../scryer/src/db/postgres/migrations/0348_lifecycle_rules.sql");
 
-/// Version the catalog is replayed to before 0359 is applied.
-const PRE_UPGRADE_VERSION: i64 = 358;
+/// Version the catalog is replayed to before 0348 is applied.
+const PRE_UPGRADE_VERSION: i64 = 347;
 
 const TITLE_RULE: &str = "rule-title-kept";
 const SEASON_RULE: &str = "rule-season-scoped";
 const EPISODE_RULE: &str = "rule-episode-scoped";
 const ROOT_RULE: &str = "rule-root-confined";
 const SYSTEM_RULE: &str = "rule-system";
+const SYSTEM_SEASON_RULE: &str = "rule-season-system";
 const TITLE: &str = "title-synthetic-quillmoor";
 
-/// Tables holding one rule's history, and how a row names its rule.
+/// Tables holding one rule's history, under their names after the upgrade,
+/// and how a row names its rule.
 const HISTORY_COUNTS: &[(&str, &str)] = &[
     (
         "lifecycle_rule_sets",
@@ -83,7 +85,7 @@ async fn pre_upgrade_pool(foreign_keys: bool) -> SqlitePool {
         true,
     )
     .await
-    .expect("pre-0359 migration fixture should apply");
+    .expect("pre-0348 migration fixture should apply");
     let pragma = if foreign_keys {
         "PRAGMA foreign_keys = ON"
     } else {
@@ -96,7 +98,39 @@ async fn pre_upgrade_pool(foreign_keys: bool) -> SqlitePool {
     pool
 }
 
+/// A statement under the table names before the upgrade: the upgrade
+/// renames every `maintenance_` rule table to the same name with
+/// `lifecycle_`, and the candidate and action run tables keep theirs.
+fn before_upgrade(sql: &str) -> String {
+    [
+        "rule_sets",
+        "rule_revisions",
+        "rule_set_libraries",
+        "rule_exclusions",
+        "evaluation_runs",
+        "action_steps",
+        "action_step_attempts",
+        "action_job_receipts",
+        "sequence_terminal_memberships",
+    ]
+    .iter()
+    .fold(sql.to_string(), |sql, table| {
+        sql.replace(
+            &format!("lifecycle_{table} "),
+            &format!("maintenance_{table} "),
+        )
+        .replace(
+            &format!("lifecycle_{table}\n"),
+            &format!("maintenance_{table}\n"),
+        )
+    })
+}
+
+/// Runs a seed statement written with the names after the upgrade against
+/// the database before it.
 async fn exec(pool: &SqlitePool, sql: &str, binds: &[&str]) {
+    let sql = before_upgrade(sql);
+    let sql = sql.as_str();
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.to_string()));
     for bind in binds {
         query = query.bind(*bind);
@@ -159,7 +193,7 @@ async fn seed_rule(
     for (index, root) in roots.iter().enumerate() {
         let number = (index + 1).to_string();
         let mut query = sqlx::query(
-            "INSERT INTO lifecycle_rule_revisions
+            "INSERT INTO maintenance_rule_revisions
                 (id, rule_set_id, revision_number, rego_source, action_spec,
                  matcher_content_hash, storage_root_id)
              VALUES (?1 || '-revision-' || ?2, ?1, ?2, 'package rules', '{}', 'hash', ?3)",
@@ -261,10 +295,15 @@ async fn seed_rule(
     }
 }
 
-async fn history(pool: &SqlitePool, rule: &str) -> Vec<(&'static str, i64)> {
+async fn history(pool: &SqlitePool, rule: &str, upgraded: bool) -> Vec<(&'static str, i64)> {
     let mut rows = Vec::with_capacity(HISTORY_COUNTS.len());
     for (table, sql) in HISTORY_COUNTS {
-        rows.push((*table, count(pool, sql, rule).await));
+        let sql = if upgraded {
+            sql.to_string()
+        } else {
+            before_upgrade(sql)
+        };
+        rows.push((*table, count(pool, &sql, rule).await));
     }
     rows
 }
@@ -295,7 +334,7 @@ fn removed() -> Vec<(&'static str, i64)> {
 
 /// Every seeded rule, its revisions' roots, and whether the upgrade keeps it.
 const RULES: &[(&str, &str, &[Option<&str>], bool, bool)] = &[
-    (TITLE_RULE, "title", &[None, None], false, true),
+    (TITLE_RULE, "title", &[None, None], false, false),
     (SEASON_RULE, "season", &[None], false, false),
     (EPISODE_RULE, "episode", &[None], false, false),
     // Confined to a root in an earlier revision only: a candidate of that
@@ -307,7 +346,14 @@ const RULES: &[(&str, &str, &[Option<&str>], bool, bool)] = &[
         false,
         false,
     ),
-    (SYSTEM_RULE, "title", &[None], true, true),
+    (
+        SYSTEM_RULE,
+        "title",
+        &[Some("root-synthetic"), None],
+        true,
+        true,
+    ),
+    (SYSTEM_SEASON_RULE, "season", &[None], true, true),
 ];
 
 async fn assert_outcome(pool: &SqlitePool, context: &str) {
@@ -317,7 +363,11 @@ async fn assert_outcome(pool: &SqlitePool, context: &str) {
         } else {
             removed()
         };
-        assert_eq!(history(pool, rule).await, expected, "{context}: {rule}");
+        assert_eq!(
+            history(pool, rule, true).await,
+            expected,
+            "{context}: {rule}"
+        );
     }
     assert_eq!(
         count(
@@ -334,16 +384,21 @@ async fn assert_outcome(pool: &SqlitePool, context: &str) {
         1,
         "{context}: titles are untouched"
     );
-    assert_eq!(
-        count(
-            pool,
-            "SELECT COUNT(*) FROM lifecycle_rule_sets WHERE subject_kind = ?1",
-            "retired"
-        )
-        .await,
-        0,
-        "{context}: no marked rule survives"
-    );
+    for (table, column) in [
+        ("lifecycle_rule_sets", "subject_kind"),
+        ("lifecycle_rule_revisions", "storage_root_id"),
+    ] {
+        assert_eq!(
+            count(
+                pool,
+                &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+                column
+            )
+            .await,
+            0,
+            "{context}: {table}.{column} is not stored"
+        );
+    }
     assert_eq!(
         count(
             pool,
@@ -359,7 +414,7 @@ async fn assert_outcome(pool: &SqlitePool, context: &str) {
 async fn upgrade(pool: &SqlitePool) {
     crate::migrations::run_upgrade_migrations_through(pool, PRE_UPGRADE_VERSION + 1)
         .await
-        .expect("0359 upgrade should apply");
+        .expect("0348 upgrade should apply");
 }
 
 async fn run_upgrade(foreign_keys: bool) {
@@ -369,7 +424,7 @@ async fn run_upgrade(foreign_keys: bool) {
     for (rule, kind, roots, system_owned, _) in RULES {
         seed_rule(&pool, rule, kind, roots, *system_owned).await;
         assert_eq!(
-            history(&pool, rule).await,
+            history(&pool, rule, false).await,
             seeded_history(roots.len() as i64),
             "{context}: seeded {rule}"
         );
@@ -378,11 +433,8 @@ async fn run_upgrade(foreign_keys: bool) {
     upgrade(&pool).await;
     assert_outcome(&pool, &context).await;
 
-    // Replaying the statements on the upgraded database changes nothing.
-    sqlx::raw_sql(sqlx::AssertSqlSafe(SQLITE.to_string()))
-        .execute(&pool)
-        .await
-        .expect("a second run applies");
+    // A second run of the upgrade applies nothing and changes nothing.
+    upgrade(&pool).await;
     assert_outcome(&pool, &format!("{context}, second run")).await;
 }
 
@@ -396,11 +448,14 @@ async fn the_upgrade_removes_scoped_and_root_confined_rules_without_foreign_keys
     run_upgrade(false).await;
 }
 
-/// The Postgres statements are the SQLite ones with Postgres's boolean.
+/// Both engines drop the two columns with the same statements.
 #[test]
-fn postgres_statements_match_sqlite() {
-    assert_eq!(
-        POSTGRES,
-        SQLITE.replace("system_owned = 0", "system_owned = false")
-    );
+fn both_engines_drop_the_scope_and_root_columns() {
+    for statement in [
+        "ALTER TABLE lifecycle_rule_revisions DROP COLUMN storage_root_id;",
+        "ALTER TABLE lifecycle_rule_sets DROP COLUMN subject_kind;",
+    ] {
+        assert!(SQLITE.contains(statement), "{statement}");
+        assert!(POSTGRES.contains(statement), "{statement}");
+    }
 }

@@ -35,10 +35,6 @@ pub(crate) const BACKGROUND_TITLE_WALK_QUERY_BUDGET: usize = 120;
 const LIFECYCLE_EVALUATION_JITTER_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
-/// Same rationale, distinct salt, for the action handler's twelve-hour cadence.
-const LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW: std::time::Duration =
-    std::time::Duration::from_secs(30 * 60);
-
 /// Same rationale again for the media-server signal sweep. The
 /// jitter matters more here than for the local passes: every instance in a
 /// fleet would otherwise hit the same Jellyfin server at the same moment.
@@ -6760,29 +6756,6 @@ pub async fn start_background_acquisition_poller(
     )
     .await;
 
-    let lifecycle_action_cadence = std::time::Duration::from_secs(
-        crate::jobs::LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS as u64,
-    );
-    let lifecycle_action_offset = match app.discovery_scheduler_seed().await {
-        Ok(seed) => crate::scheduler::stable_jitter_offset(
-            &seed,
-            "lifecycle_action_handling",
-            "global",
-            LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW,
-        ),
-        Err(error) => {
-            warn!(error = %error, "could not resolve the scheduler seed; action handling runs unjittered");
-            std::time::Duration::ZERO
-        }
-    };
-    app.advertise_job_next_run_at(
-        JobKey::LifecycleActionHandling,
-        Utc::now()
-            + chrono::Duration::from_std(lifecycle_action_offset)
-                .unwrap_or_else(|_| chrono::Duration::zero()),
-    )
-    .await;
-
     let media_server_signal_cadence = std::time::Duration::from_secs(
         crate::jobs::MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS as u64,
     );
@@ -6855,10 +6828,6 @@ pub async fn start_background_acquisition_poller(
         lifecycle_evaluation_cadence,
     );
     lifecycle_evaluation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut lifecycle_action_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + lifecycle_action_offset,
-        lifecycle_action_cadence,
-    );
     let mut media_server_signal_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + media_server_signal_offset,
         media_server_signal_cadence,
@@ -7250,21 +7219,6 @@ pub async fn start_background_acquisition_poller(
                     if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleRuleEvaluation, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "scheduled lifecycle rule evaluation failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_rule_evaluation").increment(1);
-                    }
-                }).await;
-            }
-            _ = lifecycle_action_interval.tick() => {
-                let cadence = lifecycle_action_cadence;
-                let next_run_in =
-                    chrono::Duration::from_std(cadence).unwrap_or_else(|_| chrono::Duration::hours(12));
-                admit_scheduled_job(&app, &mut supervisor, "lifecycle_action_handling", cadence, Some((JobKey::LifecycleActionHandling, next_run_in)), move |app| async move {
-                    app.advertise_job_next_run_at(
-                        JobKey::LifecycleActionHandling,
-                        Utc::now() + next_run_in,
-                    ).await;
-                    if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::ScheduledInterval).await {
-                        warn!(error = %e, "scheduled lifecycle action handling failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_action_handling").increment(1);
                     }
                 }).await;
             }

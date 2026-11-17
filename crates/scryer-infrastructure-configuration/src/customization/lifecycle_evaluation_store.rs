@@ -42,13 +42,13 @@ impl LifecycleEvaluationStore {
 
 // ── Column lists and shared SQL ─────────────────────────────────────────────
 
-const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash, title_id,
+const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, source_content_hash, title_id,
     library_id, facet, subject_kind, subject_id, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
     held_since, action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
-        (id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id, facet,
+        (id, rule_set_id, revision_number, source_content_hash, title_id, library_id, facet,
          subject_kind, subject_id, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
          action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json)
@@ -75,14 +75,14 @@ const ACTION_JOB_RECEIPT_COLUMNS: &str = "candidate_id, match_generation, revisi
     state, reconciliation_evidence_json, created_at, updated_at";
 
 const SEQUENCE_TERMINAL_MEMBERSHIP_COLUMNS: &str = "id, candidate_id, rule_set_id,
-    revision_number, matcher_content_hash, title_id, subject_kind, subject_id, match_generation,
+    revision_number, source_content_hash, title_id, subject_kind, subject_id, match_generation,
     sequence_content_hash, outcome, expected_step_ids_json, completed_step_ids_json,
     terminal_step_id, created_at, released_at";
 
 const EXCLUSION_COLUMNS: &str =
     "id, rule_set_id, title_id, subject_kind, subject_id, reason, created_by, created_at";
 
-const EVALUATION_RUN_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash,
+const EVALUATION_RUN_COLUMNS: &str = "id, rule_set_id, revision_number, source_content_hash,
     started_at, finished_at, status, evaluated_count, matched_count, no_match_count,
     unknown_count, error_count, canceled_candidates, superseded_candidates, duration_ms, error";
 
@@ -1432,7 +1432,7 @@ impl LifecycleSequenceCompletionRepository for LifecycleEvaluationStore {
                     let inserted = SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "INSERT INTO lifecycle_sequence_terminal_memberships
-                         (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
+                         (id, candidate_id, rule_set_id, revision_number, source_content_hash, title_id,
                           subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
                           expected_step_ids_json, completed_step_ids_json, terminal_step_id, created_at, released_at)
                          VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
@@ -1634,7 +1634,7 @@ impl LifecycleEvaluationRunRepository for LifecycleEvaluationStore {
             &self.datastore,
             "start_lifecycle_evaluation_run",
             "INSERT INTO lifecycle_evaluation_runs
-                (id, rule_set_id, revision_number, matcher_content_hash, started_at, status)
+                (id, rule_set_id, revision_number, source_content_hash, started_at, status)
              VALUES ({}, {}, {}, {}, {}, {})",
             vec![
                 SqlArg::Text(run.id.clone()),
@@ -2403,7 +2403,7 @@ fn row_to_sequence_terminal_membership(
         candidate_id: row.text("candidate_id")?,
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
-        source_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("source_content_hash")?,
         title_id: row.text("title_id")?,
         subject_kind: row.text("subject_kind")?,
         subject_id: row.text("subject_id")?,
@@ -2456,7 +2456,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         id: row.text("id")?,
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
-        source_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("source_content_hash")?,
         title_id: row.text("title_id")?,
         library_id: row.text("library_id")?,
         facet: row.text("facet")?,
@@ -2515,7 +2515,7 @@ fn row_to_evaluation_run(row: &SqlRow) -> AppResult<LifecycleEvaluationRun> {
         id: row.text("id")?,
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
-        source_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("source_content_hash")?,
         started_at: row.timestamp("started_at")?,
         finished_at: row.opt_timestamp("finished_at")?,
         status: LifecycleEvaluationRunStatus::parse_storage(&row.text("status")?)

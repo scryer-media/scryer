@@ -534,7 +534,7 @@ impl CustomJobSource for AppUseCase {
         for (rule, revision) in rules.into_iter().zip(revisions) {
             let declared = revision.as_ref().map(|revision| {
                 crate::lifecycle_rules::LifecycleDeclaredActions::from_persisted_json(
-                    &revision.action_spec_json,
+                    &revision.declared_actions_json,
                 )
             });
             match declared {

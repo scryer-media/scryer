@@ -1020,49 +1020,18 @@ async fn a_deleting_rule_stops_at_its_maximum_and_the_next_fire_continues() {
     assert!(stray.exists());
 }
 
-/// The instance-wide job, scheduled or run by hand, never acts for a rule: a
-/// rule's maximum bounds everything done between two of its own fires.
+/// A rule's maximum bounds everything one of its own fires does.
 #[tokio::test]
-async fn the_instance_wide_job_never_acts_and_one_fire_stops_at_the_maximum() {
+async fn one_fire_stops_at_the_maximum() {
     let (fixture, rule_set_id, paths, stray) = deleting_rule_over_five(2).await;
     let app = &fixture.execution.app;
-
-    for _ in 0..3 {
-        let report = app
-            .run_lifecycle_action_handling_job()
-            .await
-            .expect("instance-wide pass");
-        assert_eq!(report.executed, 0, "{report:?}");
-        app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
-            .await
-            .expect("instance-wide job run by hand");
-    }
-    assert_eq!(
-        remaining(&paths),
-        5,
-        "no instance-wide pass deletes anything"
-    );
 
     let fire = app
         .run_lifecycle_action_handling(Some(&rule_set_id))
         .await
         .expect("the rule's own fire");
     assert_eq!(fire.executed, 2, "{fire:?}");
-    assert_eq!(remaining(&paths), 3);
-
-    for _ in 0..3 {
-        app.run_lifecycle_action_handling_job()
-            .await
-            .expect("instance-wide pass after the fire");
-        app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
-            .await
-            .expect("instance-wide job run by hand after the fire");
-    }
-    assert_eq!(
-        remaining(&paths),
-        3,
-        "one fire plus any number of instance-wide passes acts on at most the maximum"
-    );
+    assert_eq!(remaining(&paths), 3, "one fire acts on at most the maximum");
     assert!(stray.exists(), "a file no title owns is never touched");
 }
 
@@ -1088,14 +1057,6 @@ async fn a_manual_schedule_rule_acts_only_through_its_own_trigger() {
     )
     .await
     .expect("manual schedule");
-
-    app.run_lifecycle_action_handling_job()
-        .await
-        .expect("instance-wide pass");
-    app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
-        .await
-        .expect("instance-wide job run by hand");
-    assert_eq!(remaining(&paths), 5, "the instance-wide job ran no rule");
 
     let refused = app
         .run_lifecycle_action_handler_now(user, None)

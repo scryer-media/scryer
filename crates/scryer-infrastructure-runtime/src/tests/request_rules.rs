@@ -215,7 +215,7 @@ fn decision(
         effective_outcome: outcome,
         policy_outcome: outcome,
         fallback_reason: None,
-        votes_json: r#"[{"ruleSetId":"rule-a","vote":"approve"}]"#.to_string(),
+        votes_json: r#"[{"rule_set_id":"rule-a","vote":"approve"}]"#.to_string(),
         tags: vec!["family".to_string()],
         shaping_json: Some(r#"{"set_lease_days":{"value":30}}"#.to_string()),
         input_hash: "input-hash-1".to_string(),
@@ -459,8 +459,8 @@ async fn assert_decision_round_trip(store: &dyn RequestRuleDecisionRepository) -
         "decision-2"
     );
 
-    // The rule ids live inside the serialized votes, so the count is a
-    // substring match over that column.
+    // Each decision is linked to the rule sets its votes name when it is
+    // recorded, and the count reads those links.
     assert_eq!(store.count_for_rule_set("rule-a").await?, 3);
     assert_eq!(store.count_for_rule_set("rule-zzz").await?, 0);
     assert_eq!(store.count_for_rule_set("  ").await?, 0);
@@ -570,16 +570,29 @@ async fn request_rule_decisions_round_trip() {
     let _ = std::fs::remove_file(db);
 }
 
-/// The retired mode columns are still NOT NULL, so the stores write them, but
-/// nothing reads them: `enabled` alone decides whether a rule set takes part,
-/// and decision rows written under any mode, including ones this build never
-/// knew, still list.
+/// Neither a rule set nor a decision stores a mode: `enabled` alone decides
+/// whether a rule set takes part, and decision rows recorded before the mode
+/// was dropped, with votes that still carry a per-rule mode, still list.
 #[tokio::test]
-async fn retired_request_rule_mode_columns_are_written_but_never_read() {
+async fn request_rule_modes_are_not_stored_and_older_decisions_still_list() {
     let (services, db) = temp_services("scryer_request_rule_retired_modes").await;
     let rules = crate::RequestRuleSetStore::new(services.datastore());
     let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
     let pool = services.pool();
+
+    for (table, column) in [
+        ("request_rule_sets", "evaluation_mode"),
+        ("request_rule_decisions", "mode"),
+    ] {
+        let present: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+                .bind(table)
+                .bind(column)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(present, 0, "{table}.{column} is not stored");
+    }
 
     rules
         .create_rule_set(
@@ -589,24 +602,8 @@ async fn retired_request_rule_mode_columns_are_written_but_never_read() {
         )
         .await
         .unwrap();
-    let stored_mode = || async {
-        sqlx::query_scalar::<_, String>(
-            "SELECT evaluation_mode FROM request_rule_sets WHERE id = 'rule-quiet'",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap()
-    };
-    assert_eq!(stored_mode().await, "disabled");
     rules
         .update_rule_set_enabled("rule-quiet", true, Utc::now())
-        .await
-        .unwrap();
-    assert_eq!(stored_mode().await, "enforce");
-
-    // A stored mode that disagrees with `enabled` changes nothing.
-    sqlx::query("UPDATE request_rule_sets SET evaluation_mode = 'shadow' WHERE id = 'rule-quiet'")
-        .execute(pool)
         .await
         .unwrap();
     assert!(
@@ -629,7 +626,6 @@ async fn retired_request_rule_mode_columns_are_written_but_never_read() {
             .unwrap()
             .enabled
     );
-    assert_eq!(stored_mode().await, "disabled");
 
     decisions
         .record(&decision(
@@ -639,15 +635,9 @@ async fn retired_request_rule_mode_columns_are_written_but_never_read() {
         ))
         .await
         .unwrap();
-    let new_mode: String =
-        sqlx::query_scalar("SELECT mode FROM request_rule_decisions WHERE id = 'decision-new'")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    assert_eq!(new_mode, "enforce");
 
-    // Rows recorded before the mode was retired, including a mode value this
-    // build never knew, with votes that still carry a per-rule mode.
+    // Rows recorded before the mode was dropped, with votes that still carry
+    // a per-rule mode, including a mode value this build never knew.
     for (id, mode) in [
         ("decision-old-enforce", "enforce"),
         ("decision-old-disabled", "disabled"),
@@ -655,9 +645,9 @@ async fn retired_request_rule_mode_columns_are_written_but_never_read() {
     ] {
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO request_rule_decisions
-                (id, request_id, mode, effective_outcome, policy_outcome, fallback_reason,
+                (id, request_id, effective_outcome, policy_outcome, fallback_reason,
                  votes_json, tags_json, input_hash, input_schema_version)
-             VALUES ('{id}', 'request-old', '{mode}', 'deny', 'deny', NULL,
+             VALUES ('{id}', 'request-old', 'deny', 'deny', NULL,
                  '[{{\"rule_set_id\":\"rule-quiet\",\"mode\":\"{mode}\",\"vote\":\"deny\"}}]',
                  '[]', 'old-hash', 1)"
         )))
@@ -690,6 +680,104 @@ async fn retired_request_rule_mode_columns_are_written_but_never_read() {
             .unwrap()
             .map(|row| row.request_id),
         Some("request-old".to_string())
+    );
+    let _ = std::fs::remove_file(db);
+}
+
+/// The rule set count reads the links written with each decision, and finds
+/// the decisions the scan of every stored vote found before it: the same ids,
+/// for every rule set, across decisions that name a rule set twice, name
+/// none, or name more rule sets than one link statement binds.
+#[tokio::test]
+async fn the_linked_rule_set_count_finds_what_the_votes_scan_found() {
+    let (services, db) = temp_services("scryer_request_rule_decision_links").await;
+    let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
+    let pool = services.pool();
+
+    let rule_set_ids: Vec<String> = (0..450)
+        .map(|index| format!("0b6f3a2e-77c4-4d1a-9e0b-{index:012}"))
+        .collect();
+    let votes = |ids: &[&String]| {
+        serde_json::to_string(
+            &ids.iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "rule_set_id": id,
+                        "rule_set_name": "Fixture rule",
+                        "revision_number": 1,
+                        "vote": "approve",
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    };
+    let seeded: Vec<(String, String)> = vec![
+        ("decision-one".into(), votes(&[&rule_set_ids[0]])),
+        (
+            "decision-two".into(),
+            votes(&[&rule_set_ids[0], &rule_set_ids[1]]),
+        ),
+        (
+            "decision-repeat".into(),
+            votes(&[&rule_set_ids[1], &rule_set_ids[1], &rule_set_ids[2]]),
+        ),
+        ("decision-none".into(), "[]".into()),
+        (
+            "decision-wide".into(),
+            votes(&rule_set_ids.iter().collect::<Vec<_>>()),
+        ),
+    ];
+    for (id, votes_json) in &seeded {
+        let mut record = decision(
+            id,
+            &format!("request-{id}"),
+            RequestDecisionOutcome::AutoApprove,
+        );
+        record.votes_json = votes_json.clone();
+        decisions.record(&record).await.unwrap();
+    }
+
+    let mut checked = rule_set_ids.clone();
+    checked.push("rule-unknown".to_string());
+    for rule_set_id in &checked {
+        let mut scanned: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM request_rule_decisions WHERE votes_json LIKE ?")
+                .bind(format!("%{rule_set_id}%"))
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        scanned.sort();
+        let mut linked: Vec<String> = sqlx::query_scalar(
+            "SELECT decision_id FROM request_rule_decision_rule_sets WHERE rule_set_id = ?",
+        )
+        .bind(rule_set_id)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        linked.sort();
+        assert_eq!(linked, scanned, "{rule_set_id}");
+        assert_eq!(
+            decisions.count_for_rule_set(rule_set_id).await.unwrap(),
+            scanned.len() as u64,
+            "{rule_set_id}"
+        );
+    }
+    assert_eq!(
+        decisions
+            .count_for_rule_set(&rule_set_ids[1])
+            .await
+            .unwrap(),
+        3,
+        "a decision that names a rule set twice counts once"
+    );
+    assert_eq!(
+        decisions
+            .count_for_rule_set(&rule_set_ids[449])
+            .await
+            .unwrap(),
+        1,
+        "a rule set past the first link statement is linked"
     );
     let _ = std::fs::remove_file(db);
 }

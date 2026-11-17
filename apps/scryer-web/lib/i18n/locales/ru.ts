@@ -13532,10 +13532,6 @@ const ru: LocaleDictionary = {
   "jobs.builtin.LifecycleRuleEvaluation.name": "Оценка правил жизненного цикла",
   "jobs.builtin.LifecycleRuleEvaluation.description":
     "Запуск и истечение аренд запросов по расписанию. Каждое правило жизненного цикла оценивается по собственному расписанию; запуск вручную оценивает все включённые правила и никогда не выполняет действия.",
-  "jobs.builtin.LifecycleActionHandling.name":
-    "Выполнение действий жизненного цикла",
-  "jobs.builtin.LifecycleActionHandling.description":
-    "Каждое правило жизненного цикла выполняет действия над своими кандидатами сразу после собственной плановой оценки или при ручном запуске этого правила, с учётом шлюзов эффектов экземпляра и полных повторных проверок безопасности. Эта задача не выполняет действия ни для одного правила.",
   "jobs.builtin.MediaServerSignalSync.name":
     "Синхронизация просмотров медиасерверов",
   "jobs.builtin.MediaServerSignalSync.description":

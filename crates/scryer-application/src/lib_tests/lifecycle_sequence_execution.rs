@@ -373,7 +373,7 @@ async fn empty_sequence_remains_membership_only_when_armed() {
     fixture
         .rules
         .replace_revision_in_place(scryer_domain::LifecycleRuleRevision {
-            action_spec_json: serde_json::to_string(
+            declared_actions_json: serde_json::to_string(
                 &crate::lifecycle_rules::LifecycleActionSequence::new(Vec::new()),
             )
             .expect("encode empty sequence"),
@@ -1694,7 +1694,7 @@ async fn a_stored_step_sequence_revision_is_refused_and_deletes_nothing() {
     fixture
         .rules
         .replace_revision_in_place(scryer_domain::LifecycleRuleRevision {
-            action_spec_json: serde_json::to_string(&LifecycleActionSequence::new(vec![
+            declared_actions_json: serde_json::to_string(&LifecycleActionSequence::new(vec![
                 delete_title,
             ]))
             .expect("encode step order"),

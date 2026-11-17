@@ -11871,13 +11871,8 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
         outcome: Option<scryer_domain::RequestDecisionOutcome>,
     ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>>;
 
-    /// How many recorded decisions a rule set participated in.
-    ///
-    /// The rule ids live inside `votes_json` rather than in a join table, so
-    /// this is a substring match over that column. It is deliberately loose:
-    /// the number drives an "this rule has decided N requests" affordance in
-    /// the authoring UI, not any safety decision, and a rule id is a generated
-    /// opaque id, so a false positive would need one id to contain another.
+    /// How many recorded decisions a rule set participated in: the decisions
+    /// whose votes name the rule set's id.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
 }
 

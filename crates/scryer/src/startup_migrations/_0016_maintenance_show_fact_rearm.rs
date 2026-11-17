@@ -38,8 +38,7 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
            JOIN lifecycle_rule_revisions revisions
              ON revisions.rule_set_id = rules.id
             AND revisions.revision_number = rules.current_revision_number
-          WHERE rules.subject_kind = 'title'
-            AND rules.state = 'enabled'
+          WHERE rules.state = 'enabled'
             AND rules.destructive_confirmed_revision = rules.current_revision_number
             AND rules.edited_since_enabled = {}
             AND (
@@ -186,9 +185,9 @@ mod tests {
             datastore,
             "seed_lifecycle_rule_set",
             "INSERT INTO lifecycle_rule_sets
-             (id, name, state, destructive_confirmed_revision, subject_kind, current_revision_number,
+             (id, name, state, destructive_confirmed_revision, current_revision_number,
               created_at, updated_at)
-             VALUES ({}, {}, 'enabled', 1, 'title', 1, {}, {})",
+             VALUES ({}, {}, 'enabled', 1, 1, {}, {})",
             vec![
                 SqlArg::Text(id.to_string()),
                 SqlArg::Text(id.to_string()),
@@ -202,8 +201,8 @@ mod tests {
             datastore,
             "seed_lifecycle_rule_revision",
             "INSERT INTO lifecycle_rule_revisions
-             (id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
-              matcher_content_hash, created_at)
+             (id, rule_set_id, revision_number, rego_source, declared_actions_json, grace_days,
+              source_content_hash, created_at)
              VALUES ({}, {}, 1, {}, {}, 0, {}, {})",
             vec![
                 SqlArg::Text(format!("{id}:revision")),

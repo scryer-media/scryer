@@ -467,7 +467,7 @@ fn revision_conflict() -> AppError {
 async fn require_stored_maximum(tx: &mut SqlTx<'_>, rule_set_id: &str) -> AppResult<()> {
     let row = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
-        "SELECT s.max_titles_per_run, r.action_spec
+        "SELECT s.max_titles_per_run, r.declared_actions_json
            FROM lifecycle_rule_sets s
            JOIN lifecycle_rule_revisions r
              ON r.rule_set_id = s.id AND r.revision_number = s.current_revision_number
@@ -483,7 +483,7 @@ async fn require_stored_maximum(tx: &mut SqlTx<'_>, rule_set_id: &str) -> AppRes
         .map(|max| u32::try_from(max).unwrap_or(u32::MAX));
     let declared =
         scryer_application::lifecycle_rules::LifecycleDeclaredActions::from_persisted_json(
-            &row.text("action_spec")?,
+            &row.text("declared_actions_json")?,
         )
         .ok()
         .flatten();
@@ -527,8 +527,9 @@ const RULE_SET_SELECT: &str = "SELECT id, name, description, state, edited_since
     FROM lifecycle_rule_sets
     LEFT JOIN lifecycle_rule_set_libraries scope ON scope.rule_set_id = lifecycle_rule_sets.id";
 
-const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, action_spec,
-    grace_days, matcher_content_hash, created_by, created_at, builder_model_json";
+const REVISION_COLUMNS: &str =
+    "id, rule_set_id, revision_number, rego_source, declared_actions_json,
+    grace_days, source_content_hash, created_by, created_at, builder_model_json";
 
 /// Revision keys per statement: two binds each, well under every engine's ceiling.
 const REVISION_KEY_CHUNK: usize = 400;
@@ -539,8 +540,8 @@ const INSERT_RULE_SET_SQL: &str = "INSERT INTO lifecycle_rule_sets
      VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO lifecycle_rule_revisions
-        (id, rule_set_id, revision_number, rego_source, action_spec,
-         grace_days, matcher_content_hash, created_by, created_at,
+        (id, rule_set_id, revision_number, rego_source, declared_actions_json,
+         grace_days, source_content_hash, created_by, created_at,
          builder_model_json)
      VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
@@ -603,7 +604,7 @@ fn revision_args(revision: &LifecycleRuleRevision) -> Vec<SqlArg> {
         SqlArg::Text(revision.rule_set_id.clone()),
         SqlArg::I64(revision.revision_number),
         SqlArg::Text(revision.rego_source.clone()),
-        SqlArg::Text(revision.action_spec_json.clone()),
+        SqlArg::Text(revision.declared_actions_json.clone()),
         SqlArg::I64(revision.grace_days),
         SqlArg::Text(revision.source_content_hash.clone()),
         SqlArg::OptText(revision.created_by.clone()),
@@ -649,9 +650,9 @@ fn row_to_revision(row: &SqlRow) -> AppResult<LifecycleRuleRevision> {
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
         rego_source: row.text("rego_source")?,
-        action_spec_json: row.text("action_spec")?,
+        declared_actions_json: row.text("declared_actions_json")?,
         grace_days: row.i64("grace_days")?,
-        source_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("source_content_hash")?,
         created_by: row.opt_text("created_by")?,
         created_at: row.timestamp_or_now("created_at")?,
         builder_model_json: row.opt_text("builder_model_json")?,

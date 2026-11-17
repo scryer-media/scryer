@@ -46,8 +46,6 @@ pub enum JobKeyValue {
     ArtworkEncoding,
     /// Scheduled lifecycle rule evaluation.
     LifecycleRuleEvaluation,
-    /// Scheduled lifecycle action handling.
-    LifecycleActionHandling,
     /// Scheduled media-server watch-signal synchronization.
     MediaServerSignalSync,
     /// Scheduled list-subscription synchronization.

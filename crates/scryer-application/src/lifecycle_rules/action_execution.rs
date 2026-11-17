@@ -403,7 +403,7 @@ pub mod execution_reason {
     }
 }
 
-/// Job report for [`crate::jobs::JobKey::LifecycleActionHandling`], serialized onto the run.
+/// Report of one action pass, the acting half of a rule's own fire.
 #[derive(Debug, Default, Serialize)]
 pub struct LifecycleActionHandlingReport {
     /// False when both effect gates were off and the pass did nothing.
@@ -1014,21 +1014,6 @@ impl AppUseCase {
 // ── The handler ─────────────────────────────────────────────────────────────
 
 impl AppUseCase {
-    /// Job body for [`crate::jobs::JobKey::LifecycleActionHandling`].
-    ///
-    /// A rule's candidates are acted on only by that rule's own fire, on its
-    /// schedule or by its manual trigger, so a rule's most titles per run
-    /// bounds everything it does between two of its fires and a rule on a
-    /// manual schedule is never run by anything else. The instance-wide job
-    /// has no work of its own left: abandoned leases are reclaimed by the
-    /// owning rule's next fire, which selects them with its due work. It acts
-    /// on nothing.
-    pub(crate) async fn run_lifecycle_action_handling_job(
-        &self,
-    ) -> AppResult<LifecycleActionHandlingReport> {
-        Ok(LifecycleActionHandlingReport::default())
-    }
-
     /// Act on the due candidates of every armed rule in one pass, as the
     /// action tests drive them. Production acts only per rule.
     #[cfg(test)]
@@ -1039,6 +1024,12 @@ impl AppUseCase {
     }
 
     /// Act on the due candidates of every armed rule, or of one named rule.
+    ///
+    /// In production a rule's candidates are acted on only by that rule's own
+    /// fire, on its schedule or by its manual trigger, so a rule's most titles
+    /// per run bounds everything it does between two of its fires. Abandoned
+    /// leases are reclaimed by the owning rule's next fire, which selects them
+    /// with its due work.
     ///
     /// Scoped to one rule, the other rules are still resolved when the named
     /// one declares tag actions, because the tag-conflict scan has to see what

@@ -15,9 +15,6 @@ const JOB_RUN_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 /// default rather than a contract.
 pub const LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
 
-/// Collection/action handling defaults to every twelve hours.
-pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
-
 /// Cadence of the media-server watch-signal sweep.
 ///
 /// Six hours is chosen against what the data is for, not against how fast it
@@ -199,7 +196,6 @@ pub enum JobKey {
     // Matches `as_str` and the stored `job_key`.
     #[serde(rename = "lifecycle_rule_evaluation")]
     LifecycleRuleEvaluation,
-    LifecycleActionHandling,
     MediaServerSignalSync,
     ListSync,
     LocationOperation,
@@ -257,7 +253,6 @@ impl JobKey {
             Self::AcquisitionSearch => "acquisition_search",
             Self::ApplicationUpgrade => "application_upgrade",
             Self::LifecycleRuleEvaluation => "lifecycle_rule_evaluation",
-            Self::LifecycleActionHandling => "lifecycle_action_handling",
             Self::MediaServerSignalSync => "media_server_signal_sync",
             Self::ListSync => "list_sync",
             Self::LocationOperation => "location_operation",
@@ -297,7 +292,6 @@ impl JobKey {
             "acquisition_search" => Some(Self::AcquisitionSearch),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
             "lifecycle_rule_evaluation" => Some(Self::LifecycleRuleEvaluation),
-            "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
             "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
             "list_sync" => Some(Self::ListSync),
             "location_operation" => Some(Self::LocationOperation),
@@ -338,7 +332,6 @@ impl JobKey {
             Self::AcquisitionSearch => "Acquisition Search",
             Self::ApplicationUpgrade => "Application Upgrade",
             Self::LifecycleRuleEvaluation => "Lifecycle Rule Evaluation",
-            Self::LifecycleActionHandling => "Lifecycle Action Handling",
             Self::MediaServerSignalSync => "Media Server Signal Sync",
             Self::ListSync => "List Sync",
             Self::LocationOperation => "Location Operation",
@@ -404,9 +397,6 @@ impl JobKey {
             Self::LifecycleRuleEvaluation => {
                 "Start and expire request leases on schedule. Each lifecycle rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action."
             }
-            Self::LifecycleActionHandling => {
-                "Each lifecycle rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule."
-            }
             Self::MediaServerSignalSync => {
                 "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."
             }
@@ -455,7 +445,6 @@ impl JobKey {
             | Self::StagedNzbPrune
             | Self::FullHashBackfill
             | Self::LifecycleRuleEvaluation
-            | Self::LifecycleActionHandling
             | Self::MediaServerSignalSync
             | Self::ListSync => JobCategory::Maintenance,
         }
@@ -484,7 +473,6 @@ impl JobKey {
             | Self::StagedNzbPrune
             | Self::FullHashBackfill
             | Self::LifecycleRuleEvaluation
-            | Self::LifecycleActionHandling
             | Self::MediaServerSignalSync
             | Self::ListSync => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
@@ -526,7 +514,6 @@ impl JobKey {
             Self::StagedNzbPrune => "Every hour",
             Self::FullHashBackfill => "Every 30 minutes, 02:00–06:00 host local time",
             Self::LifecycleRuleEvaluation => "Every 8 hours",
-            Self::LifecycleActionHandling => "Every 12 hours",
             Self::MediaServerSignalSync => "Every 6 hours",
             Self::ListSync => "Every 15 minutes",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
@@ -562,7 +549,6 @@ impl JobKey {
             Self::StagedNzbPrune => Some(3600),
             Self::FullHashBackfill => Some(30 * 60),
             Self::LifecycleRuleEvaluation => Some(LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS),
-            Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
             Self::MediaServerSignalSync => Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS),
             Self::ListSync => Some(LIST_SYNC_INTERVAL_SECONDS),
             Self::DiscoverySync => Some(24 * 3600),
@@ -615,7 +601,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 22] = [
+pub const ALL_JOB_KEYS: [JobKey; 21] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -635,7 +621,6 @@ pub const ALL_JOB_KEYS: [JobKey; 22] = [
     JobKey::ArtworkEncoding,
     JobKey::TitleImageCacheRefresh,
     JobKey::LifecycleRuleEvaluation,
-    JobKey::LifecycleActionHandling,
     JobKey::MediaServerSignalSync,
     JobKey::ListSync,
 ];

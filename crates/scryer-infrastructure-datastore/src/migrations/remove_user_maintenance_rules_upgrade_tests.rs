@@ -1,25 +1,26 @@
-//! User-owned maintenance rules are removed with their history; the
-//! system-owned rule and everything outside maintenance history stay.
-//! Exercised through the real upgrade runner, with and without foreign-key
-//! enforcement, and run twice to prove the second run changes nothing.
+//! User-owned maintenance rules are removed with their history when the
+//! rules become lifecycle rules; the system-owned rule and everything outside
+//! rule history stay, under the lifecycle table names. Exercised through the
+//! real upgrade runner, with and without foreign-key enforcement. The delete
+//! section is also run on its own twice, to prove a second run removes
+//! nothing more.
 
 use sqlx::SqlitePool;
 
-const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0349_remove_user_maintenance_rules.sql");
-const POSTGRES: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0349_remove_user_maintenance_rules.sql"
-);
+const SQLITE: &str = include_str!("../../../scryer/src/db/migrations/0348_lifecycle_rules.sql");
+const POSTGRES: &str =
+    include_str!("../../../scryer/src/db/postgres/migrations/0348_lifecycle_rules.sql");
 
-/// Version the catalog is replayed to before 0349 is applied.
-const PRE_UPGRADE_VERSION: i64 = 348;
+/// Version the catalog is replayed to before 0348 is applied.
+const PRE_UPGRADE_VERSION: i64 = 347;
 
 const USER_RULE: &str = "user-rule";
 const SECOND_USER_RULE: &str = "second-user-rule";
 const SYSTEM_RULE: &str = "system-rule";
 const TITLE: &str = "title-kept";
 
-/// Tables holding one rule's history, and how a row names its rule.
+/// Tables holding one rule's history, under their names before the upgrade,
+/// and how a row names its rule.
 const HISTORY_COUNTS: &[(&str, &str)] = &[
     (
         "maintenance_rule_revisions",
@@ -76,7 +77,7 @@ async fn pre_upgrade_pool(foreign_keys: bool) -> SqlitePool {
         true,
     )
     .await
-    .expect("pre-0349 migration fixture should apply");
+    .expect("pre-0348 migration fixture should apply");
     let pragma = if foreign_keys {
         "PRAGMA foreign_keys = ON"
     } else {
@@ -244,20 +245,38 @@ async fn seed_rule(pool: &SqlitePool, rule: &str, system_owned: bool) {
     }
 }
 
-/// Rows per history table for one rule, in [`HISTORY_COUNTS`] order.
-async fn history(pool: &SqlitePool, rule: &str) -> Vec<(&'static str, i64)> {
+/// A statement over the history tables, under the names the database has at
+/// this point: the upgrade renames every `maintenance_` table to the same
+/// name with `lifecycle_`.
+fn current_names(sql: &str, upgraded: bool) -> String {
+    if upgraded {
+        sql.replace("maintenance_", "lifecycle_")
+    } else {
+        sql.to_string()
+    }
+}
+
+/// Rows per history table for one rule, in [`HISTORY_COUNTS`] order, keyed
+/// by the table's name before the upgrade.
+async fn history(pool: &SqlitePool, rule: &str, upgraded: bool) -> Vec<(&'static str, i64)> {
     let mut rows = Vec::with_capacity(HISTORY_COUNTS.len() + 1);
     rows.push((
         "maintenance_rule_sets",
         count(
             pool,
-            "SELECT COUNT(*) FROM maintenance_rule_sets WHERE id = ?1",
+            &current_names(
+                "SELECT COUNT(*) FROM maintenance_rule_sets WHERE id = ?1",
+                upgraded,
+            ),
             rule,
         )
         .await,
     ));
     for (table, sql) in HISTORY_COUNTS {
-        rows.push((*table, count(pool, sql, rule).await));
+        rows.push((
+            *table,
+            count(pool, &current_names(sql, upgraded), rule).await,
+        ));
     }
     rows
 }
@@ -276,7 +295,7 @@ fn seeded_history() -> Vec<(&'static str, i64)> {
     rows
 }
 
-async fn assert_unrelated_rows_intact(pool: &SqlitePool, context: &str) {
+async fn assert_unrelated_rows_intact(pool: &SqlitePool, context: &str, upgraded: bool) {
     for (sql, bind) in [
         ("SELECT COUNT(*) FROM titles WHERE id = ?1", TITLE),
         (
@@ -292,16 +311,17 @@ async fn assert_unrelated_rows_intact(pool: &SqlitePool, context: &str) {
             "exclusion-global",
         ),
     ] {
-        assert_eq!(count(pool, sql, bind).await, 1, "{context}: {sql} {bind}");
+        let sql = current_names(sql, upgraded);
+        assert_eq!(count(pool, &sql, bind).await, 1, "{context}: {sql} {bind}");
     }
 }
 
-/// Upgrades through 0349 and no further: a later migration removes every
+/// Upgrades through 0348 and no further: the next migration removes every
 /// request rule set, which is not this upgrade's doing.
 async fn upgrade(pool: &SqlitePool) {
     crate::migrations::run_upgrade_migrations_through(pool, PRE_UPGRADE_VERSION + 1)
         .await
-        .expect("0349 upgrade should apply");
+        .expect("0348 upgrade should apply");
 }
 
 async fn run_upgrade(foreign_keys: bool) {
@@ -315,7 +335,7 @@ async fn run_upgrade(foreign_keys: bool) {
     ] {
         seed_rule(&pool, rule, system_owned).await;
         assert_eq!(
-            history(&pool, rule).await,
+            history(&pool, rule, false).await,
             seeded_history(),
             "{context}: seeded {rule}"
         );
@@ -329,38 +349,82 @@ async fn run_upgrade(foreign_keys: bool) {
         .collect();
     for rule in [USER_RULE, SECOND_USER_RULE] {
         assert_eq!(
-            history(&pool, rule).await,
+            history(&pool, rule, true).await,
             removed,
             "{context}: {rule} removed"
         );
     }
     assert_eq!(
-        history(&pool, SYSTEM_RULE).await,
+        history(&pool, SYSTEM_RULE, true).await,
         seeded_history(),
         "{context}: the system-owned rule keeps all its history"
     );
-    assert_unrelated_rows_intact(&pool, &context).await;
+    assert_unrelated_rows_intact(&pool, &context, true).await;
+}
 
-    // Replaying the statements on the upgraded database changes nothing.
-    sqlx::raw_sql(sqlx::AssertSqlSafe(SQLITE.to_string()))
-        .execute(&pool)
-        .await
-        .expect("a second run applies");
-    assert_eq!(
-        history(&pool, SYSTEM_RULE).await,
-        seeded_history(),
-        "{context}: a second run keeps the system-owned rule"
-    );
-    for rule in [USER_RULE, SECOND_USER_RULE] {
-        assert_eq!(history(&pool, rule).await, removed, "{context}: second run");
+/// The delete section of 0348: every statement before the first table rename.
+/// It names the tables as they are before the upgrade.
+fn delete_section() -> &'static str {
+    SQLITE
+        .split_once("ALTER TABLE maintenance_rule_sets RENAME TO")
+        .expect("the deletes come before the renames")
+        .0
+}
+
+/// The delete section run on its own, twice, on a database that still has the
+/// tables it names, and then the full upgrade on top: each run removes only
+/// the user-owned rules' history, and the system-owned rule keeps all of its
+/// own every time.
+async fn run_deletes_twice_then_upgrade(foreign_keys: bool) {
+    let context = format!("foreign keys {foreign_keys}");
+    let pool = pre_upgrade_pool(foreign_keys).await;
+    seed_unrelated(&pool).await;
+    for (rule, system_owned) in [
+        (USER_RULE, false),
+        (SECOND_USER_RULE, false),
+        (SYSTEM_RULE, true),
+    ] {
+        seed_rule(&pool, rule, system_owned).await;
     }
-    assert_unrelated_rows_intact(&pool, &context).await;
+    let removed: Vec<_> = seeded_history()
+        .into_iter()
+        .map(|(table, _)| (table, 0))
+        .collect();
+
+    for run in ["first", "second"] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(delete_section().to_string()))
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|error| panic!("{context}: {run} run of the deletes: {error}"));
+        for rule in [USER_RULE, SECOND_USER_RULE] {
+            assert_eq!(
+                history(&pool, rule, false).await,
+                removed,
+                "{context}: {run} run removes {rule}"
+            );
+        }
+        assert_eq!(
+            history(&pool, SYSTEM_RULE, false).await,
+            seeded_history(),
+            "{context}: {run} run keeps the system-owned rule"
+        );
+        assert_unrelated_rows_intact(&pool, &context, false).await;
+    }
+
     upgrade(&pool).await;
+    for rule in [USER_RULE, SECOND_USER_RULE] {
+        assert_eq!(
+            history(&pool, rule, true).await,
+            removed,
+            "{context}: after the upgrade"
+        );
+    }
     assert_eq!(
-        history(&pool, SYSTEM_RULE).await,
+        history(&pool, SYSTEM_RULE, true).await,
         seeded_history(),
-        "{context}"
+        "{context}: the upgrade keeps the system-owned rule"
     );
+    assert_unrelated_rows_intact(&pool, &context, true).await;
 }
 
 #[tokio::test]
@@ -373,11 +437,28 @@ async fn the_upgrade_removes_user_rules_and_their_history_without_foreign_keys()
     run_upgrade(false).await;
 }
 
-/// The Postgres statements are the SQLite ones with Postgres's boolean.
+#[tokio::test]
+async fn the_deletes_run_twice_and_keep_the_system_rule_with_foreign_keys_enforced() {
+    run_deletes_twice_then_upgrade(true).await;
+}
+
+#[tokio::test]
+async fn the_deletes_run_twice_and_keep_the_system_rule_without_foreign_keys() {
+    run_deletes_twice_then_upgrade(false).await;
+}
+
+/// The deletes, everything before the first rename, are the same on
+/// Postgres with Postgres's boolean.
 #[test]
-fn postgres_statements_match_sqlite() {
+fn postgres_deletes_match_sqlite() {
+    let deletes = |sql: &'static str| {
+        sql.split_once("ALTER TABLE maintenance_rule_sets RENAME TO")
+            .expect("the deletes come before the renames")
+            .0
+    };
+    assert!(delete_section().contains("DELETE FROM maintenance_rule_sets WHERE system_owned = 0;"));
     assert_eq!(
-        POSTGRES,
-        SQLITE.replace("system_owned = 0", "system_owned = false")
+        deletes(POSTGRES),
+        deletes(SQLITE).replace("system_owned = 0", "system_owned = false")
     );
 }

@@ -1343,7 +1343,9 @@ mod tests {
         ] {
             assert!(indexes.insert(added.to_string()), "{added} is new in 0336");
         }
-        // 0358 renames the lifecycle rule tables' indexes.
+        // 0348 drops the operator-keep claim index, which nothing writes, and
+        // renames the lifecycle rule tables' indexes.
+        assert!(indexes.remove("idx_lifecycle_claims_live_operator_keep"));
         indexes
             .into_iter()
             .map(|name| match name.strip_prefix("idx_maintenance_") {

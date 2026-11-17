@@ -638,7 +638,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // mutation roots, the action-run payload object, the arming input, and the
     // arming enum: query 142->143, mutation 208->210, OBJECT 334->335,
     // INPUT_OBJECT 182->183, ENUM 119->120, public types 647->650.
-    // LIFECYCLE_ACTION_HANDLING joins the existing job key enum.
+    // LIFECYCLE_ACTION_HANDLING joined the existing job key enum and has
+    // since been removed; neither changes a count.
     // Media-server watch-signal sync adds no GraphQL surface of its own:
     // MEDIA_SERVER_SIGNAL_SYNC joins the existing job key enum, so every count
     // below is unchanged.

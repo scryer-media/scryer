@@ -1062,6 +1062,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "request_rule_decisions",
         classification: BackupTableClassification::Export,
     },
+    // Which rule sets voted on each decision, written with the decision and
+    // read for a rule set's decision count; it goes with the trace.
+    BackupTableCatalogEntry {
+        table: "request_rule_decision_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
     // A lifecycle claim is what holds media against deletion. Losing one on a
     // restore would silently expose a leased title to the next lifecycle
     // pass, so it is exported like the candidates and action runs above.

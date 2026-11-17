@@ -25,10 +25,15 @@ impl RequestRuleDecisionStore {
 impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
     async fn record(&self, decision: &RequestRuleDecisionRecord) -> AppResult<()> {
         let args = decision_args(decision)?;
+        let rule_set_statements = rule_set_link_statements(decision);
         SqlRuntime::run_in_transaction(&self.datastore, "record_request_rule_decision", move |tx| {
             let args = args.clone();
+            let rule_set_statements = rule_set_statements.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_DECISION_SQL, &args).await?;
+                for (sql, link_args) in &rule_set_statements {
+                    SqlRuntime::execute(SqlExec::Tx(tx), sql, link_args).await?;
+                }
                 Ok(())
             })
         })
@@ -123,13 +128,9 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
             .collect()
     }
 
-    /// The rule ids live inside `votes_json` rather than in a join table, so
-    /// this is a substring match over that column rather than a join. It is
-    /// deliberately loose: the number drives a "this rule decided N requests"
-    /// affordance in the authoring UI and nothing safety-bearing, and rule ids
-    /// are generated opaque ids, so a false positive would require one id to
-    /// contain another. `%` and `_` in the id would widen the pattern; ids are
-    /// UUIDs, which contain neither.
+    /// Counted from the decision's rule set links, written with the decision,
+    /// so the read is served by the rule set index rather than a scan of every
+    /// stored vote.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64> {
         let rule_set_id = rule_set_id.trim();
         if rule_set_id.is_empty() {
@@ -138,9 +139,9 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
             "SELECT COUNT(*) AS decision_count
-               FROM request_rule_decisions
-              WHERE votes_json LIKE {}",
-            &[SqlArg::Text(format!("%{rule_set_id}%"))],
+               FROM request_rule_decision_rule_sets
+              WHERE rule_set_id = {}",
+            &[SqlArg::Text(rule_set_id.to_string())],
         )
         .await?;
         let Some(row) = row else {
@@ -157,14 +158,69 @@ const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, effective_outcome,
     policy_outcome, fallback_reason, votes_json, tags_json, shaping_json, input_hash,
     input_schema_version, created_at";
 
-/// `mode` is a retired NOT NULL column that nothing reads. Every recorded
-/// decision consulted enabled rules, so it is written as the constant
-/// `'enforce'` until a migration drops the column.
 const INSERT_DECISION_SQL: &str = "INSERT INTO request_rule_decisions
-        (id, request_id, evaluated_at, mode, effective_outcome, policy_outcome,
+        (id, request_id, evaluated_at, effective_outcome, policy_outcome,
          fallback_reason, votes_json, tags_json, shaping_json, input_hash, input_schema_version,
          created_at)
-     VALUES ({}, {}, {}, 'enforce', {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+
+/// Rule set links bound per statement: two binds each, well under every
+/// engine's ceiling.
+const RULE_SET_LINK_CHUNK: usize = 400;
+
+/// The distinct rule set ids the decision's votes name, in first-seen order.
+///
+/// Votes that are not a JSON array, and a vote with no rule set id, name
+/// nothing, the same as the migration that filled the links for decisions
+/// stored before them.
+fn voted_rule_set_ids(votes_json: &str) -> Vec<String> {
+    let votes = match serde_json::from_str::<serde_json::Value>(votes_json) {
+        Ok(serde_json::Value::Array(votes)) => votes,
+        Ok(_) => return Vec::new(),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "a request rule decision's votes do not parse; it is linked to no rule set"
+            );
+            return Vec::new();
+        }
+    };
+    let mut seen = std::collections::HashSet::new();
+    votes
+        .iter()
+        .filter_map(|vote| vote.get("rule_set_id")?.as_str())
+        .filter(|id| !id.is_empty())
+        .filter(|id| seen.insert(*id))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The statements that link one decision to the rule sets its votes name.
+fn rule_set_link_statements(decision: &RequestRuleDecisionRecord) -> Vec<(String, Vec<SqlArg>)> {
+    voted_rule_set_ids(&decision.votes_json)
+        .chunks(RULE_SET_LINK_CHUNK)
+        .map(|chunk| {
+            let placeholders = std::iter::repeat_n("({}, {})", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "INSERT INTO request_rule_decision_rule_sets (decision_id, rule_set_id)
+                 VALUES {placeholders}
+                 ON CONFLICT DO NOTHING"
+            );
+            let args = chunk
+                .iter()
+                .flat_map(|rule_set_id| {
+                    [
+                        SqlArg::Text(decision.id.clone()),
+                        SqlArg::Text(rule_set_id.clone()),
+                    ]
+                })
+                .collect();
+            (sql, args)
+        })
+        .collect()
+}
 
 fn decision_args(decision: &RequestRuleDecisionRecord) -> AppResult<Vec<SqlArg>> {
     Ok(vec![

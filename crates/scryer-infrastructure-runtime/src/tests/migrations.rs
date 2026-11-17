@@ -6763,8 +6763,8 @@ async fn migration_0295_preserves_inherited_movie_availability() {
     );
 }
 
-/// Runs 0304 against the schema as it stood before lifecycle rules stored one
-/// state (0360), holding one enabled destructive
+/// Runs 0304 against the schema of the last release before lifecycle rules
+/// stored one state (0347), holding one enabled destructive
 /// lifecycle rule, one shadow lifecycle rule and one enforcing request
 /// rule, with the experimental-features setting stored as `value_json`, or
 /// absent when `experimental` is `None`. Returns the rule rows afterwards as
@@ -6782,11 +6782,11 @@ async fn rules_after_0304(
         .max_connections(1)
         .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
         .await
-        .expect("pre-0361 database should open");
-    // The four rule-state columns 0304 writes are replaced at 0361.
-    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(360), true)
+        .expect("pre-0348 database should open");
+    // The four rule-state columns 0304 writes are replaced at 0348.
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(347), true)
         .await
-        .expect("migrations through 0360 should apply");
+        .expect("migrations through 0347 should apply");
     let mut conn = pool.acquire().await.expect("rule reset connection");
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *conn)
@@ -6794,7 +6794,7 @@ async fn rules_after_0304(
         .expect("relax foreign keys for the seeded rows");
 
     sqlx::query(
-        "INSERT INTO lifecycle_rule_sets
+        "INSERT INTO maintenance_rule_sets
          (id, name, enabled, evaluation_mode, effect_arming, destructive_rearm_required, system_owned)
          VALUES ('rule-armed', 'Synthetic armed rule', 1, 'observe', 'destructive', 0, 1),
                 ('rule-shadow', 'Synthetic shadow rule', 0, 'shadow', 'none', 1, 0)",
@@ -6838,9 +6838,7 @@ async fn rules_after_0304(
     .map(str::trim)
     .filter(|statement| !statement.is_empty())
     {
-        // 0304 predates the table rename; replay it against the current name.
-        let statement = statement.replace("maintenance_rule_sets", "lifecycle_rule_sets");
-        sqlx::query(sqlx::AssertSqlSafe(statement))
+        sqlx::query(sqlx::AssertSqlSafe(statement.to_string()))
             .execute(&mut *conn)
             .await
             .expect("0304 should apply");
@@ -6848,7 +6846,7 @@ async fn rules_after_0304(
 
     let lifecycle = sqlx::query_as(
         "SELECT id, enabled, evaluation_mode, effect_arming, destructive_rearm_required
-         FROM lifecycle_rule_sets ORDER BY id",
+         FROM maintenance_rule_sets ORDER BY id",
     )
     .fetch_all(&mut *conn)
     .await

@@ -1374,9 +1374,6 @@ impl AppUseCase {
             JobKey::ProwlarrSync => self.prowlarr_sync_tick_has_work().await,
             JobKey::StagedNzbPrune => self.staged_nzb_prune_tick_has_work().await,
             JobKey::ListSync => self.list_sync_tick_has_work().await,
-            // Each rule acts only through its own fires, so the
-            // instance-wide tick has nothing to do.
-            JobKey::LifecycleActionHandling => false,
             _ => return true,
         };
         if !has_work {
@@ -2210,46 +2207,6 @@ impl AppUseCase {
                             "{summary_text}; {} rule(s) failed and their candidates were held",
                             report.rules_failed
                         )),
-                        summary_json,
-                    ))
-                } else {
-                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
-                }
-            }
-            JobKey::LifecycleActionHandling => {
-                let report = self.run_lifecycle_action_handling_job().await?;
-                let summary_json = serde_json::to_string(&report).ok();
-                if report.rules_considered == 0 {
-                    return Ok(JobExecutionOutcome::new(
-                        Some(
-                            "Each lifecycle rule acts on its own schedule; this job acted on nothing"
-                                .to_string(),
-                        ),
-                        summary_json,
-                    ));
-                }
-                if !report.gates_enabled {
-                    return Ok(JobExecutionOutcome::new(
-                        Some(
-                            "Both instance effect gates are off; no lifecycle actions executed"
-                                .to_string(),
-                        ),
-                        summary_json,
-                    ));
-                }
-                let summary_text = format!(
-                    "Considered {} candidate(s) across {} armed rule(s): {} executed, {} already satisfied, {} held, {} canceled, {} failed",
-                    report.candidates_considered,
-                    report.rules_eligible,
-                    report.executed,
-                    report.already_satisfied,
-                    report.held,
-                    report.canceled,
-                    report.failed,
-                );
-                if report.failed > 0 {
-                    Ok(JobExecutionOutcome::warning(
-                        Some(summary_text),
                         summary_json,
                     ))
                 } else {

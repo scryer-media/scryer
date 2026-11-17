@@ -633,7 +633,7 @@ async fn create_persists_a_dormant_rule_set_and_its_first_revision() {
         Some(user.id.as_str())
     );
 
-    let expected_package = format!("package scryer.maintenance.user.{}", detail.rule_set.id);
+    let expected_package = format!("package scryer.lifecycle.user.{}", detail.rule_set.id);
     assert!(
         detail
             .revision

@@ -7829,9 +7829,6 @@ const cs: LocaleDictionary = {
   "jobs.builtin.LifecycleRuleEvaluation.name": "Vyhodnocení pravidel životního cyklu",
   "jobs.builtin.LifecycleRuleEvaluation.description":
     "Podle plánu zahajuje a ukončuje zápůjčky požadavků. Každé pravidlo životního cyklu se vyhodnocuje podle vlastního plánu; spuštění teď vyhodnotí všechna zapnutá pravidla a nikdy neprovede akci.",
-  "jobs.builtin.LifecycleActionHandling.name": "Zpracování akcí životního cyklu",
-  "jobs.builtin.LifecycleActionHandling.description":
-    "Každé pravidlo životního cyklu zasahuje na své splatné kandidáty hned po svém plánovaném vyhodnocení nebo při ručním spuštění daného pravidla, za branami účinků instance a s úplnými bezpečnostními kontrolami. Tato úloha nezasahuje za žádné pravidlo.",
   "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
     "Pozdrženo: od posledního načtení oblíbených označil účet na mediálním serveru jako oblíbenou tuto položku, nebo seriál či sérii kontrolovaných epizod.",
   "settings.lifecycleExecutionReason.ruleNotEligible":

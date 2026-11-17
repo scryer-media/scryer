@@ -6110,7 +6110,7 @@ pub struct LifecycleRuleRevision {
     /// defines. Stored as JSON because the action vocabulary lives in the
     /// application layer; callers deserialize it at that boundary rather than
     /// passing the raw text around.
-    pub action_spec_json: String,
+    pub declared_actions_json: String,
     pub grace_days: i64,
     pub source_content_hash: String,
     pub created_by: Option<String>,
