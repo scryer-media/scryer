@@ -18,6 +18,15 @@ import { useClient } from "urql";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { FacetSelect, FacetTags } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
+import {
+  GutterPanel,
+  GutterPanelButton,
+} from "@/components/common/gutter-panel";
+import {
+  RuleSidePanelButtons,
+  RuleSidePanelHeader,
+  useRuleSidePanels,
+} from "@/components/views/settings/rule-side-panels";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
@@ -221,189 +230,182 @@ score_entry["japanese_audio_bonus"] := 300 if {
 
 const ignoreRulesReferenceCodeChange = (_value: string) => undefined;
 
+const SCORING_LIBRARY_PANEL_ID = "settings-rules-library-panel";
+const SCORING_REFERENCE_PANEL_ID = "settings-rules-reference-panel";
+type ScoringSidePanel = "library" | "reference";
+
 function RulesContextReference() {
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <BookOpen className="h-4 w-4" />
-          {t("settings.refTitle")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </CardTitle>
+    <div>
+      <RuleSidePanelHeader
+        icon={<BookOpen className="h-4 w-4" />}
+        title={t("settings.refTitle")}
+      />
+      <div className="space-y-6 p-4 text-sm">
         <p className="text-xs text-muted-foreground">
           {t("settings.refSubtitle")}
         </p>
-      </CardHeader>
-      {open ? (
-        <CardContent className="space-y-6 text-sm">
-          <p className="text-muted-foreground">{t("settings.refIntro")}</p>
+        <p className="text-muted-foreground">{t("settings.refIntro")}</p>
 
-          <div>
-            <h4 className="mb-2 font-semibold">
-              {t("settings.refSectionSandbox")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refSandboxIntro")}
-            </p>
-            <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refSandboxNoIO")}</li>
-              <li>{t("settings.refSandboxPkgIsolation")}</li>
-              <li>{t("settings.refSandboxReadOnly")}</li>
-              <li>{t("settings.refSandboxOutputRestricted")}</li>
-              <li>{t("settings.refSandboxIntegerOnly")}</li>
-              <li>{t("settings.refSandboxValidation")}</li>
-              <li>{t("settings.refSandboxErrorIsolation")}</li>
-            </ul>
+        <div>
+          <h4 className="mb-2 font-semibold">
+            {t("settings.refSectionSandbox")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refSandboxIntro")}
+          </p>
+          <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+            <li>{t("settings.refSandboxNoIO")}</li>
+            <li>{t("settings.refSandboxPkgIsolation")}</li>
+            <li>{t("settings.refSandboxReadOnly")}</li>
+            <li>{t("settings.refSandboxOutputRestricted")}</li>
+            <li>{t("settings.refSandboxIntegerOnly")}</li>
+            <li>{t("settings.refSandboxValidation")}</li>
+            <li>{t("settings.refSandboxErrorIsolation")}</li>
+          </ul>
+        </div>
+
+        {REF_SECTIONS.map((section) => (
+          <RefFieldTable key={section.path} section={section} />
+        ))}
+
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refSectionBuiltins")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refBuiltinsIntro")}
+          </p>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[280px]">
+                    {t("settings.refColFunction")}
+                  </TableHead>
+                  <TableHead className="w-[100px]">
+                    {t("settings.refColReturns")}
+                  </TableHead>
+                  <TableHead>{t("settings.refColDescription")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.block_score()
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      number
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnBlockScore")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.size_gib(bytes)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      float
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnSizeGib")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.lang_matches(code, pattern)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      bool
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnLangMatches")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.normalize_source(raw)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      string
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnNormalizeSource")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.normalize_codec(raw)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      string
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnNormalizeCodec")}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
+        </div>
 
-          {REF_SECTIONS.map((section) => (
-            <RefFieldTable key={section.path} section={section} />
-          ))}
-
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refSectionBuiltins")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refBuiltinsIntro")}
-            </p>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[280px]">
-                      {t("settings.refColFunction")}
-                    </TableHead>
-                    <TableHead className="w-[100px]">
-                      {t("settings.refColReturns")}
-                    </TableHead>
-                    <TableHead>{t("settings.refColDescription")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.block_score()
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        number
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnBlockScore")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.size_gib(bytes)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        float
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnSizeGib")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.lang_matches(code, pattern)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        bool
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnLangMatches")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.normalize_source(raw)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        string
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnNormalizeSource")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.normalize_codec(raw)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        string
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnNormalizeCodec")}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refSectionOutput")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refOutputIntro")}
-            </p>
-            <LazyRegoEditor
-              ruleFamily="release"
-              id="settings-rules-output-format-example"
-              value={RULE_OUTPUT_EXAMPLE}
-              onChange={ignoreRulesReferenceCodeChange}
-              readOnly
-              minLines={25}
-              maxLines={25}
-            />
-          </div>
-        </CardContent>
-      ) : null}
-    </Card>
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refSectionOutput")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refOutputIntro")}
+          </p>
+          <LazyRegoEditor
+            ruleFamily="release"
+            id="settings-rules-output-format-example"
+            value={RULE_OUTPUT_EXAMPLE}
+            onChange={ignoreRulesReferenceCodeChange}
+            readOnly
+            minLines={25}
+            maxLines={25}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -570,13 +572,11 @@ type CommunityTemplate = {
 
 function RuleLibrary({
   onApply,
-  defaultOpen,
   onInstallCommunityPack,
   installingRulePackId,
   canManage,
 }: {
   onApply: (template: RuleTemplate) => void;
-  defaultOpen?: boolean;
   onInstallCommunityPack: (
     packId: string,
     templateIds: string[],
@@ -586,7 +586,6 @@ function RuleLibrary({
 }) {
   const t = useTranslate();
   const client = useClient();
-  const [open, setOpen] = React.useState(defaultOpen ?? false);
   const [tab, setTab] = React.useState<"builtin" | "community">("builtin");
   const [categoryFilter, setCategoryFilter] = React.useState<string>("All");
 
@@ -646,61 +645,50 @@ function RuleLibrary({
       : RULE_TEMPLATES.filter((tpl) => tpl.category === categoryFilter);
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Library className="h-4 w-4" />
-          {t("settings.ruleLibrary")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
+    <div>
+      <RuleSidePanelHeader
+        icon={<Library className="h-4 w-4" />}
+        title={t("settings.ruleLibrary")}
+      />
+      <div id="settings-rules-library" className="@container p-3">
+        <p className="mb-3 text-xs text-muted-foreground">
           {t("settings.ruleLibraryDescription")}
         </p>
-      </CardHeader>
-      {open ? (
-        <CardContent>
-          {/* Tab selector */}
-          <div className="mb-3 flex gap-2 border-b border-border pb-2">
-            <button
-              id="settings-rules-library-tab-builtin"
-              type="button"
-              className={cn(
-                "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
-                tab === "builtin"
-                  ? "text-primary border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setTab("builtin")}
-            >
-              {t("settings.pluginBuiltin")}
-            </button>
-            <button
-              id="settings-rules-library-tab-community"
-              type="button"
-              className={cn(
-                "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
-                tab === "community"
-                  ? "text-primary border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setTab("community")}
-            >
-              {t("uiText.community")}
-            </button>
-          </div>
+        {/* Tab selector */}
+        <div className="mb-3 flex gap-2 border-b border-border pb-2">
+          <button
+            id="settings-rules-library-tab-builtin"
+            type="button"
+            className={cn(
+              "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
+              tab === "builtin"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setTab("builtin")}
+          >
+            {t("settings.pluginBuiltin")}
+          </button>
+          <button
+            id="settings-rules-library-tab-community"
+            type="button"
+            className={cn(
+              "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
+              tab === "community"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setTab("community")}
+          >
+            {t("uiText.community")}
+          </button>
+        </div>
 
-          {tab === "builtin" ? (
-            <>
-              <div className="mb-3 flex flex-wrap gap-1">
-                {[
-                  t("settings.ruleLibraryAll"),
-                  ...RULE_TEMPLATE_CATEGORIES,
-                ].map((cat) => {
+        {tab === "builtin" ? (
+          <>
+            <div className="mb-3 flex flex-wrap gap-1">
+              {[t("settings.ruleLibraryAll"), ...RULE_TEMPLATE_CATEGORIES].map(
+                (cat) => {
                   const isAll = cat === t("settings.ruleLibraryAll");
                   const active = isAll
                     ? categoryFilter === "All"
@@ -724,171 +712,165 @@ function RuleLibrary({
                       {t(`rules.category.${cat}`)}
                     </button>
                   );
-                })}
-              </div>
-              <TemplateGrid
-                templates={filtered}
-                onApply={(tpl) => {
-                  onApply(tpl);
-                  setOpen(false);
-                }}
-              />
-            </>
-          ) : /* Community tab */
-          selectedPack ? (
-            <div>
-              <button
-                id="settings-rules-library-back-to-packs"
-                type="button"
-                className="mb-3 text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setSelectedPack(null);
-                  setPackTemplates([]);
-                }}
-              >
-                {t("uiText.backToPacks")}
-              </button>
-              <p className="mb-1 text-sm font-medium">{selectedPack.name}</p>
-              <p className="mb-3 text-xs text-muted-foreground">
-                {selectedPack.description}
-              </p>
-              {packLoading ? (
-                <p className="text-sm text-muted-foreground">
-                  {t("label.loading")}
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-xs text-muted-foreground">
-                    {t(
-                      selectedPack.customizable !== false
-                        ? "rules.packChooseCustomizable"
-                        : "rules.packChooseManaged",
-                    )}
-                  </p>
-                  {selectedPack.customizable === false ? (
-                    <p className="text-xs text-muted-foreground">
-                      {t("uiText.managedByThePackAuthor")}
-                    </p>
-                  ) : null}
-                  <p className="text-xs text-muted-foreground">
-                    {t(
-                      "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled",
-                    )}
-                  </p>
-                  <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
-                    {packTemplates.map((template) => {
-                      const checked = selectedTemplateIds.includes(template.id);
-                      const checkboxId = selectorId(
-                        "settings-rules-library-template-install",
-                        template.id,
-                      );
-                      return (
-                        <label
-                          key={template.id}
-                          className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3"
-                        >
-                          <Checkbox
-                            id={checkboxId}
-                            checked={checked}
-                            disabled={!canManage}
-                            onCheckedChange={(value) =>
-                              setSelectedTemplateIds((current) =>
-                                value === true
-                                  ? [...current, template.id]
-                                  : current.filter((id) => id !== template.id),
-                              )
-                            }
-                          />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium">
-                              {template.title}
-                            </span>
-                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">
-                              {template.description}
-                            </span>
-                            <span className="mt-2 flex flex-wrap gap-1">
-                              <Badge tone="neutral" className="text-[10px]">
-                                {template.category}
-                              </Badge>
-                              {template.appliedFacets.map((facet) => (
-                                <Badge
-                                  key={facet}
-                                  tone="info"
-                                  className="text-[10px]"
-                                >
-                                  {facet}
-                                </Badge>
-                              ))}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {canManage ? (
-                    <Button
-                      id={selectorId(
-                        "settings-rules-library-pack-install",
-                        selectedPack.id,
-                      )}
-                      type="button"
-                      disabled={installingRulePackId === selectedPack.id}
-                      onClick={() =>
-                        void onInstallCommunityPack(
-                          selectedPack.id,
-                          selectedTemplateIds,
-                        )
-                      }
-                    >
-                      {installingRulePackId === selectedPack.id
-                        ? "Installing…"
-                        : "Install pack"}
-                    </Button>
-                  ) : null}
-                </div>
+                },
               )}
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
-              {communityPacks.length === 0 && communityPacksLoaded ? (
-                <p className="col-span-full text-sm text-muted-foreground">
-                  {t("settings.ruleLibraryCommunityEmpty")}
+            <TemplateGrid templates={filtered} onApply={onApply} />
+          </>
+        ) : /* Community tab */
+        selectedPack ? (
+          <div>
+            <button
+              id="settings-rules-library-back-to-packs"
+              type="button"
+              className="mb-3 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setSelectedPack(null);
+                setPackTemplates([]);
+              }}
+            >
+              {t("uiText.backToPacks")}
+            </button>
+            <p className="mb-1 text-sm font-medium">{selectedPack.name}</p>
+            <p className="mb-3 text-xs text-muted-foreground">
+              {selectedPack.description}
+            </p>
+            {packLoading ? (
+              <p className="text-sm text-muted-foreground">
+                {t("label.loading")}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    selectedPack.customizable !== false
+                      ? "rules.packChooseCustomizable"
+                      : "rules.packChooseManaged",
+                  )}
                 </p>
-              ) : null}
-              {communityPacks.map((pack) => (
-                <button
-                  id={selectorId("settings-rules-library-pack", pack.id)}
-                  key={pack.id}
-                  type="button"
-                  className="group rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
-                  onClick={() => void loadPack(pack)}
-                >
-                  <p className="text-sm font-medium text-foreground group-hover:text-primary">
-                    {pack.name}
+                {selectedPack.customizable === false ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t("uiText.managedByThePackAuthor")}
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-                    {pack.description}
-                  </p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Badge tone="info" className="text-[10px]">
-                      {pack.author}
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled",
+                  )}
+                </p>
+                <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
+                  {packTemplates.map((template) => {
+                    const checked = selectedTemplateIds.includes(template.id);
+                    const checkboxId = selectorId(
+                      "settings-rules-library-template-install",
+                      template.id,
+                    );
+                    return (
+                      <label
+                        key={template.id}
+                        className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3"
+                      >
+                        <Checkbox
+                          id={checkboxId}
+                          checked={checked}
+                          disabled={!canManage}
+                          onCheckedChange={(value) =>
+                            setSelectedTemplateIds((current) =>
+                              value === true
+                                ? [...current, template.id]
+                                : current.filter((id) => id !== template.id),
+                            )
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">
+                            {template.title}
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">
+                            {template.description}
+                          </span>
+                          <span className="mt-2 flex flex-wrap gap-1">
+                            <Badge tone="neutral" className="text-[10px]">
+                              {template.category}
+                            </Badge>
+                            {template.appliedFacets.map((facet) => (
+                              <Badge
+                                key={facet}
+                                tone="info"
+                                className="text-[10px]"
+                              >
+                                {facet}
+                              </Badge>
+                            ))}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {canManage ? (
+                  <Button
+                    id={selectorId(
+                      "settings-rules-library-pack-install",
+                      selectedPack.id,
+                    )}
+                    type="button"
+                    disabled={installingRulePackId === selectedPack.id}
+                    onClick={() =>
+                      void onInstallCommunityPack(
+                        selectedPack.id,
+                        selectedTemplateIds,
+                      )
+                    }
+                  >
+                    {installingRulePackId === selectedPack.id
+                      ? "Installing…"
+                      : "Install pack"}
+                  </Button>
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
+            {communityPacks.length === 0 && communityPacksLoaded ? (
+              <p className="col-span-full text-sm text-muted-foreground">
+                {t("settings.ruleLibraryCommunityEmpty")}
+              </p>
+            ) : null}
+            {communityPacks.map((pack) => (
+              <button
+                id={selectorId("settings-rules-library-pack", pack.id)}
+                key={pack.id}
+                type="button"
+                className="group rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
+                onClick={() => void loadPack(pack)}
+              >
+                <p className="text-sm font-medium text-foreground group-hover:text-primary">
+                  {pack.name}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                  {pack.description}
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <Badge tone="info" className="text-[10px]">
+                    {pack.author}
+                  </Badge>
+                  {pack.customizable === false ? (
+                    <Badge tone="neutral" className="text-[10px]">
+                      {t("settings.managedIndexerBadge")}
                     </Badge>
-                    {pack.customizable === false ? (
-                      <Badge tone="neutral" className="text-[10px]">
-                        {t("settings.managedIndexerBadge")}
-                      </Badge>
-                    ) : null}
-                    <span className="text-[10px] text-muted-foreground">
-                      v{pack.version}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      ) : null}
-    </Card>
+                  ) : null}
+                  <span className="text-[10px] text-muted-foreground">
+                    v{pack.version}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -971,6 +953,13 @@ export function SettingsRulesSection({
   installingRulePackId,
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
+  const {
+    rootRef: sidePanelRootRef,
+    columnRef: sidePanelColumnRef,
+    buttonProps: sidePanelButtonProps,
+    panelProps: sidePanelProps,
+    close: closeSidePanel,
+  } = useRuleSidePanels<ScoringSidePanel>();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
   const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
@@ -988,401 +977,410 @@ export function SettingsRulesSection({
   );
 
   return (
-    <div id="settings-rules-section" className="space-y-4 text-sm">
-      <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
-        <div className="min-w-0 flex-1">
-          <div className="mx-auto w-full max-w-[1280px] space-y-4">
-            <div className="overflow-hidden rounded border border-border bg-card">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                <CardTitle className="text-base text-foreground">
-                  {t("settings.rules")}
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <RegoAiPromptDialog
-                    id="settings-rules-ai-prompt"
-                    ruleKind="scoring"
-                    inputContract={ruleInputContract}
-                    outputContract={
-                      'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'
-                    }
-                  />
-                  <TextActionButton
-                    id="settings-rules-arr-custom-format-import"
-                    tone="accentBright"
-                    size="default"
-                    onClick={() => setIsArrImportOpen(true)}
-                    disabled={mutatingRuleSetId !== null}
-                    leadingIcon={<FileInput className="h-4 w-4" />}
-                    label={t("settings.arrImportAction")}
-                  />
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t("label.name")}</TableHead>
-                      <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
-                      <TableHead className="text-center">
-                        {t("label.enabled")}
-                      </TableHead>
-                      <TableHead className="text-right">
-                        {t("label.actions")}
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
-                      <TableRow
-                        data-ui="settings-table-row"
-                        key={record.id}
-                        id={selectorId("settings-rule-row", record.id)}
-                      >
-                        <TableCell className="font-medium">
-                          <span
-                            id={selectorId("settings-rule-name", record.name)}
-                          >
-                            {record.name}
-                          </span>
-                          {record.disabledReason ? (
-                            <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
-                              {record.disabledReason}
-                            </p>
-                          ) : null}
-                          {record.isManaged && record.managedKey ? (
-                            <ManagedBadge managedKey={record.managedKey} />
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                          {record.description || "—"}
-                        </TableCell>
-                        <TableCell>
-                          <FacetTags
-                            values={record.appliedFacets}
-                            emptyLabel={t("uiAttr.Global")}
-                          />
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <RenderBooleanIcon
-                            value={record.enabled}
-                            label={`${t("label.enabled")}: ${record.name}`}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <IconButton
-                              id={selectorId("settings-rule-toggle", record.id)}
-                              label={
-                                record.enabled
-                                  ? t("label.disable")
-                                  : t("label.enable")
-                              }
-                              tone={record.enabled ? "disabled" : "enabled"}
-                              onClick={() => void toggleRuleSetEnabled(record)}
-                              disabled={
-                                mutatingRuleSetId === record.id ||
-                                (!record.enabled &&
-                                  Boolean(record.disabledReason))
-                              }
-                            >
-                              <Power className="h-4 w-4" />
-                            </IconButton>
-                            {record.isManaged ? (
-                              <IconButton
-                                id={selectorId("settings-rule-copy", record.id)}
-                                label={t("settings.ruleCopyAsCustom")}
-                                tone="neutral"
-                                onClick={() => copyRuleSet(record)}
-                              >
-                                <Copy className="h-4 w-4" />
-                              </IconButton>
-                            ) : isUserOwnedRuleSet(record) ? (
-                              <>
-                                <IconButton
-                                  id={selectorId(
-                                    "settings-rule-edit",
-                                    record.id,
-                                  )}
-                                  label={t("label.edit")}
-                                  tone="edit"
-                                  onClick={() => editRuleSet(record)}
-                                >
-                                  <Edit className="h-4 w-4" />
-                                </IconButton>
-                                <IconButton
-                                  id={selectorId(
-                                    "settings-rule-delete",
-                                    record.id,
-                                  )}
-                                  label={t("label.delete")}
-                                  tone="delete"
-                                  onClick={() => void deleteRuleSet(record)}
-                                  disabled={mutatingRuleSetId === record.id}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </IconButton>
-                              </>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {ruleSetRecords.length === 0 ? (
-                      <TableRow>
-                        <TableCell
-                          colSpan={5}
-                          className="text-muted-foreground"
-                        >
-                          {t("settings.noRulesFound")}
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </TableBody>
-                </Table>
-              </div>
+    <div
+      ref={sidePanelRootRef}
+      id="settings-rules-section"
+      className="space-y-4 text-sm"
+    >
+      <div
+        ref={sidePanelColumnRef}
+        className="mx-auto w-full max-w-[1280px] space-y-4"
+      >
+        <RuleSidePanelButtons>
+          <GutterPanelButton
+            panelId={SCORING_LIBRARY_PANEL_ID}
+            label={t("settings.ruleLibrary")}
+            icon={<Library className="h-4 w-4" />}
+            {...sidePanelButtonProps("library")}
+          />
+          <GutterPanelButton
+            panelId={SCORING_REFERENCE_PANEL_ID}
+            label={t("settings.refTitle")}
+            icon={<BookOpen className="h-4 w-4" />}
+            {...sidePanelButtonProps("reference")}
+          />
+        </RuleSidePanelButtons>
+        <div className="overflow-hidden rounded border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <CardTitle className="text-base text-foreground">
+              {t("settings.rules")}
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <RegoAiPromptDialog
+                id="settings-rules-ai-prompt"
+                ruleKind="scoring"
+                inputContract={ruleInputContract}
+                outputContract={
+                  'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'
+                }
+              />
+              <TextActionButton
+                id="settings-rules-arr-custom-format-import"
+                tone="accentBright"
+                size="default"
+                onClick={() => setIsArrImportOpen(true)}
+                disabled={mutatingRuleSetId !== null}
+                leadingIcon={<FileInput className="h-4 w-4" />}
+                label={t("settings.arrImportAction")}
+              />
             </div>
-
-            {isEditorOpen ? (
-              <>
-                <Card>
-                  <CardHeader className="flex items-center justify-between gap-3">
-                    <CardTitle className="text-base">
-                      {editorMode === "copy"
-                        ? t("settings.ruleCopyAsCustom")
-                        : editingRuleSetId
-                          ? t("settings.ruleUpdate")
-                          : t("settings.ruleCreate")}
-                    </CardTitle>
-                    {/* A copy is always created enabled, so the toggle would be a
-                  control over nothing. */}
-                    {editorMode !== "copy" ? (
-                      <label className="flex shrink-0 items-center gap-3">
-                        <Checkbox
-                          id="settings-rule-enabled"
-                          size="large"
-                          checked={ruleSetDraft.enabled}
-                          onCheckedChange={(value) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              enabled: value === true,
-                            }))
-                          }
-                        />
-                        <span className="text-sm">{t("label.enabled")}</span>
-                      </label>
-                    ) : null}
-                  </CardHeader>
-                  <CardContent>
-                    <form
-                      id="settings-rule-form"
-                      className="space-y-3"
-                      onSubmit={submitRuleSet}
-                    >
-                      {ruleSetRecords.find(
-                        (record) => record.id === editingRuleSetId,
-                      )?.disabledReason ? (
-                        <p
-                          role="status"
-                          className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400"
-                        >
-                          {
-                            ruleSetRecords.find(
-                              (record) => record.id === editingRuleSetId,
-                            )?.disabledReason
-                          }
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("label.name")}</TableHead>
+                  <TableHead>{t("settings.ruleDescription")}</TableHead>
+                  <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
+                  <TableHead className="text-center">
+                    {t("label.enabled")}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t("label.actions")}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
+                  <TableRow
+                    data-ui="settings-table-row"
+                    key={record.id}
+                    id={selectorId("settings-rule-row", record.id)}
+                  >
+                    <TableCell className="font-medium">
+                      <span id={selectorId("settings-rule-name", record.name)}>
+                        {record.name}
+                      </span>
+                      {record.disabledReason ? (
+                        <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
+                          {record.disabledReason}
                         </p>
                       ) : null}
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label>
-                          <Label className="mb-2 block">
-                            {t("label.name")}
-                          </Label>
-                          <Input
-                            id="settings-rule-name"
-                            value={ruleSetDraft.name}
-                            onChange={(e) =>
-                              setRuleSetDraft((prev) => ({
-                                ...prev,
-                                name: e.target.value,
-                              }))
-                            }
-                            required
-                            placeholder="my_rule"
-                          />
-                        </label>
-                        <label>
-                          <Label className="mb-2 block">
-                            {t("settings.ruleDescription")}
-                          </Label>
-                          <Input
-                            id="settings-rule-description"
-                            value={ruleSetDraft.description}
-                            onChange={(e) =>
-                              setRuleSetDraft((prev) => ({
-                                ...prev,
-                                description: e.target.value,
-                              }))
-                            }
-                            placeholder={t(
-                              "uiAttr.Block_releases_over_100_GiB",
-                            )}
-                          />
-                        </label>
-                      </div>
-
-                      <div>
-                        {translationDiagnostics.length ? (
-                          <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
-                            <p className="font-medium">
-                              {t("settings.arrImportDiagnostics")}
-                            </p>
-                            <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
-                              {translationDiagnostics.map(
-                                (diagnostic, index) => (
-                                  <li key={index}>{diagnostic}</li>
-                                ),
-                              )}
-                            </ul>
-                          </div>
-                        ) : null}
-                        <RuleEditorSurface
-                          idPrefix="settings-rule"
-                          schema={builderSchema}
-                          builderStatus={builderStatus}
-                          variant={null}
-                          mode={builderMode}
-                          onModeChange={setBuilderMode}
-                          available
-                          onEditAsRego={editAsRego}
-                          model={ruleSetDraft.builderModel}
-                          onModelChange={setBuilderModel}
-                          options={builderOptions}
-                          generatedSource={ruleSetDraft.regoSource}
-                          feedback={validationStatus}
-                          starterSource={SCORING_STARTER_SOURCE}
-                          editor={(readOnly, source) => (
-                            <LazyRegoEditor
-                              ruleFamily="release"
-                              id="settings-rule-rego-source"
-                              autoFocus={focusEditor}
-                              onAutoFocus={onEditorFocused}
-                              value={source}
-                              readOnly={readOnly}
-                              onChange={editRegoSource}
-                              diagnostics={validationDiagnostics}
-                              feedback={validationStatus}
-                              minLines={10}
-                              maxLines={35}
-                            />
-                          )}
-                        />
-                      </div>
-
-                      <div>
-                        <Label className="mb-2 block">
-                          {t("settings.ruleAppliedFacets")}
-                        </Label>
-                        <p className="mb-2 text-xs text-muted-foreground">
-                          {t("settings.ruleAppliedFacetsHelp")}
-                        </p>
-                        <FacetSelect
-                          idPrefix="settings-rule-facet"
-                          values={LOWERCASE_FACET_IDS}
-                          selected={ruleSetDraft.appliedFacets}
-                          onChange={(next) => {
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              appliedFacets: next,
-                            }));
-                          }}
-                        />
-                      </div>
-
-                      <div className="flex gap-2">
-                        <Button
-                          id="settings-rule-save"
-                          type="submit"
-                          disabled={mutatingRuleSetId !== null || validating}
+                      {record.isManaged && record.managedKey ? (
+                        <ManagedBadge managedKey={record.managedKey} />
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="max-w-[200px] truncate text-muted-foreground">
+                      {record.description || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <FacetTags
+                        values={record.appliedFacets}
+                        emptyLabel={t("uiAttr.Global")}
+                      />
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <RenderBooleanIcon
+                        value={record.enabled}
+                        label={`${t("label.enabled")}: ${record.name}`}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <IconButton
+                          id={selectorId("settings-rule-toggle", record.id)}
+                          label={
+                            record.enabled
+                              ? t("label.disable")
+                              : t("label.enable")
+                          }
+                          tone={record.enabled ? "disabled" : "enabled"}
+                          onClick={() => void toggleRuleSetEnabled(record)}
+                          disabled={
+                            mutatingRuleSetId === record.id ||
+                            (!record.enabled && Boolean(record.disabledReason))
+                          }
                         >
-                          {mutatingRuleSetId !== null
-                            ? t("label.saving")
-                            : editorMode === "copy"
-                              ? t("settings.ruleCopyAsCustom")
-                              : editingRuleSetId
-                                ? t("settings.ruleUpdate")
-                                : t("settings.ruleCreate")}
-                        </Button>
-                        {testScoring ? (
-                          <Button
-                            id="settings-rule-test"
-                            type="button"
-                            variant="secondary"
-                            onClick={() =>
-                              setIsTestScoringOpen((open) => !open)
-                            }
+                          <Power className="h-4 w-4" />
+                        </IconButton>
+                        {record.isManaged ? (
+                          <IconButton
+                            id={selectorId("settings-rule-copy", record.id)}
+                            label={t("settings.ruleCopyAsCustom")}
+                            tone="neutral"
+                            onClick={() => copyRuleSet(record)}
                           >
-                            {t("settings.proxyTest")}
-                          </Button>
+                            <Copy className="h-4 w-4" />
+                          </IconButton>
+                        ) : isUserOwnedRuleSet(record) ? (
+                          <>
+                            <IconButton
+                              id={selectorId("settings-rule-edit", record.id)}
+                              label={t("label.edit")}
+                              tone="edit"
+                              onClick={() => editRuleSet(record)}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </IconButton>
+                            <IconButton
+                              id={selectorId("settings-rule-delete", record.id)}
+                              label={t("label.delete")}
+                              tone="delete"
+                              onClick={() => void deleteRuleSet(record)}
+                              disabled={mutatingRuleSetId === record.id}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </IconButton>
+                          </>
                         ) : null}
-                        <Button
-                          id="settings-rule-cancel"
-                          type="button"
-                          variant="secondary"
-                          onClick={resetRuleSetDraft}
-                        >
-                          {t("label.cancel")}
-                        </Button>
                       </div>
-                    </form>
-                    {testScoring?.({
-                      open: isTestScoringOpen,
-                      onOpenChange: setIsTestScoringOpen,
-                    })}
-                  </CardContent>
-                </Card>
-                {editorMode === "edit" ? (
-                  <div className="flex justify-center">
-                    <AddNewButton
-                      id="settings-rule-create-new"
-                      icon={Plus}
-                      label={t("settings.ruleCreateNew")}
-                      onClick={startCreateRuleSet}
-                      disabled={mutatingRuleSetId !== null}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {ruleSetRecords.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-muted-foreground">
+                      {t("settings.noRulesFound")}
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+
+        {isEditorOpen ? (
+          <>
+            <Card>
+              <CardHeader className="flex items-center justify-between gap-3">
+                <CardTitle className="text-base">
+                  {editorMode === "copy"
+                    ? t("settings.ruleCopyAsCustom")
+                    : editingRuleSetId
+                      ? t("settings.ruleUpdate")
+                      : t("settings.ruleCreate")}
+                </CardTitle>
+                {/* A copy is always created enabled, so the toggle would be a
+                  control over nothing. */}
+                {editorMode !== "copy" ? (
+                  <label className="flex shrink-0 items-center gap-3">
+                    <Checkbox
+                      id="settings-rule-enabled"
+                      size="large"
+                      checked={ruleSetDraft.enabled}
+                      onCheckedChange={(value) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          enabled: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">{t("label.enabled")}</span>
+                  </label>
+                ) : null}
+              </CardHeader>
+              <CardContent>
+                <form
+                  id="settings-rule-form"
+                  className="space-y-3"
+                  onSubmit={submitRuleSet}
+                >
+                  {ruleSetRecords.find(
+                    (record) => record.id === editingRuleSetId,
+                  )?.disabledReason ? (
+                    <p
+                      role="status"
+                      className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400"
+                    >
+                      {
+                        ruleSetRecords.find(
+                          (record) => record.id === editingRuleSetId,
+                        )?.disabledReason
+                      }
+                    </p>
+                  ) : null}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label>
+                      <Label className="mb-2 block">{t("label.name")}</Label>
+                      <Input
+                        id="settings-rule-name"
+                        value={ruleSetDraft.name}
+                        onChange={(e) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            name: e.target.value,
+                          }))
+                        }
+                        required
+                        placeholder="my_rule"
+                      />
+                    </label>
+                    <label>
+                      <Label className="mb-2 block">
+                        {t("settings.ruleDescription")}
+                      </Label>
+                      <Input
+                        id="settings-rule-description"
+                        value={ruleSetDraft.description}
+                        onChange={(e) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            description: e.target.value,
+                          }))
+                        }
+                        placeholder={t("uiAttr.Block_releases_over_100_GiB")}
+                      />
+                    </label>
+                  </div>
+
+                  <div>
+                    {translationDiagnostics.length ? (
+                      <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
+                        <p className="font-medium">
+                          {t("settings.arrImportDiagnostics")}
+                        </p>
+                        <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                          {translationDiagnostics.map((diagnostic, index) => (
+                            <li key={index}>{diagnostic}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    <RuleEditorSurface
+                      idPrefix="settings-rule"
+                      schema={builderSchema}
+                      builderStatus={builderStatus}
+                      variant={null}
+                      mode={builderMode}
+                      onModeChange={setBuilderMode}
+                      available
+                      onEditAsRego={editAsRego}
+                      model={ruleSetDraft.builderModel}
+                      onModelChange={setBuilderModel}
+                      options={builderOptions}
+                      generatedSource={ruleSetDraft.regoSource}
+                      feedback={validationStatus}
+                      starterSource={SCORING_STARTER_SOURCE}
+                      editor={(readOnly, source) => (
+                        <LazyRegoEditor
+                          ruleFamily="release"
+                          id="settings-rule-rego-source"
+                          autoFocus={focusEditor}
+                          onAutoFocus={onEditorFocused}
+                          value={source}
+                          readOnly={readOnly}
+                          onChange={editRegoSource}
+                          diagnostics={validationDiagnostics}
+                          feedback={validationStatus}
+                          minLines={10}
+                          maxLines={35}
+                        />
+                      )}
                     />
                   </div>
-                ) : null}
-              </>
-            ) : (
+
+                  <div>
+                    <Label className="mb-2 block">
+                      {t("settings.ruleAppliedFacets")}
+                    </Label>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      {t("settings.ruleAppliedFacetsHelp")}
+                    </p>
+                    <FacetSelect
+                      idPrefix="settings-rule-facet"
+                      values={LOWERCASE_FACET_IDS}
+                      selected={ruleSetDraft.appliedFacets}
+                      onChange={(next) => {
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          appliedFacets: next,
+                        }));
+                      }}
+                    />
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button
+                      id="settings-rule-save"
+                      type="submit"
+                      disabled={mutatingRuleSetId !== null || validating}
+                    >
+                      {mutatingRuleSetId !== null
+                        ? t("label.saving")
+                        : editorMode === "copy"
+                          ? t("settings.ruleCopyAsCustom")
+                          : editingRuleSetId
+                            ? t("settings.ruleUpdate")
+                            : t("settings.ruleCreate")}
+                    </Button>
+                    {testScoring ? (
+                      <Button
+                        id="settings-rule-test"
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setIsTestScoringOpen((open) => !open)}
+                      >
+                        {t("settings.proxyTest")}
+                      </Button>
+                    ) : null}
+                    <Button
+                      id="settings-rule-cancel"
+                      type="button"
+                      variant="secondary"
+                      onClick={resetRuleSetDraft}
+                    >
+                      {t("label.cancel")}
+                    </Button>
+                  </div>
+                </form>
+                {testScoring?.({
+                  open: isTestScoringOpen,
+                  onOpenChange: setIsTestScoringOpen,
+                })}
+              </CardContent>
+            </Card>
+            {editorMode === "edit" ? (
               <div className="flex justify-center">
                 <AddNewButton
-                  id="settings-rule-create"
+                  id="settings-rule-create-new"
                   icon={Plus}
                   label={t("settings.ruleCreateNew")}
                   onClick={startCreateRuleSet}
                   disabled={mutatingRuleSetId !== null}
                 />
               </div>
-            )}
-            <TrashLocalePacksCard
-              ruleSetRecords={ruleSetRecords}
-              mutatingRuleSetId={mutatingRuleSetId}
-              toggleRuleSetEnabled={toggleRuleSetEnabled}
+            ) : null}
+          </>
+        ) : (
+          <div className="flex justify-center">
+            <AddNewButton
+              id="settings-rule-create"
+              icon={Plus}
+              label={t("settings.ruleCreateNew")}
+              onClick={startCreateRuleSet}
+              disabled={mutatingRuleSetId !== null}
             />
-            {trackedRulePacks}
           </div>
-        </div>
-        <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
-          <RuleLibrary
-            defaultOpen={ruleSetRecords.length === 0}
-            onApply={applyTemplate}
-            onInstallCommunityPack={installTrackedRulePack}
-            installingRulePackId={installingRulePackId}
-            canManage={canManageTrackedPacks}
-          />
-          <RulesContextReference />
-        </div>
+        )}
+        <TrashLocalePacksCard
+          ruleSetRecords={ruleSetRecords}
+          mutatingRuleSetId={mutatingRuleSetId}
+          toggleRuleSetEnabled={toggleRuleSetEnabled}
+        />
+        {trackedRulePacks}
       </div>
+      <GutterPanel
+        id={SCORING_LIBRARY_PANEL_ID}
+        label={t("settings.ruleLibrary")}
+        {...sidePanelProps("library")}
+      >
+        <RuleLibrary
+          onApply={(template) => {
+            applyTemplate(template);
+            closeSidePanel();
+          }}
+          onInstallCommunityPack={installTrackedRulePack}
+          installingRulePackId={installingRulePackId}
+          canManage={canManageTrackedPacks}
+        />
+      </GutterPanel>
+      <GutterPanel
+        id={SCORING_REFERENCE_PANEL_ID}
+        label={t("settings.refTitle")}
+        {...sidePanelProps("reference")}
+      >
+        <RulesContextReference />
+      </GutterPanel>
       {isArrImportOpen ? (
         <React.Suspense fallback={null}>
           <ArrCustomFormatImportDialog

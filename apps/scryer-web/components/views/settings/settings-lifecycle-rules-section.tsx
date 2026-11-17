@@ -5,13 +5,15 @@ import {
 import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
 import { LifecycleSubjectPicker } from "@/components/common/lifecycle-subject-picker";
-import { BookOpen, Copy, Edit, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { BookOpen, Copy, Edit, Plus, Sparkles, Trash2 } from "lucide-react";
 import {
   GutterPanel,
   GutterPanelButton,
 } from "@/components/common/gutter-panel";
-import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
-import { useGutterPanel } from "@/lib/hooks/use-gutter-panel";
+import {
+  RuleSidePanelHeader,
+  useRuleSidePanels,
+} from "@/components/views/settings/rule-side-panels";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { HelpLabel } from "@/components/common/info-help";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
@@ -173,10 +175,6 @@ type RefField = { field: string; type: string; descKey: string };
 
 const LIFECYCLE_TEMPLATES_PANEL_ID = "settings-lifecycle-templates-panel";
 const LIFECYCLE_REFERENCE_PANEL_ID = "settings-lifecycle-reference-panel";
-/// Template cards and the reference tables need more room than a plugin list,
-/// so these panels are wider than the Lists one and open over the content on
-/// most screens.
-const LIFECYCLE_SIDE_PANEL_SIZE = { width: 560, gap: 32 };
 type LifecycleSidePanel = "templates" | "reference";
 
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
@@ -235,44 +233,13 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
   );
 }
 
-/// The slim header a lifecycle side panel keeps in view while its body
-/// scrolls beneath it, with the panel's own close button.
-function LifecycleSidePanelHeader({
-  icon,
-  title,
-}: {
-  icon: React.ReactNode;
-  title: string;
-}) {
-  const t = useTranslate();
-  const gutterPanel = React.useContext(GutterPanelContext);
-  return (
-    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-[var(--scry-border3)] bg-[var(--scry-bg)] py-1.5 pl-3 pr-1.5">
-      <h2 className="flex min-w-0 items-center gap-2 truncate text-[13px] font-semibold text-[var(--scry-ink2)]">
-        {icon}
-        {title}
-      </h2>
-      {gutterPanel ? (
-        <IconButton
-          label={t("label.close")}
-          appearance="ghost"
-          className="size-7"
-          onClick={gutterPanel.close}
-        >
-          <X className="h-4 w-4" />
-        </IconButton>
-      ) : null}
-    </div>
-  );
-}
-
 function LifecycleContextReference() {
   const t = useTranslate();
   const descriptors = useRuleOutputDescriptors("lifecycle");
 
   return (
     <div>
-      <LifecycleSidePanelHeader
+      <RuleSidePanelHeader
         icon={<BookOpen className="h-4 w-4" />}
         title={t("settings.refLifecycleTitle")}
       />
@@ -438,7 +405,7 @@ function LifecycleTemplateGallery({
   const t = useTranslate();
   return (
     <div>
-      <LifecycleSidePanelHeader
+      <RuleSidePanelHeader
         icon={<Sparkles className="h-4 w-4" />}
         title={t("settings.lifecycleTemplateGallery")}
       />
@@ -881,28 +848,14 @@ export function SettingsLifecycleRulesSection({
   const rulePage = lifecycleRulePage(sortedRules, rulePageIndex);
 
   // Starter templates and the input reference slide out from the right edge
-  // of the settings scroll pane, like the Lists plugins panel. They only open
-  // on a click, at any screen size, and only one is open at a time.
-  const rootRef = React.useRef<HTMLDivElement>(null);
-  const scrollPaneRef = React.useRef<HTMLElement | null>(null);
-  const columnRef = React.useRef<HTMLDivElement>(null);
-  React.useLayoutEffect(() => {
-    scrollPaneRef.current =
-      rootRef.current?.closest<HTMLElement>(
-        '[data-slot="settings-main-scroll"]',
-      ) ?? null;
-  });
-  const sidePanelFrame = useGutterPanel(
-    scrollPaneRef,
-    columnRef,
-    section === "rules" ? LIFECYCLE_SIDE_PANEL_SIZE : null,
-  ).frame;
-  const [sidePanel, setSidePanel] = React.useState<LifecycleSidePanel | null>(
-    null,
-  );
-  if (section !== "rules" && sidePanel !== null) setSidePanel(null);
-  const sidePanelOpenChange = (panel: LifecycleSidePanel) => (open: boolean) =>
-    setSidePanel(open ? panel : null);
+  // of the page, closed until clicked.
+  const {
+    rootRef: sidePanelRootRef,
+    columnRef: sidePanelColumnRef,
+    buttonProps: sidePanelButtonProps,
+    panelProps: sidePanelProps,
+    close: closeSidePanel,
+  } = useRuleSidePanels<LifecycleSidePanel>(section === "rules");
 
   // The instance switches govern every tab, so they sit above the tab strip,
   // and the tabs sit directly on the pane they open. Both stay inside the
@@ -919,15 +872,13 @@ export function SettingsLifecycleRulesSection({
                 panelId={LIFECYCLE_TEMPLATES_PANEL_ID}
                 label={t("settings.lifecycleTemplateGallery")}
                 icon={<Sparkles className="h-4 w-4" />}
-                open={sidePanel === "templates"}
-                onOpenChange={sidePanelOpenChange("templates")}
+                {...sidePanelButtonProps("templates")}
               />
               <GutterPanelButton
                 panelId={LIFECYCLE_REFERENCE_PANEL_ID}
                 label={t("settings.refLifecycleTitle")}
                 icon={<BookOpen className="h-4 w-4" />}
-                open={sidePanel === "reference"}
-                onOpenChange={sidePanelOpenChange("reference")}
+                {...sidePanelButtonProps("reference")}
               />
             </>
           ) : null
@@ -953,11 +904,14 @@ export function SettingsLifecycleRulesSection({
 
   return (
     <div
-      ref={rootRef}
+      ref={sidePanelRootRef}
       id="settings-lifecycle-rules-section"
       className="space-y-4 text-sm"
     >
-      <div ref={columnRef} className="mx-auto w-full max-w-[1280px] space-y-4">
+      <div
+        ref={sidePanelColumnRef}
+        className="mx-auto w-full max-w-[1280px] space-y-4"
+      >
         <div className="pb-2">{pageHead}</div>
         <div className="overflow-hidden rounded border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -1484,23 +1438,19 @@ export function SettingsLifecycleRulesSection({
       <GutterPanel
         id={LIFECYCLE_TEMPLATES_PANEL_ID}
         label={t("settings.lifecycleTemplateGallery")}
-        frame={sidePanelFrame}
-        open={sidePanel === "templates"}
-        onOpenChange={sidePanelOpenChange("templates")}
+        {...sidePanelProps("templates")}
       >
         <LifecycleTemplateGallery
           onApply={(template) => {
             applyTemplate(template);
-            setSidePanel(null);
+            closeSidePanel();
           }}
         />
       </GutterPanel>
       <GutterPanel
         id={LIFECYCLE_REFERENCE_PANEL_ID}
         label={t("settings.refLifecycleTitle")}
-        frame={sidePanelFrame}
-        open={sidePanel === "reference"}
-        onOpenChange={sidePanelOpenChange("reference")}
+        {...sidePanelProps("reference")}
       >
         <LifecycleContextReference />
       </GutterPanel>
