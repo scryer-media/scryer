@@ -953,3 +953,28 @@ fn windows_a_held_copy_refuses_a_reparse_point_at_its_name() {
     );
     assert_eq!(std::fs::read(&source).unwrap(), b"incoming");
 }
+
+/// A Windows read that does not follow links refuses a symbolic link and a
+/// junction, and reads a regular file; any other reparse point, such as a
+/// deduplicated or cloud-placeholder file, reads as its content, which a
+/// test cannot make without those features. Creating a symbolic link needs
+/// the right to; without it only the regular file is read.
+#[cfg(windows)]
+#[test]
+fn windows_a_read_refuses_only_links_and_junctions() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("sample.mkv");
+    std::fs::write(&file, b"payload").unwrap();
+    let open = Open::read().without_following_links();
+    disk()
+        .open_blocking(&file, open)
+        .expect("a regular file reads");
+    let link = temp.path().join("link.mkv");
+    if std::os::windows::fs::symlink_file(&file, &link).is_err() {
+        return;
+    }
+    let refused = disk()
+        .open_blocking(&link, open)
+        .expect_err("a link is not followed");
+    assert_eq!(refused.reason(), reason::DISK_LINK_NOT_FOLLOWED);
+}
