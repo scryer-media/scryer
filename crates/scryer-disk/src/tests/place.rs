@@ -2064,6 +2064,30 @@ fn a_failed_put_back_says_where_the_file_is() {
             .count();
         assert_eq!(source_looks, looks, "{failure:?}");
     }
+
+    // A claimed rename that failed and left its reservation under the source
+    // name: what reads there is the empty claim, not the file, which is
+    // still where it was.
+    let (disk, backend, _) = scripted();
+    backend.stat_is(STAGED, Ok(file(9)));
+    backend.stats_in_turn(&source, &[Err(io::ErrorKind::NotFound), Ok(file(0))]);
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.always_fails("hard_link", io::ErrorKind::Unsupported);
+    backend.fails("rename_claimed", STAGED, io::ErrorKind::TimedOut);
+    *backend.claim_left.lock().unwrap() = true;
+    let dest = p(DEST);
+    let failed = job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy));
+    let said = failed.roll_back(&staged, StagedHolds::Copy { proven: true });
+    assert_eq!(said, None);
+    assert_eq!(backend.calls_of("rename_claimed"), 1);
+    assert_eq!(
+        failed.left.take(),
+        vec![
+            Leftover::AtReservedName { at: source.clone() },
+            stayed.clone()
+        ]
+    );
+    assert_eq!(backend.calls_of("remove_file"), 0, "nothing is removed");
 }
 
 /// A copy whose staged name cannot be read may still be there, and the

@@ -1373,10 +1373,12 @@ impl Job<'_> {
     /// last name it is known to hold, with whatever the failed call itself
     /// left at the source name. A name that is gone says nothing of where
     /// the file went: an earlier promotion that reported failure may have
-    /// taken it.
+    /// taken it. A failed call that left its reservation under the source
+    /// name is not looked at either: what reads there is that empty claim.
     fn after_failed_put_back(&self, from: &Path, error: &DiskError) -> Leftover {
         let taken = error.reason() == reason::DISK_DESTINATION_EXISTS;
-        if !taken && self.disk.uncached_blocking(self.source).exists() == Some(true) {
+        let reserved = error.left().is_some();
+        if !taken && !reserved && self.disk.uncached_blocking(self.source).exists() == Some(true) {
             return Leftover::PutBack {
                 at: self.source.into(),
             };
