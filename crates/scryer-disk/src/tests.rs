@@ -1137,44 +1137,6 @@ fn an_atomic_write_creates_parents_stages_and_evicts_the_destination() {
     assert_eq!(disk.calls("rename"), 1);
 }
 
-#[test]
-fn a_pass_probes_each_path_once_and_uses_its_listings() {
-    let clock = ManualClock::at(at(0));
-    let (disk, backend) = owner(&clock);
-    backend.stat_is("/srv/fixture-media/Show", Ok(dir()));
-    backend.lists(
-        "/srv/fixture-media/Show",
-        &[("a.mkv", Some(EntryKind::File))],
-    );
-    let mut pass = disk.pass();
-    for second in 0..3 {
-        // Well past the reuse window: only the pass's evidence prevents a probe.
-        clock.set(at(second * 10));
-        assert_eq!(
-            pass.reading(&p("/srv/fixture-media/Show")).exists(),
-            Some(true)
-        );
-        assert_eq!(pass.list(&p("/srv/fixture-media/Show")).unwrap().len(), 1);
-        assert_eq!(
-            pass.reading(&p("/srv/fixture-media/Show/a.mkv")).kind(),
-            Some(EntryKind::File)
-        );
-    }
-    assert_eq!(backend.calls_of("lstat"), 1);
-    assert_eq!(backend.calls_of("list"), 1);
-
-    pass.forget(&p("/srv/fixture-media/Show/a.mkv"));
-    clock.set(at(100));
-    pass.reading(&p("/srv/fixture-media/Show"));
-    assert_eq!(backend.calls_of("lstat"), 2, "the parent is forgotten too");
-    drop(pass);
-    // The next pass starts with no evidence of its own.
-    let mut next = disk.pass();
-    clock.set(at(200));
-    next.reading(&p("/srv/fixture-media/Show"));
-    assert_eq!(backend.calls_of("lstat"), 3);
-}
-
 #[tokio::test]
 async fn async_verbs_run_off_the_runtime_and_report_like_their_blocking_forms() {
     let clock = ManualClock::at(at(0));

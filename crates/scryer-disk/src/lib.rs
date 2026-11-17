@@ -23,8 +23,7 @@
 //!
 //! A check that decides a removal, a replacement, a move or a claim reads
 //! with [`Disk::uncached`] or [`Disk::uncached_blocking`]: never
-//! [`Disk::observed`], never a [`DiskPass`]'s evidence, and never
-//! [`Disk::fresh`], whose answer can be a reading another process has since
+//! [`Disk::observed`], and never [`Disk::fresh`], whose answer can be a reading another process has since
 //! outdated.
 //!
 //! Paths under no configured root (application data: the database, logs,
@@ -59,7 +58,6 @@ pub(crate) mod cache;
 pub mod capacity;
 mod copy;
 mod mark;
-mod pass;
 mod place;
 mod reading;
 mod sample;
@@ -90,7 +88,6 @@ pub use copy::{
     Verdict, Watch, resumable_staging_path,
 };
 pub use mark::{Drift, Mark, Sameness};
-pub use pass::DiskPass;
 pub use place::{
     CannotLink, Done, Doubt, Fallback, FreeNameMove, LinkAfter, LinkProof, Method, PlaceRefusal,
     Placed, Placement, Refused, Side, Unproven, Verify,
@@ -612,11 +609,6 @@ impl Disk {
     pub fn set_volumes(&self, roots: impl IntoIterator<Item = (PathBuf, VolumeClass)>) {
         let mut volumes = write(&self.inner.volumes);
         *volumes = volumes.replaced(roots.into_iter().collect());
-    }
-
-    /// Start a unit of work that keeps its own evidence.
-    pub fn pass(&self) -> DiskPass {
-        DiskPass::new(self.clone())
     }
 
     /// What is held about `path`, without touching the disk.
@@ -2071,6 +2063,7 @@ fn fixed_staging_path_for(dest: &Path) -> PathBuf {
     parent.join(format!(".scry-sf-{}.partial", &digest[..9]))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod test_support {
     use super::*;

@@ -3,6 +3,11 @@ name = "scryer-disk"
 version = "0.22.4"
 edition.workspace = true
 
+[features]
+# Seams for other crates' tests: a hand-moved clock, installed roots and
+# silenced paths. Only dev-dependencies turn it on.
+test-support = []
+
 [dependencies]
 blake3 = "1"
 chrono = { workspace = true }

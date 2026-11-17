@@ -101,6 +101,9 @@ metrics-util = { version = "0.20", default-features = false, features = ["debugg
 # The in-process SSH server double, so the end-to-end tunnel chain is tested
 # against a real SSH peer rather than a mock of one.
 scryer-tunnel = { workspace = true, features = ["test-support"] }
+# The disk service's test seams: a hand-moved clock and installed or
+# silenced roots.
+scryer-disk = { path = "../scryer-disk", features = ["test-support"] }
 # Local HTTP/3 CONNECT fixture, using the same approved transport and crypto.
 bytes = "1"
 http = "1"
