@@ -376,6 +376,61 @@ async fn valid_hardlink_performs_zero_content_reads_even_after_unjournaled_resta
     std::fs::set_permissions(file.source(), std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+/// A source that is a symbolic link is copied as the file it names, so a
+/// destination already there (a copy whose record a crash lost) is compared
+/// with that file and proven, never refused as not a regular file. The link
+/// and the file it names are left as they were.
+#[tokio::test]
+async fn an_existing_destination_is_compared_with_the_file_a_linked_source_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("original.mkv");
+    let source = temp.path().join("movie.mkv");
+    let destination = temp.path().join("copied.mkv");
+    write_file(&target, b"hello world");
+    write_file(&destination, b"hello world");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &source).unwrap();
+    #[cfg(windows)]
+    if let Err(error) = std::os::windows::fs::symlink_file(&target, &source) {
+        eprintln!(
+            "skipped the linked-source case: this process may not create a symbolic link ({error})"
+        );
+        return;
+    }
+    let proof = super::super::resolution::compare_existing(
+        &source,
+        &destination,
+        &crate::location::verify::CopyProgress::none(),
+        None,
+    )
+    .await
+    .expect("a linked source is compared by the file it names");
+    assert_eq!(
+        proof.outcome,
+        crate::location::model::FileVerificationOutcome::Verified
+    );
+    assert!(proof.permits_source_removal());
+    assert!(
+        std::fs::symlink_metadata(&source)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
+
+    // Other content under the destination's name is a mismatch, both kept.
+    write_file(&destination, b"other bytes");
+    let proof = super::super::resolution::compare_existing(
+        &source,
+        &destination,
+        &crate::location::verify::CopyProgress::none(),
+        None,
+    )
+    .await
+    .expect("compared");
+    assert!(!proof.permits_source_removal());
+}
+
 #[tokio::test]
 async fn same_filesystem_placement_resumes_after_crash_before_verification_journal() {
     for symlink in [false, true] {
@@ -442,7 +497,14 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
             .run("op-1", &work)
             .await
             .unwrap();
-        assert_eq!(result.state, LocationOperationState::Completed);
+        let title = store.checkpoint("op-1", "title-1");
+        assert_eq!(
+            result.state,
+            LocationOperationState::Completed,
+            "linked source: {symlink}; title reason {:?}, detail {:?}",
+            title.as_ref().and_then(|title| title.reason_code),
+            title.as_ref().and_then(|title| title.detail.clone()),
+        );
         assert_eq!(std::fs::read(file.destination()).unwrap(), b"hello world");
         assert_eq!(
             std::fs::symlink_metadata(file.destination())

@@ -22,6 +22,7 @@ WINDOWS_TESTS = {
         "another_case_of_a_linked_name_is_one_entry",
         "no_copy_placement_refuses_a_self_move_without_removing_the_file",
         "same_filesystem_placement_resumes_after_crash_before_verification_journal",
+        "an_existing_destination_is_compared_with_the_file_a_linked_source_names",
         "no_copy_cleanup_preserves_source_if_survivor_was_replaced",
         "same_filesystem_moves_keep_the_no_copy_fast_path",
         "a_hard_link_placement_persists_no_content_hashes",

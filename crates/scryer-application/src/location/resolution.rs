@@ -758,14 +758,17 @@ pub async fn compare_existing(
     progress: &CopyProgress,
     known: Option<&KnownSourceContent>,
 ) -> AppResult<VerifiedFile> {
-    let source_before = file_version(source).await?;
-    let destination_before = file_version(destination).await?;
-    let source_metadata = tokio::fs::symlink_metadata(source)
-        .await
-        .map_err(|error| file_error(source, error))?;
-    let destination_metadata = tokio::fs::symlink_metadata(destination)
-        .await
-        .map_err(|error| file_error(destination, error))?;
+    let (source_before, source_metadata) = file_version_and_metadata(source).await?;
+    let (destination_before, destination_metadata) = file_version_and_metadata(destination).await?;
+    // A source that is a symbolic link was copied as the file it names, so
+    // it is compared as that file: one read of the link followed, for a
+    // linked source alone. The destination is held to its own name.
+    let source_metadata = match source_metadata.file_type().is_symlink() {
+        true => tokio::fs::metadata(source)
+            .await
+            .map_err(|error| file_error(source, error))?,
+        false => source_metadata,
+    };
     if !source_metadata.is_file() || !destination_metadata.is_file() {
         return Err(AppError::validation_refused(
             crate::error_reasons::location::EXISTING_PATH_NOT_REGULAR_FILE,
