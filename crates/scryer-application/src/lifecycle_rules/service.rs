@@ -912,7 +912,7 @@ impl AppUseCase {
 
         let scratch_id = Id::new_rego_safe().0;
         let rewritten = rewrite_package_declaration(rego_source, &scratch_id);
-        let result = validate_lifecycle_rule(&rewritten, &scratch_id).map_err(|e| {
+        let mut result = validate_lifecycle_rule(&rewritten, &scratch_id).map_err(|e| {
             AppError::validation_refused(
                 crate::error_reasons::lifecycle::RULE_VALIDATION_FAILED,
                 format!("rule validation failed: {e}"),
@@ -921,9 +921,24 @@ impl AppUseCase {
         // A source that does not parse declares nothing; one that parses
         // declares its heads even while some other check refuses it, so the
         // editor can show what the rule would do while the author fixes it.
-        let declared_actions = scan_lifecycle_action_heads(&rewritten, &scratch_id)
-            .ok()
-            .map(|scan| LifecycleDeclaredActions::from_scan(&scan));
+        let scan = scan_lifecycle_action_heads(&rewritten, &scratch_id).ok();
+        let declared_actions = scan.as_ref().map(LifecycleDeclaredActions::from_scan);
+        // The live checks a save makes, so a draft that validates also saves.
+        // A draft has no library scope yet, so the scope-dependent move check
+        // (a library of another media kind) waits for the save.
+        if let Some(scan) = &scan {
+            let live = self.declared_action_target_diagnostics(scan, &[]).await?;
+            if !live.is_empty() {
+                result.valid = false;
+                result.errors.extend(
+                    live.iter()
+                        .map(|(_, diagnostic)| diagnostic.message.clone()),
+                );
+                result
+                    .diagnostics
+                    .extend(live.into_iter().map(|(_, diagnostic)| diagnostic));
+            }
+        }
         Ok(LifecycleRuleSourceValidation {
             result,
             declared_actions,
@@ -1574,24 +1589,7 @@ impl AppUseCase {
         if declared.quality_profiles.is_empty() {
             return Ok(());
         }
-        let profiles = self.lifecycle_quality_profile_ids_by_name().await?;
-        let diagnostics: Vec<ValidationDiagnostic> = scan
-            .quality_profiles
-            .iter()
-            .filter(|literal| !profiles.contains_key(&literal.value))
-            .map(|literal| {
-                let mut diagnostic = ValidationDiagnostic::new(
-                    crate::error_reasons::lifecycle::QUALITY_PROFILE_NOT_FOUND,
-                    format!(
-                        "set_quality_profile names \"{}\", which is not a quality profile",
-                        literal.value
-                    ),
-                );
-                diagnostic.line = Some(literal.line);
-                diagnostic.column = Some(literal.column);
-                diagnostic
-            })
-            .collect();
+        let diagnostics = self.quality_profile_diagnostics(scan).await?;
         if diagnostics.is_empty() {
             return Ok(());
         }
@@ -1638,9 +1636,114 @@ impl AppUseCase {
         scan: &scryer_rules::lifecycle_actions::LifecycleActionScan,
         library_ids: &[String],
     ) -> AppResult<()> {
+        let diagnostics = self.move_target_diagnostics(scan, library_ids).await?;
+        let Some((code, _)) = diagnostics.first() else {
+            return Ok(());
+        };
+        let code = *code;
+        Err(AppError::validation_refused_with_diagnostics(
+            code,
+            "The rule names a move target that does not exist.",
+            diagnostics
+                .into_iter()
+                .map(|(_, diagnostic)| diagnostic)
+                .collect(),
+        ))
+    }
+
+    /// Every live action-target problem in a source, located at its literal,
+    /// without refusing: the editor's validation reports them all at once.
+    /// Tags and quality profiles are one read each, only when the source names
+    /// any; move targets follow [`Self::move_target_diagnostics`].
+    async fn declared_action_target_diagnostics(
+        &self,
+        scan: &scryer_rules::lifecycle_actions::LifecycleActionScan,
+        library_ids: &[String],
+    ) -> AppResult<Vec<(&'static str, ValidationDiagnostic)>> {
+        let mut diagnostics = Vec::new();
+        let tag_literals: Vec<_> = scan
+            .add_tags
+            .iter()
+            .chain(scan.remove_tags.iter())
+            .collect();
+        if !tag_literals.is_empty() {
+            let labels: Vec<String> = tag_literals.iter().map(|l| l.value.clone()).collect();
+            let undefined: std::collections::HashSet<String> = self
+                .undefined_title_tag_labels(&labels)
+                .await?
+                .into_iter()
+                .collect();
+            for literal in tag_literals {
+                if undefined.contains(&literal.value) {
+                    let code = crate::error_reasons::catalog::NOT_DEFINED_TAG;
+                    let mut diagnostic = ValidationDiagnostic::new(
+                        code,
+                        format!(
+                            "'{}' is not a defined tag; an administrator has to add it in Settings before it can be applied",
+                            literal.value
+                        ),
+                    );
+                    diagnostic.line = Some(literal.line);
+                    diagnostic.column = Some(literal.column);
+                    diagnostics.push((code, diagnostic));
+                }
+            }
+        }
+        diagnostics.extend(
+            self.quality_profile_diagnostics(scan)
+                .await?
+                .into_iter()
+                .map(|diagnostic| {
+                    (
+                        crate::error_reasons::lifecycle::QUALITY_PROFILE_NOT_FOUND,
+                        diagnostic,
+                    )
+                }),
+        );
+        diagnostics.extend(self.move_target_diagnostics(scan, library_ids).await?);
+        Ok(diagnostics)
+    }
+
+    /// Each `set_quality_profile` name must be a quality profile. One read,
+    /// only for a source that sets one.
+    async fn quality_profile_diagnostics(
+        &self,
+        scan: &scryer_rules::lifecycle_actions::LifecycleActionScan,
+    ) -> AppResult<Vec<ValidationDiagnostic>> {
+        if scan.quality_profiles.is_empty() {
+            return Ok(Vec::new());
+        }
+        let profiles = self.lifecycle_quality_profile_ids_by_name().await?;
+        Ok(scan
+            .quality_profiles
+            .iter()
+            .filter(|literal| !profiles.contains_key(&literal.value))
+            .map(|literal| {
+                let mut diagnostic = ValidationDiagnostic::new(
+                    crate::error_reasons::lifecycle::QUALITY_PROFILE_NOT_FOUND,
+                    format!(
+                        "set_quality_profile names \"{}\", which is not a quality profile",
+                        literal.value
+                    ),
+                );
+                diagnostic.line = Some(literal.line);
+                diagnostic.column = Some(literal.column);
+                diagnostic
+            })
+            .collect())
+    }
+
+    /// Each `move_to_library` name must be exactly one library, of the media
+    /// kind of every library in `library_ids`, and each `move_to_root` path a
+    /// configured root. One library read, only for a source that moves.
+    async fn move_target_diagnostics(
+        &self,
+        scan: &scryer_rules::lifecycle_actions::LifecycleActionScan,
+        library_ids: &[String],
+    ) -> AppResult<Vec<(&'static str, ValidationDiagnostic)>> {
         use crate::error_reasons::lifecycle as reasons;
         if scan.libraries.is_empty() && scan.roots.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let libraries = self.services.catalog.libraries.list(None).await?;
         let scope_facets: std::collections::HashSet<&scryer_domain::MediaFacet> = libraries
@@ -1706,18 +1809,7 @@ impl AppUseCase {
                 );
             }
         }
-        let Some((code, _)) = diagnostics.first() else {
-            return Ok(());
-        };
-        let code = *code;
-        Err(AppError::validation_refused_with_diagnostics(
-            code,
-            "The rule names a move target that does not exist.",
-            diagnostics
-                .into_iter()
-                .map(|(_, diagnostic)| diagnostic)
-                .collect(),
-        ))
+        Ok(diagnostics)
     }
 }
 

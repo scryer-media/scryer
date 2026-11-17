@@ -53,6 +53,15 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_QUALITY_PROFILE_AMBIGUOUS: "error.ruleQualityProfileAmbiguous",
   RULE_MONITOR_UNSUPPORTED: "error.ruleMonitorUnsupported",
   RULE_AUDIO_LANGUAGE_UNKNOWN: "error.ruleAudioLanguageUnknown",
+  // Lifecycle's live checks, reported by validation and by a refused save.
+  CATALOG_NOT_DEFINED_TAG: "error.reason.CATALOG_NOT_DEFINED_TAG",
+  LIFECYCLE_QUALITY_PROFILE_NOT_FOUND:
+    "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND",
+  LIFECYCLE_MOVE_LIBRARY_NOT_FOUND:
+    "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND",
+  LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH:
+    "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH",
+  LIFECYCLE_MOVE_ROOT_NOT_FOUND: "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND",
 };
 
 /** Compiler-owned diagnostics keep their detail; owned conditions use i18n. */

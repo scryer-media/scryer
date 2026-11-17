@@ -1611,6 +1611,58 @@ async fn validate_reports_errors_without_storing_anything() {
     assert!(rules.list_rule_sets().await.unwrap().is_empty());
 }
 
+/// Validation makes the save's live checks, so a draft that validates also
+/// saves: an undefined tag is reported at its literal, a defined one is not.
+#[tokio::test]
+async fn validate_reports_undefined_tags_the_save_would_refuse() {
+    let LifecycleFixture {
+        app, user, rules, ..
+    } = lifecycle_app();
+    app.create_title_tag_definition(&user, "keep", None)
+        .await
+        .expect("define tag");
+
+    let source = "add_tags := [\"keep\", \"never-defined\"] if input.facts.monitored == false\n";
+    let validation = app
+        .validate_lifecycle_rule_source(&user, source)
+        .await
+        .expect("validate");
+    assert!(!validation.result.valid);
+    let tag_diagnostics: Vec<_> = validation
+        .result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == crate::error_reasons::catalog::NOT_DEFINED_TAG)
+        .collect();
+    assert_eq!(
+        tag_diagnostics.len(),
+        1,
+        "{:?}",
+        validation.result.diagnostics
+    );
+    assert!(tag_diagnostics[0].message.contains("'never-defined'"));
+    assert!(tag_diagnostics[0].line.is_some());
+    assert_eq!(
+        validation.result.errors.len(),
+        validation.result.diagnostics.len()
+    );
+
+    let defined_only = app
+        .validate_lifecycle_rule_source(
+            &user,
+            "add_tags := [\"keep\"] if input.facts.monitored == false\n",
+        )
+        .await
+        .expect("validate");
+    assert!(
+        defined_only.result.valid,
+        "{:?}",
+        defined_only.result.errors
+    );
+
+    assert!(rules.list_rule_sets().await.unwrap().is_empty());
+}
+
 /// File facts come from one batched load, and an empty file set is a confirmed
 /// answer rather than an unknown.
 #[tokio::test]
