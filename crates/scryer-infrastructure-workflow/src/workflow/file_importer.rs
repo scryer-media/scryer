@@ -2516,23 +2516,13 @@ fn reconcile_existing_destination(
     // source; a move that then removed the source would leave nothing there.
     // Any other entry, a second name of the same file included, is the
     // import, and the move finishes by removing the source name.
-    if source_cleanup_required {
-        match Disk::process().entry_alias_blocking(source, dest, kind == EntryKind::Symlink) {
-            EntryAlias::Distinct => {}
-            EntryAlias::Same => {
-                return Err(AppError::ManualReconciliationRequired(format!(
-                    "import destination {} names the source itself, so a move would remove the only copy; nothing was removed",
-                    dest.display()
-                )));
-            }
-            EntryAlias::CannotTell => {
-                return Err(AppError::Repository(format!(
-                    "could not tell whether import destination {} names the source {} itself; nothing was removed",
-                    dest.display(),
-                    source.display()
-                )));
-            }
-        }
+    if source_cleanup_required
+        && Disk::process().entry_alias_blocking(source, dest, &existing) == EntryAlias::Same
+    {
+        return Err(AppError::ManualReconciliationRequired(format!(
+            "import destination {} names the source itself, so a move would remove the only copy; nothing was removed",
+            dest.display()
+        )));
     }
     ensure_same_source(source, source_fingerprint)?;
     validate_import_destination_parent(destination_guard, dest)?;

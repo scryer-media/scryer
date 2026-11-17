@@ -28,68 +28,133 @@ pub enum Sameness {
 /// one names removes what the other names too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryAlias {
-    /// One entry: reached through a linked or mounted folder on the way, or
-    /// by a link at the second path that resolves to the first.
+    /// One entry: reached through another spelling of its folder (a link or
+    /// a second mount on the way), under a second spelling of its name on a
+    /// volume that ignores case, or by a link at the second path that
+    /// resolves to it.
     Same,
     /// Two entries, whatever file they hold: two names of one file are two
-    /// entries.
+    /// entries, and so are two links to one file.
     Distinct,
-    /// A folder on the way, or the link at the second path, did not answer.
-    CannotTell,
 }
 
 impl super::Disk {
-    /// Whether `dest` names the directory entry `source` names. Each path's
-    /// folder is resolved and the final names compared, ignoring case, which
-    /// a volume may ignore. When `dest_is_link`, its resolved target is also
-    /// compared with `source`'s entry and with `source` resolved, so a link
-    /// that reaches the source, directly or through it, is the same entry.
+    /// Whether `dest` names the directory entry `source` names. `dest_read`
+    /// is the caller's read of `dest` itself, links not followed.
     ///
-    /// Reads two paths, both folders; four when `dest_is_link`. Each is
-    /// one resolution of a path.
-    pub fn entry_alias_blocking(
-        &self,
-        source: &Path,
-        dest: &Path,
-        dest_is_link: bool,
-    ) -> EntryAlias {
-        let entry = |path: &Path| {
-            let name = path.file_name()?;
-            let folder = path
-                .parent()
-                .filter(|folder| !folder.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            let folder = self.canonicalize_blocking(folder).ok()?;
-            Some(folder.join(name))
+    /// Each path's folder is read as a file. One folder and byte-equal
+    /// names are one entry. One folder and names that differ are one entry
+    /// only when both are one file with no other name: a volume that ignores
+    /// case shows one entry under both spellings. Two folders are two
+    /// entries. Where the platform cannot tell folders apart, the folders
+    /// are resolved, or taken as written when they do not resolve, and the
+    /// paths compared ignoring case, which fails closed.
+    ///
+    /// When `dest_read` is a link, what it resolves to is judged against
+    /// `source`'s own entry by the same rule. A source that is itself a link
+    /// is its own entry, so a second link to the same target is another
+    /// entry.
+    ///
+    /// Reads the two folders, one stat each. Names that differ in one
+    /// folder add one read of the source. Where folders cannot be told
+    /// apart, two resolutions are added. A link at `dest` adds its
+    /// resolution and a stat of the folder it resolves into, and the same
+    /// extra reads again on the lanes above.
+    pub fn entry_alias_blocking(&self, source: &Path, dest: &Path, dest_read: &Mark) -> EntryAlias {
+        let Some(source_folder) = folder_of(source) else {
+            return EntryAlias::Distinct;
         };
-        let (Some(source_entry), Some(dest_entry)) = (entry(source), entry(dest)) else {
-            return EntryAlias::CannotTell;
+        let source_folder_read = self.fingerprint_followed_blocking(source_folder).ok();
+        let source_entry = Entry {
+            path: source,
+            folder: source_folder,
+            folder_read: source_folder_read.as_ref(),
         };
-        if super::place::paths_are_same_file(&source_entry, &dest_entry) {
+        if self.one_entry(&source_entry, dest, Some(dest_read)) {
             return EntryAlias::Same;
         }
-        if !dest_is_link {
+        if dest_read.kind() != Some(EntryKind::Symlink) {
             return EntryAlias::Distinct;
         }
-        let target = match self.canonicalize_blocking(dest) {
-            Ok(target) => target,
-            // A link that names nothing reaches nothing of the source's.
-            Err(error) if error.reason() == super::reason::DISK_PATH_MISSING => {
-                return EntryAlias::Distinct;
-            }
-            Err(_) => return EntryAlias::CannotTell,
-        };
-        if super::place::paths_are_same_file(&target, &source_entry) {
-            return EntryAlias::Same;
-        }
-        match self.canonicalize_blocking(source) {
-            Ok(resolved) if super::place::paths_are_same_file(&target, &resolved) => {
-                EntryAlias::Same
-            }
-            Ok(_) => EntryAlias::Distinct,
-            Err(_) => EntryAlias::CannotTell,
+        // Resolved through every link, the target names no link; a link it
+        // still reaches through is followed by the resolution itself.
+        match self.canonicalize_blocking(dest) {
+            Ok(target) if self.one_entry(&source_entry, &target, None) => EntryAlias::Same,
+            // A link that resolves to nothing, or to another entry, is not
+            // the source's entry: whatever it reaches is read as content
+            // before anything is removed.
+            _ => EntryAlias::Distinct,
         }
     }
+
+    /// Whether `other` names `entry`'s directory entry. `other_read` is a
+    /// read of `other` already made, links not followed.
+    fn one_entry(&self, entry: &Entry<'_>, other: &Path, other_read: Option<&Mark>) -> bool {
+        let Some(other_folder) = folder_of(other) else {
+            return false;
+        };
+        let (Some(name), Some(other_name)) = (entry.path.file_name(), other.file_name()) else {
+            return false;
+        };
+        let other_folder_read = self.fingerprint_followed_blocking(other_folder).ok();
+        let folders = match (entry.folder_read, other_folder_read.as_ref()) {
+            (Some(here), Some(there)) => here.same_file(there),
+            _ => Sameness::CannotTell,
+        };
+        match folders {
+            Sameness::Same if name == other_name => true,
+            Sameness::Same => {
+                // One folder, two spellings: one entry only when both are one
+                // file that has no other name.
+                let other_read = match other_read {
+                    Some(read) => Some(read.clone()),
+                    None => self.fingerprint_blocking(other).ok(),
+                };
+                let Some(other_read) = other_read else {
+                    return false;
+                };
+                let Ok(read) = self.fingerprint_blocking(entry.path) else {
+                    return false;
+                };
+                match read.same_file(&other_read) {
+                    Sameness::Same => other_read.is_only_name(),
+                    Sameness::Different => false,
+                    Sameness::CannotTell => {
+                        super::place::paths_are_same_file(Path::new(name), Path::new(other_name))
+                    }
+                }
+            }
+            Sameness::Different => false,
+            Sameness::CannotTell => {
+                let resolved = |folder: &Path, name: &std::ffi::OsStr| {
+                    self.canonicalize_blocking(folder)
+                        .unwrap_or_else(|_| folder.to_path_buf())
+                        .join(name)
+                };
+                super::place::paths_are_same_file(
+                    &resolved(entry.folder, name),
+                    &resolved(other_folder, other_name),
+                )
+            }
+        }
+    }
+}
+
+/// A path whose folder has been read.
+struct Entry<'a> {
+    path: &'a Path,
+    folder: &'a Path,
+    folder_read: Option<&'a Mark>,
+}
+
+/// The folder a path's entry is in; `.` for a bare name.
+fn folder_of(path: &Path) -> Option<&Path> {
+    path.file_name()?;
+    Some(
+        path.parent()
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new(".")),
+    )
 }
 
 /// What became of a marked file, from the strongest finding down.
@@ -146,6 +211,8 @@ struct Facts {
     changed: Option<(i64, i64)>,
     created: Option<SystemTime>,
     owner: Option<u32>,
+    /// How many names the file has, where the read said; never stored.
+    links: Option<u64>,
 }
 
 /// One read of a file, opaque. See the module text.
@@ -178,6 +245,7 @@ impl Mark {
                 changed: stat.extra.changed,
                 created: stat.extra.created,
                 owner: stat.extra.owner,
+                links: stat.links,
             }),
         }
     }
@@ -302,6 +370,11 @@ impl Mark {
         } else {
             Drift::SameFacts
         }
+    }
+
+    /// Whether the read said the file has this one name and no other.
+    pub(crate) fn is_only_name(&self) -> bool {
+        self.facts.is_some_and(|facts| facts.links == Some(1))
     }
 
     /// What was at the path; `None` for a mark that names a volume only.
@@ -481,6 +554,7 @@ impl Mark {
                 changed: pair(changed)?.filter(|(_, nanos)| *nanos >= 0),
                 created: time(created)?,
                 owner: number(owner)?,
+                links: None,
             }),
         })
     }
