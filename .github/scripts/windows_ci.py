@@ -23,6 +23,7 @@ WINDOWS_TESTS = {
         "no_copy_placement_refuses_a_self_move_without_removing_the_file",
         "same_filesystem_placement_resumes_after_crash_before_verification_journal",
         "an_existing_destination_is_compared_with_the_file_a_linked_source_names",
+        "a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names",
         "no_copy_cleanup_preserves_source_if_survivor_was_replaced",
         "same_filesystem_moves_keep_the_no_copy_fast_path",
         "a_hard_link_placement_persists_no_content_hashes",

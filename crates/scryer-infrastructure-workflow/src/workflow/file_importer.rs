@@ -489,7 +489,7 @@ fn stable_import_source_snapshot(
 ) -> AppResult<ImportSourceSnapshot> {
     let initial = match initial_fingerprint {
         Some(fingerprint) => fingerprint.clone(),
-        None => read_import_source_at_start(path, read_import_source)?.0,
+        None => read_import_source_at_start(path, fingerprint_import_source)?,
     };
     let proof = import_content_proof(path)?;
     ensure_same_source(path, &initial)?;
@@ -532,21 +532,24 @@ fn import_file_identity_from_fingerprint(file: &FileFingerprint) -> ImportFileId
     }
 }
 
+/// The source's fingerprint from one read of its name, with no mark: a
+/// check that later holds the source, or what was placed from it, to a mark
+/// takes it from [`read_import_source_marked`], the one read that hands a
+/// mark out, so a mark that cannot tell one file from another is never
+/// handed to such a check.
 fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> {
-    read_import_source(path).map(|(fingerprint, _)| fingerprint)
+    read_import_source_with(path, |_, link_meta| Mark::of(link_meta))
+        .map(|(fingerprint, _)| fingerprint)
 }
 
-/// `read`, one of [`read_import_source`] and [`read_import_source_marked`],
+/// `read`, [`fingerprint_import_source`] or [`read_import_source_marked`],
 /// as an import starts. A source that reads missing may be a file an
 /// interrupted cleanup set aside beside it: a regular file at its set-aside
 /// name is renamed back, never replacing anything, and the source is read
 /// again. Nothing is removed. Reads are added only where the source reads
 /// missing: one of the set-aside name, and, when a file was put back, its
 /// rename and the source's read again.
-fn read_import_source_at_start(
-    path: &Path,
-    read: fn(&Path) -> AppResult<(ImportSourceFingerprint, Mark)>,
-) -> AppResult<(ImportSourceFingerprint, Mark)> {
+fn read_import_source_at_start<T>(path: &Path, read: fn(&Path) -> AppResult<T>) -> AppResult<T> {
     match read(path) {
         Err(error)
             if error.reason()
@@ -570,17 +573,11 @@ fn read_import_source_at_start(
     }
 }
 
-/// The fingerprint, and the mark of the name itself built from the same
-/// read, with no further probe. On Windows that mark names no volume or
-/// file; [`read_import_source_marked`] reads one that does.
-fn read_import_source(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)> {
-    read_import_source_with(path, |_, link_meta| Mark::of(link_meta))
-}
-
-/// [`read_import_source`] with the mark [`name_mark`] reads: on Windows one
-/// more handle read of the name, for the two reads whose mark later reads
-/// are held to by file number, the source as an import starts and the
-/// destination once it lands.
+/// The fingerprint, and the mark [`name_mark`] reads of the name: on Windows
+/// one more handle read, which names the volume and the file number that
+/// later reads are held to. Every mark the importer holds a file to comes
+/// from here: the source where a placement starts and where its cleanup
+/// starts, and the destination once it lands.
 fn read_import_source_marked(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)> {
     read_import_source_with(path, name_mark)
 }
@@ -750,18 +747,28 @@ fn directory_fingerprint_from_path(path: &Path) -> AppResult<DirectoryFingerprin
 }
 
 fn ensure_same_source(path: &Path, expected: &ImportSourceFingerprint) -> AppResult<()> {
-    same_source_mark(path, expected).map(drop)
+    let actual = fingerprint_import_source(path)?;
+    if &actual != expected {
+        return Err(source_changed(path));
+    }
+    Ok(())
 }
 
-/// [`ensure_same_source`], handing back the mark of the source's name from
-/// that same read.
+fn source_changed(path: &Path) -> AppError {
+    AppError::Repository(format!(
+        "import source changed during import: {}",
+        path.display()
+    ))
+}
+
+/// [`ensure_same_source`], handing back the mark of the source's name read
+/// as [`read_import_source_marked`] reads it: a placement holds the source to
+/// that mark by file number, and takes back what it placed only while the
+/// source is still that file.
 fn same_source_mark(path: &Path, expected: &ImportSourceFingerprint) -> AppResult<Mark> {
-    let (actual, mark) = read_import_source(path)?;
+    let (actual, mark) = read_import_source_marked(path)?;
     if &actual != expected {
-        return Err(AppError::Repository(format!(
-            "import source changed during import: {}",
-            path.display()
-        )));
+        return Err(source_changed(path));
     }
     Ok(mark)
 }
@@ -1550,8 +1557,12 @@ fn prepare_import_destination(
     dest: &Path,
     permissions: &ImportFilePermissions,
 ) -> AppResult<(ImportSourceFingerprint, u64, ImportDestinationGuard)> {
-    prepare_marked_import_destination(source, dest, permissions)
-        .map(|(fingerprint, _, size, guard)| (fingerprint, size, guard))
+    // The mark is not kept, so the read that makes none is enough: the
+    // placement reads the source's mark again where it copies or links.
+    prepare_destination_reading(source, dest, permissions, |path| {
+        fingerprint_import_source(path).map(|fingerprint| (fingerprint, ()))
+    })
+    .map(|(fingerprint, _, size, guard)| (fingerprint, size, guard))
 }
 
 /// [`prepare_import_destination`], handing back the mark of the source's
@@ -1561,8 +1572,16 @@ fn prepare_marked_import_destination(
     dest: &Path,
     permissions: &ImportFilePermissions,
 ) -> AppResult<(ImportSourceFingerprint, Mark, u64, ImportDestinationGuard)> {
-    let (source_fingerprint, source_mark) =
-        read_import_source_at_start(source, read_import_source_marked)?;
+    prepare_destination_reading(source, dest, permissions, read_import_source_marked)
+}
+
+fn prepare_destination_reading<M>(
+    source: &Path,
+    dest: &Path,
+    permissions: &ImportFilePermissions,
+    read: fn(&Path) -> AppResult<(ImportSourceFingerprint, M)>,
+) -> AppResult<(ImportSourceFingerprint, M, u64, ImportDestinationGuard)> {
+    let (source_fingerprint, source_mark) = read_import_source_at_start(source, read)?;
     let size = source_fingerprint.file.len;
     if size == 0 {
         return Err(AppError::Repository(format!(
@@ -2355,13 +2374,20 @@ fn remove_import_source_after_verified_import_blocking(
         )));
     }
 
-    let (source_fingerprint, source_mark) =
-        read_import_source(&guard.source_path).map_err(|_| {
-            AppError::Repository(format!(
-                "import source cleanup failed because source is missing or inaccessible: {}",
-                guard.source_path.display()
-            ))
-        })?;
+    // Only a source removed beside an adopted destination is held to its
+    // mark, so only that cleanup reads one.
+    let read_source = match guard.adopted_destination_mark {
+        Some(_) => {
+            |path: &Path| read_import_source_marked(path).map(|(read, mark)| (read, Some(mark)))
+        }
+        None => |path: &Path| fingerprint_import_source(path).map(|read| (read, None)),
+    };
+    let (source_fingerprint, source_mark) = read_source(&guard.source_path).map_err(|_| {
+        AppError::Repository(format!(
+            "import source cleanup failed because source is missing or inaccessible: {}",
+            guard.source_path.display()
+        ))
+    })?;
     if source_identity_from_fingerprint(&source_fingerprint) != guard.source_identity {
         return Err(AppError::Repository(format!(
             "import source cleanup failed because source changed: {}",
@@ -2385,10 +2411,10 @@ fn remove_import_source_after_verified_import_blocking(
         )));
     }
 
-    if let Some(stored) = &guard.adopted_destination_mark {
+    if let (Some(stored), Some(source_mark)) = (&guard.adopted_destination_mark, &source_mark) {
         return remove_source_beside_adopted_destination(
             &guard.source_path,
-            &source_mark,
+            source_mark,
             &final_dest_path,
             stored,
             &options,
@@ -6764,7 +6790,7 @@ mod tests {
         AppResult<ImportVerification>,
         Vec<ImportFileTransferProgress>,
     ) {
-        let (fingerprint, mark) = read_import_source(source).expect("read source");
+        let (fingerprint, mark) = read_import_source_marked(source).expect("read source");
         before_copy();
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let result = copy_regular_source_to_destination(
@@ -6954,7 +6980,7 @@ mod tests {
         let neighbour = temp.path().join("Sample.Other.mkv");
         std::fs::write(&source, b"synthetic video bytes").expect("write source");
         std::fs::write(&neighbour, b"unrelated").expect("write neighbour");
-        let (fingerprint, mark) = read_import_source(&source).expect("read source");
+        let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
         let size = std::fs::metadata(&source).expect("source metadata").len();
         let options = ImportFileOptions {
             after_copy_promoted: Some(|source, _| {
@@ -6991,6 +7017,60 @@ mod tests {
         );
     }
 
+    /// A source swapped, once its copy landed, for another file of the same
+    /// length and modification time is not the file the copy was read from:
+    /// the copy may hold the only original bytes, so it is kept, and the
+    /// look-alike is left as it is.
+    #[test]
+    fn a_look_alike_swapped_in_for_the_source_keeps_the_landed_copy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("Sample.Title.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
+        let size = std::fs::metadata(&source).expect("source metadata").len();
+        let options = ImportFileOptions {
+            after_copy_promoted: Some(|source, _| {
+                let modified = std::fs::metadata(source)
+                    .and_then(|metadata| metadata.modified())
+                    .expect("source time");
+                let swap = source.with_extension("swap");
+                std::fs::write(&swap, b"other synthetic bytes").expect("write look-alike");
+                std::fs::File::options()
+                    .write(true)
+                    .open(&swap)
+                    .and_then(|file| file.set_modified(modified))
+                    .expect("match the time");
+                std::fs::rename(&swap, source).expect("swap the look-alike in");
+            }),
+            ..Default::default()
+        };
+
+        let error = copy_regular_source_to_destination(
+            &source,
+            &dest,
+            &fingerprint,
+            &mark,
+            size,
+            options,
+            VerificationDepth::Quick,
+            None,
+            None,
+        )
+        .expect_err("the source is another file");
+
+        let said = error.to_string();
+        assert!(said.contains("may be its only copy"), "{said}");
+        assert_eq!(
+            std::fs::read(&dest).expect("the landed copy is kept"),
+            b"synthetic video bytes"
+        );
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"other synthetic bytes"
+        );
+    }
+
     /// A file that took the destination name after the copy landed there is
     /// not this import's copy, so a failing check after the promotion leaves
     /// it where it is.
@@ -7000,7 +7080,7 @@ mod tests {
         let source = temp.path().join("sample-source.mkv");
         let dest = temp.path().join("Sample.Title.mkv");
         std::fs::write(&source, b"synthetic video bytes").expect("write source");
-        let (fingerprint, mark) = read_import_source(&source).expect("read source");
+        let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
         let size = std::fs::metadata(&source).expect("source metadata").len();
         let options = ImportFileOptions {
             after_copy_promoted: Some(|source, dest| {
