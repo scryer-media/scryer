@@ -4,9 +4,10 @@
 //! number in it is handed out.
 //!
 //! A mark carries whatever the platform offered: the device and inode on
-//! unix, a zero inode included; the volume serial alone on Windows, which
-//! tells no two files apart; and length and times everywhere. Each answer
-//! says when the platform's facts were not enough to tell.
+//! unix, a zero inode included; the volume serial and file index on Windows,
+//! the index only on a volume that keeps it for a file's life; and length
+//! and times everywhere. Each answer says when the platform's facts were not
+//! enough to tell.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -137,9 +138,13 @@ pub(crate) const UNKNOWN_LANE: &str = "unknown-volume";
 
 impl Mark {
     pub(crate) fn of_stat(stat: &RawStat) -> Self {
-        let (volume, file) = match stat.extra.device {
-            Some(device) => (Volume::Unix(device), stat.extra.inode),
-            None => (Volume::Unknown, None),
+        let (volume, file) = match (stat.extra.device, stat.extra.serial) {
+            (Some(device), _) => (Volume::Unix(device), stat.extra.inode),
+            (None, Some(serial)) => (
+                Volume::Windows(serial),
+                stat.extra.inode.filter(|_| !stat.extra.unnumbered),
+            ),
+            (None, None) => (Volume::Unknown, None),
         };
         Self {
             volume,
@@ -203,11 +208,12 @@ impl Mark {
 
     /// Whether this mark, read of a name just hard-linked, is the file `seen`
     /// was read as before the link. Where the platform numbers files, the
-    /// device and the number must match, and a zero number is compared as
-    /// given: a filesystem that numbers every file zero links truly. Where
-    /// it gives none, the length and modification time must match. `seen`
-    /// must be a fresh read: a stored or volume-only mark never proves. No
-    /// probe.
+    /// device and the number must match, and a unix zero number is compared
+    /// as given: a filesystem that numbers every file zero links truly. A
+    /// Windows read with no usable number, or a read that names no volume,
+    /// is compared by length and modification time, on one volume where both
+    /// name it. `seen` must be a fresh read: a stored or volume-only mark
+    /// never proves. No probe.
     pub(crate) fn is_link_of(&self, seen: &Self) -> bool {
         let (Some(linked), Some(before)) = (self.facts, seen.facts) else {
             return false;
@@ -219,7 +225,12 @@ impl Mark {
             (Volume::Unix(here), Volume::Unix(there)) => {
                 here == there && self.file.is_some() && self.file == seen.file
             }
-            (Volume::Unknown, Volume::Unknown) => {
+            (Volume::Windows(here), Volume::Windows(there)) if here != there => false,
+            (Volume::Windows(_), Volume::Windows(_)) => match (self.file, seen.file) {
+                (Some(here), Some(there)) if here != 0 && there != 0 => here == there,
+                _ => linked.len == before.len && linked.modified == before.modified,
+            },
+            (Volume::Unknown | Volume::Windows(_), Volume::Unknown | Volume::Windows(_)) => {
                 linked.len == before.len && linked.modified == before.modified
             }
             _ => false,
@@ -351,6 +362,7 @@ impl Mark {
     pub fn label(&self) -> String {
         match (self.volume, self.file, self.facts) {
             (Volume::Unix(device), Some(file), _) => format!("dev={device} ino={file}"),
+            (Volume::Windows(serial), Some(file), _) => format!("volume={serial} index={file}"),
             (_, _, Some(facts)) => {
                 let modified = facts.modified.map(since_epoch).map_or_else(
                     || "unknown".to_owned(),
@@ -467,8 +479,7 @@ impl Mark {
         let volume = match volume.split_at_checked(1)? {
             ("-", "") => Volume::Unknown,
             ("u", device) => Volume::Unix(device.parse().ok()?),
-            // No Windows mark carries a file index.
-            ("w", serial) if file == "-" => Volume::Windows(serial.parse().ok()?),
+            ("w", serial) => Volume::Windows(serial.parse().ok()?),
             _ => return None,
         };
         Some(Self {

@@ -18,6 +18,20 @@ pub(super) fn numbered(device: Option<u64>, inode: Option<u64>) -> RawStat {
     }
 }
 
+/// `stat` as Windows reads it: on the volume `serial` names, or on none,
+/// with its index as the file's number.
+pub(super) fn on_serial(stat: RawStat, serial: Option<u64>) -> RawStat {
+    RawStat {
+        identity: serial.and_then(|serial| FileIdentity::from_raw(serial, stat.extra.inode?)),
+        extra: Extra {
+            device: None,
+            serial,
+            ..stat.extra
+        },
+        ..stat
+    }
+}
+
 fn scripted() -> (Disk, Arc<Scripted>) {
     owner(&ManualClock::at(at(0)))
 }
@@ -192,6 +206,7 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
             changed: Some((-3, 5)),
             created: Some(epoch - std::time::Duration::new(2, 500)),
             owner: Some(501),
+            ..Default::default()
         },
     };
     let marks = [
@@ -201,6 +216,7 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
         mark(file(5)).volume(),
         Mark::from_stored("windows-volume:42").expect("a Windows volume"),
         mark(dir()).volume(),
+        mark(on_serial(file(5), Some(42))),
     ];
     for taken in &marks {
         let stored = taken.to_stored();
@@ -212,14 +228,21 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
     assert_eq!(marks[4].to_stored(), "windows-volume:42");
     assert_eq!(marks[5].to_stored(), "unknown-volume");
     assert!(marks[3].names_volume() && !marks[5].names_volume());
+    assert_eq!(marks[6].to_stored(), "mark1:f:5:-:-:-:w42:105:-");
+    // A Windows mark stored before file indexes were read carries none, so
+    // against a fresh read of the same file it cannot tell, and its facts
+    // still match.
+    assert_eq!(marks[2].same_file(&marks[6]), Sameness::CannotTell);
+    assert_eq!(marks[2].compare(&marks[6]), Drift::SameFacts);
+    assert!(marks[2].still_marks(&marks[6]));
     for unread in [
         "",
         "mark1",
         "mark2:f:5:-:-:-:u1:105:-",
         "mark1:x:5:-:-:-:u1:105:-",
         "mark1:f:5:-:-:-:q1:105:-",
-        // A Windows file index is nothing this service writes.
-        "mark1:f:5:-:-:-:w42:99:-",
+        "mark1:f:5:-:-:-:w+42:99:-",
+        "mark1:f:5:-:-:-:w42:099:-",
         "mark1:f:5:-:-:-:u1:105:-:extra",
         "unix-dev:",
         "unix-dev:seven",
@@ -310,29 +333,35 @@ fn real_links_and_handles_are_recognised() {
     assert_eq!(opened.compare(&read(&first)), Drift::Rewritten);
 }
 
-/// A path's own stat names no volume and no file on Windows; the volume a
-/// path lands on comes from a handle, and two names in one folder share it.
+/// A path's own stat on Windows names its volume and, on a volume that
+/// keeps them, its file number, from one handle: two names of one file are
+/// one file, and the volume a path lands on is the one its nearest folder
+/// reads as. std's own metadata names neither.
 #[cfg(windows)]
 #[test]
-fn windows_names_a_volume_from_a_handle_and_tells_no_files_apart() {
+fn windows_reads_a_volume_and_a_file_number_from_one_handle() {
     let temp = tempfile::tempdir().unwrap();
-    let (first, second) = (
+    let (first, second, other) = (
         temp.path().join("first.mkv"),
         temp.path().join("second.mkv"),
+        temp.path().join("other.mkv"),
     );
     std::fs::write(&first, b"synthetic").unwrap();
+    std::fs::write(&other, b"synthetic").unwrap();
     std::fs::hard_link(&first, &second).unwrap();
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
     let plain = |path: &Path| disk.fingerprint_blocking(path).unwrap();
-    assert_eq!(
-        plain(&first).same_file(&plain(&second)),
-        Sameness::CannotTell
-    );
-    assert_eq!(
-        plain(&first).same_volume(&plain(&second)),
-        Sameness::CannotTell
-    );
-    assert_eq!(plain(&first).compare(&plain(&first)), Drift::SameFacts);
+    assert_eq!(plain(&first).same_file(&plain(&second)), Sameness::Same);
+    assert_eq!(plain(&first).same_file(&plain(&other)), Sameness::Different);
+    assert_eq!(plain(&first).same_volume(&plain(&other)), Sameness::Same);
+    assert_eq!(plain(&first).compare(&plain(&first)), Drift::Same);
+    assert!(plain(&first).has_other_names() && !plain(&other).has_other_names());
+    assert!(plain(&first).to_stored().contains(":w"));
+
+    let opened = Mark::of(&std::fs::File::open(&first).unwrap().metadata().unwrap());
+    assert_eq!(opened.same_file(&plain(&first)), Sameness::CannotTell);
+    assert_eq!(opened.compare(&plain(&first)), Drift::SameFacts);
+
     let volume = disk.landing_volume_blocking(&first).expect("volume");
     let missing = temp.path().join("not-created/third.mkv");
     let landing = disk.landing_volume_blocking(&missing).expect("volume");
@@ -342,39 +371,29 @@ fn windows_names_a_volume_from_a_handle_and_tells_no_files_apart() {
 }
 
 /// On Windows two paths share a volume only when they name one drive or
-/// share and answer one non-zero volume serial. A serial either side does
-/// not answer, a serial of zero, or a linked source is no answer. A move
-/// asks none of this: it copies on Windows, reading nothing first.
+/// share and both read as one known volume serial. A serial either side
+/// does not answer is no answer. A source that is a link is judged by the
+/// volume holding the link, as on unix.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial() {
+async fn windows_volumes_are_shared_only_with_one_prefix_and_one_known_serial() {
     let folder = "/srv/fixture-media/Fixture Show";
     let setup = |source: Option<u64>, landing: Option<u64>| {
         let (disk, backend) = scripted();
-        backend.stat_is(B, Ok(file(5)));
-        backend.stat_is(folder, Ok(dir()));
-        if let Some(serial) = source {
-            backend.serial_is(B, serial);
-        }
-        if let Some(serial) = landing {
-            backend.serial_is(folder, serial);
-        }
+        backend.stat_is(B, Ok(on_serial(file(5), source)));
+        backend.stat_is(folder, Ok(on_serial(dir(), landing)));
         (disk, backend)
     };
 
     let (equal, backend) = setup(Some(7), Some(7));
     assert!(equal.shares_volume(&p(B), &p(A)).await);
-    assert_eq!(backend.paths_of("volume_serial"), [p(B), p(folder)]);
-    // A move reads nothing to decide: it copies.
-    let before = backend.paths_of("volume_serial").len();
-    assert!(!equal.renames_between(&p(B), &p(A)).await);
-    assert_eq!(backend.paths_of("volume_serial").len(), before);
+    // The source's own read names its volume: one stat, of the folder the
+    // destination lands in, besides the reads that find it.
+    assert_eq!(backend.paths_of("stat"), [p(folder)]);
+    assert_eq!(backend.paths_of("lstat")[0], p(B));
 
     let (different, _) = setup(Some(7), Some(8));
     assert!(!different.shares_volume(&p(B), &p(A)).await);
-
-    let (zero, _) = setup(Some(0), Some(0));
-    assert!(!zero.shares_volume(&p(B), &p(A)).await);
 
     let (source_unread, _) = setup(None, Some(7));
     assert!(!source_unread.shares_volume(&p(B), &p(A)).await);
@@ -385,13 +404,15 @@ async fn windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial(
     let (linked, backend) = setup(Some(7), Some(7));
     backend.stat_is(
         B,
-        Ok(RawStat {
-            kind: EntryKind::Symlink,
-            ..file(5)
-        }),
+        Ok(on_serial(
+            RawStat {
+                kind: EntryKind::Symlink,
+                ..file(5)
+            },
+            Some(7),
+        )),
     );
-    assert!(!linked.shares_volume(&p(B), &p(A)).await);
-    assert!(backend.paths_of("volume_serial").is_empty());
+    assert!(linked.shares_volume(&p(B), &p(A)).await);
 
     let (missing, _) = setup(Some(7), Some(7));
     assert!(!missing.shares_volume(&p(A), &p(B)).await);
@@ -409,26 +430,22 @@ async fn windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial(
         (r"c:\fixture-media\a.mkv", r"c:\fixture-media", true),
     ] {
         let (disk, backend) = scripted();
-        backend.stat_is(drive, Ok(file(5)));
-        backend.serial_is(drive, 7);
-        backend.stat_is(other_folder, Ok(dir()));
-        backend.serial_is(other_folder, 7);
+        backend.stat_is(drive, Ok(on_serial(file(5), Some(7))));
+        backend.stat_is(other_folder, Ok(on_serial(dir(), Some(7))));
         assert_eq!(
             disk.shares_volume(&p(drive), &p(other)).await,
             shared,
             "{other}"
         );
         if !shared {
-            assert!(backend.paths_of("volume_serial").is_empty(), "{other}");
+            assert_eq!(backend.calls_of("stat"), 0, "{other}");
             assert_eq!(backend.calls_of("lstat"), 0, "{other}");
         }
     }
     let share = r"\\fixture-host\media\b.mkv";
     let (disk, backend) = scripted();
-    backend.stat_is(share, Ok(file(5)));
-    backend.serial_is(share, 7);
-    backend.stat_is(r"\\fixture-host\other", Ok(dir()));
-    backend.serial_is(r"\\fixture-host\other", 7);
+    backend.stat_is(share, Ok(on_serial(file(5), Some(7))));
+    backend.stat_is(r"\\fixture-host\other", Ok(on_serial(dir(), Some(7))));
     assert!(
         !disk
             .shares_volume(&p(share), &p(r"\\fixture-host\other\a.mkv"))
@@ -437,18 +454,16 @@ async fn windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial(
 }
 
 /// Two names on one drive, the destination's folder not made yet, are on one
-/// volume; a source that is not there answers no. A move between them still
-/// copies on Windows.
+/// volume; a source that is not there answers no.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies() {
+async fn windows_two_names_on_one_drive_share_a_volume() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.mkv");
     std::fs::write(&source, b"synthetic").unwrap();
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
     let beside = temp.path().join("beside.mkv");
     assert!(disk.shares_volume(&source, &beside).await);
-    assert!(!disk.renames_between(&source, &beside).await);
     let nested = temp.path().join("not-created/yet/destination.mkv");
     assert!(disk.shares_volume(&source, &nested).await);
     let missing = temp.path().join("missing.mkv");
@@ -542,4 +557,45 @@ fn the_early_look_leaves_separate_files_to_the_set_aside() {
         backend.calls_of("stat") + backend.calls_of("canonicalize") + backend.calls_of("read_link"),
         0
     );
+}
+
+/// A Windows read carries its volume serial and, where the volume keeps
+/// it, its file index: two reads of one index are one file, another index
+/// is another file, and an index the volume does not keep tells nothing.
+#[test]
+fn a_windows_read_tells_files_apart_only_by_a_kept_index() {
+    let read = |serial, inode, unnumbered| {
+        let mut stat = on_serial(numbered(None, Some(inode)), Some(serial));
+        stat.extra.unnumbered = unnumbered;
+        mark(stat)
+    };
+    assert_eq!(
+        read(7, 11, false).same_file(&read(7, 11, false)),
+        Sameness::Same
+    );
+    assert_eq!(
+        read(7, 11, false).same_file(&read(7, 12, false)),
+        Sameness::Different
+    );
+    assert_eq!(
+        read(7, 11, false).same_file(&read(8, 11, false)),
+        Sameness::Different
+    );
+    assert_eq!(
+        read(7, 11, true).same_file(&read(7, 11, true)),
+        Sameness::CannotTell
+    );
+    assert_eq!(
+        read(7, 11, true).same_file(&read(7, 12, false)),
+        Sameness::CannotTell
+    );
+    assert_eq!(
+        read(7, 11, true).same_volume(&read(7, 12, true)),
+        Sameness::Same
+    );
+    assert_eq!(read(7, 11, true).to_stored(), "mark1:f:5:-:-:-:w7:-:-");
+    assert_eq!(read(7, 11, false).label(), "volume=7 index=11");
+    let unnamed = mark(on_serial(numbered(None, Some(11)), None));
+    assert_eq!(unnamed.same_file(&read(7, 11, false)), Sameness::CannotTell);
+    assert!(!unnamed.names_volume());
 }

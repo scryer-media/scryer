@@ -20,6 +20,9 @@ use chrono::{DateTime, Utc};
 use super::reading::{EntryKind, FileIdentity, PathReading};
 use super::{Access, Open, OpenMode, OwnerOnly, Replace};
 
+#[cfg(windows)]
+pub(crate) mod by_handle;
+
 /// What one stat call said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RawStat {
@@ -32,11 +35,19 @@ pub(crate) struct RawStat {
 }
 
 /// The rest of what the same stat call said, which only a
-/// [`super::mark::Mark`] keeps. The inode is carried as given, zero included.
+/// [`super::mark::Mark`] keeps. The inode, or the Windows file index, is
+/// carried as given, zero included.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Extra {
+    /// The unix device.
     pub device: Option<u64>,
+    /// The Windows volume serial, absent when it read as zero.
+    pub serial: Option<u64>,
     pub inode: Option<u64>,
+    /// Whether the volume's file numbers do not tell its files apart: a
+    /// Windows volume that does not keep them for a file's life, or one
+    /// whose index is truncated. Its number is then not a mark's.
+    pub unnumbered: bool,
     /// The inode change time, as seconds and nanoseconds.
     pub changed: Option<(i64, i64)>,
     pub created: Option<SystemTime>,
@@ -263,12 +274,6 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn stat(&self, path: &Path) -> io::Result<RawStat>;
     /// Does not follow links.
     fn lstat(&self, path: &Path) -> io::Result<RawStat>;
-    /// The serial of the volume `path` resolves to, where the platform keeps
-    /// it apart from a stat: one call.
-    #[cfg(windows)]
-    fn volume_serial(&self, _path: &Path) -> Option<u64> {
-        None
-    }
     /// Opens a directory for a listing; its entries are read as the
     /// iterator is driven.
     fn list(&self, path: &Path) -> io::Result<Listing>;
@@ -380,16 +385,17 @@ fn dir_builder(access: Access) -> std::fs::DirBuilder {
 
 impl DiskBackend for SystemBackend {
     fn stat(&self, path: &Path) -> io::Result<RawStat> {
+        #[cfg(windows)]
+        return by_handle::stat(path, true);
+        #[cfg(not(windows))]
         std::fs::metadata(path).map(|metadata| RawStat::of(&metadata))
     }
 
     fn lstat(&self, path: &Path) -> io::Result<RawStat> {
+        #[cfg(windows)]
+        return by_handle::stat(path, false);
+        #[cfg(not(windows))]
         std::fs::symlink_metadata(path).map(|metadata| RawStat::of(&metadata))
-    }
-
-    #[cfg(windows)]
-    fn volume_serial(&self, path: &Path) -> Option<u64> {
-        windows_volume_serial(path)
     }
 
     fn has_entries(&self, path: &Path) -> io::Result<bool> {
@@ -1031,30 +1037,6 @@ fn long_path_form(
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn exclusive_rename(_source: &Path, _dest: &Path) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
-}
-
-/// The serial of the volume `path` resolves to, a junction or link followed
-/// as a stat follows one on unix.
-#[cfg(windows)]
-fn windows_volume_serial(path: &Path) -> Option<u64> {
-    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
-    };
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .access_mode(0)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .ok()?;
-    let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
-    // SAFETY: the metadata handle stays alive throughout the call.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) } == 0 {
-        return None;
-    }
-    // SAFETY: the call above filled the structure.
-    let information = unsafe { information.assume_init() };
-    Some(u64::from(information.dwVolumeSerialNumber))
 }
 
 #[cfg(test)]

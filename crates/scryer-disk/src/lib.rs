@@ -781,6 +781,26 @@ impl Disk {
             .await
     }
 
+    /// The Windows volume serial and file index of what is at `path` itself,
+    /// a link not followed, as the platform gives them: a zero serial and an
+    /// index the volume does not keep included. Only for text stored before
+    /// marks carried them, which must keep its form; anything else asks a
+    /// [`Mark`]. `None` when the path reads without them. One probe.
+    #[cfg(windows)]
+    #[doc(hidden)]
+    pub fn windows_file_numbers_blocking(&self, path: &Path) -> Option<(u64, u64)> {
+        let stat = self.call("lstat", || self.inner.backend.lstat(path)).ok()?;
+        Some((stat.extra.serial.unwrap_or(0), stat.extra.inode?))
+    }
+
+    /// [`Self::windows_file_numbers_blocking`] off the runtime, bounded.
+    #[cfg(windows)]
+    #[doc(hidden)]
+    pub async fn windows_file_numbers(&self, path: impl Into<PathBuf>) -> Option<(u64, u64)> {
+        self.probe_with(path.into(), Self::windows_file_numbers_blocking, |_| None)
+            .await
+    }
+
     /// The entries of `dir`. On a configured root the listing seeds a reading
     /// for each entry and forgets cached entries it no longer holds.
     pub fn list_blocking(&self, dir: &Path) -> Result<Vec<Listed>, DiskError> {

@@ -109,7 +109,6 @@ pub struct FileIdentity {
 impl FileIdentity {
     /// `None` for a zero inode, which some network and FUSE filesystems
     /// report for every file: equality on it would prove nothing.
-    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn from_raw(device: u64, inode: u64) -> Option<Self> {
         (inode != 0).then_some(Self { device, inode })
     }

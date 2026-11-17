@@ -190,9 +190,8 @@ fn volume_identity(path: &Path) -> io::Result<String> {
 
 #[cfg(windows)]
 fn volume_identity(path: &Path) -> io::Result<String> {
-    // `MetadataExt::volume_serial_number` is still unstable (`windows_by_handle`);
-    // the transfer module already reads the same serial through a stable call.
-    crate::location::transfer::windows_file_identity(path)
+    crate::disk::Disk::process()
+        .windows_file_numbers_blocking(path)
         .map(|(volume_serial, _file_index)| volume_serial.to_string())
         .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "volume identity unavailable"))
 }

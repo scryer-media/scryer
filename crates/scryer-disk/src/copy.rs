@@ -355,8 +355,8 @@ impl CopyAdmission {
     }
 
     /// A turn on the volume a mark names, without a probe. A mark that
-    /// carries no volume, as a plain Windows read does not, shares the
-    /// unknown lane.
+    /// carries no volume, as a read from std's own Windows metadata does
+    /// not, shares the unknown lane.
     pub async fn acquire_on(&self, volume: &Mark) -> CopyPermit {
         self.acquire_keyed(&volume.lane()).await
     }
@@ -1494,15 +1494,8 @@ impl Disk {
         path.ancestors().find_map(|at| self.volume_at(at))
     }
 
-    #[cfg(not(windows))]
     fn volume_at(&self, path: &Path) -> Option<Mark> {
         Some(self.fingerprint_followed_blocking(path).ok()?.volume())
-    }
-
-    #[cfg(windows)]
-    fn volume_at(&self, path: &Path) -> Option<Mark> {
-        let serial = self.call("volume_serial", || self.inner.backend.volume_serial(path))?;
-        Some(Mark::on_volume(serial))
     }
 
     /// The copy lane of the volume `dest` will land on; the unknown lane when
@@ -1584,20 +1577,6 @@ impl Disk {
         // the one holding its target.
         let Ok(source) = self.fingerprint_blocking(source_path) else {
             return false;
-        };
-        // A plain read names no volume on Windows. The volume comes from a
-        // handle, which follows a link, so a linked source is left to the
-        // copy rather than judged by its target's volume. A serial of zero
-        // is not one.
-        #[cfg(windows)]
-        let source = match source.kind() {
-            Some(super::EntryKind::Symlink) | None => return false,
-            Some(_) => match self.volume_at(source_path) {
-                Some(volume) if volume.same_volume(&Mark::on_volume(0)) == Sameness::Different => {
-                    volume
-                }
-                _ => return false,
-            },
         };
         let mut candidate = Some(destination);
         while let Some(current) = candidate {

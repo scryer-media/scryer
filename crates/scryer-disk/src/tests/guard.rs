@@ -29,7 +29,7 @@ const EXEMPT_DIRS: [&str; 5] = ["tests", "lib_tests", "benches", "examples", "ta
 /// marker on a test-gated item, or one whose own attribute allows the direct
 /// calls for tests only, is not counted. Lower it when one is removed; it
 /// never goes up.
-const MARKERS: usize = 80;
+const MARKERS: usize = 79;
 /// Files holding direct filesystem lines that carry no marker yet, with how
 /// many. An entry may shrink or go; none is added and none grows.
 const UNMARKED: [(&str, usize); 11] = [

@@ -351,7 +351,10 @@ async fn recovery_file_version(path: &Path) -> AppResult<String> {
     };
     #[cfg(windows)]
     let identity = {
-        let (volume, index) = super::transfer::windows_file_identity(path).ok_or_else(|| {
+        let numbers = crate::disk::Disk::process()
+            .windows_file_numbers(path)
+            .await;
+        let (volume, index) = numbers.ok_or_else(|| {
             fail(
                 crate::error_reasons::location::RECOVERY_FILE_IDENTITY_UNAVAILABLE,
                 "Filesystem identity is unavailable",
