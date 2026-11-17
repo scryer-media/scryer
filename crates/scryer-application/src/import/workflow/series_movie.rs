@@ -129,19 +129,35 @@ async fn run_import(
     let mut subtitles_pending =
         subtitle_failed || subtitle_plan.has_pending_sources(delivered_sources.into_iter());
     let subtitles_outstanding = subtitles_pending;
+    // A cleanup refusal that needs reconciliation ends the import so, and
+    // records no hold an operator could release.
+    let mut cleanup_refused = false;
     if !subtitles_pending
         && result
             .as_ref()
             .is_ok_and(|result| result.decision == ImportDecision::Imported)
-        && complete_deferred_import_source_cleanup(app, source_cleanups)
-            .await
-            .is_err()
     {
-        subtitles_pending = true;
-        tracing::warn!(
-            import_id,
-            "verified source cleanup could not finish; import remains successful and sources retained"
-        );
+        match complete_deferred_import_source_cleanup(app, source_cleanups).await {
+            Ok(()) => {}
+            Err(DeferredCleanupFailure::NeedsReconciliation(error)) => {
+                tracing::error!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup was refused; sources retained for reconciliation"
+                );
+                subtitles_pending = true;
+                cleanup_refused = true;
+                result = Err(error);
+            }
+            Err(DeferredCleanupFailure::Held(error)) => {
+                subtitles_pending = true;
+                tracing::warn!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup could not finish; import remains successful and sources retained"
+                );
+            }
+        }
     }
     if source_hold
         && !subtitles_pending
@@ -165,7 +181,7 @@ async fn run_import(
 
     if subtitles_pending {
         workspace_reference.retain();
-        if source_hold {
+        if source_hold && !cleanup_refused {
             let reason = if target.archive_processing_pending {
                 HeldSourcesReason::ArchiveExtractionFailed
             } else if subtitles_outstanding {

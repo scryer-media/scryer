@@ -2915,7 +2915,53 @@ pub(crate) fn defer_import_source_cleanup(
         .is_ok()
 }
 
+/// The failure of a deferred source cleanup that must reach the operator
+/// as an import needing reconciliation, with its reason, rather than as a
+/// hold an operator may release: a cleanup that found the library file is
+/// the source's own entry, or could not tell. Releasing such a hold would
+/// let the download client's removal take the library file with the
+/// download. `None` for any other failure, which stays a releasable hold.
+fn deferred_cleanup_needing_reconciliation(error: &AppError) -> Option<AppError> {
+    if error.requires_manual_reconciliation() {
+        return Some(error.clone());
+    }
+    let reason = error.reason()?;
+    (reason == crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN).then(|| {
+        AppError::ManualReconciliationRefused {
+            message: error.to_string(),
+            reason,
+        }
+    })
+}
+
+/// The deferred source cleanups of one import, in order. A failure that
+/// needs reconciliation ([`deferred_cleanup_needing_reconciliation`]) comes
+/// back as [`DeferredCleanupFailure::NeedsReconciliation`], to be raised; any
+/// other as [`DeferredCleanupFailure::Held`], which leaves the import's
+/// sources held.
 async fn complete_deferred_import_source_cleanup(
+    app: &AppUseCase,
+    pending: Vec<DeferredImportSourceCleanup>,
+) -> Result<(), DeferredCleanupFailure> {
+    run_deferred_import_source_cleanups(app, pending)
+        .await
+        .map_err(|error| match deferred_cleanup_needing_reconciliation(&error) {
+            Some(escalated) => DeferredCleanupFailure::NeedsReconciliation(escalated),
+            None => DeferredCleanupFailure::Held(error),
+        })
+}
+
+/// How a deferred source cleanup failed.
+#[derive(Debug)]
+enum DeferredCleanupFailure {
+    /// The import must end needing reconciliation with this error; no hold
+    /// is recorded for it.
+    NeedsReconciliation(AppError),
+    /// The sources stay held, and the hold may be released.
+    Held(AppError),
+}
+
+async fn run_deferred_import_source_cleanups(
     app: &AppUseCase,
     pending: Vec<DeferredImportSourceCleanup>,
 ) -> AppResult<()> {
@@ -3191,6 +3237,46 @@ mod move_import_source_cleanup_gate_tests {
             source_proof: proof(),
             dest_proof: proof(),
             adopted_destination_mark: None,
+        }
+    }
+
+    /// A deferred cleanup that found the library file is the source's own
+    /// entry, or could not tell, ends the import needing reconciliation with
+    /// its reason; any other cleanup failure stays a releasable hold.
+    #[test]
+    fn a_deferred_cleanup_refusal_needs_reconciliation_and_keeps_its_reason() {
+        use crate::AppError;
+        use crate::error_reasons::import;
+
+        let is_source = AppError::ManualReconciliationRefused {
+            message: "the destination is the source".into(),
+            reason: import::DESTINATION_IS_SOURCE,
+        };
+        let raised = super::deferred_cleanup_needing_reconciliation(&is_source)
+            .expect("raised, not held");
+        assert!(raised.requires_manual_reconciliation());
+        assert_eq!(raised.reason(), Some(import::DESTINATION_IS_SOURCE));
+
+        let unknown = AppError::RepositoryFailed {
+            message: "could not tell".into(),
+            reason: import::DESTINATION_ALIAS_UNKNOWN,
+        };
+        let raised = super::deferred_cleanup_needing_reconciliation(&unknown)
+            .expect("raised, not held");
+        assert!(raised.requires_manual_reconciliation());
+        assert_eq!(raised.reason(), Some(import::DESTINATION_ALIAS_UNKNOWN));
+
+        for held in [
+            AppError::Repository("the source could not be removed".into()),
+            AppError::RepositoryFailed {
+                message: "the source could not be removed".into(),
+                reason: import::PERMISSION_DENIED,
+            },
+        ] {
+            assert!(
+                super::deferred_cleanup_needing_reconciliation(&held).is_none(),
+                "{held:?}"
+            );
         }
     }
 

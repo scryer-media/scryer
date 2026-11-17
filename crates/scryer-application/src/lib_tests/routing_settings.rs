@@ -1015,3 +1015,43 @@ async fn library_audio_language_preferences_override_the_facet_one_value_at_a_ti
     assert_eq!(library.optional_audio_languages_override, None);
     assert_eq!(library.preferred_audio_languages, facet.preferred);
 }
+
+/// A download whose import ended needing reconciliation is left blocked, and
+/// a blocked download is never removed from its client, with its data,
+/// however the scope's cleanup flags are set: a cleanup that found the
+/// library file is the download's own file cannot lose it this way.
+#[tokio::test]
+async fn a_blocked_import_is_never_removed_from_its_client() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+            "movie",
+            &serde_json::json!({
+                "weaver": {
+                    "enabled": true,
+                    "removeCompleted": true,
+                    "removeFailed": true
+                }
+            })
+            .to_string(),
+        )
+        .await;
+    let (app, _) =
+        bootstrap_with_search_settings_and_indexer(settings, Arc::new(MockIndexerClient));
+    let removes = |state| {
+        crate::import_workflow::should_remove_terminal_download(
+            &app,
+            "weaver",
+            "weaver",
+            None,
+            Some(&MediaFacet::Movie),
+            state,
+            None,
+        )
+    };
+    use scryer_domain::TrackedDownloadState;
+    assert!(removes(TrackedDownloadState::Imported).await);
+    assert!(!removes(TrackedDownloadState::ImportBlocked).await);
+}

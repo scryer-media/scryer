@@ -3375,9 +3375,14 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             .iter()
             .any(manual_file_has_scene_subtitle_hold);
     if can_release {
-        let cleanup_succeeded = complete_deferred_import_source_cleanup(app, cleanups)
-            .await
-            .is_ok();
+        let cleanup_succeeded = match complete_deferred_import_source_cleanup(app, cleanups).await
+        {
+            Ok(()) => true,
+            // Ends the import needing reconciliation, with no hold recorded
+            // that an operator could release.
+            Err(DeferredCleanupFailure::NeedsReconciliation(error)) => return Err(error),
+            Err(DeferredCleanupFailure::Held(_)) => false,
+        };
         let hold_released = cleanup_succeeded
             && (!archive_source
                 || app
