@@ -24,6 +24,7 @@ fn named(inode: u64, links: u64) -> RawStat {
     }
 }
 
+#[cfg(unix)]
 fn link(inode: u64) -> RawStat {
     RawStat {
         kind: EntryKind::Symlink,
