@@ -38,6 +38,16 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// The name an import writes its copy under, beside `dest`, until the copy
+/// is whole: the destination's whole file name with `.tmp_import` added, so
+/// two imports into one folder whose names differ only in their extension
+/// never share it, and a destination is never its own staged name.
+pub fn import_staging_path(dest: &Path) -> PathBuf {
+    let mut name = dest.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp_import");
+    dest.with_file_name(name)
+}
 use std::time::{Duration, Instant};
 
 const IMPORT_TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -271,7 +281,7 @@ pub(crate) async fn import_file_with_record_progress(
         .await;
 
     if matches!(&result, Err(AppError::Canceled(_))) {
-        let temporary_destination = dest.with_extension("tmp_import");
+        let temporary_destination = import_staging_path(dest);
         if let Err(error) = Disk::process()
             .remove(&temporary_destination, Remove::File)
             .await

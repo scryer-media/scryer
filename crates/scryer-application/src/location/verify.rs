@@ -343,6 +343,26 @@ pub async fn recorded_copy(
     policy: Placement,
     progress: &CopyProgress,
 ) -> AppResult<(StreamedContentHashes, Option<VerificationAssessment>)> {
+    recorded_copy_reporting(disk, source, destination, policy, progress)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// A copy that failed, and whether it changed what is under the destination
+/// name before it did. A copy that ran to the end and then failed counts as
+/// written.
+pub struct CopyFailure {
+    pub error: AppError,
+    pub destination_written: bool,
+}
+
+async fn recorded_copy_reporting(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    policy: Placement,
+    progress: &CopyProgress,
+) -> Result<(StreamedContentHashes, Option<VerificationAssessment>), CopyFailure> {
     let watch = Watch {
         progress: progress.disk_progress(),
         cancel: crate::disk::Cancel::never(),
@@ -350,9 +370,13 @@ pub async fn recorded_copy(
     let placed = disk
         .place_watched(source, destination, policy, watch)
         .await
-        .map_err(|refusal| copy_refusal(refusal.refused, refusal.to_string()))?;
-    let copied = placed.copied.ok_or_else(|| {
-        AppError::Repository(format!("the copy of {} recorded nothing", source.display()))
+        .map_err(|refusal| CopyFailure {
+            destination_written: refusal.destination_written,
+            error: copy_refusal(refusal.refused, refusal.to_string()),
+        })?;
+    let copied = placed.copied.ok_or_else(|| CopyFailure {
+        error: AppError::Repository(format!("the copy of {} recorded nothing", source.display())),
+        destination_written: true,
     })?;
     Ok((
         persisted_hashes(copied.hashes),
@@ -369,9 +393,25 @@ pub async fn copy_and_verify(
     policy: Placement,
     progress: &CopyProgress,
 ) -> AppResult<VerifiedFile> {
-    let (hashes, proof) = recorded_copy(disk, source, destination, policy, progress).await?;
-    let proof = proof.ok_or_else(|| {
-        AppError::Repository(format!("the copy of {} was not proven", source.display()))
+    copy_and_verify_reporting(disk, source, destination, policy, progress)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// [`copy_and_verify`], saying on failure whether the destination name was
+/// written, for a caller whose name held a file before the copy.
+pub async fn copy_and_verify_reporting(
+    disk: &Disk,
+    source: &Path,
+    destination: &Path,
+    policy: Placement,
+    progress: &CopyProgress,
+) -> Result<VerifiedFile, CopyFailure> {
+    let (hashes, proof) =
+        recorded_copy_reporting(disk, source, destination, policy, progress).await?;
+    let proof = proof.ok_or_else(|| CopyFailure {
+        error: AppError::Repository(format!("the copy of {} was not proven", source.display())),
+        destination_written: true,
     })?;
     Ok(VerifiedFile {
         source_path: source.to_path_buf(),

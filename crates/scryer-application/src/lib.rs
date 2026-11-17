@@ -469,8 +469,8 @@ pub use import_workflow::{
     HeldSourcesSettlement, HeldWorkspacePreserved, ManualImportCandidateMapping,
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
     ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
-    execute_queued_manual_import, import_completed_download, release_held_import_sources,
-    retry_failed_import, start_background_manual_import_poller,
+    execute_queued_manual_import, import_completed_download, import_staging_path,
+    release_held_import_sources, retry_failed_import, start_background_manual_import_poller,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;
 pub(crate) use integration::integration::ManualImportSourceResolution;

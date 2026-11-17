@@ -828,6 +828,59 @@ struct ImportFileOptions {
     force_hard_link_identity_mismatch: bool,
     #[cfg(test)]
     rename_fault: RenameFault,
+    #[cfg(test)]
+    link_answer: LinkAnswer,
+    /// Runs once a copy holds the destination name, before the import reads
+    /// the source and the copy again.
+    #[cfg(test)]
+    after_copy_promoted: Option<fn(&Path, &Path)>,
+}
+
+/// What the disk service is made to answer for an unproven hard link, in
+/// place of making one: states a test cannot reach between the link and its
+/// proof.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LinkAnswer {
+    #[default]
+    Real,
+    /// The link did not prove, and something else had already removed it.
+    AlreadyGone,
+    /// The source was swapped for another file, and the name holds another
+    /// writer's regular file, which the service left alone.
+    LeftAloneAfterSourceSwap,
+}
+
+/// The answer a test made the disk service give, as the refusal's parts.
+#[cfg(test)]
+fn forced_link_answer(
+    answer: LinkAnswer,
+    source: &Path,
+    dest: &Path,
+) -> Option<(Refused, String, Option<Unproven>)> {
+    let after = match answer {
+        LinkAnswer::Real => return None,
+        LinkAnswer::AlreadyGone => LinkAfter::AlreadyGone,
+        LinkAnswer::LeftAloneAfterSourceSwap => {
+            let swapped = source.with_file_name("swapped-in.mkv");
+            std::fs::write(&swapped, b"a different, longer payload").expect("write swap");
+            std::fs::rename(&swapped, source).expect("swap the source");
+            std::fs::write(dest, b"another writer").expect("write occupant");
+            LinkAfter::LeftAlone
+        }
+    };
+    let linked = match std::fs::symlink_metadata(dest) {
+        Ok(metadata) => Mark::of(&metadata),
+        Err(_) => Mark::of(&std::fs::symlink_metadata(source).expect("source")),
+    };
+    Some((
+        Refused::DestinationExists,
+        format!("{} is no longer the link made there", dest.display()),
+        Some(Unproven {
+            doubt: Doubt::OtherFile { linked },
+            after,
+        }),
+    ))
 }
 
 /// A fault the archive-output rename lane is made to hit.
@@ -858,7 +911,8 @@ thread_local! {
 /// name against `seen`, the source as this import last read it. A link that
 /// does not prove is removed by the service before it answers; one it could
 /// not remove is an error, as is a new name that cannot be read or is no
-/// regular file.
+/// regular file. A name the service left alone because another writer's
+/// regular file holds it answers as an occupied destination.
 #[cfg_attr(not(test), allow(unused_variables))]
 fn hard_link_import_source(
     source: &Path,
@@ -876,22 +930,33 @@ fn hard_link_import_source(
         true => &forced,
         false => seen,
     };
-    let policy = disk::placement::proven_link();
-    let proof = LinkProof::NameAndLength;
-    let refusal = match Disk::process().place_proven_blocking(source, dest, policy, seen, proof) {
-        Ok(Placed {
-            done: Done::HardLinked,
-            ..
-        }) => return Ok(ImportLink::Proven),
-        Ok(_) => {
-            return Err(AppError::Repository(format!(
-                "the link to {} was not made as a hard link",
-                dest.display()
-            )));
+    #[cfg(test)]
+    let forced = forced_link_answer(options.link_answer, source, dest);
+    #[cfg(not(test))]
+    let forced = None;
+    let (refused, words, unproven) = match forced {
+        Some(answer) => answer,
+        None => {
+            let policy = disk::placement::proven_link();
+            let proof = LinkProof::NameAndLength;
+            match Disk::process().place_proven_blocking(source, dest, policy, seen, proof) {
+                Ok(Placed {
+                    done: Done::HardLinked,
+                    ..
+                }) => return Ok(ImportLink::Proven),
+                Ok(_) => {
+                    return Err(AppError::Repository(format!(
+                        "the link to {} was not made as a hard link",
+                        dest.display()
+                    )));
+                }
+                Err(refusal) => {
+                    let words = refusal.to_string();
+                    (refusal.refused, words, refusal.unproven)
+                }
+            }
         }
-        Err(refusal) => refusal,
     };
-    let words = refusal.to_string();
     let unread = |error: io::Error| {
         let said = format!(
             "import path not found or inaccessible: {}: {error}",
@@ -899,8 +964,8 @@ fn hard_link_import_source(
         );
         import_io_error(&error, said)
     };
-    let Some(Unproven { doubt, after, .. }) = refusal.unproven else {
-        return Ok(match refusal.refused {
+    let Some(Unproven { doubt, after, .. }) = unproven else {
+        return Ok(match refused {
             Refused::CannotLink(_) => ImportLink::NotPossible,
             _ => ImportLink::Failed(words),
         });
@@ -918,6 +983,13 @@ fn hard_link_import_source(
                 "import path is not a regular file: {}",
                 dest.display()
             )))
+        }
+        // Another regular file took the name after the link was made, and
+        // the service left it alone. The name is occupied, and answers as an
+        // occupied name does here; nothing is copied over it.
+        (Doubt::OtherFile { .. }, LinkAfter::LeftAlone) => {
+            ensure_same_source(source, fingerprint)?;
+            Ok(ImportLink::Failed(words))
         }
         (Doubt::OtherFile { linked }, _) => Ok(ImportLink::Unproven(LinkDoubt::Identity(
             HardLinkIdentityMismatch {
@@ -1300,6 +1372,41 @@ pub fn missing_destination_dirs(parent: &Path) -> Vec<PathBuf> {
     while let Some(path) = current {
         if path.as_os_str().is_empty() || disk.follow_blocking(path).exists() == Some(true) {
             break;
+        }
+        missing.push(path.to_path_buf());
+        current = path.parent();
+    }
+    missing.reverse();
+    missing
+}
+
+/// [`missing_destination_dirs`] for a caller on the runtime: the same look
+/// at each folder, each one a bounded read off the runtime. A look that does
+/// not answer leaves the list empty, so no folder gets permissions on a
+/// guess.
+pub async fn missing_destination_dirs_off_runtime(parent: &Path) -> Vec<PathBuf> {
+    let disk = Disk::process();
+    let mut missing = Vec::new();
+    let mut current = Some(parent);
+    while let Some(path) = current {
+        if path.as_os_str().is_empty() {
+            break;
+        }
+        let reading = disk.follow(path).await;
+        if reading.exists() == Some(true) {
+            break;
+        }
+        if matches!(
+            reading.unreachable_cause(),
+            Some(disk::reason::DISK_TIMED_OUT | disk::reason::DISK_PATH_UNREACHABLE)
+        ) {
+            tracing::warn!(
+                parent = %parent.display(),
+                folder = %path.display(),
+                state = reading.describe_absence(),
+                "could not tell which folders this creates; none gets the configured permissions"
+            );
+            return Vec::new();
         }
         missing.push(path.to_path_buf());
         current = path.parent();
@@ -1696,7 +1803,7 @@ fn copy_regular_source_to_destination(
     progress: Option<&ImportFileTransferProgressSender>,
     cancellation: Option<&scryer_application::ImportCancellation>,
 ) -> AppResult<ImportVerification> {
-    let temp_dest = dest.with_extension("tmp_import");
+    let temp_dest = scryer_application::import_staging_path(dest);
     let sender = progress.cloned();
     let watch = Watch {
         // The finalizing phase covers the flush, the sync and the rename.
@@ -1713,8 +1820,8 @@ fn copy_regular_source_to_destination(
             None => Cancel::never(),
         },
     };
-    // The import's own landing, every part of it stated: the `.tmp_import`
-    // name is this import's and is cleared, the folder is not fsynced, the
+    // The import's own landing, every part of it stated: the destination's
+    // name with `.tmp_import` added is this import's and is cleared, the folder is not fsynced, the
     // source's permissions are not carried, and the source is checked by
     // name before and after and through the handle the copy reads.
     let landing = StagedCopy {
@@ -1747,8 +1854,22 @@ fn copy_regular_source_to_destination(
         )));
     }
 
-    ensure_same_source(source, source_fingerprint)?;
-    let dest_fingerprint = fingerprint_import_source(dest)?.file;
+    #[cfg(test)]
+    if let Some(after_promoted) = options.after_copy_promoted {
+        after_promoted(source, dest);
+    }
+    // The copy has taken the destination name, which was free before it: a
+    // check that fails here removes that copy, and only it, as the size check
+    // below does.
+    let checked = ensure_same_source(source, source_fingerprint)
+        .and_then(|()| fingerprint_import_source(dest));
+    let dest_fingerprint = match checked {
+        Ok(fingerprint) => fingerprint.file,
+        Err(error) => {
+            let _ = Disk::process().remove_blocking(dest, Remove::File);
+            return Err(error);
+        }
+    };
 
     if dest_fingerprint.len != size {
         let _ = Disk::process().remove_blocking(dest, Remove::File);
@@ -5819,7 +5940,7 @@ mod tests {
 
         let error = result.expect_err("the source is gone");
         assert_eq!(error.reason(), Some(import::FILE_NOT_FOUND));
-        assert!(!dest.exists() && !dest.with_extension("tmp_import").exists());
+        assert!(!dest.exists() && !scryer_application::import_staging_path(&dest).exists());
     }
 
     #[test]
@@ -5842,7 +5963,7 @@ mod tests {
             said.contains("source preflight: repository: import path is not a regular file"),
             "{said}"
         );
-        assert!(!dest.exists() && !dest.with_extension("tmp_import").exists());
+        assert!(!dest.exists() && !scryer_application::import_staging_path(&dest).exists());
     }
 
     /// What the disk service says of a copy that did not land, as an import
@@ -5854,7 +5975,7 @@ mod tests {
         let source = temp.path().join("sample-source.mkv");
         std::fs::write(&source, b"synthetic video bytes").expect("write source");
         let dest = temp.path().join("Sample.Title.mkv");
-        let staged = dest.with_extension("tmp_import");
+        let staged = scryer_application::import_staging_path(&dest);
         let fingerprint = fingerprint_import_source(&source).expect("read source");
         let refused = |step, cause, attempts| {
             let refusal = StagedCopyRefusal {
@@ -5918,6 +6039,157 @@ mod tests {
             said.contains("source validation: repository: import path is not a regular file"),
             "{said}"
         );
+        assert_eq!(not_a_file.reason(), Some(import::IO_FAILED));
+    }
+
+    /// A copy that holds the destination name and then finds the source
+    /// changed takes back that copy, and nothing beside it.
+    #[test]
+    fn a_source_that_changes_once_its_copy_landed_takes_the_copy_back() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("Sample.Title.mkv");
+        let neighbour = temp.path().join("Sample.Other.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        std::fs::write(&neighbour, b"unrelated").expect("write neighbour");
+        let (fingerprint, mark) = read_import_source(&source).expect("read source");
+        let size = std::fs::metadata(&source).expect("source metadata").len();
+        let options = ImportFileOptions {
+            after_copy_promoted: Some(|source, _| {
+                std::fs::write(source, b"synthetic bytes, rewritten and longer")
+                    .expect("rewrite source");
+            }),
+            ..Default::default()
+        };
+
+        let error = copy_regular_source_to_destination(
+            &source,
+            &dest,
+            &fingerprint,
+            &mark,
+            size,
+            options,
+            VerificationDepth::Quick,
+            None,
+            None,
+        )
+        .expect_err("the source changed");
+
+        let said = error.to_string();
+        assert!(
+            said.contains("import source changed during import"),
+            "{said}"
+        );
+        assert!(!dest.exists(), "the copy this import landed is taken back");
+        assert!(!scryer_application::import_staging_path(&dest).exists());
+        assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"synthetic bytes, rewritten and longer"
+        );
+    }
+
+    fn import_in_one_process(
+        source: &Path,
+        dest: &Path,
+        options: ImportFileOptions,
+    ) -> AppResult<ImportFileResult> {
+        import_hardlink_or_copy_blocking(
+            source.to_path_buf(),
+            dest.to_path_buf(),
+            options,
+            VerificationDepth::default(),
+            false,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+    }
+
+    fn fast_lane_error(source: &Path, dest: &Path, options: ImportFileOptions) -> AppError {
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let mut prepared = prepare_in_process(source, dest, options, false);
+        coordinator.ready_fast_placement(&mut prepared, false);
+        match try_fast_import_placement_blocking(prepared) {
+            Err(error) => error,
+            Ok(_) => panic!("the fast lane must refuse"),
+        }
+    }
+
+    /// The link did not prove and was gone before it could be removed. The
+    /// single-process lane copies instead; the fast lane refuses, as it
+    /// cannot tell what took the name.
+    #[test]
+    fn an_unproven_link_that_is_already_gone_answers_by_lane() {
+        let options = ImportFileOptions {
+            link_answer: LinkAnswer::AlreadyGone,
+            ..Default::default()
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("library/Sample.Title.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+
+        let result = import_in_one_process(&source, &dest, options).expect("the copy lands");
+        assert_eq!(result.strategy, ImportStrategy::Copy);
+        assert_eq!(
+            std::fs::read(&dest).expect("dest"),
+            b"synthetic video bytes"
+        );
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"synthetic video bytes"
+        );
+
+        let dest = temp.path().join("library/Sample.Second.mkv");
+        let said = fast_lane_error(&source, &dest, options).to_string();
+        assert!(
+            said.contains("failed to remove partial hardlink destination"),
+            "{said}"
+        );
+        assert!(!dest.exists());
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"synthetic video bytes"
+        );
+    }
+
+    /// The source was swapped and another writer's file holds the name, which
+    /// the disk service left alone. Both lanes say the source changed, and
+    /// neither touches that file.
+    #[test]
+    fn a_link_left_alone_beside_a_swapped_source_is_a_changed_source() {
+        let options = ImportFileOptions {
+            link_answer: LinkAnswer::LeftAloneAfterSourceSwap,
+            ..Default::default()
+        };
+        for fast in [false, true] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let source = temp.path().join("sample-source.mkv");
+            let dest = temp.path().join("library/Sample.Title.mkv");
+            std::fs::write(&source, b"synthetic video bytes").expect("write source");
+
+            let error = match fast {
+                true => fast_lane_error(&source, &dest, options),
+                false => import_in_one_process(&source, &dest, options)
+                    .err()
+                    .expect("the source changed"),
+            };
+            let said = error.to_string();
+            assert!(
+                said.contains("import source changed during import"),
+                "fast {fast}: {said}"
+            );
+            assert!(
+                !said.contains("is not a regular file"),
+                "fast {fast}: {said}"
+            );
+            assert_eq!(std::fs::read(&dest).expect("dest"), b"another writer");
+            assert_eq!(
+                std::fs::read(&source).expect("source"),
+                b"a different, longer payload"
+            );
+        }
     }
 
     #[test]
@@ -5927,7 +6199,8 @@ mod tests {
         let source = source_dir.path().join("source.mkv");
         std::fs::write(&source, b"fake video bytes").expect("write source");
         let dest = dest_dir.path().join("Imported.Movie.mkv");
-        std::fs::create_dir(dest.with_extension("tmp_import")).expect("create temp conflict");
+        std::fs::create_dir(scryer_application::import_staging_path(&dest))
+            .expect("create temp conflict");
 
         let error = import_file_blocking(
             source.clone(),

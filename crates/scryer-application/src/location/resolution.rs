@@ -769,7 +769,11 @@ pub async fn compare_existing(
             "An existing path is not a regular file. Resolve the conflicting path and try again; the source was preserved.",
         ));
     }
-    if super::execution::same_regular_file(&source_metadata, &destination_metadata) {
+    // A pair that cannot be told apart is checked as one file would be: the
+    // same path or one entry is refused, and two entries are compared below.
+    if super::execution::regular_file_sameness(&source_metadata, &destination_metadata)
+        != crate::disk::Sameness::Different
+    {
         if tokio::fs::canonicalize(source).await.ok()
             == tokio::fs::canonicalize(destination).await.ok()
         {

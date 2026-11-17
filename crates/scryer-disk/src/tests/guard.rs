@@ -42,7 +42,7 @@ const UNMARKED: [(&str, usize); 11] = [
         "scryer-application/src/library/leftover_title_folders.rs",
         2,
     ),
-    ("scryer-application/src/location/execution.rs", 2),
+    ("scryer-application/src/location/execution.rs", 1),
     ("scryer-application/src/subtitles/external_probe.rs", 1),
     (
         "scryer-infrastructure-datastore/src/migrations/assets.rs",

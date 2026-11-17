@@ -5,7 +5,7 @@ use crate::disk::{
 };
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
-    CopyProgress, DestinationClaim, copy_and_verify, hash_existing_file,
+    CopyProgress, DestinationClaim, copy_and_verify, copy_and_verify_reporting, hash_existing_file,
 };
 use crate::{AppError, AppResult};
 
@@ -1189,20 +1189,28 @@ async fn recycle_by_verified_copy(
     recycled_path: &Path,
     progress: CopyProgress,
 ) -> AppResult<()> {
-    quick_verified_copy(
-        source_path,
-        recycled_path,
-        DestinationClaim::ClaimHere,
-        progress,
-    )
-    .await?;
+    quick_verified_copy(source_path, recycled_path, CopyTarget::Unclaimed, progress).await?;
 
     match crate::fs_safety::remove_file_safely_if_exists(source_path).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
+            // The proven copy is the file's only sure home unless the source
+            // still reads as present: a source that is gone, or whose name
+            // does not answer, keeps its recycled copy.
+            let source_present = Disk::process().uncached(source_path).await.exists();
+            let kept = if source_present == Some(true) {
+                let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
+                ""
+            } else {
+                tracing::warn!(
+                    source = %source_path.display(),
+                    recycled = %recycled_path.display(),
+                    "the source could not be removed after its proven copy and does not read as present; the recycled copy is kept"
+                );
+                "; the recycled copy is kept"
+            };
             Err(AppError::Repository(format!(
-                "failed to remove source file {} after copy to recycle bin: {}",
+                "failed to remove source file {} after copy to recycle bin: {}{kept}",
                 source_path.display(),
                 error
             )))
@@ -1210,16 +1218,31 @@ async fn recycle_by_verified_copy(
     }
 }
 
+/// Who holds the name a quick verified copy lands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CopyTarget {
+    /// Nothing yet: the copy claims the name itself.
+    Unclaimed,
+    /// An empty file this operation made to reserve the name.
+    OwnClaim,
+    /// A file that was there before this operation, which the copy replaces.
+    Occupied,
+}
+
 /// Copy one file through the verified copier and prove it with the quick
-/// check. Anything short of a verified copy removes the copy and fails, so
-/// the caller never removes a source on an unproven destination.
+/// check. Anything short of a verified copy removes what the copy wrote and
+/// fails, so the caller never removes a source on an unproven destination.
 async fn quick_verified_copy(
     source: &Path,
     destination: &Path,
-    claim: DestinationClaim,
+    target: CopyTarget,
     progress: CopyProgress,
 ) -> AppResult<()> {
-    let copied = copy_and_verify(
+    let claim = match target {
+        CopyTarget::Unclaimed => DestinationClaim::ClaimHere,
+        CopyTarget::OwnClaim | CopyTarget::Occupied => DestinationClaim::AlreadyHeld,
+    };
+    let copied = copy_and_verify_reporting(
         &Disk::process(),
         source,
         destination,
@@ -1229,14 +1252,21 @@ async fn quick_verified_copy(
     .await;
     let verified = match copied {
         Ok(verified) => verified,
-        Err(error) => {
+        Err(failure) => {
             // A copy that claims its own name never leaves anything under it
             // on failure, and whatever holds that name is not this copy's. A
-            // name the caller claimed is this operation's to clean up.
-            if claim == DestinationClaim::AlreadyHeld {
+            // name this operation reserved is its own to clean up. A file
+            // that was there before is removed only once the copy wrote over
+            // it; a copy that failed before then left it as it was.
+            let remove = match target {
+                CopyTarget::Unclaimed => false,
+                CopyTarget::OwnClaim => true,
+                CopyTarget::Occupied => failure.destination_written,
+            };
+            if remove {
                 let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
             }
-            return Err(error);
+            return Err(failure.error);
         }
     };
     if verified.permits_source_removal() {
@@ -1379,13 +1409,7 @@ async fn copy_recycled_to_claimed_destination(
     destination: &Path,
     progress: CopyProgress,
 ) -> AppResult<()> {
-    quick_verified_copy(
-        recycled_path,
-        destination,
-        DestinationClaim::AlreadyHeld,
-        progress,
-    )
-    .await
+    quick_verified_copy(recycled_path, destination, CopyTarget::OwnClaim, progress).await
 }
 
 async fn restore_without_overwrite(
@@ -1581,12 +1605,12 @@ async fn restore_over_by_verified_copy(
     progress: CopyProgress,
 ) -> AppResult<()> {
     let reading = Disk::process().uncached(original_path).await;
-    let claim = match reading.exists() {
-        Some(true) => DestinationClaim::AlreadyHeld,
-        Some(false) => DestinationClaim::ClaimHere,
+    let target = match reading.exists() {
+        Some(true) => CopyTarget::Occupied,
+        Some(false) => CopyTarget::Unclaimed,
         None => return Err(unreadable(original_path, reading)),
     };
-    quick_verified_copy(recycled_path, original_path, claim, progress).await?;
+    quick_verified_copy(recycled_path, original_path, target, progress).await?;
     let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
     Ok(())
 }
@@ -4077,6 +4101,188 @@ mod tests {
         assert_eq!(std::fs::read(&recycled).unwrap(), b"already here");
     }
 
+    /// Puts a folder's mode back when the test ends, however it ends, so the
+    /// temporary tree can be read and cleaned up.
+    #[cfg(unix)]
+    struct ModeBack(PathBuf);
+
+    #[cfg(unix)]
+    impl Drop for ModeBack {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_mode(folder: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Sets `folder`'s mode once the copy is written, as its proof starts.
+    #[cfg(unix)]
+    fn set_mode_when_verification_starts(folder: &Path, mode: u32) -> CopyProgress {
+        let folder = folder.to_path_buf();
+        CopyProgress::none().with_transfer_sink(move |phase, verified_bytes| {
+            if phase == scryer_domain::ImportTransferPhase::Verifying && verified_bytes == 0 {
+                set_mode(&folder, mode);
+            }
+        })
+    }
+
+    /// Whether this user is held to `folder`'s mode; a superuser is not, and
+    /// the tests that need a refused removal do not apply to it.
+    #[cfg(unix)]
+    fn modes_bind(folder: &Path) -> bool {
+        let _back = ModeBack(folder.to_path_buf());
+        set_mode(folder, 0o555);
+        let probe = folder.join("mode-probe");
+        let wrote = std::fs::write(&probe, b"").is_ok();
+        set_mode(folder, 0o755);
+        let _ = std::fs::remove_file(&probe);
+        !wrote
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_recycled_copy_goes_when_its_source_could_not_be_removed_but_is_still_there() {
+        let tmp = TempDir::new().unwrap();
+        let library = tmp.path().join("library");
+        let source = library.join("sample-feature.mkv");
+        let recycled = tmp.path().join("bin").join("sample-feature.mkv");
+        let bystander = tmp.path().join("bin").join("other-feature.mkv");
+        std::fs::create_dir_all(&library).unwrap();
+        std::fs::create_dir_all(recycled.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"library bytes").unwrap();
+        std::fs::write(&bystander, b"unrelated").unwrap();
+        if !modes_bind(&library) {
+            return;
+        }
+        let _back = ModeBack(library.clone());
+
+        recycle_by_verified_copy(
+            &source,
+            &recycled,
+            set_mode_when_verification_starts(&library, 0o555),
+        )
+        .await
+        .expect_err("a source that cannot be removed fails the recycle");
+
+        assert_eq!(std::fs::read(&source).unwrap(), b"library bytes");
+        assert!(
+            !recycled.exists(),
+            "the source still reads as present, so its copy is not kept"
+        );
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_recycled_copy_stays_when_its_source_could_not_be_removed_and_does_not_answer() {
+        let tmp = TempDir::new().unwrap();
+        let library = tmp.path().join("library");
+        let source = library.join("sample-feature.mkv");
+        let recycled = tmp.path().join("bin").join("sample-feature.mkv");
+        let bystander = tmp.path().join("bin").join("other-feature.mkv");
+        std::fs::create_dir_all(&library).unwrap();
+        std::fs::create_dir_all(recycled.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"library bytes").unwrap();
+        std::fs::write(&bystander, b"unrelated").unwrap();
+        if !modes_bind(&library) {
+            return;
+        }
+        let disk = Disk::process();
+        // Declared first, so they drop last.
+        let _roots = crate::disk::test_support::install_volumes(
+            &disk,
+            [(library.clone(), crate::disk::VolumeClass::LibraryRoot)],
+        );
+        let _back = ModeBack(library.clone());
+        // Once the copy is written the source can no longer be removed, and
+        // a read of its name no longer answers. The copy's proof still reads
+        // the source through its own open.
+        let silenced = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let progress = {
+            let (library, source, silenced) = (library.clone(), source.clone(), silenced.clone());
+            CopyProgress::none().with_transfer_sink(move |phase, verified_bytes| {
+                if phase == scryer_domain::ImportTransferPhase::Verifying && verified_bytes == 0 {
+                    set_mode(&library, 0o555);
+                    *silenced.lock().unwrap() =
+                        crate::disk::test_support::silence_path(&Disk::process(), &source);
+                }
+            })
+        };
+
+        recycle_by_verified_copy(&source, &recycled, progress)
+            .await
+            .expect_err("a source that cannot be removed fails the recycle");
+        assert!(
+            silenced.lock().unwrap().take().is_some(),
+            "the source's name was silenced"
+        );
+
+        assert_eq!(
+            std::fs::read(&recycled).unwrap(),
+            b"library bytes",
+            "a source that does not read as present keeps its proven copy"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"library bytes");
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+    }
+
+    #[tokio::test]
+    async fn a_restore_that_fails_before_it_writes_leaves_the_file_it_would_replace() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("bin").join("sample-feature.recycled");
+        let original = tmp.path().join("library").join("sample-feature.mkv");
+        let bystander = tmp.path().join("library").join("other-feature.mkv");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"the occupant").unwrap();
+        std::fs::write(&bystander, b"unrelated").unwrap();
+
+        quick_verified_copy(
+            &recycled,
+            &original,
+            CopyTarget::Occupied,
+            CopyProgress::none(),
+        )
+        .await
+        .expect_err("a missing recycled file fails the restore");
+
+        assert_eq!(std::fs::read(&original).unwrap(), b"the occupant");
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+    }
+
+    #[tokio::test]
+    async fn a_reserved_name_is_released_when_its_restore_fails_before_it_writes() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("bin").join("sample-feature.recycled");
+        let reserved = tmp
+            .path()
+            .join("library")
+            .join("sample-feature-restored.mkv");
+        let bystander = tmp.path().join("library").join("other-feature.mkv");
+        std::fs::create_dir_all(reserved.parent().unwrap()).unwrap();
+        std::fs::write(&reserved, b"").unwrap();
+        std::fs::write(&bystander, b"unrelated").unwrap();
+
+        quick_verified_copy(
+            &recycled,
+            &reserved,
+            CopyTarget::OwnClaim,
+            CopyProgress::none(),
+        )
+        .await
+        .expect_err("a missing recycled file fails the restore");
+
+        assert!(
+            !reserved.exists(),
+            "the name this restore reserved is released"
+        );
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+    }
+
     #[tokio::test]
     async fn test_restore_sampled_proof_mismatch_removes_partial_and_keeps_recycled_source() {
         let tmp = TempDir::new().unwrap();
@@ -4323,7 +4529,7 @@ mod tests {
             quick_verified_copy(
                 &recycled,
                 &original,
-                DestinationClaim::AlreadyHeld,
+                CopyTarget::Occupied,
                 CopyProgress::none(),
             ),
         )

@@ -3718,7 +3718,11 @@ pub(crate) async fn quick_check_name_collisions(
         ) else {
             continue;
         };
-        if super::execution::same_regular_file(&source_metadata, &destination_metadata) {
+        // One file, or a pair the file numbers cannot tell apart, earns no
+        // sampled proof: two names for one file are never a duplicate.
+        if super::execution::regular_file_sameness(&source_metadata, &destination_metadata)
+            != crate::disk::Sameness::Different
+        {
             continue;
         }
         // The planner compares the sizes it is handed; a fresh `stat` keeps

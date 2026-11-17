@@ -35,7 +35,8 @@ use scryer_domain::MediaFacet;
 
 use crate::disk::reason::DISK_PATH_MISSING;
 use crate::disk::{
-    Disk, Done, Doubt, EntryKind, LinkProof, Mark, Parents, Placed, Removal, Remove, Unproven,
+    Disk, Done, Doubt, EntryKind, LinkProof, Mark, Parents, Placed, Removal, Remove, Sameness,
+    Unproven,
 };
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
@@ -691,16 +692,25 @@ pub(super) async fn shared_inode(
     let links = Some(std::os::unix::fs::MetadataExt::nlink(destination_metadata));
     #[cfg(not(unix))]
     let links = None;
+    let sameness = regular_file_sameness(source_metadata, destination_metadata);
     let decision = shared_inode_decision(
-        same_regular_file(source_metadata, destination_metadata),
+        sameness == Sameness::Same,
         source_metadata.len(),
         destination_metadata.len(),
         links,
     );
+    // A pair the file numbers cannot tell apart is never a second link, and
+    // goes to the content comparison only as two listed entries: one entry
+    // under two spellings would be its own match.
     #[cfg(unix)]
-    if decision == SharedInode::SecondLink && !distinct_directory_entries(source, destination).await
     {
-        return SharedInode::OneEntry;
+        let undecided =
+            sameness == Sameness::CannotTell && source_metadata.len() == destination_metadata.len();
+        if (decision == SharedInode::SecondLink || undecided)
+            && !distinct_directory_entries(source, destination).await
+        {
+            return SharedInode::OneEntry;
+        }
     }
     #[cfg(not(unix))]
     let _ = (source, destination);
@@ -756,17 +766,25 @@ async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     false
 }
 
+/// Whether two reads are one regular file, proven. A pair that cannot be
+/// told apart, such as two names on a filesystem that numbers every file
+/// zero, answers `false`, so no caller treats two files as one on a guess.
 pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    if !left.is_file() || !right.is_file() {
-        return false;
+    regular_file_sameness(left, right) == Sameness::Same
+}
+
+/// Whether two reads are one regular file, two, or cannot be told apart.
+/// Anything but two regular files is [`Sameness::Different`]. Off unix the
+/// metadata carries no file number, and the pair answers
+/// [`Sameness::Different`] as it always has there.
+pub(super) fn regular_file_sameness(
+    left: &std::fs::Metadata,
+    right: &std::fs::Metadata,
+) -> Sameness {
+    if !left.is_file() || !right.is_file() || cfg!(not(unix)) {
+        return Sameness::Different;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        left.dev() == right.dev() && left.ino() == right.ino()
-    }
-    #[cfg(not(unix))]
-    false
+    Mark::of(left).same_file(&Mark::of(right))
 }
 
 // ── TitleReconciler ──────────────────────────────────────────────────────────
