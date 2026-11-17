@@ -24,10 +24,10 @@ pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
 #[doc(hidden)]
 pub use scryer_disk::{CacheBypass, ReadBackHandle, ReadBackOpener};
 pub use scryer_disk::{
-    Cancel, Check, ContentHasher, ContentHashes, Copied, CopyAdmission, CrcKind, Depth, Evidence,
-    FILE_NAME_MAX_BYTES, Landing, Phase, Progress, Proof, RESUMABLE_STAGING_SUFFIX, StagedCause,
-    StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep, Verdict, Watch,
-    resumable_staging_path,
+    Cancel, Check, ContentHasher, ContentHashes, ContentSample, Copied, CopyAdmission, CrcKind,
+    Depth, Evidence, FILE_NAME_MAX_BYTES, Landing, Phase, Progress, Proof,
+    RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep,
+    Verdict, Watch, resumable_staging_path,
 };
 pub use scryer_disk::{
     Fresh, FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture,

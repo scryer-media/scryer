@@ -2106,7 +2106,7 @@ fn copy_regular_source_to_destination(
     depth: VerificationDepth,
     progress: Option<&ImportFileTransferProgressSender>,
     cancellation: Option<&scryer_application::ImportCancellation>,
-) -> AppResult<(ImportVerification, Option<Mark>)> {
+) -> AppResult<(ImportVerification, Option<Mark>, disk::ContentSample)> {
     let temp_dest = scryer_application::import_staging_path(dest);
     let sender = progress.cloned();
     let watch = Watch {
@@ -2149,6 +2149,7 @@ fn copy_regular_source_to_destination(
         );
     }
     let copied_hashes = copied.hashes.clone();
+    let streamed = copied.streamed;
     let hashes = persisted_hashes(copied.hashes);
 
     if force_copy_verification_failure(&options) {
@@ -2217,6 +2218,7 @@ fn copy_regular_source_to_destination(
                     source: source_mark,
                     depth,
                     copied: &copied_hashes,
+                    streamed: &streamed,
                 },
             ));
         }
@@ -2236,6 +2238,7 @@ fn copy_regular_source_to_destination(
                 source: source_mark,
                 depth,
                 copied: &copied_hashes,
+                streamed: &streamed,
             },
         ));
     }
@@ -2300,6 +2303,7 @@ fn copy_regular_source_to_destination(
                 source: source_mark,
                 depth,
                 copied: &copied_hashes,
+                streamed: &streamed,
             },
         ));
     }
@@ -2308,7 +2312,7 @@ fn copy_regular_source_to_destination(
     if let Some(after_verified) = options.after_copy_verified {
         after_verified(source, dest);
     }
-    Ok((verification, landed))
+    Ok((verification, landed, streamed))
 }
 
 /// What an import placed at its destination, and the mark it is known by.
@@ -2316,12 +2320,14 @@ fn copy_regular_source_to_destination(
 enum Landed<'a> {
     /// The staged file a copy promoted, `None` when the copy kept no mark,
     /// the source as the copy read it, the operator's verification depth,
-    /// and what the copy streamed from the source.
+    /// and what the copy streamed from the source: its hashes, and the
+    /// sample of its head and tail taken as the bytes passed.
     Copy {
         placed: Option<&'a Mark>,
         source: &'a Mark,
         depth: VerificationDepth,
         copied: &'a disk::ContentHashes,
+        streamed: &'a disk::ContentSample,
     },
     /// A second name of the source's own file, marked as the source was
     /// read before the link.
@@ -2358,9 +2364,9 @@ enum TakeBack {
     /// The destination was to be removed and the removal failed; it is
     /// still there.
     RemovalFailed,
-    /// A copy whose source reads, but the check of the two at the
-    /// operator's depth did not say they hold the same content: nothing
-    /// says the source still holds what the copy holds.
+    /// A copy whose source reads, but the check of the source at the
+    /// operator's depth did not say it still holds the bytes the copy
+    /// streamed from it: the copy may hold the only copy of them.
     KeptUnproven,
     /// The name holds something else, does not read, or has no mark; or a
     /// hard link's source did not read.
@@ -2384,18 +2390,20 @@ enum TakeBack {
 /// link, which holds no data, is taken back.
 ///
 /// A copy is then removed only when a check at the operator's depth says the
-/// source still holds what the copy streamed from it: on a volume that
+/// source still holds the bytes the copy streamed from it: on a volume that
 /// numbers no files, a look-alike of the source's length and times would pass
-/// the read of its name. At full depth the source is read whole and held to
-/// the copy's hashes, so a copy that is itself damaged still goes; at quick
-/// depth the source is held to the copy's sampled head and tail, so a damaged
-/// copy whose damage a sample reads is kept. Anything that does not read is
-/// kept.
+/// the read of its name. The copy itself is never what the source is held
+/// to, so a damaged copy goes at every depth. At full depth the source is
+/// read whole and held to the streamed hashes; at quick depth a live sample
+/// of its head and tail is held to the sample taken of the streamed bytes,
+/// kept in memory only. A source that differs or does not read keeps the
+/// copy.
 ///
 /// Then the destination is removed only while its name still holds what
 /// `landed` marks. Anything else there, a name that does not read, or no
 /// mark, is kept. All on this failure path: two reads of the names; for a
-/// copy, at full depth the source read whole, otherwise one open of each.
+/// copy, one open of the source, read whole at full depth and sampled
+/// otherwise.
 fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack {
     let Some(placed) = landed.mark() else {
         tracing::warn!(
@@ -2441,18 +2449,24 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
         }
         Err(_) => {}
     }
-    if let Landed::Copy { depth, copied, .. } = landed {
+    if let Landed::Copy {
+        depth,
+        copied,
+        streamed,
+        ..
+    } = landed
+    {
         let depth = match depth {
             VerificationDepth::Quick => disk::Depth::Quick,
             VerificationDepth::Full => disk::Depth::Full,
         };
-        match Disk::process().check_copy_source_blocking(source, dest, copied, depth) {
+        match Disk::process().check_copy_source_blocking(source, copied, streamed, depth) {
             disk::Check::Same => {}
             disk::Check::Changed => {
                 tracing::warn!(
                     source = %source.display(),
                     dest = %dest.display(),
-                    "the copy does not hold what the source holds, so it may be the only copy; it is kept"
+                    "the source no longer holds what the copy streamed from it, so the copy may be the only one; it is kept"
                 );
                 return TakeBack::KeptUnproven;
             }
@@ -2461,7 +2475,7 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
                     source = %source.display(),
                     dest = %dest.display(),
                     error = %said,
-                    "the copy could not be checked against the source, so it may be the only copy; it is kept"
+                    "the source could not be checked against what the copy streamed from it, so the copy may be the only one; it is kept"
                 );
                 return TakeBack::KeptUnproven;
             }
@@ -2507,7 +2521,9 @@ fn took_back(error: AppError, source: &Path, dest: &Path, landed: Landed<'_>) ->
     let note = match taken_back {
         TakeBack::KeptForSource => kept_because("the source no longer holds this file"),
         TakeBack::KeptSourceUnread => kept_because("the source did not read"),
-        TakeBack::KeptUnproven => kept_because("it was not shown to hold what the source holds"),
+        TakeBack::KeptUnproven => {
+            kept_because("the source was not shown to still hold what was copied from it")
+        }
         TakeBack::RemovalFailed => format!(
             "removing {} failed, so it is still at its name",
             dest.display()
@@ -3481,7 +3497,7 @@ fn copy_prepared_import_in(prepared: PreparedImportPlacement) -> AppResult<Impor
     };
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
     ensure_import_destination_absent(&prepared.dest)?;
-    let (verification, landed) = copy_regular_source_to_destination(
+    let (verification, landed, streamed) = copy_regular_source_to_destination(
         &prepared.source,
         &prepared.dest,
         &prepared.source_fingerprint,
@@ -3503,6 +3519,7 @@ fn copy_prepared_import_in(prepared: PreparedImportPlacement) -> AppResult<Impor
             source: &source_mark,
             depth: prepared.verification_depth,
             copied: &copied,
+            streamed: &streamed,
         },
     )?;
     finalize_imported_regular_destination(&prepared.dest, &prepared.options, &prepared.permissions);
@@ -3517,6 +3534,7 @@ fn copy_prepared_import_in(prepared: PreparedImportPlacement) -> AppResult<Impor
             source: &source_mark,
             depth: copy_depth,
             copied: &copied,
+            streamed: &streamed,
         },
     )?;
     result.verification = Some(verification);
@@ -3702,7 +3720,7 @@ fn import_hardlink_or_copy_blocking(
             }
         }
 
-        let (verification, landed) = copy_regular_source_to_destination(
+        let (verification, landed, streamed) = copy_regular_source_to_destination(
             &source,
             &dest,
             &source_fingerprint,
@@ -3723,6 +3741,7 @@ fn import_hardlink_or_copy_blocking(
                 source: &source_mark,
                 depth: verification_depth,
                 copied: &copied,
+                streamed: &streamed,
             },
         )?;
         finalize_imported_regular_destination(&dest, &options, &permissions);
@@ -3738,6 +3757,7 @@ fn import_hardlink_or_copy_blocking(
                 source: &source_mark,
                 depth: verification_depth,
                 copied: &copied,
+                streamed: &streamed,
             },
         )?;
         Ok(ImportFileResult {
@@ -5152,6 +5172,16 @@ mod tests {
     use super::*;
 
     /// What a copy of `path` as it now is would have streamed.
+    /// The sampled head and tail of `path` as it is now.
+    fn sample_of_file(path: &Path) -> disk::ContentSample {
+        let mut sampler = disk::ContentHasher::sampling();
+        sampler.update(&std::fs::read(path).expect("read for a sample"));
+        sampler
+            .finalize_sampled()
+            .1
+            .expect("a sampling hasher samples")
+    }
+
     fn content_of(path: &Path) -> disk::ContentHashes {
         let mut hasher = disk::ContentHasher::new();
         hasher.update(&std::fs::read(path).expect("read the file"));
@@ -6247,6 +6277,7 @@ mod tests {
                 source: &source_mark,
                 depth: VerificationDepth::Quick,
                 copied: &content_of(&source),
+                streamed: &sample_of_file(&source),
             },
         )
         .expect_err("changed parent should be rejected");
@@ -6306,6 +6337,7 @@ mod tests {
                     source: &source_mark,
                     depth: VerificationDepth::Quick,
                     copied: &content_of(&source),
+                    streamed: &sample_of_file(&source),
                 },
             )
             .expect_err("a destination that is not a file is rejected");
@@ -7496,7 +7528,7 @@ mod tests {
             Some(&progress_tx),
             None,
         )
-        .map(|(verification, _)| verification);
+        .map(|(verification, _, _)| verification);
         let mut updates = Vec::new();
         while let Ok(update) = progress_rx.try_recv() {
             updates.push(update);
@@ -7756,9 +7788,61 @@ mod tests {
         );
     }
 
+    /// A copy that failed its check is junk while the source still holds what
+    /// it streamed: at both depths a damaged copy is taken back, and so is a
+    /// copy whose length is not the source's, at quick depth too. The source
+    /// is held to what the copy streamed from it, never to the damaged copy,
+    /// and is left as it was.
+    #[test]
+    fn a_damaged_copy_is_taken_back_at_every_depth_while_the_source_holds_its_bytes() {
+        const LEN: usize = 3 * 1024 * 1024;
+        let bytes: Vec<u8> = (0..LEN).map(|index| (index % 241) as u8).collect();
+        let cases = [
+            (VerificationDepth::Quick, false),
+            (VerificationDepth::Full, false),
+            (VerificationDepth::Quick, true),
+        ];
+        for (depth, short) in cases {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let source = temp.path().join("sample-source.mkv");
+            let dest = temp.path().join("Sample.Title.mkv");
+            std::fs::write(&source, &bytes).expect("write source");
+            let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
+            let size = std::fs::metadata(&source).expect("source metadata").len();
+            // A length the copy does not land at stands for a short write.
+            let expected = if short { size + 1 } else { size };
+            let options = ImportFileOptions {
+                force_destination_corruption: !short,
+                ..Default::default()
+            };
+
+            let error = copy_regular_source_to_destination(
+                &source,
+                &dest,
+                &fingerprint,
+                &mark,
+                expected,
+                options,
+                depth,
+                None,
+                None,
+            )
+            .expect_err("a damaged copy is not imported");
+
+            assert_eq!(error.reason(), None, "{depth:?} {short}: {error:?}");
+            assert!(
+                !dest.exists(),
+                "{depth:?} {short}: the damaged copy is taken back"
+            );
+            assert!(!scryer_application::import_staging_path(&dest).exists());
+            assert_eq!(std::fs::read(&source).ok(), Some(bytes.clone()));
+        }
+    }
+
     /// A copy whose name does not read once it landed is kept when the
     /// source was swapped meanwhile for a look-alike of the same length and
-    /// modification time: the copy may hold the only original bytes.
+    /// modification time: the copy may hold the only original bytes. A copy
+    /// that is itself damaged beside the source it was read from goes.
     #[test]
     fn a_copy_take_back_on_a_volume_with_no_file_numbers_removes_only_a_proven_duplicate() {
         // The mark as a volume that numbers no files gives it: no volume, no
@@ -7792,9 +7876,9 @@ mod tests {
                 std::fs::write(&source, b"synthetic video bytes").expect("write source");
                 std::fs::write(&dest, b"synthetic video bytes").expect("write the copy");
                 let copied = content_of(&source);
+                let streamed = sample_of_file(&source);
                 let source_mark =
                     unnumbered(&Disk::process().fingerprint_blocking(&source).unwrap());
-                let placed = unnumbered(&Disk::process().fingerprint_blocking(&dest).unwrap());
                 if look_alike {
                     let modified = modified_of(&source);
                     let swap = source.with_extension("swap");
@@ -7807,7 +7891,12 @@ mod tests {
                         )),
                         "the look-alike passes the read of the source's name"
                     );
+                } else {
+                    // The copy is damaged; the source still holds what it
+                    // streamed.
+                    std::fs::write(&dest, b"synthetic video bytez").expect("damage the copy");
                 }
+                let placed = unnumbered(&Disk::process().fingerprint_blocking(&dest).unwrap());
 
                 let taken_back = take_back_placed(
                     &source,
@@ -7817,6 +7906,7 @@ mod tests {
                         source: &source_mark,
                         depth,
                         copied: &copied,
+                        streamed: &streamed,
                     },
                 );
 

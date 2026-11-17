@@ -65,7 +65,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use super::mark::UNKNOWN_LANE;
 use super::place::{Fail, Job, Leftover, Refused, Side};
 use super::reading::reason;
-use super::sample::{ContentSample, SampleStep, sample_reader};
+use super::sample::{ContentSample, SampleStep, StreamedSample, sample_reader};
 use super::{
     Disk, DiskError, DiskVerb, Mark, Open, PathReading, Remove, Replace, Sameness, SyncOutcome,
 };
@@ -102,6 +102,8 @@ pub struct ContentHasher {
     crc: crc_turbo::Digest,
     blake3: blake3::Hasher,
     size_bytes: u64,
+    /// The streamed head and tail, when asked for.
+    sample: Option<StreamedSample>,
 }
 
 impl ContentHasher {
@@ -110,6 +112,16 @@ impl ContentHasher {
             crc: crc_turbo::Digest::new(CrcKind::Crc64Nvme.algorithm()),
             blake3: blake3::Hasher::new(),
             size_bytes: 0,
+            sample: None,
+        }
+    }
+
+    /// A hasher that also keeps the sample of the bytes it is fed, in
+    /// memory: what a later check of the source at quick depth is held to.
+    pub fn sampling() -> Self {
+        Self {
+            sample: Some(StreamedSample::default()),
+            ..Self::new()
         }
     }
 
@@ -117,6 +129,16 @@ impl ContentHasher {
         self.crc.update(buffer);
         self.blake3.update(buffer);
         self.size_bytes = self.size_bytes.saturating_add(buffer.len() as u64);
+        if let Some(sample) = &mut self.sample {
+            sample.update(buffer);
+        }
+    }
+
+    /// The hashes, and the sample of the streamed bytes when this hasher
+    /// was made [`Self::sampling`].
+    pub fn finalize_sampled(mut self) -> (ContentHashes, Option<ContentSample>) {
+        let sample = self.sample.take().map(StreamedSample::finish);
+        (self.finalize(), sample)
     }
 
     /// Bytes absorbed so far.
@@ -614,6 +636,8 @@ pub(crate) struct WriteFail {
 
 pub(crate) struct Written {
     pub(crate) hashes: Option<ContentHashes>,
+    /// The streamed sample, beside the hashes.
+    pub(crate) streamed: Option<ContentSample>,
     pub(crate) sync: SyncOutcome,
     /// The target as its own handle read it once the last byte was written,
     /// when the copy was asked for it and the read answered.
@@ -697,7 +721,7 @@ pub(crate) fn write_copy(
             .map_err(|error| fail(Step::Transfer, Cause::Io(error), true))?;
         None
     } else {
-        let mut hasher = writing.hash.then(ContentHasher::new);
+        let mut hasher = writing.hash.then(ContentHasher::sampling);
         let mut written = 0u64;
         let mut buffer = vec![0u8; writing.chunk_bytes];
         loop {
@@ -727,8 +751,10 @@ pub(crate) fn write_copy(
         if writing.phases {
             writing.watch.progress.report(Phase::Finishing, written);
         }
-        hasher.map(ContentHasher::finalize)
+        hasher.map(ContentHasher::finalize_sampled)
     };
+    let (hashes, streamed) =
+        hashes.map_or((None, None), |(hashes, streamed)| (Some(hashes), streamed));
 
     output
         .flush()
@@ -756,6 +782,7 @@ pub(crate) fn write_copy(
     }
     Ok(Written {
         hashes,
+        streamed,
         sync,
         target: target_mark,
     })
@@ -996,6 +1023,10 @@ pub struct StagedCopied {
     /// the file this copy promoted from whatever holds that name later.
     /// `None` when the handle could not say; that is not the same file.
     pub promoted: Option<Mark>,
+    /// The sample of the bytes the copy streamed from the source, taken as
+    /// they passed and kept in memory only: what the source is held to at
+    /// quick depth when the copy is taken back.
+    pub streamed: ContentSample,
 }
 
 /// A staged copy that did not land. The staged name holds nothing of it
@@ -1144,6 +1175,9 @@ impl Disk {
         })?;
         Ok(StagedCopied {
             hashes: written.hashes.expect("a staged copy hashes"),
+            streamed: written
+                .streamed
+                .expect("a staged copy samples what it hashes"),
             sync: written.sync,
             promoted: written.target,
         })
@@ -1396,23 +1430,28 @@ impl Disk {
         }
     }
 
-    /// Whether `source` still holds what a copy of it streamed, `copied`, at
-    /// `depth`, so that `copy` is not the only place those bytes are: at
-    /// [`Depth::Full`] the source is read end to end and held to `copied`,
-    /// whatever `copy` now holds; at any other depth the source is held to
-    /// `copy` by [`Self::check_blocking`], since a sample of the source is
-    /// all that depth reads, and only the copy has one to compare with.
-    /// Nothing is changed. Probes: at full depth one open of the source,
-    /// read whole; otherwise those of [`Self::check_blocking`].
+    /// Whether `source` still holds the bytes a copy of it streamed, at
+    /// `depth`, so that the copy is not the only place those bytes are. What
+    /// the copy itself now holds is never read: a damaged copy says nothing
+    /// about the source. At [`Depth::Full`] the source is read end to end and
+    /// held to `copied`; at any other depth a live sample of the source is
+    /// held to `streamed`, the sample taken of those bytes as they passed.
+    /// Nothing is changed. Probes: one open of the source, read whole at
+    /// full depth, otherwise its length read through the handle and its two
+    /// sampled windows.
     pub fn check_copy_source_blocking(
         &self,
         source: &Path,
-        copy: &Path,
         copied: &ContentHashes,
+        streamed: &ContentSample,
         depth: Depth,
     ) -> Check {
         if depth != Depth::Full {
-            return self.check_blocking(source, copy, depth);
+            return match self.sample_of(source) {
+                Ok(now) if now == *streamed => Check::Same,
+                Ok(_) => Check::Changed,
+                Err(said) => Check::Unread(said),
+            };
         }
         match self.hash_file_blocking(source, &Progress::none()) {
             Ok(now) if now == *copied => Check::Same,
