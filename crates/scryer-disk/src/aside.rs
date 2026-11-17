@@ -7,8 +7,27 @@
 //! removed only while the destination still holds the file it was adopted as.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::{DiskError, EntryKind, Mark, PathReading, Remove, Sameness, reason};
+
+/// The pauses between attempts to put a set-aside source back once the first
+/// attempt failed: doubling from a tenth of a second to five seconds, then
+/// five seconds each, the last cut short so that together they come to thirty
+/// seconds. With the first attempt that makes at most twelve renames.
+pub const PUT_BACK_RETRY_PAUSES: [Duration; 11] = [
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+    Duration::from_millis(800),
+    Duration::from_millis(1_600),
+    Duration::from_millis(3_200),
+    Duration::from_secs(5),
+    Duration::from_secs(5),
+    Duration::from_secs(5),
+    Duration::from_secs(5),
+    Duration::from_millis(3_700),
+];
 
 /// How [`super::Disk::remove_source_beside_blocking`] ended. Every outcome but
 /// [`Self::Removed`] leaves the source's data in place; where, each says.
@@ -38,9 +57,9 @@ pub enum AsideRemoval {
     /// The source was put back.
     NotRemoved(DiskError),
     /// The destination checked out, removing the set-aside name answered a
-    /// failure, and the name then read missing: it may have been removed, or
-    /// another import may have put the source back meanwhile. Nothing more
-    /// was done; where the file is was not read.
+    /// failure, the name then read missing, and the source's own name holds
+    /// a file again: something put the source back meanwhile. Nothing more
+    /// was done; the source is where it was, for a later cleanup to retry.
     RemovalUnconfirmed(DiskError),
     /// The source could not be renamed aside. The source is where it was.
     NotSetAside(DiskError),
@@ -48,9 +67,91 @@ pub enum AsideRemoval {
     /// attempt left there or by anything else, so the source was not set
     /// aside. The source is where it was, and nothing at `at` was touched.
     AsideNameTaken { at: PathBuf, error: DiskError },
-    /// Putting the source back failed, so its file is at `at`, the
-    /// set-aside name in the source's own folder.
+    /// Putting the source back failed, and kept failing for thirty seconds
+    /// of retries (see [`PUT_BACK_RETRY_PAUSES`]), so its file is at `at`,
+    /// the set-aside name in the source's own folder, untouched. It is never
+    /// removed there; an import that finds the source missing puts it back.
     PutBackFailed { at: PathBuf, error: DiskError },
+    /// Putting the source back failed, and while it was retried the
+    /// set-aside name `at` stopped holding the source's file, nor does the
+    /// source's own name hold it: something else moved it. Nothing more was
+    /// done; where the file is was not found.
+    SetAsideMoved { at: PathBuf, error: DiskError },
+}
+
+/// A put-back of a set-aside source that failed, with what the removal
+/// would have answered had it succeeded.
+struct Stuck {
+    at: PathBuf,
+    error: DiskError,
+    then: AsideRemoval,
+}
+
+/// One attempt at putting a set-aside source back.
+enum Attempt {
+    /// The source's name holds its file again.
+    PutBack,
+    /// Neither the set-aside name nor the source's name holds the file.
+    Moved,
+    /// The rename failed, or the set-aside name did not read; try again.
+    Failed(Option<DiskError>),
+}
+
+impl Stuck {
+    /// What one retry settled, or the hold back to try again, keeping the
+    /// latest rename failure.
+    fn after(mut self, source: &Path, attempt: Attempt) -> Result<AsideRemoval, Self> {
+        match attempt {
+            Attempt::PutBack => {
+                tracing::info!(
+                    source = %source.display(),
+                    from = %self.at.display(),
+                    "a move's source set aside was put back on a retry"
+                );
+                Ok(self.then)
+            }
+            Attempt::Moved => {
+                tracing::error!(
+                    source = %source.display(),
+                    at = %self.at.display(),
+                    "a move's source set aside could not be put back, and its file left the set-aside name for somewhere else"
+                );
+                Ok(AsideRemoval::SetAsideMoved {
+                    at: self.at,
+                    error: self.error,
+                })
+            }
+            Attempt::Failed(error) => {
+                if let Some(error) = error {
+                    self.error = error;
+                }
+                Err(self)
+            }
+        }
+    }
+
+    /// The answer once every put-back retry failed: the file stays at the
+    /// set-aside name, untouched.
+    fn left_aside(self, source: &Path) -> AsideRemoval {
+        tracing::error!(
+            source = %source.display(),
+            at = %self.at.display(),
+            error = %self.error,
+            "a move's source set aside could not be put back after thirty seconds of retries; it is left at its set-aside name"
+        );
+        AsideRemoval::PutBackFailed {
+            at: self.at,
+            error: self.error,
+        }
+    }
+}
+
+/// Runs `job` on a blocking thread; a panic there carries on here.
+async fn blocking<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(job).await {
+        Ok(value) => value,
+        Err(join) => std::panic::resume_unwind(join.into_panic()),
+    }
 }
 
 /// What [`super::Disk::put_back_set_aside_source_blocking`] did.
@@ -64,6 +165,10 @@ pub enum PutBackAside {
     Nothing,
     /// Renaming it back failed; it is still at `at`.
     Failed { at: PathBuf, error: DiskError },
+    /// The set-aside name `at` holds a nonempty file, and the source's name
+    /// holds something again, so nothing was moved and nothing removed:
+    /// the file at `at` is left for the operator, logged.
+    SourceNameTaken { at: PathBuf },
 }
 
 /// The one hidden name in `source`'s own folder its file is set aside under.
@@ -144,7 +249,14 @@ impl super::Disk {
     /// Probes, for one adopted destination: one rename and one read of
     /// `kept`, a second read when `kept` is a link, then one removal. Unless
     /// both carry numbers on one known volume off a named share, one listing
-    /// of `kept`'s folder besides. A put-back adds one rename.
+    /// of `kept`'s folder besides. A put-back adds one rename. A put-back that
+    /// fails is retried, each retry one read of the set-aside name and one
+    /// rename, plus one read of the source's name when the set-aside name no
+    /// longer holds the file; see [`PUT_BACK_RETRY_PAUSES`].
+    ///
+    /// This twin pauses between retries on the calling thread, for up to
+    /// thirty seconds: for a thread of its own, such as a worker process.
+    /// Everywhere else use [`Self::remove_source_beside`].
     pub fn remove_source_beside_blocking(
         &self,
         source: &Path,
@@ -152,9 +264,102 @@ impl super::Disk {
         kept: &Path,
         kept_mark: &Mark,
     ) -> AsideRemoval {
+        let mut stuck = match self.remove_source_beside_once(source, source_mark, kept, kept_mark) {
+            Ok(answer) => return answer,
+            Err(stuck) => *stuck,
+        };
+        for pause in PUT_BACK_RETRY_PAUSES {
+            self.inner.clock.pause(pause);
+            let attempt = self.put_back_attempt(source, source_mark, &stuck.at);
+            stuck = match stuck.after(source, attempt) {
+                Ok(answer) => return answer,
+                Err(stuck) => stuck,
+            };
+        }
+        stuck.left_aside(source)
+    }
+
+    /// [`Self::remove_source_beside_blocking`] from the async runtime: each
+    /// filesystem step runs on a blocking thread, and the pauses between
+    /// put-back retries hold no thread.
+    pub async fn remove_source_beside(
+        &self,
+        source: &Path,
+        source_mark: &Mark,
+        kept: &Path,
+        kept_mark: &Mark,
+    ) -> AsideRemoval {
+        let once = {
+            let (disk, source, source_mark, kept, kept_mark) = (
+                self.clone(),
+                source.to_path_buf(),
+                source_mark.clone(),
+                kept.to_path_buf(),
+                kept_mark.clone(),
+            );
+            blocking(move || {
+                disk.remove_source_beside_once(&source, &source_mark, &kept, &kept_mark)
+            })
+            .await
+        };
+        let mut stuck = match once {
+            Ok(answer) => return answer,
+            Err(stuck) => *stuck,
+        };
+        for pause in PUT_BACK_RETRY_PAUSES {
+            tokio::time::sleep(pause).await;
+            let (disk, owned_source, owned_mark, at) = (
+                self.clone(),
+                source.to_path_buf(),
+                source_mark.clone(),
+                stuck.at.clone(),
+            );
+            let attempt =
+                blocking(move || disk.put_back_attempt(&owned_source, &owned_mark, &at)).await;
+            stuck = match stuck.after(source, attempt) {
+                Ok(answer) => return answer,
+                Err(stuck) => stuck,
+            };
+        }
+        stuck.left_aside(source)
+    }
+
+    /// Renames the set-aside file back while the set-aside name still holds
+    /// what `source_mark` marks. Where it does not, the source's name is read:
+    /// a rename that took effect though it answered a failure left the file
+    /// there. One read of the set-aside name and one rename, or two reads.
+    fn put_back_attempt(&self, source: &Path, source_mark: &Mark, aside: &Path) -> Attempt {
+        match self.fingerprint_blocking(aside) {
+            Ok(read) if source_mark.still_marks(&read) => {
+                match self.move_exclusive_blocking(aside, source) {
+                    Ok(_) => Attempt::PutBack,
+                    Err(error) => Attempt::Failed(Some(error)),
+                }
+            }
+            Ok(_) | Err(PathReading::Missing { .. }) => match self.fingerprint_blocking(source) {
+                Ok(read) if source_mark.still_marks(&read) => Attempt::PutBack,
+                _ => Attempt::Moved,
+            },
+            Err(_) => Attempt::Failed(None),
+        }
+    }
+
+    fn remove_source_beside_once(
+        &self,
+        source: &Path,
+        source_mark: &Mark,
+        kept: &Path,
+        kept_mark: &Mark,
+    ) -> Result<AsideRemoval, Box<Stuck>> {
         let aside = aside_path_for(source);
         if let Err(error) = self.move_exclusive_blocking(source, &aside) {
-            return self.after_refused_set_aside(source, source_mark, aside, error);
+            match self.clear_reservation_and_set_aside(source, &aside, &error) {
+                Some(Ok(())) => {}
+                Some(Err(again)) => {
+                    return self.after_refused_set_aside(source, source_mark, aside, again);
+                }
+                None => return self.after_refused_set_aside(source, source_mark, aside, error),
+            }
         }
 
         let kept_now = match self.fingerprint_blocking(kept) {
@@ -196,12 +401,24 @@ impl super::Disk {
         }
 
         match self.remove_blocking(&aside, Remove::File) {
-            Ok(_) => AsideRemoval::Removed,
+            Ok(_) => Ok(AsideRemoval::Removed),
             Err(error) => match self.fingerprint_blocking(&aside) {
                 // The removal may have taken effect though it answered a
-                // failure, or another import may have put the source back:
-                // gone from the set-aside name is no proof of either.
-                Err(PathReading::Missing { .. }) => AsideRemoval::RemovalUnconfirmed(error),
+                // failure, or something may have put the source back: the
+                // source's own name tells which. Missing there too, the
+                // removal took effect.
+                Err(PathReading::Missing { .. }) => match self.fingerprint_blocking(source) {
+                    Err(PathReading::Missing { .. }) => {
+                        tracing::info!(
+                            source = %source.display(),
+                            at = %aside.display(),
+                            error = %error,
+                            "removing a move's set-aside source answered a failure, but neither name holds it any more; it was removed"
+                        );
+                        Ok(AsideRemoval::Removed)
+                    }
+                    _ => Ok(AsideRemoval::RemovalUnconfirmed(error)),
+                },
                 _ => self.put_back(source, aside, AsideRemoval::NotRemoved(error)),
             },
         }
@@ -229,6 +446,35 @@ impl super::Disk {
         }
     }
 
+    /// After a set-aside rename refused because the set-aside name is taken:
+    /// when an empty regular file holds that name, while the source is still
+    /// at its own name, it is a reservation an interrupted set-aside left, or
+    /// an empty source set aside earlier. It holds no data, so it is removed
+    /// and the set-aside is tried once more. `None` where that does not
+    /// apply, or the removal failed; a nonempty file there is never touched.
+    /// One read and one removal of the set-aside name, and one rename, on
+    /// that failure alone.
+    fn clear_reservation_and_set_aside(
+        &self,
+        source: &Path,
+        aside: &Path,
+        error: &DiskError,
+    ) -> Option<Result<(), DiskError>> {
+        if error.left().is_some() || error.reason() != reason::DISK_DESTINATION_EXISTS {
+            return None;
+        }
+        match self.fingerprint_blocking(aside) {
+            Ok(read) if read.kind() == Some(EntryKind::File) && read.is_len(0) => {}
+            _ => return None,
+        }
+        self.remove_blocking(aside, Remove::File).ok()?;
+        tracing::info!(
+            at = %aside.display(),
+            "an empty file left at a move's set-aside name was removed"
+        );
+        Some(self.move_exclusive_blocking(source, aside).map(|_| ()))
+    }
+
     /// After a set-aside rename failed. A taken set-aside name is named. A
     /// failure that left something at the set-aside name may have moved the
     /// source there and lost the reply, or left only a reservation of its
@@ -245,16 +491,21 @@ impl super::Disk {
         source_mark: &Mark,
         aside: PathBuf,
         error: DiskError,
-    ) -> AsideRemoval {
+    ) -> Result<AsideRemoval, Box<Stuck>> {
         if error.left().is_none() {
             if error.reason() == reason::DISK_DESTINATION_EXISTS {
-                return AsideRemoval::AsideNameTaken { at: aside, error };
+                tracing::warn!(
+                    source = %source.display(),
+                    at = %aside.display(),
+                    "a move's set-aside name holds a file while the source is at its own name; both are kept"
+                );
+                return Ok(AsideRemoval::AsideNameTaken { at: aside, error });
             }
-            return AsideRemoval::NotSetAside(error);
+            return Ok(AsideRemoval::NotSetAside(error));
         }
         let at_aside = match self.fingerprint_blocking(&aside) {
             Ok(read) if read.kind() == Some(EntryKind::File) && !read.is_len(0) => read,
-            _ => return AsideRemoval::NotSetAside(error),
+            _ => return Ok(AsideRemoval::NotSetAside(error)),
         };
         if source_mark.still_marks(&at_aside)
             || matches!(
@@ -264,25 +515,35 @@ impl super::Disk {
         {
             return self.put_back(source, aside, AsideRemoval::NotSetAside(error));
         }
-        AsideRemoval::NotSetAside(error)
+        Ok(AsideRemoval::NotSetAside(error))
     }
 
     /// Puts back a source an interrupted removal left at its set-aside name,
-    /// for an import that finds the source missing. Only a nonempty regular
-    /// file at the set-aside name is moved, and only by a rename that never
-    /// replaces anything: a source name that is taken again keeps what is
-    /// there, and an empty file is a reservation, never the source. Nothing
-    /// is removed. The caller keeps this from running while a removal of the
-    /// same source is in flight.
+    /// for an import that finds the source missing. Only a regular file at
+    /// the set-aside name is moved, and only by a rename that never replaces
+    /// anything. Nothing is removed. The caller keeps this from running while
+    /// a removal of the same source is in flight.
+    ///
+    /// An empty file there is put back too. A set-aside rename that reserves
+    /// its name first leaves an empty reservation behind only while the
+    /// source is still at its own name: its failure path releases the
+    /// reservation while the source reads present, and an interruption
+    /// between the reservation and the rename leaves the source where it
+    /// was. So with the source's name missing, an empty file at the
+    /// set-aside name is an empty source that was set aside.
+    ///
+    /// A source name that is taken again keeps what is there, and the file
+    /// at the set-aside name is left as it is: an empty one (no data) or a
+    /// nonempty one, which is never removed and is logged for the operator.
     ///
     /// Probes: one read of the set-aside name, and one rename when it holds
     /// a regular file.
     pub fn put_back_set_aside_source_blocking(&self, source: &Path) -> PutBackAside {
         let aside = aside_path_for(source);
-        match self.fingerprint_blocking(&aside) {
-            Ok(read) if read.kind() == Some(EntryKind::File) && !read.is_len(0) => {}
+        let empty = match self.fingerprint_blocking(&aside) {
+            Ok(read) if read.kind() == Some(EntryKind::File) => read.is_len(0),
             _ => return PutBackAside::Nothing,
-        }
+        };
         match self.move_exclusive_blocking(&aside, source) {
             Ok(_) => {
                 tracing::warn!(
@@ -292,26 +553,43 @@ impl super::Disk {
                 );
                 PutBackAside::PutBack
             }
-            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS && empty => {
                 PutBackAside::Nothing
+            }
+            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+                tracing::warn!(
+                    source = %source.display(),
+                    at = %aside.display(),
+                    "an import source an interrupted cleanup set aside is at its set-aside name, and the source's name is taken again; both are kept"
+                );
+                PutBackAside::SourceNameTaken { at: aside }
             }
             Err(error) => PutBackAside::Failed { at: aside, error },
         }
     }
 
     /// Renames the set-aside source back, never replacing anything, and
-    /// answers `then`; or [`AsideRemoval::PutBackFailed`].
-    fn put_back(&self, source: &Path, aside: PathBuf, then: AsideRemoval) -> AsideRemoval {
+    /// answers `then`; or what failed, for the caller to retry.
+    fn put_back(
+        &self,
+        source: &Path,
+        aside: PathBuf,
+        then: AsideRemoval,
+    ) -> Result<AsideRemoval, Box<Stuck>> {
         match self.move_exclusive_blocking(&aside, source) {
-            Ok(_) => then,
+            Ok(_) => Ok(then),
             Err(error) => {
-                tracing::error!(
+                tracing::warn!(
                     source = %source.display(),
                     at = %aside.display(),
                     error = %error,
-                    "a move's source set aside could not be put back; it is left at its set-aside name"
+                    "a move's source set aside could not be put back; retrying"
                 );
-                AsideRemoval::PutBackFailed { at: aside, error }
+                Err(Box::new(Stuck {
+                    at: aside,
+                    error,
+                    then,
+                }))
             }
         }
     }

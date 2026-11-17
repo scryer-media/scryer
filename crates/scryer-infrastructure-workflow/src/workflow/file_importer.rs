@@ -597,7 +597,9 @@ fn read_import_source_at_start<T>(path: &Path, read: fn(&Path) -> AppResult<T>) 
         {
             match Disk::process().put_back_set_aside_source_blocking(path) {
                 disk::PutBackAside::PutBack => read(path),
-                disk::PutBackAside::Nothing => Err(error),
+                disk::PutBackAside::Nothing | disk::PutBackAside::SourceNameTaken { .. } => {
+                    Err(error)
+                }
                 disk::PutBackAside::Failed { at, error: failure } => {
                     tracing::error!(
                         source = %path.display(),
@@ -2396,11 +2398,80 @@ fn took_back(error: AppError, source: &Path, dest: &Path, landed: Landed<'_>) ->
     }
 }
 
+/// What is left of an import source's cleanup once its checks passed.
+enum SourceCleanup {
+    Done,
+    /// The source goes beside a destination that was already there and was
+    /// adopted, once the filesystem shows the two are separate entries.
+    BesideAdopted {
+        source: PathBuf,
+        source_mark: Mark,
+        dest: PathBuf,
+        adopted: Mark,
+    },
+}
+
+impl SourceCleanup {
+    /// The rest of the cleanup on this thread, which a failed put-back of
+    /// the source may hold for up to thirty seconds of retries: for a thread
+    /// of its own, such as the worker process's.
+    fn finish_blocking(self) -> AppResult<()> {
+        match self {
+            Self::Done => Ok(()),
+            Self::BesideAdopted {
+                source,
+                source_mark,
+                dest,
+                adopted,
+            } => aside_removal_result(
+                &source,
+                &dest,
+                Disk::process().remove_source_beside_blocking(
+                    &source,
+                    &source_mark,
+                    &dest,
+                    &adopted,
+                ),
+            ),
+        }
+    }
+
+    /// The rest of the cleanup from the async runtime: a failed put-back's
+    /// retries hold no thread while they wait.
+    async fn finish(self) -> AppResult<()> {
+        match self {
+            Self::Done => Ok(()),
+            Self::BesideAdopted {
+                source,
+                source_mark,
+                dest,
+                adopted,
+            } => aside_removal_result(
+                &source,
+                &dest,
+                Disk::process()
+                    .remove_source_beside(&source, &source_mark, &dest, &adopted)
+                    .await,
+            ),
+        }
+    }
+}
+
 fn remove_import_source_after_verified_import_blocking(
     guard: ImportSourceCleanupGuard,
     final_dest_path: PathBuf,
     options: ImportFileOptions,
 ) -> AppResult<()> {
+    prove_import_source_cleanup_blocking(guard, final_dest_path, options)?.finish_blocking()
+}
+
+/// The checks of an import source's cleanup, and the removal itself unless
+/// the source goes beside an adopted destination.
+fn prove_import_source_cleanup_blocking(
+    guard: ImportSourceCleanupGuard,
+    final_dest_path: PathBuf,
+    options: ImportFileOptions,
+) -> AppResult<SourceCleanup> {
     if guard.source_path == final_dest_path {
         return Err(AppError::Repository(format!(
             "refusing to remove import source because it is the library file: {}",
@@ -2462,8 +2533,8 @@ fn remove_import_source_after_verified_import_blocking(
         )));
     }
 
-    if let (Some(stored), Some(source_mark)) = (&guard.adopted_destination_mark, &source_mark) {
-        return remove_source_beside_adopted_destination(
+    if let (Some(stored), Some(source_mark)) = (&guard.adopted_destination_mark, source_mark) {
+        return beside_adopted_destination(
             &guard.source_path,
             source_mark,
             &final_dest_path,
@@ -2486,21 +2557,20 @@ fn remove_import_source_after_verified_import_blocking(
         )));
     }
 
-    Ok(())
+    Ok(SourceCleanup::Done)
 }
 
-/// Removes a move's source beside a destination that was already there and
-/// was adopted, once the filesystem shows the two are separate entries. See
-/// [`Disk::remove_source_beside_blocking`]. Anything but a removal keeps the
-/// source's data and refuses. `source_mark` is the read of the source just
-/// proved current.
-fn remove_source_beside_adopted_destination(
+/// A move's source to remove beside a destination that was already there
+/// and was adopted, once the filesystem shows the two are separate entries.
+/// See [`Disk::remove_source_beside`]. `source_mark` is the read of the
+/// source just proved current.
+fn beside_adopted_destination(
     source: &Path,
-    source_mark: &Mark,
+    source_mark: Mark,
     dest: &Path,
     stored: &str,
     options: &ImportFileOptions,
-) -> AppResult<()> {
+) -> AppResult<SourceCleanup> {
     let Some(adopted) = Mark::from_stored(stored) else {
         return Err(import_destination_alias_unknown(
             source,
@@ -2514,7 +2584,18 @@ fn remove_source_beside_adopted_destination(
             source.display()
         )));
     }
-    match Disk::process().remove_source_beside_blocking(source, source_mark, dest, &adopted) {
+    Ok(SourceCleanup::BesideAdopted {
+        source: source.to_path_buf(),
+        source_mark,
+        dest: dest.to_path_buf(),
+        adopted,
+    })
+}
+
+/// What a removal beside an adopted destination answered, as the import
+/// sees it. Anything but a removal kept the source's data and refuses.
+fn aside_removal_result(source: &Path, dest: &Path, answer: AsideRemoval) -> AppResult<()> {
+    match answer {
         AsideRemoval::Removed => Ok(()),
         AsideRemoval::SameEntry => Err(import_destination_is_source(source, dest)),
         AsideRemoval::DestinationChanged => Err(AppError::Repository(format!(
@@ -2556,7 +2637,15 @@ fn remove_source_beside_adopted_destination(
             source,
             dest,
             &format!(
-                "the source was set aside at {} and could not be put back: {error}",
+                "the source was set aside at {} and could not be put back after thirty seconds of retries; it is left there: {error}",
+                at.display()
+            ),
+        )),
+        AsideRemoval::SetAsideMoved { at, error } => Err(import_destination_alias_unknown(
+            source,
+            dest,
+            &format!(
+                "the source was set aside at {}, could not be put back, and has since left that name: {error}",
                 at.display()
             ),
         )),
@@ -4358,14 +4447,16 @@ impl FileImporter for FsFileImporter {
         let final_dest_path = final_dest_path.to_path_buf();
 
         tokio::task::spawn_blocking(move || {
-            remove_import_source_after_verified_import_blocking(
+            prove_import_source_cleanup_blocking(
                 guard,
                 final_dest_path,
                 ImportFileOptions::default(),
             )
         })
         .await
-        .map_err(|e| AppError::Repository(format!("import cleanup task panicked: {}", e)))?
+        .map_err(|e| AppError::Repository(format!("import cleanup task panicked: {}", e)))??
+        .finish()
+        .await
     }
 
     async fn remove_import_source_after_verified_import_with_context(
@@ -4409,14 +4500,16 @@ impl FileImporter for FsFileImporter {
         }
         let final_dest_path = final_dest_path.to_path_buf();
         tokio::task::spawn_blocking(move || {
-            remove_import_source_after_verified_import_blocking(
+            prove_import_source_cleanup_blocking(
                 guard,
                 final_dest_path,
                 ImportFileOptions::default(),
             )
         })
         .await
-        .map_err(|error| AppError::Repository(format!("import cleanup task panicked: {error}")))?
+        .map_err(|error| AppError::Repository(format!("import cleanup task panicked: {error}")))??
+        .finish()
+        .await
     }
 }
 

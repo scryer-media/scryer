@@ -312,7 +312,8 @@ fn a_changed_or_unread_destination_puts_the_source_back() {
 
 /// A set-aside rename that is refused leaves the source alone and reads
 /// nothing. A set-aside name that is taken, by a file an interrupted attempt
-/// left or anything else, is named in its own field.
+/// left or anything else, is read once and, unless it is an empty file, named
+/// in its own field.
 #[test]
 fn a_refused_set_aside_leaves_the_source_alone_and_names_a_taken_name() {
     let dest = "/srv/fixture-media/library/sample.mkv";
@@ -332,10 +333,9 @@ fn a_refused_set_aside_leaves_the_source_alone_and_names_a_taken_name() {
         other => panic!("{other:?}"),
     }
     assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE)]);
-    assert_eq!(
-        backend.calls_of("lstat") + backend.calls_of("remove_file"),
-        0
-    );
+    // A taken name is read once, to tell an empty leftover from a file.
+    assert_eq!(backend.paths_of("lstat"), [aside()]);
+    assert_eq!(backend.calls_of("remove_file"), 0);
 
     let (disk, backend) = scripted();
     backend.fails("rename_no_replace", SOURCE, io::ErrorKind::PermissionDenied);
@@ -448,16 +448,19 @@ fn a_claimed_set_aside_that_left_a_name_puts_back_only_the_sources_own_file() {
     assert_eq!(backend.paths_of("rename_claimed"), [p(SOURCE)]);
 }
 
-/// A put-back that fails says where the source's file is: at the set-aside
-/// name. A removal of the set-aside name that fails reads that name: while
-/// the file is still there the source is put back, and a name that reads
-/// gone is not taken as removed, since another import may have put it back.
+/// A put-back that keeps failing says where the source's file is: at the
+/// set-aside name. A removal of the set-aside name that fails reads that
+/// name: while the file is still there the source is put back; a name that
+/// reads gone, with the source's name also missing, was removed; and with
+/// the source's name holding a file again, something put it back and the
+/// removal is unconfirmed.
 #[test]
 fn a_failed_put_back_or_removal_says_where_the_file_is() {
     let dest = "/srv/fixture-media/library/sample.mkv";
     let aside = aside();
 
     let (disk, backend) = scripted();
+    backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
     backend.fails(
         "rename_no_replace",
         aside.to_str().unwrap(),
@@ -519,52 +522,68 @@ fn a_failed_put_back_or_removal_says_where_the_file_is() {
         other => panic!("{other:?}"),
     }
 
-    let (disk, backend) = scripted();
-    backend.stat_is(dest, Ok(named(8, 1)));
-    backend.fails(
-        "remove_file",
-        aside.to_str().unwrap(),
-        io::ErrorKind::TimedOut,
-    );
-    let answer = disk.remove_source_beside_blocking(
-        &p(SOURCE),
-        &source_mark(),
-        &p(dest),
-        &mark(named(8, 1)),
-    );
-    assert!(
-        matches!(answer, AsideRemoval::RemovalUnconfirmed(_)),
-        "{answer:?}"
-    );
-    assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE)]);
-    assert_eq!(backend.paths_of("lstat"), [p(dest), aside]);
+    for put_back_by_another in [false, true] {
+        let (disk, backend) = scripted();
+        backend.stat_is(dest, Ok(named(8, 1)));
+        if put_back_by_another {
+            backend.stats_in_turn(&p(SOURCE), &[Ok(named(7, 1))]);
+        }
+        backend.fails(
+            "remove_file",
+            aside.to_str().unwrap(),
+            io::ErrorKind::TimedOut,
+        );
+        let answer = disk.remove_source_beside_blocking(
+            &p(SOURCE),
+            &source_mark(),
+            &p(dest),
+            &mark(named(8, 1)),
+        );
+        match put_back_by_another {
+            true => assert!(
+                matches!(answer, AsideRemoval::RemovalUnconfirmed(_)),
+                "{answer:?}"
+            ),
+            false => assert!(matches!(answer, AsideRemoval::Removed), "{answer:?}"),
+        }
+        assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE)]);
+        assert_eq!(
+            backend.paths_of("lstat"),
+            [p(dest), aside.clone(), p(SOURCE)]
+        );
+    }
 }
 
 /// An import that finds its source missing puts back a regular file an
-/// interrupted cleanup left at the set-aside name, by a rename that never
-/// replaces anything. Nothing at that name, a folder or an empty reservation
-/// there, or a source name taken again moves nothing, and nothing is
-/// removed.
+/// interrupted cleanup left at the set-aside name, empty or not, by a rename
+/// that never replaces anything: with the source's name missing, an empty
+/// file there is an empty source, since a reservation is only ever left
+/// while the source is at its own name. Nothing at that name or a folder
+/// there moves nothing. A source name taken again keeps both: a nonempty
+/// file at the set-aside name is named for the operator, an empty one is
+/// not. Nothing is removed.
 #[test]
 fn a_set_aside_source_left_by_an_interruption_is_put_back() {
     let aside = aside();
+    let empty = RawStat {
+        len: 0,
+        ..named(7, 1)
+    };
 
-    let (disk, backend) = scripted();
-    backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
-    let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
-    assert!(matches!(answer, PutBackAside::PutBack), "{answer:?}");
-    assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
-    assert_eq!(backend.paths_of("rename_no_replace"), [aside.clone()]);
+    for at_aside in [named(7, 1), empty] {
+        let (disk, backend) = scripted();
+        backend.stat_is(aside.to_str().unwrap(), Ok(at_aside));
+        let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
+        assert!(matches!(answer, PutBackAside::PutBack), "{answer:?}");
+        assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+        assert_eq!(backend.paths_of("rename_no_replace"), [aside.clone()]);
+    }
 
     let folder = RawStat {
         kind: EntryKind::Directory,
         ..named(7, 1)
     };
-    let reservation = RawStat {
-        len: 0,
-        ..named(7, 1)
-    };
-    for at_aside in [None, Some(folder), Some(reservation)] {
+    for at_aside in [None, Some(folder)] {
         let (disk, backend) = scripted();
         if let Some(stat) = at_aside {
             backend.stat_is(aside.to_str().unwrap(), Ok(stat));
@@ -575,17 +594,214 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
         assert_eq!(backend.calls_of("rename_no_replace"), 0);
     }
 
+    for (at_aside, named_for_operator) in [(named(7, 1), true), (empty, false)] {
+        let (disk, backend) = scripted();
+        backend.stat_is(aside.to_str().unwrap(), Ok(at_aside));
+        backend.fails(
+            "rename_no_replace",
+            aside.to_str().unwrap(),
+            io::ErrorKind::AlreadyExists,
+        );
+        let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
+        match named_for_operator {
+            true => match answer {
+                PutBackAside::SourceNameTaken { at } => assert_eq!(at, aside),
+                other => panic!("{other:?}"),
+            },
+            false => assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}"),
+        }
+        for operation in ["remove_file", "rename_claimed", "rename"] {
+            assert_eq!(backend.calls_of(operation), 0, "{operation}");
+        }
+    }
+}
+
+/// A set-aside name taken by an empty file while the source is at its own
+/// name holds no data: it is removed, the source is set aside after all, and
+/// the cleanup goes on. A nonempty file there is never touched: the source
+/// stays, and the set-aside name is named.
+#[test]
+fn an_empty_file_at_the_set_aside_name_is_cleared_and_a_nonempty_one_kept() {
+    let dest = "/srv/fixture-media/library/sample.mkv";
+    let aside = aside();
+    let empty = RawStat {
+        len: 0,
+        ..named(9, 1)
+    };
+
     let (disk, backend) = scripted();
-    backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
+    backend.stat_is(dest, Ok(named(8, 1)));
+    backend.stats_in_turn(&aside, &[Ok(empty)]);
+    backend.fails_times("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists, 1);
+    let answer = disk.remove_source_beside_blocking(
+        &p(SOURCE),
+        &source_mark(),
+        &p(dest),
+        &mark(named(8, 1)),
+    );
+    assert!(matches!(answer, AsideRemoval::Removed), "{answer:?}");
+    assert_eq!(
+        backend.paths_of("rename_no_replace"),
+        [p(SOURCE), p(SOURCE)]
+    );
+    assert_eq!(
+        backend.paths_of("remove_file"),
+        [aside.clone(), aside.clone()]
+    );
+
+    let (disk, backend) = scripted();
+    backend.stat_is(dest, Ok(named(8, 1)));
+    backend.stat_is(aside.to_str().unwrap(), Ok(named(9, 1)));
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists);
+    let answer = disk.remove_source_beside_blocking(
+        &p(SOURCE),
+        &source_mark(),
+        &p(dest),
+        &mark(named(8, 1)),
+    );
+    match answer {
+        AsideRemoval::AsideNameTaken { at, .. } => assert_eq!(at, aside),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE)]);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+/// A destination that is the source's own entry, so the set-aside source
+/// goes back; a put-back that fails `failures` times first.
+fn put_back_failing(failures: Option<usize>) -> (Disk, Arc<Scripted>) {
+    let (disk, backend) = scripted();
+    let at = aside();
+    let at = at.to_str().unwrap();
+    match failures {
+        Some(times) => backend.fails_times(
+            "rename_no_replace",
+            at,
+            io::ErrorKind::PermissionDenied,
+            times,
+        ),
+        None => backend.fails("rename_no_replace", at, io::ErrorKind::PermissionDenied),
+    }
+    (disk, backend)
+}
+
+const SAME_ENTRY: &str = "/srv/fixture-media/mount-b/downloads/sample.mkv";
+
+/// A put-back that fails is retried after a pause that holds no thread: an
+/// early retry that succeeds answers what the removal found, after only the
+/// pauses it waited.
+#[tokio::test(start_paused = true)]
+async fn a_put_back_that_succeeds_on_an_early_retry_answers_what_was_found() {
+    let (disk, backend) = put_back_failing(Some(3));
+    backend.stat_is(aside().to_str().unwrap(), Ok(named(7, 1)));
+    let started = tokio::time::Instant::now();
+    let answer = disk
+        .remove_source_beside(
+            &p(SOURCE),
+            &source_mark(),
+            &p(SAME_ENTRY),
+            &mark(named(7, 1)),
+        )
+        .await;
+    assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
+    assert_eq!(
+        backend.paths_of("rename_no_replace"),
+        [p(SOURCE), aside(), aside(), aside(), aside()]
+    );
+    assert_eq!(
+        started.elapsed(),
+        PUT_BACK_RETRY_PAUSES[..3]
+            .iter()
+            .sum::<std::time::Duration>()
+    );
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+/// A put-back that fails every retry stops after thirty seconds and twelve
+/// renames, and leaves the file at its set-aside name untouched. The twin
+/// for a thread of its own waits the same thirty seconds on its clock.
+#[tokio::test(start_paused = true)]
+async fn a_put_back_that_keeps_failing_leaves_the_file_at_its_set_aside_name() {
+    let (disk, backend) = put_back_failing(None);
+    backend.stat_is(aside().to_str().unwrap(), Ok(named(7, 1)));
+    let started = tokio::time::Instant::now();
+    let answer = disk
+        .remove_source_beside(
+            &p(SOURCE),
+            &source_mark(),
+            &p(SAME_ENTRY),
+            &mark(named(7, 1)),
+        )
+        .await;
+    match answer {
+        AsideRemoval::PutBackFailed { at, .. } => assert_eq!(at, aside()),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(started.elapsed(), std::time::Duration::from_secs(30));
+    assert_eq!(backend.calls_of("rename_no_replace"), 1 + 12);
+    assert_eq!(
+        backend.paths_of("rename_no_replace")[1..],
+        vec![aside(); 12][..]
+    );
+    for operation in ["remove_file", "rename", "rename_claimed"] {
+        assert_eq!(backend.calls_of(operation), 0, "{operation}");
+    }
+
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    backend.stat_is(aside().to_str().unwrap(), Ok(named(7, 1)));
     backend.fails(
         "rename_no_replace",
-        aside.to_str().unwrap(),
-        io::ErrorKind::AlreadyExists,
+        aside().to_str().unwrap(),
+        io::ErrorKind::PermissionDenied,
     );
-    let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
-    assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}");
-    for operation in ["remove_file", "rename_claimed", "rename"] {
-        assert_eq!(backend.calls_of(operation), 0, "{operation}");
+    let answer = disk.remove_source_beside_blocking(
+        &p(SOURCE),
+        &source_mark(),
+        &p(SAME_ENTRY),
+        &mark(named(7, 1)),
+    );
+    assert!(
+        matches!(answer, AsideRemoval::PutBackFailed { .. }),
+        "{answer:?}"
+    );
+    assert_eq!(clock.now(), at(30));
+    assert_eq!(backend.calls_of("rename_no_replace"), 1 + 12);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+/// A put-back whose set-aside name stops holding the file while it is
+/// retried stops at once: back at the source's name, the file was put back
+/// by a rename that lost its reply; anywhere else, it moved, and nothing
+/// more is done.
+#[tokio::test(start_paused = true)]
+async fn a_put_back_stops_once_the_set_aside_name_no_longer_holds_the_file() {
+    for at_source in [false, true] {
+        let (disk, backend) = put_back_failing(None);
+        backend.stats_in_turn(&aside(), &[Ok(named(7, 1)), Ok(named(7, 1))]);
+        if at_source {
+            backend.stat_is(SOURCE, Ok(named(7, 1)));
+        }
+        let answer = disk
+            .remove_source_beside(
+                &p(SOURCE),
+                &source_mark(),
+                &p(SAME_ENTRY),
+                &mark(named(7, 1)),
+            )
+            .await;
+        match at_source {
+            true => assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}"),
+            false => match answer {
+                AsideRemoval::SetAsideMoved { at, .. } => assert_eq!(at, aside()),
+                other => panic!("{other:?}"),
+            },
+        }
+        // The first attempt and two retries renamed; the third retry found
+        // the name empty.
+        assert_eq!(backend.calls_of("rename_no_replace"), 1 + 3);
+        assert_eq!(backend.paths_of("lstat").last(), Some(&p(SOURCE)));
+        assert_eq!(backend.calls_of("remove_file"), 0);
     }
 }
 

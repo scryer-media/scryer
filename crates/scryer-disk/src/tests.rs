@@ -66,6 +66,8 @@ struct Scripted {
         Mutex<HashMap<PathBuf, std::collections::VecDeque<Result<RawStat, io::ErrorKind>>>>,
     listings: Mutex<HashMap<PathBuf, Vec<RawEntry>>>,
     failures: Mutex<HashMap<(&'static str, PathBuf), io::ErrorKind>>,
+    /// How many more calls a scripted failure answers; unlimited when absent.
+    failures_left: Mutex<HashMap<(&'static str, PathBuf), usize>>,
     any_path_failures: Mutex<HashMap<&'static str, io::ErrorKind>>,
     calls: Mutex<Vec<(&'static str, PathBuf)>>,
     gate: Mutex<Option<mpsc::Receiver<()>>>,
@@ -99,7 +101,6 @@ impl Scripted {
     }
     /// `path` answers `answers` to its next stat calls, one each, before
     /// falling back to its `stat_is` answer.
-    #[cfg(unix)]
     fn stats_in_turn(&self, path: &Path, answers: &[Result<RawStat, io::ErrorKind>]) {
         self.stats_in_turn
             .lock()
@@ -133,6 +134,14 @@ impl Scripted {
             .lock()
             .unwrap()
             .insert((operation, PathBuf::from(path)), kind);
+    }
+    /// `operation` on `path` fails `times` times, then succeeds.
+    fn fails_times(&self, operation: &'static str, path: &str, kind: io::ErrorKind, times: usize) {
+        self.fails(operation, path, kind);
+        self.failures_left
+            .lock()
+            .unwrap()
+            .insert((operation, PathBuf::from(path)), times);
     }
     fn always_fails(&self, operation: &'static str, kind: io::ErrorKind) {
         self.any_path_failures
@@ -178,12 +187,16 @@ impl Scripted {
             .lock()
             .unwrap()
             .push((operation, path.to_path_buf()));
-        match self
-            .failures
-            .lock()
-            .unwrap()
-            .get(&(operation, path.to_path_buf()))
-        {
+        let key = (operation, path.to_path_buf());
+        let spent = match self.failures_left.lock().unwrap().get_mut(&key) {
+            Some(0) => true,
+            Some(left) => {
+                *left -= 1;
+                false
+            }
+            None => false,
+        };
+        match self.failures.lock().unwrap().get(&key).filter(|_| !spent) {
             Some(kind) => Err((*kind).into()),
             None => match self.any_path_failure(operation) {
                 Some(kind) => Err(kind.into()),

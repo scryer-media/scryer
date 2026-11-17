@@ -79,7 +79,7 @@ use backend::{DiskBackend, SystemBackend};
 use cache::{StatCache, key_of};
 use volume::Volumes;
 
-pub use aside::{AsideRemoval, PutBackAside, aside_path_for};
+pub use aside::{AsideRemoval, PUT_BACK_RETRY_PAUSES, PutBackAside, aside_path_for};
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
 #[doc(hidden)]
