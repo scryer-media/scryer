@@ -151,8 +151,7 @@ impl LocationOperationRunner<'_> {
                     && fatal.is_none()
                     && !hub.has_storage_waiters(&operation.id)
                     && title_index < plan.titles.len()
-                    && copying.len()
-                        < crate::location::transfer::CopyCoordinator::shared().capacity()
+                    && copying.len() < crate::location::transfer::shared().capacity()
                     && pending.saturating_sub(copying.len()) < PIPELINE_POST_COPY_LIMIT
                 {
                     let title = &plan.titles[title_index];

@@ -1,11 +1,11 @@
 use crate::disk::reason::{DISK_DESTINATION_EXISTS, DISK_PATH_MISSING};
 use crate::disk::{
-    Access, Disk, DiskError, EntryKind, Open, Parents, PathReading, Refused, Removal, Remove,
-    Replace, Visited, placement,
+    Access, Disk, DiskError, Done, EntryKind, Open, Parents, PathReading, Placed, Refused, Removal,
+    Remove, Replace, Visited, placement,
 };
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
-    CopyProgress, DestinationClaim, VerifiedCopier, VerifiedCopyRequest, hash_existing_file,
+    CopyProgress, DestinationClaim, copy_and_verify, hash_existing_file,
 };
 use crate::{AppError, AppResult};
 
@@ -14,7 +14,11 @@ fn repository(error: DiskError) -> AppError {
 }
 
 fn unreadable(path: &Path, reading: PathReading) -> AppError {
-    AppError::Repository(format!("{}: {}", path.display(), reading.absence()))
+    AppError::Repository(format!(
+        "{}: {}",
+        path.display(),
+        reading.describe_absence()
+    ))
 }
 
 /// The kind `reading` shows at `path`; an error when it shows none.
@@ -1005,7 +1009,7 @@ async fn recycle_file_inner(
             return Err(AppError::Repository(format!(
                 "failed to stat source file {} before recycle/delete: {}",
                 source_path.display(),
-                source_reading.absence()
+                source_reading.describe_absence()
             )));
         }
     }
@@ -1215,15 +1219,14 @@ async fn quick_verified_copy(
     claim: DestinationClaim,
     progress: CopyProgress,
 ) -> AppResult<()> {
-    let copied = VerifiedCopier::new()
-        .copy_and_verify(VerifiedCopyRequest {
-            source: source.to_path_buf(),
-            destination: destination.to_path_buf(),
-            depth: VerificationDepth::Quick,
-            claim,
-            progress,
-        })
-        .await;
+    let copied = copy_and_verify(
+        &Disk::process(),
+        source,
+        destination,
+        placement::verified_copy(VerificationDepth::Quick, claim),
+        &progress,
+    )
+    .await;
     let verified = match copied {
         Ok(verified) => verified,
         Err(error) => {
@@ -1398,7 +1401,20 @@ async fn restore_without_overwrite(
         let disk = Disk::process();
         let policy = placement::recycle_restore_link();
         match disk.place(recycled_path, &destination, policy).await {
-            Ok(_) => {}
+            Ok(Placed {
+                done: Done::HardLinked,
+                ..
+            }) => {}
+            // Only a link shares the recycled file's bytes; anything else
+            // the owner did is not proof enough to remove the recycled copy.
+            Ok(placed) => {
+                return Err(AppError::Repository(format!(
+                    "restore of {} to {} was not made by a hard link ({:?}); the recycled copy was kept",
+                    recycled_path.display(),
+                    destination.display(),
+                    placed.done
+                )));
+            }
             Err(refusal) if refusal.refused == Refused::DestinationExists => continue,
             Err(link_error) => {
                 // Hard links are preferred but impossible across devices and on
@@ -1517,7 +1533,7 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
             return Err(AppError::Repository(format!(
                 "failed to stat recycle restore destination {}: {}",
                 destination.display(),
-                reading.absence()
+                reading.describe_absence()
             )));
         }
     }
@@ -2304,14 +2320,14 @@ struct RelocationOps {
     /// Try an atomic no-replace rename before copying.
     allow_rename: bool,
     /// Copies and proves each file of an entry that cannot be renamed.
-    copier: VerifiedCopier,
+    copier: Disk,
 }
 
 impl Default for RelocationOps {
     fn default() -> Self {
         Self {
             allow_rename: true,
-            copier: VerifiedCopier::new(),
+            copier: Disk::process(),
         }
     }
 }
@@ -2705,23 +2721,21 @@ async fn copy_entry_tree(
     for file in files {
         let source = entry_dir.join(file);
         let target = dest.join(file);
-        let verified = ops
-            .copier
-            .copy_and_verify(VerifiedCopyRequest {
-                source: source.clone(),
-                destination: target.clone(),
-                depth: VerificationDepth::Full,
-                claim: DestinationClaim::ClaimHere,
-                progress: CopyProgress::none(),
-            })
-            .await
-            .map_err(|error| {
-                format!(
-                    "could not copy {} to {}: {error}",
-                    source.display(),
-                    target.display()
-                )
-            })?;
+        let verified = copy_and_verify(
+            &ops.copier,
+            &source,
+            &target,
+            placement::verified_copy(VerificationDepth::Full, DestinationClaim::ClaimHere),
+            &CopyProgress::none(),
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "could not copy {} to {}: {error}",
+                source.display(),
+                target.display()
+            )
+        })?;
         if !verified.permits_source_removal() || verified.depth.fell_back {
             let detail = verified
                 .detail
@@ -4627,7 +4641,7 @@ mod tests {
     ) -> RelocationOps {
         RelocationOps {
             allow_rename: false,
-            copier: VerifiedCopier::with_read_back_opener(std::sync::Arc::new(
+            copier: Disk::process().with_read_back_opener(std::sync::Arc::new(
                 move |path: &Path| {
                     if path.file_name().is_some_and(|name| name == "media.mkv") {
                         payload(path)

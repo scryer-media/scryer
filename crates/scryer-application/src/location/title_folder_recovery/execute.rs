@@ -5,9 +5,7 @@ use crate::domain_events::{DomainEventActor, new_title_domain_event, title_conte
 use crate::location::execution::{ImportFilePermissionsApplier, PlacedContentPermissions};
 use crate::location::executor::*;
 use crate::location::ownership_guard::LiveRunnerGuard;
-use crate::location::verify::{
-    CopyProgress, VerifiedCopier, VerifiedFile, hash_existing_file_with_progress,
-};
+use crate::location::verify::{CopyProgress, VerifiedFile, hash_existing_file_with_progress};
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_domain::{DomainEventPayload, TitleUpdatedEventData};
@@ -517,9 +515,14 @@ impl TitleFileMover for RecoveryExecution<'_> {
                     &path_to_stored_string(&staging),
                 )
                 .await?;
-            VerifiedCopier::new()
-                .copy_to_journaled_staging(source, &staging, request.progress)
-                .await?;
+            crate::location::verify::recorded_copy(
+                &Disk::process(),
+                source,
+                &staging,
+                crate::disk::placement::journaled_staging_copy(),
+                request.progress,
+            )
+            .await?;
             let staged_file = RecoveryFile {
                 destination: path_to_stored_string(&staging),
                 ..file.clone()

@@ -439,24 +439,23 @@ fn recovery_writes_the_short_staging_name_and_recognises_both() {
 
 #[tokio::test]
 async fn recovery_journaled_copy_preserves_staging_collisions_and_sources() {
-    use crate::location::verify::{CopyProgress, VerifiedCopier};
+    use crate::location::verify::{CopyProgress, recorded_copy};
+    let policy = crate::disk::placement::journaled_staging_copy;
     let temp = tempfile::tempdir().unwrap();
     let folder = temp.path().canonicalize().unwrap();
     let source = folder.join("source.mkv");
     let staging = folder.join(".scryer-recovery-attempt");
     tokio::fs::write(&source, b"original").await.unwrap();
     tokio::fs::write(&staging, b"unrelated").await.unwrap();
-    let copier = VerifiedCopier::new();
+    let copier = Disk::process();
     assert!(
-        copier
-            .copy_to_journaled_staging(&source, &staging, &CopyProgress::none())
+        recorded_copy(&copier, &source, &staging, policy(), &CopyProgress::none())
             .await
             .is_err()
     );
     assert_eq!(tokio::fs::read(&staging).await.unwrap(), b"unrelated");
     let fresh = folder.join(".scryer-recovery-next-attempt");
-    let hash = copier
-        .copy_to_journaled_staging(&source, &fresh, &CopyProgress::none())
+    let (hash, _) = recorded_copy(&copier, &source, &fresh, policy(), &CopyProgress::none())
         .await
         .unwrap();
     assert_eq!(

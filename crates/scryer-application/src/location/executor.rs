@@ -3007,7 +3007,7 @@ mod tests {
     #[async_trait]
     impl TitleFileMover for PipelinedMover {
         async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
-            let copy = self.copies.acquire("volume", "library").await;
+            let copy = self.copies.acquire_keyed("volume").await;
             let active = self.copying.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_copying.fetch_max(active, Ordering::SeqCst);
             request
@@ -3657,8 +3657,7 @@ mod tests {
         // Every admitted file is either one of the copy slots or one of the
         // bounded files past its copy; the one being recorded is the last.
         let bound = (super::pipeline::PIPELINE_POST_COPY_LIMIT
-            + crate::location::transfer::CopyCoordinator::shared().capacity())
-            as u64;
+            + crate::location::transfer::shared().capacity()) as u64;
         let max_ahead = mover.max_ahead.load(Ordering::SeqCst);
         assert!(
             max_ahead <= bound,

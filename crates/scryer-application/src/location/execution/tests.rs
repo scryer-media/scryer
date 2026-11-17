@@ -5,6 +5,7 @@
 //! what ends up on disk and in the catalog rather than about mock call counts.
 
 use super::*;
+use crate::location::verify::{VerifiedCopier, VerifiedCopyRequest};
 
 use std::sync::Mutex;
 
@@ -346,7 +347,7 @@ async fn valid_hardlink_performs_zero_content_reads_even_after_unjournaled_resta
     let copier = VerifiedCopier::with_read_back_opener(Arc::new(|_| {
         panic!("hardlink attempted a verification read")
     }));
-    let mover = RootMoveFileMover::new(copier, Arc::new(NoPlacedContentPermissions));
+    let mover = RootMoveFileMover::new(copier.0, Arc::new(NoPlacedContentPermissions));
     let work = plan.to_work_plan();
     let progress =
         crate::location::verify::CopyProgress::from_fn(|_| panic!("hardlink copied content"))
@@ -3059,7 +3060,7 @@ async fn record_copy(
 }
 
 fn whole_reads(path: &Path) -> usize {
-    crate::location::verify::whole_file_reads::count(path)
+    crate::disk::whole_file_reads(path)
 }
 
 /// Rewrites one byte in the unsampled middle: the length stays, the version

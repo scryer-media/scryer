@@ -44,9 +44,7 @@ use crate::location::merge::engine::{TitleMergeRepository, execute_merge, plan_m
 use crate::location::model::LocationOperation;
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
-use crate::location::verify::{
-    DestinationClaim, VerifiedCopier, VerifiedCopyRequest, VerifiedFile, same_filesystem,
-};
+use crate::location::verify::{DestinationClaim, VerifiedFile, same_filesystem};
 use crate::ports::LocationOperationRepository;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult};
@@ -366,7 +364,7 @@ pub trait SourceRecycler: Send + Sync {
 #[derive(Clone)]
 pub struct RootMoveFileMover {
     resolver: Option<Arc<super::resolution::ConflictResolver>>,
-    copier: VerifiedCopier,
+    copier: Disk,
     permissions: Arc<dyn PlacedContentPermissions>,
     /// Where the streamed hashes are persisted (FR-041, migration 0205).
     ///
@@ -394,7 +392,7 @@ impl RootMoveFileMover {
         self.resolver = Some(resolver);
         self
     }
-    pub fn new(copier: VerifiedCopier, permissions: Arc<dyn PlacedContentPermissions>) -> Self {
+    pub fn new(copier: Disk, permissions: Arc<dyn PlacedContentPermissions>) -> Self {
         Self {
             copier,
             permissions,
@@ -423,7 +421,7 @@ impl RootMoveFileMover {
     /// A mover that changes no permissions — the right shape for a deployment
     /// with no configured modes, and for tests.
     pub fn without_permissions() -> Self {
-        Self::new(VerifiedCopier::new(), Arc::new(NoPlacedContentPermissions))
+        Self::new(Disk::process(), Arc::new(NoPlacedContentPermissions))
     }
 
     /// FR-041/D4: the hashes the copy already computed go onto the media file
@@ -519,26 +517,22 @@ impl TitleFileMover for RootMoveFileMover {
             // have followed it — or a file that appeared from outside. Either
             // way it is proven against the source rather than replaced or
             // trusted (FR-033, C4).
-            self.copier
-                .clone()
-                .with_progress(request.progress.clone())
-                .verify_existing_destination(
-                    source,
-                    destination,
-                    request.depth,
-                    request.file.source_content.as_ref(),
-                )
-                .await?
+            super::resolution::compare_existing(
+                source,
+                destination,
+                &request.progress,
+                request.file.source_content.as_ref(),
+            )
+            .await?
         } else {
-            self.copier
-                .copy_and_verify(VerifiedCopyRequest {
-                    source: source.clone(),
-                    destination: destination.clone(),
-                    depth: request.depth,
-                    claim: DestinationClaim::ClaimHere,
-                    progress: request.progress.clone(),
-                })
-                .await?
+            super::verify::copy_and_verify(
+                &self.copier,
+                source,
+                destination,
+                crate::disk::placement::verified_copy(request.depth, DestinationClaim::ClaimHere),
+                &request.progress,
+            )
+            .await?
         };
 
         // Only a destination that is actually there gets its modes changed; a
@@ -1320,9 +1314,14 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 }
                 None => {
                     let source_hashes = super::verify::hash_existing_file(&source).await?;
-                    let destination_proof = super::verify::VerifiedCopier::default()
-                        .verify(&source, &destination, &source_hashes, record.depth.applied)
-                        .await?;
+                    let destination_proof = super::verify::verify(
+                        &Disk::process(),
+                        &source,
+                        &destination,
+                        &source_hashes,
+                        record.depth.applied,
+                    )
+                    .await?;
                     record.hashes.as_ref() == Some(&source_hashes)
                         && destination_proof.outcome.permits_source_removal()
                         && destination_proof.depth.applied == record.depth.applied

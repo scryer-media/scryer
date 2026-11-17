@@ -95,7 +95,7 @@ use crate::location::root_move::{
     build_root_move_plan,
 };
 use crate::location::transfer_effects::{TitleAssociationFacts, converts_facet};
-use crate::location::verify::{VerifiedCopier, same_filesystem};
+use crate::location::verify::same_filesystem;
 use crate::ports::LocationOperationProgress;
 use crate::services::AppUseCase;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
@@ -1353,7 +1353,7 @@ impl AppUseCase {
                 .unwrap_or_else(|| "source".into());
             contexts.insert(title.title_id.clone(), label);
         }
-        let copy_mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
+        let copy_mover = RootMoveFileMover::new(Disk::process(), permissions.clone())
             .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }))
             .with_resolver(Arc::new(super::resolution::ConflictResolver::new(
                 self.services.library.location_operations.clone(),

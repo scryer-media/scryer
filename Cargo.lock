@@ -5659,6 +5659,7 @@ version = "0.22.4"
 dependencies = [
  "blake3",
  "chrono",
+ "crc-turbo",
  "libc",
  "tempfile",
  "thiserror 2.0.21",

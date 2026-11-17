@@ -58,6 +58,9 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         source,
         dest,
         policy,
+        watch: Box::leak(Box::new(Watch::nobody())),
+        permit: Default::default(),
+        copied: Default::default(),
     }
 }
 
@@ -213,6 +216,26 @@ fn a_copy_that_does_not_match_is_refused_after_one_more_look() {
     }
 }
 
+/// A move that falls back to a copy removes its source next, so the copy is
+/// proven even for a caller that proves copies itself.
+#[test]
+fn a_move_that_copies_proves_the_copy_whatever_the_policy_says() {
+    for replace in [Replace::Never, Replace::Allowed] {
+        let (disk, backend, _) = scripted();
+        backend.fails("rename_no_replace", SOURCE, io::ErrorKind::CrossesDevices);
+        backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+        copies(&backend, b"synthetic payload", b"something else");
+        let mut policy = policy(Method::Move, Fallback::Copy);
+        policy.verify = Verify::None;
+        policy.replace = replace;
+        assert_eq!(refusal(&disk, policy), Refused::NotVerified);
+        assert!(
+            !backend.paths_of("remove_file").contains(&p(SOURCE)),
+            "the source is kept"
+        );
+    }
+}
+
 /// A caller that proves the copy itself is still not trusted with a copy the
 /// filesystem could not sync.
 #[test]
@@ -297,6 +320,31 @@ fn a_link_that_cannot_be_made_is_copied_when_the_policy_allows() {
     }
 }
 
+/// A link refused for a reason that says something about the source, the
+/// access or the space is not answered by copying.
+#[test]
+fn a_link_refused_for_a_named_reason_is_not_copied() {
+    let cases = [
+        (io::ErrorKind::NotFound, Refused::SourceMissing),
+        (io::ErrorKind::PermissionDenied, Refused::Denied),
+        (io::ErrorKind::StorageFull, Refused::NoSpace),
+        (
+            io::ErrorKind::NotConnected,
+            Refused::Unreachable(Side::Either),
+        ),
+    ];
+    for (kind, expected) in cases {
+        let (disk, backend, _) = scripted();
+        backend.fails("hard_link", DEST, kind);
+        copies(&backend, b"synthetic payload", b"synthetic payload");
+        assert_eq!(
+            refusal(&disk, policy(Method::HardLink, Fallback::Copy)),
+            expected
+        );
+        assert_eq!(backend.calls_of("open"), 0, "nothing was copied");
+    }
+}
+
 #[test]
 fn failures_are_classified_once_into_typed_refusals() {
     let moved = |kind: io::ErrorKind| {
@@ -320,6 +368,12 @@ fn failures_are_classified_once_into_typed_refusals() {
         refusal(&disk, policy(Method::Copy, Fallback::None))
     };
     assert_eq!(claimed(io::ErrorKind::StorageFull), Refused::NoSpace);
+    // A reservation with no folder to go in names the destination, where a
+    // rename, which names both paths at once, cannot.
+    assert_eq!(
+        claimed(io::ErrorKind::NotFound),
+        Refused::DestinationMissing
+    );
     assert_eq!(
         claimed(io::ErrorKind::NotConnected),
         Refused::Unreachable(Side::Destination)
@@ -424,7 +478,7 @@ fn a_source_that_cannot_be_unlinked_decides_by_whether_it_is_still_there() {
         }
         let (source, dest) = (p(SOURCE), p(DEST));
         let done = job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
-            .unlink_moved_source()
+            .unlink_moved_source(Done::CopiedThenRemovedSource)
             .map_err(|fail| fail.refused);
         (
             done,
@@ -445,6 +499,21 @@ fn a_source_that_cannot_be_unlinked_decides_by_whether_it_is_still_there() {
     let (done, removed, _) = run(Some(Err(io::ErrorKind::TimedOut)));
     assert_eq!(done, Err(Refused::Denied));
     assert_eq!(removed, [p(SOURCE)]);
+}
+
+/// A source that is already gone when its unlink is tried is what the move
+/// wanted: the move finishes, and nothing is looked at or taken back.
+#[test]
+fn an_unlink_that_finds_the_source_already_gone_finishes_the_move() {
+    let (disk, backend, _) = scripted();
+    backend.fails("remove_file", SOURCE, io::ErrorKind::NotFound);
+    let (source, dest) = (p(SOURCE), p(DEST));
+    let done = job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
+        .unlink_moved_source(Done::CopiedThenRemovedSource)
+        .map_err(|fail| fail.refused);
+    assert_eq!(done, Ok(Done::CopiedThenRemovedSource));
+    assert_eq!(backend.paths_of("remove_file"), [p(SOURCE)]);
+    assert_eq!(backend.calls_of("lstat"), 0);
 }
 
 /// A name that differs only in case is the same file on a case-insensitive
@@ -748,48 +817,50 @@ mod real {
     #[cfg(unix)]
     #[test]
     fn a_cross_device_copy_never_shows_an_unproven_file_or_replaces_a_newcomer() {
-        use std::io::Write;
-        use std::os::unix::ffi::OsStrExt;
         let dir = tempfile::tempdir().expect("tempdir");
-        // A pipe as the source holds the copy open until the test lets it end.
-        let source = dir.path().join("source.mkv");
-        let source_c = std::ffi::CString::new(source.as_os_str().as_bytes()).expect("path");
-        // SAFETY: the path is NUL-terminated and outlives the call.
-        assert_eq!(unsafe { libc::mkfifo(source_c.as_ptr(), 0o600) }, 0);
-        let dest = dir.path().join("dest.mkv");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"payload");
 
-        let mover = std::thread::spawn({
-            let (source, dest) = (source.clone(), dest.clone());
-            move || {
-                let unverified = Placement {
-                    verify: Verify::None,
-                    ..moving()
-                };
-                let disk = disk();
-                job(&disk, &source, &dest, unverified)
-                    .across_volumes(crossing(&source))
-                    .map_err(|fail| fail.refused)
-            }
-        });
-        // Opening the pipe for writing returns once the copy has opened it.
-        let mut writer = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&source)
-            .expect("open the pipe");
-        writer.write_all(b"payload").expect("feed the copy");
+        // The copy reports from inside its write loop, which is where the
+        // folder is looked at and the newcomer arrives.
+        let looked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watch = Watch {
+            progress: Progress::to({
+                let (folder, dest, looked) =
+                    (dir.path().to_path_buf(), dest.clone(), looked.clone());
+                move |phase, _| {
+                    if phase != Phase::Copying
+                        || looked.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        return;
+                    }
+                    // Only the source and the staged copy: nothing under the
+                    // real name.
+                    let mid_copy = names(&folder);
+                    assert_eq!(mid_copy.len(), 2, "{mid_copy:?}");
+                    assert!(
+                        mid_copy[0].starts_with(".scryer-") && mid_copy[0].ends_with(".partial")
+                    );
+                    assert_eq!(mid_copy[1], "source.mkv");
+                    write(&dest, b"newcomer");
+                }
+            }),
+            cancel: Cancel::never(),
+        };
+        let disk = disk();
+        let refused = Job {
+            watch: &watch,
+            ..job(&disk, &source, &dest, moving())
+        }
+        .across_volumes(crossing(&source))
+        .map_err(|fail| fail.refused)
+        .expect_err("the newcomer wins");
 
-        // Only the source and the staged copy: nothing under the real name.
-        let mid_copy = names(dir.path());
-        assert_eq!(mid_copy.len(), 2, "{mid_copy:?}");
-        assert!(mid_copy[0].starts_with(".scryer-") && mid_copy[0].ends_with(".partial"));
-        assert_eq!(mid_copy[1], "source.mkv");
-        write(&dest, b"newcomer");
-        drop(writer);
-
-        let refused = mover.join().expect("join").expect_err("the newcomer wins");
+        assert!(looked.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(refused, Refused::DestinationExists);
         assert_eq!(std::fs::read(&dest).expect("dest"), b"newcomer");
         // The source is untouched and the staged copy is taken back.
+        assert_eq!(std::fs::read(&source).expect("source"), b"payload");
         assert_eq!(names(dir.path()), ["dest.mkv", "source.mkv"]);
     }
 
@@ -865,6 +936,31 @@ mod real {
         assert_eq!(done.ok(), Some(Done::CopiedThenRemovedSource));
         assert!(!source.exists());
         assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+    }
+
+    /// A symbolic link moved to another volume is made again there, and the
+    /// placement says so instead of claiming a copy.
+    #[cfg(unix)]
+    #[test]
+    fn a_cross_device_move_of_a_symlink_makes_the_link_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("target.mkv");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&target, b"payload");
+        std::os::unix::fs::symlink(&target, &source).expect("link the source");
+
+        let disk = disk();
+        let done = job(&disk, &source, &dest, moving()).across_volumes(crossing(&source));
+        assert_eq!(done.ok(), Some(Done::RelinkedThenRemovedSource));
+        assert_eq!(std::fs::read_link(&dest).expect("dest link"), target);
+        assert!(std::fs::symlink_metadata(&source).is_err());
+        assert_eq!(std::fs::read(&target).expect("target"), b"payload");
+        let relinked = Placed {
+            asked: Method::Move,
+            done: Done::RelinkedThenRemovedSource,
+            copied: None,
+        };
+        assert!(relinked.fell_back());
     }
 
     /// On Windows a read-only source refuses the unlink until its attribute

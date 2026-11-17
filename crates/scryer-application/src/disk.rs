@@ -17,6 +17,15 @@ pub use scryer_disk::{
     VolumeClass, is_cross_device_error, reason,
 };
 pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
+#[doc(hidden)]
+pub use scryer_disk::{
+    CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed, whole_file_reads,
+};
+pub use scryer_disk::{
+    Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
+    Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
+    RESUMABLE_STAGING_SUFFIX, Verdict, Watch, resumable_staging_path,
+};
 
 #[cfg(test)]
 pub(crate) use scryer_disk::test_support;
@@ -43,6 +52,7 @@ impl crate::AppUseCase {
         };
         let (_, recycle_bin, _) = self.recycle_bin_config_values().await;
         Disk::process().set_volumes(configured_volumes(library_roots, recycle_bin));
+        crate::location::transfer::install_copy_workers();
     }
 }
 

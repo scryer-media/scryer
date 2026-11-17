@@ -404,6 +404,7 @@ fn p(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+mod copying;
 mod place;
 
 #[test]

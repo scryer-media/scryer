@@ -4,7 +4,7 @@ use scryer_application::{
     ImportFileTransferProgress, ImportFileTransferProgressSender,
     disk::{Disk, EntryKind, Link, LinkOutcome, Open, Parents, Removal, Remove},
     fs_integrity::import_content_proof,
-    location::verify::{StreamedContentHasher, VerifiedCopier},
+    location::verify::StreamedContentHasher,
 };
 use scryer_domain::{
     ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportMode,
@@ -210,7 +210,7 @@ impl ImportPlacementCoordinator {
             )
         });
         let mut coordinator = Self::new(fast_workers, copy_workers);
-        coordinator.copy = scryer_application::location::transfer::CopyCoordinator::shared();
+        coordinator.copy = scryer_application::location::transfer::shared();
         coordinator.unverifiable_hard_link_volumes = UnverifiableHardLinkVolumes::shared();
         coordinator
     }
@@ -928,20 +928,20 @@ fn force_copy_verification_failure(options: &ImportFileOptions) -> bool {
 /// The copier the copy path proves with. Tests substitute a read-back opener to
 /// reach the quick floor; production always uses the real one.
 #[cfg(test)]
-fn verified_copier_for(options: &ImportFileOptions) -> VerifiedCopier {
+fn verified_copier_for(options: &ImportFileOptions) -> Disk {
     if options.force_read_back_unsupported {
-        return VerifiedCopier::with_read_back_opener(Arc::new(|_: &Path| {
+        return Disk::process().with_read_back_opener(Arc::new(|_: &Path| {
             scryer_application::location::verify::ReadBackHandle::Unsupported(
                 "forced unsupported read-back".to_string(),
             )
         }));
     }
-    VerifiedCopier::new()
+    Disk::process()
 }
 
 #[cfg(not(test))]
-fn verified_copier_for(_: &ImportFileOptions) -> VerifiedCopier {
-    VerifiedCopier::new()
+fn verified_copier_for(_: &ImportFileOptions) -> Disk {
+    Disk::process()
 }
 
 /// Corrupt the destination between write and verification (SC-006).
@@ -1832,9 +1832,14 @@ fn copy_regular_source_to_destination(
                 *last = Some(Instant::now());
             }
         });
-    let assessment = verified_copier_for(&options)
-        .with_progress(verification_progress)
-        .verify_blocking(source, dest, &hashes, depth);
+    let assessment = scryer_application::location::verify::verify_blocking(
+        &verified_copier_for(&options),
+        source,
+        dest,
+        &hashes,
+        depth,
+        &verification_progress,
+    );
     report_import_transfer_progress(progress, ImportTransferPhase::Finalizing, size, size);
     let verification = ImportVerification {
         hashes,
@@ -3750,7 +3755,7 @@ impl FsFileImporter {
                         copy_permit = Some(
                             wait_for_import_operation_or_cancel(
                                 cancellation.as_ref(),
-                                self.placement.copy.acquire(&volume_key, "copy"),
+                                self.placement.copy.acquire_keyed(&volume_key),
                             )
                             .await?,
                         );
@@ -3855,7 +3860,7 @@ impl FsFileImporter {
                 let mut copy_permit = Some(
                     wait_for_import_operation_or_cancel(
                         cancellation.as_ref(),
-                        self.placement.copy.acquire(&volume_key, "copy"),
+                        self.placement.copy.acquire_keyed(&volume_key),
                     )
                     .await?,
                 );
@@ -4055,11 +4060,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn copy_lanes_are_volume_scoped_and_do_not_block_fast_lanes() {
         let coordinator = ImportPlacementCoordinator::new(1, 2);
-        let first_copy = coordinator.copy.acquire("volume-a", "copy").await;
-        let second_copy = coordinator.copy.acquire("volume-a", "copy").await;
+        let first_copy = coordinator.copy.acquire_keyed("volume-a").await;
+        let second_copy = coordinator.copy.acquire_keyed("volume-a").await;
         let third_copy = tokio::spawn({
             let copy = coordinator.copy.clone();
-            async move { copy.acquire("volume-a", "copy").await }
+            async move { copy.acquire_keyed("volume-a").await }
         });
         run_until_idle().await;
         assert!(
@@ -4075,7 +4080,7 @@ mod tests {
         .expect("a hardlink lane must remain available while copies are blocked");
         let other_volume = tokio::time::timeout(
             Duration::from_secs(30),
-            coordinator.copy.acquire("volume-b", "copy"),
+            coordinator.copy.acquire_keyed("volume-b"),
         )
         .await
         .expect("a different volume must have independent copy capacity");

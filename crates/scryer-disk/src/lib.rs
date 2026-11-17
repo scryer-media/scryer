@@ -57,6 +57,7 @@
 pub(crate) mod backend;
 pub(crate) mod cache;
 pub mod capacity;
+mod copy;
 mod pass;
 mod place;
 mod reading;
@@ -78,6 +79,15 @@ use volume::Volumes;
 
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
+#[doc(hidden)]
+pub use copy::{
+    CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed, whole_file_reads,
+};
+pub use copy::{
+    Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
+    Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
+    RESUMABLE_STAGING_SUFFIX, Verdict, Watch, resumable_staging_path,
+};
 pub use pass::DiskPass;
 pub use place::{
     CannotLink, Done, Fallback, Method, PlaceRefusal, Placed, Placement, Refused, Side, Verify,
@@ -525,6 +535,7 @@ struct Inner {
     clock: Arc<dyn DiskClock>,
     volumes: RwLock<Volumes>,
     cache: StatCache,
+    copies: std::sync::OnceLock<CopyAdmission>,
     #[cfg(test)]
     calls: Mutex<std::collections::HashMap<&'static str, u64>>,
     #[cfg(test)]
@@ -535,6 +546,8 @@ struct Inner {
 #[derive(Clone)]
 pub struct Disk {
     inner: Arc<Inner>,
+    /// A substitute for opening full read-backs; production has none.
+    read_back: Option<copy::ReadBackOpener>,
 }
 
 impl std::fmt::Debug for Disk {
@@ -559,11 +572,13 @@ impl Disk {
                 clock,
                 volumes: RwLock::new(Volumes::default()),
                 cache: StatCache::default(),
+                copies: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 calls: Mutex::default(),
                 #[cfg(test)]
                 probe_timeout: Mutex::default(),
             }),
+            read_back: None,
         }
     }
 

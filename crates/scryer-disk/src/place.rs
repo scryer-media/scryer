@@ -12,10 +12,15 @@
 //! path here that may not replace either refuses in the same call that would
 //! have written, or reserves the name first.
 
+use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use super::copy::{
+    Cause, Copied, CopyPermit, Evidence, Opening, Phase, Step, Watch, WriteFail, Writing,
+    write_copy,
+};
 use super::sample::{ContentSample, sample_reader};
 use super::{
     Disk, DiskError, DiskVerb, EntryKind, Link, LinkOutcome, Offloaded, Open, Parents, PathReading,
@@ -53,10 +58,17 @@ pub enum Fallback {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verify {
     /// The caller proves the copy for itself. A copy the filesystem could
-    /// not sync is still proven here: the source goes next.
+    /// not sync is still proven here, and so is the copy a move falls back
+    /// to: its source goes next.
     None,
-    /// The copy's size and sampled contents must match the source's.
+    /// The copy's size and sampled contents must match the source's, before
+    /// it takes the destination's name. One that does not match is removed.
     Quick,
+    /// The copy takes its place and is then proven, and the answer carries
+    /// what it streamed and what it proved to be. A copy that does not prove
+    /// stays as written. A recorded copy never removes a source: a move that
+    /// needs one is refused, for the caller to copy and decide on the proof.
+    Recorded(Evidence),
 }
 
 /// One placement's policy. The application's resolver builds it; there is no
@@ -81,18 +93,25 @@ pub enum Done {
     Copied,
     Renamed,
     CopiedThenRemovedSource,
+    /// The source was a symbolic link on another volume: a link to the same
+    /// target was made at the destination and the source link removed.
+    RelinkedThenRemovedSource,
 }
 
 /// A finished placement: what was asked, and what was done to honour it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placed {
     pub asked: Method,
     pub done: Done,
+    /// What a recorded copy streamed and proved. Absent when no bytes were
+    /// copied, or the policy records nothing.
+    pub copied: Option<Copied>,
 }
 
 impl Placed {
-    /// Whether the fallback was taken instead of the method asked for.
-    pub fn fell_back(self) -> bool {
+    /// Whether the fallback was taken instead of the method asked for: a
+    /// copy, or a symbolic link made again on the other volume.
+    pub fn fell_back(&self) -> bool {
         !matches!(
             (self.asked, self.done),
             (Method::HardLink, Done::HardLinked)
@@ -130,11 +149,20 @@ pub enum Refused {
     NeedsCopy,
     /// The copy did not match its source. The source was kept.
     NotVerified,
+    /// The name a staged recorded copy writes under is held by something.
+    /// Nothing was copied.
+    StagingOccupied,
+    /// Whoever watches the copy stopped it.
+    Cancelled,
     NoSpace,
     Denied,
-    /// The source is not there; or, when the policy creates no folders, the
-    /// destination's folder is not.
+    /// The source is not there. A rename names both paths in one call and
+    /// does not say which is missing, so from a rename this is also the
+    /// answer when the destination's folder is not there.
     SourceMissing,
+    /// The destination's folder is not there and the policy creates none; or
+    /// a destination the policy says the caller holds is not there.
+    DestinationMissing,
     Unreachable(Side),
     /// Any other failure.
     Failed,
@@ -149,9 +177,11 @@ impl Refused {
             Self::CannotLink(CannotLink::NotSupported) => reason::DISK_LINK_NOT_SUPPORTED,
             Self::NeedsCopy => reason::DISK_MOVE_NEEDS_COPY,
             Self::NotVerified => reason::DISK_COPY_NOT_VERIFIED,
+            Self::StagingOccupied => reason::DISK_COPY_STAGING_OCCUPIED,
+            Self::Cancelled => reason::DISK_COPY_CANCELLED,
             Self::NoSpace => reason::DISK_NO_SPACE,
             Self::Denied => reason::DISK_PERMISSION_DENIED,
-            Self::SourceMissing => reason::DISK_PATH_MISSING,
+            Self::SourceMissing | Self::DestinationMissing => reason::DISK_PATH_MISSING,
             Self::Unreachable(_) => reason::DISK_PATH_UNREACHABLE,
             Self::Failed => reason::DISK_OPERATION_FAILED,
         }
@@ -175,14 +205,15 @@ pub(crate) struct Fail {
 }
 
 impl Fail {
-    fn of(error: DiskError, side: Side) -> Self {
+    pub(crate) fn of(error: DiskError, side: Side) -> Self {
         let refused = match error.reason() {
             reason::DISK_DESTINATION_EXISTS | reason::DISK_DIRECTORY_NOT_EMPTY => {
                 Refused::DestinationExists
             }
             reason::DISK_NO_SPACE => Refused::NoSpace,
             reason::DISK_PERMISSION_DENIED => Refused::Denied,
-            reason::DISK_PATH_MISSING if side != Side::Destination => Refused::SourceMissing,
+            reason::DISK_PATH_MISSING if side == Side::Destination => Refused::DestinationMissing,
+            reason::DISK_PATH_MISSING => Refused::SourceMissing,
             reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT => Refused::Unreachable(side),
             _ => Refused::Failed,
         };
@@ -197,7 +228,7 @@ impl Fail {
         Self::of(DiskError::new(DiskVerb::Write, path, error), side)
     }
 
-    fn new(refused: Refused, kind: io::ErrorKind, detail: String) -> Self {
+    pub(crate) fn new(refused: Refused, kind: io::ErrorKind, detail: String) -> Self {
         Self {
             refused,
             detail: io::Error::new(kind, detail),
@@ -256,16 +287,44 @@ impl Disk {
         dest: &Path,
         policy: Placement,
     ) -> Result<Placed, PlaceRefusal> {
+        self.place_watched_blocking(source, dest, policy, &Watch::nobody())
+    }
+
+    /// [`Self::place_blocking`], reporting a copy's progress to `watch` and
+    /// stopping it when `watch` says so. A cancelled copy removes only a
+    /// staged file this call created.
+    pub fn place_watched_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+        policy: Placement,
+        watch: &Watch,
+    ) -> Result<Placed, PlaceRefusal> {
+        self.place_admitted(source, dest, policy, watch, None)
+    }
+
+    fn place_admitted(
+        &self,
+        source: &Path,
+        dest: &Path,
+        policy: Placement,
+        watch: &Watch,
+        permit: Option<CopyPermit>,
+    ) -> Result<Placed, PlaceRefusal> {
         let job = Job {
             disk: self,
             source,
             dest,
             policy,
+            watch,
+            permit: RefCell::new(permit),
+            copied: RefCell::new(None),
         };
         match job.run() {
             Ok(done) => Ok(Placed {
                 asked: policy.method,
                 done,
+                copied: job.copied.take(),
             }),
             Err(fail) => Err(PlaceRefusal {
                 asked: policy.method,
@@ -284,13 +343,44 @@ impl Disk {
         dest: impl Into<PathBuf>,
         policy: Placement,
     ) -> Result<Placed, PlaceRefusal> {
+        self.place_watched(source, dest, policy, Watch::nobody())
+            .await
+    }
+
+    /// [`Self::place_watched_blocking`] off the async runtime. A recorded
+    /// copy first waits for its turn on the destination's volume, and gives
+    /// the turn back before the copy is proven.
+    pub async fn place_watched(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+        policy: Placement,
+        watch: Watch,
+    ) -> Result<Placed, PlaceRefusal> {
         let (disk, source, dest) = (self.clone(), source.into(), dest.into());
-        match offload(None, move || disk.place_blocking(&source, &dest, policy)).await {
+        let recorded = matches!(policy.verify, Verify::Recorded(_));
+        let permit = match recorded && policy.method == Method::Copy {
+            true => {
+                watch.progress.report(Phase::Waiting, 0);
+                Some(self.copy_admission().acquire_for(&dest).await)
+            }
+            false => None,
+        };
+        let job = move || disk.place_admitted(&source, &dest, policy, &watch, permit);
+        match offload(None, job).await {
             Offloaded::Done(result) => result,
-            Offloaded::TimedOut | Offloaded::Failed(_) => Err(PlaceRefusal {
+            Offloaded::TimedOut => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: Refused::Failed,
                 detail: io::Error::other("the placement did not run to its end"),
+            }),
+            Offloaded::Failed(said) => Err(PlaceRefusal {
+                asked: policy.method,
+                refused: Refused::Failed,
+                detail: io::Error::other(match recorded {
+                    true => format!("verified copy task failed to join: {said}"),
+                    false => "the placement did not run to its end".to_string(),
+                }),
             }),
         }
     }
@@ -400,6 +490,10 @@ pub(crate) struct Job<'a> {
     pub(crate) source: &'a Path,
     pub(crate) dest: &'a Path,
     pub(crate) policy: Placement,
+    pub(crate) watch: &'a Watch,
+    /// The copy's turn on the destination's volume, when it waited for one.
+    pub(crate) permit: RefCell<Option<CopyPermit>>,
+    pub(crate) copied: RefCell<Option<Copied>>,
 }
 
 impl Job<'_> {
@@ -479,7 +573,9 @@ impl Job<'_> {
 
     /// A move a rename cannot make: copied when the policy allows it.
     pub(crate) fn across_volumes(&self, refusal: DiskError) -> Result<Done, Fail> {
-        if self.policy.fallback == Fallback::None {
+        if self.policy.fallback == Fallback::None
+            || matches!(self.policy.verify, Verify::Recorded(_))
+        {
             return Err(Fail {
                 refused: Refused::NeedsCopy,
                 detail: refusal.into(),
@@ -517,7 +613,7 @@ impl Job<'_> {
                     format!("{} cannot hold a symbolic link", dest.display()),
                 ));
             }
-            return self.unlink_moved_source();
+            return self.unlink_moved_source(Done::RelinkedThenRemovedSource);
         }
 
         if !self.replaces() {
@@ -529,7 +625,7 @@ impl Job<'_> {
             let _ = disk.remove_blocking(dest, Remove::File);
             return Err(fail);
         }
-        self.unlink_moved_source()
+        self.unlink_moved_source(Done::CopiedThenRemovedSource)
     }
 
     /// Moves the source to another volume through `staged`, which this job
@@ -540,7 +636,7 @@ impl Job<'_> {
     fn copy_through_staging(&self, staged: &Path) -> Result<Done, Fail> {
         let (fail, proven) = match self.copy_into(staged) {
             Ok(()) => match self.promote(staged, self.dest) {
-                Ok(()) => return self.unlink_moved_source(),
+                Ok(()) => return self.unlink_moved_source(Done::CopiedThenRemovedSource),
                 Err(fail) => (fail, true),
             },
             Err(fail) => (fail, false),
@@ -553,6 +649,9 @@ impl Job<'_> {
     /// name reserved beside the destination, so an interruption never leaves
     /// a part-written file under the real name.
     fn copy_keeping_source(&self) -> Result<Done, Fail> {
+        if let Verify::Recorded(evidence) = self.policy.verify {
+            return self.recorded_copy(evidence).map(|()| Done::Copied);
+        }
         let staged = staging_path_for(self.dest);
         self.claim(&staged)?;
         let placed = self
@@ -593,9 +692,13 @@ impl Job<'_> {
         if fail.refused == Refused::DestinationExists {
             return Err(fail);
         }
-        // A link that failed for any reason but an occupied name may be
-        // copied instead; a copy that cannot be made says why itself.
-        if self.policy.fallback == Fallback::Copy {
+        // Only a link the destination cannot hold, or one that failed for a
+        // reason the disk does not name, is copied instead. A source that is
+        // missing or unreachable, a refusal of access and a full disk are
+        // answers in themselves.
+        if self.policy.fallback == Fallback::Copy
+            && (cannot.is_some() || fail.refused == Refused::Failed)
+        {
             return self.copy_keeping_source();
         }
         Err(match cannot {
@@ -720,13 +823,13 @@ impl Job<'_> {
     /// fails, one look at the source decides: gone means the move finished;
     /// still there means the new destination is taken back, so no duplicate
     /// refuses the retry; unknown leaves both and reports the failure.
-    pub(crate) fn unlink_moved_source(&self) -> Result<Done, Fail> {
+    pub(crate) fn unlink_moved_source(&self, done: Done) -> Result<Done, Fail> {
         let (disk, source) = (self.disk, self.source);
         let Err(error) = disk.remove_blocking(source, Remove::FileEvenReadOnly) else {
-            return Ok(Done::CopiedThenRemovedSource);
+            return Ok(done);
         };
         match disk.uncached_blocking(source).exists() {
-            Some(false) => Ok(Done::CopiedThenRemovedSource),
+            Some(false) => Ok(done),
             Some(true) => {
                 let _ = disk.remove_blocking(self.dest, Remove::File);
                 Err(Fail::of(error, Side::Source))
@@ -739,28 +842,21 @@ impl Job<'_> {
     /// handle is opened for writing without creating, so the reservation is
     /// what decided the file may be written.
     fn copy_into(&self, target: &Path) -> Result<(), Fail> {
-        let (disk, source) = (self.disk, self.source);
-        let mut source_file = disk
-            .open_blocking(source, Open::read())
-            .map_err(|error| Fail::of(error, Side::Source))?;
-        let mut target_file = disk
-            .open_blocking(target, Open::write_existing())
-            .map_err(|error| Fail::of(error, Side::Destination))?;
-        target_file
-            .set_len(0)
-            .map_err(|error| Fail::io(error, target, Side::Destination))?;
-        io::copy(&mut source_file, &mut target_file)
-            .map_err(|error| Fail::io(error, target, Side::Either))?;
-        let sync = disk
-            .finish_blocking(target, target_file)
-            .map_err(|error| Fail::of(error, Side::Destination))?;
+        let writing = Writing {
+            opening: Opening::Held,
+            hash: false,
+            sync_folder: false,
+            watch: self.watch,
+        };
+        let sync = write_copy(self.disk, self.source, target, writing)
+            .map_err(|fail| self.gate_failure(fail, target))?
+            .sync;
 
-        // Carry the source's permissions, so a move does not silently change
-        // access. Permissions the caller applies afterwards take precedence.
-        let _ = disk.copy_permissions_blocking(source, target);
-
+        // A move removes its source next, so its copy is proven whatever
+        // the policy asks.
         let unconfirmed = sync == SyncOutcome::Unconfirmed;
-        if self.policy.verify == Verify::Quick || unconfirmed {
+        if self.policy.verify == Verify::Quick || self.policy.method == Method::Move || unconfirmed
+        {
             if unconfirmed {
                 tracing::debug!(
                     dest = %target.display(),
@@ -770,6 +866,24 @@ impl Job<'_> {
             self.verify_copy_with_retry(target)?;
         }
         Ok(())
+    }
+
+    /// A failed copy as a gated placement reports it: in the system's words.
+    fn gate_failure(&self, fail: WriteFail, target: &Path) -> Fail {
+        let side = match fail.step {
+            Step::OpenSource => Side::Source,
+            Step::Read | Step::Write | Step::Transfer => Side::Either,
+            _ => Side::Destination,
+        };
+        match fail.cause {
+            _ if fail.step == Step::Cancelled => Fail::new(
+                Refused::Cancelled,
+                io::ErrorKind::Interrupted,
+                format!("the copy to {} was cancelled", target.display()),
+            ),
+            Cause::Disk(error) => Fail::of(error, side),
+            Cause::Io(error) => Fail::io(error, target, side),
+        }
     }
 
     /// Verifies a copy, looking once more after a pause.

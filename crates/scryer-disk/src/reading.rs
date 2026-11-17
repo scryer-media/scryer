@@ -51,6 +51,11 @@ pub mod reason {
     /// A copy did not match its source, so it does not count and the source
     /// was kept.
     pub const DISK_COPY_NOT_VERIFIED: &str = "DISK_COPY_NOT_VERIFIED";
+    /// The name a staged copy writes under is held by something, so nothing
+    /// was copied.
+    pub const DISK_COPY_STAGING_OCCUPIED: &str = "DISK_COPY_STAGING_OCCUPIED";
+    /// Whoever watches a copy stopped it.
+    pub const DISK_COPY_CANCELLED: &str = "DISK_COPY_CANCELLED";
     /// Any other failure.
     pub const DISK_OPERATION_FAILED: &str = "DISK_OPERATION_FAILED";
 
@@ -71,6 +76,8 @@ pub mod reason {
         DISK_LINK_DIFFERENT_VOLUME,
         DISK_LINK_NOT_SUPPORTED,
         DISK_COPY_NOT_VERIFIED,
+        DISK_COPY_STAGING_OCCUPIED,
+        DISK_COPY_CANCELLED,
         DISK_OPERATION_FAILED,
     ];
 }

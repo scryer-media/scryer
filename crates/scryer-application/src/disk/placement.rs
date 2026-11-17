@@ -5,7 +5,9 @@
 //! callers that put one together. A caller names what it is doing and gets
 //! the policy for it.
 
-use super::{Fallback, Method, Parents, Placement, Replace, Verify};
+use super::{Depth, Evidence, Fallback, Landing, Method, Parents, Placement, Replace, Verify};
+use crate::location::model::VerificationDepth;
+use crate::location::verify::DestinationClaim;
 
 /// Renaming a library file to its planned name. Nothing at the new name is
 /// ever replaced; a name on another volume is reached by a copy that is
@@ -43,6 +45,51 @@ pub(crate) fn recycle_restore_link() -> Placement {
         fallback: Fallback::None,
         replace: Replace::Never,
         verify: Verify::None,
+        parents: Parents::MustExist,
+    }
+}
+
+/// Copying a file and recording what the copy streamed and proved, at the
+/// operation's configured verification depth. The source is left alone and
+/// nothing is replaced: a copy that claims its own name is written beside it
+/// and takes the name once complete; one whose name the caller already holds
+/// is written over that held file. Folders are not created.
+pub fn verified_copy(depth: VerificationDepth, claim: DestinationClaim) -> Placement {
+    crate::location::transfer::install_copy_workers();
+    recorded(crate::location::verify::disk_depth(depth), claim)
+}
+
+/// Copying into a staging name the caller journaled before asking. The name
+/// is created by the copy, which fails if it is held, and whatever is written
+/// stays there on failure for the caller's recovery. The caller proves the
+/// copy from the hashes.
+pub(crate) fn journaled_staging_copy() -> Placement {
+    crate::location::transfer::install_copy_workers();
+    Placement {
+        verify: Verify::Recorded(Evidence {
+            depth: Depth::Unproven,
+            landing: Landing::Direct,
+        }),
+        ..recorded(Depth::Unproven, DestinationClaim::ClaimHere)
+    }
+}
+
+/// A recorded copy the test proves for itself.
+#[cfg(test)]
+pub(crate) fn unproven_copy(claim: DestinationClaim) -> Placement {
+    recorded(Depth::Unproven, claim)
+}
+
+fn recorded(depth: Depth, claim: DestinationClaim) -> Placement {
+    let (replace, landing) = match claim {
+        DestinationClaim::ClaimHere => (Replace::Never, Landing::Staged),
+        DestinationClaim::AlreadyHeld => (Replace::Allowed, Landing::Direct),
+    };
+    Placement {
+        method: Method::Copy,
+        fallback: Fallback::None,
+        replace,
+        verify: Verify::Recorded(Evidence { depth, landing }),
         parents: Parents::MustExist,
     }
 }
