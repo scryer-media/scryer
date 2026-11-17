@@ -874,8 +874,10 @@ impl AppUseCase {
         if keeps_arming {
             let keep_enabled = rule_set.state == LifecycleRuleState::Enabled
                 && !prepared.declared.heads.is_empty();
+            // The confirmation moves only onto a source that still deletes.
+            let carry_confirmation = keep_enabled && prepared.declared.destructive;
             rules
-                .add_revision_keeping_state(&revision, keep_enabled, keep_enabled, None, now)
+                .add_revision_keeping_state(&revision, keep_enabled, carry_confirmation, None, now)
                 .await?;
         } else {
             rules.add_revision(&revision, None, now).await?;

@@ -1047,9 +1047,8 @@ async fn a_scope_change_disarms_in_the_same_write() {
     let _ = std::fs::remove_file(db);
 }
 
-/// A stored state this build does not know reads as disabled, and a
-/// confirmed revision it cannot read reads as no confirmation, so neither
-/// can make a rule act or delete.
+/// A stored state this build does not know reads as disabled, and a NULL
+/// confirmation reads as none, so neither can make a rule act or delete.
 #[tokio::test]
 async fn an_unknown_stored_state_reads_disabled() {
     let (services, db) = temp_services("scryer_lifecycle_unknown_state").await;
@@ -1060,7 +1059,7 @@ async fn an_unknown_stored_state_reads_disabled() {
         .unwrap();
     sqlx::query(
         "UPDATE lifecycle_rule_sets
-            SET state = 'sweeping', destructive_confirmed_revision = 'not-a-revision'
+            SET state = 'sweeping', destructive_confirmed_revision = NULL
           WHERE id = 'unknown'",
     )
     .execute(services.pool())
@@ -1077,6 +1076,33 @@ async fn an_unknown_stored_state_reads_disabled() {
         LifecycleRuleState::Disabled,
         "the list read decodes the same way"
     );
+    let _ = std::fs::remove_file(db);
+}
+
+/// A confirmation the store cannot decode is a read error, not a missing
+/// confirmation: the read fails instead of hiding it.
+#[tokio::test]
+async fn an_undecodable_confirmation_fails_the_read() {
+    let (services, db) = temp_services("scryer_lifecycle_undecodable_confirmation").await;
+    let store = lifecycle_rule_set_store(&services).await;
+    store
+        .create_rule_set(
+            &rule_set("undecodable", Vec::new()),
+            &revision("undecodable", 1),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE lifecycle_rule_sets
+            SET state = 'enabled', destructive_confirmed_revision = 'not-a-revision'
+          WHERE id = 'undecodable'",
+    )
+    .execute(services.pool())
+    .await
+    .unwrap();
+
+    assert!(store.get_rule_set("undecodable").await.is_err());
+    assert!(store.list_rule_sets().await.is_err());
     let _ = std::fs::remove_file(db);
 }
 

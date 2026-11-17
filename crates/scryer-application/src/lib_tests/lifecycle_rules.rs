@@ -59,12 +59,26 @@ pub(super) struct InMemoryLifecycleRuleRepo {
     rule_sets: Mutex<Vec<LifecycleRuleSet>>,
     revisions: Mutex<Vec<LifecycleRuleRevision>>,
     read_fault: Mutex<Option<LifecycleRuleReadFault>>,
+    single_read_state: Mutex<Option<(LifecycleRuleState, Option<i64>)>>,
 }
 
 impl InMemoryLifecycleRuleRepo {
     /// Make every subsequent single-rule read fail this way.
     pub(super) async fn fail_rule_set_reads(&self, fault: LifecycleRuleReadFault) {
         *self.read_fault.lock().await = Some(fault);
+    }
+
+    /// Make every subsequent single-rule read answer with this state and
+    /// confirmation while the listing keeps the stored ones, or stop doing so
+    /// with `None`.
+    ///
+    /// A handler pass selects its rules from the listing and re-reads one rule
+    /// just before a step acts, so this is the rule changing between the two.
+    pub(super) async fn answer_single_reads_with(
+        &self,
+        state: Option<(LifecycleRuleState, Option<i64>)>,
+    ) {
+        *self.single_read_state.lock().await = state;
     }
 }
 
@@ -135,13 +149,21 @@ impl LifecycleRuleSetRepository for InMemoryLifecycleRuleRepo {
             }
             None => {}
         }
+        let override_state = *self.single_read_state.lock().await;
         Ok(self
             .rule_sets
             .lock()
             .await
             .iter()
             .find(|rule_set| rule_set.id == id)
-            .cloned())
+            .cloned()
+            .map(|mut rule_set| {
+                if let Some((state, confirmed)) = override_state {
+                    rule_set.state = state;
+                    rule_set.destructive_confirmed_revision = confirmed;
+                }
+                rule_set
+            }))
     }
 
     async fn create_rule_set(

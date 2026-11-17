@@ -620,19 +620,15 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<LifecycleRuleSet> {
         // An unrecognized stored state is a rule written by a newer build. It
         // reads back as disabled so this build never evaluates or acts on
         // semantics it does not implement.
+        // A read error is still an error.
         state: row
-            .opt_text("state")
-            .ok()
-            .flatten()
+            .opt_text("state")?
             .and_then(|value| LifecycleRuleState::parse_storage(&value))
             .unwrap_or_default(),
         edited_since_enabled: row.bool("edited_since_enabled")?,
-        // A confirmation this build cannot read confirms nothing: it reads as
-        // none, so no step that deletes runs under it.
-        destructive_confirmed_revision: row
-            .opt_i64("destructive_confirmed_revision")
-            .ok()
-            .flatten(),
+        // A NULL confirmation confirms nothing, so no step that deletes runs
+        // under it.
+        destructive_confirmed_revision: row.opt_i64("destructive_confirmed_revision")?,
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         system_owned: row.bool("system_owned")?,
         current_revision_number: row.i64("current_revision_number")?,

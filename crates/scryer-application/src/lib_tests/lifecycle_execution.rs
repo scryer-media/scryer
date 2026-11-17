@@ -1117,6 +1117,76 @@ async fn a_confirmation_for_an_older_revision_never_deletes() {
     );
 }
 
+/// The pass selects an enabled, confirmed deleting rule, and the rule changes
+/// before its step acts. The re-read just before acting holds the candidate
+/// and deletes nothing.
+#[tokio::test]
+async fn a_rule_that_changes_after_the_pass_selects_it_deletes_nothing() {
+    for (changed_state, changed_confirmation) in [
+        // Still enabled, but the confirmation is not for the revision in force.
+        (LifecycleRuleState::Enabled, Some(2)),
+        (LifecycleRuleState::Enabled, None),
+        // Confirmed for the revision in force, but no longer enabled.
+        (LifecycleRuleState::DryRun, Some(1)),
+    ] {
+        let fixture =
+            execution_app_with_operations(Arc::new(InMemoryLocationOperationStore::new()));
+        let rule_id = fixture.observed_rule(delete_draft()).await;
+        fixture.open_gates(true, true).await;
+        let title = seed_title(&fixture.app, &fixture.user, "Synthetic Retiree", true).await;
+        fixture.evaluate().await;
+        fixture
+            .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+            .await;
+        let stored = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+        assert!(stored.destructive_confirmed(), "{stored:?}");
+
+        fixture
+            .rules
+            .answer_single_reads_with(Some((changed_state, changed_confirmation)))
+            .await;
+        let report = fixture.handle().await;
+        let case = (changed_state, changed_confirmation);
+        assert_eq!(report.rules_eligible, 1, "{case:?}: {report:?}");
+        assert_eq!(report.held, 1, "{case:?}: {report:?}");
+        assert_eq!(report.executed, 0, "{case:?}: {report:?}");
+        assert!(
+            fixture
+                .app
+                .get_title(&fixture.user, &title.id)
+                .await
+                .expect("read title")
+                .is_some(),
+            "{case:?}: a rule that changed before acting must not delete"
+        );
+        let candidate = fixture.only_candidate().await;
+        assert_eq!(
+            candidate.state,
+            LifecycleCandidateState::Blocked,
+            "{case:?}"
+        );
+        assert_eq!(
+            candidate.state_reason,
+            execution_reason::RULE_NOT_ELIGIBLE,
+            "{case:?}"
+        );
+
+        // The same candidate passes the re-read once it agrees again, so the
+        // hold above came from the changed rule alone. The delete itself is
+        // proven in the integration suite.
+        fixture.rules.answer_single_reads_with(None).await;
+        fixture.evaluate().await;
+        let report = fixture.handle().await;
+        assert_eq!(report.held, 0, "{case:?}: {report:?}");
+        let candidate = fixture.only_candidate().await;
+        assert_ne!(
+            candidate.state_reason,
+            execution_reason::RULE_NOT_ELIGIBLE,
+            "{case:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn enabling_derives_arming_and_destructive_demands_the_current_count() {
     let fixture = execution_app(None);
