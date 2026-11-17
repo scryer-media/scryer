@@ -1465,12 +1465,34 @@ impl Disk {
         path: &Path,
         file: std::fs::File,
     ) -> Result<SyncOutcome, DiskError> {
+        self.finish_marking_blocking(path, file, false).0
+    }
+
+    /// [`Self::finish_blocking`], and when `mark` asks, the mark of the file
+    /// read through its handle after the sync and before the close, as late
+    /// as the handle allows. A handle that cannot say gives no mark.
+    pub(crate) fn finish_marking_blocking(
+        &self,
+        path: &Path,
+        file: std::fs::File,
+        mark: bool,
+    ) -> (Result<SyncOutcome, DiskError>, Option<Mark>) {
         let result = self.call("sync_handle", || self.inner.backend.sync_handle(&file));
         #[cfg(test)]
         let result = self.fault(CopyFault::Sync).map_or(result, Err);
+        let marked = match mark && result.is_ok() {
+            true => self
+                .call("handle_stat", || file.metadata())
+                .ok()
+                .map(|metadata| Mark::of(&metadata)),
+            false => None,
+        };
         drop(file);
         self.inner.cache.evict(&key_of(path));
-        result.map_err(|error| DiskError::new(DiskVerb::Sync, path, error))
+        (
+            result.map_err(|error| DiskError::new(DiskVerb::Sync, path, error)),
+            marked,
+        )
     }
 
     /// [`Self::finish_blocking`] for a handle from [`Self::open`]. Writes

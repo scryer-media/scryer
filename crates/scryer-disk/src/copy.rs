@@ -723,18 +723,12 @@ pub(crate) fn write_copy(
         .flush()
         .map_err(|error| fail(Step::Flush, Cause::Io(error), true))?;
     // A rename on one volume keeps the file this mark names, so a caller can
-    // tell the file it promoted from whatever holds the name later. A handle
-    // that cannot say leaves the caller unable to tell, not the copy failed.
-    let target_mark = match writing.mark_target {
-        true => disk
-            .call("handle_stat", || output.metadata())
-            .ok()
-            .map(|metadata| Mark::of(&metadata)),
-        false => None,
-    };
-    let sync = disk
-        .finish_blocking(target, output)
-        .map_err(|error| fail(Step::Sync, Cause::Disk(error), true))?;
+    // tell the file it promoted from whatever holds the name later. It is
+    // read after the sync, where a platform that sets the write time late
+    // has set it. A handle that cannot say leaves the caller unable to tell,
+    // not the copy failed.
+    let (sync, target_mark) = disk.finish_marking_blocking(target, output, writing.mark_target);
+    let sync = sync.map_err(|error| fail(Step::Sync, Cause::Disk(error), true))?;
     if writing.sync_folder {
         if sync == SyncOutcome::Unconfirmed {
             tracing::debug!(

@@ -372,6 +372,17 @@ impl Mark {
         }
     }
 
+    /// This mark without the link count it was read with, which is never
+    /// stored.
+    #[cfg(test)]
+    pub(crate) fn as_stored(&self) -> Self {
+        let mut mark = self.clone();
+        if let Some(facts) = &mut mark.facts {
+            facts.links = None;
+        }
+        mark
+    }
+
     /// Whether the read said the file has this one name and no other.
     pub(crate) fn is_only_name(&self) -> bool {
         self.facts.is_some_and(|facts| facts.links == Some(1))

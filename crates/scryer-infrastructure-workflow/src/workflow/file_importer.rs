@@ -1894,19 +1894,29 @@ fn copy_regular_source_to_destination(
     // below does. A name that does not read is left as it is.
     // The file the copy promoted, read through its own handle before it
     // took the name: a later read of the name may already be another file.
-    let landed = copied.promoted;
+    // Where that mark tells no file apart from another, only its length and
+    // times can, and a platform that sets the write time at the close would
+    // make the import's own copy read as rewritten; there the read of the
+    // name made next, right after the promotion, marks it instead.
+    let promoted = copied.promoted;
     #[cfg(test)]
     if let Some(after_promoted) = options.after_copy_promoted {
         after_promoted(source, dest);
     }
-    let dest_fingerprint = match read_import_source(dest) {
-        Ok((fingerprint, _)) => fingerprint.file,
+    let (dest_fingerprint, landed) = match read_import_source(dest) {
+        Ok((fingerprint, named)) => {
+            let landed = match promoted {
+                Some(mark) if mark.same_file(&mark) == Sameness::CannotTell => Some(named),
+                promoted => promoted,
+            };
+            (fingerprint.file, landed)
+        }
         Err(error) => {
             return Err(took_back(
                 error,
                 source,
                 dest,
-                Landed::Copy(landed.as_ref()),
+                Landed::Copy(promoted.as_ref()),
             ));
         }
     };

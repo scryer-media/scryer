@@ -604,6 +604,13 @@ fn a_staged_copy_names_the_file_it_promoted() {
     let promoted = copied.promoted.expect("the handle answered");
     let landed = Mark::of(&std::fs::symlink_metadata(&fixture.dest).unwrap());
     assert_eq!(promoted.same_file(&landed), Sameness::Same);
+    // Read after the sync, its length and write time are the file's as it
+    // was left; the promotion itself may touch the change time.
+    assert!(
+        promoted.compare(&landed).is_unwritten_by_its_owner(),
+        "{:?}",
+        promoted.compare(&landed)
+    );
 
     let other = fixture.dest.with_file_name("sample-other.mkv");
     std::fs::write(&other, payload()).unwrap();

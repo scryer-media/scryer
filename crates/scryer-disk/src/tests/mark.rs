@@ -206,7 +206,7 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
         let stored = taken.to_stored();
         let read = Mark::from_stored(&stored).unwrap_or_else(|| panic!("{stored}"));
         assert_eq!(read.to_stored(), stored);
-        assert_eq!(format!("{read:?}"), format!("{taken:?}"));
+        assert_eq!(format!("{read:?}"), format!("{:?}", taken.as_stored()));
     }
     assert_eq!(marks[3].to_stored(), "unix-dev:1");
     assert_eq!(marks[4].to_stored(), "windows-volume:42");
