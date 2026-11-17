@@ -26,10 +26,7 @@ export type RuleBuilderCondition = {
 /// choice or number output, a list for a list output, and one typed text per
 /// part for a structured output.
 export type RuleBuilderOutputValue =
-  | true
-  | string
-  | string[]
-  | { [part: string]: string };
+  true | string | string[] | { [part: string]: string };
 
 /// One action of a family whose schema declares subjects: the subject it acts
 /// on, the output it declares ("" until one is picked), and the conditions
@@ -60,11 +57,7 @@ export type RuleBuilderModel = {
 /// What a comparison takes as its value: nothing, a decimal number, a whole
 /// number of days, free text, or one of the field's known values.
 export type RuleBuilderConditionValue =
-  | "none"
-  | "number"
-  | "days"
-  | "text"
-  | "choice";
+  "none" | "number" | "days" | "text" | "choice";
 
 /// One comparison. `template` is the Rego it writes, one body line per line
 /// of the template: `{path}` is the field's input path and `{value}` the
@@ -88,6 +81,10 @@ export type RuleBuilderFieldOverride = {
   choices?: readonly RuleBuilderChoice[];
   /// Variants whose input carries the field. Absent means every variant.
   variants?: readonly string[];
+  /// A catalog the page supplies to pick a `text` comparison's value from,
+  /// for a field that holds an id the operator knows by name. Without the
+  /// catalog the value is typed in.
+  options?: string;
 };
 
 /// One contract section a condition can read from.
@@ -254,11 +251,7 @@ export type RuleBuilderBaseSchema = Omit<
 /// The value kinds the server describes an output with. A kind this build
 /// does not know is left out of the builder.
 export type RuleBuilderServedValueKind =
-  | "FLAG"
-  | "TEXT"
-  | "CHOICE"
-  | "NUMBER"
-  | "TEXT_LIST";
+  "FLAG" | "TEXT" | "CHOICE" | "NUMBER" | "TEXT_LIST";
 
 /// One output as the `ruleBuilderSchema` query describes it.
 export type RuleBuilderOutputDescriptor = {
@@ -325,7 +318,11 @@ function servedValue(
     case "CHOICE":
       // A choice without a catalog can only be typed in.
       return descriptor.options
-        ? { kind: "choice", options: descriptor.options, ...constraints(descriptor) }
+        ? {
+            kind: "choice",
+            options: descriptor.options,
+            ...constraints(descriptor),
+          }
         : { kind: "text", ...constraints(descriptor) };
     case "NUMBER":
       return {
@@ -337,7 +334,9 @@ function servedValue(
       return {
         kind: "text_list",
         ...(descriptor.options ? { options: descriptor.options } : {}),
-        ...(descriptor.maxItems != null ? { maxItems: descriptor.maxItems } : {}),
+        ...(descriptor.maxItems != null
+          ? { maxItems: descriptor.maxItems }
+          : {}),
         ...constraints(descriptor),
       };
     default:
@@ -388,7 +387,9 @@ export function ruleBuilderOutputsFromPayload(
     const of = served.of ? [...served.of] : null;
     switch (served.rule) {
       case "AT_LEAST_ONE":
-        outputRules.push(of ? { rule: "at_least_one", of } : { rule: "at_least_one" });
+        outputRules.push(
+          of ? { rule: "at_least_one", of } : { rule: "at_least_one" },
+        );
         break;
       case "AT_MOST_ONE":
         outputRules.push({ rule: "at_most_one", of: of ?? ids });
@@ -500,7 +501,8 @@ export const RULE_BUILDER_OPERATOR_LABEL_KEYS = {
   HAS_NO_VALUE: "settings.ruleBuilderOpHasNoValue",
 } as const;
 
-export type RuleBuilderOperatorId = keyof typeof RULE_BUILDER_OPERATOR_LABEL_KEYS;
+export type RuleBuilderOperatorId =
+  keyof typeof RULE_BUILDER_OPERATOR_LABEL_KEYS;
 
 /// A comparison with its shared label.
 export function ruleBuilderOperator(
@@ -508,7 +510,12 @@ export function ruleBuilderOperator(
   value: RuleBuilderConditionValue,
   template: string,
 ): RuleBuilderOperator {
-  return { id, labelKey: RULE_BUILDER_OPERATOR_LABEL_KEYS[id], value, template };
+  return {
+    id,
+    labelKey: RULE_BUILDER_OPERATOR_LABEL_KEYS[id],
+    value,
+    template,
+  };
 }
 
 // ── Fields ────────────────────────────────────────────────────────────
@@ -519,6 +526,8 @@ export type RuleBuilderField = {
   kind: string;
   descKey: string;
   choices?: readonly RuleBuilderChoice[];
+  /// The catalog a `text` comparison picks its value from.
+  options?: string;
 };
 
 const FIELD_NAME = /^[a-z_][a-z0-9_]*$/;
@@ -578,10 +587,12 @@ export function ruleBuilderFields(
       const path = `${source.section}.${field.field}`;
       fields.push({
         path,
-        label: source.label === "field" ? field.field : path.replace(/^input\./, ""),
+        label:
+          source.label === "field" ? field.field : path.replace(/^input\./, ""),
         kind,
         descKey: field.descKey,
         ...(override?.choices ? { choices: override.choices } : {}),
+        ...(override?.options ? { options: override.options } : {}),
       });
     }
   }
@@ -603,7 +614,11 @@ export function ruleBuilderDefaultSubject(
   schema: RuleBuilderSchema,
 ): RuleBuilderSubject | null {
   const subjects = schema.subjects ?? [];
-  return subjects.find((subject) => subject.inputPath === null) ?? subjects[0] ?? null;
+  return (
+    subjects.find((subject) => subject.inputPath === null) ??
+    subjects[0] ??
+    null
+  );
 }
 
 /// The subject a row acts on; null when it names one the schema lacks.
@@ -760,7 +775,9 @@ export function setRuleBuilderActionSubject(
   const subject = schema.subjects?.find((entry) => entry.id === subjectId);
   if (!row || !subject) return model;
   const current = schema.outputs.find((entry) => entry.id === row.output);
-  const actionKey = current ? (current.actionLabelKey ?? current.labelKey) : null;
+  const actionKey = current
+    ? (current.actionLabelKey ?? current.labelKey)
+    : null;
   const taken = new Set(
     rows.filter((_, at) => at !== index).map((other) => other.output),
   );
@@ -774,7 +791,8 @@ export function setRuleBuilderActionSubject(
     : undefined;
   const values = { ...model.outputs };
   if (current && match && match.id !== current.id) {
-    values[match.id] = values[current.id] ?? initialRuleBuilderOutputValue(match);
+    values[match.id] =
+      values[current.id] ?? initialRuleBuilderOutputValue(match);
     delete values[current.id];
   }
   return withRows(
@@ -863,19 +881,46 @@ export function initialRuleBuilderOutputValue(
     case "text_list":
       return [];
     case "structured":
-      return Object.fromEntries(output.value.parts.map((part) => [part.id, ""]));
+      return Object.fromEntries(
+        output.value.parts.map((part) => [part.id, ""]),
+      );
     default:
       return "";
   }
 }
 
-/// The catalogs the chosen outputs need, in write order without repeats.
+/// The catalog a condition on this field path picks its value from.
+function conditionOptionSource(
+  schema: RuleBuilderSchema,
+  path: string,
+): string | undefined {
+  for (const source of schema.conditionSources) {
+    const prefix = `${source.section}.`;
+    if (!path.startsWith(prefix)) continue;
+    const options = source.fields?.[path.slice(prefix.length)]?.options;
+    if (options) return options;
+  }
+  return undefined;
+}
+
+/// The catalogs the chosen outputs and the conditions' fields need, in write
+/// order without repeats.
 export function ruleBuilderOptionSources(
   schema: RuleBuilderSchema,
   model: RuleBuilderModel | null,
 ): string[] {
   if (!model) return [];
   const sources: string[] = [];
+  const conditions = [
+    ...model.conditions,
+    ...(model.actions ?? []).flatMap((row) => row.conditions),
+  ];
+  for (const condition of conditions) {
+    const source = condition.field
+      ? conditionOptionSource(schema, condition.field)
+      : undefined;
+    if (source && !sources.includes(source)) sources.push(source);
+  }
   for (const output of ruleBuilderChosenOutputs(schema, model.outputs)) {
     const value = output.value;
     const source =
@@ -941,7 +986,8 @@ export const RULE_BUILDER_PROBLEM_CODES = [
   "BUILDER_VALUE_NOT_IN_CATALOG",
 ] as const;
 
-export type RuleBuilderProblemCode = (typeof RULE_BUILDER_PROBLEM_CODES)[number];
+export type RuleBuilderProblemCode =
+  (typeof RULE_BUILDER_PROBLEM_CODES)[number];
 
 export type RuleBuilderProblem = {
   code: RuleBuilderProblemCode;
@@ -983,12 +1029,12 @@ export const RULE_BUILDER_PROBLEM_KEYS: Record<RuleBuilderProblemCode, string> =
     BUILDER_OUTPUT_NOT_IN_SCOPE: "settings.ruleBuilderProblemOutputNotInScope",
     BUILDER_OUTPUTS_CONFLICT: "settings.ruleBuilderProblemOutputsConflict",
     BUILDER_OUTPUT_NEEDS_OTHER: "settings.ruleBuilderProblemOutputNeedsOther",
-    BUILDER_VALUE_NOT_IN_CATALOG: "settings.ruleBuilderProblemValueNotInCatalog",
+    BUILDER_VALUE_NOT_IN_CATALOG:
+      "settings.ruleBuilderProblemValueNotInCatalog",
   };
 
 export type RuleBuilderResult =
-  | { ok: true; source: string }
-  | { ok: false; problems: RuleBuilderProblem[] };
+  { ok: true; source: string } | { ok: false; problems: RuleBuilderProblem[] };
 
 // ── Values ────────────────────────────────────────────────────────────
 
@@ -1069,8 +1115,10 @@ function wholeProblem(
 /// Fill a template's placeholders in one pass, so a value that happens to
 /// contain placeholder text is never read as one.
 function fill(template: string, values: Readonly<Record<string, string>>) {
-  return template.replace(/\{([a-z]+(?:\.[a-z_]+)?)\}/g, (whole, name: string) =>
-    Object.hasOwn(values, name) ? values[name] : whole,
+  return template.replace(
+    /\{([a-z]+(?:\.[a-z_]+)?)\}/g,
+    (whole, name: string) =>
+      Object.hasOwn(values, name) ? values[name] : whole,
   );
 }
 
@@ -1130,8 +1178,7 @@ function checkCondition(
 // ── Outputs ───────────────────────────────────────────────────────────
 
 type Checked =
-  | { problem: RuleBuilderProblemCode; part?: string }
-  | { blocks: string[] };
+  { problem: RuleBuilderProblemCode; part?: string } | { blocks: string[] };
 
 function outputBlocks(
   schema: RuleBuilderSchema,
@@ -1180,7 +1227,9 @@ function outputBlocks(
         };
       }
       return {
-        blocks: [fill(output.template, { ...base, items: literals.join(", ") })],
+        blocks: [
+          fill(output.template, { ...base, items: literals.join(", ") }),
+        ],
       };
     }
     case "structured": {
@@ -1295,7 +1344,8 @@ export function generateRuleSource(
   const joined =
     model.join === "ALL" ? [bodies.flat()] : bodies.map((lines) => lines);
   const helperBlocks = joined.map(
-    (lines) => `${helper} if {\n${lines.map((line) => `\t${line}`).join("\n")}\n}`,
+    (lines) =>
+      `${helper} if {\n${lines.map((line) => `\t${line}`).join("\n")}\n}`,
   );
   return {
     ok: true,
@@ -1369,7 +1419,11 @@ function generateRowSource(
       rowOf.set(row.output, actionIndex);
     }
 
-    if (!shared && row.conditions.length === 0 && unconditioned.length < rows.length)
+    if (
+      !shared &&
+      row.conditions.length === 0 &&
+      unconditioned.length < rows.length
+    )
       problems.push({ code: "BUILDER_NO_CONDITIONS", actionIndex });
     const fields = new Map(
       ruleBuilderSubjectFields(schema, variant, subject).map((field) => [
@@ -1509,7 +1563,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
 
 function parseOutputValue(
@@ -1559,7 +1615,9 @@ export function parseRuleBuilderModel(
       kind.operators.map((operator) => operator.id),
     ),
   );
-  const parseConditions = (entries: unknown[]): RuleBuilderCondition[] | null => {
+  const parseConditions = (
+    entries: unknown[],
+  ): RuleBuilderCondition[] | null => {
     const parsed: RuleBuilderCondition[] = [];
     for (const entry of entries) {
       if (!isRecord(entry)) return null;
@@ -1605,7 +1663,10 @@ export function parseRuleBuilderModel(
         return null;
     }
     if (typeof output !== "string") return null;
-    if (output !== "" && !schema.outputs.some((candidate) => candidate.id === output))
+    if (
+      output !== "" &&
+      !schema.outputs.some((candidate) => candidate.id === output)
+    )
       return null;
     if (join !== "ALL" && join !== "ANY") return null;
     if (!Array.isArray(entry.conditions)) return null;
@@ -1619,7 +1680,9 @@ export function parseRuleBuilderModel(
     });
   }
   // Every chosen value belongs to a row.
-  if (Object.keys(outputs).some((id) => !actions.some((row) => row.output === id)))
+  if (
+    Object.keys(outputs).some((id) => !actions.some((row) => row.output === id))
+  )
     return null;
   return { ...model, actions };
 }

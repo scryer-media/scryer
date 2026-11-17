@@ -10240,6 +10240,8 @@ const en: LocaleDictionary = {
     "Actions run in the order listed. Actions that cannot be combined are disabled once a conflicting one is chosen.",
   "settings.ruleBuilderOutputConflict": "Cannot be combined with {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Choose a quality profile",
+  "settings.ruleBuilderUserPlaceholder": "Choose a user",
+  "settings.ruleBuilderListPlaceholder": "Choose a list",
   "settings.lifecycleBuilderLibraryPlaceholder": "Choose a library",
   "settings.lifecycleBuilderRootPlaceholder": "Choose a root folder",
   "settings.ruleBuilderTagsPlaceholder": "Choose tags",

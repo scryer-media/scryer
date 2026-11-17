@@ -39,7 +39,12 @@ const SCHEMA: RuleBuilderSchema = {
           { field: "color", type: "string", descKey: "sample.color" },
           { field: "hidden", type: "string", descKey: "sample.hidden" },
           { field: "parts", type: "object[]", descKey: "sample.parts" },
-          { field: "wide_only", type: "bool", descKey: "sample.wideOnly", scopes: ["WIDE"] },
+          {
+            field: "wide_only",
+            type: "bool",
+            descKey: "sample.wideOnly",
+            scopes: ["WIDE"],
+          },
           { field: "Bad-Name", type: "bool", descKey: "sample.bad" },
         ],
       },
@@ -88,9 +93,29 @@ const SCHEMA: RuleBuilderSchema = {
     choice: { operators: [op("EQUALS", "choice", "{path} == {value}")] },
   },
   outputs: [
-    { id: "KEEP", head: "keep", labelKey: "sample.keep", value: { kind: "flag" }, template: "{head} if {helper}", conflictsWith: ["DROP"] },
-    { id: "DROP", head: "drop", labelKey: "sample.drop", value: { kind: "flag" }, template: "{head} if {helper}" },
-    { id: "WIDEN", head: "widen", labelKey: "sample.widen", value: { kind: "flag" }, template: "{head} if {helper}", variants: ["WIDE"] },
+    {
+      id: "KEEP",
+      head: "keep",
+      labelKey: "sample.keep",
+      value: { kind: "flag" },
+      template: "{head} if {helper}",
+      conflictsWith: ["DROP"],
+    },
+    {
+      id: "DROP",
+      head: "drop",
+      labelKey: "sample.drop",
+      value: { kind: "flag" },
+      template: "{head} if {helper}",
+    },
+    {
+      id: "WIDEN",
+      head: "widen",
+      labelKey: "sample.widen",
+      value: { kind: "flag" },
+      template: "{head} if {helper}",
+      variants: ["WIDE"],
+    },
     {
       id: "NOTE",
       head: "note",
@@ -134,8 +159,20 @@ const SCHEMA: RuleBuilderSchema = {
       value: {
         kind: "structured",
         parts: [
-          { id: "code", kind: "text", labelKey: "sample.code", pattern: "[a-z_]+", maxBytes: 6 },
-          { id: "points", kind: "number", labelKey: "sample.points", min: 0, max: 100 },
+          {
+            id: "code",
+            kind: "text",
+            labelKey: "sample.code",
+            pattern: "[a-z_]+",
+            maxBytes: 6,
+          },
+          {
+            id: "points",
+            kind: "number",
+            labelKey: "sample.points",
+            min: 0,
+            max: 100,
+          },
         ],
       },
       template: "{head}[{part.code}] := {part.points} if {helper}",
@@ -243,13 +280,25 @@ test("text values are escaped Rego literals and never read as placeholders", () 
   const written = source(
     model({
       conditions: [
-        { field: "input.item.name", operator: "EQUALS", value: 'say "hi" \\ {path} {value}' },
-        { field: "input.item.labels", operator: "CONTAINS", value: "Ünïcødé 😀" },
+        {
+          field: "input.item.name",
+          operator: "EQUALS",
+          value: 'say "hi" \\ {path} {value}',
+        },
+        {
+          field: "input.item.labels",
+          operator: "CONTAINS",
+          value: "Ünïcødé 😀",
+        },
       ],
       outputs: { KEEP: true, EACH: ["{helper}", 'q"uote'] },
     }),
   );
-  assert.ok(written.includes('\tinput.item.name == "say \\"hi\\" \\\\ {path} {value}"\n'));
+  assert.ok(
+    written.includes(
+      '\tinput.item.name == "say \\"hi\\" \\\\ {path} {value}"\n',
+    ),
+  );
   assert.ok(written.includes('\t"Ünïcødé 😀" in input.item.labels\n'));
   assert.ok(written.includes('each contains "{helper}" if matches\n'));
   assert.ok(written.includes('each contains "q\\"uote" if matches\n'));
@@ -260,12 +309,26 @@ test("isRuleBuilderSource accepts the source as written or without its preamble 
   const written = source(candidate);
   assert.equal(isRuleBuilderSource(SCHEMA, candidate, null, written), true);
   assert.equal(
-    isRuleBuilderSource(SCHEMA, candidate, null, written.slice(SCHEMA.preamble.length)),
+    isRuleBuilderSource(
+      SCHEMA,
+      candidate,
+      null,
+      written.slice(SCHEMA.preamble.length),
+    ),
     true,
   );
-  assert.equal(isRuleBuilderSource(SCHEMA, candidate, null, `${written}\n`), false);
-  assert.equal(isRuleBuilderSource(SCHEMA, candidate, null, written.replace("\t", "  ")), false);
-  assert.equal(isRuleBuilderSource(SCHEMA, model({ outputs: {} }), null, ""), false);
+  assert.equal(
+    isRuleBuilderSource(SCHEMA, candidate, null, `${written}\n`),
+    false,
+  );
+  assert.equal(
+    isRuleBuilderSource(SCHEMA, candidate, null, written.replace("\t", "  ")),
+    false,
+  );
+  assert.equal(
+    isRuleBuilderSource(SCHEMA, model({ outputs: {} }), null, ""),
+    false,
+  );
 });
 
 // ── Fields ────────────────────────────────────────────────────────────
@@ -283,7 +346,10 @@ test("fields come from the contract sections, kinds and overrides the schema nam
       ["input.item.color", "color", "choice"],
     ],
   );
-  const wide = ruleBuilderFields(SCHEMA, "WIDE").map((field) => [field.path, field.label]);
+  const wide = ruleBuilderFields(SCHEMA, "WIDE").map((field) => [
+    field.path,
+    field.label,
+  ]);
   assert.deepEqual(wide.slice(-2), [
     ["input.item.wide_only", "wide_only"],
     ["input.extra.count", "extra.count"],
@@ -326,7 +392,11 @@ test("unfinished, unknown or out-of-variant conditions are refused with their ro
   assert.equal(
     generateRuleSource(
       SCHEMA,
-      model({ conditions: [{ field: "input.extra.count", operator: "GREATER_THAN", value: "1" }] }),
+      model({
+        conditions: [
+          { field: "input.extra.count", operator: "GREATER_THAN", value: "1" },
+        ],
+      }),
       "WIDE",
     ).ok,
     true,
@@ -338,17 +408,61 @@ test("condition values that cannot be written are refused", () => {
     codes(model({ conditions: [{ field, operator, value }] }));
 
   for (const value of ["", " "])
-    assert.deepEqual(condition("input.item.size", "GREATER_THAN", value), ["BUILDER_VALUE_REQUIRED"]);
-  for (const value of ["1e3", "0x10", "01", "1.", ".5", "1.1234567", "Infinity", " 1", "9007199254740993"])
-    assert.deepEqual(condition("input.item.size", "GREATER_THAN", value), ["BUILDER_VALUE_NOT_NUMBER"], value);
+    assert.deepEqual(condition("input.item.size", "GREATER_THAN", value), [
+      "BUILDER_VALUE_REQUIRED",
+    ]);
+  for (const value of [
+    "1e3",
+    "0x10",
+    "01",
+    "1.",
+    ".5",
+    "1.1234567",
+    "Infinity",
+    " 1",
+    "9007199254740993",
+  ])
+    assert.deepEqual(
+      condition("input.item.size", "GREATER_THAN", value),
+      ["BUILDER_VALUE_NOT_NUMBER"],
+      value,
+    );
   for (const value of ["-1", "1.5", "100001", "07"])
-    assert.deepEqual(condition("input.item.seen_at", "MORE_THAN_DAYS_AGO", value), ["BUILDER_VALUE_NOT_DAYS"], value);
-  for (const value of ["line\nbreak", "tab\there", "nul\u0000", "sep ", "c1\u0085", "lone\ud800", "lone\udc00x"])
-    assert.deepEqual(condition("input.item.name", "EQUALS", value), ["BUILDER_VALUE_UNREPRESENTABLE"], JSON.stringify(value));
-  assert.deepEqual(condition("input.item.color", "EQUALS", ""), ["BUILDER_VALUE_REQUIRED"]);
-  assert.deepEqual(condition("input.item.color", "EQUALS", "green"), ["BUILDER_VALUE_NOT_OFFERED"]);
+    assert.deepEqual(
+      condition("input.item.seen_at", "MORE_THAN_DAYS_AGO", value),
+      ["BUILDER_VALUE_NOT_DAYS"],
+      value,
+    );
+  for (const value of [
+    "line\nbreak",
+    "tab\there",
+    "nul\u0000",
+    "sep ",
+    "c1\u0085",
+    "lone\ud800",
+    "lone\udc00x",
+  ])
+    assert.deepEqual(
+      condition("input.item.name", "EQUALS", value),
+      ["BUILDER_VALUE_UNREPRESENTABLE"],
+      JSON.stringify(value),
+    );
+  assert.deepEqual(condition("input.item.color", "EQUALS", ""), [
+    "BUILDER_VALUE_REQUIRED",
+  ]);
+  assert.deepEqual(condition("input.item.color", "EQUALS", "green"), [
+    "BUILDER_VALUE_NOT_OFFERED",
+  ]);
   assert.equal(
-    generateRuleSource(SCHEMA, model({ conditions: [{ field: "input.item.color", operator: "EQUALS", value: "red" }] }), null).ok,
+    generateRuleSource(
+      SCHEMA,
+      model({
+        conditions: [
+          { field: "input.item.color", operator: "EQUALS", value: "red" },
+        ],
+      }),
+      null,
+    ).ok,
     true,
   );
 });
@@ -357,20 +471,46 @@ test("output values are checked against their constraints", () => {
   const output = (outputs: RuleBuilderModel["outputs"]) =>
     problems(model({ outputs }));
 
-  assert.deepEqual(output({ NOTE: " " }), [{ code: "BUILDER_VALUE_REQUIRED", output: "NOTE" }]);
-  assert.deepEqual(output({ NOTE: "two\nlines" }), [{ code: "BUILDER_VALUE_UNREPRESENTABLE", output: "NOTE" }]);
-  assert.deepEqual(output({ NOTE: "far too long" }), [{ code: "BUILDER_VALUE_TOO_LONG", output: "NOTE" }]);
-  assert.deepEqual(output({ NOTE: "ABC" }), [{ code: "BUILDER_VALUE_INVALID", output: "NOTE" }]);
+  assert.deepEqual(output({ NOTE: " " }), [
+    { code: "BUILDER_VALUE_REQUIRED", output: "NOTE" },
+  ]);
+  assert.deepEqual(output({ NOTE: "two\nlines" }), [
+    { code: "BUILDER_VALUE_UNREPRESENTABLE", output: "NOTE" },
+  ]);
+  assert.deepEqual(output({ NOTE: "far too long" }), [
+    { code: "BUILDER_VALUE_TOO_LONG", output: "NOTE" },
+  ]);
+  assert.deepEqual(output({ NOTE: "ABC" }), [
+    { code: "BUILDER_VALUE_INVALID", output: "NOTE" },
+  ]);
   // The byte limit counts UTF-8: five letters, ten bytes.
-  assert.deepEqual(output({ NOTE: "ééééé" }), [{ code: "BUILDER_VALUE_TOO_LONG", output: "NOTE" }]);
-  assert.deepEqual(output({ PICK: "" }), [{ code: "BUILDER_VALUE_REQUIRED", output: "PICK" }]);
-  assert.deepEqual(output({ WEIGHT: "1.5" }), [{ code: "BUILDER_VALUE_NOT_WHOLE", output: "WEIGHT" }]);
-  assert.deepEqual(output({ WEIGHT: "11" }), [{ code: "BUILDER_VALUE_OUT_OF_RANGE", output: "WEIGHT" }]);
-  assert.deepEqual(output({ WEIGHT: "-11" }), [{ code: "BUILDER_VALUE_OUT_OF_RANGE", output: "WEIGHT" }]);
-  assert.deepEqual(output({ LABELS: [] }), [{ code: "BUILDER_VALUE_REQUIRED", output: "LABELS" }]);
-  assert.deepEqual(output({ LABELS: ["a", "b", "c"] }), [{ code: "BUILDER_VALUE_TOO_MANY", output: "LABELS" }]);
-  assert.deepEqual(output({ EACH: ["a", "a"] }), [{ code: "BUILDER_VALUE_DUPLICATE", output: "EACH" }]);
-  assert.deepEqual(output({ EACH: ["a", ""] }), [{ code: "BUILDER_VALUE_REQUIRED", output: "EACH" }]);
+  assert.deepEqual(output({ NOTE: "ééééé" }), [
+    { code: "BUILDER_VALUE_TOO_LONG", output: "NOTE" },
+  ]);
+  assert.deepEqual(output({ PICK: "" }), [
+    { code: "BUILDER_VALUE_REQUIRED", output: "PICK" },
+  ]);
+  assert.deepEqual(output({ WEIGHT: "1.5" }), [
+    { code: "BUILDER_VALUE_NOT_WHOLE", output: "WEIGHT" },
+  ]);
+  assert.deepEqual(output({ WEIGHT: "11" }), [
+    { code: "BUILDER_VALUE_OUT_OF_RANGE", output: "WEIGHT" },
+  ]);
+  assert.deepEqual(output({ WEIGHT: "-11" }), [
+    { code: "BUILDER_VALUE_OUT_OF_RANGE", output: "WEIGHT" },
+  ]);
+  assert.deepEqual(output({ LABELS: [] }), [
+    { code: "BUILDER_VALUE_REQUIRED", output: "LABELS" },
+  ]);
+  assert.deepEqual(output({ LABELS: ["a", "b", "c"] }), [
+    { code: "BUILDER_VALUE_TOO_MANY", output: "LABELS" },
+  ]);
+  assert.deepEqual(output({ EACH: ["a", "a"] }), [
+    { code: "BUILDER_VALUE_DUPLICATE", output: "EACH" },
+  ]);
+  assert.deepEqual(output({ EACH: ["a", ""] }), [
+    { code: "BUILDER_VALUE_REQUIRED", output: "EACH" },
+  ]);
   assert.deepEqual(output({ ENTRY: { code: "Bad", points: "1" } }), [
     { code: "BUILDER_VALUE_INVALID", output: "ENTRY", part: "code" },
   ]);
@@ -380,7 +520,12 @@ test("output values are checked against their constraints", () => {
   assert.deepEqual(output({ ENTRY: { code: "ok", points: "" } }), [
     { code: "BUILDER_VALUE_REQUIRED", output: "ENTRY", part: "points" },
   ]);
-  assert.equal(source(model({ outputs: { WEIGHT: "-10", NOTE: "ab cd" } })).includes("weight := -10"), true);
+  assert.equal(
+    source(model({ outputs: { WEIGHT: "-10", NOTE: "ab cd" } })).includes(
+      "weight := -10",
+    ),
+    true,
+  );
 });
 
 test("conflicts are read both ways and every chosen output is reported", () => {
@@ -388,8 +533,14 @@ test("conflicts are read both ways and every chosen output is reported", () => {
     { code: "BUILDER_OUTPUTS_CONFLICT", output: "KEEP", outputs: ["DROP"] },
     { code: "BUILDER_OUTPUTS_CONFLICT", output: "DROP", outputs: ["KEEP"] },
   ]);
-  assert.deepEqual(ruleBuilderConflicts(SCHEMA, "DROP", { KEEP: true, NOTE: "a" }), ["KEEP"]);
-  assert.deepEqual(ruleBuilderConflicts(SCHEMA, "NOTE", { KEEP: true, DROP: true }), []);
+  assert.deepEqual(
+    ruleBuilderConflicts(SCHEMA, "DROP", { KEEP: true, NOTE: "a" }),
+    ["KEEP"],
+  );
+  assert.deepEqual(
+    ruleBuilderConflicts(SCHEMA, "NOTE", { KEEP: true, DROP: true }),
+    [],
+  );
 });
 
 test("at_most_one and exactly_one groups conflict within the group", () => {
@@ -422,15 +573,28 @@ test("an output limited to some variants is refused in others", () => {
   assert.deepEqual(problems(model({ outputs: { WIDEN: true } }), "NARROW"), [
     { code: "BUILDER_OUTPUT_NOT_IN_SCOPE", output: "WIDEN" },
   ]);
-  assert.equal(source(model({ outputs: { WIDEN: true } }), "WIDE").endsWith("widen if matches\n"), true);
+  assert.equal(
+    source(model({ outputs: { WIDEN: true } }), "WIDE").endsWith(
+      "widen if matches\n",
+    ),
+    true,
+  );
 });
 
 test("an output that needs another is refused until both are chosen", () => {
   assert.deepEqual(problems(model({ outputs: { AFTER: true } })), [
     { code: "BUILDER_OUTPUT_NEEDS_OTHER", output: "AFTER", outputs: ["NOTE"] },
   ]);
-  assert.deepEqual(ruleBuilderMissingRequirements(SCHEMA, "AFTER", { NOTE: "a" }), []);
-  assert.equal(source(model({ outputs: { AFTER: true, NOTE: "a" } })).endsWith("after if matches\n"), true);
+  assert.deepEqual(
+    ruleBuilderMissingRequirements(SCHEMA, "AFTER", { NOTE: "a" }),
+    [],
+  );
+  assert.equal(
+    source(model({ outputs: { AFTER: true, NOTE: "a" } })).endsWith(
+      "after if matches\n",
+    ),
+    true,
+  );
 });
 
 test("an output the schema does not know is refused", () => {
@@ -443,14 +607,67 @@ test("option sources are only those the chosen outputs need", () => {
   assert.deepEqual(ruleBuilderOptionSources(SCHEMA, null), []);
   assert.deepEqual(ruleBuilderOptionSources(SCHEMA, model()), []);
   assert.deepEqual(
-    ruleBuilderOptionSources(SCHEMA, model({ outputs: { EACH: [], PICK: "", LABELS: [] } })),
+    ruleBuilderOptionSources(
+      SCHEMA,
+      model({ outputs: { EACH: [], PICK: "", LABELS: [] } }),
+    ),
     ["picks", "labels"],
   );
 });
 
+test("option sources include the catalogs of the conditions' fields", () => {
+  const schema: RuleBuilderSchema = {
+    ...SCHEMA,
+    conditionSources: [
+      {
+        section: "input.item",
+        label: "field",
+        fields: {
+          owner_id: { options: "users" },
+          watcher_ids: { options: "users" },
+          list_ids: { options: "lists" },
+        },
+      },
+    ],
+  };
+  const condition = (field: string) => ({
+    field,
+    operator: "EQUALS",
+    value: "",
+  });
+  assert.deepEqual(
+    ruleBuilderOptionSources(
+      schema,
+      model({
+        conditions: [
+          condition("input.item.owner_id"),
+          condition("input.item.flag"),
+          condition(""),
+        ],
+        actions: [
+          {
+            output: "PICK",
+            join: "ALL",
+            conditions: [
+              condition("input.item.watcher_ids"),
+              condition("input.item.list_ids"),
+            ],
+          },
+        ],
+        outputs: { PICK: "" },
+      }),
+    ),
+    ["users", "lists", "picks"],
+  );
+});
+
 test("problem codes are distinct and builder-prefixed", () => {
-  assert.equal(new Set(RULE_BUILDER_PROBLEM_CODES).size, RULE_BUILDER_PROBLEM_CODES.length);
-  for (const code of RULE_BUILDER_PROBLEM_CODES) assert.match(code, /^BUILDER_[A-Z_]+$/);
+  assert.equal(
+    new Set(RULE_BUILDER_PROBLEM_CODES).size,
+    RULE_BUILDER_PROBLEM_CODES.length,
+  );
+  for (const code of RULE_BUILDER_PROBLEM_CODES)
+    assert.match(code, /^BUILDER_[A-Z_]+$/);
 });
 
 // ── Documents ─────────────────────────────────────────────────────────
@@ -458,9 +675,17 @@ test("problem codes are distinct and builder-prefixed", () => {
 test("a stored document parses back to the same model", () => {
   const candidate = model({
     join: "ANY",
-    outputs: { KEEP: true, NOTE: "a", LABELS: ["x"], ENTRY: { code: "a", points: "1" } },
+    outputs: {
+      KEEP: true,
+      NOTE: "a",
+      LABELS: ["x"],
+      ENTRY: { code: "a", points: "1" },
+    },
   });
-  assert.deepEqual(parseRuleBuilderModel(SCHEMA, JSON.parse(JSON.stringify(candidate))), candidate);
+  assert.deepEqual(
+    parseRuleBuilderModel(SCHEMA, JSON.parse(JSON.stringify(candidate))),
+    candidate,
+  );
   assert.equal(isBlankRuleBuilderModel(emptyRuleBuilderModel(SCHEMA)), true);
   assert.equal(isBlankRuleBuilderModel(candidate), false);
 });
@@ -476,7 +701,12 @@ test("documents this build does not recognise do not parse", () => {
     { ...good, family: "other" },
     { ...good, join: "SOME" },
     { ...good, conditions: "none" },
-    { ...good, conditions: [{ field: "input.item.flag", operator: "MATCHES", value: "" }] },
+    {
+      ...good,
+      conditions: [
+        { field: "input.item.flag", operator: "MATCHES", value: "" },
+      ],
+    },
     { ...good, conditions: [{ field: 1, operator: "IS_TRUE", value: "" }] },
     { ...good, outputs: { KEEP: "yes" } },
     { ...good, outputs: { NOTE: 3 } },
@@ -488,7 +718,11 @@ test("documents this build does not recognise do not parse", () => {
     { ...good, outputs: null },
   ];
   for (const document of bad)
-    assert.equal(parseRuleBuilderModel(SCHEMA, document), null, JSON.stringify(document));
+    assert.equal(
+      parseRuleBuilderModel(SCHEMA, document),
+      null,
+      JSON.stringify(document),
+    );
 });
 
 test("a document from an earlier version does not attach", () => {

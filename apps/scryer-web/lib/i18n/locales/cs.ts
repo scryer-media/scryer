@@ -5580,6 +5580,8 @@ const cs: LocaleDictionary = {
     "Akce proběhnou v uvedeném pořadí. Akce, které nelze kombinovat, se po výběru konfliktní akce zakážou.",
   "settings.ruleBuilderOutputConflict": "Nelze kombinovat s: {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Vyberte profil kvality",
+  "settings.ruleBuilderUserPlaceholder": "Vyberte uživatele",
+  "settings.ruleBuilderListPlaceholder": "Vyberte seznam",
   "settings.lifecycleBuilderLibraryPlaceholder": "Vyberte knihovnu",
   "settings.lifecycleBuilderRootPlaceholder": "Vyberte kořenovou složku",
   "settings.ruleBuilderTagsPlaceholder": "Vyberte štítky",

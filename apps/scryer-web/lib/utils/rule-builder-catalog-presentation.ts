@@ -17,6 +17,12 @@ export const RULE_BUILDER_CATALOGS: Readonly<
   qualityProfiles: {
     placeholderKey: "settings.ruleBuilderQualityProfilePlaceholder",
   },
+  // Id catalogs a condition picks from, labelled by name.
+  qualityProfileIds: {
+    placeholderKey: "settings.ruleBuilderQualityProfilePlaceholder",
+  },
+  users: { placeholderKey: "settings.ruleBuilderUserPlaceholder" },
+  lists: { placeholderKey: "settings.ruleBuilderListPlaceholder" },
   libraries: { placeholderKey: "settings.lifecycleBuilderLibraryPlaceholder" },
   roots: {
     placeholderKey: "settings.lifecycleBuilderRootPlaceholder",

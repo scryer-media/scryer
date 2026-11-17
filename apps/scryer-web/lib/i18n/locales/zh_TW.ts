@@ -4817,6 +4817,8 @@ const zh_TW: LocaleDictionary = {
     "動作會依列出的順序執行。選擇某個動作後，無法與其搭配的動作會停用。",
   "settings.ruleBuilderOutputConflict": "無法與{{outputs}}一起使用。",
   "settings.ruleBuilderQualityProfilePlaceholder": "選擇品質設定檔",
+  "settings.ruleBuilderUserPlaceholder": "選擇使用者",
+  "settings.ruleBuilderListPlaceholder": "選擇清單",
   "settings.lifecycleBuilderLibraryPlaceholder": "選擇媒體庫",
   "settings.lifecycleBuilderRootPlaceholder": "選擇根資料夾",
   "settings.ruleBuilderTagsPlaceholder": "選擇標籤",

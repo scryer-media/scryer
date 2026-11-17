@@ -4810,6 +4810,8 @@ const zh_HK: LocaleDictionary = {
     "動作會按列出嘅次序執行。揀咗某個動作之後，唔可以同佢一齊用嘅動作會停用。",
   "settings.ruleBuilderOutputConflict": "唔可以同{{outputs}}一齊使用。",
   "settings.ruleBuilderQualityProfilePlaceholder": "揀選品質設定檔",
+  "settings.ruleBuilderUserPlaceholder": "揀選用戶",
+  "settings.ruleBuilderListPlaceholder": "揀選清單",
   "settings.lifecycleBuilderLibraryPlaceholder": "揀選媒體庫",
   "settings.lifecycleBuilderRootPlaceholder": "揀選根資料夾",
   "settings.ruleBuilderTagsPlaceholder": "揀選標籤",

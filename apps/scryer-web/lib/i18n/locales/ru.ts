@@ -5169,6 +5169,8 @@ const ru: LocaleDictionary = {
     "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
   "settings.ruleBuilderOutputConflict": "Нельзя сочетать с: {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Выберите профиль качества",
+  "settings.ruleBuilderUserPlaceholder": "Выберите пользователя",
+  "settings.ruleBuilderListPlaceholder": "Выберите список",
   "settings.lifecycleBuilderLibraryPlaceholder": "Выберите библиотеку",
   "settings.lifecycleBuilderRootPlaceholder": "Выберите корневую папку",
   "settings.ruleBuilderTagsPlaceholder": "Выберите теги",

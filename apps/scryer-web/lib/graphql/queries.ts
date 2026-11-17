@@ -4224,6 +4224,22 @@ export const ruleBuilderTagLabelsQuery = `query RuleBuilderTagLabels {
   }
 }`;
 
+/// Users a condition on a user-id fact picks from. Needs user management.
+export const ruleBuilderUserOptionsQuery = `query RuleBuilderUserOptions {
+  users {
+    id
+    username
+  }
+}`;
+
+/// Lists a condition on a list-id fact picks from.
+export const ruleBuilderListOptionsQuery = `query RuleBuilderListOptions {
+  listSubscriptions {
+    id
+    name
+  }
+}`;
+
 /// The outputs one rule family's builder offers, read once per page.
 export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!) {
   ruleBuilderSchema(family: $family) {

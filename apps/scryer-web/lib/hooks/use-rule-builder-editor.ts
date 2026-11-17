@@ -25,7 +25,7 @@ import {
 
 /// Catalogs a page can load for the builder's pickers, by option source.
 export type RuleBuilderOptionLoaders = Readonly<
-  Record<string, () => Promise<string[]>>
+  Record<string, () => Promise<readonly RuleBuilderOptionValue[]>>
 >;
 
 /// The Simple, Advanced view and Advanced edit state one rule editor keeps,
@@ -50,7 +50,9 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   onLoadError?: (error: unknown) => void;
 }) {
   const [mode, setModeState] = useState<RuleEditorMode>("edit");
-  const [loaded, setLoaded] = useState<Record<string, string[]>>({});
+  const [loaded, setLoaded] = useState<
+    Record<string, readonly RuleBuilderOptionValue[]>
+  >({});
   const loading = useRef(new Set<string>());
   const loaders = useRef(optionLoaders);
   const reportError = useRef(onLoadError);
@@ -110,9 +112,7 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
         continue;
       loading.current.add(source);
       load()
-        .then((values) =>
-          setLoaded((prev) => ({ ...prev, [source]: values })),
-        )
+        .then((values) => setLoaded((prev) => ({ ...prev, [source]: values })))
         .catch((error: unknown) => {
           setLoaded((prev) => ({ ...prev, [source]: [] }));
           reportError.current?.(error);

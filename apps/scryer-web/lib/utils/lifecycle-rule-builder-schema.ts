@@ -17,7 +17,22 @@ export const LIFECYCLE_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   preamble: "package rules\nimport rego.v1\n\n",
   helperRule: "rule_applies",
   contract: lifecycleContract as RuleBuilderContract,
-  conditionSources: [{ section: "input.facts", label: "field" }],
+  conditionSources: [
+    {
+      section: "input.facts",
+      label: "field",
+      // Facts that hold an id are picked by name.
+      fields: {
+        added_by_user_id: { options: "users" },
+        requested_by_user_ids: { options: "users" },
+        watched_by_user_ids: { options: "users" },
+        watchlisted_by_user_ids: { options: "users" },
+        favorited_by_user_ids: { options: "users" },
+        quality_profile_id: { options: "qualityProfileIds" },
+        lists_enabled_ids: { options: "lists" },
+      },
+    },
+  ],
   typeRules: [
     { type: "bool", kind: "bool" },
     { type: "number", kind: "number" },

@@ -100,9 +100,18 @@ export function FilterableSelect({
   }, [filter, filterByValue, options]);
   const itemValue = (option: FilterableSelectOption) =>
     `${option.label} ${option.description ?? ""} ${option.value}`;
-  const activeDetail =
-    filteredOptions.find((option) => itemValue(option) === active)?.detail ??
+  // Something is always highlighted, so Enter picks without an arrow press:
+  // the row last highlighted while it still matches, else the chosen value,
+  // else the first row that can be picked.
+  const highlighted =
+    filteredOptions.find((option) => itemValue(option) === active) ??
+    filteredOptions.find(
+      (option) => option.value === value && !option.disabled,
+    ) ??
+    filteredOptions.find((option) => !option.disabled) ??
     null;
+  const highlightedValue = highlighted ? itemValue(highlighted) : "";
+  const activeDetail = highlighted?.detail ?? null;
   const hasDetail = options.some((option) => option.detail);
   // The flyout lines up with the highlighted row, so it follows the pointer
   // and the arrow keys. It is hidden (null) while that row is scrolled out of
@@ -144,7 +153,7 @@ export function FilterableSelect({
   React.useLayoutEffect(() => {
     userScrolled.current = false;
     if (activeDetail) placeDetail();
-  }, [active, activeDetail, filteredOptions, placeDetail]);
+  }, [highlightedValue, activeDetail, filteredOptions, placeDetail]);
   const codeFont =
     valueKind !== "text" && "font-[family-name:var(--font-code)]";
 
@@ -210,7 +219,7 @@ export function FilterableSelect({
           // read out twice.
           label={ariaLabel}
           shouldFilter={false}
-          value={active}
+          value={highlightedValue}
           onValueChange={setActive}
           className="bg-transparent"
         >

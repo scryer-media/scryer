@@ -28,8 +28,13 @@ import {
   type LifecycleLibraryOption,
 } from "@/components/views/settings/settings-lifecycle-rules-section";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
+import { useSessionUser } from "@/lib/hooks/use-auth";
+import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
+  loadListIdOptions,
+  loadQualityProfileIdOptions,
   loadQualityProfileNames,
+  loadUserIdOptions,
   loadTitleTagLabels,
 } from "@/lib/utils/rule-builder-catalogs";
 import {
@@ -186,15 +191,12 @@ export function SettingsLifecycleRulesContainer({
   const [candidates, setCandidates] = useState<LifecycleCandidate[]>([]);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
-  const [candidateRuleFilter, setCandidateRuleFilter] = useState(
-    LIFECYCLE_FILTER_ALL,
-  );
-  const [candidateStateFilter, setCandidateStateFilter] = useState(
-    LIFECYCLE_FILTER_ALL,
-  );
-  const [candidateLibraryFilter, setCandidateLibraryFilter] = useState(
-    LIFECYCLE_FILTER_ALL,
-  );
+  const [candidateRuleFilter, setCandidateRuleFilter] =
+    useState(LIFECYCLE_FILTER_ALL);
+  const [candidateStateFilter, setCandidateStateFilter] =
+    useState(LIFECYCLE_FILTER_ALL);
+  const [candidateLibraryFilter, setCandidateLibraryFilter] =
+    useState(LIFECYCLE_FILTER_ALL);
 
   const [evaluationRuns, setEvaluationRuns] = useState<
     LifecycleEvaluationRun[]
@@ -202,9 +204,8 @@ export function SettingsLifecycleRulesContainer({
   const [actionRuns, setActionRuns] = useState<LifecycleActionRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
-  const [runScopeRuleSetId, setRunScopeRuleSetId] = useState(
-    LIFECYCLE_FILTER_ALL,
-  );
+  const [runScopeRuleSetId, setRunScopeRuleSetId] =
+    useState(LIFECYCLE_FILTER_ALL);
   const [evaluationTriggering, setEvaluationTriggering] = useState(false);
   const [actionTriggering, setActionTriggering] = useState(false);
 
@@ -239,12 +240,20 @@ export function SettingsLifecycleRulesContainer({
     }),
     [libraries, rootPaths],
   );
+  // Listing users needs user management; without it a user id is typed in.
+  const sessionUser = useSessionUser();
+  const canListUsers =
+    sessionUser !== null &&
+    hasAppPermission(sessionUser, APP_PERMISSIONS.manageUsers);
   const builderOptionLoaders = useMemo(
     () => ({
       qualityProfiles: () => loadQualityProfileNames(client),
       titleTags: () => loadTitleTagLabels(client),
+      qualityProfileIds: () => loadQualityProfileIdOptions(client),
+      lists: () => loadListIdOptions(client),
+      ...(canListUsers ? { users: () => loadUserIdOptions(client) } : {}),
     }),
-    [client],
+    [client, canListUsers],
   );
   const servedSchema = useRuleBuilderSchema(LIFECYCLE_RULE_BUILDER_BASE);
   const builderBinding = useMemo(
@@ -347,10 +356,7 @@ export function SettingsLifecycleRulesContainer({
         whenSchemaReady(),
       ]);
       if (!detail) return;
-      const next = copyLifecycleRuleDraft(
-        detail,
-        lifecycleRuleBuilder(schema),
-      );
+      const next = copyLifecycleRuleDraft(detail, lifecycleRuleBuilder(schema));
       setEditingRuleSetId(null);
       startEditorSession(next, next);
       setIsEditorOpen(true);
@@ -472,9 +478,8 @@ export function SettingsLifecycleRulesContainer({
           })),
         );
         setRootPaths(
-          catalogLibraries.flatMap(
-            (library: { roots?: { path: string }[] }) =>
-              (library.roots ?? []).map((root) => root.path),
+          catalogLibraries.flatMap((library: { roots?: { path: string }[] }) =>
+            (library.roots ?? []).map((root) => root.path),
           ),
         );
       }
@@ -528,9 +533,7 @@ export function SettingsLifecycleRulesContainer({
         )
         .toPromise();
       if (error) throw error;
-      setCandidates(
-        (data?.lifecycleCandidates as LifecycleCandidate[]) ?? [],
-      );
+      setCandidates((data?.lifecycleCandidates as LifecycleCandidate[]) ?? []);
     } catch (error) {
       setCandidates([]);
       setCandidatesError(
@@ -596,9 +599,7 @@ export function SettingsLifecycleRulesContainer({
         )
         .toPromise();
       if (error) throw error;
-      setExclusions(
-        (data?.lifecycleExclusions as LifecycleExclusion[]) ?? [],
-      );
+      setExclusions((data?.lifecycleExclusions as LifecycleExclusion[]) ?? []);
     } catch (error) {
       setExclusions([]);
       setExclusionsError(
@@ -730,16 +731,13 @@ export function SettingsLifecycleRulesContainer({
       return;
     }
     if (
-      (validation as LifecycleValidationResult).declaredActions
-        ?.destructive &&
+      (validation as LifecycleValidationResult).declaredActions?.destructive &&
       ruleSetDraft.maxTitlesPerRun === null
     ) {
       setValidationResult({
         ...validation,
         valid: false,
-        errors: [
-          t("error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED"),
-        ],
+        errors: [t("error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED")],
       });
       return;
     }
@@ -822,9 +820,7 @@ export function SettingsLifecycleRulesContainer({
           .toPromise();
         if (request !== previewRequest.current) return;
         if (error) throw error;
-        setPreviewResult(
-          data.previewLifecycleRule as LifecyclePreviewResult,
-        );
+        setPreviewResult(data.previewLifecycleRule as LifecyclePreviewResult);
       } catch (error) {
         if (request !== previewRequest.current) return;
         setPreviewResult(null);
@@ -972,8 +968,7 @@ export function SettingsLifecycleRulesContainer({
         .toPromise();
       if (error) throw error;
       announceTrigger(
-        (data?.runLifecycleActionHandlerNow as LifecycleTriggerResult) ??
-          null,
+        (data?.runLifecycleActionHandlerNow as LifecycleTriggerResult) ?? null,
       );
       await refreshRuns();
       await refreshCandidates();

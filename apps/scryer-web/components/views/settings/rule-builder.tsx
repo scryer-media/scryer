@@ -146,6 +146,7 @@ function ConditionRow({
   idBase,
   keys,
   condition,
+  options,
   problems,
   readOnly,
   onChange,
@@ -156,6 +157,7 @@ function ConditionRow({
   idBase: string;
   keys: readonly (string | number)[];
   condition: RuleBuilderCondition;
+  options: RuleBuilderOptions;
   problems: RuleBuilderProblem[];
   readOnly: boolean;
   onChange: (condition: RuleBuilderCondition) => void;
@@ -171,6 +173,19 @@ function ConditionRow({
   const valueId = selectorId(`${idBase}-value`, ...keys);
   const factId = selectorId(`${idBase}-fact`, ...keys);
   const hasValue = valueKind !== "none";
+  // An id is picked by name from the field's catalog once it has loaded with
+  // something in it; until then, and for a catalog the page cannot supply, it
+  // is typed in.
+  const catalog = valueKind === "text" ? field?.options : undefined;
+  const catalogNames =
+    catalog && Object.hasOwn(options, catalog) ? options[catalog] : undefined;
+  const catalogPresentation = catalog
+    ? RULE_BUILDER_CATALOGS[catalog]
+    : undefined;
+  const pickFromCatalog =
+    catalogPresentation !== undefined &&
+    catalogNames !== undefined &&
+    (catalogNames === null || catalogNames.length > 0);
   const factProblems = problems.filter((p) => FACT_PROBLEM_CODES.has(p.code));
   const operatorProblems = problems.filter((p) =>
     OPERATOR_PROBLEM_CODES.has(p.code),
@@ -192,7 +207,7 @@ function ConditionRow({
     >
       {/* Every column is a label over a control, top-aligned, so the
           controls line up whatever text sits under each one. */}
-      <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-start">
+      <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.4fr)_minmax(0,1fr)_auto] md:items-start">
         <div className="min-w-0 space-y-1.5">
           <label
             htmlFor={factId}
@@ -285,6 +300,35 @@ function ConditionRow({
                 value: choice.value,
                 label: t(choice.labelKey),
               }))}
+            />
+            <ProblemText
+              id={selectorId(`${idBase}-value-problem`, ...keys)}
+              schema={schema}
+              problems={valueProblems}
+            />
+          </div>
+        ) : hasValue && pickFromCatalog ? (
+          <div className="min-w-0 space-y-1.5">
+            <label
+              htmlFor={valueId}
+              className={cn(FIELD_LABEL_CLASS, readOnly && "opacity-60")}
+            >
+              {t("settings.ruleBuilderValue")}
+            </label>
+            <FilterableSelect
+              id={valueId}
+              optionIdPrefix={valueId}
+              value={condition.value}
+              disabled={readOnly || catalogNames === null}
+              placeholder={
+                catalogNames === null
+                  ? t("label.loading")
+                  : t(catalogPresentation.placeholderKey)
+              }
+              onValueChange={(value) => onChange({ ...condition, value })}
+              options={pickerOptions(catalogNames ?? [], [
+                condition.value,
+              ]).sort((a, b) => a.label.localeCompare(b.label))}
             />
             <ProblemText
               id={selectorId(`${idBase}-value-problem`, ...keys)}
@@ -631,12 +675,14 @@ function ConditionList({
   problems,
   readOnly,
   label,
+  options,
   onChange,
 }: {
   schema: RuleBuilderSchema;
   fields: readonly RuleBuilderField[];
   idBase: string;
   keys: readonly (string | number)[];
+  options: RuleBuilderOptions;
   joinId: string;
   join: RuleBuilderJoin;
   conditions: RuleBuilderCondition[];
@@ -674,6 +720,7 @@ function ConditionList({
           idBase={idBase}
           keys={[...keys, index]}
           condition={condition}
+          options={options}
           readOnly={readOnly}
           problems={problems.filter(
             (problem) => problem.conditionIndex === index,
@@ -819,6 +866,7 @@ function ActionRow({
         fields={ruleBuilderSubjectFields(schema, variant, subject)}
         idBase={`${prefix}-action-condition`}
         keys={[index]}
+        options={options}
         joinId={selectorId(`${prefix}-action-join`, index)}
         join={row.join}
         conditions={row.conditions}
@@ -883,6 +931,7 @@ export function RuleBuilder({
         fields={ruleBuilderFields(schema, variant)}
         idBase={`${prefix}-condition`}
         keys={[]}
+        options={options}
         joinId={`${prefix}-join`}
         join={model.join}
         conditions={model.conditions}
