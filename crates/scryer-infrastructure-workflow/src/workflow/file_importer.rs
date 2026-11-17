@@ -3,8 +3,8 @@ use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
     ImportFileTransferProgress, ImportFileTransferProgressSender,
     disk::{
-        self, Cancel, Disk, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Open, Parents,
-        PathReading, Phase, Progress, Refused, Removal, Remove, StagedCause, StagedCopy,
+        self, Cancel, Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Open, Parents,
+        PathReading, Phase, Placed, Progress, Refused, Removal, Remove, StagedCause, StagedCopy,
         StagedCopyRefusal, StagedStep, Unproven, Watch,
     },
     fs_integrity::import_content_proof,
@@ -253,16 +253,16 @@ impl ImportPlacementCoordinator {
             tracing::warn!(
                 volume_key = %opaque_lane_key(volume_key),
                 dest = %dest.display(),
-                source_identity = %mismatch.source,
-                linked_identity = %mismatch.linked,
+                source_identity = %mark_label(&mismatch.source),
+                linked_identity = %mark_label(&mismatch.linked),
                 "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), so imports to this volume copy instead of hard linking until restart"
             );
         } else {
             tracing::debug!(
                 volume_key = %opaque_lane_key(volume_key),
                 dest = %dest.display(),
-                source_identity = %mismatch.source,
-                linked_identity = %mismatch.linked,
+                source_identity = %mark_label(&mismatch.source),
+                linked_identity = %mark_label(&mismatch.linked),
                 "hard link identity is unverifiable on this volume; copying"
             );
         }
@@ -735,6 +735,11 @@ enum LinkDoubt {
     Length(PathReading),
 }
 
+/// A stored mark in a few words for a log line.
+fn mark_label(stored: &str) -> String {
+    Mark::from_stored(stored).map_or_else(|| "unread".to_owned(), |mark| mark.label())
+}
+
 fn io_other(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::other(error)
 }
@@ -799,13 +804,13 @@ struct ImportFileOptions {
     force_cross_device_move: bool,
     #[cfg(test)]
     force_copy_verification_failure: bool,
-    /// SC-006: flip a byte in the destination after it is written, before it is
+    /// Flip a byte in the destination after it is written, before it is
     /// verified. The only way to exercise "a corrupted destination copy is
     /// detected before source removal" without an unreliable disk.
     #[cfg(test)]
     force_destination_corruption: bool,
     /// Make the full-depth read-back report itself unsupported, as a filesystem
-    /// that refuses the cache-bypassed re-read would (FR-042 quick floor).
+    /// that refuses the cache-bypassed re-read would, which lands on the quick floor.
     #[cfg(test)]
     force_read_back_unsupported: bool,
     #[cfg(test)]
@@ -870,17 +875,39 @@ fn hard_link_import_source(
     let policy = disk::placement::proven_link();
     let proof = LinkProof::NameAndLength;
     let refusal = match Disk::process().place_proven_blocking(source, dest, policy, seen, proof) {
-        Ok(_) => return Ok(ImportLink::Proven),
+        Ok(Placed {
+            done: Done::HardLinked,
+            ..
+        }) => return Ok(ImportLink::Proven),
+        Ok(placed) => {
+            return Err(AppError::Repository(format!(
+                "hard link to {} was placed as {:?}, which was not asked for",
+                dest.display(),
+                placed.done
+            )));
+        }
         Err(refusal) => refusal,
     };
     let words = refusal.to_string();
+    let unread = |error: io::Error| {
+        let said = format!(
+            "import path not found or inaccessible: {}: {error}",
+            dest.display()
+        );
+        import_io_error(&error, said)
+    };
     let doubt = match refusal.unproven {
         None if matches!(refusal.refused, Refused::CannotLink(_)) => {
             return Ok(ImportLink::NotPossible);
         }
         None => return Ok(ImportLink::Failed(words)),
+        // The read that failed names the reason, whatever became of the name.
         Some(Unproven {
-            after: LinkAfter::NotRemoved,
+            doubt: Doubt::Unread(error),
+            ..
+        }) => return Err(unread(error.into())),
+        Some(Unproven {
+            after: LinkAfter::NotRemoved | LinkAfter::AlreadyGone,
             ..
         }) => {
             return Err(AppError::Repository(format!(
@@ -891,17 +918,7 @@ fn hard_link_import_source(
         Some(Unproven { doubt, .. }) => doubt,
     };
     match doubt {
-        Doubt::Unread(error) => {
-            let error = io::Error::from(error);
-            Err(import_io_error(
-                &error,
-                format!(
-                    "import path not found or inaccessible: {}: {}",
-                    dest.display(),
-                    error
-                ),
-            ))
-        }
+        Doubt::Unread(error) => Err(unread(error.into())),
         Doubt::OtherFile { linked } if linked.kind() != Some(EntryKind::File) => {
             Err(AppError::Repository(format!(
                 "import path is not a regular file: {}",
@@ -998,7 +1015,7 @@ fn verified_copier_for(_: &ImportFileOptions) -> Disk {
     Disk::process()
 }
 
-/// Corrupt the destination between write and verification (SC-006).
+/// Corrupt the destination between write and verification.
 #[cfg(test)]
 fn force_destination_corruption(options: &ImportFileOptions, dest: &Path) {
     if !options.force_destination_corruption {
@@ -1588,19 +1605,30 @@ fn report_import_transfer_progress(
     }
 }
 
-/// A staged copy the disk service refused, as an import reports it.
+/// A staged copy the disk service refused, as an import reports it. A source
+/// whose name no longer reads as the file is read once more, the import's own
+/// way against `fingerprint`, for what it is now.
 fn import_copy_refusal(
     source: &Path,
     dest: &Path,
     temp_dest: &Path,
+    fingerprint: &ImportSourceFingerprint,
     refusal: StagedCopyRefusal,
 ) -> AppError {
+    let changed = || {
+        let now = ensure_same_source(source, fingerprint);
+        io_other(now.err().unwrap_or_else(|| {
+            AppError::Repository(format!(
+                "import source changed during import: {}",
+                source.display()
+            ))
+        }))
+    };
     let (source, dest) = (source.display(), dest.display());
     let attempts = refusal.attempts;
-    let changed = || io_other(format!("import source changed during import: {source}"));
     let unread = |error: io::Error| {
         let said = format!("import path not found or inaccessible: {source}: {error}");
-        io::Error::new(error.kind(), said)
+        io_other(import_io_error(&error, said))
     };
     let (stage, error) = match (refusal.step, refusal.cause) {
         (_, StagedCause::Cancelled) => {
@@ -1663,17 +1691,14 @@ fn copy_regular_source_to_destination(
     let temp_dest = dest.with_extension("tmp_import");
     let sender = progress.cloned();
     let watch = Watch {
-        // The last chunk is followed at once by the finalizing phase, which
-        // covers the flush, the sync and the rename.
+        // The finalizing phase covers the flush, the sync and the rename.
         progress: Progress::to(move |phase, bytes| {
-            if phase == Phase::Copying {
-                let copying = ImportTransferPhase::Copying;
-                report_import_transfer_progress(sender.as_ref(), copying, bytes, size);
-                if bytes >= size {
-                    let finalizing = ImportTransferPhase::Finalizing;
-                    report_import_transfer_progress(sender.as_ref(), finalizing, bytes, size);
-                }
-            }
+            let phase = match phase {
+                Phase::Copying => ImportTransferPhase::Copying,
+                Phase::Finishing => ImportTransferPhase::Finalizing,
+                _ => return,
+            };
+            report_import_transfer_progress(sender.as_ref(), phase, bytes, size);
         }),
         cancel: match cancellation.cloned() {
             Some(cancellation) => Cancel::when(move || cancellation.is_cancelled()),
@@ -1687,16 +1712,24 @@ fn copy_regular_source_to_destination(
     let landing = StagedCopy {
         staged: &temp_dest,
         seen: source_mark,
-        clear_staged: true,
         sync_folder: false,
         carry_permissions: false,
         bad_handle_pauses: &IMPORT_COPY_RETRY_PAUSES,
         chunk_bytes: IMPORT_COPY_BUFFER_BYTES,
     };
-    let hashes = Disk::process()
+    let copied = Disk::process()
         .copy_staged_blocking(source, dest, &landing, &watch)
-        .map(persisted_hashes)
-        .map_err(|refusal| import_copy_refusal(source, dest, &temp_dest, refusal))?;
+        .map_err(|refusal| {
+            import_copy_refusal(source, dest, &temp_dest, source_fingerprint, refusal)
+        })?;
+    if copied.sync == disk::SyncOutcome::Unconfirmed {
+        // Verification below, not the sync, guards the source before cleanup.
+        tracing::debug!(
+            dest = %dest.display(),
+            "import destination filesystem does not support fsync; relying on copy verification"
+        );
+    }
+    let hashes = persisted_hashes(copied.hashes);
 
     if force_copy_verification_failure(&options) {
         let _ = Disk::process().remove_blocking(dest, Remove::File);
@@ -1721,7 +1754,7 @@ fn copy_regular_source_to_destination(
 
     // Already on a blocking thread, so the blocking twin is the right one.
     // `Full` degrades to the quick floor by itself when the destination cannot
-    // be read back (FR-042), which is why a filesystem that refuses a
+    // be read back, which is why a filesystem that refuses a
     // cache-bypassed re-read still imports rather than failing.
     let sender = progress.cloned();
     let last_report = std::sync::Mutex::new(None::<Instant>);
@@ -1861,7 +1894,7 @@ struct PreparedImportPlacement {
     dest: PathBuf,
     #[serde(skip)]
     options: ImportFileOptions,
-    /// The operator's verification depth for this import (FR-042/045).
+    /// The operator's verification depth for this import.
     /// Serialized, unlike `options`: the worker process performs the copy, so
     /// the depth has to survive the handoff. Required on the wire: every peer
     /// that speaks this protocol version writes it, and a missing depth is a
@@ -1976,7 +2009,7 @@ fn finish_prepared_import(
         destination_disposition: ImportDestinationDisposition::Created,
         source_disposition: ImportSourceDisposition::Retained,
         source_cleanup,
-        // A rename, hardlink, or symlink placement copies no bytes (FR-032):
+        // A rename, hardlink, or symlink placement copies no bytes:
         // there is nothing to verify and nothing to hash.
         verification: None,
     })
@@ -2328,7 +2361,7 @@ fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult
     validate_import_destination_guard_after_placement(&prepared.destination_guard, &prepared.dest)?;
     finalize_imported_regular_destination(&prepared.dest, &prepared.options, &prepared.permissions);
     // The source-cleanup guard is only built once verification passed, so
-    // FR-044 holds structurally: an unproven copy has no guard to remove
+    // An unproven copy therefore has no guard to remove
     // anything with.
     let mut result = finish_prepared_import(prepared, ImportStrategy::Copy)?;
     result.verification = Some(verification);
@@ -2438,8 +2471,8 @@ fn import_hardlink_or_copy_blocking(
             }
             ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => tracing::warn!(
                 dest = %dest.display(),
-                source_identity = %mismatch.source,
-                linked_identity = %mismatch.linked,
+                source_identity = %mark_label(&mismatch.source),
+                linked_identity = %mark_label(&mismatch.linked),
                 "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
             ),
             ImportLink::Unproven(LinkDoubt::Length(linked)) => match linked.size() {
@@ -2584,7 +2617,7 @@ enum ImportFileWorkerRequest {
         mode: ImportMode,
         expected_source: Option<ImportSourceSnapshot>,
         permissions: ImportFilePermissions,
-        /// FR-042/045. Required: the parent always sends the resolved depth,
+        /// Required: the parent always sends the resolved depth,
         /// and a request without one is rejected instead of being verified at
         /// whatever the type's default happens to be.
         verification_depth: VerificationDepth,
@@ -3266,7 +3299,7 @@ async fn next_import_worker_event(
 #[async_trait]
 impl FileImporter for FsFileImporter {
     /// A location operation writes its own destination, then asks for the same
-    /// modes an import would have applied (FR-031). Best-effort for the same
+    /// modes an import would have applied. Best-effort for the same
     /// reason imports are: a filesystem that refuses a chmod or a chown is not
     /// a reason to fail a move whose bytes are already verified.
     async fn apply_placed_file_permissions(
@@ -3401,7 +3434,7 @@ impl FileImporter for FsFileImporter {
         context: &ImportFileExecutionContext,
     ) -> AppResult<ImportFileResult> {
         // No depth was named, so the copy path proves at full depth: only the
-        // operator's preference may choose the quick floor (FR-042: never a
+        // operator's preference may choose the quick floor (never a
         // silent downgrade).
         self.place_import_file(
             source,
@@ -3510,7 +3543,7 @@ impl FileImporter for FsFileImporter {
 
 impl FsFileImporter {
     /// The one placement implementation. Both trait entry points land here; the
-    /// only thing that varies is the depth the copy path proves at (FR-045).
+    /// only thing that varies is the depth the copy path proves at.
     #[expect(
         clippy::too_many_arguments,
         reason = "file placement keeps transfer, permission, source-snapshot, lane, and verification context explicit"
@@ -4930,7 +4963,7 @@ mod tests {
         );
     }
 
-    // ── FR-045: the download-client copy path proves what it copied ─────────
+    // ── The download-client copy path proves what it copied ─────────
 
     /// A cross-device import copy computes both hashes during the copy and
     /// proves the destination at the configured depth.
@@ -4967,7 +5000,7 @@ mod tests {
         assert_eq!(verification.stamp(), "verified (full)");
 
         // The hashes are of the bytes, computed in the same pass that wrote
-        // them (D2) — not a second read. Compared against the same hasher fed
+        // them — not a second read. Compared against the same hasher fed
         // directly, so a copy loop that dropped or double-fed a buffer would
         // show up here.
         let mut expected = scryer_application::location::verify::StreamedContentHasher::new();
@@ -5022,9 +5055,9 @@ mod tests {
         assert_eq!(verification.stamp(), "verified (quick)");
     }
 
-    /// SC-006: a byte flipped after write is caught before the source is
+    /// A byte flipped after write is caught before the source is
     /// touched. The import fails, so there is no cleanup guard and no path to
-    /// source removal (FR-044) — and the source is still there.
+    /// source removal — and the source is still there.
     #[test]
     fn a_corrupted_destination_fails_the_import_and_leaves_the_source_alone() {
         let source_dir = tempfile::tempdir().expect("source tempdir");
@@ -5060,7 +5093,7 @@ mod tests {
         );
     }
 
-    /// FR-042: full is requested, the read-back cannot run, and verification
+    /// Full is requested, the read-back cannot run, and verification
     /// lands on the quick floor rather than failing the import. Behavioural
     /// compatibility — a filesystem that cannot be re-read still imports.
     #[test]
@@ -5106,7 +5139,7 @@ mod tests {
         assert!(dest.exists());
     }
 
-    /// FR-032: a same-filesystem placement copies no bytes, so there is nothing
+    /// A same-filesystem placement copies no bytes, so there is nothing
     /// to hash and nothing to verify. The fast path stays untouched.
     #[test]
     fn a_hardlink_placement_carries_no_verification() {
@@ -5678,6 +5711,176 @@ mod tests {
                 && update.bytes == total_bytes
                 && update.total_bytes == total_bytes
         }));
+    }
+
+    /// The copy lane alone, on a source read just before it.
+    fn copy_alone(
+        source: &Path,
+        dest: &Path,
+        size: u64,
+        before_copy: impl FnOnce(),
+    ) -> (
+        AppResult<ImportVerification>,
+        Vec<ImportFileTransferProgress>,
+    ) {
+        let (fingerprint, mark) = read_import_source(source).expect("read source");
+        before_copy();
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = copy_regular_source_to_destination(
+            source,
+            dest,
+            &fingerprint,
+            &mark,
+            size,
+            ImportFileOptions::default(),
+            VerificationDepth::Quick,
+            Some(&progress_tx),
+            None,
+        );
+        let mut updates = Vec::new();
+        while let Ok(update) = progress_rx.try_recv() {
+            updates.push(update);
+        }
+        (result, updates)
+    }
+
+    #[test]
+    fn a_copy_reports_finalizing_when_its_stream_ends_whatever_size_was_expected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let dest = temp.path().join("Sample.Title.mkv");
+        let real = std::fs::metadata(&source).expect("source metadata").len();
+
+        let (result, updates) = copy_alone(&source, &dest, real + 7, || {});
+
+        result.expect_err("the size expected is not the size copied");
+        let seen: Vec<_> = updates
+            .iter()
+            .map(|update| (update.phase, update.bytes))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (ImportTransferPhase::Copying, 0),
+                (ImportTransferPhase::Copying, real),
+                (ImportTransferPhase::Finalizing, real),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_copy_that_cannot_stage_reports_no_progress() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let dest = temp.path().join("no-such-folder").join("Sample.Title.mkv");
+
+        let (result, updates) = copy_alone(&source, &dest, 21, || {});
+
+        result.expect_err("the staged file cannot be made");
+        assert_eq!(updates.len(), 0, "{updates:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_replaced_by_a_dangling_link_is_a_file_not_found() {
+        use scryer_application::error_reasons::import;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let dest = temp.path().join("Sample.Title.mkv");
+
+        let (result, _) = copy_alone(&source, &dest, 21, || {
+            std::fs::remove_file(&source).expect("remove source");
+            std::os::unix::fs::symlink(temp.path().join("sample-gone.mkv"), &source)
+                .expect("link source");
+        });
+
+        let error = result.expect_err("the source is gone");
+        assert_eq!(error.reason(), Some(import::FILE_NOT_FOUND));
+        assert!(!dest.exists() && !dest.with_extension("tmp_import").exists());
+    }
+
+    #[test]
+    fn a_source_replaced_by_a_folder_is_not_a_regular_file() {
+        use scryer_application::error_reasons::import;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let dest = temp.path().join("Sample.Title.mkv");
+
+        let (result, _) = copy_alone(&source, &dest, 21, || {
+            std::fs::remove_file(&source).expect("remove source");
+            std::fs::create_dir(&source).expect("folder at source");
+        });
+
+        let error = result.expect_err("the source is a folder");
+        assert_eq!(error.reason(), Some(import::IO_FAILED));
+        let said = error.to_string();
+        assert!(
+            said.contains("source preflight: repository: import path is not a regular file"),
+            "{said}"
+        );
+        assert!(!dest.exists() && !dest.with_extension("tmp_import").exists());
+    }
+
+    /// What the disk service says of a copy that did not land, as an import
+    /// words and codes it.
+    #[test]
+    fn a_refused_copy_is_worded_and_coded_by_where_it_stopped() {
+        use scryer_application::error_reasons::import;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let dest = temp.path().join("Sample.Title.mkv");
+        let staged = dest.with_extension("tmp_import");
+        let fingerprint = fingerprint_import_source(&source).expect("read source");
+        let refused = |step, cause, attempts| {
+            let refusal = StagedCopyRefusal {
+                step,
+                cause,
+                attempts,
+            };
+            import_copy_refusal(&source, &dest, &staged, &fingerprint, refusal)
+        };
+        let io = |kind: io::ErrorKind| StagedCause::Io(kind.into());
+        let raw = |code| StagedCause::Io(io::Error::from_raw_os_error(code));
+
+        let dropped = refused(StagedStep::Transfer, raw(9), 3);
+        let said = dropped.to_string();
+        assert!(
+            said.contains("import copy failed after 3 attempt(s)"),
+            "{said}"
+        );
+        #[cfg(unix)]
+        assert!(said.contains("copy: Bad file descriptor"), "{said}");
+        assert_eq!(dropped.reason(), Some(import::IO_FAILED));
+
+        let said = refused(StagedStep::Transfer, raw(5), 1).to_string();
+        assert!(
+            said.contains("import copy failed after 1 attempt(s)"),
+            "{said}"
+        );
+
+        let missing = refused(StagedStep::SourceBefore, io(io::ErrorKind::NotFound), 1);
+        assert_eq!(missing.reason(), Some(import::FILE_NOT_FOUND));
+        let full = refused(StagedStep::Transfer, io(io::ErrorKind::StorageFull), 1);
+        assert_eq!(full.reason(), Some(import::DISK_FULL));
+
+        let uncleared = refused(
+            StagedStep::ClearStaged,
+            io(io::ErrorKind::PermissionDenied),
+            2,
+        );
+        let said = uncleared.to_string();
+        assert!(
+            said.contains("import copy failed before attempt 2"),
+            "{said}"
+        );
+        assert_eq!(uncleared.reason(), Some(import::PERMISSION_DENIED));
+
+        assert!(refused(StagedStep::Transfer, StagedCause::Cancelled, 1).is_canceled());
     }
 
     #[test]

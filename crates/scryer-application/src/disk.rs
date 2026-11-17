@@ -23,7 +23,8 @@ pub use scryer_disk::{CacheBypass, ReadBackHandle, ReadBackOpener};
 pub use scryer_disk::{
     Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CrcKind, Depth, Evidence,
     FILE_NAME_MAX_BYTES, Landing, Phase, Progress, Proof, RESUMABLE_STAGING_SUFFIX, StagedCause,
-    StagedCopy, StagedCopyRefusal, StagedStep, Verdict, Watch, resumable_staging_path,
+    StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep, Verdict, Watch,
+    resumable_staging_path,
 };
 
 #[cfg(test)]

@@ -35,7 +35,8 @@ use scryer_domain::MediaFacet;
 
 use crate::disk::reason::DISK_PATH_MISSING;
 use crate::disk::{
-    Disk, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, Removal, Remove, Unproven,
+    Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, Placed, Removal, Remove,
+    Unproven,
 };
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
@@ -613,20 +614,24 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
         )
         .await;
     let refusal = match linked {
-        Ok(_) => return Ok(true),
+        Ok(Placed {
+            done: Done::HardLinked,
+            ..
+        }) => return Ok(true),
+        Ok(placed) => {
+            return Err(AppError::Repository(format!(
+                "the link to {} was placed as {:?}, which was not asked for",
+                destination.display(),
+                placed.done
+            )));
+        }
         Err(refusal) => refusal,
     };
     let words = refusal.to_string();
     match refusal.unproven {
         // No link was made: the ordinary verified copy takes over.
         None => Ok(false),
-        Some(Unproven {
-            after: LinkAfter::NotRemoved,
-            ..
-        }) => Err(AppError::Repository(format!(
-            "cannot remove the unproven link {}: {words}",
-            destination.display()
-        ))),
+        // The read that failed is the answer, whatever became of the name.
         Some(Unproven {
             doubt: Doubt::Unread(error),
             ..
@@ -635,6 +640,14 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             destination.display(),
             error.words()
         ))),
+        Some(Unproven {
+            doubt: Doubt::OtherLength(_),
+            after: LinkAfter::NotRemoved | LinkAfter::AlreadyGone,
+        }) => Err(AppError::Repository(format!(
+            "cannot remove the unproven link {}: {words}",
+            destination.display()
+        ))),
+        // Another file at the name, removed or not.
         Some(_) => Err(AppError::validation_refused(
             crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
             "source changed during file placement",

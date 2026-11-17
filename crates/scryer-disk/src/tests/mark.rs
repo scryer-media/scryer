@@ -117,7 +117,7 @@ fn a_later_mark_says_what_differs() {
         with(|stat| stat.extra.created = Some(std::time::UNIX_EPOCH)),
         Drift::Touched
     );
-    assert_eq!(with(|stat| stat.extra.owner = Some(501)), Drift::Touched);
+    assert_eq!(with(|stat| stat.extra.owner = Some(501)), Drift::Reowned);
     assert_eq!(with(|stat| stat.links = Some(2)), Drift::Same);
     // Where the platform cannot tell the files apart, equal facts are
     // reported as only that.
@@ -125,6 +125,10 @@ fn a_later_mark_says_what_differs() {
     assert_eq!(unnumbered.compare(&unnumbered), Drift::SameFacts);
     assert!(Drift::SameFacts.is_untouched() && Drift::Same.is_untouched());
     assert!(Drift::Touched.is_unwritten() && !Drift::Touched.is_untouched());
+    // A new owner is not a rewrite, and is still told from none.
+    assert!(Drift::Reowned.is_unwritten() && !Drift::Reowned.is_untouched());
+    assert!(Drift::Touched.is_unwritten_by_its_owner());
+    assert!(!Drift::Reowned.is_unwritten_by_its_owner());
     for unshown in [Drift::Rewritten, Drift::Replaced, Drift::CannotTell] {
         assert!(!unshown.is_unwritten() && !unshown.is_untouched());
     }

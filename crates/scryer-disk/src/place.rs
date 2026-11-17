@@ -175,13 +175,20 @@ pub enum Doubt {
 pub enum LinkAfter {
     /// The placement removed the name it had created.
     Removed,
-    /// The removal failed or found the name already gone, and that failure
-    /// is the refusal. The name may still be there.
+    /// The removal found nothing at the name: something else took it away.
+    AlreadyGone,
+    /// The removal failed, and that failure is the refusal. The name may
+    /// still be there.
     NotRemoved,
+    /// The name read as something other than a regular file, and was not
+    /// touched, even if this call made it: a source swapped for a symlink
+    /// before the link call makes exactly that.
+    LeftAlone,
 }
 
 /// A hard link this placement made and could not prove. The placement then
-/// went to remove the name it had just created, and nothing else.
+/// went to remove the name it had just created, and nothing else; a name
+/// that does not read as a regular file is left alone.
 #[derive(Debug)]
 pub struct Unproven {
     pub doubt: Doubt,
@@ -219,7 +226,9 @@ pub enum Refused {
     /// answer when the destination's folder is not there.
     SourceMissing,
     /// The destination's folder is not there and the policy creates none; or
-    /// a destination the policy says the caller holds is not there.
+    /// a destination the policy says the caller holds is not there; or the
+    /// name of a hard link that did not prove was already gone when the
+    /// placement went to remove it.
     DestinationMissing,
     Unreachable(Side),
     /// Any other failure.
@@ -392,15 +401,23 @@ impl Disk {
     /// number where the platform gives them, a zero number compared as
     /// given, and the same length and modification time where it gives
     /// none. [`LinkProof::NameAndLength`] reads what the name resolves to as
-    /// well.
+    /// well. `seen` must come from a read made for this call: a stored mark
+    /// or one that names a volume only never proves.
     ///
     /// A link that does not prove is removed: only the name this call
     /// created, and only when the link call itself succeeded. A name that
     /// was there before the call is refused as a destination that exists and
-    /// is never removed. A removal that fails, or finds the name already
-    /// gone, is the refusal, and [`PlaceRefusal::unproven`] says what did
-    /// not prove. Once the name is removed the policy's fallback copy runs,
-    /// or the answer is [`CannotLink::Unverifiable`].
+    /// is never removed. Neither is a new name that reads as anything but a
+    /// regular file: another writer replaced the link, and the answer is a
+    /// destination that exists. A removal that fails, or finds the name
+    /// already gone, is the refusal, and [`PlaceRefusal::unproven`] says
+    /// what did not prove and what became of the name. Once the name is
+    /// removed the policy's fallback copy runs, or the answer is
+    /// [`CannotLink::Unverifiable`].
+    ///
+    /// What remains: on a filesystem that makes up its file numbers, a
+    /// regular file another writer put at the name in that instant cannot be
+    /// told from the link, and is removed as the link would be.
     ///
     /// Nothing is remembered about the volume. A policy that asks for
     /// another method is placed as [`Self::place_blocking`] places it.
@@ -928,6 +945,17 @@ impl Job<'_> {
         let read = disk.call("lstat", || disk.inner.backend.lstat(dest));
         let doubt = match read.map(|stat| Mark::of_stat(&stat)) {
             Err(error) => Doubt::Unread(DiskError::new(DiskVerb::Read, dest, error)),
+            // Not a regular file, so not removed as one, whoever made it.
+            Ok(linked) if linked.kind() != Some(EntryKind::File) => {
+                let doubt = Doubt::OtherFile { linked };
+                let after = LinkAfter::LeftAlone;
+                self.unproven.replace(Some(Unproven { doubt, after }));
+                return Err(Fail::new(
+                    Refused::DestinationExists,
+                    io::ErrorKind::AlreadyExists,
+                    format!("{} is no longer the link made there", dest.display()),
+                ));
+            }
             Ok(linked) if !linked.is_link_of(seen) => Doubt::OtherFile { linked },
             Ok(_) if proof == LinkProof::Name => return Ok(Done::HardLinked),
             Ok(_) => {
@@ -939,23 +967,23 @@ impl Job<'_> {
             }
         };
         // Strict: an unproven link left behind would be taken for the file.
-        let removed = match disk.remove_blocking(dest, Remove::File) {
-            Ok(Removal::Removed) => Ok(()),
-            Ok(Removal::AlreadyAbsent) => Err(Fail::new(
-                Refused::Failed,
-                io::ErrorKind::NotFound,
-                format!("{} is already gone", dest.display()),
-            )),
-            Err(error) => Err(Fail::of(error, Side::Destination)),
+        let (after, fail) = match disk.remove_blocking(dest, Remove::File) {
+            Ok(Removal::Removed) => (LinkAfter::Removed, None),
+            Ok(Removal::AlreadyAbsent) => {
+                let gone = format!("{} is already gone", dest.display());
+                let fail = Fail::new(Refused::DestinationMissing, io::ErrorKind::NotFound, gone);
+                (LinkAfter::AlreadyGone, Some(fail))
+            }
+            Err(error) => (
+                LinkAfter::NotRemoved,
+                Some(Fail::of(error, Side::Destination)),
+            ),
         };
-        if let Err(fail) = removed {
-            let after = LinkAfter::NotRemoved;
-            self.unproven.replace(Some(Unproven { doubt, after }));
+        // A fallback copy that is then refused still says what did not prove.
+        self.unproven.replace(Some(Unproven { doubt, after }));
+        if let Some(fail) = fail {
             return Err(fail);
         }
-        // A fallback copy that is then refused still says what did not prove.
-        let after = LinkAfter::Removed;
-        self.unproven.replace(Some(Unproven { doubt, after }));
         if self.policy.fallback == Fallback::Copy {
             return self.copy_keeping_source();
         }
@@ -1106,6 +1134,7 @@ impl Job<'_> {
             carry_permissions: true,
             chunk_bytes: crate::copy::CHUNK_BYTES,
             seen: None,
+            phases: false,
             watch: self.watch,
         };
         let sync = write_copy(self.disk, self.source, target, writing)

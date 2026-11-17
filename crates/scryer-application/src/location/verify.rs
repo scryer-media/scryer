@@ -201,6 +201,7 @@ impl CopyProgress {
             Phase::Copying => {
                 sinks.advance(bytes.saturating_sub(written.swap(bytes, Ordering::Relaxed)));
             }
+            Phase::Finishing => sinks.phase(scryer_domain::ImportTransferPhase::Finalizing, bytes),
             Phase::Verifying => sinks.phase(scryer_domain::ImportTransferPhase::Verifying, bytes),
         })
     }

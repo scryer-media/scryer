@@ -31,9 +31,11 @@ pub enum Drift {
     /// Nothing read about it differs, but the platform could not tell
     /// whether it is the same file.
     SameFacts,
-    /// Its length and modification time held; its change time, creation
-    /// time or owner did not.
+    /// Its length, modification time and owner held; its change time or
+    /// creation time did not.
     Touched,
+    /// Its length and modification time held; its owner did not.
+    Reowned,
     /// Its length or modification time differs.
     Rewritten,
     /// A different file.
@@ -51,6 +53,11 @@ impl Drift {
     /// Its length and modification time held, and it was not shown to be
     /// another file. `false` when that is not shown.
     pub fn is_unwritten(self) -> bool {
+        self.is_unwritten_by_its_owner() || self == Self::Reowned
+    }
+
+    /// [`Self::is_unwritten`], and its owner held too.
+    pub fn is_unwritten_by_its_owner(self) -> bool {
         matches!(self, Self::Same | Self::SameFacts | Self::Touched)
     }
 }
@@ -153,7 +160,9 @@ impl Mark {
     /// was read as before the link. Where the platform numbers files, the
     /// device and the number must match, and a zero number is compared as
     /// given: a filesystem that numbers every file zero links truly. Where
-    /// it gives none, the length and modification time must match. No probe.
+    /// it gives none, the length and modification time must match. `seen`
+    /// must be a fresh read: a stored or volume-only mark never proves. No
+    /// probe.
     pub(crate) fn is_link_of(&self, seen: &Self) -> bool {
         let (Some(linked), Some(before)) = (self.facts, seen.facts) else {
             return false;
@@ -202,10 +211,9 @@ impl Mark {
         }
         if before.len != after.len || before.modified != after.modified {
             Drift::Rewritten
-        } else if before.changed != after.changed
-            || before.created != after.created
-            || before.owner != after.owner
-        {
+        } else if before.owner != after.owner {
+            Drift::Reowned
+        } else if before.changed != after.changed || before.created != after.created {
             Drift::Touched
         } else if same == Sameness::Same {
             Drift::Same
@@ -245,6 +253,20 @@ impl Mark {
             Volume::Unix(device) => format!("{UNIX_LANE}{device}"),
             Volume::Windows(serial) => format!("{WINDOWS_LANE}{serial}"),
             Volume::Unknown => UNKNOWN_LANE.to_owned(),
+        }
+    }
+
+    /// The mark in a few words for a log line: its device and file number
+    /// where the platform gave them, its length and modification time
+    /// otherwise. For a person; nothing reads it back.
+    pub fn label(&self) -> String {
+        match (self.volume, self.file, self.facts) {
+            (Volume::Unix(device), Some(file), _) => format!("dev={device} ino={file}"),
+            (_, _, Some(facts)) => {
+                let modified = facts.modified.map(since_epoch);
+                format!("len={} modified={modified:?}", facts.len)
+            }
+            _ => self.lane(),
         }
     }
 

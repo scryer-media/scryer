@@ -85,8 +85,8 @@ pub use copy::{CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed}
 pub use copy::{
     Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
-    RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopy, StagedCopyRefusal, StagedStep, Verdict,
-    Watch, resumable_staging_path,
+    RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep,
+    Verdict, Watch, resumable_staging_path,
 };
 pub use mark::{Drift, Mark, Sameness};
 pub use pass::DiskPass;
@@ -543,9 +543,23 @@ struct Inner {
     calls: Mutex<std::collections::HashMap<&'static str, u64>>,
     #[cfg(test)]
     probe_timeout: Mutex<Option<std::time::Duration>>,
-    /// Raw error codes the next syncs of a written file fail with, in order.
+    /// Where the next steps of a copy fail, in order, and the raw error code
+    /// each fails with.
     #[cfg(test)]
-    sync_faults: Mutex<std::collections::VecDeque<i32>>,
+    copy_faults: Mutex<std::collections::VecDeque<(CopyFault, i32)>>,
+}
+
+/// A step of a copy a test makes fail.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyFault {
+    /// Reading the source's name.
+    SourceName,
+    /// Not a failure: the source's name reads as owned by the user the code
+    /// names.
+    SourceOwner,
+    Write,
+    Sync,
 }
 
 /// The filesystem owner. Cheap to clone; clones share one cache.
@@ -585,7 +599,7 @@ impl Disk {
                 #[cfg(test)]
                 probe_timeout: Mutex::default(),
                 #[cfg(test)]
-                sync_faults: Mutex::default(),
+                copy_faults: Mutex::default(),
             }),
             read_back: None,
         }
@@ -1064,6 +1078,14 @@ impl Disk {
             .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
     }
 
+    /// The failure a test queued for this step of a copy, when it is next.
+    #[cfg(test)]
+    pub(crate) fn fault(&self, at: CopyFault) -> Option<io::Error> {
+        let mut faults = self.inner.copy_faults.lock().unwrap();
+        let (_, code) = faults.pop_front_if(|(step, _)| *step == at)?;
+        Some(io::Error::from_raw_os_error(code))
+    }
+
     /// Move `source` to `dest` by reserving `dest` with an exclusive create
     /// and renaming over the reservation, which is removed again if the
     /// rename fails and it still reads as empty. For a caller that reserves the name whatever the
@@ -1445,10 +1467,7 @@ impl Disk {
     ) -> Result<SyncOutcome, DiskError> {
         let result = self.call("sync_handle", || self.inner.backend.sync_handle(&file));
         #[cfg(test)]
-        let result = match self.inner.sync_faults.lock().unwrap().pop_front() {
-            Some(code) => Err(io::Error::from_raw_os_error(code)),
-            None => result,
-        };
+        let result = self.fault(CopyFault::Sync).map_or(result, Err);
         drop(file);
         self.inner.cache.evict(&key_of(path));
         result.map_err(|error| DiskError::new(DiskVerb::Sync, path, error))

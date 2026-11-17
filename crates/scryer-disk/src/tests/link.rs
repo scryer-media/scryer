@@ -250,10 +250,53 @@ fn a_removal_that_fails_is_the_refusal_and_still_says_what_did_not_prove() {
         LinkProof::NameAndLength,
     )
     .expect_err("the name was already gone");
-    assert_eq!(refusal.refused, Refused::Failed);
+    assert_eq!(refusal.refused, Refused::DestinationMissing);
     let unproven = refusal.unproven.as_ref().expect("says why");
-    assert_eq!(unproven.after, LinkAfter::NotRemoved);
+    assert_eq!(unproven.after, LinkAfter::AlreadyGone);
     assert_eq!(refusal.to_string(), format!("{DEST} is already gone"));
+}
+
+/// A link to a regular file never reads as anything else, so such a name is
+/// another writer's: it is refused, said to be left alone, and not removed.
+#[test]
+fn a_new_name_that_is_no_regular_file_is_left_alone() {
+    for fallback in [Fallback::None, Fallback::Copy] {
+        let (disk, backend) = scripted();
+        backend.stat_is(DEST, Ok(dir()));
+        let refusal = prove(&disk, fallback, &numbered(7, 17), LinkProof::NameAndLength)
+            .expect_err("not the link");
+        assert_eq!(refusal.refused, Refused::DestinationExists);
+        let unproven = refusal.unproven.as_ref().expect("says why");
+        assert_eq!(unproven.after, LinkAfter::LeftAlone);
+        assert!(matches!(
+            &unproven.doubt,
+            Doubt::OtherFile { linked } if linked.kind() == Some(EntryKind::Directory)
+        ));
+        let removals = ["remove_file", "remove_dir", "remove_tree"];
+        assert_eq!(removals.map(|verb| backend.calls_of(verb)), [0, 0, 0]);
+        assert_eq!(backend.calls_of("open"), 0, "no copy over it");
+    }
+}
+
+/// The copy that follows a removed link can be refused too, and the refusal
+/// still says the link did not prove and is gone.
+#[test]
+fn a_fallback_copy_that_fails_still_says_the_link_was_removed() {
+    let (disk, backend) = scripted();
+    backend.stat_is(DEST, Ok(numbered(8, 17)));
+    backend.fails("open", SOURCE, io::ErrorKind::PermissionDenied);
+    let refusal = prove(
+        &disk,
+        Fallback::Copy,
+        &numbered(7, 17),
+        LinkProof::NameAndLength,
+    )
+    .expect_err("the copy failed");
+    assert_eq!(refusal.refused, Refused::Denied);
+    let unproven = refusal.unproven.as_ref().expect("says why");
+    assert_eq!(unproven.after, LinkAfter::Removed);
+    assert!(matches!(unproven.doubt, Doubt::OtherFile { .. }));
+    assert_eq!(backend.paths_of("remove_file").first(), Some(&p(DEST)));
 }
 
 #[test]
@@ -498,11 +541,8 @@ mod on_real_files {
             .expect("copied");
         assert_eq!(placed.done, Done::Copied);
         assert_eq!(std::fs::read(&at.dest).expect("dest"), b"synthetic payload");
-        // A copy, not a second name for the source.
-        assert_eq!(
-            mark(&at.dest).same_file(&mark(&at.source)) == Sameness::Same,
-            false
-        );
+        // A copy, not a second name for the source: writing to one leaves
+        // the other as it was.
         assert_eq!(
             names(at.dir.path()),
             [
@@ -511,6 +551,7 @@ mod on_real_files {
                 "invented-source.mkv"
             ]
         );
+        std::fs::write(&at.dest, b"rewritten").expect("rewrite the copy");
         at.untouched();
     }
 }
