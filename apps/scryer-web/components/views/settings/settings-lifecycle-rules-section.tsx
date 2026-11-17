@@ -44,6 +44,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { LifecycleRulesSection } from "@/components/root/types";
+import { SortableHead } from "@/components/views/lists/sortable-head";
+import {
+  lifecycleRulePage,
+  nextLifecycleRuleSort,
+  sortLifecycleRules,
+  type LifecycleRuleSort,
+} from "@/lib/utils/lifecycle-rule-table";
 import lifecycleInputContract from "@/lib/contracts/lifecycle-input-contract.json";
 import {
   LIFECYCLE_RULE_TEMPLATES,
@@ -851,6 +858,17 @@ export function SettingsLifecycleRulesSection({
       }
     />
   );
+  // The rule list arrives whole; sorting and paging stay in the page.
+  const [ruleSort, setRuleSort] = React.useState<LifecycleRuleSort>({
+    key: "name",
+    descending: false,
+  });
+  const [rulePageIndex, setRulePageIndex] = React.useState(0);
+  const sortedRules = React.useMemo(
+    () => sortLifecycleRules(ruleSetRecords, ruleSort),
+    [ruleSetRecords, ruleSort],
+  );
+  const rulePage = lifecycleRulePage(sortedRules, rulePageIndex);
 
   // Candidates and history are one pane each. They keep the instance switches,
   // because what the instance is allowed to do explains every row they show,
@@ -892,33 +910,64 @@ export function SettingsLifecycleRulesSection({
                 <Table className="min-w-[min(900px,100%)]">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t("label.name")}</TableHead>
-                      <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead className="text-center">
-                        {t("settings.lifecycleRuleGraceDays")}
-                      </TableHead>
-                      <TableHead>
-                        <HelpLabel
-                          label={t("jobs.column.schedule")}
-                          help={t("settings.lifecycleRuleScheduleHelp")}
+                      {(
+                        [
+                          ["name", t("label.name"), undefined, undefined],
+                          [
+                            "description",
+                            t("settings.ruleDescription"),
+                            undefined,
+                            undefined,
+                          ],
+                          [
+                            "graceDays",
+                            t("settings.lifecycleRuleGraceDays"),
+                            "text-center",
+                            undefined,
+                          ],
+                          [
+                            "schedule",
+                            t("jobs.column.schedule"),
+                            undefined,
+                            t("settings.lifecycleRuleScheduleHelp"),
+                          ],
+                          [
+                            "state",
+                            t("settings.lifecycleRuleState"),
+                            "w-[240px]",
+                            t("settings.lifecycleRuleStateHelp"),
+                          ],
+                          [
+                            "revision",
+                            t("settings.lifecycleRuleRevision"),
+                            "text-center",
+                            undefined,
+                          ],
+                        ] as const
+                      ).map(([key, label, className, help]) => (
+                        <SortableHead
+                          key={key}
+                          id={selectorId("settings-lifecycle-rules-sort", key)}
+                          label={label}
+                          className={className}
+                          help={help}
+                          active={ruleSort.key === key}
+                          descending={ruleSort.descending}
+                          onSort={() => {
+                            setRuleSort((current) =>
+                              nextLifecycleRuleSort(current, key),
+                            );
+                            setRulePageIndex(0);
+                          }}
                         />
-                      </TableHead>
-                      <TableHead className="w-[240px]">
-                        <HelpLabel
-                          label={t("settings.lifecycleRuleState")}
-                          help={t("settings.lifecycleRuleStateHelp")}
-                        />
-                      </TableHead>
-                      <TableHead className="text-center">
-                        {t("settings.lifecycleRuleRevision")}
-                      </TableHead>
+                      ))}
                       <TableHead className="text-right">
                         {t("label.actions")}
                       </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {ruleSetRecords.map((record) => {
+                    {rulePage.rows.map((record) => {
                       return (
                         <TableRow
                           data-ui="settings-table-row"
@@ -1073,6 +1122,45 @@ export function SettingsLifecycleRulesSection({
                   </TableBody>
                 </Table>
               </div>
+              {rulePage.pageCount > 1 ? (
+                <div
+                  id="settings-lifecycle-rules-pager"
+                  className="flex items-center justify-between gap-3 border-t border-border px-3 py-2"
+                >
+                  <p
+                    id="settings-lifecycle-rules-page-range"
+                    className="text-[12.5px] text-[var(--scry-muted3)]"
+                  >
+                    {t("pendingImports.pageRange", {
+                      start: rulePage.start,
+                      end: rulePage.end,
+                      total: rulePage.total,
+                    })}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      id="settings-lifecycle-rules-previous-page"
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={rulePage.page === 0}
+                      onClick={() => setRulePageIndex(rulePage.page - 1)}
+                    >
+                      {t("pendingImports.prev")}
+                    </Button>
+                    <Button
+                      id="settings-lifecycle-rules-next-page"
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={rulePage.page >= rulePage.pageCount - 1}
+                      onClick={() => setRulePageIndex(rulePage.page + 1)}
+                    >
+                      {t("pendingImports.next")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {isEditorOpen ? (
