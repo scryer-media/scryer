@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use scryer_application::disk::{Disk, EntryKind, Parents, PlaceRefusal, placement};
+use scryer_application::disk::{Disk, EntryKind, Parents, PlaceRefusal, ReadBefore, placement};
 use scryer_application::stored_paths::stored_path_to_path_buf;
 use scryer_application::{
     AppError, AppResult, ImportFilePermissions, LibraryRenamer, RenameApplyItemResult,
@@ -132,9 +132,11 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                     // the check and the write stays as small as the filesystem
                     // allows, and so a file that cannot move does not cancel
                     // the rest of the plan.
-                    if let Err((reason_code, message)) =
-                        prepare_move_target(&item.current_path, target, permissions).await
-                    {
+                    let prepared =
+                        prepare_move_target(&item.current_path, target, permissions).await;
+                    let read = match prepared {
+                        Ok(read) => read,
+                        Err((reason_code, message)) => {
                         result.status = RenameApplyStatus::Failed;
                         result.reason_code = reason_code;
                         result.error_message = Some(message);
@@ -143,9 +145,10 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                         }
                         slots[index] = Some(result);
                         continue;
-                    }
+                        }
+                    };
 
-                    match move_file(&item.current_path, target).await {
+                    match move_file(&item.current_path, target, Some(&read)).await {
                         Ok(()) => {
                             // Configured permissions take precedence over
                             // whatever the file carried at its old path.
@@ -191,7 +194,7 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                 continue;
             }
 
-            move_file(final_path, &item.current_path)
+            move_file(final_path, &item.current_path, None)
                 .await
                 .map_err(|err| AppError::Repository(err.to_string()))?;
         }
@@ -201,12 +204,14 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
 }
 
 /// Verifies one file can move and prepares its destination directory,
-/// returning a per-item reason code and message when it cannot.
+/// returning a per-item reason code and message when it cannot. What it read
+/// of the source, and the folder it made, are handed to the move, which then
+/// reads neither again.
 async fn prepare_move_target(
     current_path: &str,
     target_path: &str,
     permissions: &ImportFilePermissions,
-) -> Result<(), (String, String)> {
+) -> Result<ReadBefore, (String, String)> {
     let source = stored_path_to_path_buf(current_path);
     let reading = Disk::process().uncached(&source).await;
     if reading.exists() != Some(true) {
@@ -258,17 +263,25 @@ async fn prepare_move_target(
         ));
     }
 
-    Ok(())
+    Ok(ReadBefore::made_folder(reading, &target))
 }
 
-async fn move_file(source: &str, target: &str) -> Result<(), PlaceRefusal> {
+async fn move_file(
+    source: &str,
+    target: &str,
+    read: Option<&ReadBefore>,
+) -> Result<(), PlaceRefusal> {
     let (source, target) = (
         stored_path_to_path_buf(source),
         stored_path_to_path_buf(target),
     );
     let disk = Disk::process();
-    let placed = disk.place(source, target, placement::library_rename());
-    placed.await.map(|_| ())
+    let policy = placement::library_rename();
+    match read {
+        Some(read) => disk.place_after_reading(source, target, policy, read).await,
+        None => disk.place(source, target, policy).await,
+    }
+    .map(|_| ())
 }
 
 fn rename_paths_equivalent(source: &str, target: &str) -> bool {
@@ -320,7 +333,7 @@ mod tests {
         std::fs::write(&source, b"source-payload").expect("write source");
         std::fs::write(&target, b"target-payload").expect("write target");
 
-        let error = move_file(&source.to_string_lossy(), &target.to_string_lossy())
+        let error = move_file(&source.to_string_lossy(), &target.to_string_lossy(), None)
             .await
             .expect_err("an occupied destination must not be replaced");
         assert_eq!(
@@ -349,7 +362,7 @@ mod tests {
         let target = dir.path().join("ONE PIECE.mkv");
         std::fs::write(&source, b"payload").expect("write source");
 
-        move_file(&source.to_string_lossy(), &target.to_string_lossy())
+        move_file(&source.to_string_lossy(), &target.to_string_lossy(), None)
             .await
             .expect("case-only rename should succeed");
 

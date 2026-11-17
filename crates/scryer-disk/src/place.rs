@@ -378,11 +378,40 @@ fn left_as_the_source(name: &Path, source: &Path, source_reads: PathReading) -> 
 
 /// What a placement's source and destination folder read as, within their
 /// roots' bounds, before it took a thread.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Answered {
     source: PathReading,
     /// The destination's folder, links followed, read as a folder.
     folder_is_dir: bool,
+    /// The copy lane of the volume that folder is on, where its read named
+    /// one.
+    folder_lane: Option<String>,
+}
+
+/// A placement's first reads, of the source's name and the destination's
+/// folder, taken once for placements that share both. See
+/// [`Disk::read_before_placing`].
+#[derive(Clone)]
+pub struct ReadBefore {
+    answered: Answered,
+    folder: Option<PathBuf>,
+}
+
+impl ReadBefore {
+    /// The read of a caller that has just read the source's name within its
+    /// root's bound, as `source_read`, and made `dest`'s folder itself.
+    pub fn made_folder(source_read: PathReading, dest: &Path) -> Self {
+        Self {
+            answered: Answered {
+                source: source_read,
+                folder_is_dir: dest
+                    .parent()
+                    .is_some_and(|folder| !folder.as_os_str().is_empty()),
+                folder_lane: None,
+            },
+            folder: dest.parent().map(Path::to_path_buf),
+        }
+    }
 }
 
 /// A placement refused before its job ran, so with nothing written.
@@ -575,21 +604,27 @@ impl Disk {
             .probe_with(source.to_path_buf(), name, Err)
             .await
             .map_err(|reading| unanswered(source, Side::Source, reading))?;
-        let mut folder_is_dir = false;
+        let (mut folder_is_dir, mut folder_lane) = (false, None);
         if let Some(folder) = dest
             .parent()
             .filter(|folder| !folder.as_os_str().is_empty())
         {
-            let resolved = |disk: &Self, path: &Path| Ok(disk.follow_blocking(path));
+            let resolved = |disk: &Self, path: &Path| Ok(disk.fingerprint_followed_blocking(path));
             let folder_read = self
                 .probe_with(folder.to_path_buf(), resolved, Err)
                 .await
                 .map_err(|reading| unanswered(folder, Side::Destination, reading))?;
-            folder_is_dir = folder_read.is(EntryKind::Directory);
+            if let Ok(folder) = folder_read
+                && folder.kind() == Some(EntryKind::Directory)
+            {
+                folder_is_dir = true;
+                folder_lane = folder.names_volume().then(|| folder.volume().lane());
+            }
         }
         Ok(Answered {
             source: source_read,
             folder_is_dir,
+            folder_lane,
         })
     }
 
@@ -616,7 +651,7 @@ impl Disk {
             prove,
             unproven: RefCell::new(None),
             left: RefCell::new(Vec::new()),
-            source_read: Cell::new(answered.map(|answered| answered.source)),
+            source_read: Cell::new(answered.as_ref().map(|answered| answered.source)),
             folder_is_dir: answered.is_some_and(|answered| answered.folder_is_dir),
             wrote_dest: Cell::new(false),
         };
@@ -681,7 +716,55 @@ impl Disk {
         policy: Placement,
         watch: Watch,
     ) -> Result<Placed, PlaceRefusal> {
-        let (disk, source, dest) = (self.clone(), source.into(), dest.into());
+        self.place_answered(source.into(), dest.into(), policy, watch, None)
+            .await
+    }
+
+    /// Reads `source`'s name and `dest`'s folder within their roots' bounds,
+    /// as [`Self::place`] does first, for a caller that places from one
+    /// source into one folder more than once: see
+    /// [`Self::place_after_reading`]. A root that does not answer is the
+    /// refusal a placement would give.
+    pub async fn read_before_placing(
+        &self,
+        source: &Path,
+        dest: &Path,
+        policy: Placement,
+    ) -> Result<ReadBefore, PlaceRefusal> {
+        let answered = self.roots_answer(source, dest).await;
+        let answered = answered.map_err(|fail| refused_before_it_ran(policy, fail))?;
+        Ok(ReadBefore {
+            answered,
+            folder: dest.parent().map(Path::to_path_buf),
+        })
+    }
+
+    /// [`Self::place`] with the source's name and the destination's folder
+    /// taken from `read` instead of read again. A `dest` in another folder
+    /// than the one `read` was taken for is read as [`Self::place`] reads it.
+    pub async fn place_after_reading(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+        policy: Placement,
+        read: &ReadBefore,
+    ) -> Result<Placed, PlaceRefusal> {
+        let dest = dest.into();
+        let answered = (read.folder.as_deref() == dest.parent()).then(|| read.answered.clone());
+        let watch = Watch::nobody();
+        self.place_answered(source.into(), dest, policy, watch, answered)
+            .await
+    }
+
+    async fn place_answered(
+        &self,
+        source: PathBuf,
+        dest: PathBuf,
+        policy: Placement,
+        watch: Watch,
+        read_already: Option<Answered>,
+    ) -> Result<Placed, PlaceRefusal> {
+        let disk = self.clone();
         let recorded = matches!(policy.verify, Verify::Recorded(_));
         let mut staged_free = false;
         let refuse = |fail: Fail| refused_before_it_ran(policy, fail);
@@ -698,10 +781,17 @@ impl Disk {
         );
         // Every placement but the copy that lands directly is refused here
         // when its source's root or its destination's does not answer.
-        let answered = match lands_directly {
-            true => None,
-            false => Some(self.roots_answer(&source, &dest).await.map_err(refuse)?),
+        let answered = match (lands_directly, read_already) {
+            (true, _) => None,
+            (false, Some(answered)) => Some(answered),
+            (false, None) => Some(self.roots_answer(&source, &dest).await.map_err(refuse)?),
         };
+        // The folder's volume, where its read named one, is the volume the
+        // copy lands on: no second read of it for the turn.
+        let landing = answered
+            .as_ref()
+            .filter(|answered| answered.folder_is_dir)
+            .and_then(|answered| answered.folder_lane.clone());
         let permit = match policy {
             Placement {
                 method: Method::Copy,
@@ -719,7 +809,10 @@ impl Disk {
                 staged_name_is_free(&staged, reading).map_err(refuse)?;
                 staged_free = true;
                 watch.progress.report(Phase::Waiting, 0);
-                Some(self.copy_turn(&dest).await.map_err(refuse)?)
+                match landing {
+                    Some(lane) => Some(self.copy_admission().acquire_keyed(&lane).await),
+                    None => Some(self.copy_turn(&dest).await.map_err(refuse)?),
+                }
             }
             Placement {
                 method: Method::Copy,
@@ -898,16 +991,27 @@ pub(crate) struct Job<'a> {
 
 impl Job<'_> {
     fn run(&self) -> Result<Done, Fail> {
-        if self.policy.parents == Parents::Create
-            && self.policy.method != Method::HardLink
-            && !self.folder_is_dir
-            && let Some(parent) = self.dest.parent()
-            && !parent.as_os_str().is_empty()
-        {
+        let creates = self.policy.parents == Parents::Create
+            && self.policy.method != Method::HardLink;
+        let parent = self
+            .dest
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        let make_folders = |parent: &Path| {
             self.disk
                 .create_dir_blocking(parent, Parents::Create)
-                .map_err(|error| Fail::of(error, Side::Destination))?;
+                .map_err(|error| Fail::of(error, Side::Destination))
+        };
+        if creates
+            && !self.folder_is_dir
+            && let Some(parent) = parent
+        {
+            make_folders(parent)?;
         }
+        self.place_once()
+    }
+
+    fn place_once(&self) -> Result<Done, Fail> {
         match self.policy.method {
             Method::Move => self.relocate(),
             Method::HardLink => self.hard_link(),

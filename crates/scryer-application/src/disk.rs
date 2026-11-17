@@ -14,7 +14,8 @@ pub(crate) use scryer_disk::open_cache_bypassed;
 pub use scryer_disk::{
     Access, CannotLink, Disk, DiskError, Done, Doubt, Drift, EntryKind, Fallback, FreeNameMove,
     IfPresent, Link, LinkAfter, LinkOutcome, LinkProof, Listed, Mark, Method, Open, OwnerOnly,
-    Parents, PathReading, PlaceRefusal, Placed, Placement, Refused, Removal, Remove, Replace,
+    Leftover, Parents, PathReading, PlaceRefusal, Placed, Placement, ReadBefore, Refused, Removal,
+    Remove, Replace,
     Sameness, ScratchDir, Side, Staged, Staging, StoredVersion, SyncOutcome, Unproven, Verify,
     Visited, VolumeClass, reason,
 };

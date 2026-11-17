@@ -1417,14 +1417,34 @@ async fn restore_without_overwrite(
     original_path: &Path,
     allowed_roots: Option<&[PathBuf]>,
 ) -> AppResult<PathBuf> {
+    let disk = Disk::process();
+    let policy = placement::recycle_restore_link();
+    // The recycled file's name and the folder every candidate name is in are
+    // read once, not once per name tried.
+    let mut read = None;
     for attempt in 0..=20_000u32 {
         let destination = restore_candidate_path(original_path, attempt);
         if let Some(roots) = allowed_roots {
             ensure_restore_destination_within_roots(&destination, roots)?;
         }
-        let disk = Disk::process();
-        let policy = placement::recycle_restore_link();
-        match disk.place(recycled_path, &destination, policy).await {
+        let placed = match &read {
+            Some(read) => {
+                disk.place_after_reading(recycled_path, &destination, policy, read)
+                    .await
+            }
+            None => match disk
+                .read_before_placing(recycled_path, &destination, policy)
+                .await
+            {
+                Ok(first) => {
+                    let read = read.insert(first);
+                    disk.place_after_reading(recycled_path, &destination, policy, read)
+                        .await
+                }
+                Err(refusal) => Err(refusal),
+            },
+        };
+        match placed {
             Ok(Placed {
                 done: Done::HardLinked,
                 ..

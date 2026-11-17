@@ -1413,7 +1413,7 @@ mod real {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = dir.path().join("sample show.mkv");
         let dest = dir.path().join("SAMPLE SHOW.mkv");
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
 
         disk()
             .place_blocking(&source, &dest, moving())
@@ -1429,7 +1429,7 @@ mod real {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = dir.path().join("source.mkv");
         let dest = dir.path().join("nested").join("dest.mkv");
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
 
         let placed = disk()
             .place_blocking(&source, &dest, moving())
@@ -1572,7 +1572,7 @@ mod real {
         let locked = dir.path().join("locked");
         std::fs::create_dir(&locked).expect("locked folder");
         let source = locked.join("source.mkv");
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
         let set = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
         set(0o000).expect("lock");
         if std::fs::symlink_metadata(&source).is_ok() {
@@ -1642,7 +1642,7 @@ mod real {
     fn a_cross_device_copy_never_shows_an_unproven_file_or_replaces_a_newcomer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
 
         // The copy reports from inside its write loop, which is where the
         // folder is looked at and the newcomer arrives.
@@ -1727,7 +1727,7 @@ mod real {
         let held = dir.path().join("held");
         std::fs::create_dir(&held).expect("source folder");
         let (source, dest) = (held.join("source.mkv"), dir.path().join("dest.mkv"));
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
         std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555))
             .expect("lock the source folder");
 
@@ -1750,7 +1750,7 @@ mod real {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
         std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444))
             .expect("make the source unwritable");
 
@@ -1793,7 +1793,7 @@ mod real {
     fn a_windows_cross_device_move_unlinks_a_read_only_source() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
         set_read_only(&source, true);
 
         let disk = disk();
@@ -1828,7 +1828,7 @@ mod real {
         std::fs::create_dir(&held).expect("source folder");
         let (source, dest) = (held.join("source.mkv"), dir.path().join("dest.mkv"));
         let staged = dir.path().join(".scryer-partial.partial");
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
         write(&staged, b"staged-payload");
         std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o000))
             .expect("lock the source folder");
@@ -1867,7 +1867,7 @@ mod real {
     fn a_windows_exclusive_rename_moves_to_a_free_name() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
 
         assert!(matches!(
             disk().exclusive_rename_blocking(&source, &dest),
@@ -1884,7 +1884,7 @@ mod real {
     fn a_windows_read_only_file_moves_without_a_staging_leftover() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
-        write(&source, b"payload");
+        std::fs::write(&source, b"payload").unwrap();
         set_read_only(&source, true);
 
         disk()
@@ -1910,4 +1910,66 @@ mod real {
         assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
         assert_eq!(std::fs::read(&staged).expect("staged"), b"staged-payload");
     }
+}
+
+/// What a placement handed its first reads does not read again: the source's
+/// name and the destination's folder, two reads fewer per file.
+#[tokio::test]
+async fn a_placement_after_reading_reads_neither_the_source_nor_the_folder_again() {
+    let reads = |disk: &Disk| disk.calls("lstat") + disk.calls("stat");
+    let mut counted = Vec::new();
+    for reuse in [false, true] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (temp.path().join("one.mkv"), temp.path().join("two.mkv"));
+        std::fs::write(&source, b"payload").unwrap();
+        let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+        let moving = policy(Method::Move, Fallback::None);
+        let before = match reuse {
+            false => {
+                let before = reads(&disk);
+                disk.place(&source, &dest, moving).await.expect("moved");
+                before
+            }
+            true => {
+                let read = disk
+                    .read_before_placing(&source, &dest, moving)
+                    .await
+                    .expect("read");
+                let before = reads(&disk);
+                disk.place_after_reading(&source, &dest, moving, &read)
+                    .await
+                    .expect("moved");
+                before
+            }
+        };
+        assert_eq!(std::fs::read(&dest).expect("moved"), b"payload");
+        counted.push(reads(&disk) - before);
+    }
+    assert_eq!(counted[1] + 2, counted[0], "{counted:?}");
+}
+
+/// A staged recorded copy takes its turn on the volume its folder's read
+/// named, without reading the destination and its folder again for it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_staged_copy_takes_its_turn_from_the_folder_it_already_read() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (source, dest) = (temp.path().join("one.mkv"), temp.path().join("two.mkv"));
+    std::fs::write(&source, b"payload").unwrap();
+    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+    let copying = Placement {
+        method: Method::Copy,
+        fallback: Fallback::None,
+        replace: Replace::Never,
+        verify: Verify::Recorded(Evidence {
+            depth: Depth::Quick,
+            landing: Landing::Staged,
+        }),
+        parents: Parents::MustExist,
+    };
+    disk.place(&source, &dest, copying).await.expect("copied");
+    assert_eq!(std::fs::read(&dest).expect("copied"), b"payload");
+    // Reading the volume again for the turn made this four: the destination
+    // and then its folder, followed.
+    assert_eq!(disk.calls("stat"), 2);
 }
