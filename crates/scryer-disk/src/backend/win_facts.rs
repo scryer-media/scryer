@@ -107,16 +107,33 @@ impl VolumeAnswers {
             }
             let skipped = (held >> SKIPPED_SHIFT) & SKIPPED_MASK;
             if held & UNANSWERED != 0 && skipped < ASK_AGAIN_AFTER {
-                slot.store(
-                    (u64::from(serial) << 32) | UNANSWERED | ((skipped + 1) << SKIPPED_SHIFT),
+                // Only over what was read: a count lost to another read is
+                // harmless, an answer written meanwhile is kept.
+                let counted =
+                    (u64::from(serial) << 32) | UNANSWERED | ((skipped + 1) << SKIPPED_SHIFT);
+                return match slot.compare_exchange(
+                    held,
+                    counted,
                     Ordering::Relaxed,
-                );
-                return false;
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => false,
+                    Err(now) => known_answer(now, serial).unwrap_or(false),
+                };
             }
         }
         let Some(flags) = ask() else {
-            slot.store((u64::from(serial) << 32) | UNANSWERED, Ordering::Relaxed);
-            return false;
+            // No answer never replaces one another read wrote meanwhile.
+            let unanswered = (u64::from(serial) << 32) | UNANSWERED;
+            return match slot.compare_exchange(
+                held,
+                unanswered,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => false,
+                Err(now) => known_answer(now, serial).unwrap_or(false),
+            };
         };
         let keeps = keeps_numbers(flags);
         slot.store(
@@ -125,6 +142,11 @@ impl VolumeAnswers {
         );
         keeps
     }
+}
+
+/// The answer a slot holds for `serial`, if it holds one.
+fn known_answer(held: u64, serial: u32) -> Option<bool> {
+    ((held >> 32) as u32 == serial && held & KNOWN != 0).then_some(held & KEEPS != 0)
 }
 
 #[cfg(test)]
@@ -208,6 +230,22 @@ mod tests {
         assert!(!answers.keeps_numbers(13 + 16, ask(Some(0))));
         assert!(answers.keeps_numbers(13, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
         assert_eq!(asked.get(), 10);
+    }
+
+    /// An answer another read writes while this one asks is never replaced
+    /// by this one's silence, and is what this read gives.
+    #[test]
+    fn a_volume_that_did_not_answer_never_replaces_an_answer_written_meanwhile() {
+        let answers = VolumeAnswers::new();
+        let slot = 21_u32;
+        let others_answer = || {
+            assert!(answers.keeps_numbers(slot, || Some(SUPPORTS_OPEN_BY_FILE_ID)));
+        };
+        assert!(answers.keeps_numbers(slot, || {
+            others_answer();
+            None
+        }));
+        assert!(answers.keeps_numbers(slot, || None));
     }
 
     #[test]

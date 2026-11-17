@@ -68,7 +68,8 @@ WINDOWS_TESTS = {
         "folder_path_candidates_cover_the_spellings_of_one_folder",
         "a_stored_or_volume_only_mark_never_proves_a_link",
         "a_replacing_move_refuses_another_kind_at_the_destination",
-        "a_volume_is_asked_once_it_answers_and_again_until_it_does",
+        "a_volume_is_asked_once_it_answers_and_now_and_then_until_it_does",
+        "a_volume_that_did_not_answer_never_replaces_an_answer_written_meanwhile",
     ],
     "scryer-infrastructure-library": [
         "rename_path_key_folds_case_and_separators_on_windows",
