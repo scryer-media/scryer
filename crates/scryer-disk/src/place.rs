@@ -12,14 +12,14 @@
 //! path here that may not replace either refuses in the same call that would
 //! have written, or reserves the name first.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::copy::{
-    Cause, Copied, CopyPermit, Evidence, Opening, Phase, Step, Watch, WriteFail, Writing,
-    write_copy,
+    Cause, Copied, CopyPermit, Evidence, Landing, Opening, Phase, Step, Watch, WriteFail, Writing,
+    resumable_staging_path, staged_name_is_free, write_copy,
 };
 use super::sample::{ContentSample, sample_reader};
 use super::{
@@ -119,6 +119,17 @@ impl Placed {
                 | (Method::Move, Done::Renamed)
         )
     }
+}
+
+/// What a move onto a free name did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FreeNameMove {
+    Moved,
+    /// Nothing was moved: the volume has no rename that refuses an occupied
+    /// name, or on Windows it refused for a reason that is neither a
+    /// collision nor a move to another volume. The caller takes the path it
+    /// took before the rename existed.
+    NotOffered,
 }
 
 /// Why the destination cannot hold a hard link to the source.
@@ -292,7 +303,8 @@ impl Disk {
 
     /// [`Self::place_blocking`], reporting a copy's progress to `watch` and
     /// stopping it when `watch` says so. A cancelled copy removes only a
-    /// staged file this call created.
+    /// staged file this call created. A recorded copy waits on this thread
+    /// for its turn on the destination's volume.
     pub fn place_watched_blocking(
         &self,
         source: &Path,
@@ -309,8 +321,11 @@ impl Disk {
         dest: &Path,
         policy: Placement,
         watch: &Watch,
-        permit: Option<CopyPermit>,
+        admitted: Option<CopyPermit>,
     ) -> Result<Placed, PlaceRefusal> {
+        // A turn handed in was waited for after the staged name read free.
+        let staged_free = admitted.is_some();
+        let permit = admitted;
         let job = Job {
             disk: self,
             source,
@@ -318,6 +333,7 @@ impl Disk {
             policy,
             watch,
             permit: RefCell::new(permit),
+            staged_free: Cell::new(staged_free),
             copied: RefCell::new(None),
         };
         match job.run() {
@@ -348,8 +364,10 @@ impl Disk {
     }
 
     /// [`Self::place_watched_blocking`] off the async runtime. A recorded
-    /// copy first waits for its turn on the destination's volume, and gives
-    /// the turn back before the copy is proven.
+    /// copy first reads its staged name within the root's bound, then waits
+    /// for its turn on the destination's volume before it takes a thread,
+    /// and gives the turn back before the copy is proven. A link that falls
+    /// back to a recorded copy waits for its turn on the thread it has.
     pub async fn place_watched(
         &self,
         source: impl Into<PathBuf>,
@@ -359,12 +377,29 @@ impl Disk {
     ) -> Result<Placed, PlaceRefusal> {
         let (disk, source, dest) = (self.clone(), source.into(), dest.into());
         let recorded = matches!(policy.verify, Verify::Recorded(_));
-        let permit = match recorded && policy.method == Method::Copy {
-            true => {
+        let permit = match policy {
+            Placement {
+                method: Method::Copy,
+                verify: Verify::Recorded(evidence),
+                ..
+            } => {
+                // The staged name is read within the root's bound, before a
+                // turn is waited for and before a thread is taken.
+                if evidence.landing == Landing::Staged {
+                    let staged = resumable_staging_path(&dest);
+                    let reading = self.uncached(staged.clone()).await;
+                    if let Err(fail) = staged_name_is_free(&staged, reading) {
+                        return Err(PlaceRefusal {
+                            asked: policy.method,
+                            refused: fail.refused,
+                            detail: fail.detail,
+                        });
+                    }
+                }
                 watch.progress.report(Phase::Waiting, 0);
                 Some(self.copy_admission().acquire_for(&dest).await)
             }
-            false => None,
+            _ => None,
         };
         let job = move || disk.place_admitted(&source, &dest, policy, &watch, permit);
         match offload(None, job).await {
@@ -396,8 +431,7 @@ impl Disk {
     /// destination instead: the filesystem has none, or on Windows it refused
     /// for a reason that is neither a collision nor a move to another volume,
     /// where the reservation worked before Windows had this rename.
-    #[doc(hidden)]
-    pub fn exclusive_rename_blocking(
+    pub(crate) fn exclusive_rename_blocking(
         &self,
         source: &Path,
         dest: &Path,
@@ -420,30 +454,24 @@ impl Disk {
         }
     }
 
-    #[doc(hidden)]
-    pub async fn exclusive_rename(
+    /// Moves a staged or reserved file or folder onto a name nothing holds,
+    /// in one step that never replaces. A refusal changed nothing; its
+    /// reason says whether the name was taken or the move needs a copy.
+    pub async fn move_onto_free_name(
         &self,
         source: impl Into<PathBuf>,
         dest: impl Into<PathBuf>,
-    ) -> Option<Result<(), DiskError>> {
+    ) -> Result<FreeNameMove, DiskError> {
         let dest = dest.into();
-        self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
-            disk.exclusive_rename_blocking(source, &dest).transpose()
-        })
-        .await
-        .transpose()
-    }
-
-    #[doc(hidden)]
-    pub async fn promote_staged(
-        &self,
-        staged: impl Into<PathBuf>,
-        dest: impl Into<PathBuf>,
-    ) -> Result<(), DiskError> {
-        let dest = dest.into();
-        self.run(DiskVerb::Move, staged.into(), None, move |disk, staged| {
-            disk.promote_staged_blocking(staged, &dest)
-        })
+        self.run(
+            DiskVerb::Move,
+            source.into(),
+            None,
+            move |disk, source| match disk.exclusive_rename_blocking(source, &dest) {
+                Some(result) => result.map(|()| FreeNameMove::Moved),
+                None => Ok(FreeNameMove::NotOffered),
+            },
+        )
         .await
     }
 
@@ -456,8 +484,11 @@ impl Disk {
     /// place, which refuses an existing destination in the same call, and
     /// only a volume with neither reserves the name and renames over the
     /// reservation.
-    #[doc(hidden)]
-    pub fn promote_staged_blocking(&self, staged: &Path, dest: &Path) -> Result<(), DiskError> {
+    pub(crate) fn promote_staged_blocking(
+        &self,
+        staged: &Path,
+        dest: &Path,
+    ) -> Result<(), DiskError> {
         if let Some(result) = self.exclusive_rename_blocking(staged, dest) {
             return result;
         }
@@ -493,6 +524,8 @@ pub(crate) struct Job<'a> {
     pub(crate) watch: &'a Watch,
     /// The copy's turn on the destination's volume, when it waited for one.
     pub(crate) permit: RefCell<Option<CopyPermit>>,
+    /// Whether the staged name of a recorded copy was already read as free.
+    pub(crate) staged_free: Cell<bool>,
     pub(crate) copied: RefCell<Option<Copied>>,
 }
 
@@ -557,7 +590,7 @@ impl Job<'_> {
                 self.promote(&staged, dest).map(|()| Done::Renamed),
                 StagedHolds::OnlyCopy,
             ),
-            Err(error) if needs_copy(&error) && self.policy.fallback == Fallback::Copy => {
+            Err(error) if needs_copy(&error) && self.may_copy_instead() => {
                 return self.copy_through_staging(&staged);
             }
             Err(error) if needs_copy(&error) => {
@@ -571,11 +604,15 @@ impl Job<'_> {
         outcome
     }
 
+    /// Whether a move a rename cannot make may be copied. A move never takes
+    /// the recorded copy, whose hashes and proof it could not hand back.
+    fn may_copy_instead(&self) -> bool {
+        self.policy.fallback == Fallback::Copy && !matches!(self.policy.verify, Verify::Recorded(_))
+    }
+
     /// A move a rename cannot make: copied when the policy allows it.
     pub(crate) fn across_volumes(&self, refusal: DiskError) -> Result<Done, Fail> {
-        if self.policy.fallback == Fallback::None
-            || matches!(self.policy.verify, Verify::Recorded(_))
-        {
+        if !self.may_copy_instead() {
             return Err(Fail {
                 refused: Refused::NeedsCopy,
                 detail: refusal.into(),

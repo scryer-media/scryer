@@ -28,7 +28,10 @@ use crate::location::model::{
 use crate::{AppError, AppResult};
 
 #[doc(hidden)]
-pub use crate::disk::{CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed};
+#[doc(hidden)]
+pub use crate::disk::ReadBackHandle;
+#[cfg(test)]
+pub(crate) use crate::disk::{CacheBypass, ReadBackOpener, open_cache_bypassed};
 pub use crate::disk::{
     FILE_NAME_MAX_BYTES, RESUMABLE_STAGING_SUFFIX as PARTIAL_COPY_SUFFIX,
     resumable_staging_path as partial_destination_path,
@@ -611,6 +614,14 @@ mod tests {
             Ok(MOVE_CRC_ALGORITHM_TAG)
         );
         assert!(MoveCrcAlgorithm::from_setting("crc32_iscsi").is_err());
+
+        let mut sample = StreamedContentHasher::new();
+        sample.update(b"synthetic payload");
+        let stored = sample.finalize();
+        assert_eq!(stored.crc_algorithm, MOVE_CRC_ALGORITHM_TAG);
+        let on_disk = disk_hashes(&stored);
+        assert_eq!(on_disk.crc_kind, CrcKind::Crc64Nvme);
+        assert_eq!(persisted_hashes(on_disk), stored);
     }
 
     // ── Verified copy ────────────────────────────────────────────────────────

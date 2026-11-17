@@ -3755,7 +3755,7 @@ impl FsFileImporter {
                         copy_permit = Some(
                             wait_for_import_operation_or_cancel(
                                 cancellation.as_ref(),
-                                self.placement.copy.acquire_keyed(&volume_key),
+                                self.placement.copy.acquire_for(dest),
                             )
                             .await?,
                         );
@@ -3860,7 +3860,7 @@ impl FsFileImporter {
                 let mut copy_permit = Some(
                     wait_for_import_operation_or_cancel(
                         cancellation.as_ref(),
-                        self.placement.copy.acquire_keyed(&volume_key),
+                        self.placement.copy.acquire_for(&prepared.dest),
                     )
                     .await?,
                 );
@@ -4060,11 +4060,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn copy_lanes_are_volume_scoped_and_do_not_block_fast_lanes() {
         let coordinator = ImportPlacementCoordinator::new(1, 2);
-        let first_copy = coordinator.copy.acquire_keyed("volume-a").await;
-        let second_copy = coordinator.copy.acquire_keyed("volume-a").await;
+        let volume = tempfile::tempdir().expect("tempdir");
+        let first_copy = coordinator.copy.acquire_for(volume.path()).await;
+        let second_copy = coordinator.copy.acquire_for(volume.path()).await;
         let third_copy = tokio::spawn({
-            let copy = coordinator.copy.clone();
-            async move { copy.acquire_keyed("volume-a").await }
+            let (copy, volume) = (coordinator.copy.clone(), volume.path().to_path_buf());
+            async move { copy.acquire_for(&volume).await }
         });
         run_until_idle().await;
         assert!(
@@ -4078,15 +4079,8 @@ mod tests {
         )
         .await
         .expect("a hardlink lane must remain available while copies are blocked");
-        let other_volume = tokio::time::timeout(
-            Duration::from_secs(30),
-            coordinator.copy.acquire_keyed("volume-b"),
-        )
-        .await
-        .expect("a different volume must have independent copy capacity");
 
         drop(fast);
-        drop(other_volume);
         drop(first_copy);
         let third_copy = tokio::time::timeout(Duration::from_secs(30), third_copy)
             .await

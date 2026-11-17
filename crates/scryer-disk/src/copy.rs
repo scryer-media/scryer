@@ -57,13 +57,13 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::place::{Fail, Job, Refused, Side};
 use super::sample::{ContentSample, SampleStep, sample_reader};
-use super::{Disk, DiskError, DiskVerb, Open, Remove, Replace, SyncOutcome};
+use super::{Disk, DiskError, DiskVerb, Open, PathReading, Remove, Replace, SyncOutcome};
 
 /// Bytes moved per copy iteration, and per read-back iteration.
 const CHUNK_BYTES: usize = 1024 * 1024;
@@ -315,9 +315,14 @@ impl CopyAdmission {
         self.acquire_keyed(&key).await
     }
 
-    /// A turn in a lane the caller names for itself.
-    #[doc(hidden)]
-    pub async fn acquire_keyed(&self, key: &str) -> CopyPermit {
+    /// [`Self::acquire_for`] for a copy already on a blocking thread, which
+    /// waits there for its turn.
+    pub(crate) fn acquire_for_blocking(&self, destination: &Path) -> CopyPermit {
+        wait_parked(self.acquire_keyed(&volume_key(destination)))
+    }
+
+    /// A turn in a named lane.
+    pub(crate) async fn acquire_keyed(&self, key: &str) -> CopyPermit {
         let semaphore = {
             let mut volumes = self.volumes.lock().unwrap_or_else(|e| e.into_inner());
             volumes.retain(|_, value| value.strong_count() > 0);
@@ -338,9 +343,30 @@ impl CopyAdmission {
     }
 }
 
+/// Waits for `turn` on this thread, parked between wake-ups. The turn's
+/// future needs no runtime, so this works on a blocking thread of one and on
+/// a thread that has none.
+fn wait_parked<T>(turn: impl std::future::Future<Output = T>) -> T {
+    struct Unpark(std::thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut turn = std::pin::pin!(turn);
+    loop {
+        match turn.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(turn) => return turn,
+            std::task::Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
 /// The volume a path will land on, from its nearest ancestor that answers.
 /// An unavailable identity conservatively shares the unknown lane.
-fn volume_key(path: &Path) -> String {
+pub(crate) fn volume_key(path: &Path) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -485,33 +511,6 @@ fn engage_cache_bypass(file: File) -> ReadBackHandle {
         file,
         bypass: CacheBypass::NotAvailableOnPlatform,
     }
-}
-
-// ── Whole-file reads, counted for tests ──────────────────────────────────────
-
-static WHOLE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
-
-fn note_whole_read(path: &Path) {
-    if let Some(reads) = WHOLE_READS.get() {
-        *reads
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .entry(path.to_path_buf())
-            .or_default() += 1;
-    }
-}
-
-/// How many times `path` was read end to end by a hash or a full read-back
-/// since the first call here, which starts the count.
-#[doc(hidden)]
-pub fn whole_file_reads(path: &Path) -> usize {
-    WHOLE_READS
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get(path)
-        .copied()
-        .unwrap_or(0)
 }
 
 // ── The staged name ──────────────────────────────────────────────────────────
@@ -752,8 +751,17 @@ impl Job<'_> {
         let staged = (evidence.landing == Landing::Staged).then(|| resumable_staging_path(dest));
         let target = staged.as_deref().unwrap_or(dest);
         let replaces = self.policy.replace == Replace::Allowed;
-        if let Some(staged) = &staged {
-            self.staged_name_is_free(staged)?;
+        if let Some(staged) = &staged
+            && !self.staged_free.get()
+        {
+            staged_name_is_free(staged, disk.uncached_blocking(staged))?;
+        }
+        // Every recorded copy writes inside its volume's budget. A caller
+        // that could wait off this thread already holds the turn.
+        if self.permit.borrow().is_none() {
+            self.watch.progress.report(Phase::Waiting, 0);
+            let turn = disk.copy_admission().acquire_for_blocking(dest);
+            self.permit.replace(Some(turn));
         }
 
         self.watch.progress.report(Phase::Copying, 0);
@@ -805,31 +813,30 @@ impl Job<'_> {
         self.copied.replace(Some(Copied { hashes, proof }));
         Ok(())
     }
+}
 
-    /// Refuses a copy whose staged name is occupied, rather than removing
-    /// whatever occupies it.
-    fn staged_name_is_free(&self, staged: &Path) -> Result<(), Fail> {
-        let reading = self.disk.uncached_blocking(staged);
-        match reading.exists() {
-            Some(false) => Ok(()),
-            None => Err(Fail::new(
-                Refused::Unreachable(Side::Destination),
-                io::ErrorKind::Other,
-                format!(
-                    "failed to inspect the destination staging path {}: {}",
-                    staged.display(),
-                    reading.absence()
-                ),
-            )),
-            Some(true) => Err(Fail::new(
-                Refused::StagingOccupied,
-                io::ErrorKind::AlreadyExists,
-                format!(
-                    "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
-                    staged.display()
-                ),
-            )),
-        }
+/// Refuses a copy whose staged name, read as `reading`, is occupied, rather
+/// than removing whatever occupies it.
+pub(crate) fn staged_name_is_free(staged: &Path, reading: PathReading) -> Result<(), Fail> {
+    match reading.exists() {
+        Some(false) => Ok(()),
+        None => Err(Fail::new(
+            Refused::Unreachable(Side::Destination),
+            io::ErrorKind::Other,
+            format!(
+                "failed to inspect the destination staging path {}: {}",
+                staged.display(),
+                reading.describe_absence()
+            ),
+        )),
+        Some(true) => Err(Fail::new(
+            Refused::StagingOccupied,
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
+                staged.display()
+            ),
+        )),
     }
 }
 
@@ -871,6 +878,39 @@ impl Disk {
             .clone()
     }
 
+    /// Starts counting, on this owner, how often each path is read end to
+    /// end by a hash or a full read-back. For tests that prove a file was
+    /// not read twice.
+    #[doc(hidden)]
+    pub fn count_whole_reads(&self) {
+        self.inner.whole_reads.get_or_init(Mutex::default);
+    }
+
+    /// How many times `path` was read end to end on this owner since
+    /// [`Self::count_whole_reads`], which must have been called.
+    #[doc(hidden)]
+    pub fn whole_reads_of(&self, path: &Path) -> usize {
+        self.inner
+            .whole_reads
+            .get()
+            .expect("whole reads are counted only after count_whole_reads")
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(path)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn note_whole_read(&self, path: &Path) {
+        if let Some(reads) = self.inner.whole_reads.get() {
+            *reads
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .entry(path.to_path_buf())
+                .or_default() += 1;
+        }
+    }
+
     fn open_read_back(&self, path: &Path) -> ReadBackHandle {
         if let Some(opener) = &self.read_back {
             return opener(path);
@@ -892,7 +932,7 @@ impl Disk {
         path: &Path,
         progress: &Progress,
     ) -> Result<ContentHashes, HashRefusal> {
-        note_whole_read(path);
+        self.note_whole_read(path);
         let refusal = |what: &str, error: DiskError| HashRefusal {
             reason: error.reason(),
             sentence: format!(
@@ -965,7 +1005,7 @@ impl Disk {
                 self.quick_floor(source, destination, hashes, &reason)
             }
             ReadBackHandle::Ready { file, bypass } => {
-                note_whole_read(destination);
+                self.note_whole_read(destination);
                 match full_read_back(file, hashes, progress) {
                     Ok((verdict, detail)) => {
                         full(verdict, join_details(bypass_note(bypass), detail))
@@ -1031,7 +1071,7 @@ impl Disk {
                 Some(format!(
                     "could not stat the destination: {}: {}",
                     destination.display(),
-                    reading.absence()
+                    reading.describe_absence()
                 )),
             );
         };

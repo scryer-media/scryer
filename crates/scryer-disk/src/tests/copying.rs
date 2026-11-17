@@ -92,6 +92,16 @@ async fn copies_share_a_volume_budget() {
     let next = admission.acquire_keyed("a").await;
     drop((b, next, other));
     assert!(turn_is_free(&admission, "a"));
+
+    // Asked for by path, two names in one folder are one volume.
+    let temp = tempfile::tempdir().unwrap();
+    let one = CopyAdmission::new(1);
+    let held = one.acquire_for(&temp.path().join("first.mkv")).await;
+    let lane = crate::copy::volume_key(&temp.path().join("second.mkv"));
+    assert!(!turn_is_free(&one, &lane));
+    drop(held);
+    assert!(turn_is_free(&one, &lane));
+
     assert_eq!(CopyAdmission::new(0).capacity(), 1);
     assert_eq!(CopyAdmission::new(100).capacity(), 8);
 }
@@ -262,6 +272,7 @@ async fn the_turn_is_given_back_before_the_copy_is_proven() {
         policy: recorded(Depth::Full, Landing::Staged, Replace::Never),
         watch: &watch,
         permit: std::cell::RefCell::new(Some(permit)),
+        staged_free: Default::default(),
         copied: Default::default(),
     };
     job.recorded_copy(Evidence {
@@ -272,6 +283,80 @@ async fn the_turn_is_given_back_before_the_copy_is_proven() {
     .expect("copied");
     assert!(held_while_copying.load(Ordering::SeqCst));
     assert!(free_while_proving.load(Ordering::SeqCst));
+}
+
+/// A recorded copy started on a blocking thread takes its volume's turn
+/// itself, holds it while it writes and gives it back before it proves.
+#[test]
+fn a_blocking_recorded_copy_takes_its_own_turn() {
+    let temp = tempfile::tempdir().unwrap();
+    let (source, dest) = (temp.path().join("source.mkv"), temp.path().join("dest.mkv"));
+    std::fs::write(&source, b"incoming").unwrap();
+    let disk = disk();
+    disk.install_copy_workers(1);
+    let lane = crate::copy::volume_key(&dest);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let watch = Watch {
+        progress: Progress::to({
+            let (admission, seen) = (disk.copy_admission(), seen.clone());
+            move |phase, _| {
+                let state = (phase, turn_is_free(&admission, &lane));
+                let mut seen = seen.lock().unwrap();
+                if seen.last() != Some(&state) {
+                    seen.push(state);
+                }
+            }
+        }),
+        cancel: Cancel::never(),
+    };
+    disk.place_watched_blocking(
+        &source,
+        &dest,
+        recorded(Depth::Full, Landing::Staged, Replace::Never),
+        &watch,
+    )
+    .expect("copied");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            (Phase::Waiting, true),
+            (Phase::Copying, false),
+            (Phase::Verifying, true)
+        ]
+    );
+}
+
+/// The async form waits for the turn before it takes a thread and hands it
+/// to the copy, which does not ask for a second: with one turn on the
+/// volume the copy still runs to its end.
+#[tokio::test]
+async fn an_admitted_copy_does_not_ask_for_a_second_turn() {
+    let temp = tempfile::tempdir().unwrap();
+    let (source, dest) = (temp.path().join("source.mkv"), temp.path().join("dest.mkv"));
+    std::fs::write(&source, b"incoming").unwrap();
+    let disk = disk();
+    disk.install_copy_workers(1);
+    let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let watch = Watch {
+        progress: Progress::to({
+            let waits = waits.clone();
+            move |phase, _| {
+                if phase == Phase::Waiting {
+                    waits.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }),
+        cancel: Cancel::never(),
+    };
+    let policy = recorded(Depth::Quick, Landing::Staged, Replace::Never);
+    let placed = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        disk.place_watched(&source, &dest, policy, watch),
+    )
+    .await
+    .expect("a copy holding its turn does not wait for another");
+    assert_eq!(placed.expect("copied").done, Done::Copied);
+    assert_eq!(waits.load(Ordering::SeqCst), 1);
 }
 
 /// A move never takes the recorded copy: it is refused before a byte moves.
@@ -293,6 +378,7 @@ fn a_move_that_would_need_a_recorded_copy_is_refused() {
         },
         watch: &watch,
         permit: Default::default(),
+        staged_free: Default::default(),
         copied: Default::default(),
     };
     let crossing = DiskError::new(

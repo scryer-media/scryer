@@ -2976,6 +2976,8 @@ async fn copied_files_awaiting_cleanup(
     LocationOperation,
     Vec<VerifiedFile>,
 ) {
+    // Counted from before the copies, on the owner every step here uses.
+    crate::disk::Disk::process().count_whole_reads();
     let mut plan = single_title_plan(&temp.join("a"), &temp.join("b"), names[0], 0);
     let template = plan.titles[0].files[0].clone();
     plan.titles[0].files = names
@@ -3060,7 +3062,7 @@ async fn record_copy(
 }
 
 fn whole_reads(path: &Path) -> usize {
-    crate::disk::whole_file_reads(path)
+    crate::disk::Disk::process().whole_reads_of(path)
 }
 
 /// Rewrites one byte in the unsampled middle: the length stays, the version

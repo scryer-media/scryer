@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::disk::{Disk, EntryKind, Link, LinkOutcome, Removal, Remove};
+use crate::disk::{Disk, EntryKind, FreeNameMove, Link, LinkOutcome, Removal, Remove};
 use crate::{AppError, AppResult};
 
 pub(crate) fn most_specific_containing_root(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
@@ -240,8 +240,8 @@ mod tests {
 /// If neither operation is supported, preserve everything and refuse.
 pub(crate) async fn promote_recovery_staged_file(staged: &Path, dest: &Path) -> io::Result<()> {
     let disk = Disk::process();
-    if let Some(result) = disk.exclusive_rename(staged, dest).await {
-        return result.map_err(Into::into);
+    if disk.move_onto_free_name(staged, dest).await? == FreeNameMove::Moved {
+        return Ok(());
     }
     match disk.link(staged, dest, Link::Hard).await? {
         LinkOutcome::Linked => Ok(()),

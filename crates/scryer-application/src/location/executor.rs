@@ -3007,7 +3007,7 @@ mod tests {
     #[async_trait]
     impl TitleFileMover for PipelinedMover {
         async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
-            let copy = self.copies.acquire_keyed("volume").await;
+            let copy = self.copies.acquire_for(std::path::Path::new("/")).await;
             let active = self.copying.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_copying.fetch_max(active, Ordering::SeqCst);
             request

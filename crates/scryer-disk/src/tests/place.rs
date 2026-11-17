@@ -60,7 +60,18 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         policy,
         watch: Box::leak(Box::new(Watch::nobody())),
         permit: Default::default(),
+        staged_free: Default::default(),
         copied: Default::default(),
+    }
+}
+
+fn recorded_staged(method: Method, fallback: Fallback) -> Placement {
+    Placement {
+        verify: Verify::Recorded(Evidence {
+            depth: Depth::Full,
+            landing: Landing::Staged,
+        }),
+        ..policy(method, fallback)
     }
 }
 
@@ -149,6 +160,53 @@ fn a_reserved_name_is_released_when_the_move_is_refused() {
         refusal(&disk, policy(Method::Move, Fallback::None)),
         Refused::NeedsCopy
     );
+    assert_eq!(removed_only_staging(&backend), 1);
+}
+
+/// A move never takes the recorded copy, whichever rename found that it
+/// needs one. Here it is the rename onto the reserved name, on a filesystem
+/// with no exclusive rename: nothing is copied and the source stays.
+#[test]
+fn a_recorded_move_is_refused_on_the_reserved_name_path_too() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+    *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+    *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
+    let refused = place(&disk, recorded_staged(Method::Move, Fallback::Copy)).expect_err("refused");
+    assert_eq!(refused.refused, Refused::NeedsCopy);
+    // Only the reservation was opened, and only it was removed.
+    let opened = backend.paths_of("open");
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(is_staging_name(&opened[0]));
+    assert_eq!(removed_only_staging(&backend), 1);
+    assert_eq!(backend.calls_of("hard_link"), 0);
+}
+
+/// The plain copy, with no hashes and nobody watching: the bytes go under a
+/// staging name and never under the real one, and a destination that was
+/// taken meanwhile is not replaced and does not cost the source.
+#[test]
+fn a_plain_cross_device_copy_never_shows_an_unproven_file_or_replaces_a_newcomer() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+    backend.fails("hard_link", DEST, io::ErrorKind::AlreadyExists);
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+    let mut unproven = policy(Method::Move, Fallback::Copy);
+    unproven.verify = Verify::None;
+    assert_eq!(refusal(&disk, unproven), Refused::DestinationExists);
+    let opened = backend.paths_of("open");
+    assert!(
+        opened
+            .iter()
+            .all(|path| *path == p(SOURCE) || is_staging_name(path)),
+        "{opened:?}"
+    );
+    // The one rename is the refused move of the source: the staged copy was
+    // never renamed over the name the newcomer holds.
+    assert_eq!(backend.paths_of("rename"), [p(SOURCE)]);
     assert_eq!(removed_only_staging(&backend), 1);
 }
 
@@ -318,6 +376,41 @@ fn a_link_that_cannot_be_made_is_copied_when_the_policy_allows() {
         assert!(placed.fell_back());
         assert_eq!(backend.calls_of("remove_file"), 0, "the source is kept");
     }
+}
+
+/// A link that falls back to a recorded copy waits for its volume's turn
+/// like any other recorded copy, once.
+#[test]
+fn a_link_that_falls_back_to_a_recorded_copy_takes_a_turn() {
+    let (disk, backend, _) = scripted();
+    backend.fails("hard_link", DEST, io::ErrorKind::CrossesDevices);
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+    let phases = Arc::new(Mutex::new(Vec::new()));
+    let watch = Watch {
+        progress: Progress::to({
+            let phases = phases.clone();
+            move |phase, _| {
+                let mut phases = phases.lock().unwrap();
+                if phases.last() != Some(&phase) {
+                    phases.push(phase);
+                }
+            }
+        }),
+        cancel: Cancel::never(),
+    };
+    let policy = Placement {
+        verify: Verify::Recorded(Evidence {
+            depth: Depth::Unproven,
+            landing: Landing::Direct,
+        }),
+        ..policy(Method::HardLink, Fallback::Copy)
+    };
+    let placed = disk
+        .place_watched_blocking(&p(SOURCE), &p(DEST), policy, &watch)
+        .expect("copied");
+    assert_eq!(placed.done, Done::Copied);
+    assert!(placed.copied.is_some());
+    assert_eq!(*phases.lock().unwrap(), [Phase::Waiting, Phase::Copying]);
 }
 
 /// A link refused for a reason that says something about the source, the
@@ -557,6 +650,106 @@ async fn the_async_form_reports_like_the_blocking_one() {
     assert!(disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
     backend.stat_is(DEST, Ok(file(1)));
     assert!(!disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
+}
+
+/// The staged name of a recorded copy is read within the root's bound, before
+/// a turn on the volume is waited for and before anything is opened. A name
+/// that is held is refused from that one reading.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn() {
+    let waited = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let watch = || Watch {
+        progress: Progress::to({
+            let waited = waited.clone();
+            move |_, _| {
+                waited.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }),
+        cancel: Cancel::never(),
+    };
+    let staged = resumable_staging_path(&p(DEST));
+
+    let (disk, backend, _) = scripted();
+    backend.stat_is(staged.to_str().unwrap(), Ok(file(1)));
+    let held = disk
+        .place_watched(
+            SOURCE,
+            DEST,
+            recorded_staged(Method::Copy, Fallback::None),
+            watch(),
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(held.refused, Refused::StagingOccupied);
+    assert_eq!(backend.paths_of("lstat"), [staged.clone()], "one reading");
+    assert_eq!(backend.calls_of("open"), 0);
+
+    let (disk, backend, _) = scripted();
+    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
+    let (open, gate) = mpsc::channel();
+    *backend.gate.lock().unwrap() = Some(gate);
+    // The reading is held in the backend until the gate opens, so the bound
+    // always elapses first.
+    let silent = disk
+        .place_watched(
+            SOURCE,
+            DEST,
+            recorded_staged(Method::Copy, Fallback::None),
+            watch(),
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
+    assert_eq!(
+        silent.to_string(),
+        format!(
+            "failed to inspect the destination staging path {}: the disk did not answer in time",
+            staged.display()
+        )
+    );
+    assert_eq!(backend.calls_of("open"), 0);
+    assert_eq!(
+        waited.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no turn was waited for"
+    );
+    open.send(()).unwrap();
+}
+
+/// A move onto a free name says whether it moved, was not offered, or was
+/// refused, and never falls back to a rename that replaces.
+#[tokio::test]
+async fn a_move_onto_a_free_name_moves_or_says_why_not() {
+    let (disk, backend, _) = scripted();
+    assert_eq!(
+        disk.move_onto_free_name(SOURCE, DEST).await.expect("moved"),
+        FreeNameMove::Moved
+    );
+
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists);
+    let refused = disk.move_onto_free_name(SOURCE, DEST).await;
+    assert_eq!(
+        refused.expect_err("occupied").reason(),
+        reason::DISK_DESTINATION_EXISTS
+    );
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::CrossesDevices);
+    let refused = disk.move_onto_free_name(SOURCE, DEST).await;
+    assert_eq!(
+        refused.expect_err("another volume").reason(),
+        reason::DISK_MOVE_NEEDS_COPY
+    );
+
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    assert_eq!(
+        disk.move_onto_free_name(SOURCE, DEST)
+            .await
+            .expect("not offered"),
+        FreeNameMove::NotOffered
+    );
+    assert_eq!(backend.calls_of("rename"), 0);
+    assert_eq!(backend.calls_of("open"), 0);
+    assert_eq!(backend.calls_of("hard_link"), 0);
 }
 
 /// A name written precomposed comes back decomposed from an SMB share, so

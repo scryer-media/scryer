@@ -80,9 +80,7 @@ use volume::Volumes;
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
 #[doc(hidden)]
-pub use copy::{
-    CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed, whole_file_reads,
-};
+pub use copy::{CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed};
 pub use copy::{
     Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
@@ -90,7 +88,8 @@ pub use copy::{
 };
 pub use pass::DiskPass;
 pub use place::{
-    CannotLink, Done, Fallback, Method, PlaceRefusal, Placed, Placement, Refused, Side, Verify,
+    CannotLink, Done, Fallback, FreeNameMove, Method, PlaceRefusal, Placed, Placement, Refused,
+    Side, Verify,
 };
 pub use reading::{
     DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, is_cross_device_error, reason,
@@ -536,6 +535,8 @@ struct Inner {
     volumes: RwLock<Volumes>,
     cache: StatCache,
     copies: std::sync::OnceLock<CopyAdmission>,
+    /// Whole-file reads by path, once a test asked for the count.
+    whole_reads: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, usize>>>,
     #[cfg(test)]
     calls: Mutex<std::collections::HashMap<&'static str, u64>>,
     #[cfg(test)]
@@ -573,6 +574,7 @@ impl Disk {
                 volumes: RwLock::new(Volumes::default()),
                 cache: StatCache::default(),
                 copies: std::sync::OnceLock::new(),
+                whole_reads: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 calls: Mutex::default(),
                 #[cfg(test)]

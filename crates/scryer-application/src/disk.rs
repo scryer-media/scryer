@@ -9,18 +9,18 @@
 pub(crate) mod capacity;
 pub mod placement;
 
+#[cfg(test)]
+pub(crate) use scryer_disk::open_cache_bypassed;
 pub use scryer_disk::{
     Access, CannotLink, DISK_STAT_REUSE, Disk, DiskError, DiskPass, DiskVerb, Done, EntryKind,
-    Fallback, FileIdentity, IfPresent, KeptPermissions, Link, LinkOutcome, Listed, Method,
-    MoveOutcome, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed, Placement, Refused,
-    Removal, Remove, Replace, ScratchDir, Side, Staged, Staging, SyncOutcome, Verify, Visited,
-    VolumeClass, is_cross_device_error, reason,
+    Fallback, FileIdentity, FreeNameMove, IfPresent, KeptPermissions, Link, LinkOutcome, Listed,
+    Method, MoveOutcome, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed, Placement,
+    Refused, Removal, Remove, Replace, ScratchDir, Side, Staged, Staging, SyncOutcome, Verify,
+    Visited, VolumeClass, is_cross_device_error, reason,
 };
 pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
 #[doc(hidden)]
-pub use scryer_disk::{
-    CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed, whole_file_reads,
-};
+pub use scryer_disk::{CacheBypass, ReadBackHandle, ReadBackOpener};
 pub use scryer_disk::{
     Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,

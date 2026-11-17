@@ -1,7 +1,7 @@
 use crate::disk::reason::{DISK_DESTINATION_EXISTS, DISK_PATH_MISSING};
 use crate::disk::{
-    Access, Disk, DiskError, Done, EntryKind, Open, Parents, PathReading, Placed, Refused, Removal,
-    Remove, Replace, Visited, placement,
+    Access, Disk, DiskError, Done, EntryKind, FreeNameMove, Open, Parents, PathReading, Placed,
+    Refused, Removal, Remove, Replace, Visited, placement,
 };
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
@@ -1407,12 +1407,11 @@ async fn restore_without_overwrite(
             }) => {}
             // Only a link shares the recycled file's bytes; anything else
             // the owner did is not proof enough to remove the recycled copy.
-            Ok(placed) => {
+            Ok(_) => {
                 return Err(AppError::Repository(format!(
-                    "restore of {} to {} was not made by a hard link ({:?}); the recycled copy was kept",
+                    "{} was put back at {} without a hard link, so the recycled copy was kept",
                     recycled_path.display(),
-                    destination.display(),
-                    placed.done
+                    destination.display()
                 )));
             }
             Err(refusal) if refusal.refused == Refused::DestinationExists => continue,
@@ -2572,9 +2571,10 @@ async fn relocate_entry(
         // is only ever in one place and there is no copy to verify. Only the
         // no-replace rename is used: a plain rename would replace an empty
         // directory that appeared at the destination.
-        match Disk::process().exclusive_rename(entry_dir, dest).await {
-            Some(Ok(())) => return Ok(RelocatedEntry::Moved),
-            Some(Err(error)) => match error.reason() {
+        match Disk::process().move_onto_free_name(entry_dir, dest).await {
+            Ok(FreeNameMove::Moved) => return Ok(RelocatedEntry::Moved),
+            Ok(FreeNameMove::NotOffered) => {}
+            Err(error) => match error.reason() {
                 crate::disk::reason::DISK_DESTINATION_EXISTS
                 | crate::disk::reason::DISK_DIRECTORY_NOT_EMPTY => {
                     return Err(relocation_collision(dest));
@@ -2588,7 +2588,6 @@ async fn relocate_entry(
                     ));
                 }
             },
-            None => {}
         }
     }
 
