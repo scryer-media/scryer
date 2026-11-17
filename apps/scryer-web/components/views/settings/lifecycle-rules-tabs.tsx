@@ -1,5 +1,6 @@
 import { History, ListChecks, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { UnderlineTabLink } from "@/components/common/underline-filter-button";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -27,11 +28,15 @@ const LIFECYCLE_RULES_SECTIONS: {
 
 /// The Lifecycle Rules page's panes, as route tabs right above the pane they
 /// open. The rule list is the default tab, so a bare lifecycle-rules link
-/// opens it.
+/// opens it. The rule list adds its side-panel buttons at the strip's right
+/// end.
 export function LifecycleRulesTabs({
   activeSection,
+  actions,
 }: {
   activeSection: LifecycleRulesSection;
+  /// Buttons for the open pane, at the right end of the tab strip.
+  actions?: ReactNode;
 }) {
   const t = useTranslate();
   return (
@@ -53,6 +58,11 @@ export function LifecycleRulesTabs({
           />
         ))}
       </div>
+      {actions ? (
+        <div className="ml-auto flex flex-wrap items-center gap-2 pb-2">
+          {actions}
+        </div>
+      ) : null}
     </div>
   );
 }

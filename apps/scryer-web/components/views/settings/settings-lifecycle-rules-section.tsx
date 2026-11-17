@@ -5,15 +5,13 @@ import {
 import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
 import { LifecycleSubjectPicker } from "@/components/common/lifecycle-subject-picker";
+import { BookOpen, Copy, Edit, Plus, Sparkles, Trash2, X } from "lucide-react";
 import {
-  BookOpen,
-  ChevronDown,
-  Copy,
-  Edit,
-  Plus,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
+  GutterPanel,
+  GutterPanelButton,
+} from "@/components/common/gutter-panel";
+import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
+import { useGutterPanel } from "@/lib/hooks/use-gutter-panel";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { HelpLabel } from "@/components/common/info-help";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
@@ -162,7 +160,7 @@ type SettingsLifecycleRulesSectionProps = {
     state: LifecycleRuleState,
   ) => void;
   /// Which pane of the lifecycle gutter is open. Only the rule list wants the
-  /// editor, the preview and the reference rail; the operational panes are a
+  /// editor, the preview and the side panels; the operational panes are a
   /// single panel each and read better across the full width.
   section: LifecycleRulesSection;
   /// Panels rendered under the rules table. They are passed in rather than
@@ -172,6 +170,14 @@ type SettingsLifecycleRulesSectionProps = {
 };
 
 type RefField = { field: string; type: string; descKey: string };
+
+const LIFECYCLE_TEMPLATES_PANEL_ID = "settings-lifecycle-templates-panel";
+const LIFECYCLE_REFERENCE_PANEL_ID = "settings-lifecycle-reference-panel";
+/// Template cards and the reference tables need more room than a plugin list,
+/// so these panels are wider than the Lists one and open over the content on
+/// most screens.
+const LIFECYCLE_SIDE_PANEL_SIZE = { width: 560, gap: 32 };
+type LifecycleSidePanel = "templates" | "reference";
 
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = lifecycleInputContract.sections as RefSectionDef[];
@@ -229,120 +235,140 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
   );
 }
 
+/// The slim header a lifecycle side panel keeps in view while its body
+/// scrolls beneath it, with the panel's own close button.
+function LifecycleSidePanelHeader({
+  icon,
+  title,
+}: {
+  icon: React.ReactNode;
+  title: string;
+}) {
+  const t = useTranslate();
+  const gutterPanel = React.useContext(GutterPanelContext);
+  return (
+    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-[var(--scry-border3)] bg-[var(--scry-bg)] py-1.5 pl-3 pr-1.5">
+      <h2 className="flex min-w-0 items-center gap-2 truncate text-[13px] font-semibold text-[var(--scry-ink2)]">
+        {icon}
+        {title}
+      </h2>
+      {gutterPanel ? (
+        <IconButton
+          label={t("label.close")}
+          appearance="ghost"
+          className="size-7"
+          onClick={gutterPanel.close}
+        >
+          <X className="h-4 w-4" />
+        </IconButton>
+      ) : null}
+    </div>
+  );
+}
+
 function LifecycleContextReference() {
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
   const descriptors = useRuleOutputDescriptors("lifecycle");
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
+    <div>
+      <LifecycleSidePanelHeader
+        icon={<BookOpen className="h-4 w-4" />}
+        title={t("settings.refLifecycleTitle")}
+      />
+      <div
+        id="settings-lifecycle-rules-reference"
+        className="space-y-6 p-4 text-sm"
       >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <BookOpen className="h-4 w-4" />
-          {t("settings.refLifecycleTitle")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </CardTitle>
-      </CardHeader>
-      {open ? (
-        <CardContent
-          id="settings-lifecycle-rules-reference"
-          className="space-y-6 text-sm"
-        >
-          <p className="text-muted-foreground">
-            {t("settings.refLifecycleIntro")}
+        <p className="text-muted-foreground">
+          {t("settings.refLifecycleIntro")}
+        </p>
+
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refLifecycleOutputTitle")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refLifecycleOutputIntro")}
           </p>
+          <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+            <li>{t("settings.refLifecycleOutputFlagHeads")}</li>
+            <li>{t("settings.refLifecycleOutputValueHeads")}</li>
+            <li>{t("settings.refLifecycleOutputHelpers")}</li>
+            <li>{t("settings.refLifecycleOutputUnknown")}</li>
+            <li>{t("settings.refLifecycleOutputReasons")}</li>
+            <li>{t("settings.refLifecycleOutputNoPackage")}</li>
+          </ul>
+        </div>
 
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refLifecycleOutputTitle")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refLifecycleOutputIntro")}
-            </p>
-            <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refLifecycleOutputFlagHeads")}</li>
-              <li>{t("settings.refLifecycleOutputValueHeads")}</li>
-              <li>{t("settings.refLifecycleOutputHelpers")}</li>
-              <li>{t("settings.refLifecycleOutputUnknown")}</li>
-              <li>{t("settings.refLifecycleOutputReasons")}</li>
-              <li>{t("settings.refLifecycleOutputNoPackage")}</li>
-            </ul>
-          </div>
+        <div>
+          <h4 className="mb-1 font-semibold">
+            <HelpLabel
+              label={t("settings.refLifecycleActionsTitle")}
+              help={t("settings.refLifecycleActionsOrder", {
+                order: ruleOutputHeadNames(descriptors),
+              })}
+            />
+          </h4>
+          <Table id="settings-lifecycle-rules-reference-actions">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[260px]">
+                  {t("settings.refColField")}
+                </TableHead>
+                <TableHead>{t("settings.refColDescription")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {descriptors.map((descriptor) => {
+                const help = ruleOutputHeadHelp(t, descriptor);
+                return (
+                  <TableRow
+                    key={descriptor.id}
+                    id={selectorId(
+                      "settings-lifecycle-rules-reference-action",
+                      descriptor.id,
+                    )}
+                    data-ui="settings-table-row"
+                  >
+                    <TableCell>
+                      <code data-code-font className="text-xs">
+                        {ruleOutputSyntax(descriptor)}
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {ruleOutputHeadLabel(t, descriptors, descriptor.id)}
+                      {help ? (
+                        <span className="block text-xs">{help}</span>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+          <ul className="mt-2 list-disc space-y-1.5 pl-5 text-muted-foreground">
+            <li>{t("settings.refLifecycleActionsDaysSince")}</li>
+            <li>{t("settings.refLifecycleActionsNotify")}</li>
+            <li>{t("settings.refLifecycleActionsConflicts")}</li>
+          </ul>
+        </div>
 
-          <div>
-            <h4 className="mb-1 font-semibold">
-              <HelpLabel
-                label={t("settings.refLifecycleActionsTitle")}
-                help={t("settings.refLifecycleActionsOrder", {
-                  order: ruleOutputHeadNames(descriptors),
-                })}
-              />
-            </h4>
-            <Table id="settings-lifecycle-rules-reference-actions">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[260px]">
-                    {t("settings.refColField")}
-                  </TableHead>
-                  <TableHead>{t("settings.refColDescription")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {descriptors.map((descriptor) => {
-                  const help = ruleOutputHeadHelp(t, descriptor);
-                  return (
-                    <TableRow
-                      key={descriptor.id}
-                      id={selectorId(
-                        "settings-lifecycle-rules-reference-action",
-                        descriptor.id,
-                      )}
-                      data-ui="settings-table-row"
-                    >
-                      <TableCell>
-                        <code data-code-font className="text-xs">
-                          {ruleOutputSyntax(descriptor)}
-                        </code>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {ruleOutputHeadLabel(t, descriptors, descriptor.id)}
-                        {help ? (
-                          <span className="block text-xs">{help}</span>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refLifecycleActionsDaysSince")}</li>
-              <li>{t("settings.refLifecycleActionsNotify")}</li>
-              <li>{t("settings.refLifecycleActionsConflicts")}</li>
-            </ul>
-          </div>
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refLifecycleTagActionsTitle")}
+          </h4>
+          <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+            <li>{t("settings.refLifecycleTagActionsNote")}</li>
+            <li>{t("settings.refLifecycleTagOscillationNote")}</li>
+          </ul>
+        </div>
 
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refLifecycleTagActionsTitle")}
-            </h4>
-            <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refLifecycleTagActionsNote")}</li>
-              <li>{t("settings.refLifecycleTagOscillationNote")}</li>
-            </ul>
-          </div>
-
-          {REF_SECTIONS.map((section) => (
-            <RefFieldTable key={section.path} section={section} />
-          ))}
-        </CardContent>
-      ) : null}
-    </Card>
+        {REF_SECTIONS.map((section) => (
+          <RefFieldTable key={section.path} section={section} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -410,42 +436,25 @@ function LifecycleTemplateGallery({
   onApply: (template: LifecycleRuleTemplate) => void;
 }) {
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
-
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
+    <div>
+      <LifecycleSidePanelHeader
+        icon={<Sparkles className="h-4 w-4" />}
+        title={t("settings.lifecycleTemplateGallery")}
+      />
+      <div
+        id="settings-lifecycle-template-gallery"
+        className="grid grid-cols-1 gap-2 p-3"
       >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Sparkles className="h-4 w-4" />
-          {t("settings.lifecycleTemplateGallery")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
+        {LIFECYCLE_RULE_TEMPLATES.map((template) => (
+          <LifecycleTemplateCard
+            key={template.id}
+            template={template}
+            onApply={onApply}
           />
-        </CardTitle>
-      </CardHeader>
-      {open ? (
-        <CardContent
-          id="settings-lifecycle-template-gallery"
-          className="@container"
-        >
-          <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2 @[900px]:grid-cols-3">
-            {LIFECYCLE_RULE_TEMPLATES.map((template) => (
-              <LifecycleTemplateCard
-                key={template.id}
-                template={template}
-                onApply={(applied) => {
-                  onApply(applied);
-                  setOpen(false);
-                }}
-              />
-            ))}
-          </div>
-        </CardContent>
-      ) : null}
-    </Card>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -871,19 +880,65 @@ export function SettingsLifecycleRulesSection({
   );
   const rulePage = lifecycleRulePage(sortedRules, rulePageIndex);
 
+  // Starter templates and the input reference slide out from the right edge
+  // of the settings scroll pane, like the Lists plugins panel. They only open
+  // on a click, at any screen size, and only one is open at a time.
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const scrollPaneRef = React.useRef<HTMLElement | null>(null);
+  const columnRef = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    scrollPaneRef.current =
+      rootRef.current?.closest<HTMLElement>(
+        '[data-slot="settings-main-scroll"]',
+      ) ?? null;
+  });
+  const sidePanelFrame = useGutterPanel(
+    scrollPaneRef,
+    columnRef,
+    section === "rules" ? LIFECYCLE_SIDE_PANEL_SIZE : null,
+  ).frame;
+  const [sidePanel, setSidePanel] = React.useState<LifecycleSidePanel | null>(
+    null,
+  );
+  if (section !== "rules" && sidePanel !== null) setSidePanel(null);
+  const sidePanelOpenChange = (panel: LifecycleSidePanel) => (open: boolean) =>
+    setSidePanel(open ? panel : null);
+
   // The instance switches govern every tab, so they sit above the tab strip,
   // and the tabs sit directly on the pane they open. Both stay inside the
   // pane's own column, as on the Lists page, rather than spanning the page.
   const pageHead = (
     <div className="space-y-5">
       {instanceSwitches}
-      <LifecycleRulesTabs activeSection={section} />
+      <LifecycleRulesTabs
+        activeSection={section}
+        actions={
+          section === "rules" ? (
+            <>
+              <GutterPanelButton
+                panelId={LIFECYCLE_TEMPLATES_PANEL_ID}
+                label={t("settings.lifecycleTemplateGallery")}
+                icon={<Sparkles className="h-4 w-4" />}
+                open={sidePanel === "templates"}
+                onOpenChange={sidePanelOpenChange("templates")}
+              />
+              <GutterPanelButton
+                panelId={LIFECYCLE_REFERENCE_PANEL_ID}
+                label={t("settings.refLifecycleTitle")}
+                icon={<BookOpen className="h-4 w-4" />}
+                open={sidePanel === "reference"}
+                onOpenChange={sidePanelOpenChange("reference")}
+              />
+            </>
+          ) : null
+        }
+      />
     </div>
   );
 
   // Candidates and history are one pane each, in the same column width as the
   // rule list so the tabs do not move when switching between them. There is
-  // no editor to sit beside and no rule being written for the reference rail
+  // no editor to sit beside and no rule being written for the side panels
   // to describe.
   if (section !== "rules") {
     return (
@@ -897,560 +952,558 @@ export function SettingsLifecycleRulesSection({
   }
 
   return (
-    <div id="settings-lifecycle-rules-section" className="space-y-4 text-sm">
-      <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 2xl:flex-row 2xl:items-start">
-        <div className="min-w-0 basis-[900px] flex-1">
-          <div className="mx-auto w-full max-w-[1280px] space-y-4">
-            <div className="pb-2">{pageHead}</div>
-            <div className="overflow-hidden rounded border border-border bg-card">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                <CardTitle className="text-base text-foreground">
-                  {t("settings.lifecycleRules")}
-                </CardTitle>
-                <RegoAiPromptDialog
-                  id="settings-lifecycle-rules-ai-prompt"
-                  ruleKind="lifecycle"
-                  inputContract={lifecycleInputContract}
-                  outputContract={
-                    'Declare actions by defining rules with these names: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title as "name if { ... }"; set_quality_profile := "Profile name", move_to_library := "Library name", move_to_root := "/path/of/root" and notify := "message text" as plain string literals; add_tags := ["tag"] and remove_tags := ["tag"] as plain lists of string literals. delete_title, move_to_library and move_to_root act on whole titles. A series rule can also act on one season: monitor_season, unmonitor_season, delete_season_files and fetch_season_subtitles as "name if { ... }" and notify_season := "message text" act on the season at input.season; monitor_episode, unmonitor_episode, delete_episode_files, fetch_episode_subtitles and notify_episode do the same for the episode at input.episode. Any other rule name is a helper of your own. days_since(ts) returns whole days since an RFC3339 timestamp; do not define a rule with that name. You may add reasons contains "stable_reason" if { ... } and unknown if { ... } to hold a subject.'
-                  }
-                />
-              </div>
-              <div className="overflow-x-auto">
-                <Table className="min-w-[min(900px,100%)]">
-                  <TableHeader>
-                    <TableRow>
-                      {(
-                        [
-                          ["name", t("label.name"), undefined, undefined],
-                          [
-                            "description",
-                            t("settings.ruleDescription"),
-                            undefined,
-                            undefined,
-                          ],
-                          [
-                            "graceDays",
-                            t("settings.lifecycleRuleGraceDays"),
-                            "text-center",
-                            undefined,
-                          ],
-                          [
-                            "schedule",
-                            t("jobs.column.schedule"),
-                            undefined,
-                            t("settings.lifecycleRuleScheduleHelp"),
-                          ],
-                          [
-                            "state",
-                            t("settings.lifecycleRuleState"),
-                            "w-[240px]",
-                            t("settings.lifecycleRuleStateHelp"),
-                          ],
-                          [
-                            "revision",
-                            t("settings.lifecycleRuleRevision"),
-                            "text-center",
-                            undefined,
-                          ],
-                        ] as const
-                      ).map(([key, label, className, help]) => (
-                        <SortableHead
-                          key={key}
-                          id={selectorId("settings-lifecycle-rules-sort", key)}
-                          label={label}
-                          className={className}
-                          help={help}
-                          active={ruleSort.key === key}
-                          descending={ruleSort.descending}
-                          onSort={() => {
-                            setRuleSort((current) =>
-                              nextLifecycleRuleSort(current, key),
-                            );
-                            setRulePageIndex(0);
-                          }}
-                        />
-                      ))}
-                      <TableHead className="text-right">
-                        {t("label.actions")}
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {rulePage.rows.map((record) => {
-                      return (
-                        <TableRow
-                          data-ui="settings-table-row"
-                          key={record.id}
+    <div
+      ref={rootRef}
+      id="settings-lifecycle-rules-section"
+      className="space-y-4 text-sm"
+    >
+      <div ref={columnRef} className="mx-auto w-full max-w-[1280px] space-y-4">
+        <div className="pb-2">{pageHead}</div>
+        <div className="overflow-hidden rounded border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <CardTitle className="text-base text-foreground">
+              {t("settings.lifecycleRules")}
+            </CardTitle>
+            <RegoAiPromptDialog
+              id="settings-lifecycle-rules-ai-prompt"
+              ruleKind="lifecycle"
+              inputContract={lifecycleInputContract}
+              outputContract={
+                'Declare actions by defining rules with these names: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title as "name if { ... }"; set_quality_profile := "Profile name", move_to_library := "Library name", move_to_root := "/path/of/root" and notify := "message text" as plain string literals; add_tags := ["tag"] and remove_tags := ["tag"] as plain lists of string literals. delete_title, move_to_library and move_to_root act on whole titles. A series rule can also act on one season: monitor_season, unmonitor_season, delete_season_files and fetch_season_subtitles as "name if { ... }" and notify_season := "message text" act on the season at input.season; monitor_episode, unmonitor_episode, delete_episode_files, fetch_episode_subtitles and notify_episode do the same for the episode at input.episode. Any other rule name is a helper of your own. days_since(ts) returns whole days since an RFC3339 timestamp; do not define a rule with that name. You may add reasons contains "stable_reason" if { ... } and unknown if { ... } to hold a subject.'
+              }
+            />
+          </div>
+          <div className="overflow-x-auto">
+            <Table className="min-w-[min(900px,100%)]">
+              <TableHeader>
+                <TableRow>
+                  {(
+                    [
+                      ["name", t("label.name"), undefined, undefined],
+                      [
+                        "description",
+                        t("settings.ruleDescription"),
+                        undefined,
+                        undefined,
+                      ],
+                      [
+                        "graceDays",
+                        t("settings.lifecycleRuleGraceDays"),
+                        "text-center",
+                        undefined,
+                      ],
+                      [
+                        "schedule",
+                        t("jobs.column.schedule"),
+                        undefined,
+                        t("settings.lifecycleRuleScheduleHelp"),
+                      ],
+                      [
+                        "state",
+                        t("settings.lifecycleRuleState"),
+                        "w-[240px]",
+                        t("settings.lifecycleRuleStateHelp"),
+                      ],
+                      [
+                        "revision",
+                        t("settings.lifecycleRuleRevision"),
+                        "text-center",
+                        undefined,
+                      ],
+                    ] as const
+                  ).map(([key, label, className, help]) => (
+                    <SortableHead
+                      key={key}
+                      id={selectorId("settings-lifecycle-rules-sort", key)}
+                      label={label}
+                      className={className}
+                      help={help}
+                      active={ruleSort.key === key}
+                      descending={ruleSort.descending}
+                      onSort={() => {
+                        setRuleSort((current) =>
+                          nextLifecycleRuleSort(current, key),
+                        );
+                        setRulePageIndex(0);
+                      }}
+                    />
+                  ))}
+                  <TableHead className="text-right">
+                    {t("label.actions")}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rulePage.rows.map((record) => {
+                  return (
+                    <TableRow
+                      data-ui="settings-table-row"
+                      key={record.id}
+                      id={selectorId("settings-lifecycle-rule-row", record.id)}
+                    >
+                      <TableCell className="font-medium">
+                        <span
                           id={selectorId(
-                            "settings-lifecycle-rule-row",
+                            "settings-lifecycle-rule-name",
+                            record.name,
+                          )}
+                        >
+                          {record.name}
+                        </span>
+                        {record.systemOwned ? (
+                          <Badge tone="neutral" className="ml-2 text-[10px]">
+                            {t("settings.lifecycleRuleSystemOwned")}
+                          </Badge>
+                        ) : null}
+                        {record.loadRefusal ? (
+                          <p
+                            id={selectorId(
+                              "settings-lifecycle-rule-load-refusal",
+                              record.id,
+                            )}
+                            className="mt-1 text-xs text-[var(--scry-danger-text)]"
+                          >
+                            {t(lifecycleLoadRefusalKey(record.loadRefusal))}
+                          </p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate text-muted-foreground">
+                        {record.description || "—"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {record.graceDays}
+                      </TableCell>
+                      <TableCell className="min-w-[10rem] text-muted-foreground">
+                        <LifecycleRuleScheduleSummary
+                          record={record}
+                          idPrefix={selectorId(
+                            "settings-lifecycle-rule-schedule",
                             record.id,
                           )}
-                        >
-                          <TableCell className="font-medium">
-                            <span
-                              id={selectorId(
-                                "settings-lifecycle-rule-name",
-                                record.name,
-                              )}
-                            >
-                              {record.name}
-                            </span>
-                            {record.systemOwned ? (
-                              <Badge
-                                tone="neutral"
-                                className="ml-2 text-[10px]"
-                              >
-                                {t("settings.lifecycleRuleSystemOwned")}
-                              </Badge>
-                            ) : null}
-                            {record.loadRefusal ? (
-                              <p
-                                id={selectorId(
-                                  "settings-lifecycle-rule-load-refusal",
-                                  record.id,
-                                )}
-                                className="mt-1 text-xs text-[var(--scry-danger-text)]"
-                              >
-                                {t(lifecycleLoadRefusalKey(record.loadRefusal))}
-                              </p>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                            {record.description || "—"}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            {record.graceDays}
-                          </TableCell>
-                          <TableCell className="min-w-[10rem] text-muted-foreground">
-                            <LifecycleRuleScheduleSummary
-                              record={record}
-                              idPrefix={selectorId(
-                                "settings-lifecycle-rule-schedule",
-                                record.id,
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <div className="space-y-1">
-                              <SingleSelectField
-                                id={selectorId(
-                                  "settings-lifecycle-rule-state",
-                                  record.id,
-                                )}
-                                size="sm"
-                                value={record.state}
-                                disabled={mutatingRuleSetId === record.id}
-                                onValueChange={(value) =>
-                                  setRuleState(
-                                    record,
-                                    value as LifecycleRuleState,
-                                  )
-                                }
-                                options={ruleStateOptionsFor(record).map(
-                                  (state) => {
-                                    const key = ruleStateLabelKey(state);
-                                    return {
-                                      value: state,
-                                      ariaLabel: state,
-                                      label: key ? t(key) : state,
-                                    };
-                                  },
-                                )}
-                              />
-                              {record.editedSinceEnabled ? (
-                                <p
-                                  id={selectorId(
-                                    "settings-lifecycle-rule-edited-since-enabled",
-                                    record.id,
-                                  )}
-                                  className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-2 py-1 text-xs text-[var(--scry-warning-text)]"
-                                >
-                                  {t(
-                                    "settings.lifecycleRuleEditedSinceEnabled",
-                                  )}
-                                </p>
-                              ) : null}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            {record.currentRevisionNumber}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <IconButton
-                                id={selectorId(
-                                  "settings-lifecycle-rule-copy",
-                                  record.id,
-                                )}
-                                label={t("settings.lifecycleRuleCopy")}
-                                tone="neutral"
-                                onClick={() => copyRuleSet(record)}
-                              >
-                                <Copy className="h-4 w-4" />
-                              </IconButton>
-                              <IconButton
-                                id={selectorId(
-                                  "settings-lifecycle-rule-edit",
-                                  record.id,
-                                )}
-                                label={t("label.edit")}
-                                tone="edit"
-                                onClick={() => editRuleSet(record)}
-                              >
-                                <Edit className="h-4 w-4" />
-                              </IconButton>
-                              {record.systemOwned ? null : (
-                                <IconButton
-                                  id={selectorId(
-                                    "settings-lifecycle-rule-delete",
-                                    record.id,
-                                  )}
-                                  label={t("label.delete")}
-                                  tone="delete"
-                                  onClick={() => void deleteRuleSet(record)}
-                                  disabled={mutatingRuleSetId === record.id}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </IconButton>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                    {ruleSetRecords.length === 0 ? (
-                      <TableRow>
-                        <TableCell
-                          colSpan={7}
-                          className="text-muted-foreground"
-                        >
-                          {t("settings.noLifecycleRulesFound")}
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </TableBody>
-                </Table>
-              </div>
-              {rulePage.pageCount > 1 ? (
-                <div
-                  id="settings-lifecycle-rules-pager"
-                  className="flex items-center justify-between gap-3 border-t border-border px-3 py-2"
-                >
-                  <p
-                    id="settings-lifecycle-rules-page-range"
-                    className="text-[12.5px] text-[var(--scry-muted3)]"
-                  >
-                    {t("pendingImports.pageRange", {
-                      start: rulePage.start,
-                      end: rulePage.end,
-                      total: rulePage.total,
-                    })}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      id="settings-lifecycle-rules-previous-page"
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      disabled={rulePage.page === 0}
-                      onClick={() => setRulePageIndex(rulePage.page - 1)}
-                    >
-                      {t("pendingImports.prev")}
-                    </Button>
-                    <Button
-                      id="settings-lifecycle-rules-next-page"
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      disabled={rulePage.page >= rulePage.pageCount - 1}
-                      onClick={() => setRulePageIndex(rulePage.page + 1)}
-                    >
-                      {t("pendingImports.next")}
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            {isEditorOpen ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">
-                    {editingRuleSetId
-                      ? t("settings.lifecycleRuleUpdate")
-                      : t("settings.lifecycleRuleCreate")}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <form
-                    id="settings-lifecycle-rule-form"
-                    className="space-y-3"
-                    onSubmit={submitRuleSet}
-                  >
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <label>
-                        <Label className="mb-2 block">{t("label.name")}</Label>
-                        <Input
-                          id="settings-lifecycle-rule-name"
-                          value={ruleSetDraft.name}
-                          readOnly={editingSystemOwned}
-                          onChange={(event) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              name: event.target.value,
-                            }))
-                          }
-                          required
-                          placeholder="stale_unmonitored_titles"
                         />
-                      </label>
-                      <label>
-                        <Label className="mb-2 block">
-                          {t("settings.ruleDescription")}
-                        </Label>
-                        <Input
-                          id="settings-lifecycle-rule-description"
-                          value={ruleSetDraft.description}
-                          onChange={(event) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              description: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    {!editingRuleSetId ? (
-                      <SingleSelectField
-                        id="settings-lifecycle-rule-template"
-                        label={t("settings.lifecycleRuleTemplate")}
-                        placeholder={t(
-                          "settings.lifecycleRuleTemplatePlaceholder",
-                        )}
-                        value=""
-                        onValueChange={(id) => {
-                          const template = LIFECYCLE_RULE_TEMPLATES.find(
-                            (candidate) => candidate.id === id,
-                          );
-                          if (template) applyTemplate(template);
-                        }}
-                        options={LIFECYCLE_RULE_TEMPLATES.map((template) => ({
-                          value: template.id,
-                          label: t(template.titleKey),
-                        }))}
-                      />
-                    ) : null}
-
-                    <RuleEditorSurface
-                      idPrefix="settings-lifecycle-rule"
-                      schema={builderSchema}
-                      builderStatus={builderStatus}
-                      variant={null}
-                      mode={editorMode}
-                      onModeChange={setEditorMode}
-                      available={!editingSystemOwned}
-                      onEditAsRego={editAsRego}
-                      model={ruleSetDraft.builderModel}
-                      onModelChange={setBuilderModel}
-                      options={builderOptions}
-                      generatedSource={ruleSetDraft.regoSource}
-                      feedback={validationStatus}
-                      starterSource={LIFECYCLE_STARTER_SOURCE}
-                      editor={(readOnly, source) => (
-                        <LazyRegoEditor
-                          ruleFamily="lifecycle"
-                          ruleVariant={null}
-                          id="settings-lifecycle-rule-rego-source"
-                          value={source}
-                          readOnly={editingSystemOwned || readOnly}
-                          onChange={editRegoSource}
-                          diagnostics={regoDiagnostics(
-                            ruleSetDraft.regoSource,
-                            validationResult,
-                            t,
-                          )}
-                          feedback={validationStatus}
-                          minLines={12}
-                          maxLines={35}
-                        />
-                      )}
-                    />
-
-                    <LifecycleRuleSourceFindings
-                      source={ruleSetDraft.regoSource}
-                      checked={
-                        !validating &&
-                        validationResult !== null &&
-                        !validationResult.unavailable
-                      }
-                      warnings={validationResult?.warnings ?? []}
-                    />
-
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <label className="block">
-                        <Label className="mb-2 block">
-                          <HelpLabel
-                            label={t("settings.lifecycleRuleGraceDays")}
-                            help={t("settings.lifecycleRuleGraceDaysHelp")}
-                          />
-                        </Label>
-                        <Input
-                          id="settings-lifecycle-rule-grace-days"
-                          {...integerInputProps}
-                          min={0}
-                          value={ruleSetDraft.graceDays}
-                          onChange={(event) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              graceDays:
-                                Number(sanitizeDigits(event.target.value)) || 0,
-                            }))
-                          }
-                          placeholder="0"
-                        />
-                      </label>
-
-                      <label className="block">
-                        <Label className="mb-2 block">
-                          <HelpLabel
-                            label={t("settings.lifecycleRuleMaxTitlesPerRun")}
-                            help={t(
-                              "settings.lifecycleRuleMaxTitlesPerRunHelp",
+                      </TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <SingleSelectField
+                            id={selectorId(
+                              "settings-lifecycle-rule-state",
+                              record.id,
+                            )}
+                            size="sm"
+                            value={record.state}
+                            disabled={mutatingRuleSetId === record.id}
+                            onValueChange={(value) =>
+                              setRuleState(record, value as LifecycleRuleState)
+                            }
+                            options={ruleStateOptionsFor(record).map(
+                              (state) => {
+                                const key = ruleStateLabelKey(state);
+                                return {
+                                  value: state,
+                                  ariaLabel: state,
+                                  label: key ? t(key) : state,
+                                };
+                              },
                             )}
                           />
-                        </Label>
-                        <Input
-                          id="settings-lifecycle-rule-max-titles-per-run"
-                          {...integerInputProps}
-                          min={1}
-                          required={
-                            validationResult?.declaredActions?.destructive ===
-                            true
-                          }
-                          value={ruleSetDraft.maxTitlesPerRun ?? ""}
-                          onChange={(event) => {
-                            const digits = sanitizeDigits(event.target.value);
+                          {record.editedSinceEnabled ? (
+                            <p
+                              id={selectorId(
+                                "settings-lifecycle-rule-edited-since-enabled",
+                                record.id,
+                              )}
+                              className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-2 py-1 text-xs text-[var(--scry-warning-text)]"
+                            >
+                              {t("settings.lifecycleRuleEditedSinceEnabled")}
+                            </p>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {record.currentRevisionNumber}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <IconButton
+                            id={selectorId(
+                              "settings-lifecycle-rule-copy",
+                              record.id,
+                            )}
+                            label={t("settings.lifecycleRuleCopy")}
+                            tone="neutral"
+                            onClick={() => copyRuleSet(record)}
+                          >
+                            <Copy className="h-4 w-4" />
+                          </IconButton>
+                          <IconButton
+                            id={selectorId(
+                              "settings-lifecycle-rule-edit",
+                              record.id,
+                            )}
+                            label={t("label.edit")}
+                            tone="edit"
+                            onClick={() => editRuleSet(record)}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </IconButton>
+                          {record.systemOwned ? null : (
+                            <IconButton
+                              id={selectorId(
+                                "settings-lifecycle-rule-delete",
+                                record.id,
+                              )}
+                              label={t("label.delete")}
+                              tone="delete"
+                              onClick={() => void deleteRuleSet(record)}
+                              disabled={mutatingRuleSetId === record.id}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </IconButton>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {ruleSetRecords.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-muted-foreground">
+                      {t("settings.noLifecycleRulesFound")}
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+          {rulePage.pageCount > 1 ? (
+            <div
+              id="settings-lifecycle-rules-pager"
+              className="flex items-center justify-between gap-3 border-t border-border px-3 py-2"
+            >
+              <p
+                id="settings-lifecycle-rules-page-range"
+                className="text-[12.5px] text-[var(--scry-muted3)]"
+              >
+                {t("pendingImports.pageRange", {
+                  start: rulePage.start,
+                  end: rulePage.end,
+                  total: rulePage.total,
+                })}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  id="settings-lifecycle-rules-previous-page"
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={rulePage.page === 0}
+                  onClick={() => setRulePageIndex(rulePage.page - 1)}
+                >
+                  {t("pendingImports.prev")}
+                </Button>
+                <Button
+                  id="settings-lifecycle-rules-next-page"
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={rulePage.page >= rulePage.pageCount - 1}
+                  onClick={() => setRulePageIndex(rulePage.page + 1)}
+                >
+                  {t("pendingImports.next")}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {isEditorOpen ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                {editingRuleSetId
+                  ? t("settings.lifecycleRuleUpdate")
+                  : t("settings.lifecycleRuleCreate")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form
+                id="settings-lifecycle-rule-form"
+                className="space-y-3"
+                onSubmit={submitRuleSet}
+              >
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label>
+                    <Label className="mb-2 block">{t("label.name")}</Label>
+                    <Input
+                      id="settings-lifecycle-rule-name"
+                      value={ruleSetDraft.name}
+                      readOnly={editingSystemOwned}
+                      onChange={(event) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          name: event.target.value,
+                        }))
+                      }
+                      required
+                      placeholder="stale_unmonitored_titles"
+                    />
+                  </label>
+                  <label>
+                    <Label className="mb-2 block">
+                      {t("settings.ruleDescription")}
+                    </Label>
+                    <Input
+                      id="settings-lifecycle-rule-description"
+                      value={ruleSetDraft.description}
+                      onChange={(event) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          description: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                {!editingRuleSetId ? (
+                  <SingleSelectField
+                    id="settings-lifecycle-rule-template"
+                    label={t("settings.lifecycleRuleTemplate")}
+                    placeholder={t("settings.lifecycleRuleTemplatePlaceholder")}
+                    value=""
+                    onValueChange={(id) => {
+                      const template = LIFECYCLE_RULE_TEMPLATES.find(
+                        (candidate) => candidate.id === id,
+                      );
+                      if (template) applyTemplate(template);
+                    }}
+                    options={LIFECYCLE_RULE_TEMPLATES.map((template) => ({
+                      value: template.id,
+                      label: t(template.titleKey),
+                    }))}
+                  />
+                ) : null}
+
+                <RuleEditorSurface
+                  idPrefix="settings-lifecycle-rule"
+                  schema={builderSchema}
+                  builderStatus={builderStatus}
+                  variant={null}
+                  mode={editorMode}
+                  onModeChange={setEditorMode}
+                  available={!editingSystemOwned}
+                  onEditAsRego={editAsRego}
+                  model={ruleSetDraft.builderModel}
+                  onModelChange={setBuilderModel}
+                  options={builderOptions}
+                  generatedSource={ruleSetDraft.regoSource}
+                  feedback={validationStatus}
+                  starterSource={LIFECYCLE_STARTER_SOURCE}
+                  editor={(readOnly, source) => (
+                    <LazyRegoEditor
+                      ruleFamily="lifecycle"
+                      ruleVariant={null}
+                      id="settings-lifecycle-rule-rego-source"
+                      value={source}
+                      readOnly={editingSystemOwned || readOnly}
+                      onChange={editRegoSource}
+                      diagnostics={regoDiagnostics(
+                        ruleSetDraft.regoSource,
+                        validationResult,
+                        t,
+                      )}
+                      feedback={validationStatus}
+                      minLines={12}
+                      maxLines={35}
+                    />
+                  )}
+                />
+
+                <LifecycleRuleSourceFindings
+                  source={ruleSetDraft.regoSource}
+                  checked={
+                    !validating &&
+                    validationResult !== null &&
+                    !validationResult.unavailable
+                  }
+                  warnings={validationResult?.warnings ?? []}
+                />
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <Label className="mb-2 block">
+                      <HelpLabel
+                        label={t("settings.lifecycleRuleGraceDays")}
+                        help={t("settings.lifecycleRuleGraceDaysHelp")}
+                      />
+                    </Label>
+                    <Input
+                      id="settings-lifecycle-rule-grace-days"
+                      {...integerInputProps}
+                      min={0}
+                      value={ruleSetDraft.graceDays}
+                      onChange={(event) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          graceDays:
+                            Number(sanitizeDigits(event.target.value)) || 0,
+                        }))
+                      }
+                      placeholder="0"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <Label className="mb-2 block">
+                      <HelpLabel
+                        label={t("settings.lifecycleRuleMaxTitlesPerRun")}
+                        help={t("settings.lifecycleRuleMaxTitlesPerRunHelp")}
+                      />
+                    </Label>
+                    <Input
+                      id="settings-lifecycle-rule-max-titles-per-run"
+                      {...integerInputProps}
+                      min={1}
+                      required={
+                        validationResult?.declaredActions?.destructive === true
+                      }
+                      value={ruleSetDraft.maxTitlesPerRun ?? ""}
+                      onChange={(event) => {
+                        const digits = sanitizeDigits(event.target.value);
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          maxTitlesPerRun:
+                            digits === "" ? null : Number(digits),
+                        }));
+                      }}
+                      placeholder={t(
+                        "settings.lifecycleRuleMaxTitlesPerRunNone",
+                      )}
+                    />
+                  </label>
+                </div>
+
+                <LifecycleRuleScheduleField
+                  key={editorSessionKey}
+                  idPrefix="settings-lifecycle-rule-form-schedule"
+                  value={ruleSetDraft.schedule}
+                  onChange={(schedule) =>
+                    setRuleSetDraft((prev) => ({ ...prev, schedule }))
+                  }
+                  nextRunAt={editingNextRunAt}
+                />
+
+                <div>
+                  <Label className="mb-2 block">
+                    <HelpLabel
+                      label={t("settings.lifecycleRuleLibraries")}
+                      help={t("settings.lifecycleRuleLibrariesHelp")}
+                    />
+                  </Label>
+                  <div className="flex flex-wrap items-center gap-4">
+                    {libraries.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">
+                        {t("settings.lifecycleRuleLibrariesAll")}
+                      </span>
+                    ) : null}
+                    {libraries.map((library) => (
+                      <label
+                        key={library.id}
+                        className="flex items-center gap-2"
+                      >
+                        <Checkbox
+                          id={selectorId(
+                            "settings-lifecycle-rule-library",
+                            library.id,
+                          )}
+                          checked={ruleSetDraft.libraryIds.includes(library.id)}
+                          onCheckedChange={(value) => {
                             setRuleSetDraft((prev) => ({
                               ...prev,
-                              maxTitlesPerRun:
-                                digits === "" ? null : Number(digits),
+                              libraryIds:
+                                value === true
+                                  ? [...prev.libraryIds, library.id]
+                                  : prev.libraryIds.filter(
+                                      (id) => id !== library.id,
+                                    ),
                             }));
                           }}
-                          placeholder={t(
-                            "settings.lifecycleRuleMaxTitlesPerRunNone",
-                          )}
                         />
+                        <span className="text-sm">{library.name}</span>
                       </label>
-                    </div>
+                    ))}
+                  </div>
+                </div>
 
-                    <LifecycleRuleScheduleField
-                      key={editorSessionKey}
-                      idPrefix="settings-lifecycle-rule-form-schedule"
-                      value={ruleSetDraft.schedule}
-                      onChange={(schedule) =>
-                        setRuleSetDraft((prev) => ({ ...prev, schedule }))
-                      }
-                      nextRunAt={editingNextRunAt}
-                    />
+                <div className="flex gap-2">
+                  <Button
+                    id="settings-lifecycle-rule-save"
+                    type="submit"
+                    disabled={mutatingRuleSetId !== null || validating}
+                  >
+                    {mutatingRuleSetId !== null
+                      ? t("label.saving")
+                      : editingRuleSetId
+                        ? t("settings.lifecycleRuleUpdate")
+                        : t("settings.lifecycleRuleCreate")}
+                  </Button>
+                  <Button
+                    id="settings-lifecycle-rule-cancel"
+                    type="button"
+                    variant="secondary"
+                    onClick={resetRuleSetDraft}
+                  >
+                    {t("label.cancel")}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        ) : null}
 
-                    <div>
-                      <Label className="mb-2 block">
-                        <HelpLabel
-                          label={t("settings.lifecycleRuleLibraries")}
-                          help={t("settings.lifecycleRuleLibrariesHelp")}
-                        />
-                      </Label>
-                      <div className="flex flex-wrap items-center gap-4">
-                        {libraries.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t("settings.lifecycleRuleLibrariesAll")}
-                          </span>
-                        ) : null}
-                        {libraries.map((library) => (
-                          <label
-                            key={library.id}
-                            className="flex items-center gap-2"
-                          >
-                            <Checkbox
-                              id={selectorId(
-                                "settings-lifecycle-rule-library",
-                                library.id,
-                              )}
-                              checked={ruleSetDraft.libraryIds.includes(
-                                library.id,
-                              )}
-                              onCheckedChange={(value) => {
-                                setRuleSetDraft((prev) => ({
-                                  ...prev,
-                                  libraryIds:
-                                    value === true
-                                      ? [...prev.libraryIds, library.id]
-                                      : prev.libraryIds.filter(
-                                          (id) => id !== library.id,
-                                        ),
-                                }));
-                              }}
-                            />
-                            <span className="text-sm">{library.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button
-                        id="settings-lifecycle-rule-save"
-                        type="submit"
-                        disabled={mutatingRuleSetId !== null || validating}
-                      >
-                        {mutatingRuleSetId !== null
-                          ? t("label.saving")
-                          : editingRuleSetId
-                            ? t("settings.lifecycleRuleUpdate")
-                            : t("settings.lifecycleRuleCreate")}
-                      </Button>
-                      <Button
-                        id="settings-lifecycle-rule-cancel"
-                        type="button"
-                        variant="secondary"
-                        onClick={resetRuleSetDraft}
-                      >
-                        {t("label.cancel")}
-                      </Button>
-                    </div>
-                  </form>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            <div className="flex justify-center">
-              <AddNewButton
-                id="settings-lifecycle-rule-create"
-                icon={Plus}
-                label={t("settings.lifecycleRuleCreateNew")}
-                onClick={startCreateRuleSet}
-                disabled={mutatingRuleSetId !== null}
-              />
-            </div>
-
-            <LifecyclePreviewPanel
-              isEditorOpen={isEditorOpen}
-              draftName={ruleSetDraft.name}
-              ruleSetRecords={ruleSetRecords}
-              libraries={libraries}
-              {...previewProps}
-            />
-
-            {operationsPanels}
-          </div>
+        <div className="flex justify-center">
+          <AddNewButton
+            id="settings-lifecycle-rule-create"
+            icon={Plus}
+            label={t("settings.lifecycleRuleCreateNew")}
+            onClick={startCreateRuleSet}
+            disabled={mutatingRuleSetId !== null}
+          />
         </div>
-        <div className="@container w-full space-y-4 2xl:w-[44%] 2xl:max-w-[880px] 2xl:shrink-0">
-          <LifecycleTemplateGallery onApply={applyTemplate} />
-          <LifecycleContextReference />
-        </div>
+
+        <LifecyclePreviewPanel
+          isEditorOpen={isEditorOpen}
+          draftName={ruleSetDraft.name}
+          ruleSetRecords={ruleSetRecords}
+          libraries={libraries}
+          {...previewProps}
+        />
+
+        {operationsPanels}
       </div>
+      <GutterPanel
+        id={LIFECYCLE_TEMPLATES_PANEL_ID}
+        label={t("settings.lifecycleTemplateGallery")}
+        frame={sidePanelFrame}
+        open={sidePanel === "templates"}
+        onOpenChange={sidePanelOpenChange("templates")}
+      >
+        <LifecycleTemplateGallery
+          onApply={(template) => {
+            applyTemplate(template);
+            setSidePanel(null);
+          }}
+        />
+      </GutterPanel>
+      <GutterPanel
+        id={LIFECYCLE_REFERENCE_PANEL_ID}
+        label={t("settings.refLifecycleTitle")}
+        frame={sidePanelFrame}
+        open={sidePanel === "reference"}
+        onOpenChange={sidePanelOpenChange("reference")}
+      >
+        <LifecycleContextReference />
+      </GutterPanel>
     </div>
   );
 }
