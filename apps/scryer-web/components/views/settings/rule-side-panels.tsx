@@ -11,6 +11,19 @@ import { useGutterPanel } from "@/lib/hooks/use-gutter-panel";
 /// most screens.
 const RULE_SIDE_PANEL_SIZE = { width: 560, gap: 32 };
 
+/// The body of a rule input reference panel. The panel is too narrow for the
+/// reference's field, type and description columns, so each table row stacks:
+/// the field path (wrapping) and its type on one line, the description under
+/// both. Two-column tables put the description under the field the same way.
+export const RULE_REFERENCE_BODY_CLASS = [
+  "space-y-6 p-4 text-sm",
+  "[&_h4_code]:break-all",
+  "[&_table]:block [&_thead]:hidden [&_tbody]:block",
+  "[&_tr]:grid [&_tr]:grid-cols-[minmax(0,1fr)_auto] [&_tr]:items-start [&_tr]:gap-x-3 [&_tr]:gap-y-1 [&_tr]:py-2.5",
+  "[&_td]:p-0 [&_td:first-child_code]:break-all",
+  "[&_td:last-child]:col-span-2 [&_td:last-child]:text-[13px] [&_td:last-child]:leading-5",
+].join(" ");
+
 /// The side panels of a rule page (starter templates, input reference) that
 /// slide out from the right edge of the settings scroll pane, like the Lists
 /// plugins panel. They open only on a click, at any screen size, and only one

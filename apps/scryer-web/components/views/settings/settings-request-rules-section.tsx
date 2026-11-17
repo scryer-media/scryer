@@ -20,6 +20,7 @@ import {
 } from "@/components/common/gutter-panel";
 import {
   RuleSidePanelButtons,
+  RULE_REFERENCE_BODY_CLASS,
   RuleSidePanelHeader,
   useRuleSidePanels,
 } from "@/components/views/settings/rule-side-panels";
@@ -277,7 +278,7 @@ function RequestContextReference() {
       />
       <div
         id="settings-request-rules-reference"
-        className="space-y-6 p-4 text-sm"
+        className={RULE_REFERENCE_BODY_CLASS}
       >
         <p className="text-muted-foreground">{t("settings.refReqIntro")}</p>
 

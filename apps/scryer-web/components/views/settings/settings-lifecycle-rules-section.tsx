@@ -11,6 +11,7 @@ import {
   GutterPanelButton,
 } from "@/components/common/gutter-panel";
 import {
+  RULE_REFERENCE_BODY_CLASS,
   RuleSidePanelHeader,
   useRuleSidePanels,
 } from "@/components/views/settings/rule-side-panels";
@@ -245,7 +246,7 @@ function LifecycleContextReference() {
       />
       <div
         id="settings-lifecycle-rules-reference"
-        className="space-y-6 p-4 text-sm"
+        className={RULE_REFERENCE_BODY_CLASS}
       >
         <p className="text-muted-foreground">
           {t("settings.refLifecycleIntro")}

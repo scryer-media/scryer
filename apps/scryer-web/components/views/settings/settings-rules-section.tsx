@@ -24,6 +24,7 @@ import {
 } from "@/components/common/gutter-panel";
 import {
   RuleSidePanelButtons,
+  RULE_REFERENCE_BODY_CLASS,
   RuleSidePanelHeader,
   useRuleSidePanels,
 } from "@/components/views/settings/rule-side-panels";
@@ -243,7 +244,7 @@ function RulesContextReference() {
         icon={<BookOpen className="h-4 w-4" />}
         title={t("settings.refTitle")}
       />
-      <div className="space-y-6 p-4 text-sm">
+      <div className={RULE_REFERENCE_BODY_CLASS}>
         <p className="text-xs text-muted-foreground">
           {t("settings.refSubtitle")}
         </p>
