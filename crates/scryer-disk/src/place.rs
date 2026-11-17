@@ -394,13 +394,15 @@ struct Answered {
 #[derive(Clone)]
 pub struct ReadBefore {
     answered: Answered,
+    /// The source whose name was read.
+    source: PathBuf,
     folder: Option<PathBuf>,
 }
 
 impl ReadBefore {
-    /// The read of a caller that has just read the source's name within its
+    /// The read of a caller that has just read `source`'s name within its
     /// root's bound, as `source_read`, and made `dest`'s folder itself.
-    pub fn made_folder(source_read: PathReading, dest: &Path) -> Self {
+    pub fn made_folder(source: &Path, source_read: PathReading, dest: &Path) -> Self {
         Self {
             answered: Answered {
                 source: source_read,
@@ -409,6 +411,7 @@ impl ReadBefore {
                     .is_some_and(|folder| !folder.as_os_str().is_empty()),
                 folder_lane: None,
             },
+            source: source.to_path_buf(),
             folder: dest.parent().map(Path::to_path_buf),
         }
     }
@@ -735,13 +738,15 @@ impl Disk {
         let answered = answered.map_err(|fail| refused_before_it_ran(policy, fail))?;
         Ok(ReadBefore {
             answered,
+            source: source.to_path_buf(),
             folder: dest.parent().map(Path::to_path_buf),
         })
     }
 
     /// [`Self::place`] with the source's name and the destination's folder
-    /// taken from `read` instead of read again. A `dest` in another folder
-    /// than the one `read` was taken for is read as [`Self::place`] reads it.
+    /// taken from `read` instead of read again. A `source` other than the one
+    /// `read` was taken for, or a `dest` in another folder, is read as
+    /// [`Self::place`] reads it.
     pub async fn place_after_reading(
         &self,
         source: impl Into<PathBuf>,
@@ -749,10 +754,11 @@ impl Disk {
         policy: Placement,
         read: &ReadBefore,
     ) -> Result<Placed, PlaceRefusal> {
-        let dest = dest.into();
-        let answered = (read.folder.as_deref() == dest.parent()).then(|| read.answered.clone());
+        let (source, dest) = (source.into(), dest.into());
+        let same = read.source == source && read.folder.as_deref() == dest.parent();
+        let answered = same.then(|| read.answered.clone());
         let watch = Watch::nobody();
-        self.place_answered(source.into(), dest, policy, watch, answered)
+        self.place_answered(source, dest, policy, watch, answered)
             .await
     }
 

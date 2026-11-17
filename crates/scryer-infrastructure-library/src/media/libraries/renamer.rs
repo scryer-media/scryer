@@ -263,7 +263,7 @@ async fn prepare_move_target(
         ));
     }
 
-    Ok(ReadBefore::made_folder(reading, &target))
+    Ok(ReadBefore::made_folder(&source, reading, &target))
 }
 
 async fn move_file(

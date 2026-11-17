@@ -2001,7 +2001,7 @@ async fn a_folder_gone_since_it_was_read_is_made_again() {
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
     let source_read = disk.uncached(&source).await;
     // The folder is said to be made, and is not there.
-    let read = ReadBefore::made_folder(source_read, &dest);
+    let read = ReadBefore::made_folder(&source, source_read, &dest);
     let moving = Placement {
         parents: Parents::Create,
         ..policy(Method::Move, Fallback::None)
@@ -2108,4 +2108,30 @@ fn a_claimed_rename_that_fails_says_what_it_left() {
         .move_exclusive_blocking(&p(SOURCE), &p(DEST))
         .expect_err("refused");
     assert_eq!(moved.left(), None);
+}
+
+/// A reading taken for one source is never used for another: a source that
+/// read as missing does not refuse a different one placed into the same
+/// folder, which is read as a placement reads it.
+#[tokio::test]
+async fn a_reading_for_one_source_is_not_used_for_another() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (missing, other) = (
+        temp.path().join("missing.mkv"),
+        temp.path().join("other.mkv"),
+    );
+    let dest = temp.path().join("two.mkv");
+    std::fs::write(&other, b"payload").unwrap();
+    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+    let moving = policy(Method::Move, Fallback::None);
+    let read = disk
+        .read_before_placing(&missing, &dest, moving)
+        .await
+        .expect("read");
+    let before = disk.calls("lstat");
+    disk.place_after_reading(&other, &dest, moving, &read)
+        .await
+        .expect("the other source is read and moved");
+    assert_eq!(std::fs::read(&dest).expect("moved"), b"payload");
+    assert!(disk.calls("lstat") > before, "the other source was read");
 }
