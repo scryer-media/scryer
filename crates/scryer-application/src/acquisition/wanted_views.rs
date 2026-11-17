@@ -1022,6 +1022,12 @@ fn acquisition_search_job_status(
         JobRunStatus::Warning
     }
 }
+/// The single item a waiting or running search was started for, when it was
+/// started for one.
+fn acquisition_search_run_scope_key(run: &JobRun) -> Option<String> {
+    let progress: serde_json::Value = serde_json::from_str(run.progress_json.as_deref()?).ok()?;
+    progress["search"]["scopeKey"].as_str().map(str::to_string)
+}
 fn progress_with_search_context(
     progress: &AcquisitionSearchProgress,
     previous: Option<&str>,
@@ -1215,32 +1221,76 @@ impl AppUseCase {
         {
             return Err(AppError::validation_refused(crate::error_reasons::acquisition::AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM, "Automatic search requires a title and cannot select a Wanted item"));
         }
+        // A search of one item the operator picked waits its turn behind the
+        // running search instead of being refused: searches take as long as
+        // the indexers do, and an operator picks several items in a row.
+        // Broader searches keep single admission.
+        let single_item = !request.automatic
+            && request
+                .wanted_item_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty());
+        let another_search_running = || {
+            AppError::validation_refused(
+                crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING,
+                "Another search is running. Wait for it to finish or cancel it before starting this search.",
+            )
+        };
         let search_guard = self
             .runtime
             .jobs
             .acquisition_search_lock
             .clone()
             .try_lock_owned()
-            .map_err(|_| {
-                AppError::validation_refused(crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING, "Another search is running. Wait for it to finish or cancel it before starting this search.")
-            })?;
-        if self
+            .ok();
+        if search_guard.is_none() && !single_item {
+            return Err(another_search_running());
+        }
+        let search_guard = if self
             .runtime
             .jobs
             .job_run_tracker
             .has_active_job(JobKey::AcquisitionSearch)
             .await
         {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING,
-                "Another search is running. Wait for it to finish or cancel it before starting this search.",
-            ));
-        }
+            if !single_item {
+                return Err(another_search_running());
+            }
+            // Searches are already waiting: join the line behind them.
+            None
+        } else {
+            search_guard
+        };
 
         self.authorize_acquisition_search(actor, &request).await?;
         let scopes = self
             .resolve_acquisition_search_scopes(actor, &request)
             .await?;
+        let queued_scope_key = if single_item {
+            scopes
+                .first()
+                .map(|scope| scope.scope_key.clone())
+                .filter(|key| !key.is_empty())
+        } else {
+            None
+        };
+        // Asking again for an item whose search is waiting or running returns
+        // that search; it is not searched twice.
+        if let Some(scope_key) = queued_scope_key.as_deref()
+            && let Some(existing) = self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .list_active()
+                .await
+                .into_iter()
+                .find(|run| {
+                    run.job_key == JobKey::AcquisitionSearch
+                        && acquisition_search_run_scope_key(run).as_deref() == Some(scope_key)
+                })
+        {
+            return Ok(existing);
+        }
         let plan = self.acquisition_search_plan(&request, scopes).await?;
 
         let now = chrono::Utc::now();
@@ -1252,7 +1302,11 @@ impl AppUseCase {
                 request.wanted_kind.as_str(),
                 plan.scope_count()
             ),
-            status: JobRunStatus::Running,
+            status: if search_guard.is_some() {
+                JobRunStatus::Running
+            } else {
+                JobRunStatus::Queued
+            },
             trigger_source: JobTriggerSource::Manual,
             actor_user_id: Some(actor.id.clone()),
             progress_json: serde_json::to_string(&AcquisitionSearchProgress {
@@ -1279,6 +1333,7 @@ impl AppUseCase {
             "titleId": request.title_id,
             "seasonNumber": request.season_number,
             "intent": if request.automatic { "AUTOMATIC" } else { "WANTED" },
+            "scopeKey": queued_scope_key,
         });
         run.progress_json = Some(progress.to_string());
         run = self.services.events.job_runs.create_job_run(&run).await?;
@@ -1314,6 +1369,33 @@ impl AppUseCase {
         let app = self.clone();
         let actor = actor.clone();
         tokio::spawn(async move {
+            let mut run = run;
+            let search_guard = match search_guard {
+                Some(guard) => guard,
+                None => {
+                    let admission = app.runtime.jobs.acquisition_search_lock.clone();
+                    let guard = tokio::select! {
+                        guard = admission.lock_owned() => guard,
+                        _ = cancellation.cancelled() => {
+                            let total = plan.scope_count();
+                            app.finish_acquisition_search_job(
+                                run,
+                                actor_event,
+                                total,
+                                0,
+                                0,
+                                0,
+                                false,
+                                true,
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    run.status = JobRunStatus::Running;
+                    guard
+                }
+            };
             app.run_acquisition_search_job(
                 run,
                 actor,
