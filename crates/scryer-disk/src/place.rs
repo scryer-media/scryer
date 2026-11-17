@@ -1008,7 +1008,25 @@ impl Job<'_> {
         {
             make_folders(parent)?;
         }
-        self.place_once()
+        let placed = self.place_once();
+        // The folder read as there before this job took its thread, so it
+        // was not created. A name missing on the way may be that folder,
+        // gone since: when it now reads as gone, nothing of this placement
+        // can be in it, so the folders are made and the placement is tried
+        // once more. One read, on this failure alone.
+        match placed {
+            Err(fail)
+                if creates
+                    && self.folder_is_dir
+                    && matches!(fail.refused, Refused::DestinationMissing | Refused::SourceMissing)
+                    && let Some(parent) = parent
+                    && self.disk.follow_blocking(parent).exists() == Some(false) =>
+            {
+                make_folders(parent)?;
+                self.place_once()
+            }
+            placed => placed,
+        }
     }
 
     fn place_once(&self) -> Result<Done, Fail> {

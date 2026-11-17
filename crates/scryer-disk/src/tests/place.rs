@@ -1973,3 +1973,26 @@ async fn a_staged_copy_takes_its_turn_from_the_folder_it_already_read() {
     // and then its folder, followed.
     assert_eq!(disk.calls("stat"), 2);
 }
+
+/// A folder that read as there and is gone when the placement writes into it
+/// is made again, and the placement is tried once more.
+#[tokio::test]
+async fn a_folder_gone_since_it_was_read_is_made_again() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("one.mkv");
+    std::fs::write(&source, b"payload").unwrap();
+    let dest = temp.path().join("Invented Show").join("Season 01").join("two.mkv");
+    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+    let source_read = disk.uncached(&source).await;
+    // The folder is said to be made, and is not there.
+    let read = ReadBefore::made_folder(source_read, &dest);
+    let moving = Placement {
+        parents: Parents::Create,
+        ..policy(Method::Move, Fallback::None)
+    };
+    disk.place_after_reading(&source, &dest, moving, &read)
+        .await
+        .expect("moved into the folders made again");
+    assert_eq!(std::fs::read(&dest).expect("moved"), b"payload");
+    assert!(!source.exists());
+}
