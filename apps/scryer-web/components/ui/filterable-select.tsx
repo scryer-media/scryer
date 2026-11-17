@@ -105,20 +105,44 @@ export function FilterableSelect({
     null;
   const hasDetail = options.some((option) => option.detail);
   // The flyout lines up with the highlighted row, so it follows the pointer
-  // and the arrow keys, and stays put as the list scrolls under it.
+  // and the arrow keys. It is hidden (null) while that row is scrolled out of
+  // the list's view, and from a wheel or touch scroll until the pointer moves
+  // again: the highlight does not follow the content under a still pointer.
   const contentRef = React.useRef<HTMLDivElement>(null);
-  const [detailTop, setDetailTop] = React.useState(0);
+  const [detailTop, setDetailTop] = React.useState<number | null>(null);
+  // Set by a wheel or touch scroll, cleared when the pointer moves or the
+  // highlight changes; the scroll events that follow leave it hidden.
+  const userScrolled = React.useRef(false);
   const placeDetail = React.useCallback(() => {
+    if (userScrolled.current) return;
     const content = contentRef.current;
-    const item = content?.querySelector<HTMLElement>(
+    const list = content?.querySelector<HTMLElement>("[cmdk-list]");
+    const item = list?.querySelector<HTMLElement>(
       '[cmdk-item][data-selected="true"]',
     );
-    if (!content || !item) return;
+    if (!content || !list || !item) {
+      setDetailTop(null);
+      return;
+    }
+    const itemRect = item.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    const inView =
+      itemRect.top >= listRect.top - 1 &&
+      itemRect.bottom <= listRect.bottom + 1;
     setDetailTop(
-      item.getBoundingClientRect().top - content.getBoundingClientRect().top,
+      inView ? itemRect.top - content.getBoundingClientRect().top : null,
     );
   }, []);
+  const hideDetail = React.useCallback(() => {
+    userScrolled.current = true;
+    setDetailTop(null);
+  }, []);
+  const resumeDetail = React.useCallback(() => {
+    userScrolled.current = false;
+    placeDetail();
+  }, [placeDetail]);
   React.useLayoutEffect(() => {
+    userScrolled.current = false;
     if (activeDetail) placeDetail();
   }, [active, activeDetail, filteredOptions, placeDetail]);
   const codeFont =
@@ -172,7 +196,7 @@ export function FilterableSelect({
           contentClassName,
         )}
       >
-        {activeDetail ? (
+        {activeDetail && detailTop !== null ? (
           <div
             role="note"
             style={{ top: detailTop }}
@@ -195,7 +219,14 @@ export function FilterableSelect({
             onValueChange={setFilter}
             placeholder={filterPlaceholder ?? t("label.filterOptions")}
           />
-          <CommandList onScroll={activeDetail ? placeDetail : undefined}>
+          <CommandList
+            onScroll={activeDetail ? placeDetail : undefined}
+            onWheel={activeDetail ? hideDetail : undefined}
+            onTouchMove={activeDetail ? hideDetail : undefined}
+            onPointerMove={
+              activeDetail && detailTop === null ? resumeDetail : undefined
+            }
+          >
             {filteredOptions.length === 0 ? (
               <CommandEmpty>
                 {emptyLabel ?? t("label.noMatchingOptions")}
