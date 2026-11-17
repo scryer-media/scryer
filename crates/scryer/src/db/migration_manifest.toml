@@ -4381,6 +4381,23 @@ file = "postgres/migrations/0361_download_submissions_client_item_id_index.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 362
+description = "index audit"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0362_index_audit.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0362_index_audit.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

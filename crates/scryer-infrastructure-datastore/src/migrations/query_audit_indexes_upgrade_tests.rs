@@ -29,10 +29,11 @@ const ADDED: [&str; 21] = [
 ];
 
 /// Indexes that already answer what a dropped one did; they must survive.
-const KEPT: [&str; 4] = [
+/// `idx_history_events_type_time` was one of them until 0362 retired it: no
+/// statement reads history by event type.
+const KEPT: [&str; 3] = [
     "idx_download_identity_states_canonical_latest",
     "idx_history_events_title_time",
-    "idx_history_events_type_time",
     "idx_media_files_title_path",
 ];
 

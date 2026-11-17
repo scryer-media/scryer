@@ -497,6 +497,13 @@ impl ReleaseDecisionIdentityArgs {
 
 /// Newest first, so a table that still holds pre-dedupe duplicates collapses
 /// onto the row a reader would have seen anyway.
+///
+/// The sort key is wrapped so the planner cannot read it from
+/// `idx_release_decisions_wanted`: that plan walks every decision of the
+/// scope, newest first, until one matches, and all of them when none does.
+/// With the wrapped key the equalities are sought in
+/// `idx_release_decisions_identity` and the few rows found are sorted. The
+/// order is the same either way.
 const RELEASE_DECISION_IDENTITY_SELECT_SQL: &str = "SELECT id
        FROM release_decisions
       WHERE wanted_item_id = {}
@@ -504,7 +511,7 @@ const RELEASE_DECISION_IDENTITY_SELECT_SQL: &str = "SELECT id
         AND COALESCE(release_url, '') = {}
         AND release_title = {}
         AND COALESCE(release_size_bytes, -1) = {}
-      ORDER BY created_at DESC
+      ORDER BY COALESCE(created_at, created_at) DESC
       LIMIT 1";
 
 fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
@@ -815,6 +822,61 @@ async fn execute_wanted_upsert_tx(
 /// that names it matches that index.
 const PENDING_RELEASE_ACTIVE_STATUSES_SQL: &str =
     "('waiting', 'standby', 'processing', 'needs_review')";
+
+/// The grabbed scopes of `count` titles, newest first.
+///
+/// The status is compared through an expression so no index can be sought on
+/// it. Written as a bare column, sqlite reads `idx_wanted_items_status_updated_at`
+/// for its ready-made order, which is every grabbed scope of the library; this
+/// way the titles are sought and their rows filtered and sorted. A scope
+/// always has a status, so the rows are the same.
+fn grabbed_scopes_for_titles_sql(select: &str, count: usize) -> String {
+    format!(
+        "{select} WHERE w.title_id IN ({}) AND COALESCE(w.status, '') = 'grabbed'
+                 ORDER BY w.updated_at DESC, w.id",
+        placeholders(count)
+    )
+}
+
+/// One page of a title's mismatch-recovery scopes in id order. The title
+/// filter, the id cursor and the id order are all read from
+/// `idx_wanted_items_title_id_id`, so no page sorts.
+fn mismatch_recovery_scopes_for_title_statement(
+    title_id: &str,
+    after_id: Option<&str>,
+    limit: i64,
+) -> (String, Vec<SqlArg>) {
+    let mut sql = format!(
+        "{} WHERE w.title_id = {{}} AND {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL}",
+        wanted_item_projection_sql(WantedProjection::WithoutLatestDecision)
+    );
+    let mut args = vec![SqlArg::Text(title_id.to_string())];
+    if let Some(after_id) = after_id {
+        sql.push_str(" AND w.id > {}");
+        args.push(SqlArg::Text(after_id.to_string()));
+    }
+    sql.push_str(" ORDER BY w.id LIMIT {}");
+    args.push(SqlArg::I64(limit));
+    (sql, args)
+}
+
+/// The active pending releases whose age is unknown. The flag is written as
+/// each engine's own literal, exactly as the partial index
+/// `idx_pending_releases_active_unknown_age` states it: a bound value there
+/// keeps the planner from proving the index applies.
+fn active_release_age_unknown_pending_releases_sql(datastore: &StoreDatastore) -> String {
+    let age_unknown = match datastore {
+        StoreDatastore::Sqlite { .. } => "release_age_unknown = 1",
+        StoreDatastore::Postgres { .. } => "release_age_unknown",
+    };
+    format!(
+        "SELECT {PENDING_RELEASE_COLUMNS}
+              FROM pending_releases
+              WHERE {age_unknown}
+                AND status IN {PENDING_RELEASE_ACTIVE_STATUSES_SQL}
+              ORDER BY indexer_id ASC, added_at ASC, id ASC"
+    )
+}
 
 async fn execute_datastore_write(
     datastore: &StoreDatastore,
@@ -1314,20 +1376,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
         after_id: Option<&str>,
         limit: i64,
     ) -> AppResult<Vec<AcquisitionScopeState>> {
-        // The title filter is served by the leading column of the
-        // `(title_id, episode_id)` unique key; the id order is a sort of that
-        // one title's rows.
-        let mut sql = format!(
-            "{} WHERE w.title_id = {{}} AND {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL}",
-            wanted_item_projection_sql(WantedProjection::WithoutLatestDecision)
-        );
-        let mut args = vec![SqlArg::Text(title_id.to_string())];
-        if let Some(after_id) = after_id {
-            sql.push_str(" AND w.id > {}");
-            args.push(SqlArg::Text(after_id.to_string()));
-        }
-        sql.push_str(" ORDER BY w.id LIMIT {}");
-        args.push(SqlArg::I64(limit));
+        let (sql, args) = mismatch_recovery_scopes_for_title_statement(title_id, after_id, limit);
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
@@ -1342,9 +1391,9 @@ impl AcquisitionScopeStateRepository for WantedStore {
         if title_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // The title filter is served by the leading column of the
-        // `(title_id, episode_id)` unique key; the status is checked on those
-        // titles' rows and the order is a sort of what is left.
+        // The titles are sought through an index that leads with `title_id`;
+        // the status is checked on those titles' rows and the order is a sort
+        // of what is left.
         let projection = WantedProjection::WithoutLatestDecision;
         let select = wanted_item_projection_sql(projection);
         let exec = self.datastore.read_exec();
@@ -1354,11 +1403,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
         let mut statements = 0usize;
         for chunk in ids.chunks(per_statement) {
             statements += 1;
-            let sql = format!(
-                "{select} WHERE w.title_id IN ({}) AND w.status = 'grabbed'
-                 ORDER BY w.updated_at DESC, w.id",
-                placeholders(chunk.len())
-            );
+            let sql = grabbed_scopes_for_titles_sql(&select, chunk.len());
             let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
             for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
                 states.push(wanted_projected_row_to_item(&row, projection)?);
@@ -2836,18 +2881,12 @@ impl PendingReleaseRepository for PendingReleaseStore {
     async fn list_active_release_age_unknown_pending_releases(
         &self,
     ) -> AppResult<Vec<PendingRelease>> {
-        let sql = format!(
-            "SELECT {PENDING_RELEASE_COLUMNS}
-              FROM pending_releases
-              WHERE release_age_unknown = {{}}
-                AND status IN {PENDING_RELEASE_ACTIVE_STATUSES_SQL}
-              ORDER BY indexer_id ASC, added_at ASC, id ASC"
-        );
+        let sql = active_release_age_unknown_pending_releases_sql(&self.datastore);
         let encryption_key = self.encryption_key()?;
         fetch_pending_releases(
             self.datastore.read_exec(),
             &sql,
-            &[SqlArg::Bool(true)],
+            &[],
             encryption_key.as_ref(),
         )
         .await
@@ -4628,5 +4667,139 @@ mod keyed_scope_completion_tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "no row is created");
+    }
+}
+
+#[cfg(test)]
+mod index_plan_tests {
+    use std::sync::Arc;
+
+    use super::{
+        RELEASE_DECISION_IDENTITY_SELECT_SQL, WantedProjection,
+        active_release_age_unknown_pending_releases_sql, grabbed_scopes_for_titles_sql,
+        mismatch_recovery_scopes_for_title_statement, wanted_item_projection_sql,
+    };
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    /// The plans are sqlite's, over the full migration catalog.
+    async fn datastore() -> StoreDatastore {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .unwrap();
+        StoreDatastore::sqlite(pool, Arc::new(tokio::sync::Mutex::new(())))
+    }
+
+    async fn query_plan(datastore: &StoreDatastore, sql: &str, args: &[SqlArg]) -> Vec<String> {
+        SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            args,
+        )
+        .await
+        .expect("query plan should read")
+        .iter()
+        .map(|row| row.text("detail").expect("plan detail"))
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn unknown_age_pending_releases_are_read_through_their_partial_index() {
+        let datastore = datastore().await;
+        let sql = active_release_age_unknown_pending_releases_sql(&datastore);
+        let plan = query_plan(&datastore, &sql, &[]).await;
+        assert!(
+            plan.iter().any(
+                |line| line.starts_with("SEARCH pending_releases USING INDEX ")
+                    && line.contains("idx_pending_releases_active_unknown_age ")
+            ),
+            "unknown-age pending releases must be sought in the partial index: {plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.starts_with("SCAN")),
+            "the pending releases table must not be scanned: {plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn release_decision_identity_lookup_seeks_the_identity_index() {
+        let datastore = datastore().await;
+        let args = [
+            SqlArg::Text("scope-1".to_string()),
+            SqlArg::Text("title_mismatch".to_string()),
+            SqlArg::Text(String::new()),
+            SqlArg::Text("Synthetic.Release".to_string()),
+            SqlArg::I64(-1),
+        ];
+        let plan = query_plan(&datastore, RELEASE_DECISION_IDENTITY_SELECT_SQL, &args).await;
+        assert!(
+            plan.iter().any(|line| line
+                == "SEARCH release_decisions USING INDEX idx_release_decisions_identity \
+                    (wanted_item_id=? AND release_title=? AND decision_code=?)"),
+            "a decision's identity must be sought on scope, release and code: {plan:#?}"
+        );
+    }
+
+    /// The literal status and the newest-first order must not pull the read
+    /// onto the status index, which holds every grabbed scope of the library.
+    #[tokio::test]
+    async fn grabbed_scopes_for_titles_are_sought_by_title() {
+        let datastore = datastore().await;
+        let select = wanted_item_projection_sql(WantedProjection::WithoutLatestDecision);
+        for count in [1, 3, 1_000] {
+            let sql = grabbed_scopes_for_titles_sql(&select, count);
+            let args = (0..count)
+                .map(|n| SqlArg::Text(format!("title-{n}")))
+                .collect::<Vec<_>>();
+            let plan = query_plan(&datastore, &sql, &args).await;
+            assert!(
+                plan.iter().any(|line| {
+                    // The `(title_id, episode_id)` unique key or the
+                    // `(title_id, id)` index: both lead with the title.
+                    line == "SEARCH w USING INDEX sqlite_autoindex_wanted_items_2 (title_id=?)"
+                        || line == "SEARCH w USING INDEX idx_wanted_items_title_id_id (title_id=?)"
+                }),
+                "{count} titles: grabbed scopes must be sought by title id: {plan:#?}"
+            );
+            assert!(
+                !plan
+                    .iter()
+                    .any(|line| line.contains("idx_wanted_items_status_updated_at")),
+                "{count} titles: the status index reads every grabbed scope: {plan:#?}"
+            );
+            assert!(
+                !plan.iter().any(|line| line.starts_with("SCAN w")),
+                "{count} titles: the wanted table must not be scanned: {plan:#?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mismatch_recovery_pages_read_a_title_in_id_order_without_sorting() {
+        let datastore = datastore().await;
+        for after_id in [None, Some("scope-1")] {
+            let (sql, args) = mismatch_recovery_scopes_for_title_statement("title-1", after_id, 50);
+            let plan = query_plan(&datastore, &sql, &args).await;
+            assert!(
+                plan.iter()
+                    .any(|line| line.starts_with("SEARCH w USING INDEX ")
+                        && line.contains("idx_wanted_items_title_id_id ")),
+                "a title's page must be sought in the title and id index: {plan:#?}"
+            );
+            assert!(
+                !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+                "a title's page must come back in id order without a sort: {plan:#?}"
+            );
+            assert!(
+                !plan.iter().any(|line| line.starts_with("SCAN w")),
+                "the wanted table must not be scanned: {plan:#?}"
+            );
+        }
     }
 }

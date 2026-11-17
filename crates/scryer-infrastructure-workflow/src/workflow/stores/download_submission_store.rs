@@ -102,13 +102,10 @@ impl DownloadSubmissionStore {
     }
 }
 
-async fn active_binding_download_id(
-    exec: SqlExec<'_, '_>,
-    locator: &ClientJobLocator,
-) -> AppResult<Option<DownloadId>> {
-    let row = SqlRuntime::fetch_optional(
-        exec,
-        "SELECT download_id
+/// The item id is sought in `idx_download_client_bindings_active_native_item`,
+/// whose predicate is the first two terms; the client columns are compared
+/// after normalisation on the rows found.
+const ACTIVE_BINDING_DOWNLOAD_ID_SQL: &str = "SELECT download_id
          FROM download_client_bindings
          WHERE ended_at IS NULL
            AND native_item_id IS NOT NULL
@@ -116,7 +113,15 @@ async fn active_binding_download_id(
            AND LOWER(TRIM(COALESCE(client_type_snapshot, ''))) = {}
            AND native_item_id = {}
          ORDER BY created_at, download_id
-         LIMIT 1",
+         LIMIT 1";
+
+async fn active_binding_download_id(
+    exec: SqlExec<'_, '_>,
+    locator: &ClientJobLocator,
+) -> AppResult<Option<DownloadId>> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        ACTIVE_BINDING_DOWNLOAD_ID_SQL,
         &[
             SqlArg::Text(locator.client_id.clone().unwrap_or_default()),
             SqlArg::Text(locator.client_type.clone()),
@@ -944,6 +949,53 @@ async fn retain_adopted_passwords_tx(
 
 /// The submissions with one of `count` client item ids, newest first. The
 /// item-id index answers the filter; the order is a sort of the few matches.
+/// Submissions with a password retry pending. They are read from
+/// `idx_download_submissions_password_retry`, which holds only those rows.
+///
+/// The binding's item id is compared with the submission's and nothing more:
+/// the equality already excludes a null on either side. Adding an explicit
+/// `IS NOT NULL` hands sqlite a range on the submission's item id, and it then
+/// walks every submission that has one instead of the pending retries.
+fn password_retry_recovery_submissions_sql(datastore: &StoreDatastore) -> String {
+    download_submission_select_sql(
+        datastore,
+        "WHERE password_retry_state IS NOT NULL
+             AND EXISTS (SELECT 1 FROM download_identity_states st
+                 WHERE st.canonical_download_id = download_submissions.id AND st.reason = {})
+             AND EXISTS (SELECT 1 FROM downloads d
+                 WHERE d.id = download_submissions.id AND d.terminal_at IS NULL)
+             AND EXISTS (SELECT 1 FROM download_client_bindings b
+                 WHERE b.download_id = download_submissions.id AND b.ended_at IS NULL
+                 AND b.client_config_id = download_submissions.download_client_id
+                 AND b.client_type_snapshot = download_submissions.download_client_type
+                 AND b.native_item_id = download_submissions.download_client_item_id)",
+    )
+}
+
+/// Grab intents no client item id was ever stored for, oldest first. The
+/// rows without an item id are sought through an index, never by scanning
+/// the table.
+fn active_unbound_submitted_before_sql(datastore: &StoreDatastore) -> String {
+    download_submission_select_sql(
+        datastore,
+        "WHERE submitted_at < {}
+               AND download_client_item_id IS NULL
+               AND EXISTS (
+                   SELECT 1
+                     FROM download_client_bindings binding
+                    WHERE binding.download_id = download_submissions.id
+                      AND binding.native_item_id IS NULL
+                      AND binding.ended_at IS NULL
+               )
+             ORDER BY submitted_at, id",
+    )
+    .replacen(
+        "SELECT ",
+        "SELECT download_submissions.submitted_at AS unconfirmed_submitted_at, ",
+        1,
+    )
+}
+
 fn submissions_for_client_item_ids_sql(datastore: &StoreDatastore, count: usize) -> String {
     download_submission_select_sql(
         datastore,
@@ -2171,20 +2223,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
     }
 
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
-        let sql = download_submission_select_sql(
-            &self.datastore,
-            "WHERE password_retry_state IS NOT NULL
-             AND EXISTS (SELECT 1 FROM download_identity_states st
-                 WHERE st.canonical_download_id = download_submissions.id AND st.reason = {})
-             AND EXISTS (SELECT 1 FROM downloads d
-                 WHERE d.id = download_submissions.id AND d.terminal_at IS NULL)
-             AND EXISTS (SELECT 1 FROM download_client_bindings b
-                 WHERE b.download_id = download_submissions.id AND b.ended_at IS NULL
-                 AND b.client_config_id = download_submissions.download_client_id
-                 AND b.client_type_snapshot = download_submissions.download_client_type
-                 AND b.native_item_id = download_submissions.download_client_item_id
-                 AND b.native_item_id IS NOT NULL)",
-        );
+        let sql = password_retry_recovery_submissions_sql(&self.datastore);
         fetch_download_submissions(
             self.datastore.read_exec(),
             &sql,
@@ -2270,24 +2309,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
     ) -> AppResult<Vec<scryer_application::UnconfirmedDownloadSubmission>> {
         // The release path needs each intent's submission time to judge
         // whether a client's bounded history window reaches back to it.
-        let sql = download_submission_select_sql(
-            &self.datastore,
-            "WHERE submitted_at < {}
-               AND download_client_item_id IS NULL
-               AND EXISTS (
-                   SELECT 1
-                     FROM download_client_bindings binding
-                    WHERE binding.download_id = download_submissions.id
-                      AND binding.native_item_id IS NULL
-                      AND binding.ended_at IS NULL
-               )
-             ORDER BY submitted_at, id",
-        )
-        .replacen(
-            "SELECT ",
-            "SELECT download_submissions.submitted_at AS unconfirmed_submitted_at, ",
-            1,
-        );
+        let sql = active_unbound_submitted_before_sql(&self.datastore);
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &sql,
@@ -3136,6 +3158,23 @@ mod seed_goal_tests {
         .execute(&pool)
         .await
         .expect("client item id index migration should apply");
+        // 0362 also treats tables this fixture does not hold; only its
+        // statements for the two tables built above are applied. Comments go
+        // first, because one of them holds a semicolon.
+        let index_audit = include_str!("../../../../scryer/src/db/migrations/0362_index_audit.sql")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for statement in index_audit.split(';').filter(|statement| {
+            statement.contains("ON download_submissions ")
+                || statement.contains("ON download_client_bindings ")
+        }) {
+            sqlx::query(sqlx::AssertSqlSafe(statement.to_string()))
+                .execute(&pool)
+                .await
+                .expect("index audit migration should apply");
+        }
         DownloadSubmissionStore::new(StoreDatastore::Sqlite {
             pool,
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -7842,6 +7881,82 @@ mod seed_goal_tests {
                 .iter()
                 .any(|line| line.starts_with("SCAN download_submissions")),
             "the legacy fallback must never scan the submissions table: {plan:#?}"
+        );
+    }
+
+    /// The locator indexes production keeps on the bindings table, which the
+    /// shared fixture leaves out. A plan is only evidence with them present.
+    async fn add_binding_locator_indexes(store: &DownloadSubmissionStore) {
+        for sql in [
+            "CREATE INDEX IF NOT EXISTS idx_download_client_bindings_locator
+                 ON download_client_bindings(client_config_id, client_type_snapshot, native_item_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_download_client_bindings_active_locator_unique
+                 ON download_client_bindings(client_config_id, client_type_snapshot, native_item_id)
+                 WHERE native_item_id IS NOT NULL AND ended_at IS NULL",
+        ] {
+            SqlRuntime::execute(store.datastore.read_exec(), sql, &[])
+                .await
+                .expect("binding locator index should be created");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_active_binding_is_sought_by_its_native_item_id() {
+        let store = store().await;
+        add_binding_locator_indexes(&store).await;
+        let args = [
+            SqlArg::Text("primary".to_string()),
+            SqlArg::Text("sabnzbd".to_string()),
+            SqlArg::Text("job-a".to_string()),
+        ];
+        let plan = query_plan(&store, ACTIVE_BINDING_DOWNLOAD_ID_SQL, &args).await;
+        assert!(
+            plan.iter().any(|line| line
+                == "SEARCH download_client_bindings USING INDEX \
+                    idx_download_client_bindings_active_native_item (native_item_id=?)"),
+            "an active binding must be sought by item id: {plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.starts_with("SCAN")),
+            "the bindings table must not be scanned: {plan:#?}"
+        );
+    }
+
+    /// The rows that have no item id are sought through the item id index
+    /// and sorted, so only the intents without an item id are read.
+    #[tokio::test]
+    async fn unconfirmed_intents_are_sought_without_scanning_the_submissions() {
+        let store = store().await;
+        add_binding_locator_indexes(&store).await;
+        let sql = active_unbound_submitted_before_sql(&store.datastore);
+        let plan = query_plan(&store, &sql, &[SqlArg::Timestamp(Utc::now())]).await;
+        assert!(
+            plan.iter().any(|line| line
+                == "SEARCH download_submissions USING INDEX \
+                    idx_download_submissions_client_item_id (download_client_item_id=?)"),
+            "unconfirmed intents must be sought through an index: {plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line.starts_with("SCAN download_submissions")),
+            "the submissions table must not be scanned: {plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_password_retries_are_read_from_their_partial_index() {
+        let store = store().await;
+        add_binding_locator_indexes(&store).await;
+        let sql = password_retry_recovery_submissions_sql(&store.datastore);
+        let args = [SqlArg::Text(
+            scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into(),
+        )];
+        let plan = query_plan(&store, &sql, &args).await;
+        assert!(
+            plan.iter().any(|line| line
+                == "SCAN download_submissions USING INDEX idx_download_submissions_password_retry"),
+            "only the submissions with a retry pending may be read: {plan:#?}"
         );
     }
 
