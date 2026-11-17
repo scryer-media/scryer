@@ -1315,13 +1315,8 @@ impl Disk {
         // A link or anything but a regular file at the sibling is refused
         // and kept; only a regular file is emptied and reused.
         let open = Open::create_or_keep().without_following_links();
+        // The open refuses links and, on Windows, any other reparse point.
         let mut file = backend.open(staged, open.with_access(access))?;
-        // The open refuses links; FILE_ATTRIBUTE_REPARSE_POINT refuses any
-        // other reparse point.
-        #[cfg(windows)]
-        if std::os::windows::fs::MetadataExt::file_attributes(&file.metadata()?) & 0x400 != 0 {
-            return Err(backend::Refused::Link.into());
-        }
         if matches!(access, Access::OwnerOnly) {
             backend.restrict_handle_to_owner(&file, OwnerOnly::File)?;
         }

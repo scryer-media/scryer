@@ -616,9 +616,21 @@ impl DiskBackend for SystemBackend {
                 error
             }
         })?;
-        if !open.follow_links {
+        // On unix O_NOFOLLOW has already refused a link and a write open has
+        // refused a folder, so only a read open, which opens a folder, needs
+        // the handle's kind. Windows opens a reparse point itself, so every
+        // open that does not follow links reads it.
+        let needs_kind = !open.follow_links && (cfg!(windows) || open.mode == OpenMode::Read);
+        if needs_kind {
             // The handle's own metadata: no further call on the path.
-            let file_type = file.metadata()?.file_type();
+            let metadata = file.metadata()?;
+            // FILE_ATTRIBUTE_REPARSE_POINT: a junction, a mount point or any
+            // other reparse point is refused like a link.
+            #[cfg(windows)]
+            if std::os::windows::fs::MetadataExt::file_attributes(&metadata) & 0x400 != 0 {
+                return Err(Refused::Link.into());
+            }
+            let file_type = metadata.file_type();
             if file_type.is_symlink() {
                 return Err(Refused::Link.into());
             }

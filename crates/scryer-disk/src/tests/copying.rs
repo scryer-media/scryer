@@ -915,3 +915,34 @@ fn a_staged_copy_keeps_saying_what_an_earlier_attempt_left() {
     );
     assert_eq!(std::fs::read(&fixture.dest).unwrap(), b"", "kept");
 }
+
+/// A Windows held name that is a reparse point is refused as a link, so a
+/// copy never writes through it into, or empties, the file it points at.
+/// Creating a symbolic link needs the right to; without it there is nothing
+/// to test.
+#[cfg(windows)]
+#[test]
+fn windows_a_held_copy_refuses_a_reparse_point_at_its_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let (source, dest) = (temp.path().join("source.mkv"), temp.path().join("dest.mkv"));
+    let elsewhere = temp.path().join("elsewhere.mkv");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&elsewhere, b"someone else's file").unwrap();
+    if std::os::windows::fs::symlink_file(&elsewhere, &dest).is_err() {
+        return;
+    }
+
+    let policy = recorded(Depth::Quick, Landing::Direct, Replace::Allowed);
+    let refusal = disk()
+        .place_watched_blocking(&source, &dest, policy, &Watch::nobody())
+        .expect_err("a reparse point is not a held file");
+    assert_eq!(refusal.refused.reason(), reason::DISK_LINK_NOT_FOLLOWED);
+    assert_eq!(std::fs::read(&elsewhere).unwrap(), b"someone else's file");
+    assert!(
+        std::fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), b"incoming");
+}

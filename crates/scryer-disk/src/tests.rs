@@ -103,6 +103,7 @@ impl Scripted {
     }
     /// `path` answers `answers` to its next stat calls, one each, before
     /// falling back to its `stat_is` answer.
+    #[cfg(unix)]
     fn stats_in_turn(&self, path: &Path, answers: &[Result<RawStat, io::ErrorKind>]) {
         self.stats_in_turn
             .lock()
