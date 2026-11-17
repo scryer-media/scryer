@@ -3,7 +3,7 @@
 //! scripted backend first, then on synthetic files in a temporary directory.
 
 use super::*;
-use crate::place::{Doubt, LinkAfter, LinkProof};
+use crate::place::{Doubt, LinkAfter, LinkProof, LinkProven};
 
 const SOURCE: &str = "/srv/fixture-media/incoming/sample.mkv";
 const DEST: &str = "/srv/fixture-media/Fixture Show/sample.mkv";
@@ -60,34 +60,85 @@ fn a_link_whose_new_name_is_the_file_seen_is_proven() {
     )
     .expect("proven");
     assert_eq!(placed.done, Done::HardLinked);
+    assert_eq!(placed.proven_by, Some(LinkProven::Identity));
     assert!(!placed.fell_back());
     assert_eq!(backend.paths_of("lstat"), [p(DEST)]);
     assert_eq!(backend.paths_of("stat"), [p(DEST)]);
     assert_eq!(backend.calls_of("remove_file"), 0);
+    assert_eq!(backend.calls_of("open"), 0, "file numbers read no content");
 
-    // A filesystem that numbers every file zero links truly: zero is
-    // compared as given.
+    // A filesystem that numbers every file zero, and one that numbers none,
+    // prove by content: one length, and the first and last MiB alike.
+    for (linked, seen) in [
+        (numbered(0, 17), numbered(0, 17)),
+        (unnumbered(17, 40), unnumbered(17, 40)),
+        // A source read that names no volume has no number to compare.
+        (numbered(7, 17), unnumbered(17, 0)),
+    ] {
+        let (disk, backend) = scripted();
+        backend.stat_is(
+            DEST,
+            Ok(RawStat {
+                modified: seen.modified,
+                ..linked
+            }),
+        );
+        backend.holds(SOURCE, b"seventeen bytes..");
+        backend.holds(DEST, b"seventeen bytes..");
+        let placed = prove(&disk, Fallback::None, &seen, LinkProof::NameAndLength).expect("proven");
+        assert_eq!(placed.done, Done::HardLinked);
+        assert_eq!(placed.proven_by, Some(LinkProven::Content));
+        assert_eq!(backend.paths_of("open"), [p(SOURCE), p(DEST)]);
+        assert_eq!(backend.calls_of("remove_file"), 0);
+    }
+}
+
+/// Where only the content can prove a link, a name with other content is
+/// another writer's file and is left alone; content that cannot be read
+/// proves nothing, and the name this call made is removed.
+#[test]
+fn a_link_proven_by_content_keeps_a_name_with_other_content() {
     let (disk, backend) = scripted();
     backend.stat_is(DEST, Ok(numbered(0, 17)));
-    let placed = prove(
-        &disk,
-        Fallback::None,
-        &numbered(0, 17),
-        LinkProof::NameAndLength,
-    );
-    assert_eq!(placed.expect("proven").done, Done::HardLinked);
+    backend.holds(SOURCE, b"seventeen bytes..");
+    backend.holds(DEST, b"seventeen other..");
+    for fallback in [Fallback::None, Fallback::Copy] {
+        let refusal = prove(&disk, fallback, &numbered(0, 17), LinkProof::NameAndLength)
+            .expect_err("other content");
+        assert_eq!(refusal.refused, Refused::DestinationExists);
+        let unproven = refusal.unproven.as_ref().expect("says why");
+        assert!(matches!(unproven.doubt, Doubt::OtherContent { .. }));
+        assert_eq!(unproven.after, LinkAfter::LeftAlone);
+    }
     assert_eq!(backend.calls_of("remove_file"), 0);
+    assert_eq!(backend.calls_of("stat"), 0, "nothing resolved");
 
-    // Where no file is numbered, length and modification time stand in.
     let (disk, backend) = scripted();
-    backend.stat_is(DEST, Ok(unnumbered(17, 40)));
-    let placed = prove(
-        &disk,
-        Fallback::None,
-        &unnumbered(17, 40),
-        LinkProof::NameAndLength,
+    backend.stat_is(DEST, Ok(numbered(0, 17)));
+    backend.holds(SOURCE, b"seventeen bytes..");
+    let refusal = prove(&disk, Fallback::None, &numbered(0, 17), LinkProof::Name)
+        .expect_err("unread content");
+    assert_eq!(
+        refusal.refused,
+        Refused::CannotLink(CannotLink::Unverifiable)
     );
-    assert_eq!(placed.expect("proven").done, Done::HardLinked);
+    let unproven = refusal.unproven.as_ref().expect("says why");
+    assert!(
+        matches!(unproven.doubt, Doubt::Unread(_)),
+        "{:?}",
+        unproven.doubt
+    );
+    assert_eq!(unproven.after, LinkAfter::Removed);
+    assert_eq!(backend.paths_of("remove_file"), [p(DEST)]);
+
+    // A length that differs on the content lane is the length's answer:
+    // nothing is read.
+    let (disk, backend) = scripted();
+    backend.stat_is(DEST, Ok(numbered(0, 9)));
+    let refusal = prove(&disk, Fallback::None, &numbered(0, 17), LinkProof::Name)
+        .expect_err("another writer's");
+    assert_eq!(refusal.refused, Refused::DestinationExists);
+    assert_eq!(backend.calls_of("open"), 0);
 }
 
 #[test]
@@ -300,10 +351,13 @@ fn a_regular_file_that_is_not_the_link_goes_only_with_the_sources_facts() {
             let refusal =
                 prove(&disk, fallback, &seen, LinkProof::NameAndLength).expect_err("not the link");
             let unproven = refusal.unproven.as_ref().expect("says why");
-            assert!(
-                matches!(unproven.doubt, Doubt::OtherFile { .. }),
-                "case {index}"
-            );
+            // A name that reads with no volume against a numbered source can
+            // be told only by its content, which here cannot be read.
+            let doubt_seen = match index {
+                1 => matches!(unproven.doubt, Doubt::Unread(_)),
+                _ => matches!(unproven.doubt, Doubt::OtherFile { .. }),
+            };
+            assert!(doubt_seen, "case {index}: {:?}", unproven.doubt);
             let after = match removed {
                 true => LinkAfter::Removed,
                 false => LinkAfter::LeftAlone,

@@ -21,7 +21,7 @@ use super::copy::{
     Cause, Copied, CopyPermit, Evidence, Landing, Opening, Phase, Step, Watch, WriteFail, Writing,
     resumable_staging_path, staged_name_is_free, write_copy,
 };
-use super::mark::{Mark, UNKNOWN_LANE};
+use super::mark::{LinkLane, Mark, UNKNOWN_LANE};
 use super::sample::{ContentSample, sample_reader};
 use super::{
     Disk, DiskError, DiskVerb, EntryKind, Link, LinkOutcome, Offloaded, Open, Parents, PathReading,
@@ -107,6 +107,20 @@ pub struct Placed {
     /// What a recorded copy streamed and proved. Absent when no bytes were
     /// copied, or the policy records nothing.
     pub copied: Option<Copied>,
+    /// How a hard link the placement proved was proven. Absent when no link
+    /// was made, or none was asked to prove itself.
+    pub proven_by: Option<LinkProven>,
+}
+
+/// How a hard link's new name was proven to be the file it was made from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkProven {
+    /// Its volume and file number are the ones the caller saw.
+    Identity,
+    /// Neither read gave a usable file number. Both names are regular files
+    /// with the length and modification time the caller saw, and their first
+    /// and last MiB hash alike: up to 2 MiB read from each name.
+    Content,
 }
 
 impl Placed {
@@ -160,7 +174,8 @@ pub enum LinkProof {
 /// Why a hard link that was made did not prove.
 #[derive(Debug)]
 pub enum Doubt {
-    /// The new name could not be read.
+    /// The new name could not be read, or, where the content must prove the
+    /// link, either name's content.
     Unread(DiskError),
     /// The new name read as something other than the file the caller saw.
     /// Filesystems that number files by path report this for a true link.
@@ -168,6 +183,11 @@ pub enum Doubt {
     /// What the new name resolves to has another length, or could not be
     /// read; the reading says which.
     OtherLength(PathReading),
+    /// Neither read gave a usable file number, and the new name, a regular
+    /// file with the source's length and modification time, has other
+    /// content in its first or last MiB: another writer's file. It is left
+    /// alone.
+    OtherContent { linked: Mark },
 }
 
 /// What became of the name an unproven hard link was made under.
@@ -184,7 +204,8 @@ pub enum LinkAfter {
     /// file, even if this call made it: a source swapped for a symlink
     /// before the link call makes exactly that. Or it read as a regular file
     /// that is not the link and whose length or modification time is not the
-    /// source's, which is another writer's file.
+    /// source's, or whose content is not the source's where only the content
+    /// can tell, which is another writer's file.
     LeftAlone,
 }
 
@@ -505,11 +526,13 @@ impl Disk {
     /// [`Self::place_blocking`] for a hard link that must prove itself.
     ///
     /// Once the link is made its new name is read, itself, and must be the
-    /// file `seen` was read as before the link: the same device and file
-    /// number where the platform gives them, a zero number compared as
-    /// given, and the same length and modification time where it gives
-    /// none. [`LinkProof::NameAndLength`] reads what the name resolves to as
-    /// well. `seen` must come from a read made for this call: a stored mark
+    /// file `seen` was read as before the link: the same volume and file
+    /// number where both reads give a usable one. Where neither does, a zero
+    /// number on both sides or none, or where `seen` names no volume, the
+    /// new name must have `seen`'s length and modification time and both
+    /// names must hash alike in their first and last MiB, and
+    /// [`Placed::proven_by`] says the content proved it.
+    /// [`LinkProof::NameAndLength`] reads what the name resolves to as well. `seen` must come from a read made for this call: a stored mark
     /// or one that names a volume only never proves.
     ///
     /// A link that does not prove is removed: only the name this call
@@ -528,8 +551,11 @@ impl Disk {
     ///
     /// What remains: a regular file another writer put at the name in that
     /// instant, with the source's length and modification time, is removed
-    /// as the unproven link would be, on any filesystem. Where file numbers
-    /// are made up it cannot even be told from the link. So is any regular
+    /// as the unproven link would be, on any filesystem, unless only the
+    /// content can tell and its content differs, when it is left alone.
+    /// Where file numbers are made up but not zero it cannot even be told
+    /// from the link, and a copy with the source's content, length and time
+    /// is taken for it where no file number is given. So is any regular
     /// file there when `seen` names a volume only, which carries no length
     /// or time to tell it by.
     ///
@@ -653,6 +679,7 @@ impl Disk {
             copied: RefCell::new(None),
             prove,
             unproven: RefCell::new(None),
+            proven_by: Cell::new(None),
             left: RefCell::new(Vec::new()),
             source_read: Cell::new(answered.as_ref().map(|answered| answered.source)),
             folder_is_dir: answered.is_some_and(|answered| answered.folder_is_dir),
@@ -663,6 +690,7 @@ impl Disk {
                 asked: policy.method,
                 done,
                 copied: job.copied.take(),
+                proven_by: job.proven_by.get(),
             }),
             Err(fail) => Err(PlaceRefusal {
                 asked: policy.method,
@@ -982,6 +1010,8 @@ pub(crate) struct Job<'a> {
     /// The link this job made and could not prove, when that is why it
     /// failed.
     pub(crate) unproven: RefCell<Option<Unproven>>,
+    /// How the link this job made was proven, when it was.
+    pub(crate) proven_by: Cell<Option<LinkProven>>,
     /// What [`PlaceRefusal::left`] reports.
     pub(crate) left: RefCell<Vec<Leftover>>,
     /// The source's name as it was read, within its root's bound, before
@@ -1278,36 +1308,56 @@ impl Job<'_> {
     /// removes it when it does not prove. Only a successful link call leads
     /// here, and a regular file that is not the link is removed only when it
     /// does not read with another length or modification time than `seen`,
-    /// so the name removed is one this job created.
+    /// nor, where only the content can tell, with other content, so the name
+    /// removed is one this job created.
+    ///
+    /// Where file numbers prove the link, the new name is read once. Where
+    /// neither read gives a usable one, both names' first and last MiB are
+    /// read as well: up to 4 MiB in all.
     fn prove_link(&self, seen: &Mark, proof: LinkProof) -> Result<Done, Fail> {
         let (disk, dest) = (self.disk, self.dest);
         let read = disk.call("lstat", || disk.inner.backend.lstat(dest));
+        let left_alone = |doubt: Doubt| {
+            let after = LinkAfter::LeftAlone;
+            self.unproven.replace(Some(Unproven { doubt, after }));
+            Err(Fail::new(
+                Refused::DestinationExists,
+                io::ErrorKind::AlreadyExists,
+                format!("{} is no longer the link made there", dest.display()),
+            ))
+        };
         let doubt = match read.map(|stat| Mark::of_stat(&stat)) {
             Err(error) => Doubt::Unread(DiskError::new(DiskVerb::Read, dest, error)),
-            // Not a regular file, so not removed as one, whoever made it. A
-            // regular file that is not the link and has another length or
-            // modification time than the source is another writer's.
-            Ok(linked)
+            Ok(linked) => {
+                let lane = linked.link_of(seen);
+                // Not a regular file, so not removed as one, whoever made it.
+                // A regular file that is not the link and has another length
+                // or modification time than the source is another writer's.
                 if linked.kind() != Some(EntryKind::File)
-                    || (!linked.is_link_of(seen) && linked.differs_in_content_facts(seen)) =>
-            {
-                let doubt = Doubt::OtherFile { linked };
-                let after = LinkAfter::LeftAlone;
-                self.unproven.replace(Some(Unproven { doubt, after }));
-                return Err(Fail::new(
-                    Refused::DestinationExists,
-                    io::ErrorKind::AlreadyExists,
-                    format!("{} is no longer the link made there", dest.display()),
-                ));
-            }
-            Ok(linked) if !linked.is_link_of(seen) => Doubt::OtherFile { linked },
-            Ok(_) if proof == LinkProof::Name => return Ok(Done::HardLinked),
-            Ok(_) => {
-                let resolved = disk.follow_blocking(dest);
-                if resolved.size().is_some() && resolved.size() == seen.len() {
-                    return Ok(Done::HardLinked);
+                    || (lane == LinkLane::No && linked.differs_in_content_facts(seen))
+                {
+                    return left_alone(Doubt::OtherFile { linked });
                 }
-                Doubt::OtherLength(resolved)
+                let proven = match lane {
+                    LinkLane::No => Err(Doubt::OtherFile { linked }),
+                    LinkLane::Identity => Ok(LinkProven::Identity),
+                    // Only this lane reads the content.
+                    LinkLane::Content => match self.same_content() {
+                        Ok(true) => Ok(LinkProven::Content),
+                        Ok(false) => return left_alone(Doubt::OtherContent { linked }),
+                        Err(error) => Err(Doubt::Unread(error)),
+                    },
+                };
+                match proven {
+                    Err(doubt) => doubt,
+                    Ok(by) => match self.resolved_doubt(seen, proof) {
+                        None => {
+                            self.proven_by.set(Some(by));
+                            return Ok(Done::HardLinked);
+                        }
+                        Some(doubt) => doubt,
+                    },
+                }
             }
         };
         // Strict: an unproven link left behind would be taken for the file.
@@ -1337,6 +1387,35 @@ impl Job<'_> {
             io::ErrorKind::Other,
             detail,
         ))
+    }
+
+    /// What keeps a link whose name proved from counting: with
+    /// [`LinkProof::NameAndLength`], what the name resolves to must have the
+    /// length `seen` was read with. One more read for that proof alone.
+    fn resolved_doubt(&self, seen: &Mark, proof: LinkProof) -> Option<Doubt> {
+        if proof == LinkProof::Name {
+            return None;
+        }
+        let resolved = self.disk.follow_blocking(self.dest);
+        if resolved.size().is_some() && resolved.size() == seen.len() {
+            return None;
+        }
+        Some(Doubt::OtherLength(resolved))
+    }
+
+    /// Whether the source and the new name hash alike in their first and
+    /// last MiB and have one length, links not followed: the proof of a
+    /// link where no file number can give one.
+    fn same_content(&self) -> Result<bool, DiskError> {
+        let sample = |path: &Path| {
+            let mut file = self
+                .disk
+                .open_blocking(path, Open::read().without_following_links())?;
+            let unread = |error| DiskError::new(DiskVerb::Read, path, error);
+            let size_bytes = file.metadata().map_err(unread)?.len();
+            sample_reader(&mut file, size_bytes).map_err(|(_, error)| unread(error))
+        };
+        Ok(sample(self.source)? == sample(self.dest)?)
     }
 
     /// Reserves `path` so no other writer can take it, failing if it is

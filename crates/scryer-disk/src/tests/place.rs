@@ -64,6 +64,7 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        proven_by: Default::default(),
         left: Default::default(),
         source_read: Default::default(),
         folder_is_dir: false,
@@ -1794,6 +1795,7 @@ mod real {
             asked: Method::Move,
             done: Done::RelinkedThenRemovedSource,
             copied: None,
+            proven_by: None,
         };
         assert!(relinked.fell_back());
     }

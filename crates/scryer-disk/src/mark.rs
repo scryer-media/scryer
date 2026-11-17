@@ -103,6 +103,18 @@ impl Drift {
     }
 }
 
+/// What a new hard link's name must show to be the file it was made from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LinkLane {
+    /// One volume and one file number: it is the link.
+    Identity,
+    /// No usable file number on either side, and the source's length and
+    /// modification time: its content must match the source's.
+    Content,
+    /// It is not the link.
+    No,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Volume {
     Unix(u64),
@@ -206,34 +218,44 @@ impl Mark {
         }
     }
 
-    /// Whether this mark, read of a name just hard-linked, is the file `seen`
-    /// was read as before the link. Where the platform numbers files, the
-    /// device and the number must match, and a unix zero number is compared
-    /// as given: a filesystem that numbers every file zero links truly. A
-    /// Windows read with no usable number, or a read that names no volume,
-    /// is compared by length and modification time, on one volume where both
-    /// name it. `seen` must be a fresh read: a stored or volume-only mark
-    /// never proves. No probe.
-    pub(crate) fn is_link_of(&self, seen: &Self) -> bool {
+    /// How this mark, read of a name just hard-linked, can be the file
+    /// `seen` was read as before the link. Where both reads give a usable
+    /// file number, one volume and one number are the link. Where neither
+    /// does, a zero number on both sides or none at all, or where one read
+    /// names no volume to compare numbers on, only the content can say, and
+    /// only for a regular file with `seen`'s length and modification time.
+    /// `seen` must be a fresh read: a stored or volume-only mark never
+    /// proves. No probe.
+    pub(crate) fn link_of(&self, seen: &Self) -> LinkLane {
         let (Some(linked), Some(before)) = (self.facts, seen.facts) else {
-            return false;
+            return LinkLane::No;
         };
         if linked.kind != EntryKind::File {
-            return false;
+            return LinkLane::No;
         }
-        match (self.volume, seen.volume) {
-            (Volume::Unix(here), Volume::Unix(there)) => {
-                here == there && self.file.is_some() && self.file == seen.file
-            }
-            (Volume::Windows(here), Volume::Windows(there)) if here != there => false,
-            (Volume::Windows(_), Volume::Windows(_)) => match (self.file, seen.file) {
-                (Some(here), Some(there)) if here != 0 && there != 0 => here == there,
-                _ => linked.len == before.len && linked.modified == before.modified,
-            },
-            (Volume::Unknown | Volume::Windows(_), Volume::Unknown | Volume::Windows(_)) => {
-                linked.len == before.len && linked.modified == before.modified
-            }
+        let usable = |file: Option<u64>| file.filter(|&number| number != 0);
+        let numbers = (usable(self.file), usable(seen.file));
+        let one_volume = match (self.volume, seen.volume) {
+            (Volume::Unix(here), Volume::Unix(there)) => here == there,
+            (Volume::Windows(here), Volume::Windows(there)) => here == there,
+            // A read that names no volume has no number to compare.
+            (Volume::Unknown, _) | (_, Volume::Unknown) => true,
             _ => false,
+        };
+        let named = self.volume != Volume::Unknown && seen.volume != Volume::Unknown;
+        let by_content = match linked.len == before.len && linked.modified == before.modified {
+            true => LinkLane::Content,
+            false => LinkLane::No,
+        };
+        match numbers {
+            _ if !one_volume => LinkLane::No,
+            (Some(here), Some(there)) if named => match here == there {
+                true => LinkLane::Identity,
+                false => LinkLane::No,
+            },
+            (None, None) => by_content,
+            _ if !named => by_content,
+            _ => LinkLane::No,
         }
     }
 

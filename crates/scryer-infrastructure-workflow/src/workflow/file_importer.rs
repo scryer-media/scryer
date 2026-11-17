@@ -1015,7 +1015,9 @@ fn hard_link_import_source(
         // Another regular file took the name after the link was made, and
         // the service left it alone. The name is occupied, and answers as an
         // occupied name does here; nothing is copied over it.
-        (Doubt::OtherFile { .. }, LinkAfter::LeftAlone) => {
+        // So is a name whose content is not the source's where only the
+        // content could prove the link: the service leaves it alone.
+        (Doubt::OtherFile { .. }, LinkAfter::LeftAlone) | (Doubt::OtherContent { .. }, _) => {
             ensure_same_source(source, fingerprint)?;
             Ok(ImportLink::Occupied)
         }

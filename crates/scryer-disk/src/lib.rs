@@ -91,8 +91,8 @@ pub use copy::{
 };
 pub use mark::{Drift, EntryAlias, Mark, Sameness};
 pub use place::{
-    CannotLink, Done, Doubt, Fallback, FreeNameMove, Leftover, LinkAfter, LinkProof, Method,
-    PlaceRefusal, Placed, Placement, ReadBefore, Refused, Side, Unproven, Verify,
+    CannotLink, Done, Doubt, Fallback, FreeNameMove, Leftover, LinkAfter, LinkProof, LinkProven,
+    Method, PlaceRefusal, Placed, Placement, ReadBefore, Refused, Side, Unproven, Verify,
 };
 pub use reading::{DiskError, EntryKind, FileIdentity, PathReading, reason};
 pub(crate) use reading::{DiskVerb, is_cross_device_error};
