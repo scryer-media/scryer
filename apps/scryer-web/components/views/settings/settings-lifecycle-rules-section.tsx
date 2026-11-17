@@ -872,7 +872,8 @@ export function SettingsLifecycleRulesSection({
   const rulePage = lifecycleRulePage(sortedRules, rulePageIndex);
 
   // The instance switches govern every tab, so they sit above the tab strip,
-  // and the tabs sit directly on the pane they open.
+  // and the tabs sit directly on the pane they open. Both stay inside the
+  // pane's own column, as on the Lists page, rather than spanning the page.
   const pageHead = (
     <div className="space-y-5">
       {instanceSwitches}
@@ -880,26 +881,27 @@ export function SettingsLifecycleRulesSection({
     </div>
   );
 
-  // Candidates and history are one pane each, and get the full column: there
-  // is no editor to sit beside and no rule being written for the reference
-  // rail to describe.
+  // Candidates and history are one pane each, in the same column width as the
+  // rule list so the tabs do not move when switching between them. There is
+  // no editor to sit beside and no rule being written for the reference rail
+  // to describe.
   if (section !== "rules") {
     return (
-      <div id="settings-lifecycle-rules-section" className="space-y-6 text-sm">
-        {pageHead}
-        <div className="mx-auto w-full max-w-[1600px] space-y-8">
-          {operationsPanels}
+      <div id="settings-lifecycle-rules-section" className="text-sm">
+        <div className="mx-auto w-full max-w-[1280px] space-y-6">
+          {pageHead}
+          <div className="space-y-8">{operationsPanels}</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div id="settings-lifecycle-rules-section" className="space-y-6 text-sm">
-      {pageHead}
+    <div id="settings-lifecycle-rules-section" className="space-y-4 text-sm">
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 2xl:flex-row 2xl:items-start">
         <div className="min-w-0 basis-[900px] flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
+            <div className="pb-2">{pageHead}</div>
             <div className="overflow-hidden rounded border border-border bg-card">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <CardTitle className="text-base text-foreground">
