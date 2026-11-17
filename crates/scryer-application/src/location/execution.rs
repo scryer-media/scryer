@@ -1420,7 +1420,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 None => {
                     return Err(AppError::Repository(reading.absence().into()));
                 }
-                Some(true) if !reading.is(EntryKind::File) => {
+                // A linked source that took a copy is judged by the file it
+                // names (its version carries that file's, and the proofs
+                // below read through it); only the link's own name is removed.
+                Some(true) if !reading.is(EntryKind::File) && !reading.is(EntryKind::Symlink) => {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
                         "Source changed before cleanup; preserved it.",

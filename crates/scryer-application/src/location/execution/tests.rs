@@ -3453,6 +3453,103 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
     }
 }
 
+/// A linked source that took a verified copy is cleaned up by the file it
+/// names: unchanged, only the link's own name goes and the file it names is
+/// kept; rewritten behind the link where no sample reaches, the link is kept.
+#[tokio::test]
+async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
+    for rewritten in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = single_title_plan(
+            &temp.path().join("a"),
+            &temp.path().join("b"),
+            "Emberfall.mkv",
+            THREE_SAMPLE_WINDOWS as u64,
+        );
+        let file = plan.titles[0].files[0].clone();
+        let named = temp.path().join("named.mkv");
+        write_pattern_file(&named, THREE_SAMPLE_WINDOWS);
+        std::fs::create_dir_all(file.source().parent().unwrap()).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&named, file.source()).unwrap();
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_file(&named, file.source()) {
+            eprintln!(
+                "skipped the linked-source case: this process may not create a symbolic link ({error})"
+            );
+            return;
+        }
+        let store = Arc::new(InMemoryLocationOperationStore::new());
+        let operation = queued_operation(
+            "op-1",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        store.insert_operation(operation.clone());
+        let mover = RootMoveFileMover::without_permissions()
+            .forcing_copies()
+            .with_resolver(Arc::new(
+                crate::location::resolution::ConflictResolver::new(
+                    store.clone(),
+                    BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+                ),
+            ));
+        let work = plan.to_work_plan();
+        let verified = mover
+            .move_file(FileMoveRequest {
+                operation_id: "op-1",
+                title: &work.titles[0],
+                file: &work.titles[0].files[0],
+                depth: VerificationDepth::Full,
+                progress: &crate::location::verify::CopyProgress::none(),
+            })
+            .await
+            .expect("copy");
+        assert!(verified.hashes.is_some(), "the linked source took a copy");
+        record_copy(
+            &store,
+            &verified,
+            "mf-1",
+            crate::location::model::FileVerificationOutcome::Verified,
+        )
+        .await;
+        if rewritten {
+            rewrite_middle(&named);
+        }
+
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let result = reconciler
+            .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+            .await;
+
+        let link_kept = std::fs::symlink_metadata(file.source()).is_ok();
+        if rewritten {
+            let error = result.expect_err("a rewrite behind the link keeps it");
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP)
+            );
+            assert!(link_kept, "the link is preserved");
+        } else {
+            result.expect("cleanup");
+            assert!(!link_kept, "the link's own name is removed");
+        }
+        assert_eq!(
+            std::fs::read(&named).unwrap().len(),
+            THREE_SAMPLE_WINDOWS,
+            "the file the link names is never removed"
+        );
+        assert_eq!(
+            std::fs::read(file.destination()).unwrap().len(),
+            THREE_SAMPLE_WINDOWS
+        );
+        assert!(recycler.recycled().is_empty());
+    }
+}
+
 /// For unchanged files, cleanup removes and keeps exactly the same sources
 /// whether it decides from the recorded proof or from a full re-read: a
 /// verified copy's source goes, a copy recorded as a mismatch and a copy with
