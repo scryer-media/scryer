@@ -628,7 +628,12 @@ impl AppUseCase {
             external_ids,
             quality_profile_id,
             quality_profile_name,
-            monitor_type: sample.monitor_type.clone(),
+            // Normalized as submit stores it, so the sample matches what a
+            // real request with this monitor type would give the rule.
+            monitor_type: crate::media_requests::normalize_requested_monitor_type(
+                &library.facet,
+                sample.monitor_type.clone(),
+            )?,
             monitor_selection: None,
             requested_lease_days: sample.lease_days.flatten(),
             requested_required_audio_languages,

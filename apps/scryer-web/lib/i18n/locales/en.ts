@@ -7517,6 +7517,7 @@ const en: LocaleDictionary = {
     "Per-stream verified audio profile or extension label",
   "settings.refAudioStreamChannels": "Per-stream channel count",
   "settings.refAudioStreamLanguage": "Per-stream language code",
+  "settings.refAudioStreamName": "Per-stream audio track title, if available",
   "settings.refAudioStreamBitrateKbps": "Per-stream bitrate in kbps",
 
   "settings.refSectionSubtitleStreams": "— Nested subtitle stream entries",

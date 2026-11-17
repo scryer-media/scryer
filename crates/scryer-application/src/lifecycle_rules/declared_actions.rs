@@ -133,6 +133,18 @@ impl LifecycleDeclaredActions {
             .map_err(|error| LifecycleActionSequenceError::InvalidEnvelope(error.to_string()))
     }
 
+    /// Whether the source defines a notification and no other action, at
+    /// any level: `notify_season` and `notify_episode` are `notify` on that
+    /// season or episode. Such a rule's notification is itself its act. A
+    /// revision that declares nothing does not count.
+    pub fn only_notifies(&self) -> bool {
+        !self.heads.is_empty()
+            && self
+                .heads
+                .iter()
+                .all(|head| head.base() == LifecycleActionHead::Notify)
+    }
+
     /// The document as a revision stores it.
     pub fn to_persisted_json(&self) -> String {
         serde_json::to_string(self).expect("declared lifecycle actions always serialize")
@@ -506,7 +518,29 @@ mod tests {
             ]
         );
 
-        // A rule that only notifies runs no step at all.
+        // A rule that only notifies, at any level, runs no step at all, and
+        // its notification is its act.
+        for head in [
+            LifecycleActionHead::Notify,
+            LifecycleActionHead::NotifySeason,
+            LifecycleActionHead::NotifyEpisode,
+        ] {
+            let declared = LifecycleDeclaredActions {
+                heads: vec![head],
+                ..LifecycleDeclaredActions::none()
+            };
+            assert!(declared.only_notifies(), "{head:?}");
+        }
+        let notify_and_tag = LifecycleDeclaredActions {
+            heads: vec![
+                LifecycleActionHead::NotifyEpisode,
+                LifecycleActionHead::AddTags,
+            ],
+            ..LifecycleDeclaredActions::none()
+        };
+        assert!(!notify_and_tag.only_notifies());
+        assert!(!LifecycleDeclaredActions::none().only_notifies());
+
         let notify_only = LifecycleActions {
             notify: Some("Fixture".into()),
             ..LifecycleActions::default()

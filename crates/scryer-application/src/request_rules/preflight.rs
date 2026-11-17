@@ -125,6 +125,17 @@ impl AppUseCase {
             Err(_) => (None, None),
         };
 
+        // Normalized exactly as submit stores them, so a rule reading the
+        // monitor type sees the same value in the preview as at submit.
+        let monitor_type = crate::media_requests::normalize_requested_monitor_type(
+            &input.facet,
+            input.requested_monitor_type.clone(),
+        )?;
+        let monitor_selection = crate::media_requests::normalize_requested_monitor_selection(
+            monitor_type.as_deref(),
+            input.requested_monitor_selection.clone(),
+        )?;
+
         let draft = RequestDraft {
             facet: input.facet.clone(),
             title: input.title.trim().to_string(),
@@ -135,8 +146,8 @@ impl AppUseCase {
             external_ids,
             quality_profile_id,
             quality_profile_name,
-            monitor_type: input.requested_monitor_type.clone(),
-            monitor_selection: input.requested_monitor_selection.clone(),
+            monitor_type,
+            monitor_selection,
             requested_lease_days,
             requested_required_audio_languages,
             requested_preferred_audio_languages,

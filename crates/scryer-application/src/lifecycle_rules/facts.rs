@@ -1666,7 +1666,7 @@ fn scoped_watch_observations(
     if episodes.is_empty() {
         return WatchObservations {
             watched_by_user_ids: Observation::known(vec![]),
-            last_watched_at: Observation::absent_because("no_aired_episodes"),
+            last_watched_at: Observation::absent_because(unknown_reason::NO_AIRED_EPISODE),
             watched_by_any_requester: Observation::known(false),
             watched_by_all_requesters: Observation::known(false),
             watched_by_anyone: anyone.0,

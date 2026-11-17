@@ -2052,7 +2052,7 @@ fn synthetic_test_input() -> UserRuleInput {
             stereoscopy: None,
             raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265.DDP.5.1".to_string(),
             normalized_tokens: vec![],
-            quality: Some("2160P".to_string()),
+            quality: Some("2160p".to_string()),
             source: Some("WEB-DL".to_string()),
             video_codec: Some("H.265".to_string()),
             audio: Some("DDP".to_string()),
@@ -2145,7 +2145,6 @@ fn synthetic_test_input() -> UserRuleInput {
             codes: vec!["quality_tier_0".to_string(), "source_webdl".to_string()],
         },
         file: Some(FileDoc {
-            details: Default::default(),
             video_codec: Some("hevc".to_string()),
             video_width: Some(3840),
             video_height: Some(2160),
@@ -3221,7 +3220,7 @@ mod tests {
                 .entries
                 .iter()
                 .any(|entry| entry.code == "x264_4k_penalty" && entry.delta == -200),
-            "prefer-hevc should penalize canonical 2160P H.264 input"
+            "prefer-hevc should penalize canonical 2160p H.264 input"
         );
     }
 

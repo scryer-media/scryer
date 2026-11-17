@@ -2764,6 +2764,7 @@ const ru: LocaleDictionary = {
   "settings.refAudioStreamChannels":
     "Количество каналов отдельного аудиопотока",
   "settings.refAudioStreamLanguage": "Код языка отдельного аудиопотока",
+  "settings.refAudioStreamName": "Название отдельной звуковой дорожки, если доступно",
   "settings.refAudioStreamBitrateKbps":
     "Битрейт отдельного аудиопотока в кбит/с",
   "settings.refSectionSubtitleStreams": "— Вложенные записи потоков субтитров",

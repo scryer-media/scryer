@@ -2964,6 +2964,7 @@ const cs: LocaleDictionary = {
     "Ověřený zvukový profil nebo rozšiřující popisek jednotlivé stopy",
   "settings.refAudioStreamChannels": "Počet kanálů jednotlivé stopy",
   "settings.refAudioStreamLanguage": "Kód jazyka jednotlivé stopy",
+  "settings.refAudioStreamName": "Název zvukové stopy jednotlivé stopy, je-li dostupný",
   "settings.refAudioStreamBitrateKbps": "Datový tok jednotlivé stopy v kb/s",
   "settings.refSectionSubtitleStreams": "— Vnořené položky stop titulků",
   "settings.refSubtitleStreamCodec": "Kodek titulků jednotlivé stopy",

@@ -6296,7 +6296,6 @@ dependencies = [
  "blake3",
  "chrono",
  "regorus",
- "scryer-media-types",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

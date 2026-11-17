@@ -332,12 +332,12 @@ impl AppUseCase {
                 // this subject's actions are already in place, changed
                 // nothing to report. That is what keeps a candidate recreated
                 // after its actions changed from repeating the notification.
-                // Only a rule that declares nothing but `notify` has a
-                // notification that is itself the act.
+                // Only a rule that declares nothing but `notify` (at any
+                // level) has a notification that is itself the act.
                 let changed_anything = durable_runs
                     .iter()
                     .any(|run| run.state == LifecycleActionStepState::Succeeded)
-                    || (sequence.steps.is_empty() && rule_only_notifies(detail));
+                    || (sequence.steps.is_empty() && detail.declared_actions.only_notifies());
                 let durable_success_ids: HashSet<_> = durable_runs
                     .into_iter()
                     .filter(|run| run.state.is_completion_success())
@@ -2558,16 +2558,6 @@ fn sequence_step_before_state_holds(
         }
         _ => false,
     }
-}
-
-/// Whether the rule's source defines `notify` and no other action head. A
-/// revision from before rules declared their own actions declares none.
-fn rule_only_notifies(detail: &LifecycleRuleSetDetail) -> bool {
-    let heads = &detail.declared_actions.heads;
-    !heads.is_empty()
-        && heads
-            .iter()
-            .all(|head| *head == scryer_rules::lifecycle_actions::LifecycleActionHead::Notify)
 }
 
 /// Whether the title now sits where a recorded move sent it: in the target

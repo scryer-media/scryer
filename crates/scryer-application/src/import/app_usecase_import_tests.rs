@@ -1297,7 +1297,6 @@ fn test_rule_file_doc(
     dovi_bl_compat_id: Option<u8>,
 ) -> scryer_rules::FileDoc {
     scryer_rules::FileDoc {
-        details: Default::default(),
         video_codec: Some("hevc".to_string()),
         video_width: Some(3840),
         video_height: Some(2160),

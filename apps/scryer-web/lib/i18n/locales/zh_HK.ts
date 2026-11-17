@@ -2523,6 +2523,7 @@ const zh_HK: LocaleDictionary = {
   "settings.refAudioStreamProfile": "個別串流的已驗證音訊規格或延伸標籤",
   "settings.refAudioStreamChannels": "個別串流的聲道數",
   "settings.refAudioStreamLanguage": "個別串流的語言代碼",
+  "settings.refAudioStreamName": "個別音訊軌道標題（若可用）",
   "settings.refAudioStreamBitrateKbps": "以 kbps 為單位的個別串流碼率",
   "settings.refSectionSubtitleStreams": "— 嵌套字幕串流項目",
   "settings.refSubtitleStreamCodec": "個別串流的字幕編解碼器",

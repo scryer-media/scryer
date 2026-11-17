@@ -2434,6 +2434,7 @@ const nl: LocaleDictionary = {
     "Geverifieerd audioprofiel of extensielabel per stroom",
   "settings.refAudioStreamChannels": "Aantal kanalen per stroom",
   "settings.refAudioStreamLanguage": "Taalcode per stroom",
+  "settings.refAudioStreamName": "Titel van audiotrack per stroom, indien beschikbaar",
   "settings.refAudioStreamBitrateKbps": "Bitrate in kbps per stroom",
 
   "settings.refSectionSubtitleStreams":
