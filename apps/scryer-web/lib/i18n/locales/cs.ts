@@ -5660,11 +5660,7 @@ const cs: LocaleDictionary = {
   "settings.requestBuilderMonitorPlaceholder": "Vyberte sledování",
   "settings.requestBuilderLanguagesPlaceholder": "Vyberte jazyky",
   "settings.requestDeclaredActionsTitle": "Co toto pravidlo umí",
-  "settings.requestDeclaredActionsHelp":
-    "Hlasy a hodnoty, které zdroj tohoto pravidla definuje, v tomto pořadí: {{order}}. Automaticky schválený požadavek dostane hodnoty, jejichž podmínky platí; u požadavku čekajícího na posouzení je schvalovatel uvidí jako návrhy.",
   "settings.requestDeclaredActionsNone": "Nic není deklarováno",
-  "settings.requestDeclaredActionsUnavailable":
-    "Opravte chyby, abyste viděli, co toto pravidlo umí.",
   "settings.requestRuleWarningsTitle": "Upozornění",
   "settings.requestRuleWarningLocation": "Řádek {{line}}, sloupec {{column}}:",
   "settings.requestBuilderConditionsHelp":
@@ -5673,11 +5669,7 @@ const cs: LocaleDictionary = {
   "settings.requestBuilderOriginPublicList": "Z veřejného seznamu",
   "settings.requestBuilderOriginPersonalList": "Z osobního seznamu",
   "settings.lifecycleDeclaredActionsTitle": "Deklarované akce",
-  "settings.lifecycleDeclaredActionsHelp":
-    "Akce, které definuje zdroj pravidla. Odpovídající subjekt dostane jen ty, jejichž podmínky pro něj platí, a to v tomto pořadí: {{order}}.",
   "settings.lifecycleDeclaredActionsNone": "Žádné akce",
-  "settings.lifecycleDeclaredActionsUnavailable":
-    "Opravte chyby, abyste viděli, co toto pravidlo dělá.",
   "settings.lifecycleDecidedActionsNone": "Žádné akce",
   "settings.lifecycleRuleWarningsTitle": "Upozornění",
   "settings.lifecycleRuleWarningLocation":

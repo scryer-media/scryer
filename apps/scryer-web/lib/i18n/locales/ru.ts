@@ -5254,11 +5254,7 @@ const ru: LocaleDictionary = {
   "settings.requestBuilderMonitorPlaceholder": "Выберите отслеживание",
   "settings.requestBuilderLanguagesPlaceholder": "Выберите языки",
   "settings.requestDeclaredActionsTitle": "Что может это правило",
-  "settings.requestDeclaredActionsHelp":
-    "Голоса и значения, которые определяет исходный код правила, в этом порядке: {{order}}. Автоматически одобренный запрос получает значения, условия которых выполняются; для запроса на рассмотрении они показываются одобряющему как предложения.",
   "settings.requestDeclaredActionsNone": "Ничего не объявлено",
-  "settings.requestDeclaredActionsUnavailable":
-    "Исправьте ошибки, чтобы увидеть, что может это правило.",
   "settings.requestRuleWarningsTitle": "Предупреждения",
   "settings.requestRuleWarningLocation": "Строка {{line}}, столбец {{column}}:",
   "settings.requestBuilderConditionsHelp":
@@ -5267,11 +5263,7 @@ const ru: LocaleDictionary = {
   "settings.requestBuilderOriginPublicList": "Из публичного списка",
   "settings.requestBuilderOriginPersonalList": "Из личного списка",
   "settings.lifecycleDeclaredActionsTitle": "Объявленные действия",
-  "settings.lifecycleDeclaredActionsHelp":
-    "Действия, которые определяет исходный код правила. Подходящий объект получает только те, чьи условия для него выполняются, в таком порядке: {{order}}.",
   "settings.lifecycleDeclaredActionsNone": "Нет действий",
-  "settings.lifecycleDeclaredActionsUnavailable":
-    "Исправьте ошибки, чтобы увидеть, что делает это правило.",
   "settings.lifecycleDecidedActionsNone": "Нет действий",
   "settings.lifecycleRuleWarningsTitle": "Предупреждения",
   "settings.lifecycleRuleWarningLocation":

@@ -29,7 +29,6 @@ type Views = {
   }>;
   SourceFindings: ComponentType<{
     source: string;
-    declared: LifecycleDeclaredActions | null | undefined;
     warnings: readonly RuleValidationDiagnostic[];
     checked: boolean;
   }>;
@@ -259,13 +258,12 @@ test("the declared summary lists heads in execution order", async () => {
   });
 });
 
-test("warnings render apart from errors with their line, and an unparseable source names no actions", async () => {
+test("warnings render apart from errors with their line, and the panel is empty without them", async () => {
   await withLifecycleViews(({ SourceFindings, render }) => {
     const source = "helper if true\n\nunmonitor if true\n";
     const markup = render(
       createElement(SourceFindings, {
         source,
-        declared: declared({ heads: ["UNMONITOR"] }),
         warnings: [
           {
             code: "RULE_UNREFERENCED_RULE",
@@ -284,30 +282,21 @@ test("warnings render apart from errors with their line, and an unparseable sour
     );
     assert.match(markup, /error\.ruleUnreferencedRule/);
     assert.doesNotMatch(markup, /server words/);
-    assert.match(
-      markup,
-      /id="settings-lifecycle-rule-declared-action-unmonitor"/,
-    );
-
-    const unparseable = render(
-      createElement(SourceFindings, {
-        source,
-        declared: null,
-        warnings: [],
-        checked: true,
-      }),
-    );
-    assert.match(
-      unparseable,
-      /id="settings-lifecycle-rule-declared-actions-unavailable"/,
-    );
-    assert.doesNotMatch(unparseable, /id="settings-lifecycle-rule-warnings"/);
 
     assert.equal(
       render(
         createElement(SourceFindings, {
           source,
-          declared: undefined,
+          warnings: [],
+          checked: true,
+        }),
+      ),
+      "",
+    );
+    assert.equal(
+      render(
+        createElement(SourceFindings, {
+          source,
           warnings: [],
           checked: false,
         }),

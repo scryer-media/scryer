@@ -1396,13 +1396,7 @@ export function SettingsRequestRulesSection({
                         validationResult !== null &&
                         !validationResult.unavailable
                       }
-                      declared={validationResult?.declaredActions}
                       warnings={validationResult?.warnings ?? []}
-                      showDeclared={
-                        builderMode === "simple" &&
-                        ruleSetDraft.builderModel !== null &&
-                        builderSchema !== null
-                      }
                     />
 
                     <RequestUserPicker

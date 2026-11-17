@@ -4889,11 +4889,7 @@ const zh_TW: LocaleDictionary = {
   "settings.requestBuilderMonitorPlaceholder": "選擇監控方式",
   "settings.requestBuilderLanguagesPlaceholder": "選擇語言",
   "settings.requestDeclaredActionsTitle": "此規則能做什麼",
-  "settings.requestDeclaredActionsHelp":
-    "此規則原始碼定義的投票與數值，依此順序：{{order}}。自動核准的請求會取得條件成立的數值；保留審核的請求會將其作為建議顯示給審核者。",
   "settings.requestDeclaredActionsNone": "未宣告任何內容",
-  "settings.requestDeclaredActionsUnavailable":
-    "修正錯誤後才能看到此規則能做什麼。",
   "settings.requestRuleWarningsTitle": "警告",
   "settings.requestRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
   "settings.requestBuilderConditionsHelp":
@@ -4902,11 +4898,7 @@ const zh_TW: LocaleDictionary = {
   "settings.requestBuilderOriginPublicList": "來自公開清單",
   "settings.requestBuilderOriginPersonalList": "來自個人清單",
   "settings.lifecycleDeclaredActionsTitle": "宣告的操作",
-  "settings.lifecycleDeclaredActionsHelp":
-    "此規則原始碼定義的操作。符合的對象只會套用條件成立的操作，並依此順序執行：{{order}}。",
   "settings.lifecycleDeclaredActionsNone": "沒有操作",
-  "settings.lifecycleDeclaredActionsUnavailable":
-    "修正錯誤後即可看到此規則的作用。",
   "settings.lifecycleDecidedActionsNone": "沒有操作",
   "settings.lifecycleRuleWarningsTitle": "警告",
   "settings.lifecycleRuleWarningLocation":

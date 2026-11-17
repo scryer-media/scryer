@@ -28,7 +28,8 @@ type EditorValidationStatusProps = ComponentProps<"div"> & {
 
 /// Where the status sits. Over a code editor it is a corner badge that opens
 /// on demand; anywhere else (the rule builder) it is a plain block in the
-/// flow, with its messages always shown.
+/// flow that shows only a failure, with its messages. The builder only writes
+/// rules it can check itself, so a passing or running check is not news.
 export const EditorValidationPlacement = createContext<"editor" | "inline">(
   "editor",
 );
@@ -192,51 +193,32 @@ function InlineValidationStatus({
   ...props
 }: EditorValidationStatusProps) {
   const t = useTranslate();
-  const failed = !checking && result?.valid === false;
-  const errorMessages = result?.diagnostics?.length
+  if (checking || result?.valid !== false) return null;
+  const errorMessages = result.diagnostics?.length
     ? result.diagnostics.map((diagnostic) =>
         regoDiagnosticMessage(diagnostic, t),
       )
-    : (result?.errors ?? []);
+    : result.errors;
   return (
     <div
       {...props}
       role="status"
       aria-live="polite"
-      data-editor-validation={
-        checking ? "checking" : failed ? "failed" : "passed"
-      }
+      data-editor-validation="failed"
       className={cn(
-        "flex items-start gap-2 rounded-md border px-3 py-2 text-sm",
-        checking
-          ? "border-border text-muted-foreground"
-          : failed
-            ? "border-[var(--scry-danger-border)] text-[var(--scry-danger-text)]"
-            : "border-[var(--scry-success-border)] text-[var(--scry-success-text)]",
+        "flex items-start gap-2 rounded-md border border-[var(--scry-danger-border)] px-3 py-2 text-sm text-[var(--scry-danger-text)]",
         className,
       )}
     >
-      {checking ? (
-        <LoadingMark className="mt-0.5 h-4 w-4 shrink-0" />
-      ) : failed ? (
-        <X className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-      ) : (
-        <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-      )}
-      {failed && errorMessages.length > 0 ? (
+      <X className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      {errorMessages.length > 0 ? (
         <ul className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
           {errorMessages.map((error, index) => (
             <li key={index}>{formatError ? formatError(error) : error}</li>
           ))}
         </ul>
       ) : (
-        <span>
-          {checking
-            ? t("settings.ruleValidating")
-            : failed
-              ? t("settings.regoValidationFailed")
-              : t("settings.ruleValid")}
-        </span>
+        <span>{t("settings.regoValidationFailed")}</span>
       )}
     </div>
   );

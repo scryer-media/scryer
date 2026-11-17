@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-import { HelpLabel } from "@/components/common/info-help";
 import { Badge } from "@/components/ui/badge";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -33,7 +31,6 @@ import type { RuleBuilderOutputDescriptor } from "@/lib/utils/rule-builder";
 import {
   isRuleOutputDestructive,
   ruleOutputHeadLabel,
-  ruleOutputHeadNames,
   sortByRuleOutputOrder,
 } from "@/lib/utils/rule-output-vocabulary";
 
@@ -173,63 +170,33 @@ export function LifecycleDecidedActionsSummary({
 /// The keys and ids one rule family's findings panel uses.
 type SourceFindingsVocabulary = {
   /// Every id in the panel hangs off it: `<id>-source-findings`,
-  /// `<id>-declared-actions-unavailable`, `<id>-warnings`, `<id>-warning-*`.
+  /// `<id>-warnings`, `<id>-warning-*`.
   idPrefix: string;
-  titleKey: string;
-  helpKey: string;
-  unavailableKey: string;
   warningsTitleKey: string;
   warningLocationKey: string;
 };
 
-/// The panel under a rule editor: what the source declares, and validation
-/// warnings, which never block saving, kept apart from errors.
+/// The panel under a rule editor: validation warnings, which never block
+/// saving, kept apart from errors.
 function RuleSourceFindings({
   vocabulary,
   source,
-  declared,
-  order,
   warnings,
   checked,
-  showDeclared,
 }: {
   vocabulary: SourceFindingsVocabulary;
   source: string;
-  /// Null when the source could not be read.
-  declared: ReactNode | null;
-  /// The head order the help names.
-  order: string;
   warnings: readonly RuleValidationDiagnostic[];
   checked: boolean;
-  /// False in Advanced, where the Rego itself says what the rule does.
-  showDeclared: boolean;
 }) {
   const t = useTranslate();
-  if (!checked || (!showDeclared && warnings.length === 0)) return null;
+  if (!checked || warnings.length === 0) return null;
   const prefix = vocabulary.idPrefix;
   return (
     <div
       id={`${prefix}-source-findings`}
       className="space-y-2 rounded border border-border bg-muted/30 px-3 py-2"
     >
-      {showDeclared ? (
-        <div className="space-y-1">
-          <p className="text-xs font-medium">
-            <HelpLabel
-              label={t(vocabulary.titleKey)}
-              help={t(vocabulary.helpKey, { order })}
-            />
-          </p>
-          {declared ?? (
-            <p
-              id={`${prefix}-declared-actions-unavailable`}
-              className="text-xs text-muted-foreground"
-            >
-              {t(vocabulary.unavailableKey)}
-            </p>
-          )}
-        </div>
-      ) : null}
       {warnings.length > 0 ? (
         <div className="space-y-1">
           <p className="text-xs font-medium text-[var(--scry-warning-text)]">
@@ -272,44 +239,24 @@ function RuleSourceFindings({
 /// The lifecycle editor's findings panel.
 export function LifecycleRuleSourceFindings({
   source,
-  declared,
   warnings,
   checked,
-  showDeclared = true,
 }: {
   source: string;
-  /// Null when the source could not be parsed, undefined before validation.
-  declared: LifecycleDeclaredActions | null | undefined;
   warnings: readonly RuleValidationDiagnostic[];
   /// Validation has answered for the current source.
   checked: boolean;
-  /// False while the editor shows the Rego rather than the builder.
-  showDeclared?: boolean;
 }) {
-  const descriptors = useRuleOutputDescriptors("lifecycle");
   return (
     <RuleSourceFindings
       vocabulary={{
         idPrefix: "settings-lifecycle-rule",
-        titleKey: "settings.lifecycleDeclaredActionsTitle",
-        helpKey: "settings.lifecycleDeclaredActionsHelp",
-        unavailableKey: "settings.lifecycleDeclaredActionsUnavailable",
         warningsTitleKey: "settings.lifecycleRuleWarningsTitle",
         warningLocationKey: "settings.lifecycleRuleWarningLocation",
       }}
       source={source}
-      declared={
-        declared ? (
-          <LifecycleDeclaredActionsSummary
-            declared={declared}
-            idPrefix="settings-lifecycle-rule-declared-action"
-          />
-        ) : null
-      }
-      order={ruleOutputHeadNames(descriptors)}
       warnings={warnings}
       checked={checked}
-      showDeclared={showDeclared}
     />
   );
 }
@@ -370,42 +317,24 @@ export function RequestDeclaredActionsSummary({
 /// The request editor's findings panel.
 export function RequestRuleSourceFindings({
   source,
-  declared,
   warnings,
   checked,
-  showDeclared = true,
 }: {
   source: string;
-  declared: RequestDeclaredActions | null | undefined;
   warnings: readonly RuleValidationDiagnostic[];
+  /// Validation has answered for the current source.
   checked: boolean;
-  /// False while the editor shows the Rego rather than the builder.
-  showDeclared?: boolean;
 }) {
-  const descriptors = useRuleOutputDescriptors("request");
   return (
     <RuleSourceFindings
       vocabulary={{
         idPrefix: "settings-request-rule",
-        titleKey: "settings.requestDeclaredActionsTitle",
-        helpKey: "settings.requestDeclaredActionsHelp",
-        unavailableKey: "settings.requestDeclaredActionsUnavailable",
         warningsTitleKey: "settings.requestRuleWarningsTitle",
         warningLocationKey: "settings.requestRuleWarningLocation",
       }}
       source={source}
-      declared={
-        declared ? (
-          <RequestDeclaredActionsSummary
-            declared={declared}
-            idPrefix="settings-request-rule-declared-action"
-          />
-        ) : null
-      }
-      order={ruleOutputHeadNames(descriptors)}
       warnings={warnings}
       checked={checked}
-      showDeclared={showDeclared}
     />
   );
 }

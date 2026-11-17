@@ -10323,11 +10323,7 @@ const en: LocaleDictionary = {
   "settings.requestBuilderMonitorPlaceholder": "Choose monitoring",
   "settings.requestBuilderLanguagesPlaceholder": "Choose languages",
   "settings.requestDeclaredActionsTitle": "What this rule can do",
-  "settings.requestDeclaredActionsHelp":
-    "The votes and values this rule's source defines, in this order: {{order}}. An automatically approved request gets the values whose conditions hold; a request held for review shows them to the approver as suggestions.",
   "settings.requestDeclaredActionsNone": "Nothing declared",
-  "settings.requestDeclaredActionsUnavailable":
-    "Fix the errors to see what this rule can do.",
   "settings.requestRuleWarningsTitle": "Warnings",
   "settings.requestRuleWarningLocation": "Line {{line}}, column {{column}}:",
   "settings.requestBuilderConditionsHelp":
@@ -10336,11 +10332,7 @@ const en: LocaleDictionary = {
   "settings.requestBuilderOriginPublicList": "From a public list",
   "settings.requestBuilderOriginPersonalList": "From a personal list",
   "settings.lifecycleDeclaredActionsTitle": "Declared actions",
-  "settings.lifecycleDeclaredActionsHelp":
-    "The actions this rule's source defines. A matched subject gets only the ones whose conditions hold for it, applied in this order: {{order}}.",
   "settings.lifecycleDeclaredActionsNone": "No actions",
-  "settings.lifecycleDeclaredActionsUnavailable":
-    "Fix the errors to see what this rule does.",
   "settings.lifecycleDecidedActionsNone": "No actions",
   "settings.lifecycleRuleWarningsTitle": "Warnings",
   "settings.lifecycleRuleWarningLocation":

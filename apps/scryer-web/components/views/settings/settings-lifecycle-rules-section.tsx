@@ -1214,14 +1214,7 @@ export function SettingsLifecycleRulesSection({
                         validationResult !== null &&
                         !validationResult.unavailable
                       }
-                      declared={validationResult?.declaredActions}
                       warnings={validationResult?.warnings ?? []}
-                      showDeclared={
-                        editorMode === "simple" &&
-                        ruleSetDraft.builderModel !== null &&
-                        builderSchema !== null &&
-                        !editingSystemOwned
-                      }
                     />
 
                     <div className="grid gap-4 sm:grid-cols-2">
