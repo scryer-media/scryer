@@ -1142,19 +1142,28 @@ impl AppUseCase {
         )
         .await?;
 
-        let mut filtered = Vec::with_capacity(results.len());
-        for result in results {
-            let is_blocklisted = self
-                .services
+        // One read of this file's blocklist, not one per result. A failed read
+        // hides nothing, as a failed per-result check did.
+        let blocklist = if results.is_empty() {
+            Vec::new()
+        } else {
+            self.services
                 .workflow
                 .subtitle_downloads
-                .is_blocklisted(media_file_id, &result.provider, &result.provider_file_id)
+                .list_blocklist_for_media_file(media_file_id)
                 .await
-                .unwrap_or(false);
-            if !is_blocklisted {
-                filtered.push(result);
-            }
-        }
+                .unwrap_or_default()
+        };
+        let blocklisted: std::collections::HashSet<(&str, &str)> = blocklist
+            .iter()
+            .map(|entry| (entry.provider.as_str(), entry.provider_file_id.as_str()))
+            .collect();
+        let filtered: Vec<_> = results
+            .into_iter()
+            .filter(|result| {
+                !blocklisted.contains(&(result.provider.as_str(), result.provider_file_id.as_str()))
+            })
+            .collect();
 
         Ok(SubtitleSearchOutcome {
             status: SubtitleSearchStatus::Ready,
