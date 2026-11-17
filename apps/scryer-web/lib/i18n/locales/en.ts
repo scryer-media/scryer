@@ -10244,11 +10244,6 @@ const en: LocaleDictionary = {
   "settings.lifecycleBuilderRootPlaceholder": "Choose a root folder",
   "settings.ruleBuilderTagsPlaceholder": "Choose tags",
   "settings.ruleBuilderNoTags": "No tags have been created yet.",
-  "settings.ruleBuilderGeneratedSource": "Generated Rego",
-  "settings.ruleBuilderGeneratedSourceHelp":
-    "The source the builder writes from your choices. This is what is validated, previewed and saved.",
-  "settings.ruleBuilderGeneratedSourceEmpty":
-    "Nothing is generated until the conditions and outcomes are complete.",
   "settings.ruleBuilderOpIsTrue": "is true",
   "settings.ruleBuilderOpIsFalse": "is false",
   "settings.ruleBuilderOpEquals": "equals",

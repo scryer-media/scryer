@@ -24,8 +24,10 @@ import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schem
 /// A rule's source editor, the same for every rule family. A rule still made
 /// by the builder is shown in the builder (Simple) or as its generated Rego
 /// (Advanced). The first edit of that Rego asks once, since editing it is
-/// one-way; a rule with nothing chosen yet goes straight to the Rego editor.
-/// Any other rule shows only the Rego editor.
+/// one-way. A rule whose builder has written nothing yet, because nothing is
+/// chosen or the choices are incomplete, goes straight to the Rego editor,
+/// which starts from the family's starter source. Any other rule shows only
+/// the Rego editor.
 export function RuleEditorSurface({
   idPrefix,
   schema,
@@ -74,10 +76,15 @@ export function RuleEditorSurface({
       ? generateRuleSource(schema, builderModel, variant)
       : null;
 
-  const needsConfirmation = ruleRegoEditorNeedsConfirmation({
-    regoSource: "",
-    builderModel,
-  });
+  // Nothing to show read-only: the Advanced tab opens the editor at once.
+  const advancedOpensEditor =
+    generatedSource === "" ||
+    !ruleRegoEditorNeedsConfirmation({ regoSource: "", builderModel });
+  const viewingNothing =
+    builderModel !== null && mode === "view" && generatedSource === "";
+  React.useEffect(() => {
+    if (viewingNothing) onEditAsRego();
+  }, [viewingNothing, onEditAsRego]);
 
   /// Stops an edit of the builder's Rego before the editor applies it and
   /// asks first. Copying, selecting and moving around stay free.
@@ -115,8 +122,7 @@ export function RuleEditorSurface({
                 className="inline-flex rounded-md border border-border p-1"
                 value={showBuilder ? "simple" : "view"}
                 onValueChange={(value) => {
-                  // Nothing chosen yet loses nothing: open the Rego editor.
-                  if (value === "view" && !needsConfirmation) onEditAsRego();
+                  if (value === "view" && advancedOpensEditor) onEditAsRego();
                   else if (value === "simple" || value === "view")
                     onModeChange(value);
                 }}
@@ -173,16 +179,8 @@ export function RuleEditorSurface({
           problems={result && !result.ok ? result.problems : []}
           options={options}
           onChange={onModelChange}
-          generatedSource={generatedSource}
           feedback={feedback}
         />
-      ) : builderModel !== null && generatedSource === "" ? (
-        <p
-          id={selectorId(idPrefix, "editor-view-empty")}
-          className="rounded border border-border px-2 py-3 text-xs text-muted-foreground"
-        >
-          {t("settings.ruleBuilderGeneratedSourceEmpty")}
-        </p>
       ) : (
         // One wrapper for both cases, so confirming keeps the same editor.
         <div

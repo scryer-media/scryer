@@ -101,9 +101,7 @@ type SettingsLifecycleRulesSectionProps = {
   isEditorOpen: boolean;
   editingRuleSetId: string | null;
   ruleSetDraft: LifecycleRuleSetDraft;
-  setRuleSetDraft: React.Dispatch<
-    React.SetStateAction<LifecycleRuleSetDraft>
-  >;
+  setRuleSetDraft: React.Dispatch<React.SetStateAction<LifecycleRuleSetDraft>>;
   /// Changes with every editor opening; controls that keep their own typing
   /// state are keyed on it.
   editorSessionKey: number;
@@ -248,7 +246,9 @@ function LifecycleContextReference() {
           id="settings-lifecycle-rules-reference"
           className="space-y-6 text-sm"
         >
-          <p className="text-muted-foreground">{t("settings.refLifecycleIntro")}</p>
+          <p className="text-muted-foreground">
+            {t("settings.refLifecycleIntro")}
+          </p>
 
           <div>
             <h4 className="mb-1 font-semibold">
@@ -557,9 +557,7 @@ function LifecyclePreviewPanel({
             <SingleSelectField
               id="settings-lifecycle-preview-rule"
               label={t("settings.lifecyclePreviewRuleSelect")}
-              placeholder={t(
-                "settings.lifecyclePreviewRuleSelectPlaceholder",
-              )}
+              placeholder={t("settings.lifecyclePreviewRuleSelectPlaceholder")}
               value={previewRuleSetId}
               onValueChange={setPreviewRuleSetId}
               options={ruleSetRecords.map((record) => ({
@@ -886,10 +884,7 @@ export function SettingsLifecycleRulesSection({
   // being written for the reference rail to describe.
   if (section !== "rules") {
     return (
-      <div
-        id="settings-lifecycle-rules-section"
-        className="space-y-4 text-sm"
-      >
+      <div id="settings-lifecycle-rules-section" className="space-y-4 text-sm">
         <div className="mx-auto w-full max-w-[1600px] space-y-4">
           {instanceSwitches}
           {operationsPanels}
@@ -984,9 +979,7 @@ export function SettingsLifecycleRulesSection({
                                 )}
                                 className="mt-1 text-xs text-[var(--scry-danger-text)]"
                               >
-                                {t(
-                                  lifecycleLoadRefusalKey(record.loadRefusal),
-                                )}
+                                {t(lifecycleLoadRefusalKey(record.loadRefusal))}
                               </p>
                             ) : null}
                           </TableCell>
@@ -1229,54 +1222,62 @@ export function SettingsLifecycleRulesSection({
                       }
                     />
 
-                    <label className="block md:max-w-[50%]">
-                      <Label className="mb-2 block">
-                        <HelpLabel
-                          label={t("settings.lifecycleRuleGraceDays")}
-                          help={t("settings.lifecycleRuleGraceDaysHelp")}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <Label className="mb-2 block">
+                          <HelpLabel
+                            label={t("settings.lifecycleRuleGraceDays")}
+                            help={t("settings.lifecycleRuleGraceDaysHelp")}
+                          />
+                        </Label>
+                        <Input
+                          id="settings-lifecycle-rule-grace-days"
+                          {...integerInputProps}
+                          min={0}
+                          value={ruleSetDraft.graceDays}
+                          onChange={(event) =>
+                            setRuleSetDraft((prev) => ({
+                              ...prev,
+                              graceDays:
+                                Number(sanitizeDigits(event.target.value)) || 0,
+                            }))
+                          }
+                          placeholder="0"
                         />
-                      </Label>
-                      <Input
-                        id="settings-lifecycle-rule-grace-days"
-                        {...integerInputProps}
-                        min={0}
-                        value={ruleSetDraft.graceDays}
-                        onChange={(event) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            graceDays:
-                              Number(sanitizeDigits(event.target.value)) || 0,
-                          }))
-                        }
-                        placeholder="0"
-                      />
-                    </label>
+                      </label>
 
-                    <label className="block md:max-w-[50%]">
-                      <Label className="mb-2 block">
-                        <HelpLabel
-                          label={t("settings.lifecycleRuleMaxTitlesPerRun")}
-                          help={t("settings.lifecycleRuleMaxTitlesPerRunHelp")}
+                      <label className="block">
+                        <Label className="mb-2 block">
+                          <HelpLabel
+                            label={t("settings.lifecycleRuleMaxTitlesPerRun")}
+                            help={t(
+                              "settings.lifecycleRuleMaxTitlesPerRunHelp",
+                            )}
+                          />
+                        </Label>
+                        <Input
+                          id="settings-lifecycle-rule-max-titles-per-run"
+                          {...integerInputProps}
+                          min={1}
+                          required={
+                            validationResult?.declaredActions?.destructive ===
+                            true
+                          }
+                          value={ruleSetDraft.maxTitlesPerRun ?? ""}
+                          onChange={(event) => {
+                            const digits = sanitizeDigits(event.target.value);
+                            setRuleSetDraft((prev) => ({
+                              ...prev,
+                              maxTitlesPerRun:
+                                digits === "" ? null : Number(digits),
+                            }));
+                          }}
+                          placeholder={t(
+                            "settings.lifecycleRuleMaxTitlesPerRunNone",
+                          )}
                         />
-                      </Label>
-                      <Input
-                        id="settings-lifecycle-rule-max-titles-per-run"
-                        {...integerInputProps}
-                        min={1}
-                        required={
-                          validationResult?.declaredActions?.destructive === true
-                        }
-                        value={ruleSetDraft.maxTitlesPerRun ?? ""}
-                        onChange={(event) => {
-                          const digits = sanitizeDigits(event.target.value);
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            maxTitlesPerRun: digits === "" ? null : Number(digits),
-                          }));
-                        }}
-                        placeholder={t("settings.lifecycleRuleMaxTitlesPerRunNone")}
-                      />
-                    </label>
+                      </label>
+                    </div>
 
                     <LifecycleRuleScheduleField
                       key={editorSessionKey}

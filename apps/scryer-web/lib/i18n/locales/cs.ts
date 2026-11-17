@@ -5584,11 +5584,6 @@ const cs: LocaleDictionary = {
   "settings.lifecycleBuilderRootPlaceholder": "Vyberte kořenovou složku",
   "settings.ruleBuilderTagsPlaceholder": "Vyberte štítky",
   "settings.ruleBuilderNoTags": "Zatím nejsou vytvořeny žádné štítky.",
-  "settings.ruleBuilderGeneratedSource": "Vygenerované Rego",
-  "settings.ruleBuilderGeneratedSourceHelp":
-    "Kód, který editor napíše podle vašich voleb. Právě ten se ověřuje, zobrazuje v náhledu a ukládá.",
-  "settings.ruleBuilderGeneratedSourceEmpty":
-    "Dokud nejsou podmínky a výsledky dokončeny, nic se negeneruje.",
   "settings.ruleBuilderOpIsTrue": "je pravda",
   "settings.ruleBuilderOpIsFalse": "není pravda",
   "settings.ruleBuilderOpEquals": "se rovná",

@@ -5173,11 +5173,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleBuilderRootPlaceholder": "Выберите корневую папку",
   "settings.ruleBuilderTagsPlaceholder": "Выберите теги",
   "settings.ruleBuilderNoTags": "Теги ещё не созданы.",
-  "settings.ruleBuilderGeneratedSource": "Сгенерированный Rego",
-  "settings.ruleBuilderGeneratedSourceHelp":
-    "Код, который конструктор пишет по вашему выбору. Именно он проверяется, используется в предпросмотре и сохраняется.",
-  "settings.ruleBuilderGeneratedSourceEmpty":
-    "Код не создаётся, пока условия и результаты не заполнены.",
   "settings.ruleBuilderOpIsTrue": "истинно",
   "settings.ruleBuilderOpIsFalse": "ложно",
   "settings.ruleBuilderOpEquals": "равно",

@@ -1,13 +1,8 @@
 import * as React from "react";
-import { ChevronRight, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { HelpLabel } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { IconButton } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,6 +40,7 @@ import {
   type RuleBuilderOutputValue,
   type RuleBuilderOptionValue,
   type RuleBuilderProblem,
+  type RuleBuilderProblemCode,
   type RuleBuilderSchema,
 } from "@/lib/utils/rule-builder";
 import {
@@ -118,6 +114,29 @@ function ProblemText({
   );
 }
 
+const FIELD_LABEL_CLASS = "block text-sm font-medium text-[var(--scry-ink2)]";
+
+/// Problems a condition row shows under its fact or comparison control. A
+/// value problem shows under the value control, and anything else under the
+/// whole row.
+const FACT_PROBLEM_CODES: ReadonlySet<RuleBuilderProblemCode> = new Set([
+  "BUILDER_FACT_REQUIRED",
+  "BUILDER_FACT_UNKNOWN",
+]);
+const OPERATOR_PROBLEM_CODES: ReadonlySet<RuleBuilderProblemCode> = new Set([
+  "BUILDER_OPERATOR_INVALID",
+]);
+const VALUE_PROBLEM_CODES: ReadonlySet<RuleBuilderProblemCode> = new Set([
+  "BUILDER_VALUE_REQUIRED",
+  "BUILDER_VALUE_NOT_NUMBER",
+  "BUILDER_VALUE_NOT_DAYS",
+  "BUILDER_VALUE_NOT_WHOLE",
+  "BUILDER_VALUE_OUT_OF_RANGE",
+  "BUILDER_VALUE_NOT_OFFERED",
+  "BUILDER_VALUE_UNREPRESENTABLE",
+  "BUILDER_VALUE_INVALID",
+]);
+
 /// One condition. `idBase` and `keys` name its elements: the rule's shared
 /// conditions are `<prefix>-condition-*` by index, an action row's own are
 /// `<prefix>-action-condition-*` by row and index.
@@ -151,22 +170,33 @@ function ConditionRow({
   const valueKind = operator?.value ?? "none";
   const valueId = selectorId(`${idBase}-value`, ...keys);
   const factId = selectorId(`${idBase}-fact`, ...keys);
+  const hasValue = valueKind !== "none";
+  const factProblems = problems.filter((p) => FACT_PROBLEM_CODES.has(p.code));
+  const operatorProblems = problems.filter((p) =>
+    OPERATOR_PROBLEM_CODES.has(p.code),
+  );
+  const valueProblems = hasValue
+    ? problems.filter((p) => VALUE_PROBLEM_CODES.has(p.code))
+    : [];
+  const rowProblems = problems.filter(
+    (p) =>
+      !factProblems.includes(p) &&
+      !operatorProblems.includes(p) &&
+      !valueProblems.includes(p),
+  );
 
   return (
     <div
       id={selectorId(idBase, ...keys)}
       className="space-y-1 rounded border border-border p-2"
     >
-      <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-        {/* pb-1.5 matches the trailing gap the sibling SingleSelectFields get
-            from their hidden native select, so the triggers line up. */}
-        <div className="min-w-0 space-y-1.5 pb-1.5">
+      {/* Every column is a label over a control, top-aligned, so the
+          controls line up whatever text sits under each one. */}
+      <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-start">
+        <div className="min-w-0 space-y-1.5">
           <label
             htmlFor={factId}
-            className={cn(
-              "block text-sm font-medium text-[var(--scry-ink2)]",
-              readOnly && "opacity-60",
-            )}
+            className={cn(FIELD_LABEL_CLASS, readOnly && "opacity-60")}
           >
             {t("settings.ruleBuilderFact")}
           </label>
@@ -207,46 +237,71 @@ function ConditionRow({
                 : []),
             ]}
           />
+          {field ? (
+            <p className="text-xs text-muted-foreground">{t(field.descKey)}</p>
+          ) : null}
+          <ProblemText
+            id={selectorId(`${idBase}-fact-problem`, ...keys)}
+            schema={schema}
+            problems={factProblems}
+          />
         </div>
-        <SingleSelectField
-          id={selectorId(`${idBase}-operator`, ...keys)}
-          label={t("settings.ruleBuilderOperator")}
-          value={condition.operator}
-          disabled={readOnly || !field}
-          onValueChange={(next) => {
-            const nextOperator = operators.find(
-              (candidate) => candidate.id === next,
-            );
-            onChange({
-              ...condition,
-              operator: next,
-              value: nextOperator?.value === valueKind ? condition.value : "",
-            });
-          }}
-          options={operators.map((candidate) => ({
-            value: candidate.id,
-            label: t(candidate.labelKey),
-          }))}
-        />
-        {valueKind === "choice" ? (
+        <div className="min-w-0 space-y-1.5">
           <SingleSelectField
-            id={valueId}
-            label={t("settings.ruleBuilderValue")}
-            value={condition.value}
-            disabled={readOnly}
-            onValueChange={(value) => onChange({ ...condition, value })}
-            options={(field?.choices ?? []).map((choice) => ({
-              value: choice.value,
-              label: t(choice.labelKey),
+            id={selectorId(`${idBase}-operator`, ...keys)}
+            label={t("settings.ruleBuilderOperator")}
+            value={condition.operator}
+            disabled={readOnly || !field}
+            onValueChange={(next) => {
+              const nextOperator = operators.find(
+                (candidate) => candidate.id === next,
+              );
+              onChange({
+                ...condition,
+                operator: next,
+                value: nextOperator?.value === valueKind ? condition.value : "",
+              });
+            }}
+            options={operators.map((candidate) => ({
+              value: candidate.id,
+              label: t(candidate.labelKey),
             }))}
           />
-        ) : valueKind !== "none" ? (
-          <label>
-            <Label className="mb-2 block">
+          <ProblemText
+            id={selectorId(`${idBase}-operator-problem`, ...keys)}
+            schema={schema}
+            problems={operatorProblems}
+          />
+        </div>
+        {valueKind === "choice" ? (
+          <div className="min-w-0 space-y-1.5">
+            <SingleSelectField
+              id={valueId}
+              label={t("settings.ruleBuilderValue")}
+              value={condition.value}
+              disabled={readOnly}
+              onValueChange={(value) => onChange({ ...condition, value })}
+              options={(field?.choices ?? []).map((choice) => ({
+                value: choice.value,
+                label: t(choice.labelKey),
+              }))}
+            />
+            <ProblemText
+              id={selectorId(`${idBase}-value-problem`, ...keys)}
+              schema={schema}
+              problems={valueProblems}
+            />
+          </div>
+        ) : hasValue ? (
+          <div className="min-w-0 space-y-1.5">
+            <label
+              htmlFor={valueId}
+              className={cn(FIELD_LABEL_CLASS, readOnly && "opacity-60")}
+            >
               {valueKind === "days"
                 ? t("settings.ruleBuilderDays")
                 : t("settings.ruleBuilderValue")}
-            </Label>
+            </label>
             <Input
               id={valueId}
               value={condition.value}
@@ -256,27 +311,32 @@ function ConditionRow({
                 onChange({ ...condition, value: event.target.value })
               }
             />
-          </label>
-        ) : (
-          <div />
-        )}
-        <IconButton
-          id={selectorId(`${idBase}-remove`, ...keys)}
-          label={t("label.remove")}
-          tone="delete"
-          disabled={readOnly}
-          onClick={onRemove}
-        >
-          <Trash2 className="h-4 w-4" />
-        </IconButton>
+            <ProblemText
+              id={selectorId(`${idBase}-value-problem`, ...keys)}
+              schema={schema}
+              problems={valueProblems}
+            />
+          </div>
+        ) : null}
+        {/* Level with the controls: a label line plus its gap above, and the
+            control's height to center in. With no value to enter, it takes
+            the value's column, right beside the comparison. */}
+        <div className="flex h-10 items-center md:mt-[calc(1.25rem+0.375rem)]">
+          <IconButton
+            id={selectorId(`${idBase}-remove`, ...keys)}
+            label={t("label.remove")}
+            tone="delete"
+            disabled={readOnly}
+            onClick={onRemove}
+          >
+            <Trash2 className="h-4 w-4" />
+          </IconButton>
+        </div>
       </div>
-      {field ? (
-        <p className="text-xs text-muted-foreground">{t(field.descKey)}</p>
-      ) : null}
       <ProblemText
         id={selectorId(`${idBase}-problem`, ...keys)}
         schema={schema}
-        problems={problems}
+        problems={rowProblems}
       />
     </div>
   );
@@ -791,7 +851,6 @@ export function RuleBuilder({
   options,
   readOnly = false,
   onChange,
-  generatedSource,
   feedback,
 }: {
   schema: RuleBuilderSchema;
@@ -801,14 +860,11 @@ export function RuleBuilder({
   options: RuleBuilderOptions;
   readOnly?: boolean;
   onChange: (model: RuleBuilderModel) => void;
-  /// What the rule will save; empty while the model cannot be written.
-  generatedSource: string;
   /// Validation status of the generated source.
   feedback: React.ReactNode;
 }) {
   const t = useTranslate();
   const prefix = schema.idPrefix;
-  const [sourceOpen, setSourceOpen] = React.useState(false);
   const hasSubjects = (schema.subjects?.length ?? 0) > 0;
   const general = problems.filter(
     (problem) =>
@@ -905,44 +961,6 @@ export function RuleBuilder({
         problems={general}
       />
 
-      <Collapsible open={sourceOpen} onOpenChange={setSourceOpen}>
-        <CollapsibleTrigger asChild>
-          <button
-            id={`${prefix}-source-toggle`}
-            type="button"
-            className="flex items-center gap-1.5 rounded-[8px] py-1 text-sm font-medium text-[var(--scry-muted)] transition-colors hover:text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ChevronRight
-              className={cn(
-                "h-4 w-4 transition-transform",
-                sourceOpen && "rotate-90",
-              )}
-            />
-            <HelpLabel
-              label={t("settings.ruleBuilderGeneratedSource")}
-              help={t("settings.ruleBuilderGeneratedSourceHelp")}
-            />
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="pt-2">
-          {generatedSource ? (
-            <pre
-              id={`${prefix}-source`}
-              data-code-font
-              className="max-h-96 overflow-auto rounded bg-muted p-2 text-xs"
-            >
-              {generatedSource}
-            </pre>
-          ) : (
-            <p
-              id={`${prefix}-source-empty`}
-              className="text-xs text-muted-foreground"
-            >
-              {t("settings.ruleBuilderGeneratedSourceEmpty")}
-            </p>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
       {feedback}
     </div>
   );

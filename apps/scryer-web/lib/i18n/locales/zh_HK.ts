@@ -4814,11 +4814,6 @@ const zh_HK: LocaleDictionary = {
   "settings.lifecycleBuilderRootPlaceholder": "揀選根資料夾",
   "settings.ruleBuilderTagsPlaceholder": "揀選標籤",
   "settings.ruleBuilderNoTags": "仲未建立任何標籤。",
-  "settings.ruleBuilderGeneratedSource": "產生嘅 Rego",
-  "settings.ruleBuilderGeneratedSourceHelp":
-    "建構器按你嘅選擇寫出嘅原始碼。驗證、預覽同儲存嘅都係呢份原始碼。",
-  "settings.ruleBuilderGeneratedSourceEmpty":
-    "條件同結果完成之前唔會產生任何內容。",
   "settings.ruleBuilderOpIsTrue": "為真",
   "settings.ruleBuilderOpIsFalse": "為假",
   "settings.ruleBuilderOpEquals": "等於",
