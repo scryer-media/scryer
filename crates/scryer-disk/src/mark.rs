@@ -404,6 +404,13 @@ impl Mark {
         }
     }
 
+    /// Whether both reads give a nonzero file number on one named volume,
+    /// so their numbers can tell one file from another. No probe.
+    pub(crate) fn numbered_on_one_volume(&self, other: &Self) -> bool {
+        self.same_volume(other) == Sameness::Same
+            && matches!((self.file, other.file), (Some(here), Some(there)) if here != 0 && there != 0)
+    }
+
     /// Whether the read said the file has a name besides this one.
     pub fn has_other_names(&self) -> bool {
         self.facts

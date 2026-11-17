@@ -168,6 +168,35 @@ fn a_destination_with_the_sources_number_and_no_other_name_keeps_the_source() {
     assert_eq!(backend.paths_of("remove_file"), [aside()]);
 }
 
+/// On the source's own volume, a destination whose read carries no file
+/// number, or a zero one, cannot be told from the set-aside file by number,
+/// so its folder is listed once as off the volume: listed by its name, the
+/// set-aside name goes; not listed, the source goes back.
+#[test]
+fn on_the_sources_volume_an_unnumbered_destination_must_be_listed_in_its_folder() {
+    let folder = "/srv/fixture-media/share";
+    let dest = "/srv/fixture-media/share/sample.mkv";
+    for kept in [on_volume(1, 0, Some(1)), numbered(Some(1), None)] {
+        let (disk, backend) = scripted();
+        backend.stat_is(dest, Ok(kept));
+        backend.lists(folder, &[("sample.mkv", None)]);
+        let answer =
+            disk.remove_source_beside_blocking(&p(SOURCE), &source_mark(), &p(dest), &mark(kept));
+        assert!(matches!(answer, AsideRemoval::Removed), "{answer:?}");
+        assert_eq!(backend.paths_of("list"), [p(folder)]);
+        assert_eq!(backend.paths_of("remove_file"), [aside()]);
+
+        let (disk, backend) = scripted();
+        backend.stat_is(dest, Ok(kept));
+        backend.lists(folder, &[("other.mkv", None)]);
+        let answer =
+            disk.remove_source_beside_blocking(&p(SOURCE), &source_mark(), &p(dest), &mark(kept));
+        assert!(matches!(answer, AsideRemoval::CannotTell), "{answer:?}");
+        assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE), aside()]);
+        assert_eq!(backend.calls_of("remove_file"), 0);
+    }
+}
+
 /// Off the source's known volume, the destination's folder is listed once
 /// and must hold its name byte for byte before the set-aside name goes. A
 /// name the listing lacks, another spelling of it included, cannot tell

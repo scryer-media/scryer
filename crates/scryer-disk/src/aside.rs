@@ -76,6 +76,26 @@ pub fn aside_path_for(source: &Path) -> PathBuf {
     folder.join(format!(".scry-ia-{}", &digest[..9]))
 }
 
+/// Whether `path`, as spelled, names a network share (`\\server\share` or
+/// its `\\?\UNC\` form). Read from the text alone, no probe: a drive letter
+/// mapped to a share is not told apart here. Never on other platforms.
+fn on_a_share(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        matches!(
+            path.components().next(),
+            Some(Component::Prefix(prefix))
+                if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 impl super::Disk {
     /// Removes `source` once the filesystem shows that `kept`, a destination
     /// that already held the file and was adopted, is a separate entry.
@@ -94,8 +114,10 @@ impl super::Disk {
     ///    length on another volume, or one not named, cannot tell: a second
     ///    view of one folder can name another volume, and two volumes can
     ///    number a file alike. The source goes back either way.
-    /// 4. Where `kept` and the source are not on one known volume, `kept`'s
-    ///    folder is listed once and must hold `kept`'s name, byte for byte.
+    /// 4. Unless `kept` and the source both carry nonzero file numbers on
+    ///    one known volume, and on Windows `kept`'s path names no network
+    ///    share, `kept`'s folder is listed once and must hold `kept`'s name,
+    ///    byte for byte.
     ///    A second view of a folder can keep answering a renamed name from
     ///    its cache; the listing is the folder's own word. A name the listing
     ///    lacks as spelled cannot tell, since the folder may hold it in
@@ -107,15 +129,17 @@ impl super::Disk {
     ///
     /// What stays unproven: on a second cached view of one folder, a name
     /// whose file number that view makes up per name reads as another file
-    /// for as long as the view's cache holds it, and on one known volume no
-    /// listing is taken. A destination that is a second hard link of the
+    /// for as long as the view's cache holds it, and where both carry
+    /// numbers on one known volume reached by a drive letter, no listing is
+    /// taken: a drive letter mapped to a share is not told from a local one
+    /// without another probe. A destination that is a second hard link of the
     /// source's file elsewhere is kept and the source goes: the library
     /// entry for the source's name is gone, the data is not.
     ///
     /// Probes, for one adopted destination: one rename and one read of
-    /// `kept`, a second read when `kept` is a link, then one removal. Where
-    /// the two are not on one known volume, one listing of `kept`'s folder
-    /// besides. A put-back adds one rename.
+    /// `kept`, a second read when `kept` is a link, then one removal. Unless
+    /// both carry numbers on one known volume off a named share, one listing
+    /// of `kept`'s folder besides. A put-back adds one rename.
     pub fn remove_source_beside_blocking(
         &self,
         source: &Path,
@@ -160,7 +184,7 @@ impl super::Disk {
                 }
             }
         }
-        if kept_now.same_volume(source_mark) != Sameness::Same
+        if (!kept_now.numbered_on_one_volume(source_mark) || on_a_share(kept))
             && let Some(answer) = self.unlisted(kept)
         {
             return self.put_back(source, aside, answer);
