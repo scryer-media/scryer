@@ -685,7 +685,7 @@ const zh_HK: LocaleDictionary = {
   "persona.trait.compatible.source": "來源：偏好 WEB-DL",
   "persona.trait.compatible.audio": "音訊：DDP 和 AAC 優先，支援廣泛設備",
   "persona.trait.compatible.x265": "x265：H.264 優於 H.265",
-  "persona.trait.compatible.size": "檔案大小：標準偏好",
+  "persona.trait.compatible.size": "檔案大小：過大的檔案會被扣分",
   "persona.trait.compatible.remux": "Remux：不優先",
   "persona.trait.compatible.hdr": "HDR：Dolby Vision 扣分（兼容性風險）",
   "settings.moviesLibrarySettings": "電影媒體設定",

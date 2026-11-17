@@ -5205,7 +5205,7 @@ const en: LocaleDictionary = {
   "persona.trait.compatible.audio":
     "Audio: DDP and AAC prioritized for broad device support",
   "persona.trait.compatible.x265": "x265: H.264 preferred over H.265",
-  "persona.trait.compatible.size": "File size: standard preferences",
+  "persona.trait.compatible.size": "File size: oversized files are penalized",
   "persona.trait.compatible.remux": "Remux: not prioritized",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision penalized (compatibility risk)",

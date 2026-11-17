@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 
 pub(crate) const BUILTIN_TRASH_PACK_ID: &str = "trash-guides-scoring-pack";
 const BUILTIN_TRASH_SHA256: &str =
-    "56810e8cb61c5cfe4b9d9ba4a8000375a4d1b99d22cbdf02789fe1d5a911a212";
+    "245d4ae106017a422d041d4f2a4313e50e0ed8fb2f1d95b4d55292bf3f1ef6ec";
 
 #[derive(Deserialize)]
 struct BuiltinPackManifest {

@@ -801,7 +801,8 @@ const cs: LocaleDictionary = {
   "persona.trait.compatible.audio":
     "Zvuk: DDP a AAC zvýhodněny kvůli široké podpoře zařízení",
   "persona.trait.compatible.x265": "x265: preferováno H.264 před H.265",
-  "persona.trait.compatible.size": "Velikost souboru: standardní preference",
+  "persona.trait.compatible.size":
+    "Velikost souboru: příliš velké soubory jsou penalizovány",
   "persona.trait.compatible.remux": "Remux: nezvýhodněno",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision penalizováno (riziko kompatibility)",
