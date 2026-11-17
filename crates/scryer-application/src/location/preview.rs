@@ -847,7 +847,7 @@ impl VolumeProbe for SystemVolumeProbe {
     }
 }
 
-/// What a free-space estimate needs to know (FR-080).
+/// What a free-space estimate needs to know.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreeSpaceRequest {
     /// A path on the source volume.
@@ -864,7 +864,7 @@ pub struct FreeSpaceRequest {
     pub recycle_base_path: Option<PathBuf>,
 }
 
-/// Free-space expectation stated in the preview (FR-080).
+/// Free-space expectation stated in the preview.
 ///
 /// Recycling is the subtle part: recycling a file on the *same* volume is a
 /// rename and costs nothing, but a recycle bin configured on another volume
@@ -879,11 +879,10 @@ pub struct FreeSpaceEstimate {
     /// recycling is a same-volume rename or is unavailable.
     pub recycle_required_bytes: u64,
     pub recycle_available_bytes: Option<u64>,
-    /// The move is a same-volume rename, so it needs no destination space
-    /// (FR-032).
+    /// The move is a same-volume rename, so it needs no destination space.
     pub same_volume_move: bool,
     /// The recycle bin is on a different volume from the source, so recycling
-    /// copies bytes instead of renaming them (FR-080).
+    /// copies bytes instead of renaming them.
     pub recycle_on_other_volume: bool,
     /// The recycle bin's volume is the destination volume, so its cost adds to
     /// the destination requirement rather than standing on its own.
@@ -995,7 +994,7 @@ where
 }
 
 /// Estimates the free space an operation needs, including the recycle-bin cost
-/// when the bin is on another volume (FR-080).
+/// when the bin is on another volume.
 pub fn estimate_free_space(
     request: &FreeSpaceRequest,
     probe: &dyn VolumeProbe,

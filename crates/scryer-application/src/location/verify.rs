@@ -311,20 +311,14 @@ pub trait FileVerificationRecorder: Send + Sync {
     async fn record_file_verification(&self, record: FileVerificationRecord) -> AppResult<()>;
 }
 
-/// Copy `source` onto `destination` as `policy`, a recorded-copy policy from
-/// [`crate::disk::placement`], says, and report what the copy streamed.
-///
-/// A copy failure is an error. What the destination proved to be is in the
-/// answer, not an error: a mismatched destination is a fact to record and
-/// surface.
 fn copy_refusal(refused: Refused, sentence: String) -> AppError {
     match refused {
         Refused::StagingOccupied => AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_OCCUPIED,
             sentence,
         ),
-        // Storage that timed out or could not be reached: the transient kind
-        // the runner retries and waits out.
+        // Storage that timed out or could not be reached carries its own
+        // variant and reason; every other refusal is a repository failure.
         Refused::Unreachable(_) => AppError::temporary_unavailable_reason(
             crate::disk::reason::DISK_PATH_UNREACHABLE,
             sentence,
@@ -334,6 +328,12 @@ fn copy_refusal(refused: Refused, sentence: String) -> AppError {
     }
 }
 
+/// Copy `source` onto `destination` as `policy`, a recorded-copy policy from
+/// [`crate::disk::placement`], says, and report what the copy streamed.
+///
+/// A copy failure is an error. What the destination proved to be is in the
+/// answer, not an error: a mismatched destination is a fact to record and
+/// surface.
 pub async fn recorded_copy(
     disk: &Disk,
     source: &Path,
@@ -1240,8 +1240,8 @@ mod tests {
     }
 
     /// A copy whose staged name cannot be read for a lasting reason, here a
-    /// parent that is a file, is a plain failure: it is not reported as
-    /// temporarily unavailable and the runner does not wait it out.
+    /// parent that is a file, is a repository failure with no reason code,
+    /// not the temporarily-unavailable variant.
     #[tokio::test]
     async fn a_destination_under_a_file_is_not_reported_as_temporarily_unavailable() {
         let dir = tempfile::tempdir().unwrap();

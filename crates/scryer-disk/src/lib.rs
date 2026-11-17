@@ -737,7 +737,7 @@ impl Disk {
 
     fn mark_of(&self, result: io::Result<backend::RawStat>) -> Result<Mark, PathReading> {
         match &result {
-            Ok(stat) => Ok(Mark::of_stat(stat, None)),
+            Ok(stat) => Ok(Mark::of_stat(stat)),
             Err(_) => Err(PathReading::from_result(&result, self.inner.clock.now())),
         }
     }
@@ -1434,6 +1434,20 @@ impl Disk {
         })
         .await
         .map(tokio::fs::File::from_std)
+    }
+
+    /// Write all of `bytes` through `file`, a handle on `path` from
+    /// [`Self::open`], and flush them out of the handle.
+    pub async fn write_through(
+        &self,
+        path: &Path,
+        file: &mut tokio::fs::File,
+        bytes: &[u8],
+    ) -> Result<(), DiskError> {
+        use tokio::io::AsyncWriteExt;
+        let failed = |error| DiskError::new(DiskVerb::Write, path, error);
+        file.write_all(bytes).await.map_err(failed)?;
+        file.flush().await.map_err(failed)
     }
 
     /// Sync what was written through `file`, a handle on `path`, close it,

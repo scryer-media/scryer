@@ -1,12 +1,12 @@
 //! What one read of a file said about which file it is and which version of
 //! it, kept opaque. A caller holds a [`Mark`] and asks what it means: is this
-//! path still that file, are these two one file, does it have other names.
-//! No number in it is handed out.
+//! path still that file, are these two one file, are they on one volume. No
+//! number in it is handed out.
 //!
 //! A mark carries whatever the platform offered: the device and inode on
-//! unix, a zero inode included; the volume serial and file index on Windows
-//! when the read asked for them; and length and times everywhere. Each
-//! answer says when the platform's facts were not enough to tell.
+//! unix, a zero inode included; the volume serial alone on Windows, which
+//! tells no two files apart; and length and times everywhere. Each answer
+//! says when the platform's facts were not enough to tell.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -69,7 +69,6 @@ struct Facts {
     modified: Option<SystemTime>,
     changed: Option<(i64, i64)>,
     created: Option<SystemTime>,
-    links: Option<u64>,
     owner: Option<u32>,
 }
 
@@ -88,11 +87,10 @@ const WINDOWS_LANE: &str = "windows-volume:";
 pub(crate) const UNKNOWN_LANE: &str = "unknown-volume";
 
 impl Mark {
-    pub(crate) fn of_stat(stat: &RawStat, windows_id: Option<(u64, u64)>) -> Self {
-        let (volume, file) = match (windows_id, stat.extra.device) {
-            (Some((serial, index)), _) => (Volume::Windows(serial), Some(index)),
-            (None, Some(device)) => (Volume::Unix(device), stat.extra.inode),
-            (None, None) => (Volume::Unknown, None),
+    pub(crate) fn of_stat(stat: &RawStat) -> Self {
+        let (volume, file) = match stat.extra.device {
+            Some(device) => (Volume::Unix(device), stat.extra.inode),
+            None => (Volume::Unknown, None),
         };
         Self {
             volume,
@@ -103,15 +101,15 @@ impl Mark {
                 modified: stat.modified,
                 changed: stat.extra.changed,
                 created: stat.extra.created,
-                links: stat.links,
                 owner: stat.extra.owner,
             }),
         }
     }
 
     /// The mark of the volume the platform numbers `number`, a unix device
-    /// or a Windows volume serial, for a caller that already holds that
-    /// number from a handle. No probe.
+    /// or a Windows volume serial. No probe. Only for the import worker,
+    /// whose payload carries that number until it carries a mark instead.
+    #[doc(hidden)]
     pub fn on_volume(number: u64) -> Self {
         Self {
             volume: if cfg!(unix) {
@@ -127,9 +125,14 @@ impl Mark {
     }
 
     /// The mark of metadata a caller already holds from an open handle. No
-    /// probe. It never carries a Windows file index.
+    /// probe.
     pub fn of(metadata: &std::fs::Metadata) -> Self {
-        Self::of_stat(&RawStat::of(metadata), None)
+        Self::of_stat(&RawStat::of(metadata))
+    }
+
+    /// Whether the read named the volume the path is on.
+    pub fn names_volume(&self) -> bool {
+        self.volume != Volume::Unknown
     }
 
     /// Whether both marks are one file. No probe.
@@ -250,7 +253,6 @@ impl Mark {
             pair(facts.created.map(since_epoch)),
             volume,
             number(self.file),
-            number(facts.links),
             number(facts.owner.map(u64::from)),
         ]
         .join(":")
@@ -287,7 +289,6 @@ impl Mark {
             created,
             volume,
             file,
-            links,
             owner,
         ] = fields[..]
         else {
@@ -339,7 +340,6 @@ impl Mark {
                 // A change time's nanoseconds are a count, never signed.
                 changed: pair(changed)?.filter(|(_, nanos)| *nanos >= 0),
                 created: time(created)?,
-                links: number(links)?,
                 owner: number(owner)?,
             }),
         })

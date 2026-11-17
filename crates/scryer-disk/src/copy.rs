@@ -1156,14 +1156,12 @@ impl Disk {
     }
 
     /// A turn on the volume `dest` will land on. The volume is read within
-    /// the root's bound, and one that does not answer in time shares the
-    /// unknown lane.
-    pub(crate) async fn copy_turn(&self, dest: &Path) -> CopyPermit {
-        let unanswered = |_| UNKNOWN_LANE.to_owned();
-        let lane = self
-            .probe_with(dest.to_path_buf(), Self::copy_lane, unanswered)
-            .await;
-        self.copy_admission().acquire_keyed(&lane).await
+    /// the root's bound; when it does not answer in time there is no turn,
+    /// and the copy waits for its own on the thread it runs on.
+    pub(crate) async fn copy_turn(&self, dest: &Path) -> Option<CopyPermit> {
+        let read = |disk: &Self, dest: &Path| Some(disk.copy_lane(dest));
+        let lane = self.probe_with(dest.to_path_buf(), read, |_| None).await?;
+        Some(self.copy_admission().acquire_keyed(&lane).await)
     }
 
     /// Whether a move from `source` to `destination` can be a rename: both

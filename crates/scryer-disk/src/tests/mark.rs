@@ -23,7 +23,7 @@ fn scripted() -> (Disk, Arc<Scripted>) {
 }
 
 fn mark(stat: RawStat) -> Mark {
-    Mark::of_stat(&stat, None)
+    Mark::of_stat(&stat)
 }
 
 #[test]
@@ -166,9 +166,9 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
     let marks = [
         mark(full),
         mark(dir()),
-        Mark::of_stat(&file(5), Some((42, 99))),
+        Mark::from_stored("mark1:f:5:-:-:-:w42:99:-").expect("a Windows mark"),
         mark(file(5)).volume(),
-        Mark::of_stat(&file(5), Some((42, 99))).volume(),
+        Mark::from_stored("windows-volume:42").expect("a Windows volume"),
         mark(dir()).volume(),
     ];
     for taken in &marks {
@@ -180,25 +180,26 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
     assert_eq!(marks[3].to_stored(), "unix-dev:1");
     assert_eq!(marks[4].to_stored(), "windows-volume:42");
     assert_eq!(marks[5].to_stored(), "unknown-volume");
+    assert!(marks[3].names_volume() && !marks[5].names_volume());
     for unread in [
         "",
         "mark1",
-        "mark2:f:5:-:-:-:u1:105:1:-",
-        "mark1:x:5:-:-:-:u1:105:1:-",
-        "mark1:f:5:-:-:-:q1:105:1:-",
-        "mark1:f:5:-:-:-:u1:105:1:-:extra",
+        "mark2:f:5:-:-:-:u1:105:-",
+        "mark1:x:5:-:-:-:u1:105:-",
+        "mark1:f:5:-:-:-:q1:105:-",
+        "mark1:f:5:-:-:-:u1:105:-:extra",
         "unix-dev:",
         "unix-dev:seven",
         // Another spelling of a number is not what was written.
         "unix-dev:+7",
         "unix-dev:07",
         "windows-volume:+7",
-        "mark1:f:05:-:-:-:u1:105:1:-",
-        "mark1:f:5:-:-:-:u+1:105:1:-",
-        "mark1:f:5:-:5.-3:-:u1:105:1:-",
-        "mark1:f:5:-:5.1000000000:-:u1:105:1:-",
-        "mark1:f:5:5.1000000000:-:-:u1:105:1:-",
-        "mark1:f:5:-:+5.3:-:u1:105:1:-",
+        "mark1:f:05:-:-:-:u1:105:-",
+        "mark1:f:5:-:-:-:u+1:105:-",
+        "mark1:f:5:-:5.-3:-:u1:105:-",
+        "mark1:f:5:-:5.1000000000:-:u1:105:-",
+        "mark1:f:5:5.1000000000:-:-:u1:105:-",
+        "mark1:f:5:-:+5.3:-:u1:105:-",
     ] {
         assert!(Mark::from_stored(unread).is_none(), "{unread}");
     }
@@ -241,16 +242,19 @@ async fn a_landing_volume_is_its_nearest_answering_ancestor() {
     assert!(nowhere.landing_volume_blocking(&p(A)).is_none());
     assert_eq!(nowhere.copy_lane(&p(A)), "unknown-volume");
 
-    // A volume that does not answer within the bound shares the unknown lane.
+    // A volume that answers gives a turn on its own lane; one that does not
+    // answer within the bound gives no turn and holds no lane.
     disk.install_copy_workers(1);
-    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
-    let (open, gate) = mpsc::channel();
-    *backend.gate.lock().unwrap() = Some(gate);
-    let turn = disk.copy_turn(&p(A)).await;
     let free = |lane| super::copying::turn_is_free(&disk.copy_admission(), lane);
-    assert!(!free("unknown-volume") && free("unix-dev:7"));
+    let turn = disk.copy_turn(&p(A)).await;
+    assert!(turn.is_some() && free("unknown-volume") && !free("unix-dev:7"));
     drop(turn);
-    open.send(()).unwrap();
+    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
+    let (open, gate) = mpsc::channel::<()>();
+    *backend.gate.lock().unwrap() = Some(gate);
+    assert!(disk.copy_turn(&p(A)).await.is_none());
+    assert!(free("unknown-volume") && free("unix-dev:7"));
+    drop(open);
 }
 
 #[cfg(unix)]

@@ -4,7 +4,7 @@ use scryer_domain::{Episode, Title};
 use std::io::Cursor;
 
 use crate::disk::reason::DISK_DESTINATION_EXISTS;
-use crate::disk::{Disk, DiskError, DiskVerb, Link, LinkOutcome, Open, Parents, Remove};
+use crate::disk::{Disk, DiskError, Link, LinkOutcome, Open, Parents, Remove};
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -1326,17 +1326,15 @@ async fn write_new(
     content: &str,
     durable: bool,
 ) -> Result<(), DiskError> {
-    use tokio::io::AsyncWriteExt;
     let mut file = disk.open(path, Open::create_new()).await?;
-    let written = match file.write_all(content.as_bytes()).await {
-        Ok(()) => file.flush().await,
-        failed => failed,
-    };
-    let written = match written {
+    let written = match disk
+        .write_through(path, &mut file, content.as_bytes())
+        .await
+    {
         Ok(()) if durable => disk.finish(path, file).await.map(drop),
         written => {
             drop(file);
-            written.map_err(|error| DiskError::new(DiskVerb::Write, path, error))
+            written
         }
     };
     if written.is_err() {
@@ -3309,11 +3307,11 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
         stdfs::write(dir.path().join("invented-neighbour.nfo"), "kept").unwrap();
         // A name no filesystem accepts makes the in-place write fail.
         let path = dir.path().join(format!("{}.nfo", "n".repeat(300)));
-        let refused = DiskError::new(
-            DiskVerb::Link,
-            &path,
-            std::io::ErrorKind::PermissionDenied.into(),
-        );
+        // A link whose source is missing is one the disk refuses outright.
+        let refused = Disk::process()
+            .link(dir.path().join("invented-missing.tmp"), &path, Link::Hard)
+            .await
+            .expect_err("a missing source cannot be linked");
 
         let outcome = settle_staged(&path, "<episodedetails/>\n", Err(refused)).await;
 

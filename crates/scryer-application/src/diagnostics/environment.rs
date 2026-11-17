@@ -321,8 +321,7 @@ fn probe_root(path: &str) -> RootFacts {
         available_bytes: space.as_ref().map(|space| space.available_bytes),
         // A plain read names no volume on Windows, and such a root is in no
         // group.
-        volume: (mark.same_volume(&mark) == crate::disk::Sameness::Same)
-            .then(|| mark.volume().to_stored()),
+        volume: mark.names_volume().then(|| mark.volume().to_stored()),
     }
 }
 

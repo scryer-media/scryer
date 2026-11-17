@@ -411,6 +411,7 @@ fn p(path: &str) -> PathBuf {
 }
 
 mod copying;
+mod guard;
 mod mark;
 mod place;
 

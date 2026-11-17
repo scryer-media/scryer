@@ -2031,7 +2031,7 @@ fn prepare_import_placement_blocking(
 fn copy_lane(volume_key: &str) -> Mark {
     Mark::from_stored(volume_key).unwrap_or_else(|| {
         tracing::warn!(
-            volume_key,
+            volume_key = %opaque_lane_key(volume_key),
             "an import copy's volume key was not read; it shares the unknown lane"
         );
         Mark::from_stored("unknown-volume").expect("the unknown lane is always readable")
@@ -2040,13 +2040,14 @@ fn copy_lane(volume_key: &str) -> Mark {
 
 /// The key the disk service writes for the volume the approved destination
 /// folder resolved to, from the number its fingerprint already holds.
+#[cfg_attr(not(any(unix, windows)), allow(unused_variables))]
 fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
     #[cfg(unix)]
     let number = guard.approved_parent_fingerprint.dev;
     #[cfg(windows)]
     let number = u64::from(guard.approved_parent_fingerprint.volume_serial_number);
     #[cfg(not(any(unix, windows)))]
-    let number = (guard, 0).1;
+    let number = 0;
     Mark::on_volume(number).to_stored()
 }
 

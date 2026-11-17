@@ -18,8 +18,9 @@ pub mod reason {
     /// Nothing current is known about the path; the caller did not ask the
     /// disk.
     pub const DISK_NOT_OBSERVED: &str = "DISK_NOT_OBSERVED";
-    /// The path could not be read: the share did not answer, access was
-    /// refused, or the read failed.
+    /// The storage could not be reached: a stale handle, a dropped connection,
+    /// a host or network that is down. Also the unknown reason of every
+    /// unreachable reading, whose own cause says which.
     pub const DISK_PATH_UNREACHABLE: &str = "DISK_PATH_UNREACHABLE";
     /// The disk did not answer within the owner's bound.
     pub const DISK_TIMED_OUT: &str = "DISK_TIMED_OUT";
@@ -307,8 +308,7 @@ pub struct DiskError {
 }
 
 impl DiskError {
-    #[doc(hidden)]
-    pub fn new(verb: DiskVerb, path: &Path, source: io::Error) -> Self {
+    pub(crate) fn new(verb: DiskVerb, path: &Path, source: io::Error) -> Self {
         Self {
             verb,
             reason: classify(&source),

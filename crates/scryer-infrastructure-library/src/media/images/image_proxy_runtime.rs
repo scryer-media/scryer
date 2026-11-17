@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use reqwest::header::{
     ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
 };
-use scryer_application::disk::{Access, Disk, DiskError, Parents, Remove, Replace};
+use scryer_application::disk::{Access, Disk, DiskError, Parents, Remove, Replace, reason};
 use scryer_application::{
     AppError, AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage,
     ImageProxyRepository, ImageProxySourceRecord, TitleImageKind, TitleImageProcessor,
@@ -939,15 +939,10 @@ impl ImageProxyCacheControl for ImageProxyRuntime {
             let conversion = self.conversions.watch(source_path.clone());
             #[cfg(test)]
             self.jpeg_source_reads.fetch_add(1, Ordering::Relaxed);
-            let read = Disk::process().read(source_path).await;
-            let bytes = match read.map_err(std::io::Error::from) {
+            let bytes = match Disk::process().read(source_path).await {
                 Ok(bytes) => bytes,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to read cached JPEG: {error}"
-                    )));
-                }
+                Err(error) if error.reason() == reason::DISK_PATH_MISSING => return Ok(false),
+                Err(error) => return Err(cache_failure("read cached JPEG")(error)),
             };
             if bytes.len() as i64 != entry.byte_size {
                 return Ok(false);

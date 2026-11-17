@@ -416,7 +416,7 @@ impl Disk {
                     staged_free = true;
                 }
                 watch.progress.report(Phase::Waiting, 0);
-                Some(self.copy_turn(&dest).await)
+                self.copy_turn(&dest).await
             }
             _ => None,
         };

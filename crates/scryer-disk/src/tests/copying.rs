@@ -38,7 +38,6 @@ fn payload() -> Vec<u8> {
         .collect()
 }
 
-/// Whether a turn in `lane` is free right now, asked without waiting.
 /// How many turns of a lane are out, without waiting for one.
 pub(super) fn turns_held(admission: &CopyAdmission, lane: &str) -> usize {
     let mut taken = Vec::new();
@@ -51,6 +50,7 @@ pub(super) fn turns_held(admission: &CopyAdmission, lane: &str) -> usize {
     }
 }
 
+/// Whether a turn in `lane` is free right now, asked without waiting.
 pub(super) fn turn_is_free(admission: &CopyAdmission, lane: &str) -> bool {
     let turn = std::pin::pin!(admission.acquire_keyed(lane));
     matches!(
