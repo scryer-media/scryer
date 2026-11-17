@@ -10229,6 +10229,8 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderAction": "Action",
   "settings.ruleBuilderActionPlaceholder": "Choose an action",
   "settings.ruleBuilderActionConditions": "Only when",
+  "settings.ruleBuilderActionConditionsHelp": "This action runs only when these match too, on top of the rule's conditions. Other actions are not affected.",
+  "settings.ruleBuilderAddActionCondition": "Add a condition for this action only",
   "settings.ruleBuilderAddAction": "Add action",
   "settings.ruleBuilderProblemActionRequired": "Choose an action.",
   "settings.ruleBuilderFact": "Fact",

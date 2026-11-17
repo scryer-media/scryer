@@ -861,29 +861,58 @@ function ActionRow({
           />
         </div>
       ) : null}
-      <ConditionList
-        schema={schema}
-        fields={ruleBuilderSubjectFields(schema, variant, subject)}
-        idBase={`${prefix}-action-condition`}
-        keys={[index]}
-        options={options}
-        joinId={selectorId(`${prefix}-action-join`, index)}
-        join={row.join}
-        conditions={row.conditions}
-        problems={problems.filter(
-          (problem) => problem.conditionIndex !== undefined,
-        )}
-        readOnly={readOnly}
-        label={t("settings.ruleBuilderActionConditions")}
-        onChange={(change) =>
-          onChange(setRuleBuilderActionConditions(model, index, change))
-        }
-      />
       <ProblemText
         id={selectorId(`${prefix}-action-row-problem`, index)}
         schema={schema}
         problems={rowProblems}
       />
+      {row.conditions.length > 0 ? (
+        // Set apart from the rule's own conditions: these narrow this action
+        // alone.
+        <div className="border-l-2 border-border pl-3">
+          <ConditionList
+            schema={schema}
+            fields={ruleBuilderSubjectFields(schema, variant, subject)}
+            idBase={`${prefix}-action-condition`}
+            keys={[index]}
+            options={options}
+            joinId={selectorId(`${prefix}-action-join`, index)}
+            join={row.join}
+            conditions={row.conditions}
+            problems={problems.filter(
+              (problem) => problem.conditionIndex !== undefined,
+            )}
+            readOnly={readOnly}
+            label={
+              <HelpLabel
+                label={t("settings.ruleBuilderActionConditions")}
+                help={t("settings.ruleBuilderActionConditionsHelp")}
+              />
+            }
+            onChange={(change) =>
+              onChange(setRuleBuilderActionConditions(model, index, change))
+            }
+          />
+        </div>
+      ) : (
+        <Button
+          id={selectorId(`${prefix}-action-condition-add`, index)}
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={readOnly}
+          onClick={() =>
+            onChange(
+              setRuleBuilderActionConditions(model, index, {
+                conditions: [{ field: "", operator: "", value: "" }],
+              }),
+            )
+          }
+        >
+          <Plus className="mr-1 h-4 w-4" />
+          {t("settings.ruleBuilderAddActionCondition")}
+        </Button>
+      )}
     </div>
   );
 }

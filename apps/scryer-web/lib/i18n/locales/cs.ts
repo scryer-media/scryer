@@ -5569,6 +5569,8 @@ const cs: LocaleDictionary = {
   "settings.ruleBuilderAction": "Akce",
   "settings.ruleBuilderActionPlaceholder": "Vyberte akci",
   "settings.ruleBuilderActionConditions": "Jen když",
+  "settings.ruleBuilderActionConditionsHelp": "Tato akce proběhne, jen když platí i tyto podmínky, navíc k podmínkám pravidla. Ostatních akcí se to netýká.",
+  "settings.ruleBuilderAddActionCondition": "Přidat podmínku jen pro tuto akci",
   "settings.ruleBuilderAddAction": "Přidat akci",
   "settings.ruleBuilderProblemActionRequired": "Vyberte akci.",
   "settings.ruleBuilderFact": "Údaj",

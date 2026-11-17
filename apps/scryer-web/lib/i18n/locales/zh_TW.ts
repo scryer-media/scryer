@@ -4806,6 +4806,8 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleBuilderAction": "動作",
   "settings.ruleBuilderActionPlaceholder": "選擇動作",
   "settings.ruleBuilderActionConditions": "僅限於",
+  "settings.ruleBuilderActionConditionsHelp": "除了規則的條件外，還要符合這些條件，此動作才會執行。其他動作不受影響。",
+  "settings.ruleBuilderAddActionCondition": "新增僅限此動作的條件",
   "settings.ruleBuilderAddAction": "新增動作",
   "settings.ruleBuilderProblemActionRequired": "請選擇動作。",
   "settings.ruleBuilderFact": "事實",

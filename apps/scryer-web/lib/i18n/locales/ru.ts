@@ -5158,6 +5158,8 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderAction": "Действие",
   "settings.ruleBuilderActionPlaceholder": "Выберите действие",
   "settings.ruleBuilderActionConditions": "Только если",
+  "settings.ruleBuilderActionConditionsHelp": "Это действие выполняется, только если выполнены и эти условия, помимо условий правила. На другие действия это не влияет.",
+  "settings.ruleBuilderAddActionCondition": "Добавить условие только для этого действия",
   "settings.ruleBuilderAddAction": "Добавить действие",
   "settings.ruleBuilderProblemActionRequired": "Выберите действие.",
   "settings.ruleBuilderFact": "Факт",

@@ -4799,6 +4799,8 @@ const zh_HK: LocaleDictionary = {
   "settings.ruleBuilderAction": "動作",
   "settings.ruleBuilderActionPlaceholder": "揀選動作",
   "settings.ruleBuilderActionConditions": "只限於",
+  "settings.ruleBuilderActionConditionsHelp": "除咗規則嘅條件，仲要符合呢啲條件，呢個動作先會執行。其他動作唔受影響。",
+  "settings.ruleBuilderAddActionCondition": "新增只限此動作嘅條件",
   "settings.ruleBuilderAddAction": "新增動作",
   "settings.ruleBuilderProblemActionRequired": "請揀選動作。",
   "settings.ruleBuilderFact": "事實",
