@@ -164,7 +164,8 @@ pub enum PutBackAside {
     /// There was nothing to put back: no nonempty regular file at the
     /// set-aside name. An empty one there was removed. Nothing was moved.
     Nothing,
-    /// Renaming it back failed; it is still at `at`.
+    /// Renaming it back failed, and a read after the failure found the
+    /// nonempty file still at `at`.
     Failed { at: PathBuf, error: DiskError },
     /// The set-aside name `at` holds a nonempty file, and the source's name
     /// holds something again, so nothing was moved and nothing removed:
@@ -554,7 +555,8 @@ impl super::Disk {
     /// operator.
     ///
     /// Probes: one read of the set-aside name, then one rename when it holds
-    /// a nonempty regular file, or one removal when it holds an empty one.
+    /// a nonempty regular file, or one removal when it holds an empty one. A
+    /// rename that fails reads the set-aside name once more.
     pub fn put_back_set_aside_source_blocking(&self, source: &Path) -> PutBackAside {
         let aside = aside_path_for(source);
         match self.fingerprint_blocking(&aside) {
@@ -592,7 +594,15 @@ impl super::Disk {
                 );
                 PutBackAside::SourceNameTaken { at: aside }
             }
-            Err(error) => PutBackAside::Failed { at: aside, error },
+            // The file is named as still there only on a fresh read that
+            // finds it: a rename that failed because it went elsewhere
+            // leaves nothing here to wait on.
+            Err(error) => match self.fingerprint_blocking(&aside) {
+                Ok(read) if read.kind() == Some(EntryKind::File) && !read.is_len(0) => {
+                    PutBackAside::Failed { at: aside, error }
+                }
+                _ => PutBackAside::Nothing,
+            },
         }
     }
 

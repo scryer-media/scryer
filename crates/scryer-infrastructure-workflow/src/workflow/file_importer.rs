@@ -612,6 +612,9 @@ fn read_import_source_at_start<T>(path: &Path, read: fn(&Path) -> AppResult<T>) 
                         facts: vec![kept_path_fact(&at)],
                     })
                 }
+                // The only copy may be the file at the set-aside name, in
+                // the source's folder: the run stops there, and nothing
+                // releases that folder until an operator settles it.
                 disk::PutBackAside::Failed { at, error: failure } => {
                     tracing::error!(
                         source = %path.display(),
@@ -619,7 +622,16 @@ fn read_import_source_at_start<T>(path: &Path, read: fn(&Path) -> AppResult<T>) 
                         error = %failure,
                         "an import source left at its set-aside name could not be put back"
                     );
-                    Err(error)
+                    Err(AppError::ManualReconciliationRefused {
+                        message: format!(
+                            "import source {} was set aside at {} by an earlier cleanup and could not be put back: {failure}; nothing was moved or removed",
+                            path.display(),
+                            at.display()
+                        ),
+                        reason:
+                            scryer_application::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+                        facts: vec![kept_path_fact(&at)],
+                    })
                 }
             }
         }
@@ -2693,6 +2705,9 @@ fn prove_import_source_cleanup_blocking(
             );
             return Ok(SourceCleanup::Done);
         }
+        // A set-aside file that could not go back stays where it is, and the
+        // refusal that names it reaches the caller.
+        Err(error) if error.requires_manual_reconciliation() => return Err(error),
         Err(_) => {
             return Err(AppError::Repository(format!(
                 "import source cleanup failed because source is inaccessible: {}",
@@ -3021,6 +3036,7 @@ fn try_fast_import_placement_in(
         prepared.size,
         &prepared.destination_guard,
         prepared.source_cleanup_required,
+        prepared.verification_depth,
     )? {
         return Ok(FastPlacementResult::Finished(existing));
     }
@@ -3274,6 +3290,7 @@ fn reconcile_existing_destination(
     size: u64,
     destination_guard: &ImportDestinationGuard,
     source_cleanup_required: bool,
+    depth: VerificationDepth,
 ) -> AppResult<Option<ImportFileResult>> {
     let existing = match Disk::process().fingerprint_blocking(dest) {
         Ok(mark) => mark,
@@ -3343,29 +3360,27 @@ fn reconcile_existing_destination(
     ensure_same_source(source, source_fingerprint)?;
     validate_import_destination_parent(destination_guard, dest)?;
     validate_import_destination_file(destination_guard)?;
-    let source_proof = import_content_proof(source).map_err(|error| {
-        import_error_context(
-            &error,
-            format!(
-                "failed to prove import source content {}: {error}",
-                source.display()
-            ),
-        )
-    })?;
-    let destination_proof = import_content_proof(dest).map_err(|error| {
-        import_error_context(
-            &error,
-            format!(
-                "failed to prove import destination content {}: {error}",
+    // The existing destination is adopted, and a move's source later removed
+    // beside it, only when the two hold the same content at the operator's
+    // depth: at quick depth their lengths and live head and tail, at full
+    // depth both read whole. A copy an earlier run kept at this name after
+    // it failed its full check is therefore never adopted at full depth.
+    // Probes: one open of each file and its length through the handle; at
+    // full depth each is read whole. The source's length is the one just
+    // read, so a destination of the same content is of `size` bytes.
+    let check_depth = match depth {
+        VerificationDepth::Quick => disk::Depth::Quick,
+        VerificationDepth::Full => disk::Depth::Full,
+    };
+    match Disk::process().check_blocking(source, dest, check_depth) {
+        disk::Check::Same => {}
+        disk::Check::Changed => {
+            return Err(AppError::ManualReconciliationRequired(format!(
+                "import destination appeared with different content: {}",
                 dest.display()
-            ),
-        )
-    })?;
-    if source_proof != destination_proof || source_proof.size_bytes != size {
-        return Err(AppError::ManualReconciliationRequired(format!(
-            "import destination appeared with different content: {}",
-            dest.display()
-        )));
+            )));
+        }
+        disk::Check::Unread(said) => return Err(adoption_unread(source, dest, &said)),
     }
 
     let source_cleanup = if source_cleanup_required {
@@ -3392,6 +3407,29 @@ fn reconcile_existing_destination(
         // proved equal to the source by the sampled proof above.
         verification: None,
     }))
+}
+
+/// Why an existing destination could not be compared with the source: the
+/// file that does not read, with the reason its own read gives, so a source
+/// or destination gone in the meantime is told as such. Each is read once
+/// more, on this failure only.
+fn adoption_unread(source: &Path, dest: &Path, said: &str) -> AppError {
+    for (path, which) in [(source, "source"), (dest, "destination")] {
+        if let Err(error) = import_content_proof(path) {
+            return import_error_context(
+                &error,
+                format!(
+                    "failed to prove import {which} content {}: {error}",
+                    path.display()
+                ),
+            );
+        }
+    }
+    AppError::Repository(format!(
+        "failed to compare import destination {} with its source {}: {said}",
+        dest.display(),
+        source.display()
+    ))
 }
 
 /// The destination is the source's own entry. The library row points at the
@@ -3511,6 +3549,7 @@ fn import_hardlink_or_copy_blocking(
             size,
             &destination_guard,
             source_cleanup_required,
+            verification_depth,
         )? {
             return Ok(existing);
         }
@@ -6534,6 +6573,58 @@ mod tests {
         assert_eq!(std::fs::read(&linked).ok(), bytes);
     }
 
+    /// An existing destination that differs from the source only between the
+    /// sampled head and tail is not adopted at full depth: the import is
+    /// refused for reconciliation and both files stay as they are. At quick
+    /// depth the same pair is adopted, since a sample is all that depth
+    /// compares.
+    #[test]
+    fn an_existing_destination_is_adopted_only_at_the_operators_depth() {
+        const LEN: usize = 6 * 1024 * 1024;
+        let source_bytes: Vec<u8> = (0..LEN).map(|index| (index % 251) as u8).collect();
+        let mut damaged = source_bytes.clone();
+        damaged[LEN / 2] ^= 0xFF;
+
+        for depth in [VerificationDepth::Full, VerificationDepth::Quick] {
+            let source_dir = tempfile::tempdir().expect("source tempdir");
+            let dest_dir = tempfile::tempdir().expect("dest tempdir");
+            let source = source_dir.path().join("sample-source.mkv");
+            let dest = dest_dir.path().join("Imported.Sample.mkv");
+            std::fs::write(&source, &source_bytes).expect("write source");
+            std::fs::write(&dest, &damaged).expect("write destination");
+
+            let result = import_file_blocking_at_depth(
+                source.clone(),
+                dest.clone(),
+                ImportMode::Move,
+                ImportFileOptions {
+                    force_cross_device_move: true,
+                    ..Default::default()
+                },
+                depth,
+                None,
+                None,
+                ImportFilePermissions::default(),
+            );
+            match depth {
+                VerificationDepth::Full => {
+                    let error = result.expect_err("a differing destination is not adopted");
+                    assert!(error.requires_manual_reconciliation(), "{error:?}");
+                }
+                VerificationDepth::Quick => {
+                    let result = result.expect("the sampled pair is adopted");
+                    assert_eq!(
+                        result.destination_disposition,
+                        ImportDestinationDisposition::AlreadyPresent
+                    );
+                    assert!(result.source_cleanup.is_some(), "{result:?}");
+                }
+            }
+            assert_eq!(std::fs::read(&source).ok(), Some(source_bytes.clone()));
+            assert_eq!(std::fs::read(&dest).ok(), Some(damaged.clone()));
+        }
+    }
+
     /// A destination that is another entry is the import, and the move
     /// finishes by removing the source name: a second name of the source
     /// file, and a symlink to another file with the same content.
@@ -8104,6 +8195,88 @@ mod tests {
             Some(scryer_application::error_reasons::import::FILE_NOT_FOUND)
         );
         assert!(!missing.exists());
+    }
+
+    /// A source an interrupted cleanup set aside that cannot be put back
+    /// stops a cleanup-only retry, and an import, with the set-aside name in
+    /// the kept-path fact: the file there may be the only copy, in the
+    /// download's folder, so the cleanup is not done and nothing is removed.
+    /// Once it can go back, the cleanup puts it back and finishes.
+    #[cfg(unix)]
+    #[test]
+    fn a_set_aside_source_that_cannot_go_back_stops_its_cleanup() {
+        use scryer_application::error_reasons::import;
+        use std::os::unix::fs::PermissionsExt;
+        let source_dir = tempfile::tempdir().expect("source tempdir");
+        let dest_dir = tempfile::tempdir().expect("dest tempdir");
+        let source = source_dir.path().join("sample-source.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let dest = dest_dir.path().join("Imported.Sample.mkv");
+        let result = import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                ..Default::default()
+            },
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("place file");
+        let guard = result.source_cleanup.expect("cleanup guard");
+
+        let aside = disk::aside_path_for(&source);
+        std::fs::rename(&source, &aside).expect("set the source aside");
+        let set = |mode| {
+            std::fs::set_permissions(source_dir.path(), std::fs::Permissions::from_mode(mode))
+                .expect("folder permissions")
+        };
+        set(0o555);
+        // A user the permissions do not bind renames anyway; nothing to test.
+        let probe = source_dir.path().join("probe");
+        if std::fs::write(&probe, b"").is_ok() {
+            let _ = std::fs::remove_file(&probe);
+            set(0o755);
+            return;
+        }
+        let kept = [RefusalFact {
+            key: import::KEPT_PATH_FACT,
+            value: RefusalFactValue::Text(aside.display().to_string()),
+        }];
+        let cleanup = remove_import_source_after_verified_import_blocking(
+            guard.clone(),
+            dest.clone(),
+            ImportFileOptions::default(),
+        )
+        .expect_err("a set-aside source that cannot go back is not done");
+        let start =
+            snapshot_import_source_blocking(source.clone()).expect_err("an import stops at it too");
+        set(0o755);
+        for error in [cleanup, start] {
+            assert!(error.requires_manual_reconciliation(), "{error:?}");
+            assert_eq!(error.reason(), Some(import::DESTINATION_ALIAS_UNKNOWN));
+            assert_eq!(error.refusal_facts(), &kept);
+        }
+        assert_eq!(
+            std::fs::read(&aside).ok(),
+            Some(b"synthetic video bytes".to_vec())
+        );
+        assert!(!source.exists());
+
+        remove_import_source_after_verified_import_blocking(
+            guard,
+            dest.clone(),
+            ImportFileOptions::default(),
+        )
+        .expect("the source goes back and the cleanup finishes");
+        assert!(!aside.exists());
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(&dest).ok(),
+            Some(b"synthetic video bytes".to_vec())
+        );
     }
 
     /// A turn given up leaves nothing behind once another is taken: the map

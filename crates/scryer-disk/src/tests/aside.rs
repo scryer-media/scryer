@@ -622,6 +622,41 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
     }
 }
 
+/// A put-back whose rename fails names the set-aside file only on a read
+/// after the failure that still finds it there; a file that left the name
+/// meanwhile leaves nothing to wait on. Nothing is removed either way.
+#[test]
+fn a_failed_put_back_names_the_set_aside_file_only_while_it_is_there() {
+    let aside = aside();
+
+    let (disk, backend) = scripted();
+    backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
+    backend.fails(
+        "rename_no_replace",
+        aside.to_str().unwrap(),
+        io::ErrorKind::PermissionDenied,
+    );
+    let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
+    match answer {
+        PutBackAside::Failed { at, .. } => assert_eq!(at, aside),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(backend.paths_of("lstat"), [aside.clone(), aside.clone()]);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+
+    let (disk, backend) = scripted();
+    backend.stats_in_turn(&aside, &[Ok(named(7, 1)), Err(io::ErrorKind::NotFound)]);
+    backend.fails(
+        "rename_no_replace",
+        aside.to_str().unwrap(),
+        io::ErrorKind::PermissionDenied,
+    );
+    let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
+    assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}");
+    assert_eq!(backend.paths_of("lstat"), [aside.clone(), aside.clone()]);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
 /// A set-aside name taken by an empty file while the source is at its own
 /// name holds no data: it is removed, the source is set aside after all, and
 /// the cleanup goes on. A nonempty file there is never touched: the source

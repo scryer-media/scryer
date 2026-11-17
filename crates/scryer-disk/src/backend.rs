@@ -400,6 +400,74 @@ fn dir_builder(access: Access) -> std::fs::DirBuilder {
     builder
 }
 
+impl SystemBackend {
+    /// After a claimed rename failed, removes the reservation that rename
+    /// made, and only that, and answers whether something is left at `dest`.
+    ///
+    /// A share can apply the rename and lose the reply, leaving the only copy
+    /// at the name. So the empty file there goes only on a read of it, made
+    /// immediately before the removal, that finds a regular empty file which
+    /// is the entry the reservation created (`claim`), whatever the source
+    /// reads as. Where the entry cannot be told (`claim` is none, or the
+    /// volume has no numbers), it goes only while the source still reads as
+    /// present. Anything else at the name is left in place.
+    ///
+    /// Probes, on the failure alone: one read of `dest`, then the removal; one
+    /// read of the source only where the entry cannot be told.
+    fn release_failed_claim(
+        &self,
+        source: &Path,
+        dest: &Path,
+        claim: Option<FileIdentity>,
+    ) -> bool {
+        match self.lstat(dest) {
+            Ok(stat) if stat.kind == EntryKind::File && stat.len == 0 => {
+                match (claim, stat.identity) {
+                    (Some(claim), Some(found)) if claim == found => {
+                        std::fs::remove_file(dest).is_err()
+                    }
+                    (Some(_), Some(_)) => {
+                        tracing::warn!(
+                            path = %dest.display(),
+                            "a rename reported failure and the empty file at its reserved name is not the one it made; it is left in place"
+                        );
+                        true
+                    }
+                    _ => match self.lstat(source) {
+                        Ok(_) => std::fs::remove_file(dest).is_err(),
+                        Err(error) => {
+                            tracing::error!(
+                                path = %dest.display(),
+                                source = %source.display(),
+                                error = %error,
+                                "a rename reported failure and its source does not read as present; the empty file at its reserved name is left in place"
+                            );
+                            true
+                        }
+                    },
+                }
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    path = %dest.display(),
+                    "a rename reported failure and its reserved name is not an empty file; it is left in place"
+                );
+                true
+            }
+            // Nothing is at the name, so nothing was left there.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => {
+                tracing::warn!(
+                    path = %dest.display(),
+                    error = %error,
+                    "a rename reported failure and its reserved name could not be read; it is left in place"
+                );
+                true
+            }
+        }
+    }
+}
+
 impl DiskBackend for SystemBackend {
     fn stat(&self, path: &Path) -> io::Result<RawStat> {
         #[cfg(windows)]
@@ -502,7 +570,19 @@ impl DiskBackend for SystemBackend {
     }
 
     fn rename_claimed(&self, source: &Path, dest: &Path) -> Result<(), ClaimedRenameFailed> {
-        self.open(dest, Open::create_new())?;
+        let claim = self.open(dest, Open::create_new())?;
+        // The reservation's own entry, to tell it from anything a failed
+        // rename left at the name. Windows reads it through the handle before
+        // the handle closes for the rename: one handle read per claimed
+        // rename. Unix keeps the handle and reads it on a failure alone.
+        #[cfg(windows)]
+        let claim = {
+            let identity = by_handle::ByHandle::of(&claim)
+                .ok()
+                .and_then(|read| read.identity());
+            drop(claim);
+            identity
+        };
         // The name holds the empty file just made, so only the source's kind
         // is read before the rename: on Windows one handle read per claimed
         // rename, links not followed, and none of the reservation; none on
@@ -512,47 +592,14 @@ impl DiskBackend for SystemBackend {
         #[cfg(not(windows))]
         let renamed = std::fs::rename(source, dest);
         renamed.map_err(|error| {
-            // Release the empty reservation, and only that: a share can apply
-            // the rename and lose the reply, leaving the only copy here. An
-            // empty file there may be an empty source moved that way, so it
-            // goes only while the source still reads as present: one look at
-            // the source, on this failure alone.
-            let reservation_left = match self.lstat(dest) {
-                Ok(stat) if stat.kind == EntryKind::File && stat.len == 0 => {
-                    match self.lstat(source) {
-                        Ok(_) => std::fs::remove_file(dest).is_err(),
-                        Err(error) => {
-                            tracing::error!(
-                                path = %dest.display(),
-                                source = %source.display(),
-                                error = %error,
-                                "a rename reported failure and its source does not read as present; the empty file at its reserved name is left in place"
-                            );
-                            true
-                        }
-                    }
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        path = %dest.display(),
-                        "a rename reported failure and its reserved name is not an empty file; it is left in place"
-                    );
-                    true
-                }
-                // Nothing is at the name, so nothing was left there.
-                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-                Err(error) => {
-                    tracing::warn!(
-                        path = %dest.display(),
-                        error = %error,
-                        "a rename reported failure and its reserved name could not be read; it is left in place"
-                    );
-                    true
-                }
-            };
+            #[cfg(not(windows))]
+            let claim = claim
+                .metadata()
+                .ok()
+                .and_then(|metadata| RawStat::of(&metadata).identity);
             ClaimedRenameFailed {
                 error,
-                reservation_left,
+                reservation_left: self.release_failed_claim(source, dest, claim),
             }
         })
     }
@@ -1504,12 +1551,12 @@ mod tests {
         assert_eq!(std::fs::read(&source).unwrap(), b"source");
     }
 
-    /// A claimed rename that fails releases its empty reservation only while
-    /// the source still reads as present. A source that is gone, or cannot
-    /// be read, may be the empty file there, which is then left in place.
+    /// A claimed rename that fails releases its empty reservation, the file
+    /// it made itself, whether its source is present, gone or unreadable: no
+    /// empty file is left to refuse the next attempt as occupied.
     #[cfg(unix)]
     #[test]
-    fn a_failed_claimed_rename_releases_its_empty_claim_only_beside_a_present_source() {
+    fn a_failed_claimed_rename_releases_the_empty_claim_it_made() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("temp dir");
 
@@ -1530,12 +1577,12 @@ mod tests {
         let missing = dir.path().join("invented-missing.bin");
         let dest = dir.path().join("invented-absent.bin");
         assert!(
-            SystemBackend
+            !SystemBackend
                 .rename_claimed(&missing, &dest)
                 .unwrap_err()
                 .reservation_left
         );
-        assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
+        assert!(std::fs::symlink_metadata(&dest).is_err(), "claim released");
 
         // Unreadable: the source's folder cannot be searched.
         let locked = dir.path().join("invented-locked");
@@ -1547,15 +1594,46 @@ mod tests {
         if std::fs::symlink_metadata(&hidden).is_err() {
             let dest = dir.path().join("invented-unread.bin");
             assert!(
-                SystemBackend
+                !SystemBackend
                     .rename_claimed(&hidden, &dest)
                     .unwrap_err()
                     .reservation_left
             );
-            assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
+            assert!(std::fs::symlink_metadata(&dest).is_err(), "claim released");
         }
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(std::fs::read(&hidden).unwrap(), b"source");
+    }
+
+    /// What a failed claimed rename finds at the name in place of its own
+    /// reservation stays: a nonempty file, and an empty file that is another
+    /// entry, with the source gone, as a share that applied the rename and
+    /// lost the reply leaves an empty source.
+    #[test]
+    fn a_failed_claim_leaves_what_is_not_its_own_reservation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("invented-missing.bin");
+        let dest = dir.path().join("invented-claimed.bin");
+        std::fs::write(&dest, b"").unwrap();
+        let claim = SystemBackend.lstat(&dest).unwrap().identity;
+
+        // A nonempty file now holds the name.
+        std::fs::write(&dest, b"arrived").unwrap();
+        assert!(SystemBackend.release_failed_claim(&missing, &dest, claim));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"arrived");
+
+        // Another empty entry now holds the name.
+        let other = dir.path().join("invented-other.bin");
+        std::fs::write(&other, b"").unwrap();
+        std::fs::rename(&other, &dest).unwrap();
+        if claim.is_some() && SystemBackend.lstat(&dest).unwrap().identity != claim {
+            assert!(SystemBackend.release_failed_claim(&missing, &dest, claim));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"");
+        }
+
+        // With no entry to tell, the source's absence keeps it.
+        assert!(SystemBackend.release_failed_claim(&missing, &dest, None));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"");
     }
 
     #[test]

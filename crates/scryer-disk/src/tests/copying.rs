@@ -875,8 +875,8 @@ fn a_cancelled_staged_copy_leaves_nothing_staged() {
 }
 
 /// A claimed move whose rename fails beside a source that does not read as
-/// present leaves its reservation, and the failure says where, in a typed
-/// field.
+/// present removes the reservation it made, so the next attempt finds the
+/// name free, and says nothing was left.
 #[test]
 fn a_claimed_move_that_fails_says_what_it_left_at_the_reserved_name() {
     let temp = tempfile::tempdir().unwrap();
@@ -887,14 +887,10 @@ fn a_claimed_move_that_fails_says_what_it_left_at_the_reserved_name() {
     let error = disk()
         .move_claimed_blocking(&missing, &dest)
         .expect_err("nothing to move");
-    assert_eq!(
-        error.left(),
-        Some(&Leftover::AtReservedName { at: dest.clone() })
-    );
-    assert_eq!(
-        std::fs::read(&dest).unwrap(),
-        b"",
-        "the reservation is kept"
+    assert_eq!(error.left(), None);
+    assert!(
+        std::fs::symlink_metadata(&dest).is_err(),
+        "the reservation is released"
     );
 
     // A rename refused beside a source that is still there: a folder onto
