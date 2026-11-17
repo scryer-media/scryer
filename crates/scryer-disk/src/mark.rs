@@ -142,8 +142,10 @@ impl Mark {
         self.volume != Volume::Unknown
     }
 
-    /// Whether both marks are one file. No probe.
-    pub(crate) fn same_file(&self, other: &Self) -> Sameness {
+    /// Whether both marks are one file. A volume the read did not name, a
+    /// missing file number, or a zero number on both sides is
+    /// [`Sameness::CannotTell`], never [`Sameness::Same`]. No probe.
+    pub fn same_file(&self, other: &Self) -> Sameness {
         match (self.volume, other.volume) {
             (Volume::Unknown, _) | (_, Volume::Unknown) => return Sameness::CannotTell,
             (left, right) if left != right => return Sameness::Different,
@@ -179,6 +181,17 @@ impl Mark {
             }
             _ => false,
         }
+    }
+
+    /// Whether this mark and `seen` were both read in full and differ in
+    /// length or modification time. A hard link shares both with its source,
+    /// so a name that differs so is somebody else's file. No probe.
+    pub(crate) fn differs_in_content_facts(&self, seen: &Self) -> bool {
+        matches!(
+            (self.facts, seen.facts),
+            (Some(here), Some(there))
+                if here.len != there.len || here.modified != there.modified
+        )
     }
 
     /// The length read; `None` for a mark that names a volume only.

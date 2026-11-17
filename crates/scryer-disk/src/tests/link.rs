@@ -106,7 +106,7 @@ fn a_proof_of_the_name_alone_reads_it_once() {
 fn an_unproven_link_is_removed_and_says_what_did_not_prove() {
     type Script = fn(&Scripted);
     type Check = fn(&Doubt) -> bool;
-    let cases: [(&str, Script, RawStat, Check); 6] = [
+    let cases: [(&str, Script, RawStat, Check); 5] = [
         (
             "another file",
             |backend| backend.stat_is(DEST, Ok(numbered(8, 17))),
@@ -117,12 +117,6 @@ fn an_unproven_link_is_removed_and_says_what_did_not_prove() {
             "zero against a number",
             |backend| backend.stat_is(DEST, Ok(numbered(0, 17))),
             numbered(7, 17),
-            |doubt| matches!(doubt, Doubt::OtherFile { .. }),
-        ),
-        (
-            "another modification time where nothing is numbered",
-            |backend| backend.stat_is(DEST, Ok(unnumbered(17, 41))),
-            unnumbered(17, 40),
             |doubt| matches!(doubt, Doubt::OtherFile { .. }),
         ),
         (
@@ -278,6 +272,54 @@ fn a_new_name_that_is_no_regular_file_is_left_alone() {
     }
 }
 
+/// A regular file at the new name that is not the link is removed only when
+/// its length and modification time are the source's, which is how a true
+/// link reads where files are numbered by path. With another length or
+/// another modification time it is another writer's file and stays.
+#[test]
+fn a_regular_file_that_is_not_the_link_goes_only_with_the_sources_facts() {
+    fn timed(inode: u64, len: u64, modified_secs: u64) -> RawStat {
+        let mut stat = numbered(inode, len);
+        stat.modified = unnumbered(len, modified_secs).modified;
+        stat
+    }
+    // (what the new name reads as, what the source was seen as, removed)
+    let cases = [
+        (timed(8, 17, 40), timed(7, 17, 40), true),
+        (unnumbered(17, 40), timed(7, 17, 40), true),
+        (timed(8, 9, 40), timed(7, 17, 40), false),
+        (timed(8, 17, 41), timed(7, 17, 40), false),
+        (unnumbered(17, 41), unnumbered(17, 40), false),
+        (unnumbered(9, 40), unnumbered(17, 40), false),
+    ];
+    for (index, (linked, seen, removed)) in cases.into_iter().enumerate() {
+        for fallback in [Fallback::None, Fallback::Copy] {
+            let (disk, backend) = scripted();
+            backend.stat_is(DEST, Ok(linked));
+            backend.fails("open", SOURCE, io::ErrorKind::PermissionDenied);
+            let refusal =
+                prove(&disk, fallback, &seen, LinkProof::NameAndLength).expect_err("not the link");
+            let unproven = refusal.unproven.as_ref().expect("says why");
+            assert!(
+                matches!(unproven.doubt, Doubt::OtherFile { .. }),
+                "case {index}"
+            );
+            let after = match removed {
+                true => LinkAfter::Removed,
+                false => LinkAfter::LeftAlone,
+            };
+            assert_eq!(unproven.after, after, "case {index}");
+            let removals = backend.paths_of("remove_file");
+            let of_the_name = removals.iter().filter(|path| **path == p(DEST)).count();
+            assert_eq!(of_the_name, usize::from(removed), "case {index}");
+            if !removed {
+                assert_eq!(refusal.refused, Refused::DestinationExists, "case {index}");
+                assert_eq!(backend.calls_of("open"), 0, "case {index}: no copy over it");
+            }
+        }
+    }
+}
+
 /// The copy that follows a removed link can be refused too, and the refusal
 /// still says the link did not prove and is gone.
 #[test]
@@ -397,6 +439,26 @@ mod on_real_files {
     }
 
     impl Fixture {
+        /// Another file with the source's length and modification time, as a
+        /// caller would have seen the source's name before it was replaced
+        /// by a file that reads alike.
+        fn twin(&self) -> Mark {
+            let twin = self.dir.path().join("invented-twin.mkv");
+            std::fs::write(&twin, b"synthetic PAYLOAD").expect("twin");
+            let modified = std::fs::metadata(&self.source)
+                .and_then(|source| source.modified())
+                .expect("source time");
+            let file = std::fs::File::options()
+                .write(true)
+                .open(&twin)
+                .expect("open twin");
+            file.set_modified(modified).expect("twin time");
+            drop(file);
+            let seen = mark(&twin);
+            std::fs::remove_file(&twin).expect("the fixture's own twin");
+            seen
+        }
+
         fn untouched(&self) {
             assert_eq!(
                 std::fs::read(&self.source).expect("source"),
@@ -430,8 +492,9 @@ mod on_real_files {
     #[test]
     fn a_link_to_another_file_than_the_one_seen_is_removed() {
         let at = fixture();
-        // The caller saw another file under the source's name.
-        let seen = mark(&at.neighbour);
+        // The caller saw another file under the source's name, one that
+        // read as the source does now.
+        let seen = at.twin();
         let refusal = disk()
             .place_proven_blocking(
                 &at.source,
@@ -526,10 +589,35 @@ mod on_real_files {
         at.untouched();
     }
 
+    /// The caller saw a file of another length and time under the source's
+    /// name. The name the link call made does not read as that file, so it
+    /// is not removed as the link, and nothing is copied over it.
+    #[test]
+    fn a_new_name_with_another_length_and_time_than_the_one_seen_is_left() {
+        for fallback in [Fallback::None, Fallback::Copy] {
+            let at = fixture();
+            let seen = mark(&at.neighbour);
+            let refusal = disk()
+                .place_proven_blocking(
+                    &at.source,
+                    &at.dest,
+                    linking(fallback),
+                    &seen,
+                    LinkProof::NameAndLength,
+                )
+                .expect_err("not proven");
+            assert_eq!(refusal.refused, Refused::DestinationExists);
+            let unproven = refusal.unproven.expect("says why");
+            assert_eq!(unproven.after, LinkAfter::LeftAlone);
+            assert_eq!(std::fs::read(&at.dest).expect("dest"), b"synthetic payload");
+            at.untouched();
+        }
+    }
+
     #[test]
     fn an_unproven_link_is_removed_before_its_fallback_copy_lands() {
         let at = fixture();
-        let seen = mark(&at.neighbour);
+        let seen = at.twin();
         let placed = disk()
             .place_proven_blocking(
                 &at.source,

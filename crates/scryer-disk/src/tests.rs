@@ -80,6 +80,9 @@ struct Scripted {
     list_read_gate: Mutex<Option<mpsc::Receiver<()>>>,
     list_read_entered: Mutex<Option<mpsc::Sender<()>>>,
     ambiguous_renames: Mutex<Vec<PathBuf>>,
+    /// A path whose open to read hands back a handle on a folder, as a name
+    /// swapped for one between its reading and its open would.
+    opens_as_folder: Mutex<Option<PathBuf>>,
 }
 
 impl Scripted {
@@ -346,6 +349,9 @@ impl DiskBackend for Scripted {
         let handle = dir.path().join(format!("handle-{}", self.calls_of("open")));
         if open.mode != OpenMode::Read {
             return SystemBackend.open(&handle, Open::create_or_keep());
+        }
+        if self.opens_as_folder.lock().unwrap().as_deref() == Some(path) {
+            return std::fs::File::open(dir.path());
         }
         let scripted = self.contents.lock().unwrap().get(path).cloned();
         let staged = || match is_staging_name(path) {

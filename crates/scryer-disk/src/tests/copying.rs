@@ -311,6 +311,9 @@ async fn the_turn_is_given_back_before_the_copy_is_proven() {
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        source_read: Default::default(),
+        folder_is_dir: false,
+        wrote_dest: Default::default(),
     };
     job.recorded_copy(Evidence {
         depth: Depth::Full,
@@ -415,6 +418,9 @@ fn a_move_that_would_need_a_recorded_copy_is_refused() {
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        source_read: Default::default(),
+        folder_is_dir: false,
+        wrote_dest: Default::default(),
     };
     let crossing = DiskError::new(
         DiskVerb::Move,
@@ -688,6 +694,42 @@ fn a_staged_copy_stops_when_only_the_owner_of_its_source_changed() {
     assert!(matches!(refusal.cause, StagedCause::SourceChanged));
     assert_eq!(backend.calls_of("open"), 0);
     assert_eq!(backend.calls_of("stat"), 0, "a file is not followed");
+}
+
+/// A source whose name reads as the file the caller saw, but which opens as
+/// something that is no regular file, stops the copy at once: no second
+/// attempt, nothing promoted, and the staged name cleared again.
+#[cfg(unix)]
+#[test]
+fn a_staged_copy_stops_when_its_opened_source_is_no_regular_file() {
+    const SOURCE: &str = "/srv/fixture-media/incoming/sample.mkv";
+    let (disk, backend) = owner(&ManualClock::at(at(0)));
+    backend.stat_is(SOURCE, Ok(file(17)));
+    *backend.opens_as_folder.lock().unwrap() = Some(p(SOURCE));
+    let seen = Mark::of_stat(&file(17));
+    let staged = p("/srv/fixture-media/Fixture Show/sample.staged");
+    let dest = p("/srv/fixture-media/Fixture Show/sample.mkv");
+
+    let refusal = disk
+        .copy_staged_blocking(
+            &p(SOURCE),
+            &dest,
+            &staged_copy(&staged, &seen),
+            &Watch::nobody(),
+        )
+        .expect_err("the source opened as a folder");
+
+    assert_eq!(
+        (refusal.step, refusal.attempts),
+        (StagedStep::SourceHandle, 1)
+    );
+    assert!(matches!(refusal.cause, StagedCause::SourceNotAFile));
+    // Cleared before the attempt and after it; nothing else was removed.
+    assert_eq!(backend.paths_of("remove_file"), [staged.clone(), staged]);
+    // Only the source was opened: no staged file was written.
+    assert_eq!(backend.paths_of("open"), [p(SOURCE)]);
+    assert_eq!(backend.calls_of("rename_claimed"), 0);
+    assert_eq!(backend.calls_of("hard_link"), 0);
 }
 
 /// A source handed to another owner while it is copied is not given the

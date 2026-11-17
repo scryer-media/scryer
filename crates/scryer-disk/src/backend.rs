@@ -460,10 +460,23 @@ impl DiskBackend for SystemBackend {
         self.open(dest, Open::create_new())?;
         std::fs::rename(source, dest).inspect_err(|_| {
             // Release the empty reservation, and only that: a share can apply
-            // the rename and lose the reply, leaving the only copy here.
+            // the rename and lose the reply, leaving the only copy here. An
+            // empty file there may be an empty source moved that way, so it
+            // goes only while the source still reads as present: one look at
+            // the source, on this failure alone.
             match self.lstat(dest) {
                 Ok(stat) if stat.kind == EntryKind::File && stat.len == 0 => {
-                    let _ = std::fs::remove_file(dest);
+                    match self.lstat(source) {
+                        Ok(_) => {
+                            let _ = std::fs::remove_file(dest);
+                        }
+                        Err(error) => tracing::error!(
+                            path = %dest.display(),
+                            source = %source.display(),
+                            error = %error,
+                            "a rename reported failure and its source does not read as present; the empty file at its reserved name is left in place"
+                        ),
+                    }
                 }
                 Ok(_) => tracing::warn!(
                     path = %dest.display(),
@@ -1315,6 +1328,45 @@ mod tests {
         assert_eq!(claimed.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read(&dest).unwrap(), b"keep me");
         assert_eq!(std::fs::read(&source).unwrap(), b"source");
+    }
+
+    /// A claimed rename that fails releases its empty reservation only while
+    /// the source still reads as present. A source that is gone, or cannot
+    /// be read, may be the empty file there, which is then left in place.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_claimed_rename_releases_its_empty_claim_only_beside_a_present_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        // Present: a folder cannot be renamed onto the claimed file.
+        let folder = dir.path().join("invented-folder");
+        std::fs::create_dir(&folder).unwrap();
+        let dest = dir.path().join("invented-present.bin");
+        SystemBackend.rename_claimed(&folder, &dest).unwrap_err();
+        assert!(std::fs::symlink_metadata(&dest).is_err(), "claim released");
+        assert!(folder.is_dir());
+
+        // Absent: nothing to rename.
+        let missing = dir.path().join("invented-missing.bin");
+        let dest = dir.path().join("invented-absent.bin");
+        SystemBackend.rename_claimed(&missing, &dest).unwrap_err();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
+
+        // Unreadable: the source's folder cannot be searched.
+        let locked = dir.path().join("invented-locked");
+        std::fs::create_dir(&locked).unwrap();
+        let hidden = locked.join("invented-source.bin");
+        std::fs::write(&hidden, b"source").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A user the permissions do not bind reads it anyway; nothing to test.
+        if std::fs::symlink_metadata(&hidden).is_err() {
+            let dest = dir.path().join("invented-unread.bin");
+            SystemBackend.rename_claimed(&hidden, &dest).unwrap_err();
+            assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(std::fs::read(&hidden).unwrap(), b"source");
     }
 
     #[test]

@@ -64,6 +64,9 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        source_read: Default::default(),
+        folder_is_dir: false,
+        wrote_dest: Default::default(),
     }
 }
 
@@ -172,13 +175,66 @@ fn a_reserved_name_is_released_when_the_move_is_refused() {
     );
 }
 
+/// A symlinked source that a rename onto the reserved name cannot move to
+/// another volume is made again there, as a move with an exclusive rename
+/// makes it: the reservation is released first, the link's target is never
+/// opened or copied, and the source link goes. A link that cannot be made
+/// releases the reservation too and keeps the source.
+#[test]
+fn a_symlinked_source_is_linked_again_on_the_reserved_name_path_too() {
+    let symlink = RawStat {
+        kind: EntryKind::Symlink,
+        ..file(9)
+    };
+    for made in [true, false] {
+        let (disk, backend, _) = scripted();
+        backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+        backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+        backend.stat_is(SOURCE, Ok(symlink));
+        if !made {
+            backend.fails("symlink", DEST, io::ErrorKind::PermissionDenied);
+        }
+        let placed = place(&disk, policy(Method::Move, Fallback::Copy));
+        let removed = backend.paths_of("remove_file");
+        assert!(is_staging_name(&removed[0]), "{removed:?}");
+        match made {
+            true => {
+                assert_eq!(
+                    placed.expect("relinked").done,
+                    Done::RelinkedThenRemovedSource
+                );
+                assert_eq!(removed[1..], [p(SOURCE)]);
+            }
+            false => {
+                assert_eq!(placed.expect_err("refused").refused, Refused::Denied);
+                assert_eq!(removed.len(), 1, "the source stays: {removed:?}");
+            }
+        }
+        assert_eq!(backend.paths_of("symlink"), [p(DEST)]);
+        // Only the reservation was opened; the link's target was not copied.
+        let opened = backend.paths_of("open");
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert!(is_staging_name(&opened[0]));
+        assert_eq!(
+            backend.paths_of("lstat"),
+            [p(SOURCE)],
+            "one look, at the source"
+        );
+    }
+}
+
 /// An empty source can be renamed onto the reserved name by a rename whose
 /// reply is lost. The empty file there is then the only copy, so it is not
-/// released unless the source still reads as present, and the refusal says
-/// that it was left.
+/// released unless the source still reads as present. A source that reads
+/// as gone gets it back under its name, by a link that replaces nothing,
+/// after which only the reserved name is unlinked; a source that cannot be
+/// read leaves it where it is. The refusal says which.
 #[test]
 fn an_empty_file_at_the_reserved_name_is_kept_when_the_source_is_not_there() {
-    for source in [None, Some(Err(io::ErrorKind::PermissionDenied))] {
+    for (source, put_back) in [
+        (None, true),
+        (Some(Err(io::ErrorKind::PermissionDenied)), false),
+    ] {
         let (disk, backend, _) = scripted();
         backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
         // The rename landed and its reply did not come back.
@@ -189,11 +245,22 @@ fn an_empty_file_at_the_reserved_name_is_kept_when_the_source_is_not_there() {
         }
         let refused = place(&disk, policy(Method::Move, Fallback::Copy)).expect_err("refused");
         assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
-        assert_eq!(backend.calls_of("remove_file"), 0, "{source:?}");
         assert_eq!(backend.calls_of("lstat"), 2, "one look at each name");
         let said = refused.to_string();
-        assert!(said.contains("is left in place"), "{said}");
         assert!(said.contains(SOURCE), "{said}");
+        let linked = backend.paths_of("hard_link");
+        let removed = backend.paths_of("remove_file");
+        if put_back {
+            assert!(said.contains("was put back"), "{said}");
+            // The link is made at the source's name; only then is the
+            // reserved name unlinked.
+            assert_eq!(linked, [p(SOURCE)]);
+            assert_eq!(removed.len(), 1, "{removed:?}");
+            assert!(is_staging_name(&removed[0]), "{removed:?}");
+        } else {
+            assert!(said.contains("is left in place"), "{said}");
+            assert!(linked.is_empty() && removed.is_empty(), "{source:?}");
+        }
     }
 }
 
@@ -576,9 +643,10 @@ fn a_rollback_removes_only_a_copy_or_an_empty_claim_and_puts_the_only_copy_back(
     // (held, staged reads, source reads) -> (removed, put back)
     let cases: [(StagedHolds, Stat, Stat, bool, bool); 16] = [
         // An empty file may be an empty source: it goes only while the
-        // source reads as present.
+        // source reads as present, goes back while the source reads as gone,
+        // and stays while the source cannot be read.
         (StagedHolds::EmptyClaim, claim, present, true, false),
-        (StagedHolds::EmptyClaim, claim, None, false, false),
+        (StagedHolds::EmptyClaim, claim, None, false, true),
         (StagedHolds::EmptyClaim, claim, unread, false, false),
         (StagedHolds::EmptyClaim, None, None, false, false),
         // An unread claim goes back only when the source reads as gone.
@@ -607,8 +675,12 @@ fn a_rollback_removes_only_a_copy_or_an_empty_claim_and_puts_the_only_copy_back(
         let (source, dest) = (p(SOURCE), p(DEST));
         let left = job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
             .roll_back(&p(STAGED), held);
-        // Only an empty file that was kept adds to the refusal.
+        // Only an empty file that was put back or kept adds to the refusal.
         assert_eq!(left.is_some(), matches!(index, 1 | 2), "case {index}");
+        if let Some(said) = &left {
+            let expected = ["was put back", "is left in place"][index - 1];
+            assert!(said.contains(expected), "case {index}: {said}");
+        }
         let removals = backend.paths_of("remove_file");
         assert_eq!(
             removals,
@@ -704,8 +776,14 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
 
     // An empty intermediate name is released, and the rename tried again,
     // only while the source still reads as present: it may be an empty
-    // source.
-    for (source_stat, attempts) in [(Some(Ok(file(0))), 10), (None, 1)] {
+    // source. While the source reads as gone it goes back under the source's
+    // name, never over anything; while the source cannot be read it stays.
+    let unread = Some(Err(io::ErrorKind::PermissionDenied));
+    for (source_stat, attempts, said_of_it) in [
+        (Some(Ok(file(0))), 10, None),
+        (None, 1, Some("was put back")),
+        (unread, 1, Some("is left in place")),
+    ] {
         let (disk, backend, _) = scripted();
         backend.fails("rename", SOURCE, io::ErrorKind::TimedOut);
         *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
@@ -717,10 +795,17 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
             .expect_err("refused");
         assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
         assert_eq!(backend.calls_of("rename"), attempts);
-        let released = usize::from(source_stat.is_some()) * attempts;
+        let released = if said_of_it.is_none() { attempts } else { 0 };
         assert_eq!(removed_only_staging(&backend), released);
+        let promoted = backend.paths_of("rename_no_replace");
+        assert_eq!(
+            promoted.len(),
+            usize::from(said_of_it == Some("was put back"))
+        );
         let said = refused.to_string();
-        assert_eq!(said.contains("is left in place"), source_stat.is_none());
+        for words in ["was put back", "is left in place"] {
+            assert_eq!(said.contains(words), said_of_it == Some(words), "{said}");
+        }
     }
 }
 
@@ -735,9 +820,139 @@ async fn the_async_form_reports_like_the_blocking_one() {
         bounded(refused).await.expect_err("refused").refused,
         Refused::DestinationExists
     );
+    // Before it takes a thread the async form reads the source's name and
+    // the destination's folder, once each for each placement.
+    let folder = p("/srv/fixture-media/Fixture Show");
+    assert_eq!(backend.paths_of("lstat"), [p(SOURCE), p(SOURCE)]);
+    assert_eq!(backend.paths_of("stat"), [folder.clone(), folder]);
     assert!(disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
     backend.stat_is(DEST, Ok(file(1)));
     assert!(!disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
+}
+
+/// A root that does not answer refuses the placement before it takes a
+/// thread, for the source's side and for the destination folder's, and
+/// nothing is renamed, linked or opened. The refusal is the unreachable one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_placement_whose_root_does_not_answer_is_refused_before_it_runs() {
+    let folder = "/srv/fixture-media/Fixture Show";
+    let seen = Mark::of_stat(&file(17));
+    for (silenced, side) in [(SOURCE, Side::Source), (folder, Side::Destination)] {
+        for proven in [false, true] {
+            let (disk, backend, _) = scripted();
+            backend.stat_is(SOURCE, Ok(file(17)));
+            let silent = crate::test_support::silence_path(&disk, &p(silenced)).expect("a root");
+            let refusal = match proven {
+                false => {
+                    bounded(disk.place(SOURCE, DEST, policy(Method::Move, Fallback::Copy))).await
+                }
+                true => {
+                    let linking = policy(Method::HardLink, Fallback::Copy);
+                    let proof = LinkProof::NameAndLength;
+                    bounded(disk.place_proven(SOURCE, DEST, linking, seen.clone(), proof)).await
+                }
+            }
+            .expect_err("refused");
+            drop(silent);
+            assert_eq!(refusal.refused, Refused::Unreachable(side), "{silenced}");
+            assert_eq!(refusal.refused.reason(), reason::DISK_PATH_UNREACHABLE);
+            assert!(!refusal.destination_written);
+            for call in [
+                "rename_no_replace",
+                "rename",
+                "hard_link",
+                "open",
+                "remove_file",
+            ] {
+                assert_eq!(backend.calls_of(call), 0, "{silenced}: {call}");
+            }
+        }
+    }
+}
+
+/// The two looks taken before the thread stand for the job's own: a folder
+/// that read as a folder is not created again, one that did not is, and a
+/// move a rename cannot make decides what its source is from the first look.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_looks_before_the_thread_stand_for_the_jobs_own() {
+    let folder = "/srv/fixture-media/Fixture Show";
+    let mut creating = policy(Method::Move, Fallback::Copy);
+    creating.parents = Parents::Create;
+    for folder_there in [true, false] {
+        let (disk, backend, _) = scripted();
+        if folder_there {
+            backend.stat_is(folder, Ok(dir()));
+        }
+        bounded(disk.place(SOURCE, DEST, creating))
+            .await
+            .expect("placed");
+        let created = backend.paths_of("create_dir_all");
+        assert_eq!(created.len(), usize::from(!folder_there), "{created:?}");
+    }
+
+    // A symlinked source on a volume with no exclusive rename: the source
+    // is looked at once in all, before the thread.
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+    let symlink = RawStat {
+        kind: EntryKind::Symlink,
+        ..file(9)
+    };
+    backend.stat_is(SOURCE, Ok(symlink));
+    let placed = bounded(disk.place(SOURCE, DEST, policy(Method::Move, Fallback::Copy))).await;
+    assert_eq!(
+        placed.expect("relinked").done,
+        Done::RelinkedThenRemovedSource
+    );
+    assert_eq!(backend.paths_of("lstat"), [p(SOURCE)]);
+}
+
+/// Whether a refused copy changed what is under the destination name: only
+/// a copy that lands directly and got as far as emptying or creating the
+/// file there says it did.
+#[test]
+fn a_refusal_says_whether_the_destination_name_was_written() {
+    let landing = |landing, replace| Placement {
+        replace,
+        verify: Verify::Recorded(Evidence {
+            depth: Depth::Unproven,
+            landing,
+        }),
+        ..policy(Method::Copy, Fallback::None)
+    };
+    let held = landing(Landing::Direct, Replace::Allowed);
+    let claimed = landing(Landing::Direct, Replace::Never);
+    let staged = landing(Landing::Staged, Replace::Never);
+    // (policy, the source opens, the destination opens, a write fails, written)
+    let cases = [
+        (held, false, true, false, false),
+        (held, true, false, false, false),
+        (held, true, true, true, true),
+        (claimed, true, false, false, false),
+        (claimed, true, true, true, true),
+        (staged, false, true, false, false),
+        (staged, true, true, true, false),
+    ];
+    for (index, (policy, source_opens, dest_opens, write_fails, written)) in
+        cases.into_iter().enumerate()
+    {
+        let (disk, backend, _) = scripted();
+        disk.install_copy_workers(1);
+        if source_opens {
+            backend.holds(SOURCE, b"synthetic payload");
+        }
+        if !dest_opens {
+            backend.fails("open", DEST, io::ErrorKind::PermissionDenied);
+        }
+        if write_fails {
+            let fault = (crate::CopyFault::Write, 5);
+            disk.inner.copy_faults.lock().unwrap().push_back(fault);
+        }
+        let refusal = place(&disk, policy).expect_err("refused");
+        assert_eq!(refusal.destination_written, written, "case {index}");
+        assert_eq!(backend.calls_of("rename"), 0, "case {index}");
+    }
 }
 
 /// The staged name of a recorded copy is read within the root's bound, before
@@ -764,7 +979,8 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
         .await
         .expect_err("refused");
     assert_eq!(held.refused, Refused::StagingOccupied);
-    assert_eq!(backend.paths_of("lstat"), [staged.clone()], "one reading");
+    // The source's name, then the staged name: one reading of each.
+    assert_eq!(backend.paths_of("lstat"), [p(SOURCE), staged.clone()]);
     assert_eq!(backend.calls_of("open"), 0);
 
     // A staged name unread for a lasting reason is not unreachable storage.
@@ -788,8 +1004,9 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
     disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
     let (open, gate) = mpsc::channel();
     *backend.gate.lock().unwrap() = Some(gate);
-    // The reading is held in the backend until the gate opens, so the bound
-    // always elapses first.
+    *backend.gate_under.lock().unwrap() = Some(staged.clone());
+    // The staged name's reading is held in the backend until the gate opens,
+    // so the bound always elapses first.
     let silent = bounded(disk.place_watched(SOURCE, DEST, policy, watch()))
         .await
         .expect_err("refused");
@@ -983,14 +1200,14 @@ async fn a_staged_copy_whose_volume_does_not_answer_is_refused_before_its_turn()
         .expect_err("refused");
     drop(silent);
     assert_eq!(refusal.refused, Refused::Unreachable(Side::Destination));
-    // The staged name was read and answered; the volume was never asked for.
+    // The source's name and the staged name were read and answered, and the
+    // destination's folder once; the volume was never asked for.
     assert_eq!(
         backend.paths_of("lstat"),
-        [resumable_staging_path(&p(DEST))]
+        [p(SOURCE), resumable_staging_path(&p(DEST))]
     );
-    assert_eq!(backend.calls_of("stat"), 0);
-    // Nothing was opened, and no thread ran a placement that would have read
-    // the source.
+    assert_eq!(backend.paths_of("stat"), [p(folder)]);
+    // Nothing was opened: no thread ran the placement.
     assert_eq!(backend.calls_of("open"), 0);
     let free = |lane| turn_is_free(&disk.copy_admission(), lane);
     assert!(free("unknown-volume") && free("unix-dev:7"));
@@ -1224,7 +1441,7 @@ mod real {
         write(&staged, b"irreplaceable");
 
         let disk = disk();
-        job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::OnlyCopy);
+        let _ = job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::OnlyCopy);
 
         assert_eq!(std::fs::read(&source).expect("back"), b"irreplaceable");
         assert_eq!(std::fs::read(&dest).expect("dest"), b"occupied");
@@ -1272,8 +1489,8 @@ mod real {
                 None,
             ),
             // With no source it may be an empty source that a rename moved:
-            // it is kept, and never put under the source's name.
-            (StagedHolds::EmptyClaim, None, Some(b""), None, Some(b"")),
+            // it goes back under the source's name.
+            (StagedHolds::EmptyClaim, None, Some(b""), Some(b""), None),
             // An unproven copy is not promoted even when the source is gone.
             (unproven, None, Some(b"half"), None, Some(b"half")),
             // A claim that holds data may be the source: it goes back, and
@@ -1305,11 +1522,57 @@ mod real {
                 }
             }
             let disk = disk();
-            job(&disk, &source, &dest, moving()).roll_back(&staged, held);
+            let _ = job(&disk, &source, &dest, moving()).roll_back(&staged, held);
             let read = |path: &Path| std::fs::read(path).ok();
             assert_eq!(read(&source).as_deref(), source_after, "case {index}");
             assert_eq!(read(&staged).as_deref(), staged_after, "case {index}");
         }
+    }
+
+    /// An empty claim beside a source that cannot be read, or that reads as
+    /// gone but cannot be put back, stays at its reserved name, and the
+    /// refusal says so. Nothing is removed.
+    #[cfg(unix)]
+    #[test]
+    fn an_empty_claim_stays_where_its_source_cannot_be_read_or_put_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let staged = dir.path().join(".scryer-move.partial");
+        let dest = dir.path().join("dest.mkv");
+        let neighbour = dir.path().join("neighbour.mkv");
+        write(&neighbour, b"unrelated");
+        let disk = disk();
+
+        // The source's folder is gone, so the put-back has nowhere to go.
+        write(&staged, b"");
+        let source = dir.path().join("vanished").join("source.mkv");
+        let said = job(&disk, &source, &dest, moving())
+            .roll_back(&staged, StagedHolds::EmptyClaim)
+            .expect("the refusal says what became of the empty file");
+        assert!(said.contains("is left in place"), "{said}");
+        assert!(said.contains("putting it back"), "{said}");
+        assert_eq!(std::fs::read(&staged).expect("kept"), b"");
+
+        // The source's folder does not let its name be read.
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).expect("locked folder");
+        let source = locked.join("source.mkv");
+        write(&source, b"payload");
+        let set = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
+        set(0o000).expect("lock");
+        if std::fs::symlink_metadata(&source).is_ok() {
+            // This user reads through any mode; the case does not apply.
+            set(0o755).expect("unlock");
+            return;
+        }
+        let said = job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::EmptyClaim);
+        set(0o755).expect("unlock");
+        let said = said.expect("the refusal says what became of the empty file");
+        assert!(said.contains("is left in place"), "{said}");
+        assert!(!said.contains("putting it back"), "{said}");
+        assert_eq!(std::fs::read(&staged).expect("kept"), b"");
+        assert_eq!(std::fs::read(&source).expect("source"), b"payload");
+        assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");
     }
 
     /// Installing the roots changes only reuse and timeouts: placing a file
@@ -1553,7 +1816,8 @@ mod real {
             .expect("lock the source folder");
 
         let disk = disk();
-        job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::Copy { proven: true });
+        let held_copy = StagedHolds::Copy { proven: true };
+        let _ = job(&disk, &source, &dest, moving()).roll_back(&staged, held_copy);
         std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
             .expect("unlock the source folder");
 

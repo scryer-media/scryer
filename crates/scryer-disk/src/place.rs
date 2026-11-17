@@ -12,7 +12,7 @@
 //! path here that may not replace either refuses in the same call that would
 //! have written, or reserves the name first.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -180,15 +180,18 @@ pub enum LinkAfter {
     /// The removal failed, and that failure is the refusal. The name may
     /// still be there.
     NotRemoved,
-    /// The name read as something other than a regular file, and was not
-    /// touched, even if this call made it: a source swapped for a symlink
-    /// before the link call makes exactly that.
+    /// The name was not touched. It read as something other than a regular
+    /// file, even if this call made it: a source swapped for a symlink
+    /// before the link call makes exactly that. Or it read as a regular file
+    /// that is not the link and whose length or modification time is not the
+    /// source's, which is another writer's file.
     LeftAlone,
 }
 
 /// A hard link this placement made and could not prove. The placement then
 /// went to remove the name it had just created, and nothing else; a name
-/// that does not read as a regular file is left alone.
+/// that does not read as a regular file, or reads as a regular file with
+/// another length or modification time than the source, is left alone.
 #[derive(Debug)]
 pub struct Unproven {
     pub doubt: Doubt,
@@ -266,6 +269,14 @@ pub struct PlaceRefusal {
     /// The link this placement made, could not prove and went to remove,
     /// and whether the name is gone.
     pub unproven: Option<Unproven>,
+    /// Whether this placement changed what is under the destination name
+    /// itself before it failed: a copy that lands directly, stopped after it
+    /// emptied the file the caller holds there or created one. `false` for
+    /// every failure before that (the source not opened, a turn not given,
+    /// the destination not opened or not emptied), for a copy that lands
+    /// through a staged name, and for a placement whose thread ended without
+    /// answering, where nothing says what it did.
+    pub destination_written: bool,
     detail: io::Error,
 }
 
@@ -339,6 +350,26 @@ fn left_as_the_source(name: &Path, source: &Path, source_reads: PathReading) -> 
     )
 }
 
+/// What a placement's source and destination folder read as, within their
+/// roots' bounds, before it took a thread.
+#[derive(Clone, Copy)]
+struct Answered {
+    source: PathReading,
+    /// The destination's folder, links followed, read as a folder.
+    folder_is_dir: bool,
+}
+
+/// A placement refused before its job ran, so with nothing written.
+fn refused_before_it_ran(policy: Placement, fail: Fail) -> PlaceRefusal {
+    PlaceRefusal {
+        asked: policy.method,
+        refused: fail.refused,
+        unproven: None,
+        destination_written: false,
+        detail: fail.detail,
+    }
+}
+
 fn needs_copy(error: &DiskError) -> bool {
     error.reason() == reason::DISK_MOVE_NEEDS_COPY
 }
@@ -409,7 +440,7 @@ impl Disk {
         policy: Placement,
         watch: &Watch,
     ) -> Result<Placed, PlaceRefusal> {
-        self.place_admitted(source, dest, policy, watch, None, false, None)
+        self.place_admitted(source, dest, policy, watch, None, false, None, None)
     }
 
     /// [`Self::place_blocking`] for a hard link that must prove itself.
@@ -426,16 +457,22 @@ impl Disk {
     /// created, and only when the link call itself succeeded. A name that
     /// was there before the call is refused as a destination that exists and
     /// is never removed. Neither is a new name that reads as anything but a
-    /// regular file: another writer replaced the link, and the answer is a
-    /// destination that exists. A removal that fails, or finds the name
-    /// already gone, is the refusal, and [`PlaceRefusal::unproven`] says
-    /// what did not prove and what became of the name. Once the name is
+    /// regular file, nor one that reads as a regular file that is not the
+    /// link and has another length or modification time than `seen`: another
+    /// writer replaced the link, the name is left as it is with
+    /// [`LinkAfter::LeftAlone`], and the answer is a destination that exists,
+    /// with no fallback copy over it. A removal that fails, or finds the
+    /// name already gone, is the refusal, and [`PlaceRefusal::unproven`]
+    /// says what did not prove and what became of the name. Once the name is
     /// removed the policy's fallback copy runs, or the answer is
     /// [`CannotLink::Unverifiable`].
     ///
     /// What remains: a regular file another writer put at the name in that
-    /// instant is removed as the unproven link would be, on any filesystem.
-    /// Where file numbers are made up it cannot even be told from the link.
+    /// instant, with the source's length and modification time, is removed
+    /// as the unproven link would be, on any filesystem. Where file numbers
+    /// are made up it cannot even be told from the link. So is any regular
+    /// file there when `seen` names a volume only, which carries no length
+    /// or time to tell it by.
     ///
     /// Nothing is remembered about the volume. A policy that asks for
     /// another method is placed as [`Self::place_blocking`] places it.
@@ -448,7 +485,16 @@ impl Disk {
         proof: LinkProof,
     ) -> Result<Placed, PlaceRefusal> {
         let prove = Some((seen, proof));
-        self.place_admitted(source, dest, policy, &Watch::nobody(), None, false, prove)
+        self.place_admitted(
+            source,
+            dest,
+            policy,
+            &Watch::nobody(),
+            None,
+            false,
+            prove,
+            None,
+        )
     }
 
     /// [`Self::place_proven_blocking`] off the async runtime. Once started
@@ -462,16 +508,61 @@ impl Disk {
         proof: LinkProof,
     ) -> Result<Placed, PlaceRefusal> {
         let (disk, source, dest) = (self.clone(), source.into(), dest.into());
-        let job = move || disk.place_proven_blocking(&source, &dest, policy, &seen, proof);
+        let answered = match self.roots_answer(&source, &dest).await {
+            Ok(answered) => Some(answered),
+            Err(fail) => return Err(refused_before_it_ran(policy, fail)),
+        };
+        let job = move || {
+            let prove = Some((&seen, proof));
+            let nobody = Watch::nobody();
+            disk.place_admitted(
+                &source, &dest, policy, &nobody, None, false, prove, answered,
+            )
+        };
         match offload(None, job).await {
             Offloaded::Done(result) => result,
             Offloaded::TimedOut | Offloaded::Failed(_) => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: Refused::Failed,
                 unproven: None,
+                destination_written: false,
                 detail: io::Error::other("the placement did not run to its end"),
             }),
         }
+    }
+
+    /// Reads the source's name and the destination's folder, each within its
+    /// root's bound, before a placement takes a thread: a root that does not
+    /// answer refuses the placement here instead of holding the thread. What
+    /// either holds is the placement's to judge; only a read that did not
+    /// come back refuses. Returns what both read as, for the placement to
+    /// use in place of its own looks at the same things.
+    async fn roots_answer(&self, source: &Path, dest: &Path) -> Result<Answered, Fail> {
+        let unanswered = |path: &Path, side, reading: PathReading| {
+            let why = reading.describe_absence();
+            Fail::unread(reading, side, format!("{}: {why}", path.display()))
+        };
+        let name = |disk: &Self, path: &Path| Ok(disk.uncached_blocking(path));
+        let source_read = self
+            .probe_with(source.to_path_buf(), name, Err)
+            .await
+            .map_err(|reading| unanswered(source, Side::Source, reading))?;
+        let mut folder_is_dir = false;
+        if let Some(folder) = dest
+            .parent()
+            .filter(|folder| !folder.as_os_str().is_empty())
+        {
+            let resolved = |disk: &Self, path: &Path| Ok(disk.follow_blocking(path));
+            let folder_read = self
+                .probe_with(folder.to_path_buf(), resolved, Err)
+                .await
+                .map_err(|reading| unanswered(folder, Side::Destination, reading))?;
+            folder_is_dir = folder_read.is(EntryKind::Directory);
+        }
+        Ok(Answered {
+            source: source_read,
+            folder_is_dir,
+        })
     }
 
     fn place_admitted(
@@ -483,6 +574,7 @@ impl Disk {
         permit: Option<CopyPermit>,
         staged_free: bool,
         prove: Option<(&Mark, LinkProof)>,
+        answered: Option<Answered>,
     ) -> Result<Placed, PlaceRefusal> {
         let job = Job {
             disk: self,
@@ -495,6 +587,9 @@ impl Disk {
             copied: RefCell::new(None),
             prove,
             unproven: RefCell::new(None),
+            source_read: Cell::new(answered.map(|answered| answered.source)),
+            folder_is_dir: answered.is_some_and(|answered| answered.folder_is_dir),
+            wrote_dest: Cell::new(false),
         };
         match job.run() {
             Ok(done) => Ok(Placed {
@@ -506,6 +601,7 @@ impl Disk {
                 asked: policy.method,
                 refused: fail.refused,
                 unproven: job.unproven.take(),
+                destination_written: job.wrote_dest.get(),
                 detail: fail.detail,
             }),
         }
@@ -525,6 +621,11 @@ impl Disk {
     }
 
     /// `Disk::place_watched_blocking` off the async runtime.
+    ///
+    /// The source's name and the destination's folder are first read within
+    /// their roots' bounds, and a placement whose root does not answer is
+    /// refused before it takes a thread. The copy that lands directly is the
+    /// exception, below.
     ///
     /// A recorded copy that lands [`Landing::Staged`] first reads its staged
     /// name and its destination's volume within the root's bound, and is
@@ -553,11 +654,23 @@ impl Disk {
         let (disk, source, dest) = (self.clone(), source.into(), dest.into());
         let recorded = matches!(policy.verify, Verify::Recorded(_));
         let mut staged_free = false;
-        let refuse = |fail: Fail| PlaceRefusal {
-            asked: policy.method,
-            refused: fail.refused,
-            unproven: None,
-            detail: fail.detail,
+        let refuse = |fail: Fail| refused_before_it_ran(policy, fail);
+        let lands_directly = matches!(
+            policy,
+            Placement {
+                method: Method::Copy,
+                verify: Verify::Recorded(Evidence {
+                    landing: Landing::Direct,
+                    ..
+                }),
+                ..
+            }
+        );
+        // Every placement but the copy that lands directly is refused here
+        // when its source's root or its destination's does not answer.
+        let answered = match lands_directly {
+            true => None,
+            false => Some(self.roots_answer(&source, &dest).await.map_err(refuse)?),
         };
         let permit = match policy {
             Placement {
@@ -599,20 +712,24 @@ impl Disk {
             }
             _ => None,
         };
-        let job =
-            move || disk.place_admitted(&source, &dest, policy, &watch, permit, staged_free, None);
+        let job = move || {
+            let (free, read) = (staged_free, answered);
+            disk.place_admitted(&source, &dest, policy, &watch, permit, free, None, read)
+        };
         match offload(None, job).await {
             Offloaded::Done(result) => result,
             Offloaded::TimedOut => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: Refused::Failed,
                 unproven: None,
+                destination_written: false,
                 detail: io::Error::other("the placement did not run to its end"),
             }),
             Offloaded::Failed(said) => Err(PlaceRefusal {
                 asked: policy.method,
                 refused: Refused::Failed,
                 unproven: None,
+                destination_written: false,
                 detail: io::Error::other(match recorded {
                     true => format!("verified copy task failed to join: {said}"),
                     false => "the placement did not run to its end".to_string(),
@@ -734,12 +851,22 @@ pub(crate) struct Job<'a> {
     /// The link this job made and could not prove, when that is why it
     /// failed.
     pub(crate) unproven: RefCell<Option<Unproven>>,
+    /// The source's name as it was read, within its root's bound, before
+    /// this job took its thread; `None` for a job that started on one.
+    pub(crate) source_read: Cell<Option<PathReading>>,
+    /// Whether the destination's folder read as a folder, within its root's
+    /// bound, before this job took its thread; it is then not created.
+    pub(crate) folder_is_dir: bool,
+    /// Whether a copy that lands directly on the destination name emptied
+    /// or wrote it before failing.
+    pub(crate) wrote_dest: Cell<bool>,
 }
 
 impl Job<'_> {
     fn run(&self) -> Result<Done, Fail> {
         if self.policy.parents == Parents::Create
             && self.policy.method != Method::HardLink
+            && !self.folder_is_dir
             && let Some(parent) = self.dest.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -797,9 +924,19 @@ impl Job<'_> {
                 self.promote(&staged, dest).map(|()| Done::Renamed),
                 StagedHolds::OnlyCopy,
             ),
-            Err(error) if needs_copy(&error) && self.may_copy_instead() => {
-                return self.copy_through_staging(&staged);
-            }
+            Err(error) if needs_copy(&error) && self.may_copy_instead() => match self.source_kind()
+            {
+                // A symlinked source is made again on the other volume, as
+                // a move without the claim makes it. A rename refused across
+                // volumes moved nothing, so the claim is still the empty file
+                // this job made, and is released before the link is made.
+                Ok(EntryKind::Symlink) => {
+                    let _ = disk.remove_blocking(&staged, Remove::File);
+                    return self.relink_across_volumes();
+                }
+                Ok(_) => return self.copy_through_staging(&staged),
+                Err(fail) => (Err(fail), StagedHolds::EmptyClaim),
+            },
             Err(error) if needs_copy(&error) => {
                 (self.across_volumes(error), StagedHolds::EmptyClaim)
             }
@@ -825,35 +962,11 @@ impl Job<'_> {
                 detail: refusal.into(),
             });
         }
-        let (disk, source, dest) = (self.disk, self.source, self.dest);
-        let reading = disk.uncached_blocking(source);
-        let Some(kind) = reading.kind() else {
-            let absence = format!("{}: {}", source.display(), reading.describe_absence());
-            return Err(match reading.exists() {
-                Some(false) => Fail::new(Refused::SourceMissing, io::ErrorKind::NotFound, absence),
-                _ => Fail::unread(reading, Side::Source, absence),
-            });
-        };
+        let (disk, dest) = (self.disk, self.dest);
         // A symlinked media file is a pointer, not the payload: copying it
         // would silently duplicate the whole file and drop the link.
-        if kind == EntryKind::Symlink {
-            let link_target = disk
-                .read_link_blocking(source)
-                .map_err(|error| Fail::of(error, Side::Source))?;
-            if self.replaces() {
-                let _ = disk.remove_blocking(dest, Remove::File);
-            }
-            let linked = disk
-                .link_blocking(&link_target, dest, Link::Symbolic)
-                .map_err(|error| Fail::of(error, Side::Destination))?;
-            if linked == LinkOutcome::NotPossible {
-                return Err(Fail::new(
-                    Refused::Failed,
-                    io::ErrorKind::Unsupported,
-                    format!("{} cannot hold a symbolic link", dest.display()),
-                ));
-            }
-            return self.unlink_moved_source(Done::RelinkedThenRemovedSource);
+        if self.source_kind()? == EntryKind::Symlink {
+            return self.relink_across_volumes();
         }
 
         if !self.replaces() {
@@ -866,6 +979,45 @@ impl Job<'_> {
             return Err(fail);
         }
         self.unlink_moved_source(Done::CopiedThenRemovedSource)
+    }
+
+    /// What the source is, for a move a rename cannot make. The look made
+    /// before this job took its thread stands for this one when it found the
+    /// source; anything else is read now.
+    fn source_kind(&self) -> Result<EntryKind, Fail> {
+        let (disk, source) = (self.disk, self.source);
+        let before = self.source_read.take().filter(|read| read.kind().is_some());
+        let reading = before.unwrap_or_else(|| disk.uncached_blocking(source));
+        reading.kind().ok_or_else(|| {
+            let absence = format!("{}: {}", source.display(), reading.describe_absence());
+            match reading.exists() {
+                Some(false) => Fail::new(Refused::SourceMissing, io::ErrorKind::NotFound, absence),
+                _ => Fail::unread(reading, Side::Source, absence),
+            }
+        })
+    }
+
+    /// Moves a symlinked source to another volume: a link to the same
+    /// target is made at the destination, and the source link removed.
+    fn relink_across_volumes(&self) -> Result<Done, Fail> {
+        let (disk, source, dest) = (self.disk, self.source, self.dest);
+        let link_target = disk
+            .read_link_blocking(source)
+            .map_err(|error| Fail::of(error, Side::Source))?;
+        if self.replaces() {
+            let _ = disk.remove_blocking(dest, Remove::File);
+        }
+        let linked = disk
+            .link_blocking(&link_target, dest, Link::Symbolic)
+            .map_err(|error| Fail::of(error, Side::Destination))?;
+        if linked == LinkOutcome::NotPossible {
+            return Err(Fail::new(
+                Refused::Failed,
+                io::ErrorKind::Unsupported,
+                format!("{} cannot hold a symbolic link", dest.display()),
+            ));
+        }
+        self.unlink_moved_source(Done::RelinkedThenRemovedSource)
     }
 
     /// Moves the source to another volume through `staged`, which this job
@@ -881,7 +1033,9 @@ impl Job<'_> {
             },
             Err(fail) => (fail, false),
         };
-        self.roll_back(staged, StagedHolds::Copy { proven });
+        // A copy is never the empty claim the note speaks of, so there is no
+        // note to add; what became of the copy is logged by the rollback.
+        let _ = self.roll_back(staged, StagedHolds::Copy { proven });
         Err(fail)
     }
 
@@ -957,14 +1111,21 @@ impl Job<'_> {
 
     /// Proves the link this job has just made at the destination, and
     /// removes it when it does not prove. Only a successful link call leads
-    /// here, so the name removed is one this job created.
+    /// here, and a regular file that is not the link is removed only when it
+    /// does not read with another length or modification time than `seen`,
+    /// so the name removed is one this job created.
     fn prove_link(&self, seen: &Mark, proof: LinkProof) -> Result<Done, Fail> {
         let (disk, dest) = (self.disk, self.dest);
         let read = disk.call("lstat", || disk.inner.backend.lstat(dest));
         let doubt = match read.map(|stat| Mark::of_stat(&stat)) {
             Err(error) => Doubt::Unread(DiskError::new(DiskVerb::Read, dest, error)),
-            // Not a regular file, so not removed as one, whoever made it.
-            Ok(linked) if linked.kind() != Some(EntryKind::File) => {
+            // Not a regular file, so not removed as one, whoever made it. A
+            // regular file that is not the link and has another length or
+            // modification time than the source is another writer's.
+            Ok(linked)
+                if linked.kind() != Some(EntryKind::File)
+                    || (!linked.is_link_of(seen) && linked.differs_in_content_facts(seen)) =>
+            {
                 let doubt = Doubt::OtherFile { linked };
                 let after = LinkAfter::LeftAlone;
                 self.unproven.replace(Some(Unproven { doubt, after }));
@@ -1037,7 +1198,8 @@ impl Job<'_> {
     /// file back when it does not.
     ///
     /// Returns what the refusal should add when an empty reserved name was
-    /// left in place rather than released.
+    /// put back under the source name or left in place rather than released.
+    #[must_use = "a refusal says when an empty reserved name was kept"]
     pub(crate) fn roll_back(&self, staged: &Path, held: StagedHolds) -> Option<String> {
         let (disk, source) = (self.disk, self.source);
         let reading = disk.uncached_blocking(staged);
@@ -1045,20 +1207,15 @@ impl Job<'_> {
             // Only the empty claim this move created is removed. An empty
             // file there may also be an empty source, moved by a rename that
             // reported failure, so it goes only while the source still reads
-            // as present: one look at the source, on this failure alone.
+            // as present: one look at the source, on this failure alone. A
+            // source that reads as gone gets the empty file back.
             StagedHolds::EmptyClaim if holds_only_the_claim(reading) => {
                 let source_reads = disk.uncached_blocking(source);
                 if source_reads.exists() == Some(true) {
                     let _ = disk.remove_blocking(staged, Remove::File);
                     return None;
                 }
-                tracing::error!(
-                    staged = %staged.display(),
-                    source = %source.display(),
-                    state = source_reads.describe_absence(),
-                    "the source of a failed move does not read as present; the empty file at its reserved name is left in place"
-                );
-                return Some(left_as_the_source(staged, source, source_reads));
+                return Some(self.settle_empty_claim(staged, source_reads));
             }
             StagedHolds::EmptyClaim if reading.exists() == Some(false) => return None,
             // An unread claim may be the source, moved by a rename that
@@ -1132,6 +1289,46 @@ impl Job<'_> {
             ),
         }
         None
+    }
+
+    /// Settles an empty file at a reserved name, `name`, that may be the
+    /// source moved by a rename that reported failure, once the source read
+    /// as `source_reads` and not as present. A source that reads as gone gets
+    /// the file back under its name, never over anything there; one that
+    /// cannot be read, or a put-back that fails, leaves the file where it is.
+    /// Nothing is removed. Returns what the refusal adds.
+    fn settle_empty_claim(&self, name: &Path, source_reads: PathReading) -> String {
+        let (disk, source) = (self.disk, self.source);
+        if source_reads.exists() == Some(false) {
+            return match disk.promote_staged_blocking(name, source) {
+                Ok(()) => format!(
+                    "the empty file at {} may be the source and was put back at {}",
+                    name.display(),
+                    source.display()
+                ),
+                Err(error) => {
+                    tracing::error!(
+                        name = %name.display(),
+                        source = %source.display(),
+                        error = %error.words(),
+                        "the source of a failed move reads as gone and the empty file at its reserved name could not be put back; it is left in place"
+                    );
+                    format!(
+                        "the empty file at {} may be the source and is left in place (putting it back at {} failed: {})",
+                        name.display(),
+                        source.display(),
+                        error.words()
+                    )
+                }
+            };
+        }
+        tracing::error!(
+            name = %name.display(),
+            source = %source.display(),
+            state = source_reads.describe_absence(),
+            "the source of a failed move cannot be read; the empty file at its reserved name is left in place"
+        );
+        left_as_the_source(name, source, source_reads)
     }
 
     /// Finishes a move whose destination is in place by unlinking the source.
@@ -1316,14 +1513,8 @@ impl Job<'_> {
                     }
                     let source_reads = disk.uncached_blocking(source);
                     if source_reads.exists() != Some(true) {
-                        tracing::error!(
-                            intermediate = %intermediate.display(),
-                            source = %source.display(),
-                            state = source_reads.describe_absence(),
-                            "a case-only rename reported failure and its source does not read as present; the empty file at its intermediate name is left in place"
-                        );
-                        let left = left_as_the_source(&intermediate, source, source_reads);
-                        return Err(Fail::of(error, Side::Either).noting(&left));
+                        let note = self.settle_empty_claim(&intermediate, source_reads);
+                        return Err(Fail::of(error, Side::Either).noting(&note));
                     }
                     let _ = disk.remove_blocking(&intermediate, Remove::File);
                     last_failure = Some(Fail::of(error, Side::Either));

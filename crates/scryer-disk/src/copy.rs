@@ -857,6 +857,8 @@ impl Job<'_> {
                 if staged.is_some() && fail.found_the_target_taken() {
                     return Err(staging_occupied(target));
                 }
+                // Landing directly, the name opened is the destination's.
+                self.wrote_dest.set(staged.is_none() && fail.claimed);
                 return Err(fail.recorded(source, target));
             }
         };
