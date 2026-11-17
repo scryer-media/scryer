@@ -1427,6 +1427,12 @@ pub(super) struct TrackingImportRepo {
     pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
     /// The tracked state each finished history retry settled on.
     pub(super) retry_finished_states: Arc<Mutex<Vec<TrackedDownloadState>>>,
+    /// Held-source reads of one download, and batched ones.
+    pub(super) held_reads_per_download: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) held_reads_batched: Arc<std::sync::atomic::AtomicUsize>,
+    /// What a batched held-source read answers instead of the records, for a
+    /// test whose holds change between the batch and the per-download read.
+    pub(super) batched_held_answer: Arc<Mutex<Option<crate::HeldDownloadSources>>>,
 }
 
 fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
@@ -1557,12 +1563,37 @@ impl ImportRepository for TrackingImportRepo {
         &self,
         download_id: &scryer_domain::download_identity::DownloadId,
     ) -> AppResult<bool> {
+        self.held_reads_per_download
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let canonical_ids = self.canonical_ids.lock().await;
         Ok(self.records.lock().await.iter().any(|record| {
             canonical_ids.get(&record.id) == Some(download_id)
                 && serde_json::from_str::<serde_json::Value>(&record.payload_json)
                     .is_ok_and(|payload| payload["archive_processing_pending"] == true)
         }))
+    }
+
+    async fn archive_processing_pending_downloads(
+        &self,
+        download_ids: &[scryer_domain::download_identity::DownloadId],
+    ) -> AppResult<crate::HeldDownloadSources> {
+        self.held_reads_batched
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(answer) = self.batched_held_answer.lock().await.clone() {
+            return Ok(answer);
+        }
+        let canonical_ids = self.canonical_ids.lock().await;
+        let mut answer = crate::HeldDownloadSources::default();
+        for record in self.records.lock().await.iter() {
+            if let Some(download_id) = canonical_ids.get(&record.id)
+                && download_ids.contains(download_id)
+                && serde_json::from_str::<serde_json::Value>(&record.payload_json)
+                    .is_ok_and(|payload| payload["archive_processing_pending"] == true)
+            {
+                answer.held.insert(*download_id);
+            }
+        }
+        Ok(answer)
     }
 
     async fn queue_import_request_with_identity_for_download(

@@ -8998,6 +8998,16 @@ pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reaso
 /// interrupted release can be told apart from an import that never held.
 pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released";
 
+/// Which downloads of a batch an import still holds the sources of.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldDownloadSources {
+    /// Downloads an import still holds.
+    pub held: HashSet<DownloadId>,
+    /// Downloads not held by any readable import that have an import whose
+    /// record could not be read. Each waits on its own.
+    pub unreadable: HashSet<DownloadId>,
+}
+
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
     async fn set_archive_processing_pending(
@@ -9050,22 +9060,29 @@ pub trait ImportRepository: Send + Sync {
     }
 
     /// Which of `download_ids` an import still holds the sources of, as
-    /// [`Self::archive_processing_pending_for_download`] answers each. A store
+    /// [`Self::archive_processing_pending_for_download`] answers each, and
+    /// which of them have an import whose record could not be read. A store
     /// answers the set in bounded statements; this default asks per id.
     async fn archive_processing_pending_downloads(
         &self,
         download_ids: &[DownloadId],
-    ) -> AppResult<HashSet<DownloadId>> {
-        let mut held = HashSet::new();
+    ) -> AppResult<HeldDownloadSources> {
+        let mut answer = HeldDownloadSources::default();
         for download_id in download_ids {
-            if self
+            match self
                 .archive_processing_pending_for_download(download_id)
-                .await?
+                .await
             {
-                held.insert(*download_id);
+                Ok(true) => {
+                    answer.held.insert(*download_id);
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    answer.unreadable.insert(*download_id);
+                }
             }
         }
-        Ok(held)
+        Ok(answer)
     }
     async fn queue_import_request(
         &self,

@@ -749,8 +749,10 @@ async fn reconcile_terminal_download_cleanup(
     // A claimed cleanup waits while an archive or subtitle delivery of the
     // download still holds its sources. A cleanup without a claim of its own
     // waits here the same way before anything is removed.
-    // One batched read per tick answers every row of the tick; the read
-    // writes nothing, so a tick that finds every download held does no write.
+    // Downloads still held from an earlier tick are answered by one batched
+    // read per tick; a "not held" is always read for this download alone, now.
+    // The reads write nothing, so a tick that finds every download held does
+    // no write.
     if record.is_none()
         && let Some(download_id) = canonical_download_id
     {
@@ -758,18 +760,16 @@ async fn reconcile_terminal_download_cleanup(
             Some(cache) => cache.sources_held(app, download_id).await,
             None => sources_held_by_import(app, download_id).await,
         };
+        let first_unread = note_held_sources(download_id, &held);
         match held {
-            Ok(false) => {
-                held_sources_read_again(download_id);
-            }
+            Ok(false) => {}
             Ok(true) => {
-                held_sources_read_again(download_id);
                 return TerminalDownloadCleanup::bare(
                     TerminalDownloadCleanupOutcome::RetryableFailure,
                 );
             }
             Err(error) => {
-                if held_sources_unread_first_time(download_id) {
+                if first_unread {
                     tracing::warn!(%download_id, error = %error,
                         "could not tell whether the download's sources are still held; cleanup deferred until they read");
                 } else {
@@ -3031,34 +3031,6 @@ async fn run_deferred_import_source_cleanups(
         .await?;
     }
     Ok(())
-}
-
-/// Downloads whose held-source read failed and has been logged, so a read
-/// that keeps failing logs once per download, not once per tick. An entry
-/// goes once its read answers again, so the set holds only downloads whose
-/// read is failing now.
-static HELD_SOURCES_UNREAD: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<scryer_domain::download_identity::DownloadId>>,
-> = std::sync::LazyLock::new(Default::default);
-
-/// Whether this is the first failed held-source read of `download_id` since
-/// its read last answered.
-fn held_sources_unread_first_time(
-    download_id: &scryer_domain::download_identity::DownloadId,
-) -> bool {
-    match HELD_SOURCES_UNREAD.lock() {
-        Ok(mut unread) => unread.insert(*download_id),
-        Err(_) => true,
-    }
-}
-
-/// `download_id`'s held sources read again.
-fn held_sources_read_again(download_id: &scryer_domain::download_identity::DownloadId) {
-    if let Ok(mut unread) = HELD_SOURCES_UNREAD.lock()
-        && !unread.is_empty()
-    {
-        unread.remove(download_id);
-    }
 }
 
 async fn finalize_import_source_cleanup(

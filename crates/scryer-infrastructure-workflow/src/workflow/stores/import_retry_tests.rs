@@ -1001,3 +1001,112 @@ async fn nzbget_password_holds_block_actual_cleanup_claim_after_store_restart() 
         );
     }
 }
+
+/// The batched held-source read gives every download the answer its own
+/// read gives, across more ids than one statement takes: no import, several
+/// imports, a held one among unheld ones, records that do not read, and
+/// records without a download.
+#[tokio::test]
+async fn batched_held_sources_answer_as_each_download_read_alone() {
+    let store = store().await;
+    let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+        panic!("SQLite fixture")
+    };
+    let held = r#"{"archive_processing_pending":true}"#;
+    let cases: [&[Option<&str>]; 9] = [
+        &[],
+        &[Some(held)],
+        &[Some("{}")],
+        &[Some(r#"{"archive_processing_pending":false}"#), Some(held)],
+        &[Some(r#"{"archive_processing_pending":1}"#), Some("[]")],
+        &[Some("not a document")],
+        &[None],
+        &[Some(r#""a document as text""#)],
+        &[Some(r#"{"archive_processing_pending":false}"#), Some("{}")],
+    ];
+    let mut ids = Vec::new();
+    let mut row = 0usize;
+    for index in 0..600 {
+        let download_id = DownloadId::new();
+        ids.push(download_id);
+        for payload in cases[index % cases.len()] {
+            row += 1;
+            sqlx::query(
+                "INSERT INTO imports (id, source_system, source_ref, import_type, status,
+                    payload_json, canonical_download_id, created_at, updated_at)
+                 VALUES (?, 'nzbget', ?, 'movie_download', 'completed', ?, ?, 'now', 'now')",
+            )
+            .bind(format!("import-{row}"))
+            .bind(format!("job-{row}"))
+            .bind(*payload)
+            .bind(download_id.to_string())
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+    // A held import of no download answers for none.
+    sqlx::query(
+        "INSERT INTO imports (id, source_system, source_ref, import_type, status,
+            payload_json, canonical_download_id, created_at, updated_at)
+         VALUES ('import-orphan', 'nzbget', 'job-orphan', 'movie_download', 'completed', ?, NULL, 'now', 'now')",
+    )
+    .bind(held)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let batch = store.archive_processing_pending_downloads(&ids).await.unwrap();
+    for (index, download_id) in ids.iter().enumerate() {
+        let alone = store
+            .archive_processing_pending_for_download(download_id)
+            .await;
+        let case = index % cases.len();
+        match alone {
+            Ok(true) => assert!(batch.held.contains(download_id), "case {case}"),
+            Ok(false) => assert!(
+                !batch.held.contains(download_id) && !batch.unreadable.contains(download_id),
+                "case {case}"
+            ),
+            Err(_) => assert!(
+                batch.unreadable.contains(download_id) && !batch.held.contains(download_id),
+                "case {case}"
+            ),
+        }
+    }
+    assert!(!batch.held.is_empty() && !batch.unreadable.is_empty());
+}
+
+/// A download held by one import and with another import that does not read
+/// is held: the hold is what decides.
+#[tokio::test]
+async fn a_held_download_stays_held_beside_an_unreadable_import() {
+    let store = store().await;
+    let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+        panic!("SQLite fixture")
+    };
+    let download_id = DownloadId::new();
+    for (row, payload) in [r#"{"archive_processing_pending":true}"#, "not a document"]
+        .into_iter()
+        .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO imports (id, source_system, source_ref, import_type, status,
+                payload_json, canonical_download_id, created_at, updated_at)
+             VALUES (?, 'nzbget', ?, 'movie_download', 'completed', ?, ?, 'now', 'now')",
+        )
+        .bind(format!("import-{row}"))
+        .bind(format!("job-{row}"))
+        .bind(payload)
+        .bind(download_id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let batch = store
+        .archive_processing_pending_downloads(&[download_id])
+        .await
+        .unwrap();
+    assert!(batch.held.contains(&download_id));
+    assert!(batch.unreadable.is_empty());
+}

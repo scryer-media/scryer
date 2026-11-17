@@ -76,9 +76,10 @@ pub fn aside_path_for(source: &Path) -> PathBuf {
     folder.join(format!(".scry-ia-{}", &digest[..9]))
 }
 
-/// Whether `path`, as spelled, names a network share (`\\server\share` or
-/// its `\\?\UNC\` form). Read from the text alone, no probe: a drive letter
-/// mapped to a share is not told apart here. Never on other platforms.
+/// Whether `path`, as spelled, names a network share (`\\server\share`, or
+/// its `\\?\UNC\` or `\\.\UNC\` form). Read from the text alone, no probe: a
+/// drive letter mapped to a share is not told apart here. Never on other
+/// platforms.
 fn on_a_share(path: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -86,7 +87,11 @@ fn on_a_share(path: &Path) -> bool {
         matches!(
             path.components().next(),
             Some(Component::Prefix(prefix))
-                if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))
+                if match prefix.kind() {
+                    Prefix::UNC(..) | Prefix::VerbatimUNC(..) => true,
+                    Prefix::DeviceNS(name) => name.eq_ignore_ascii_case("UNC"),
+                    _ => false,
+                }
         )
     }
     #[cfg(not(windows))]
@@ -184,7 +189,7 @@ impl super::Disk {
                 }
             }
         }
-        if (!kept_now.numbered_on_one_volume(source_mark) || on_a_share(kept))
+        if (!kept_now.numbered_on_one_volume(source_mark) || on_a_share(kept) || on_a_share(source))
             && let Some(answer) = self.unlisted(kept)
         {
             return self.put_back(source, aside, answer);
@@ -308,6 +313,33 @@ impl super::Disk {
                 );
                 AsideRemoval::PutBackFailed { at: aside, error }
             }
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod share_spellings {
+    use super::on_a_share;
+    use std::path::Path;
+
+    #[test]
+    fn every_unc_spelling_is_a_share_and_a_drive_is_not() {
+        for share in [
+            r"\\server\share\Show\episode.mkv",
+            r"\\?\UNC\server\share\Show\episode.mkv",
+            r"\\.\UNC\server\share\Show\episode.mkv",
+            r"\\.\unc\server\share\Show\episode.mkv",
+        ] {
+            assert!(on_a_share(Path::new(share)), "{share}");
+        }
+        for local in [
+            r"C:\Library\Show\episode.mkv",
+            r"\\?\C:\Library\Show\episode.mkv",
+            r"\\.\C:\Library\Show\episode.mkv",
+            r"\\.\PhysicalDrive0",
+            r"Library\Show\episode.mkv",
+        ] {
+            assert!(!on_a_share(Path::new(local)), "{local}");
         }
     }
 }

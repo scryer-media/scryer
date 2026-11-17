@@ -701,7 +701,7 @@ pub use ports::{
     ExternalImportSetupSecretDraft, ExternalImportSetupSecretDraftInput,
     ExternalImportSetupSecretDraftRepository, ExternalImportSetupSecretDraftSaveResult,
     ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
-    ExternalImportSetupSecretOverrideDraft, ExternalPluginWasm, FileImporter,
+    ExternalImportSetupSecretOverrideDraft, ExternalPluginWasm, FileImporter, HeldDownloadSources,
     HousekeepingMediaFileRootRow, HousekeepingRepository, IMPORT_RETRY_TRACKED_STATE_REASON,
     IdentityTrackedStateTarget, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
     ImageProxyCacheUsage, ImageProxyKind, ImageProxyRegistration, ImageProxyRepository,
