@@ -1374,14 +1374,21 @@ impl Job<'_> {
     /// left at the source name. A name that is gone says nothing of where
     /// the file went: an earlier promotion that reported failure may have
     /// taken it. A failed call that left its reservation under the source
-    /// name is not looked at either: what reads there is that empty claim.
+    /// name may have left the empty claim there, or the file itself, renamed
+    /// over the claim with its reply lost: only a regular file with content
+    /// is the file put back.
     fn after_failed_put_back(&self, from: &Path, error: &DiskError) -> Leftover {
-        let taken = error.reason() == reason::DISK_DESTINATION_EXISTS;
-        let reserved = error.left().is_some();
-        if !taken && !reserved && self.disk.uncached_blocking(self.source).exists() == Some(true) {
-            return Leftover::PutBack {
-                at: self.source.into(),
+        if error.reason() != reason::DISK_DESTINATION_EXISTS {
+            let reading = self.disk.uncached_blocking(self.source);
+            let back = match error.left() {
+                Some(_) => reading.is(EntryKind::File) && reading.size().is_some_and(|len| len > 0),
+                None => reading.exists() == Some(true),
             };
+            if back {
+                return Leftover::PutBack {
+                    at: self.source.into(),
+                };
+            }
         }
         self.note_left(error);
         Leftover::PutBackFailed { at: from.into() }
