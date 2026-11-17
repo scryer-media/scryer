@@ -63,7 +63,10 @@ import type {
 } from "@/lib/types/rule-sets";
 import ruleInputContract from "@/lib/contracts/rule-input-contract.json";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
+import {
+  isUserOwnedRuleSet,
+  SCORING_STARTER_SOURCE,
+} from "@/lib/utils/rule-sets";
 import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
 import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
 import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
@@ -1257,13 +1260,14 @@ export function SettingsRulesSection({
                           options={builderOptions}
                           generatedSource={ruleSetDraft.regoSource}
                           feedback={validationStatus}
-                          editor={(readOnly) => (
+                          starterSource={SCORING_STARTER_SOURCE}
+                          editor={(readOnly, source) => (
                             <LazyRegoEditor
                               ruleFamily="release"
                               id="settings-rule-rego-source"
                               autoFocus={focusEditor}
                               onAutoFocus={onEditorFocused}
-                              value={ruleSetDraft.regoSource}
+                              value={source}
                               readOnly={readOnly}
                               onChange={editRegoSource}
                               diagnostics={validationDiagnostics}

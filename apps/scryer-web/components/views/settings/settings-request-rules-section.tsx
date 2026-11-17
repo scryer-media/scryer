@@ -68,6 +68,7 @@ import {
   requestRuleReadsRequester,
   requestVoteBadgeTone,
   requestVoteLabelKey,
+  REQUEST_STARTER_SOURCE,
 } from "@/lib/utils/request-rule-sets";
 import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
 import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
@@ -1368,11 +1369,12 @@ export function SettingsRequestRulesSection({
                       options={builderOptions}
                       generatedSource={ruleSetDraft.regoSource}
                       feedback={validationStatus}
-                      editor={(readOnly) => (
+                      starterSource={REQUEST_STARTER_SOURCE}
+                      editor={(readOnly, source) => (
                         <LazyRegoEditor
                           ruleFamily="request"
                           id="settings-request-rule-rego-source"
-                          value={ruleSetDraft.regoSource}
+                          value={source}
                           readOnly={readOnly}
                           onChange={editRegoSource}
                           diagnostics={regoDiagnostics(

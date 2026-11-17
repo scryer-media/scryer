@@ -73,6 +73,7 @@ import {
   ruleStateOptionsFor,
   lifecycleLoadRefusalKey,
   lifecyclePreviewErrorText,
+  LIFECYCLE_STARTER_SOURCE,
 } from "@/lib/utils/lifecycle-rule-sets";
 import { useRuleOutputDescriptors } from "@/lib/hooks/use-rule-builder-schema";
 import {
@@ -1185,12 +1186,13 @@ export function SettingsLifecycleRulesSection({
                       options={builderOptions}
                       generatedSource={ruleSetDraft.regoSource}
                       feedback={validationStatus}
-                      editor={(readOnly) => (
+                      starterSource={LIFECYCLE_STARTER_SOURCE}
+                      editor={(readOnly, source) => (
                         <LazyRegoEditor
                           ruleFamily="lifecycle"
                           ruleVariant={null}
                           id="settings-lifecycle-rule-rego-source"
-                          value={ruleSetDraft.regoSource}
+                          value={source}
                           readOnly={editingSystemOwned || readOnly}
                           onChange={editRegoSource}
                           diagnostics={regoDiagnostics(

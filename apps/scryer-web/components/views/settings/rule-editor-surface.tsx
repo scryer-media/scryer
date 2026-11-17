@@ -23,11 +23,12 @@ import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schem
 
 /// A rule's source editor, the same for every rule family. A rule still made
 /// by the builder is shown in the builder (Simple) or as its generated Rego
-/// (Advanced). The first edit of that Rego asks once, since editing it is
-/// one-way. A rule whose builder has written nothing yet, because nothing is
-/// chosen or the choices are incomplete, goes straight to the Rego editor,
-/// which starts from the family's starter source. Any other rule shows only
-/// the Rego editor.
+/// (Advanced), and the operator moves freely between the two. While the
+/// builder has written nothing yet, because nothing is chosen or the choices
+/// are incomplete, Advanced shows the family's starter source instead. The
+/// first edit there detaches the rule from the builder, which is one-way, so
+/// it asks first when that gives up choices made in the builder. Any other
+/// rule shows only the Rego editor.
 export function RuleEditorSurface({
   idPrefix,
   schema,
@@ -41,6 +42,7 @@ export function RuleEditorSurface({
   onModelChange,
   options,
   generatedSource,
+  starterSource,
   feedback,
   editor,
 }: {
@@ -61,10 +63,12 @@ export function RuleEditorSurface({
   onModelChange: (model: RuleBuilderModel) => void;
   options: RuleBuilderOptions;
   generatedSource: string;
+  /// Shown on Advanced while the builder has written nothing yet.
+  starterSource: string;
   feedback: React.ReactNode;
-  /// The Rego editor, shown whenever the builder is not. `readOnly` is set
-  /// while it shows the builder's own source.
-  editor: (readOnly: boolean) => React.ReactNode;
+  /// The Rego editor, shown whenever the builder is not, with the source it
+  /// shows. `readOnly` is set while it shows the builder's own source.
+  editor: (readOnly: boolean, source: string) => React.ReactNode;
 }) {
   const t = useTranslate();
   const [confirming, setConfirming] = React.useState(false);
@@ -76,19 +80,23 @@ export function RuleEditorSurface({
       ? generateRuleSource(schema, builderModel, variant)
       : null;
 
-  // Nothing to show read-only: the Advanced tab opens the editor at once.
-  const advancedOpensEditor =
-    generatedSource === "" ||
+  const shownSource =
+    builderModel !== null && generatedSource === ""
+      ? starterSource
+      : generatedSource;
+  // Editing gives up nothing chosen in the builder: the first edit detaches
+  // the rule and goes through to the editor.
+  const editsFreely =
+    builderModel !== null &&
     !ruleRegoEditorNeedsConfirmation({ regoSource: "", builderModel });
-  const viewingNothing =
-    builderModel !== null && mode === "view" && generatedSource === "";
-  React.useEffect(() => {
-    if (viewingNothing) onEditAsRego();
-  }, [viewingNothing, onEditAsRego]);
 
   /// Stops an edit of the builder's Rego before the editor applies it and
   /// asks first. Copying, selecting and moving around stay free.
   const holdEdit = (event: React.SyntheticEvent) => {
+    if (editsFreely) {
+      onEditAsRego();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     setConfirming(true);
@@ -122,8 +130,7 @@ export function RuleEditorSurface({
                 className="inline-flex rounded-md border border-border p-1"
                 value={showBuilder ? "simple" : "view"}
                 onValueChange={(value) => {
-                  if (value === "view" && advancedOpensEditor) onEditAsRego();
-                  else if (value === "simple" || value === "view")
+                  if (value === "simple" || value === "view")
                     onModeChange(value);
                 }}
               >
@@ -195,7 +202,7 @@ export function RuleEditorSurface({
               }
             : {})}
         >
-          {editor(false)}
+          {editor(false, shownSource)}
         </div>
       )}
       <ConfirmDialog
