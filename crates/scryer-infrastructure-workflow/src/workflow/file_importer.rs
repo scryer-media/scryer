@@ -728,6 +728,9 @@ enum ImportLink {
     /// Linked but not proven, and the new name was already gone when the
     /// disk service went to remove it. Carries the service's words.
     UnprovenGone(String),
+    /// Linked but not proven, and another writer's regular file now holds
+    /// the name, which the disk service left alone.
+    Occupied,
 }
 
 /// Why a hard link that was made is not trusted.
@@ -849,6 +852,9 @@ enum LinkAnswer {
     /// The source was swapped for another file, and the name holds another
     /// writer's regular file, which the service left alone.
     LeftAloneAfterSourceSwap,
+    /// The source is unchanged, and the name holds another writer's regular
+    /// file, which the service left alone.
+    LeftAlone,
 }
 
 /// The answer a test made the disk service give, as the refusal's parts.
@@ -865,6 +871,10 @@ fn forced_link_answer(
             let swapped = source.with_file_name("swapped-in.mkv");
             std::fs::write(&swapped, b"a different, longer payload").expect("write swap");
             std::fs::rename(&swapped, source).expect("swap the source");
+            std::fs::write(dest, b"another writer").expect("write occupant");
+            LinkAfter::LeftAlone
+        }
+        LinkAnswer::LeftAlone => {
             std::fs::write(dest, b"another writer").expect("write occupant");
             LinkAfter::LeftAlone
         }
@@ -989,7 +999,7 @@ fn hard_link_import_source(
         // occupied name does here; nothing is copied over it.
         (Doubt::OtherFile { .. }, LinkAfter::LeftAlone) => {
             ensure_same_source(source, fingerprint)?;
-            Ok(ImportLink::Failed(words))
+            Ok(ImportLink::Occupied)
         }
         (Doubt::OtherFile { linked }, _) => Ok(ImportLink::Unproven(LinkDoubt::Identity(
             HardLinkIdentityMismatch {
@@ -1541,16 +1551,22 @@ fn ensure_import_destination_absent(dest: &Path) -> AppResult<()> {
     let reading = Disk::process().uncached_blocking(dest);
     match reading.exists() {
         Some(false) => Ok(()),
-        Some(true) => Err(AppError::Repository(format!(
-            "import destination appeared before copy execution: {}",
-            dest.display()
-        ))),
+        Some(true) => Err(import_destination_occupied(dest)),
         None => Err(AppError::Repository(format!(
             "failed to inspect import destination {} before copy: {}",
             dest.display(),
             reading.describe_absence()
         ))),
     }
+}
+
+/// Something other than this import holds the destination name, so nothing
+/// is copied to it.
+fn import_destination_occupied(dest: &Path) -> AppError {
+    AppError::Repository(format!(
+        "import destination appeared before copy execution: {}",
+        dest.display()
+    ))
 }
 
 // disk-guard: a failure's own error kind names the import reason, which a
@@ -1937,16 +1953,17 @@ fn copy_regular_source_to_destination(
 /// regular file whose length, modification time and owner held. Anything else
 /// there, or a name that does not read, is kept. One read of the name.
 fn take_back_landed_copy(dest: &Path, landed: &Mark) {
-    let still_landed = Disk::process().fingerprint_blocking(dest).is_ok_and(|now| {
-        match now.same_file(landed) {
-            Sameness::Same => true,
-            Sameness::Different => false,
-            Sameness::CannotTell => {
-                now.kind() == Some(EntryKind::File)
-                    && landed.compare(&now).is_unwritten_by_its_owner()
-            }
-        }
-    });
+    let still_landed =
+        Disk::process()
+            .fingerprint_blocking(dest)
+            .is_ok_and(|now| match now.same_file(landed) {
+                Sameness::Same => true,
+                Sameness::Different => false,
+                Sameness::CannotTell => {
+                    now.kind() == Some(EntryKind::File)
+                        && landed.compare(&now).is_unwritten_by_its_owner()
+                }
+            });
     if still_landed {
         let _ = Disk::process().remove_blocking(dest, Remove::File);
     } else {
@@ -2282,6 +2299,10 @@ fn try_fast_import_placement_blocking(
             ImportLink::UnprovenGone(words) => {
                 return Err(link_not_removed(&prepared.dest, &words));
             }
+            // The service already read the name holding another file.
+            ImportLink::Occupied => {
+                return Err(import_destination_occupied(&prepared.dest));
+            }
             ImportLink::NotPossible => {
                 tracing::debug!("hard link is ineligible; handing import to copy lane");
             }
@@ -2609,8 +2630,10 @@ fn import_hardlink_or_copy_blocking(
         // The source is read again whether or not the link proved. A link
         // that did not prove is already gone.
         let proven = matches!(linked, ImportLink::Proven);
-        if !matches!(linked, ImportLink::NotPossible | ImportLink::Failed(_))
-            && let Err(error) = ensure_same_source(&source, &source_fingerprint)
+        if !matches!(
+            linked,
+            ImportLink::NotPossible | ImportLink::Failed(_) | ImportLink::Occupied
+        ) && let Err(error) = ensure_same_source(&source, &source_fingerprint)
         {
             if proven {
                 let _ = Disk::process().remove_blocking(&dest, Remove::File);
@@ -2663,6 +2686,9 @@ fn import_hardlink_or_copy_blocking(
                     linked.describe_absence()
                 ),
             },
+            // Another writer's file holds the name; nothing is copied over
+            // it, as a copy would only be refused when it lands.
+            ImportLink::Occupied => return Err(import_destination_occupied(&dest)),
             ImportLink::UnprovenGone(words) => tracing::warn!(
                 "hard link did not prove and was already gone: {}, falling back to copy: {} -> {}",
                 words,
@@ -6223,7 +6249,9 @@ mod tests {
         .expect_err("the source changed");
 
         assert!(
-            error.to_string().contains("import source changed during import"),
+            error
+                .to_string()
+                .contains("import source changed during import"),
             "{error}"
         );
         assert_eq!(
@@ -6331,6 +6359,42 @@ mod tests {
             assert_eq!(
                 std::fs::read(&source).expect("source"),
                 b"a different, longer payload"
+            );
+        }
+    }
+
+    /// Another writer's file took the name after the link was made, and the
+    /// disk service left it alone. Both lanes answer as for an occupied name:
+    /// nothing is copied over that file, and the source stays.
+    #[test]
+    fn a_link_left_alone_for_another_writer_is_an_occupied_name() {
+        let options = ImportFileOptions {
+            link_answer: LinkAnswer::LeftAlone,
+            ..Default::default()
+        };
+        for fast in [false, true] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let source = temp.path().join("sample-source.mkv");
+            let dest = temp.path().join("library/Sample.Title.mkv");
+            std::fs::write(&source, b"synthetic video bytes").expect("write source");
+
+            let outcome = match fast {
+                true => Err(fast_lane_error(&source, &dest, options)),
+                false => import_in_one_process(&source, &dest, options),
+            };
+            let said = outcome.err().expect("the name is occupied").to_string();
+            assert!(
+                said.contains("import destination appeared before copy execution"),
+                "fast {fast}: {said}"
+            );
+            assert_eq!(
+                std::fs::read(&dest).expect("dest"),
+                b"another writer",
+                "fast {fast}"
+            );
+            assert_eq!(
+                std::fs::read(&source).expect("source"),
+                b"synthetic video bytes"
             );
         }
     }
