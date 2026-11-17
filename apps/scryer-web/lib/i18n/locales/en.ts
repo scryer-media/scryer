@@ -2328,7 +2328,7 @@ const en: LocaleDictionary = {
     "Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "The rule changed while confirming; review it again before arming deletion.",
-  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
     "The rule configuration must be reviewed again before arming deletion; reopen the confirmation.",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
   "error.reason.LIFECYCLE_RULE_COMPILE_FAILED":
@@ -3141,15 +3141,15 @@ const en: LocaleDictionary = {
     "The search results expired. Search again.",
   "error.reason.RELEASE_TOKEN_INVALID":
     "The release selection could not be verified. Search again.",
-  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
     "Failed to build the request rules engine.",
   "error.reason.REQUEST_RULE_FIELD_REQUIRED": "A required field is empty.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "A lease must be from 1 to 3650 days (ten years), or forever.",
-  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
     "Library facet does not match requested media facet.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Library was not found.",
-  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
     "You may not read this request's decision.",
   "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
     "Media requests must include SMG external identifiers.",
@@ -3159,17 +3159,17 @@ const en: LocaleDictionary = {
     "Media request was not found.",
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
     "A request may carry at most 16 tags.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
-  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE": "Rule failed to compile.",
+  "error.reason.REQUEST_RULE_COMPILE_FAILED": "Rule failed to compile.",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "Rule validation failed.",
   "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND":
     "Sample library was not found.",
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND":
     "Sample requester was not found.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "Request rule set was not found.",
-  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
     "A tag may be at most 64 characters long.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "A tag contains an unsupported character; use letters, digits, '.', '_', '-', or spaces.",

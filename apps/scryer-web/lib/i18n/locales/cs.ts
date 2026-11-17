@@ -5935,15 +5935,15 @@ const cs: LocaleDictionary = {
     "Pravidla nastavila pro totéž různé hodnoty, takže rozhodne člověk.",
   "requests.fallbackShapingInvalid":
     "Pravidla by schválila, ale hodnotu, kterou nastavila, nelze na tento požadavek použít, takže rozhodne člověk.",
-  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
     "Nepodařilo se sestavit modul pravidel požadavků.",
   "error.reason.REQUEST_RULE_FIELD_REQUIRED": "Povinné pole je prázdné.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "Zápůjčka musí trvat 1 až 3650 dní (deset let), nebo navždy.",
-  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
     "Druh knihovny neodpovídá druhu požadovaného média.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Knihovna nebyla nalezena.",
-  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
     "Rozhodnutí o tomto požadavku nemůžete číst.",
   "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
     "Požadavky na média musí obsahovat externí identifikátory SMG.",
@@ -5953,11 +5953,11 @@ const cs: LocaleDictionary = {
     "Požadavek na médium nebyl nalezen.",
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Toto pravidlo čte fakty o konkrétních lidech, takže jeho uložení vyžaduje oprávnění spravovat oprávnění. Požádejte o uložení správce, nebo pravidlo přepište bez těchto faktů.",
-  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
     "Požadavek smí nést nejvýše 16 štítků.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED":
     "Vyhodnocení pravidla selhalo.",
-  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE":
+  "error.reason.REQUEST_RULE_COMPILE_FAILED":
     "Pravidlo se nepodařilo zkompilovat.",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED":
     "Ověření pravidla selhalo.",
@@ -5967,7 +5967,7 @@ const cs: LocaleDictionary = {
     "Ukázkový žadatel nebyl nalezen.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND":
     "Sada pravidel požadavků nebyla nalezena.",
-  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
     "Štítek smí mít nejvýše 64 znaků.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "Štítek obsahuje nepodporovaný znak; použijte písmena, číslice, '.', '_', '-' nebo mezery.",
@@ -7785,7 +7785,7 @@ const cs: LocaleDictionary = {
     "Subjekt náhledu chybí, leží mimo knihovny pravidla, nebo nepatří k vybraným titulům a rozsahu.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Pravidlo se během potvrzování změnilo; před zapnutím mazání ho zkontrolujte znovu.",
-  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
     "Konfiguraci pravidla je před zapnutím mazání nutné znovu zkontrolovat; otevřete potvrzení znovu.",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Vyhodnocení pravidla selhalo.",

@@ -3026,8 +3026,8 @@ async fn an_automatic_approval_applies_the_shaped_monitor_and_audio_languages() 
 #[test]
 fn an_approver_tag_list_is_checked_like_a_rule_tag() {
     use crate::error_reasons::request_rules::{
-        REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED, TAG_CHARACTERS_MOST_ALLOWED,
-        TAG_CONTAINS_UNSUPPORTED_CHARACTER, TAG_REQUIRED, TAG_USES_RESERVED_PREFIX,
+        TAG_CONTAINS_UNSUPPORTED_CHARACTER, TAG_LIMIT_EXCEEDED, TAG_REQUIRED, TAG_TOO_LONG,
+        TAG_USES_RESERVED_PREFIX,
     };
     use crate::request_rules::validate_tag_list;
     use scryer_rules::policy::{MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX};
@@ -3077,7 +3077,7 @@ fn an_approver_tag_list_is_checked_like_a_rule_tag() {
     assert_eq!(
         refusal(&too_many),
         (
-            REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED,
+            TAG_LIMIT_EXCEEDED,
             format!(
                 "a request may carry at most {MAX_TAGS} tags, {} were supplied",
                 MAX_TAGS + 1
@@ -3094,7 +3094,7 @@ fn an_approver_tag_list_is_checked_like_a_rule_tag() {
     assert_eq!(
         refusal(&[too_long.as_str()]),
         (
-            TAG_CHARACTERS_MOST_ALLOWED,
+            TAG_TOO_LONG,
             format!(
                 "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
                 MAX_TAG_LEN + 1
@@ -3104,7 +3104,7 @@ fn an_approver_tag_list_is_checked_like_a_rule_tag() {
     assert_eq!(
         refusal(&[wide.as_str()]),
         (
-            TAG_CHARACTERS_MOST_ALLOWED,
+            TAG_TOO_LONG,
             format!(
                 "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
                 wide.len()

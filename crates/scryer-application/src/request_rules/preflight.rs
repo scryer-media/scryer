@@ -77,7 +77,10 @@ impl AppUseCase {
                 )
             })?;
         if library.facet != input.facet {
-            return Err(AppError::validation_refused(crate::error_reasons::request_rules::LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET, "library facet does not match requested media facet"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::LIBRARY_FACET_MISMATCH,
+                "library facet does not match requested media facet",
+            ));
         }
         self.require_library_permission(actor, &library.id, LibraryPermission::Request)
             .await?;

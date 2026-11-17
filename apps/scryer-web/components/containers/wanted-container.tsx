@@ -27,7 +27,6 @@ import {
   triggerTitleMismatchRecoverySearchMutation,
   pauseWantedItemMutation,
   resumeWantedItemMutation,
-  queueBestReleaseMutation,
   queueReplacementMutation,
   forceGrabPendingReleaseMutation,
   dismissPendingReleaseMutation,
@@ -53,7 +52,6 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
-import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { releaseQueueScopeInput } from "@/lib/utils/release-queue-scope";
 import { createWantedNavigationCountsCache } from "@/lib/utils/wanted-navigation-counts";
 import { createWantedDetailsRequests } from "@/lib/utils/wanted-details-request";
@@ -102,20 +100,6 @@ function storeAcquisitionSearchJobId(id: string | null) {
 
 function cutoffItemKey(item: CutoffUnmetItem) {
   return item.episodeId?.trim() || item.titleId;
-}
-
-function cutoffItemEpisodeCode(item: CutoffUnmetItem): string | null {
-  const seasonDigits = item.seasonNumber?.match(/\d+/)?.[0] ?? null;
-  const episodeDigits = item.episodeNumber?.match(/\d+/)?.[0] ?? null;
-  if (!seasonDigits || !episodeDigits) {
-    return null;
-  }
-  return `S${seasonDigits.padStart(2, "0")}E${episodeDigits.padStart(2, "0")}`;
-}
-
-function cutoffItemLabel(item: CutoffUnmetItem) {
-  const episodeCode = cutoffItemEpisodeCode(item);
-  return episodeCode ? `${item.titleName} ${episodeCode}` : item.titleName;
 }
 
 function cutoffConflictMessage(item: CutoffUnmetItem) {
@@ -814,66 +798,24 @@ export const WantedContainer = memo(function WantedContainer({
 
   // --- Cutoff search actions ---
 
-  const searchAndQueueCutoffItem = useCallback(
-    async (
-      cutoffItem: CutoffUnmetItem,
-      options: { allowReplaceConfirmation?: boolean } = {},
-    ) => {
-      const input = {
-        titleId: cutoffItem.titleId,
-        scope: cutoffQueueScope(cutoffItem),
-      };
-      const submit = async (
-        nextInput: typeof input & { replaceInProgress?: boolean },
-      ) => {
-        const { data, error } = await client
-          .mutation(queueBestReleaseMutation, { input: nextInput })
-          .toPromise();
-        if (error) throw error;
-        return data?.queueBestRelease;
-      };
-      const payload = options.allowReplaceConfirmation
-        ? await retryWithReplaceOnConflict(
-            input,
-            submit,
-            cutoffConflictMessage(cutoffItem),
-            confirmReplaceConflict,
-          )
-        : await submit(input);
-      assertNoReplaceConflict(payload, cutoffConflictMessage(cutoffItem));
-      setGlobalStatus(
-        t("cutoff.searchTriggered", { name: cutoffItemLabel(cutoffItem) }),
-      );
-    },
-    [client, confirmReplaceConflict, t, setGlobalStatus],
-  );
-
+  // A row's automatic search runs as the background search job: a search
+  // waits on its indexers, so it never holds a request open.
   const cutoffTriggerAutoSearch = useCallback(
     async (item: CutoffUnmetItem) => {
       const itemKey = cutoffItemKey(item);
+      const episodeId = item.episodeId?.trim();
       setCutoffAutoSearchingId(itemKey);
       try {
-        await searchAndQueueCutoffItem(item, {
-          allowReplaceConfirmation: true,
+        await startAcquisitionSearch({
+          wantedItemId: episodeId
+            ? `episode:${episodeId}`
+            : `title:${item.titleId}`,
         });
-      } catch (error) {
-        const outcome = autoSearchOutcomeMessage(
-          error,
-          t,
-          cutoffItemLabel(item),
-        );
-        if (outcome) {
-          setGlobalStatus(outcome, { level: "WARNING" });
-        } else {
-          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
-            level: "ERROR",
-          });
-        }
       } finally {
         setCutoffAutoSearchingId(null);
       }
     },
-    [searchAndQueueCutoffItem, setGlobalStatus, t],
+    [startAcquisitionSearch],
   );
 
   const cutoffTriggerInteractiveSearch = useCallback(

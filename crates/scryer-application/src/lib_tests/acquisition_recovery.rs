@@ -17679,6 +17679,98 @@ async fn release_grabbed_actors(
         .collect()
 }
 
+/// An operator who picks several items in a row gets every one searched: each
+/// waits behind the search that is running instead of being refused.
+#[tokio::test]
+async fn single_item_searches_wait_in_line_behind_a_running_search() {
+    let (app, title, _) = seed_grabbing_season_pack_fixture().await;
+    let actor = test_admin_user();
+    let mut episode_keys: Vec<String> = app
+        .derive_acquisition_targets_for_title(&Utc::now(), Some(&title.id))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|target| target.scope_key)
+        .filter(|key| key.starts_with("episode:"))
+        .collect();
+    episode_keys.sort();
+    assert!(episode_keys.len() >= 2, "{episode_keys:?}");
+    let single_item = |key: &str| AcquisitionSearchRequest {
+        wanted_item_id: Some(key.to_string()),
+        ..Default::default()
+    };
+
+    let admission = app
+        .runtime
+        .jobs
+        .acquisition_search_lock
+        .clone()
+        .lock_owned()
+        .await;
+    let first = app
+        .start_acquisition_search_job(&actor, single_item(&episode_keys[0]))
+        .await
+        .expect("a single-item search is accepted while another search runs");
+    assert_eq!(first.status, JobRunStatus::Queued);
+    let again = app
+        .start_acquisition_search_job(&actor, single_item(&episode_keys[0]))
+        .await
+        .expect("asking again for a waiting item is accepted");
+    assert_eq!(again.id, first.id, "the item is not searched twice");
+    let second = app
+        .start_acquisition_search_job(&actor, single_item(&episode_keys[1]))
+        .await
+        .expect("a second item joins the line");
+    assert_ne!(second.id, first.id);
+    assert_eq!(second.status, JobRunStatus::Queued);
+
+    let refused = app
+        .start_acquisition_search_job(
+            &actor,
+            AcquisitionSearchRequest {
+                automatic: true,
+                title_id: Some(title.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING),
+        "a title-wide search keeps single admission"
+    );
+
+    assert!(
+        app.cancel_acquisition_search(&actor, &second.id)
+            .await
+            .unwrap()
+    );
+    let cancelled = await_acquisition_search_job(&app, &actor, &second.id).await;
+    assert_eq!(cancelled.state, "cancelled", "{cancelled:?}");
+    let waiting = app
+        .acquisition_search_job(&actor, &first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        waiting.finished_at.is_none(),
+        "the first item is still waiting for its turn: {waiting:?}"
+    );
+
+    drop(admission);
+    let finished = await_acquisition_search_job(&app, &actor, &first.id).await;
+    assert_eq!(finished.state, "completed", "{finished:?}");
+    assert_eq!(finished.processed, 1, "{finished:?}");
+    assert!(
+        !app.runtime
+            .jobs
+            .job_run_tracker
+            .has_active_job(JobKey::AcquisitionSearch)
+            .await
+    );
+}
+
 #[tokio::test]
 async fn an_operator_automatic_title_search_records_the_operator_on_its_grabs() {
     let (app, title, download_client) = seed_grabbing_season_pack_fixture().await;

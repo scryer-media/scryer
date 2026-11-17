@@ -1956,7 +1956,7 @@ pub mod lifecycle {
     /// This rule's action never changes anything, so it can only run as a dry run.
     pub const RULE_HAS_NO_EFFECT: &str = "LIFECYCLE_RULE_HAS_NO_EFFECT";
     /// The rule configuration must be reviewed again before arming deletion; reopen the confirmation.
-    pub const RULE_CONFIGURATION_INVALID: &str = "LIFECYCLE_RULE_CONFIGURATION_INVALID";
+    pub const ARM_CONFIRMATION_STALE: &str = "LIFECYCLE_ARM_CONFIRMATION_STALE";
     /// The rule changed while confirming; review it again before arming deletion.
     pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING";
     /// Lifecycle sequence step parameters are invalid.
@@ -2023,7 +2023,7 @@ pub mod lifecycle {
         SUBJECT_ID_REQUIRED,
         SUBJECT_NOT_FOUND,
         RULE_HAS_NO_EFFECT,
-        RULE_CONFIGURATION_INVALID,
+        ARM_CONFIRMATION_STALE,
         RULE_CHANGED_WHILE_CONFIRMING,
         SEQUENCE_STEP_PARAMETERS_INVALID,
         DELETE_FILES_UNMONITOR_STEP_MISSING,
@@ -3928,7 +3928,7 @@ pub mod request_rules {
     /// Sample library was not found.
     pub const SAMPLE_LIBRARY_NOT_FOUND: &str = "REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND";
     /// Rule failed to compile.
-    pub const RULE_FAILED_COMPILE: &str = "REQUEST_RULE_RULE_FAILED_COMPILE";
+    pub const COMPILE_FAILED: &str = "REQUEST_RULE_COMPILE_FAILED";
     /// Rule evaluation failed.
     pub const RULE_EVALUATION_FAILED: &str = "REQUEST_RULE_RULE_EVALUATION_FAILED";
     /// This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.
@@ -3939,12 +3939,11 @@ pub mod request_rules {
     /// A required field is empty.
     pub const FIELD_REQUIRED: &str = "REQUEST_RULE_FIELD_REQUIRED";
     /// A request may carry at most 16 tags.
-    pub const REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED: &str =
-        "REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED";
+    pub const TAG_LIMIT_EXCEEDED: &str = "REQUEST_RULE_TAG_LIMIT_EXCEEDED";
     /// Tag must not be empty.
     pub const TAG_REQUIRED: &str = "REQUEST_RULE_TAG_REQUIRED";
     /// A tag may be at most 64 characters long.
-    pub const TAG_CHARACTERS_MOST_ALLOWED: &str = "REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED";
+    pub const TAG_TOO_LONG: &str = "REQUEST_RULE_TAG_TOO_LONG";
     /// A tag may not start with the reserved prefix 'scryer:'.
     pub const TAG_USES_RESERVED_PREFIX: &str = "REQUEST_RULE_TAG_USES_RESERVED_PREFIX";
     /// A tag contains an unsupported character; use letters, digits, '.', '_', '-', or spaces.
@@ -3955,8 +3954,7 @@ pub mod request_rules {
     /// Library was not found.
     pub const LIBRARY_NOT_FOUND: &str = "REQUEST_RULE_LIBRARY_NOT_FOUND";
     /// Library facet does not match requested media facet.
-    pub const LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET: &str =
-        "REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET";
+    pub const LIBRARY_FACET_MISMATCH: &str = "REQUEST_RULE_LIBRARY_FACET_MISMATCH";
     /// Media requests must include SMG external identifiers.
     pub const MEDIA_REQUESTS_INVALID: &str = "REQUEST_RULE_MEDIA_REQUESTS_INVALID";
     /// Media request id is required.
@@ -3964,34 +3962,32 @@ pub mod request_rules {
     /// Media request was not found.
     pub const MEDIA_REQUEST_NOT_FOUND: &str = "REQUEST_RULE_MEDIA_REQUEST_NOT_FOUND";
     /// You may not read this request's decision.
-    pub const MAY_NOT_READ_REQUEST_S_DECISION: &str =
-        "REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION";
+    pub const DECISION_READ_FORBIDDEN: &str = "REQUEST_RULE_DECISION_READ_FORBIDDEN";
     /// Failed to build the request rules engine.
-    pub const FAILED_BUILD_REQUEST_RULES_ENGINE: &str =
-        "REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE";
+    pub const ENGINE_BUILD_FAILED: &str = "REQUEST_RULE_ENGINE_BUILD_FAILED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         RULE_VALIDATION_FAILED,
         SAMPLE_REQUESTER_NOT_FOUND,
         SAMPLE_LIBRARY_NOT_FOUND,
-        RULE_FAILED_COMPILE,
+        COMPILE_FAILED,
         RULE_EVALUATION_FAILED,
         PERSON_TARGETING_PERMISSION_REQUIRED,
         SET_NOT_FOUND,
         FIELD_REQUIRED,
-        REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED,
+        TAG_LIMIT_EXCEEDED,
         TAG_REQUIRED,
-        TAG_CHARACTERS_MOST_ALLOWED,
+        TAG_TOO_LONG,
         TAG_USES_RESERVED_PREFIX,
         TAG_CONTAINS_UNSUPPORTED_CHARACTER,
         LEASE_OUT_OF_RANGE,
         LIBRARY_NOT_FOUND,
-        LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET,
+        LIBRARY_FACET_MISMATCH,
         MEDIA_REQUESTS_INVALID,
         MEDIA_REQUEST_ID_REQUIRED,
         MEDIA_REQUEST_NOT_FOUND,
-        MAY_NOT_READ_REQUEST_S_DECISION,
-        FAILED_BUILD_REQUEST_RULES_ENGINE,
+        DECISION_READ_FORBIDDEN,
+        ENGINE_BUILD_FAILED,
     ];
 }
 

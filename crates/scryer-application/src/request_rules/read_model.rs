@@ -161,7 +161,7 @@ impl AppUseCase {
                 .any(|requester| requester.user_id == actor.id)
         {
             return Err(AppError::unauthorized_reason(
-                crate::error_reasons::request_rules::MAY_NOT_READ_REQUEST_S_DECISION,
+                crate::error_reasons::request_rules::DECISION_READ_FORBIDDEN,
                 "You may not read this request's decision".to_string(),
             ));
         }

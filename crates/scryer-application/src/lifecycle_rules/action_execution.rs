@@ -653,7 +653,7 @@ impl AppUseCase {
                 .is_some_and(|reviewed| reviewed.matches(&detail.rule_set))
             {
                 return Err(AppError::validation_refused(
-                    crate::error_reasons::lifecycle::RULE_CONFIGURATION_INVALID,
+                    crate::error_reasons::lifecycle::ARM_CONFIRMATION_STALE,
                     "the rule configuration must be reviewed again before arming deletion; reopen the confirmation",
                 ));
             }
