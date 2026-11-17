@@ -513,7 +513,17 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
                 .is_symlink(),
             symlink && cfg!(unix)
         );
-        assert!(!file.source().exists());
+        assert!(
+            std::fs::symlink_metadata(file.source()).is_err(),
+            "the source name is removed, a link's own name included"
+        );
+        if symlink {
+            assert_eq!(
+                std::fs::read(temp.path().join("original.mkv")).unwrap(),
+                b"hello world",
+                "the file a linked source names is never removed"
+            );
+        }
         reconciler
             .clean_up_title(&operation, &work.titles[0])
             .await
@@ -3453,12 +3463,12 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
     }
 }
 
-/// A linked source that took a verified copy is not removed at cleanup,
-/// whether or not the file it names changed: the cleanup refuses it as a
-/// source that is no longer the regular file it copied, and keeps the link,
-/// the file it names and the copy.
+/// A linked source that took a verified copy is proven by the file it names:
+/// unchanged, only the link's own name goes and the file it names is kept;
+/// rewritten behind the link where the check reads, the copy is no longer
+/// proven and the link is kept.
 #[tokio::test]
-async fn a_linked_source_with_a_copy_keeps_its_link_at_cleanup() {
+async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
     for rewritten in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let plan = single_title_plan(
@@ -3514,7 +3524,11 @@ async fn a_linked_source_with_a_copy_keeps_its_link_at_cleanup() {
         )
         .await;
         if rewritten {
-            rewrite_middle(&named);
+            // The first byte lies in a sampled window, so the check made at
+            // cleanup reads the change through the link at either depth.
+            let mut bytes = std::fs::read(&named).unwrap();
+            bytes[0] ^= 0xff;
+            std::fs::write(&named, bytes).unwrap();
         }
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
@@ -3524,19 +3538,21 @@ async fn a_linked_source_with_a_copy_keeps_its_link_at_cleanup() {
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await;
 
-        let error = result.expect_err("a linked source is kept");
-        assert_eq!(
-            error.validation_reason(),
-            Some(crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP),
-            "rewritten: {rewritten}"
-        );
-        assert!(
-            std::fs::symlink_metadata(file.source())
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "the link is preserved"
-        );
+        let link = std::fs::symlink_metadata(file.source());
+        if rewritten {
+            let error = result.expect_err("a copy no longer proven keeps the link");
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP)
+            );
+            assert!(
+                link.unwrap().file_type().is_symlink(),
+                "the link is preserved"
+            );
+        } else {
+            result.expect("cleanup");
+            assert!(link.is_err(), "the link's own name is removed");
+        }
         assert_eq!(
             std::fs::read(&named).unwrap().len(),
             THREE_SAMPLE_WINDOWS,
