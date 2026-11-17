@@ -9048,6 +9048,25 @@ pub trait ImportRepository: Send + Sync {
     ) -> AppResult<bool> {
         Ok(false)
     }
+
+    /// Which of `download_ids` an import still holds the sources of, as
+    /// [`Self::archive_processing_pending_for_download`] answers each. A store
+    /// answers the set in bounded statements; this default asks per id.
+    async fn archive_processing_pending_downloads(
+        &self,
+        download_ids: &[DownloadId],
+    ) -> AppResult<HashSet<DownloadId>> {
+        let mut held = HashSet::new();
+        for download_id in download_ids {
+            if self
+                .archive_processing_pending_for_download(download_id)
+                .await?
+            {
+                held.insert(*download_id);
+            }
+        }
+        Ok(held)
+    }
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,

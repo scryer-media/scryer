@@ -1,12 +1,13 @@
-/// An automatic import left pending on a download whose block is in error
-/// stopped where only the operator can settle what is on disk; nothing picks
-/// it up again on its own. The row shows the block and its reason, not a
-/// pending import, the same as the tracked projection does.
+/// An automatic import left pending on a blocked download is not waiting on
+/// anything: a retry moves the download out of the block first, and nothing
+/// else picks it up again on its own. The row shows the block and its reason,
+/// not a pending import, the same as the tracked projection does, whatever
+/// status the block carries: a block restored after a restart reads as a
+/// warning.
 fn automatic_import_stopped_by_block(item: &DownloadQueueItem, record: &ImportRecord) -> bool {
     record.import_type != ImportType::ManualImport
         && record.status == ImportStatus::Pending
         && item.tracked_state == Some(TrackedDownloadState::ImportBlocked)
-        && item.tracked_status == Some(scryer_domain::TrackedDownloadStatus::Error)
 }
 
 async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [DownloadQueueItem]) {

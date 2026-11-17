@@ -277,6 +277,43 @@ impl ImportRepository for ImportStore {
         Ok(false)
     }
 
+    async fn archive_processing_pending_downloads(
+        &self,
+        download_ids: &[scryer_domain::download_identity::DownloadId],
+    ) -> AppResult<std::collections::HashSet<scryer_domain::download_identity::DownloadId>> {
+        // Well under both engines' bind limits per statement.
+        const IDS_PER_STATEMENT: usize = 500;
+        let mut held = std::collections::HashSet::new();
+        for chunk in download_ids.chunks(IDS_PER_STATEMENT) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT canonical_download_id, payload_json FROM imports \
+                     WHERE canonical_download_id IN ({placeholders})"
+                ),
+                &chunk
+                    .iter()
+                    .map(|download_id| SqlArg::Text(download_id.to_string()))
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+            for row in rows {
+                if archive_import_has_pending_sources(&row)?
+                    && let Some(download_id) = row
+                        .opt_text("canonical_download_id")?
+                        .as_deref()
+                        .and_then(scryer_domain::download_identity::DownloadId::parse)
+                {
+                    held.insert(download_id);
+                }
+            }
+        }
+        Ok(held)
+    }
+
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,

@@ -380,14 +380,16 @@ fn apply_tracked_download_activity_projection(
             // import invisible everywhere: the row went back to the original
             // block message with `importStatus: null`.
             //
-            // An automatic import left pending by a block in error is not
-            // waiting on anything: it stopped where only the operator can
-            // settle what is on disk, and nothing picks it up again on its
-            // own. Showing it as pending hid the block and its reason, so the
-            // row shows the block instead.
+            // An automatic import left pending by a block is not waiting on
+            // anything: a retry moves the download out of the block first,
+            // and nothing else picks it up again on its own. Showing it as
+            // pending hid the block and its reason, so the row shows the
+            // block instead, whatever status the block carries: a block
+            // restored after a restart reads as a warning.
             let stopped_automatic_import = item.import_status == Some(ImportStatus::Pending)
-                && item.import_type != Some(ImportType::ManualImport)
-                && tracked.status == scryer_domain::TrackedDownloadStatus::Error;
+                && item
+                    .import_type
+                    .is_some_and(|import_type| import_type != ImportType::ManualImport);
             let keep_import_status = (matches!(
                 item.import_status,
                 Some(ImportStatus::Pending | ImportStatus::Running | ImportStatus::Processing)
@@ -4437,7 +4439,13 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
         .iter()
         .filter_map(|tracked| tracked_download_source_identity(tracked))
         .collect();
-    let cache = crate::import::import::TerminalCleanupTickCache::prefetch(app, &identities).await;
+    let download_ids = settled
+        .iter()
+        .filter_map(|tracked| tracked.canonical_download_id().copied())
+        .collect();
+    let cache = crate::import::import::TerminalCleanupTickCache::prefetch(app, &identities)
+        .await
+        .with_download_ids(download_ids);
 
     for (download_id, state) in terminal_ids {
         finalize_tracked_terminal_state_for_download_with(

@@ -5233,10 +5233,12 @@ async fn external_weaver_idless_bad_observed_item_blocks_after_history_retry() {
 /// client removals asked for.
 async fn run_unclaimed_failed_tracked_cleanup(
     held: bool,
+    tick: bool,
 ) -> (
     crate::import::import::TerminalDownloadCleanup,
     Vec<(Option<String>, Option<String>, String, bool, bool)>,
     String,
+    Option<usize>,
 ) {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -5357,20 +5359,45 @@ async fn run_unclaimed_failed_tracked_cleanup(
         retained_in_client_after_cleanup: false,
     };
 
+    // A tick's cache answers the row's held sources from one read for every
+    // download of the tick, another one included.
+    let cache = match tick {
+        true => Some(
+            crate::import::import::TerminalCleanupTickCache::prefetch(&app, &[])
+                .await
+                .with_download_ids(vec![
+                    scryer_domain::download_identity::DownloadId::new(),
+                    download_id,
+                ]),
+        ),
+        false => None,
+    };
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         &app,
         &tracked,
         TrackedDownloadState::Failed,
-        None,
+        cache.as_ref(),
     )
     .await;
+    if let Some(cache) = &cache {
+        // A second row of the same tick asks again: no second read.
+        cache
+            .sources_held(&app, &download_id)
+            .await
+            .expect("held sources read");
+    }
     let deleted = download_client.deleted_requests.lock().await.clone();
-    (outcome, deleted, config.id)
+    (
+        outcome,
+        deleted,
+        config.id,
+        cache.map(|cache| cache.held_source_reads()),
+    )
 }
 
 #[tokio::test]
 async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
-    let (outcome, deleted, client_id) = run_unclaimed_failed_tracked_cleanup(false).await;
+    let (outcome, deleted, client_id, _) = run_unclaimed_failed_tracked_cleanup(false, false).await;
 
     assert_eq!(
         outcome,
@@ -5391,16 +5418,28 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
 
 /// A download without a cleanup claim of its own waits, as a claimed one
 /// does, while an import of it still holds its sources: nothing is removed
-/// from the client, and the cleanup is tried again later.
+/// from the client, and the cleanup is tried again later. Within a tick, the
+/// held sources of every row are read once.
 #[tokio::test]
 async fn unclaimed_tracked_cleanup_waits_while_an_import_holds_the_sources() {
-    let (outcome, deleted, _) = run_unclaimed_failed_tracked_cleanup(true).await;
+    for tick in [false, true] {
+        let (outcome, deleted, _, reads) = run_unclaimed_failed_tracked_cleanup(true, tick).await;
 
+        assert_eq!(
+            outcome,
+            crate::import::import::TerminalDownloadCleanupOutcome::RetryableFailure
+        );
+        assert!(deleted.is_empty(), "{deleted:?}");
+        assert_eq!(reads, tick.then_some(1));
+    }
+
+    // A tick that finds nothing held removes as before, from the same one read.
+    let (outcome, _, _, reads) = run_unclaimed_failed_tracked_cleanup(false, true).await;
     assert_eq!(
         outcome,
-        crate::import::import::TerminalDownloadCleanupOutcome::RetryableFailure
+        crate::import::import::TerminalDownloadCleanupOutcome::Removed
     );
-    assert!(deleted.is_empty(), "{deleted:?}");
+    assert_eq!(reads, Some(1));
 }
 
 #[tokio::test]

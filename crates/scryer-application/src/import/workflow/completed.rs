@@ -657,6 +657,14 @@ pub(crate) struct TerminalCleanupTickCache {
     /// itself rather than only the shape of the key.
     routing_scope_reads: std::sync::atomic::AtomicUsize,
     remove_completed_reads: std::sync::atomic::AtomicUsize,
+    /// The downloads of this tick's rows, whose held sources are read in one
+    /// batch the first time a row asks, and only then.
+    download_ids: Vec<scryer_domain::download_identity::DownloadId>,
+    /// That one read's answer, or why it failed.
+    held_sources: tokio::sync::OnceCell<
+        Result<std::collections::HashSet<scryer_domain::download_identity::DownloadId>, String>,
+    >,
+    held_source_reads: std::sync::atomic::AtomicUsize,
 }
 
 impl TerminalCleanupTickCache {
@@ -669,8 +677,74 @@ impl TerminalCleanupTickCache {
             remove_completed: std::sync::Mutex::new(HashMap::new()),
             routing_scope_reads: std::sync::atomic::AtomicUsize::new(0),
             remove_completed_reads: std::sync::atomic::AtomicUsize::new(0),
+            download_ids: Vec::new(),
+            held_sources: tokio::sync::OnceCell::new(),
+            held_source_reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
+
+    /// The downloads of this tick's rows, so the first row that asks whether
+    /// an import still holds its sources reads the answer for all of them.
+    pub(crate) fn with_download_ids(
+        mut self,
+        download_ids: Vec<scryer_domain::download_identity::DownloadId>,
+    ) -> Self {
+        self.download_ids = download_ids;
+        self
+    }
+
+    /// Whether an import still holds `download_id`'s sources, or why the
+    /// store could not tell. A download of this tick's
+    /// rows is answered from one batched read per tick; any other is read on
+    /// its own.
+    pub(crate) async fn sources_held(
+        &self,
+        app: &AppUseCase,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> Result<bool, String> {
+        if !self.download_ids.contains(download_id) {
+            return sources_held_by_import(app, download_id).await;
+        }
+        self.held_sources
+            .get_or_init(|| async {
+                self.held_source_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                app.services
+                    .workflow
+                    .imports
+                    .archive_processing_pending_downloads(&self.download_ids)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .as_ref()
+            .map(|held| held.contains(download_id))
+            .map_err(Clone::clone)
+    }
+
+    /// Batched held-source reads that reached the repository.
+    #[cfg(test)]
+    pub(crate) fn held_source_reads(&self) -> usize {
+        self.held_source_reads
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Whether an import still holds `download_id`'s sources, read on its own,
+/// or why the store could not tell.
+pub(crate) async fn sources_held_by_import(
+    app: &AppUseCase,
+    download_id: &scryer_domain::download_identity::DownloadId,
+) -> Result<bool, String> {
+    app.services
+        .workflow
+        .imports
+        .archive_processing_pending_for_download(download_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+impl TerminalCleanupTickCache {
 
     pub(crate) fn goal_batch(&self) -> &crate::seeding_gate::SeedGoalBatch {
         &self.goals

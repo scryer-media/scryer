@@ -1100,18 +1100,21 @@ mod tests {
             );
         }
 
-        // An automatic import a block in error stopped is not pending: the row
-        // shows the block and its reason. A manual import queued on the same
-        // row is still live.
-        for (import_type, stays) in [
-            (ImportType::MovieDownload, false),
-            (ImportType::ManualImport, true),
+        // An automatic import a block stopped is not pending: the row shows
+        // the block and its reason. A manual import queued on the same row is
+        // still live. The block holds as the import left it, in error, and as
+        // a restart restores it, as a warning.
+        for (import_type, stays, status) in [
+            (ImportType::MovieDownload, false, TrackedDownloadStatus::Error),
+            (ImportType::ManualImport, true, TrackedDownloadStatus::Error),
+            (ImportType::MovieDownload, false, TrackedDownloadStatus::Warning),
+            (ImportType::ManualImport, true, TrackedDownloadStatus::Warning),
         ] {
             let mut queue_item = item("job-1", DownloadQueueState::Completed);
             queue_item.import_status = Some(ImportStatus::Pending);
             queue_item.import_type = Some(import_type);
             let mut tracked = blocked_tracked(&queue_item);
-            tracked.status = TrackedDownloadStatus::Error;
+            tracked.status = status;
             tracked.status_messages =
                 vec!["the library file is the import source's own entry".to_string().into()];
             let metadata = tracked_download_queue_snapshot(&tracked);
