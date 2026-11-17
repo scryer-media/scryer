@@ -4552,6 +4552,8 @@ impl QueuedManualImportOutcome {
             completed_at: now,
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
         };
         Self {
             status: ImportStatus::Skipped,

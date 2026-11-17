@@ -236,12 +236,15 @@ async fn import_inner(
                 tracing::error!(
                     id = %td.id,
                     dest_dir = %completed.dest_dir,
+                    reason = error.reason(),
                     error = %message,
-                    "import filesystem worker was terminated; routing download to manual reconciliation"
+                    "import stopped where only the operator can settle what is on disk; routing download to manual reconciliation"
                 );
                 td.clear_import_execution_retry();
                 td.state = TrackedDownloadState::ImportBlocked;
                 td.status = TrackedDownloadStatus::Error;
+                td.client_item.attention_reason = Some(message.to_owned());
+                td.client_item.attention_reason_code = error.reason().map(str::to_string);
                 td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
                     message.to_owned(),
                 )];

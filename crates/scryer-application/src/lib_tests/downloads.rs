@@ -1354,6 +1354,8 @@ async fn local_password_retry_action_requires_current_identity_failure_and_libra
         completed_at: now,
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let record = ImportRecord {
         id: result.import_id.clone(),
@@ -15270,6 +15272,153 @@ async fn quality_mismatch_retry_uses_the_current_profile_and_fresh_probe() {
     );
     assert_eq!(primary_movie_files(&fixture).await.len(), 1);
     assert_eq!(std::fs::read_to_string(unrelated).unwrap(), "preserve this");
+}
+
+/// A move import whose source cleanup refuses, because the library file is
+/// the source's own entry.
+/// The first placement stops on a title folder the operator must settle; once
+/// it is settled the file lands and its source cleanup needs reconciliation.
+#[derive(Default)]
+struct CleanupRefusingImporter {
+    folder_settled: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl FileImporter for CleanupRefusingImporter {
+    async fn snapshot_import_source(
+        &self,
+        source: &Path,
+    ) -> AppResult<scryer_domain::ImportSourceSnapshot> {
+        CopyingFileImporter.snapshot_import_source(source).await
+    }
+
+    async fn import_file(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: scryer_domain::ImportMode,
+        expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
+    ) -> AppResult<scryer_domain::ImportFileResult> {
+        if !self
+            .folder_settled
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::folder_ownership::TITLE_FOLDER_INVALID,
+                "the title folder is not usable",
+            ));
+        }
+        let mut placed = CopyingFileImporter
+            .import_file(
+                source,
+                dest,
+                scryer_domain::ImportMode::HardlinkOrCopy,
+                expected_source,
+            )
+            .await?;
+        if mode == scryer_domain::ImportMode::Move {
+            let snapshot = test_import_source_snapshot(source)?;
+            placed.source_cleanup = Some(scryer_domain::ImportSourceCleanupGuard {
+                source_path: source.to_path_buf(),
+                dest_path: dest.to_path_buf(),
+                size_bytes: placed.size_bytes,
+                source_identity: snapshot.identity,
+                source_proof: snapshot.proof.clone(),
+                dest_proof: snapshot.proof,
+                adopted_destination_mark: None,
+            });
+        }
+        Ok(placed)
+    }
+
+    async fn remove_import_source_after_verified_import(
+        &self,
+        _guard: scryer_domain::ImportSourceCleanupGuard,
+        _final_dest_path: &Path,
+    ) -> AppResult<()> {
+        Err(AppError::ManualReconciliationRefused {
+            message: "the library file is the import source's own entry".into(),
+            reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
+        })
+    }
+}
+
+/// A history retry whose source cleanup refuses as needing reconciliation
+/// leaves the download blocked with the refusal's reason, never imported,
+/// although the retry placed and recorded the file first: an imported
+/// download may be removed from its client with its files. Nothing is removed.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_needs_reconciliation_stays_blocked() {
+    let release_title = "Cleanup Refusal Movie.2026.1080p.WEB-DL.x264-GRP";
+    let mut fixture = disposition_fixture("Cleanup Refusal Movie", release_title).await;
+    let profiles = Arc::new(StoredQualityProfileRepo::default());
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let profile = crate::builtin_default_quality_profile();
+    profiles.set_profiles(vec![profile.clone()]).await;
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            &serde_json::to_string(&profile.id).unwrap(),
+        )
+        .await;
+    settings
+        .set_value(SETTINGS_SCOPE_SYSTEM, IMPORT_MODE_KEY, "\"move\"")
+        .await;
+    fixture.app.services.config.quality_profiles = profiles;
+    fixture.app.services.config.settings = settings;
+    fixture.app.services.workflow.file_importer = Arc::new(CleanupRefusingImporter::default());
+    let source = PathBuf::from(&fixture.completed.dest_dir).join(format!("{release_title}.mkv"));
+    let source_bytes = std::fs::read(&source).unwrap();
+
+    let mut tracked = fixture.tracked_import_pending();
+    {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::completed_download_handler::import(&fixture.app, &fixture.user, &mut tracked).await;
+    }
+    let first = fixture.latest_import_result().await;
+    assert_eq!(
+        first.skip_reason,
+        Some(scryer_domain::ImportSkipReason::TitleFolderConflict),
+        "{first:?}"
+    );
+    assert!(primary_movie_files(&fixture).await.is_empty());
+
+    let retried = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import_workflow::retry_failed_import(
+            &fixture.app,
+            &fixture.user,
+            &first.import_id,
+            None,
+        )
+        .await
+        .expect("the retry records its outcome")
+    };
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{retried:?}"
+    );
+    assert!(retried.needs_reconciliation, "{retried:?}");
+    assert_eq!(
+        retried.reason_code.as_deref(),
+        Some(crate::error_reasons::import::DESTINATION_IS_SOURCE)
+    );
+    assert_eq!(
+        fixture
+            .import_repo
+            .retry_finished_states
+            .lock()
+            .await
+            .as_slice(),
+        &[TrackedDownloadState::ImportBlocked],
+        "the retried download stays blocked, never imported"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    let placed = primary_movie_files(&fixture).await;
+    assert_eq!(placed.len(), 1, "{placed:?}");
+    assert!(Path::new(&placed[0].file_path).exists());
 }
 
 /// A file rule the operator wrote vetoes the file over something the release name

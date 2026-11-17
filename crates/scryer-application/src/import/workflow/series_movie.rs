@@ -349,6 +349,8 @@ async fn carry_out_import_rejection(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -1441,6 +1443,8 @@ async fn hold_replacement_for_manual_resolution(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1691,6 +1695,8 @@ async fn import_additional_movie_download(
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1813,6 +1819,8 @@ async fn import_additional_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2094,6 +2102,8 @@ async fn import_movie_download(
                 completed_at: Utc::now(),
                 upgrade: false,
                 upgrade_previous_path: None,
+                reason_code: None,
+                needs_reconciliation: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2182,6 +2192,8 @@ async fn import_movie_download(
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2357,6 +2369,8 @@ async fn import_movie_download(
                     completed_at: Utc::now(),
                     upgrade: true,
                     upgrade_previous_path: outcome.previous_path.clone(),
+                    reason_code: None,
+                    needs_reconciliation: false,
                 };
                 tracing::info!(
                     title = %title.name,
@@ -2636,6 +2650,8 @@ async fn import_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2991,6 +3007,8 @@ async fn import_series_movie_download(
                 completed_at: Utc::now(),
                 upgrade: false,
                 upgrade_previous_path: None,
+                reason_code: None,
+                needs_reconciliation: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -3209,6 +3227,8 @@ async fn import_series_movie_download(
                         completed_at: Utc::now(),
                         upgrade: true,
                         upgrade_previous_path: outcome.previous_path.clone(),
+                        reason_code: None,
+                        needs_reconciliation: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     app.update_import_status_and_notify(
@@ -3278,6 +3298,8 @@ async fn import_series_movie_download(
                         completed_at: Utc::now(),
                         upgrade: false,
                         upgrade_previous_path: None,
+                        reason_code: None,
+                        needs_reconciliation: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -3511,6 +3533,8 @@ async fn import_series_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)

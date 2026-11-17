@@ -3655,6 +3655,15 @@ pub struct ImportResult {
     pub file_size_bytes: Option<i64>,
     pub link_type: Option<ImportStrategy>,
     pub error_message: Option<String>,
+    /// The stable reason code of the failure `error_message` words, when the
+    /// failure names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    /// The attempt stopped where only the operator can settle what is on
+    /// disk: the download must stay blocked, and is never taken as imported
+    /// whatever the attempt recorded before it stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_reconciliation: bool,
     #[serde(default)]
     pub release_burned: bool,
     pub started_at: DateTime<Utc>,

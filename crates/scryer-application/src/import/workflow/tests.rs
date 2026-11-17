@@ -1173,6 +1173,8 @@ mod tests {
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
         };
 
         assert_eq!(
@@ -1343,6 +1345,8 @@ mod tests {
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
         };
 
         assert_eq!(
@@ -1378,6 +1382,8 @@ mod tests {
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
         };
 
         for message in [

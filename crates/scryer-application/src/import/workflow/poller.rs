@@ -652,6 +652,8 @@ async fn finalize_completed_import_error(
         } else {
             error.to_string()
         }),
+        reason_code: error.reason().map(str::to_string),
+        needs_reconciliation: requires_reconciliation,
         release_burned: false,
         title_id: completed_import_request_title_id(request),
         ..base_completed_import_result(

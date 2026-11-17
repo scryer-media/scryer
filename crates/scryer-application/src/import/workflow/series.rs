@@ -24,6 +24,8 @@ fn base_completed_import_result(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     }
 }
 fn facet_for_completed_download(completed: &CompletedDownload) -> Option<MediaFacet> {
@@ -309,6 +311,8 @@ async fn import_series_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, status);

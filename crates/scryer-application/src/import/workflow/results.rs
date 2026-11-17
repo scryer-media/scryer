@@ -284,6 +284,11 @@ async fn execute_history_retry(
                 decision: ImportDecision::Failed,
                 skip_reason,
                 error_message: Some(error.to_string()),
+                reason_code: error.reason().map(str::to_string),
+                // A failure the operator must settle, such as a source cleanup
+                // that found the library file is the source's own entry, is
+                // never taken for an import however much this attempt placed.
+                needs_reconciliation: error.requires_manual_reconciliation(),
                 release_burned: false,
                 title_id: release_evidence
                     .title_id()
@@ -398,6 +403,20 @@ async fn compute_history_retry_state(
         && let Some(title) = app.services.catalog.titles.get_by_id(title_id).await?
     {
         td.facet = Some(title.facet.as_str().to_string());
+    }
+    // Blocked the way the automatic import blocks the same refusal.
+    if result.needs_reconciliation {
+        td.clear_import_execution_retry();
+        td.state = TrackedDownloadState::ImportBlocked;
+        td.status = scryer_domain::TrackedDownloadStatus::Error;
+        let message = result
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "Import needs manual reconciliation".into());
+        td.client_item.attention_reason = Some(message.clone());
+        td.client_item.attention_reason_code = result.reason_code.clone();
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(message)];
+        return Ok(());
     }
     let success = result.decision == ImportDecision::Imported
         || (result.decision == ImportDecision::Skipped

@@ -1425,6 +1425,8 @@ pub(super) struct TrackingImportRepo {
     pub(super) open_selection_roots: Arc<Mutex<Vec<String>>>,
     /// Makes the next hold release fail before it changes anything.
     pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
+    /// The tracked state each finished history retry settled on.
+    pub(super) retry_finished_states: Arc<Mutex<Vec<TrackedDownloadState>>>,
 }
 
 fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
@@ -1631,6 +1633,7 @@ impl ImportRepository for TrackingImportRepo {
             return Ok(crate::ImportRetryFinishOutcome::Superseded);
         }
         claims.remove(&claim.import_id);
+        self.retry_finished_states.lock().await.push(state);
         let mut records = self.records.lock().await;
         let record = records
             .iter_mut()
