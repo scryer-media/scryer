@@ -1,10 +1,12 @@
 import { formatBytes } from "@/lib/utils/activity-utils";
 import { lifecycleExecutionReasonText } from "@/lib/utils/lifecycle-execution-reason";
-import { Ban, Play, RefreshCw, Trash2 } from "lucide-react";
+import { useState } from "react";
+import type * as React from "react";
+import { Ban, Play, RefreshCw, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { IconButton } from "@/components/ui/icon-button";
+import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
 import { Label } from "@/components/ui/label";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { SingleSelectField } from "@/components/ui/select";
@@ -47,7 +49,7 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { parseLifecycleFileResults } from "@/lib/utils/lifecycle-file-results";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { HelpLabel } from "@/components/common/info-help";
+import { HelpLabel, InfoHelp } from "@/components/common/info-help";
 import { LifecycleDecidedActionsSummary } from "@/components/views/settings/lifecycle-action-summary";
 
 export type LifecycleLibraryOption = { id: string; name: string };
@@ -256,10 +258,7 @@ export function LifecycleInstanceSwitches({
     );
   }
   return (
-    <div
-      id="settings-lifecycle-switches"
-      className="grid gap-3 md:grid-cols-2"
-    >
+    <div id="settings-lifecycle-switches" className="grid gap-3 md:grid-cols-2">
       {INSTANCE_SWITCHES.map(({ key, label, help }) => (
         <div
           key={key}
@@ -288,6 +287,151 @@ export function LifecycleInstanceSwitches({
   );
 }
 
+// ── Shared pane pieces ────────────────────────────────────────────────
+
+/// The same heading the Lists page puts over each of its sections.
+const SECTION_HEADING =
+  "font-display text-[17px] font-bold text-[var(--scry-ink)]";
+
+/// Tables sit in the same rounded shell as the Lists tables.
+const TABLE_SHELL = "rounded-[12px] border border-[var(--scry-border3)]";
+
+/// The filter and toolbar band above a table, as on the History page.
+const TOOLBAR_SHELL =
+  "flex flex-col gap-3 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-3 md:flex-row md:flex-wrap md:items-end";
+
+const TOOLBAR_SELECT_LABEL = "text-xs text-[var(--scry-muted)]";
+
+function PaneSection({
+  id,
+  title,
+  help,
+  count,
+  actions,
+  children,
+}: {
+  id: string;
+  title: string;
+  help?: string;
+  count?: number;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className="space-y-3">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h2 className={SECTION_HEADING}>{title}</h2>
+          {count !== undefined ? (
+            <Badge id={`${id}-count`} tone="neutral">
+              {count}
+            </Badge>
+          ) : null}
+          {help ? <InfoHelp text={help} ariaLabel={title} /> : null}
+        </div>
+        {actions ? (
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function PaneError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p
+      role="alert"
+      className="whitespace-pre-wrap rounded-[12px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-4 py-3 text-[13px] text-[var(--scry-danger-text)]"
+    >
+      {message}
+    </p>
+  );
+}
+
+/// What a section shows in place of its table: loading, or why it is empty.
+function PaneEmpty({
+  id,
+  loading,
+  children,
+}: {
+  id: string;
+  loading: boolean;
+  children: React.ReactNode;
+}) {
+  const t = useTranslate();
+  return (
+    <div
+      id={id}
+      className="flex items-center justify-center gap-2 rounded-[12px] border border-dashed border-[var(--scry-border3)] px-4 py-8 text-center text-[13px] text-[var(--scry-muted)]"
+    >
+      {loading ? (
+        <>
+          <LoadingMark className="h-4 w-4" />
+          {t("label.loading")}
+        </>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+function RefreshButton({
+  id,
+  loading,
+  onClick,
+}: {
+  id: string;
+  loading: boolean;
+  onClick: () => void;
+}) {
+  const t = useTranslate();
+  return (
+    <Button
+      id={id}
+      type="button"
+      variant="secondary"
+      size="sm"
+      disabled={loading}
+      onClick={onClick}
+    >
+      {loading ? (
+        <LoadingMark className="h-4 w-4" />
+      ) : (
+        <RefreshCw className="h-4 w-4" />
+      )}
+      {t("label.refresh")}
+    </Button>
+  );
+}
+
+/// A title, and under it the season or episode a row is about.
+function SubjectCell({
+  titleName,
+  subjectKind,
+  subjectLabel,
+  children,
+}: {
+  titleName: string;
+  subjectKind: string;
+  subjectLabel: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-[13.5px] font-medium text-[var(--scry-ink2)]">
+        {titleName}
+      </span>
+      {subjectKind !== "title" ? (
+        <span className="text-xs text-[var(--scry-muted)]">{subjectLabel}</span>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
 // ── Candidates ────────────────────────────────────────────────────────
 
 function CandidateDueCell({ dueAt }: { dueAt: string }) {
@@ -300,8 +444,8 @@ function CandidateDueCell({ dueAt }: { dueAt: string }) {
     <span
       className={
         countdown.overdue
-          ? "text-[var(--scry-warning-text)]"
-          : "text-muted-foreground"
+          ? "font-medium text-[var(--scry-warning-text)]"
+          : "text-[var(--scry-ink2)]"
       }
     >
       {t(countdown.labelKey, countdown.values)}
@@ -341,6 +485,176 @@ function candidatesEmptyKey(
   return "settings.lifecycleCandidatesEmpty";
 }
 
+/// A candidate opens to the detail its row has no room for: why it matched,
+/// why it is held, and how far its action sequence has got.
+function candidateHasDetail(candidate: LifecycleCandidate): boolean {
+  return (
+    candidate.reasonCodes.length > 0 ||
+    Boolean(candidate.stateReason) ||
+    Boolean(candidate.actionSequence?.steps.length)
+  );
+}
+
+function CandidateDetail({ candidate }: { candidate: LifecycleCandidate }) {
+  const t = useTranslate();
+  return (
+    <div className="grid gap-4 py-1 md:grid-cols-2">
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-[var(--scry-muted)]">
+          {t("settings.lifecyclePreviewColReasons")}
+        </p>
+        <ReasonCodes codes={candidate.reasonCodes} />
+        {candidate.stateReason ? (
+          <p className="text-xs text-[var(--scry-warning-text)]">
+            {lifecycleExecutionReasonText(t, candidate.stateReason)}
+          </p>
+        ) : null}
+      </div>
+      {candidate.actionSequence?.steps.length ? (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-[var(--scry-muted)]">
+            {t("settings.lifecycleRuleAction")}
+          </p>
+          <LifecycleSequenceProgress
+            sequence={candidate.actionSequence}
+            progress={candidate.sequenceSteps}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CandidateRows({
+  candidate,
+  expanded,
+  onToggle,
+  excludeCandidate,
+}: {
+  candidate: LifecycleCandidate;
+  expanded: boolean;
+  onToggle: () => void;
+  excludeCandidate: (candidate: LifecycleCandidate) => void;
+}) {
+  const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
+  const stateKey = candidateStateLabelKey(candidate.state);
+  const stateReason = candidate.stateReason
+    ? lifecycleExecutionReasonText(t, candidate.stateReason)
+    : undefined;
+  const detailId = selectorId(
+    "settings-lifecycle-candidate-detail",
+    candidate.id,
+  );
+  const hasDetail = candidateHasDetail(candidate);
+  return (
+    <>
+      <TableRow
+        data-ui="settings-table-row"
+        id={selectorId("settings-lifecycle-candidate-row", candidate.id)}
+        className={expanded ? "border-b-0" : undefined}
+      >
+        <TableCell className="w-[1%] pr-0">
+          {hasDetail ? (
+            <TableDisclosureButton
+              id={selectorId(
+                "settings-lifecycle-candidate-toggle",
+                candidate.id,
+              )}
+              expanded={expanded}
+              aria-controls={expanded ? detailId : undefined}
+              aria-label={candidate.titleName}
+              onClick={onToggle}
+            />
+          ) : null}
+        </TableCell>
+        <TableCell>
+          <SubjectCell
+            titleName={candidate.titleName}
+            subjectKind={candidate.subjectKind}
+            subjectLabel={candidate.subjectLabel}
+          >
+            {candidate.fileCount != null ? (
+              <span className="text-xs text-[var(--scry-muted)]">
+                {t("settings.lifecycleFileSummary", {
+                  count: candidate.fileCount,
+                  size: formatBytes(candidate.totalSizeBytes),
+                })}
+              </span>
+            ) : null}
+          </SubjectCell>
+        </TableCell>
+        <TableCell>
+          <div className="flex flex-col gap-1">
+            <span className="text-[13px] text-[var(--scry-ink2)]">
+              {candidate.ruleName}
+            </span>
+            {candidate.actions ? (
+              <LifecycleDecidedActionsSummary
+                actions={candidate.actions}
+                idPrefix={selectorId(
+                  "settings-lifecycle-candidate-action",
+                  candidate.id,
+                )}
+              />
+            ) : null}
+          </div>
+        </TableCell>
+        <TableCell>
+          <div className="flex flex-col gap-1">
+            <Badge
+              tone={candidateStateBadgeTone(candidate.state)}
+              title={stateReason}
+            >
+              {stateKey ? t(stateKey) : candidate.state}
+            </Badge>
+            {candidate.heldSince ? (
+              <span
+                className="whitespace-nowrap text-xs text-[var(--scry-warning-text)]"
+                title={stateReason}
+              >
+                {t("settings.lifecycleCandidatesHeldSince", {
+                  time: timestamp(candidate.heldSince, dateTimeFormat),
+                })}
+              </span>
+            ) : null}
+          </div>
+        </TableCell>
+        <TableCell className="hidden whitespace-nowrap text-[var(--scry-muted)] lg:table-cell">
+          {timestamp(candidate.firstMatchedAt, dateTimeFormat)}
+        </TableCell>
+        <TableCell
+          className="whitespace-nowrap"
+          title={timestamp(candidate.dueAt, dateTimeFormat)}
+        >
+          <CandidateDueCell dueAt={candidate.dueAt} />
+        </TableCell>
+        <TableCell className="w-[1%] text-right">
+          <IconButton
+            id={selectorId(
+              "settings-lifecycle-candidate-exclude",
+              candidate.id,
+            )}
+            label={t("settings.lifecycleCandidateExclude")}
+            tone="delete"
+            onClick={() => excludeCandidate(candidate)}
+          >
+            <Ban className="h-4 w-4" />
+          </IconButton>
+        </TableCell>
+      </TableRow>
+      {expanded && hasDetail ? (
+        <TableRow id={detailId} className="bg-[var(--scry-surfC)]">
+          <TableCell />
+          <TableCell colSpan={6}>
+            <CandidateDetail candidate={candidate} />
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  );
+}
+
 export function LifecycleCandidatesPanel({
   candidates,
   candidatesLoading,
@@ -358,254 +672,142 @@ export function LifecycleCandidatesPanel({
   excludeCandidate,
 }: LifecycleCandidatesPanelProps) {
   const t = useTranslate();
-  const dateTimeFormat = useUiDateTimeFormat();
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const toggle = (id: string) =>
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          <HelpLabel
-            label={t("settings.lifecycleCandidatesTitle")}
-            help={t("settings.lifecycleCandidatesSubtitle")}
-          />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-4">
-          <SingleSelectField
-            id="settings-lifecycle-candidates-rule"
-            label={t("settings.lifecycleCandidatesFilterRule")}
-            value={candidateRuleFilter}
-            onValueChange={setCandidateRuleFilter}
-            options={[
-              {
-                value: LIFECYCLE_FILTER_ALL,
-                label: t("settings.lifecycleCandidatesAllRules"),
-              },
-              ...ruleSetRecords.map((record) => ({
-                value: record.id,
-                label: record.name,
-              })),
-            ]}
-          />
-          <SingleSelectField
-            id="settings-lifecycle-candidates-state"
-            label={t("settings.lifecycleCandidatesFilterState")}
-            value={candidateStateFilter}
-            onValueChange={setCandidateStateFilter}
-            options={[
-              {
-                value: LIFECYCLE_FILTER_ALL,
-                label: t("settings.lifecycleCandidatesAllStates"),
-              },
-              ...CANDIDATE_STATE_FILTER_OPTIONS.map((state) => {
-                const labelKey = candidateStateLabelKey(state);
-                return { value: state, label: labelKey ? t(labelKey) : state };
-              }),
-            ]}
-          />
-          <SingleSelectField
-            id="settings-lifecycle-candidates-library"
-            label={t("settings.lifecycleCandidatesFilterLibrary")}
-            value={candidateLibraryFilter}
-            onValueChange={setCandidateLibraryFilter}
-            options={[
-              {
-                value: LIFECYCLE_FILTER_ALL,
-                label: t("settings.lifecycleCandidatesAllLibraries"),
-              },
-              ...libraries.map((library) => ({
-                value: library.id,
-                label: library.name,
-              })),
-            ]}
-          />
-          <div className="flex items-end">
-            <Button
-              id="settings-lifecycle-candidates-refresh"
-              type="button"
-              variant="secondary"
-              disabled={candidatesLoading}
-              onClick={refreshCandidates}
-            >
-              {candidatesLoading ? (
-                <LoadingMark className="mr-2 h-4 w-4" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              {t("label.refresh")}
-            </Button>
-          </div>
-        </div>
+    <PaneSection
+      id="settings-lifecycle-candidates"
+      title={t("settings.lifecycleCandidatesTitle")}
+      help={t("settings.lifecycleCandidatesSubtitle")}
+      count={
+        candidatesLoading && candidates.length === 0
+          ? undefined
+          : candidates.length
+      }
+      actions={
+        <RefreshButton
+          id="settings-lifecycle-candidates-refresh"
+          loading={candidatesLoading}
+          onClick={refreshCandidates}
+        />
+      }
+    >
+      <div className={TOOLBAR_SHELL}>
+        <SingleSelectField
+          id="settings-lifecycle-candidates-rule"
+          label={t("settings.lifecycleCandidatesFilterRule")}
+          labelClassName={TOOLBAR_SELECT_LABEL}
+          size="compact"
+          chrome="toolbar"
+          className="md:w-[240px]"
+          value={candidateRuleFilter}
+          onValueChange={setCandidateRuleFilter}
+          options={[
+            {
+              value: LIFECYCLE_FILTER_ALL,
+              label: t("settings.lifecycleCandidatesAllRules"),
+            },
+            ...ruleSetRecords.map((record) => ({
+              value: record.id,
+              label: record.name,
+            })),
+          ]}
+        />
+        <SingleSelectField
+          id="settings-lifecycle-candidates-state"
+          label={t("settings.lifecycleCandidatesFilterState")}
+          labelClassName={TOOLBAR_SELECT_LABEL}
+          size="compact"
+          chrome="toolbar"
+          className="md:w-[200px]"
+          value={candidateStateFilter}
+          onValueChange={setCandidateStateFilter}
+          options={[
+            {
+              value: LIFECYCLE_FILTER_ALL,
+              label: t("settings.lifecycleCandidatesAllStates"),
+            },
+            ...CANDIDATE_STATE_FILTER_OPTIONS.map((state) => {
+              const labelKey = candidateStateLabelKey(state);
+              return { value: state, label: labelKey ? t(labelKey) : state };
+            }),
+          ]}
+        />
+        <SingleSelectField
+          id="settings-lifecycle-candidates-library"
+          label={t("settings.lifecycleCandidatesFilterLibrary")}
+          labelClassName={TOOLBAR_SELECT_LABEL}
+          size="compact"
+          chrome="toolbar"
+          className="md:w-[200px]"
+          value={candidateLibraryFilter}
+          onValueChange={setCandidateLibraryFilter}
+          options={[
+            {
+              value: LIFECYCLE_FILTER_ALL,
+              label: t("settings.lifecycleCandidatesAllLibraries"),
+            },
+            ...libraries.map((library) => ({
+              value: library.id,
+              label: library.name,
+            })),
+          ]}
+        />
+      </div>
 
-        {candidatesError ? (
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono text-[12px] leading-5 text-[var(--scry-danger-text)]">
-            {candidatesError}
-          </pre>
-        ) : null}
+      <PaneError message={candidatesError} />
 
-        <div className="overflow-x-auto">
-          <Table id="settings-lifecycle-candidates-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("label.title")}</TableHead>
-                <TableHead>
-                  {t("settings.lifecycleCandidatesColRule")}
-                </TableHead>
-                <TableHead className="w-[150px]">
-                  {t("settings.lifecycleCandidatesColState")}
-                </TableHead>
-                <TableHead>
-                  {t("settings.lifecyclePreviewColReasons")}
-                </TableHead>
-                <TableHead className="whitespace-nowrap">
-                  {t("settings.lifecycleCandidatesColFirstMatched")}
-                </TableHead>
-                <TableHead className="whitespace-nowrap">
-                  {t("settings.lifecycleCandidatesColDue")}
-                </TableHead>
-                <TableHead className="text-right">
-                  {t("label.actions")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {candidates.map((candidate) => {
-                const stateKey = candidateStateLabelKey(candidate.state);
-                return (
-                  <TableRow
-                    key={candidate.id}
-                    data-ui="settings-table-row"
-                    id={selectorId(
-                      "settings-lifecycle-candidate-row",
-                      candidate.id,
-                    )}
-                  >
-                    <TableCell className="font-medium">
-                      <div className="flex flex-col gap-1">
-                        <span>{candidate.titleName}</span>
-                        {candidate.subjectKind !== "title" && (
-                          <span className="text-sm text-muted-foreground">
-                            {candidate.subjectLabel}
-                          </span>
-                        )}
-                        {candidate.fileCount != null && (
-                          <span className="text-xs text-muted-foreground">
-                            {t("settings.lifecycleFileSummary", {
-                              count: candidate.fileCount,
-                              size: formatBytes(candidate.totalSizeBytes),
-                            })}
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      <div className="flex flex-col">
-                        <span>{candidate.ruleName}</span>
-                        {candidate.actions ? (
-                          <div className="mt-0.5">
-                            <LifecycleDecidedActionsSummary
-                              actions={candidate.actions}
-                              idPrefix={selectorId(
-                                "settings-lifecycle-candidate-action",
-                                candidate.id,
-                              )}
-                            />
-                          </div>
-                        ) : null}
-                        {candidate.actionSequence?.steps.length ? (
-                          <LifecycleSequenceProgress
-                            sequence={candidate.actionSequence}
-                            progress={candidate.sequenceSteps}
-                          />
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <Badge
-                          tone={candidateStateBadgeTone(candidate.state)}
-                          title={
-                            candidate.stateReason
-                              ? lifecycleExecutionReasonText(
-                                  t,
-                                  candidate.stateReason,
-                                )
-                              : undefined
-                          }
-                        >
-                          {stateKey ? t(stateKey) : candidate.state}
-                        </Badge>
-                        {candidate.heldSince ? (
-                          <span
-                            className="text-xs text-[var(--scry-warning-text)]"
-                            title={
-                              candidate.stateReason
-                                ? lifecycleExecutionReasonText(
-                                    t,
-                                    candidate.stateReason,
-                                  )
-                                : undefined
-                            }
-                          >
-                            {t("settings.lifecycleCandidatesHeldSince", {
-                              time: timestamp(
-                                candidate.heldSince,
-                                dateTimeFormat,
-                              ),
-                            })}
-                          </span>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      <ReasonCodes codes={candidate.reasonCodes} />
-                      {candidate.stateReason ? (
-                        <p className="mt-1 max-w-[280px] truncate text-xs">
-                          {lifecycleExecutionReasonText(
-                            t,
-                            candidate.stateReason,
-                          )}
-                        </p>
-                      ) : null}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {timestamp(candidate.firstMatchedAt, dateTimeFormat)}
-                    </TableCell>
-                    <TableCell
-                      className="whitespace-nowrap"
-                      title={timestamp(candidate.dueAt, dateTimeFormat)}
-                    >
-                      <CandidateDueCell dueAt={candidate.dueAt} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <IconButton
-                        id={selectorId(
-                          "settings-lifecycle-candidate-exclude",
-                          candidate.id,
-                        )}
-                        label={t("settings.lifecycleCandidateExclude")}
-                        tone="delete"
-                        onClick={() => excludeCandidate(candidate)}
-                      >
-                        <Ban className="h-4 w-4" />
-                      </IconButton>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {candidates.length === 0 && !candidatesLoading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground">
-                    {t(candidatesEmptyKey(gates, ruleSetRecords))}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
+      {candidates.length === 0 ? (
+        <PaneEmpty
+          id="settings-lifecycle-candidates-empty"
+          loading={candidatesLoading}
+        >
+          {t(candidatesEmptyKey(gates, ruleSetRecords))}
+        </PaneEmpty>
+      ) : (
+        <Table
+          id="settings-lifecycle-candidates-table"
+          wrapperClassName={TABLE_SHELL}
+        >
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[1%]" />
+              <TableHead>{t("label.title")}</TableHead>
+              <TableHead>{t("settings.lifecycleCandidatesColRule")}</TableHead>
+              <TableHead>{t("settings.lifecycleCandidatesColState")}</TableHead>
+              <TableHead className="hidden whitespace-nowrap lg:table-cell">
+                {t("settings.lifecycleCandidatesColFirstMatched")}
+              </TableHead>
+              <TableHead className="whitespace-nowrap">
+                {t("settings.lifecycleCandidatesColDue")}
+              </TableHead>
+              <TableHead className="w-[1%] text-right">
+                {t("label.actions")}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {candidates.map((candidate) => (
+              <CandidateRows
+                key={candidate.id}
+                candidate={candidate}
+                expanded={expandedIds.has(candidate.id)}
+                onToggle={() => toggle(candidate.id)}
+                excludeCandidate={excludeCandidate}
+              />
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </PaneSection>
   );
 }
 
@@ -619,6 +821,41 @@ function runCounts(run: LifecycleEvaluationRun, t: Translate): string {
     unknown: run.unknownCount,
     errors: run.errorCount,
   });
+}
+
+/// A run's status, with the hold reason and error that explain it under the
+/// badge rather than in columns of their own that are empty on most rows.
+function RunOutcome({
+  status,
+  holdReason,
+  error,
+  children,
+}: {
+  status: string;
+  holdReason?: string | null;
+  error: string | null;
+  children?: React.ReactNode;
+}) {
+  const t = useTranslate();
+  return (
+    <div className="flex max-w-[420px] flex-col gap-1">
+      <RunStatusBadge status={status} />
+      {holdReason ? (
+        <span className="text-xs text-[var(--scry-warning-text)]">
+          {lifecycleExecutionReasonText(t, holdReason)}
+        </span>
+      ) : null}
+      {error ? (
+        <span
+          className="line-clamp-3 whitespace-normal text-xs text-[var(--scry-danger-text)]"
+          title={error}
+        >
+          {error}
+        </span>
+      ) : null}
+      {children}
+    </div>
+  );
 }
 
 export type LifecycleRunsPanelProps = {
@@ -652,19 +889,22 @@ export function LifecycleRunsPanel({
 }: LifecycleRunsPanelProps) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
+  const ruleNames = new Map(
+    ruleSetRecords.map((record) => [record.id, record.name]),
+  );
+  const everyRule = runScopeRuleSetId === LIFECYCLE_FILTER_ALL;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          {t("settings.lifecycleRunsTitle")}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-4">
+    <div id="settings-lifecycle-runs" className="space-y-8">
+      <div className="space-y-2">
+        <div className={TOOLBAR_SHELL}>
           <SingleSelectField
             id="settings-lifecycle-run-scope"
             label={t("settings.lifecycleRunScope")}
+            labelClassName={TOOLBAR_SELECT_LABEL}
+            size="compact"
+            chrome="toolbar"
+            className="md:w-[260px]"
             value={runScopeRuleSetId}
             onValueChange={setRunScopeRuleSetId}
             options={[
@@ -678,244 +918,231 @@ export function LifecycleRunsPanel({
               })),
             ]}
           />
-          <div className="flex items-end">
+          <div className="flex flex-wrap items-center gap-2 md:ml-auto">
+            <RefreshButton
+              id="settings-lifecycle-runs-refresh"
+              loading={runsLoading}
+              onClick={refreshRuns}
+            />
             <Button
               id="settings-lifecycle-run-evaluation-now"
               type="button"
               variant="secondary"
+              size="sm"
               disabled={evaluationTriggering}
               onClick={runEvaluationNow}
             >
-              <Play className="mr-2 h-4 w-4" />
+              {evaluationTriggering ? (
+                <LoadingMark className="h-4 w-4" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
               {evaluationTriggering
                 ? t("settings.lifecycleRunEvaluationRunning")
                 : t("settings.lifecycleRunEvaluationNow")}
             </Button>
-          </div>
-          <div className="flex flex-col justify-end gap-1">
             {/* Rules act only through their own fires, so acting now is
-                always for the one rule chosen above. */}
-            <Button
-              id="settings-lifecycle-run-actions-now"
-              type="button"
-              variant="secondary"
-              disabled={
-                actionTriggering || runScopeRuleSetId === LIFECYCLE_FILTER_ALL
-              }
-              aria-describedby={
-                runScopeRuleSetId === LIFECYCLE_FILTER_ALL
-                  ? "settings-lifecycle-run-actions-needs-rule"
-                  : undefined
-              }
-              onClick={runActionHandlerNow}
-            >
-              <Play className="mr-2 h-4 w-4" />
-              {actionTriggering
-                ? t("settings.lifecycleRunActionsRunning")
-                : t("settings.lifecycleRunActionsNow")}
-            </Button>
-            {runScopeRuleSetId === LIFECYCLE_FILTER_ALL ? (
-              <p
-                id="settings-lifecycle-run-actions-needs-rule"
-                className="text-xs text-muted-foreground"
+                always for the one rule chosen beside it. */}
+            <span className="inline-flex items-center gap-1">
+              <Button
+                id="settings-lifecycle-run-actions-now"
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={actionTriggering || everyRule}
+                aria-describedby={
+                  everyRule
+                    ? "settings-lifecycle-run-actions-needs-rule"
+                    : undefined
+                }
+                onClick={runActionHandlerNow}
               >
-                {t("settings.lifecycleRunActionsNeedsRule")}
-              </p>
-            ) : null}
-            <p
-              id={selectorId("settings-lifecycle-run-actions-held-help")}
-              className="max-w-xs text-xs text-muted-foreground"
-            >
-              {t("settings.lifecycleRunActionsHeldHelp")}
-            </p>
-          </div>
-          <div className="flex items-end">
-            <Button
-              id="settings-lifecycle-runs-refresh"
-              type="button"
-              variant="secondary"
-              disabled={runsLoading}
-              onClick={refreshRuns}
-            >
-              {runsLoading ? (
-                <LoadingMark className="mr-2 h-4 w-4" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              {t("label.refresh")}
-            </Button>
+                {actionTriggering ? (
+                  <LoadingMark className="h-4 w-4" />
+                ) : (
+                  <Zap className="h-4 w-4" />
+                )}
+                {actionTriggering
+                  ? t("settings.lifecycleRunActionsRunning")
+                  : t("settings.lifecycleRunActionsNow")}
+              </Button>
+              <InfoHelp
+                text={t("settings.lifecycleRunActionsHeldHelp")}
+                ariaLabel={t("settings.lifecycleRunActionsNow")}
+              />
+            </span>
           </div>
         </div>
-
-        {runsError ? (
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono text-[12px] leading-5 text-[var(--scry-danger-text)]">
-            {runsError}
-          </pre>
+        {everyRule ? (
+          <p
+            id="settings-lifecycle-run-actions-needs-rule"
+            className="px-1 text-xs text-[var(--scry-muted)]"
+          >
+            {t("settings.lifecycleRunActionsNeedsRule")}
+          </p>
         ) : null}
+        <PaneError message={runsError} />
+      </div>
 
-        <div className="space-y-2">
-          <h4 className="text-sm font-semibold">
-            {t("settings.lifecycleEvaluationRunsTitle")}
-          </h4>
-          <div className="overflow-x-auto">
-            <Table id="settings-lifecycle-evaluation-runs">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="whitespace-nowrap">
-                    {t("settings.lifecycleRunColStarted")}
-                  </TableHead>
-                  <TableHead>
-                    {t("settings.lifecycleCandidatesColRule")}
-                  </TableHead>
-                  <TableHead className="w-[130px]">
-                    {t("settings.lifecycleRunColStatus")}
-                  </TableHead>
-                  <TableHead>{t("settings.lifecycleRunColCounts")}</TableHead>
-                  <TableHead className="whitespace-nowrap">
-                    {t("settings.lifecycleRunColDuration")}
-                  </TableHead>
-                  <TableHead>{t("settings.lifecycleRunColError")}</TableHead>
+      <PaneSection
+        id="settings-lifecycle-evaluation-runs-section"
+        title={t("settings.lifecycleEvaluationRunsTitle")}
+        count={
+          runsLoading && evaluationRuns.length === 0
+            ? undefined
+            : evaluationRuns.length
+        }
+      >
+        {evaluationRuns.length === 0 ? (
+          <PaneEmpty
+            id="settings-lifecycle-evaluation-runs-empty"
+            loading={runsLoading}
+          >
+            {t("settings.lifecycleEvaluationRunsEmpty")}
+          </PaneEmpty>
+        ) : (
+          <Table
+            id="settings-lifecycle-evaluation-runs"
+            wrapperClassName={TABLE_SHELL}
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">
+                  {t("settings.lifecycleRunColStarted")}
+                </TableHead>
+                <TableHead>
+                  {t("settings.lifecycleCandidatesColRule")}
+                </TableHead>
+                <TableHead>{t("settings.lifecycleRunColStatus")}</TableHead>
+                <TableHead>{t("settings.lifecycleRunColCounts")}</TableHead>
+                <TableHead className="whitespace-nowrap text-right">
+                  {t("settings.lifecycleRunColDuration")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {evaluationRuns.map((run) => (
+                <TableRow
+                  key={run.id}
+                  data-ui="settings-table-row"
+                  id={selectorId(
+                    "settings-lifecycle-evaluation-run-row",
+                    run.id,
+                  )}
+                >
+                  <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
+                    {timestamp(run.startedAt, dateTimeFormat)}
+                  </TableCell>
+                  <TableCell>
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      <span className="text-[13px] font-medium text-[var(--scry-ink2)]">
+                        {ruleNames.get(run.ruleSetId) ?? run.ruleSetId}
+                      </span>
+                      <Badge tone="outline">
+                        {t("settings.lifecycleRunRevision", {
+                          revision: run.revisionNumber,
+                        })}
+                      </Badge>
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <RunOutcome status={run.status} error={run.error} />
+                  </TableCell>
+                  <TableCell className="text-xs text-[var(--scry-muted)]">
+                    {runCounts(run, t)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right text-[var(--scry-muted)]">
+                    {run.durationMs === null
+                      ? "—"
+                      : t("settings.lifecycleRunDuration", {
+                          seconds: (run.durationMs / 1000).toFixed(1),
+                        })}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {evaluationRuns.map((run) => {
-                  const rule = ruleSetRecords.find(
-                    (record) => record.id === run.ruleSetId,
-                  );
-                  return (
-                    <TableRow
-                      key={run.id}
-                      data-ui="settings-table-row"
-                      id={selectorId(
-                        "settings-lifecycle-evaluation-run-row",
-                        run.id,
-                      )}
-                    >
-                      <TableCell className="whitespace-nowrap text-muted-foreground">
-                        {timestamp(run.startedAt, dateTimeFormat)}
-                      </TableCell>
-                      <TableCell>
-                        {rule?.name ?? run.ruleSetId}
-                        <span className="ml-1 text-xs text-muted-foreground">
-                          {t("settings.lifecycleRunRevision", {
-                            revision: run.revisionNumber,
-                          })}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <RunStatusBadge status={run.status} />
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {runCounts(run, t)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-muted-foreground">
-                        {run.durationMs === null
-                          ? "—"
-                          : t("settings.lifecycleRunDuration", {
-                              seconds: (run.durationMs / 1000).toFixed(1),
-                            })}
-                      </TableCell>
-                      <TableCell className="max-w-[240px] truncate text-[var(--scry-danger-text)]">
-                        {run.error ?? "—"}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-                {evaluationRuns.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-muted-foreground">
-                      {t("settings.lifecycleEvaluationRunsEmpty")}
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </PaneSection>
 
-        <div className="space-y-2">
-          <h4 className="text-sm font-semibold">
-            {t("settings.lifecycleActionRunsTitle")}
-          </h4>
-          <div className="overflow-x-auto">
-            <Table id="settings-lifecycle-action-runs">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="whitespace-nowrap">
-                    {t("settings.lifecycleRunColStarted")}
-                  </TableHead>
-                  <TableHead>{t("label.title")}</TableHead>
-                  <TableHead>{t("settings.lifecycleRuleAction")}</TableHead>
-                  <TableHead className="w-[150px]">
-                    {t("settings.lifecycleRunColStatus")}
-                  </TableHead>
-                  <TableHead className="text-center">
-                    {t("settings.lifecycleActionRunColAttempt")}
-                  </TableHead>
-                  <TableHead>
-                    {t("settings.lifecycleActionRunColHoldReason")}
-                  </TableHead>
-                  <TableHead>{t("settings.lifecycleRunColError")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {actionRuns.map((run) => (
-                  <TableRow
-                    key={run.id}
-                    data-ui="settings-table-row"
-                    id={selectorId(
-                      "settings-lifecycle-action-run-row",
-                      run.id,
-                    )}
-                  >
-                    <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {timestamp(run.startedAt, dateTimeFormat)}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {run.titleName}
-                      {run.subjectKind !== "title" && (
-                        <div className="text-sm text-muted-foreground">
-                          {run.subjectLabel}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
+      <PaneSection
+        id="settings-lifecycle-action-runs-section"
+        title={t("settings.lifecycleActionRunsTitle")}
+        count={
+          runsLoading && actionRuns.length === 0 ? undefined : actionRuns.length
+        }
+      >
+        {actionRuns.length === 0 ? (
+          <PaneEmpty
+            id="settings-lifecycle-action-runs-empty"
+            loading={runsLoading}
+          >
+            {t("settings.lifecycleActionRunsEmpty")}
+          </PaneEmpty>
+        ) : (
+          <Table
+            id="settings-lifecycle-action-runs"
+            wrapperClassName={TABLE_SHELL}
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">
+                  {t("settings.lifecycleRunColStarted")}
+                </TableHead>
+                <TableHead>{t("label.title")}</TableHead>
+                <TableHead>{t("settings.lifecycleRuleAction")}</TableHead>
+                <TableHead>{t("settings.lifecycleRunColStatus")}</TableHead>
+                <TableHead className="w-[1%] whitespace-nowrap text-right">
+                  {t("settings.lifecycleActionRunColAttempt")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {actionRuns.map((run) => (
+                <TableRow
+                  key={run.id}
+                  data-ui="settings-table-row"
+                  id={selectorId("settings-lifecycle-action-run-row", run.id)}
+                  className="[&>td]:align-top"
+                >
+                  <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
+                    {timestamp(run.startedAt, dateTimeFormat)}
+                  </TableCell>
+                  <TableCell>
+                    <SubjectCell
+                      titleName={run.titleName}
+                      subjectKind={run.subjectKind}
+                      subjectLabel={run.subjectLabel}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-[13px] text-[var(--scry-ink2)]">
                       <ActionKindLabel kind={run.actionKind} />
-                      <LifecycleSequenceProgress
-                        sequence={run.actionSequence}
-                        progress={run.sequenceSteps}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <RunStatusBadge status={run.status} />
-                    </TableCell>
-                    <TableCell className="text-center text-muted-foreground">
-                      {run.attempt}
-                    </TableCell>
-                    <TableCell className="max-w-[220px] truncate text-[var(--scry-warning-text)]">
-                      {run.holdReason
-                        ? lifecycleExecutionReasonText(t, run.holdReason)
-                        : "—"}
-                    </TableCell>
-                    <TableCell className="min-w-[220px] whitespace-normal text-[var(--scry-danger-text)]">
-                      {run.error ?? "—"}
+                    </span>
+                    <LifecycleSequenceProgress
+                      sequence={run.actionSequence}
+                      progress={run.sequenceSteps}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <RunOutcome
+                      status={run.status}
+                      holdReason={run.holdReason}
+                      error={run.error}
+                    >
                       <LifecycleFileResults detail={run.detail} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {actionRuns.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
-                      {t("settings.lifecycleActionRunsEmpty")}
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+                    </RunOutcome>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-[var(--scry-muted)]">
+                    {run.attempt}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </PaneSection>
+    </div>
   );
 }
 
@@ -938,106 +1165,100 @@ export function LifecycleExclusionsPanel({
 }: LifecycleExclusionsPanelProps) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
+  const ruleNames = new Map(
+    ruleSetRecords.map((record) => [record.id, record.name]),
+  );
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          <HelpLabel
-            label={t("settings.lifecycleExclusionsTitle")}
-            help={t("settings.lifecycleExclusionsSubtitle")}
-          />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {exclusionsError ? (
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono text-[12px] leading-5 text-[var(--scry-danger-text)]">
-            {exclusionsError}
-          </pre>
-        ) : null}
-        <div className="overflow-x-auto">
-          <Table id="settings-lifecycle-exclusions">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("label.title")}</TableHead>
-                <TableHead>
-                  {t("settings.lifecycleExclusionColScope")}
-                </TableHead>
-                <TableHead>
-                  {t("settings.lifecycleExclusionColReason")}
-                </TableHead>
-                <TableHead className="whitespace-nowrap">
-                  {t("settings.lifecycleExclusionColCreated")}
-                </TableHead>
-                <TableHead className="text-right">
-                  {t("label.actions")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {exclusions.map((exclusion) => {
-                const rule = exclusion.ruleSetId
-                  ? ruleSetRecords.find(
-                      (record) => record.id === exclusion.ruleSetId,
-                    )
-                  : null;
-                return (
-                  <TableRow
-                    key={exclusion.id}
-                    data-ui="settings-table-row"
+    <PaneSection
+      id="settings-lifecycle-exclusions-section"
+      title={t("settings.lifecycleExclusionsTitle")}
+      help={t("settings.lifecycleExclusionsSubtitle")}
+      count={exclusions.length}
+    >
+      <PaneError message={exclusionsError} />
+      {exclusions.length === 0 ? (
+        <PaneEmpty id="settings-lifecycle-exclusions-empty" loading={false}>
+          {t("settings.lifecycleExclusionsEmpty")}
+        </PaneEmpty>
+      ) : (
+        <Table
+          id="settings-lifecycle-exclusions"
+          wrapperClassName={TABLE_SHELL}
+        >
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t("label.title")}</TableHead>
+              <TableHead>{t("settings.lifecycleExclusionColScope")}</TableHead>
+              <TableHead className="hidden md:table-cell">
+                {t("settings.lifecycleExclusionColReason")}
+              </TableHead>
+              <TableHead className="hidden whitespace-nowrap md:table-cell">
+                {t("settings.lifecycleExclusionColCreated")}
+              </TableHead>
+              <TableHead className="w-[1%] text-right">
+                {t("label.actions")}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {exclusions.map((exclusion) => (
+              <TableRow
+                key={exclusion.id}
+                data-ui="settings-table-row"
+                id={selectorId(
+                  "settings-lifecycle-exclusion-row",
+                  exclusion.id,
+                )}
+              >
+                <TableCell>
+                  <SubjectCell
+                    titleName={exclusion.titleName}
+                    subjectKind={exclusion.subjectKind}
+                    subjectLabel={exclusion.subjectLabel}
+                  />
+                </TableCell>
+                <TableCell>
+                  {exclusion.ruleSetId ? (
+                    <Badge tone="outline">
+                      {ruleNames.get(exclusion.ruleSetId) ??
+                        exclusion.ruleSetId}
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">
+                      {t("settings.lifecycleExclusionScopeGlobal")}
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell
+                  className="hidden max-w-[320px] truncate text-[var(--scry-muted)] md:table-cell"
+                  title={exclusion.reason || undefined}
+                >
+                  {exclusion.reason || "—"}
+                </TableCell>
+                <TableCell className="hidden whitespace-nowrap text-[var(--scry-muted)] md:table-cell">
+                  {timestamp(exclusion.createdAt, dateTimeFormat)}
+                </TableCell>
+                <TableCell className="text-right">
+                  <IconButton
                     id={selectorId(
-                      "settings-lifecycle-exclusion-row",
+                      "settings-lifecycle-exclusion-remove",
                       exclusion.id,
                     )}
+                    label={t("settings.lifecycleExclusionRemove")}
+                    tone="delete"
+                    disabled={removingExclusionId === exclusion.id}
+                    onClick={() => removeExclusion(exclusion)}
                   >
-                    <TableCell className="font-medium">
-                      {exclusion.titleName}
-                      {exclusion.subjectKind !== "title" && (
-                        <div className="text-sm text-muted-foreground">
-                          {exclusion.subjectLabel}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {exclusion.ruleSetId
-                        ? (rule?.name ?? exclusion.ruleSetId)
-                        : t("settings.lifecycleExclusionScopeGlobal")}
-                    </TableCell>
-                    <TableCell className="max-w-[280px] truncate text-muted-foreground">
-                      {exclusion.reason || "—"}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {timestamp(exclusion.createdAt, dateTimeFormat)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <IconButton
-                        id={selectorId(
-                          "settings-lifecycle-exclusion-remove",
-                          exclusion.id,
-                        )}
-                        label={t("settings.lifecycleExclusionRemove")}
-                        tone="delete"
-                        disabled={removingExclusionId === exclusion.id}
-                        onClick={() => removeExclusion(exclusion)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </IconButton>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {exclusions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
-                    {t("settings.lifecycleExclusionsEmpty")}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </PaneSection>
   );
 }
 
@@ -1047,48 +1268,58 @@ function LifecycleFileResults({ detail }: { detail: string }) {
   const results = parseLifecycleFileResults(detail);
   if (!results) return null;
   return (
-    <details className="whitespace-normal text-foreground">
-      <summary className="cursor-pointer text-sm">
+    <details className="group whitespace-normal">
+      <summary className="cursor-pointer text-xs font-medium text-[var(--scry-accent-text)] hover:underline">
         {t("settings.lifecycleFileResults")} ({results.files.length})
       </summary>
-      {results.totalSizeBytes != null ? (
-        <p className="text-xs text-muted-foreground">
-          {t("settings.lifecycleFileSummary", {
-            count: results.files.length,
-            size: formatBytes(results.totalSizeBytes),
+      <div className="mt-2 space-y-1.5 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-2.5">
+        <p className="text-xs text-[var(--scry-muted)]">
+          {results.totalSizeBytes != null
+            ? `${t("settings.lifecycleFileSummary", {
+                count: results.files.length,
+                size: formatBytes(results.totalSizeBytes),
+              })} · `
+            : null}
+          {t("settings.lifecycleFileProgress", {
+            completed: results.completedFileCount,
+            remaining: results.remainingFileCount,
           })}
         </p>
-      ) : null}
-      <p className="text-xs text-muted-foreground">
-        {t("settings.lifecycleFileProgress", {
-          completed: results.completedFileCount,
-          remaining: results.remainingFileCount,
-        })}
-      </p>
-      {results.graceDeadline ? (
-        <p className="text-xs text-muted-foreground">
-          {t("settings.lifecyclePreviewDue", {
-            time: formatUiDateTime(results.graceDeadline, dateTimeFormat),
-          })}
-        </p>
-      ) : null}
-      <Table>
-        <TableBody>
+        {results.graceDeadline ? (
+          <p className="text-xs text-[var(--scry-muted)]">
+            {t("settings.lifecyclePreviewDue", {
+              time: formatUiDateTime(results.graceDeadline, dateTimeFormat),
+            })}
+          </p>
+        ) : null}
+        <ul className="space-y-1">
           {results.files.map((file) => (
-            <TableRow key={file.fileId} data-ui="settings-table-row">
-              <TableCell className="break-all text-xs">
+            <li
+              key={file.fileId}
+              className="flex flex-col gap-0.5 border-t border-[var(--scry-border3)] pt-1 text-xs first:border-t-0 first:pt-0"
+            >
+              <span
+                data-code-font
+                className="break-all text-[var(--scry-ink2)]"
+              >
                 {file.filePath ?? file.fileId}
-              </TableCell>
-              <TableCell className="text-xs">
+              </span>
+              <span
+                className={
+                  file.error
+                    ? "text-[var(--scry-danger-text)]"
+                    : "text-[var(--scry-muted)]"
+                }
+              >
                 {file.error ??
                   (file.completed
                     ? t("settings.lifecycleFileDeleted")
                     : t("settings.lifecycleFilePending"))}
-              </TableCell>
-            </TableRow>
+              </span>
+            </li>
           ))}
-        </TableBody>
-      </Table>
+        </ul>
+      </div>
     </details>
   );
 }

@@ -877,7 +877,7 @@ export function SettingsLifecycleRulesSection({
   if (section !== "rules") {
     return (
       <div id="settings-lifecycle-rules-section" className="space-y-4 text-sm">
-        <div className="mx-auto w-full max-w-[1600px] space-y-4">
+        <div className="mx-auto w-full max-w-[1600px] space-y-8">
           {instanceSwitches}
           {operationsPanels}
         </div>
