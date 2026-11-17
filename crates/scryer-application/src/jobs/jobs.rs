@@ -913,6 +913,9 @@ impl AppUseCase {
             | JobKey::LibraryDeletion
             | JobKey::TitleRename
             | JobKey::ReleaseGrab => Ok(true),
+            // Only the user who asked for the search sees it, and the search
+            // was checked against their grants when it started.
+            JobKey::AcquisitionSearch => Ok(true),
             JobKey::MediaFileRescore
             | JobKey::MediaFileDeletion
             | JobKey::RecycleBinRestore
@@ -1023,6 +1026,7 @@ impl AppUseCase {
                     | JobKey::LibraryDeletion
                     | JobKey::TitleRename
                     | JobKey::ReleaseGrab
+                    | JobKey::AcquisitionSearch
                     | JobKey::MediaFileDeletion
                     | JobKey::MediaFileRescore
                     | JobKey::RecycleBinRestore
