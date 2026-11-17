@@ -557,17 +557,27 @@ impl TitleFileMover for RootMoveFileMover {
 
 /// Place a second name for the same regular file without copying bytes. The
 /// source survives a crash before the verification journal is durable; cleanup
-/// removes that name only after the catalog has moved. Unsupported filesystems
-/// and platforms take the ordinary verified-copy path. On Windows a linked
-/// source is not staged, and an existing destination goes to the content
-/// comparison.
-#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
+/// removes that name only after the catalog has moved, and only when the two
+/// names read as one file that has another name. A source on a volume whose
+/// reads cannot tell its files apart (FAT, exFAT, ReFS, a share without file
+/// numbers, a filesystem that numbers every file zero) is not staged, since
+/// cleanup could never prove the second name: it takes the ordinary
+/// verified-copy path, as do other platforms. On Windows a linked source is
+/// not staged either. Each name is read once, links not followed.
+#[allow(clippy::disallowed_methods)] // disk-guard: symlink placement
 async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppResult<bool> {
-    let source_metadata = tokio::fs::symlink_metadata(source).await.map_err(|error| {
-        AppError::Repository(format!("cannot inspect {}: {error}", source.display()))
-    })?;
+    let seen = Disk::process()
+        .fingerprint(source)
+        .await
+        .map_err(|reading| {
+            AppError::Repository(format!(
+                "cannot inspect {}: {}",
+                source.display(),
+                reading.absence()
+            ))
+        })?;
     #[cfg(unix)]
-    if source_metadata.file_type().is_symlink() {
+    if seen.kind() == Some(EntryKind::Symlink) {
         let target = tokio::fs::read_link(source).await.map_err(|error| {
             AppError::Repository(format!("cannot read link {}: {error}", source.display()))
         })?;
@@ -584,10 +594,10 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             })?;
         return Ok(true);
     }
-    if !source_metadata.is_file() || !cfg!(any(unix, windows)) {
+    if seen.kind() != Some(EntryKind::File) || !cfg!(any(unix, windows)) {
         return Ok(false);
     }
-    if let Ok(destination_metadata) = tokio::fs::symlink_metadata(destination).await {
+    if let Ok(destination_read) = Disk::process().fingerprint(destination).await {
         if tokio::fs::canonicalize(source).await.ok()
             == tokio::fs::canonicalize(destination).await.ok()
         {
@@ -596,23 +606,17 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
                 "source and destination are the same path",
             ));
         }
-        return match shared_inode(source, destination, &source_metadata, &destination_metadata)
-            .await
-        {
+        return match shared_inode(source, destination, &seen, &destination_read).await {
             SharedInode::SecondLink => Ok(true),
             SharedInode::OneEntry => Err(one_entry_refusal()),
             SharedInode::Distinct => Ok(false),
         };
     }
-    // std's own metadata names no volume or file number on Windows, so the
-    // source is read there once more through the disk service, which does.
-    #[cfg(windows)]
-    let seen = match Disk::process().fingerprint(source).await {
-        Ok(seen) if seen.kind() == Some(crate::disk::EntryKind::File) => seen,
-        _ => return Ok(false),
-    };
-    #[cfg(not(windows))]
-    let seen = Mark::of(&source_metadata);
+    // Only a read that tells this file from every other can prove the
+    // second name at cleanup; anything else is copied.
+    if seen.same_file(&seen) != Sameness::Same {
+        return Ok(false);
+    }
     // The new name is read once and must be the file read above. A link that
     // does not prove is removed by the disk service before it answers.
     let linked = Disk::process()
@@ -696,61 +700,54 @@ pub(super) enum SharedInode {
     OneEntry,
 }
 
-/// Decide a pair from the facts alone. Equal dev/ino is not trusted by itself:
-/// mounts that synthesize inodes (CIFS without serverino, mergerfs, rclone) can
-/// report it for two different files, so a length mismatch sends the pair to
-/// the content comparison. A shared inode counts as a second link only with a
-/// known link count of two or more; an unknown count is never assumed to be.
+/// Decide a pair from the facts alone. One file number is not trusted by
+/// itself: mounts that synthesize inodes (CIFS without serverino, mergerfs,
+/// rclone) can report it for two different files, so a length mismatch sends
+/// the pair to the content comparison. A shared file counts as a second link
+/// only when the read showed the destination to have another name; a count
+/// the read did not give is never assumed to be two.
 pub(super) fn shared_inode_decision(
     same_identity: bool,
     source_len: u64,
     destination_len: u64,
-    link_count: Option<u64>,
+    other_names: bool,
 ) -> SharedInode {
     if !same_identity || source_len != destination_len {
         return SharedInode::Distinct;
     }
-    match link_count {
-        Some(count) if count >= 2 => SharedInode::SecondLink,
-        _ => SharedInode::OneEntry,
+    match other_names {
+        true => SharedInode::SecondLink,
+        false => SharedInode::OneEntry,
     }
 }
 
-/// Classify a pair by metadata, then prove a claimed second link is really a
-/// second directory entry: two names in one directory must both be listed
-/// under their exact spelling, which a case-folding mount does not do.
+/// Classify a pair by the disk service's reads of both names, links not
+/// followed, then prove a claimed second link is really a second directory
+/// entry: two names in one directory must both be listed under their exact
+/// spelling, which a case-folding mount or a case-insensitive volume does not
+/// do.
 pub(super) async fn shared_inode(
     source: &Path,
     destination: &Path,
-    source_metadata: &std::fs::Metadata,
-    destination_metadata: &std::fs::Metadata,
+    source_read: &Mark,
+    destination_read: &Mark,
 ) -> SharedInode {
-    #[cfg(unix)]
-    let links = Some(std::os::unix::fs::MetadataExt::nlink(destination_metadata));
-    #[cfg(not(unix))]
-    let links = None;
-    let sameness = regular_file_sameness(source_metadata, destination_metadata);
+    let sameness = regular_file_sameness(source_read, destination_read);
     let decision = shared_inode_decision(
         sameness == Sameness::Same,
-        source_metadata.len(),
-        destination_metadata.len(),
-        links,
+        source_read.len().unwrap_or_default(),
+        destination_read.len().unwrap_or_default(),
+        destination_read.has_other_names(),
     );
     // A pair the file numbers cannot tell apart is never a second link, and
     // goes to the content comparison only as two listed entries: one entry
     // under two spellings would be its own match.
-    #[cfg(unix)]
+    let undecided = sameness == Sameness::CannotTell && source_read.len() == destination_read.len();
+    if (decision == SharedInode::SecondLink || undecided)
+        && !distinct_directory_entries(source, destination).await
     {
-        let undecided =
-            sameness == Sameness::CannotTell && source_metadata.len() == destination_metadata.len();
-        if (decision == SharedInode::SecondLink || undecided)
-            && !distinct_directory_entries(source, destination).await
-        {
-            return SharedInode::OneEntry;
-        }
+        return SharedInode::OneEntry;
     }
-    #[cfg(not(unix))]
-    let _ = (source, destination);
     decision
 }
 
@@ -761,24 +758,25 @@ pub(super) fn one_entry_refusal() -> AppError {
     )
 }
 
-/// Whether two paths are two directory entries. Names in two different
-/// directories are; names in one directory are only when they differ and the
-/// listing holds both exactly.
-#[cfg(unix)]
-#[allow(clippy::disallowed_methods)] // disk-guard: raw parent dev/ino, early-exit listing
+/// Whether two paths are two directory entries. Names in two folders the
+/// disk service reads as different folders are; names in one folder, or in
+/// folders it cannot tell apart, are only when they differ and the listing of
+/// the source's folder holds both exactly.
+#[allow(clippy::disallowed_methods)] // disk-guard: early-exit listing
 async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     let (Some(source_parent), Some(destination_parent)) = (source.parent(), destination.parent())
     else {
         return false;
     };
     let (Ok(source_dir), Ok(destination_dir)) = (
-        tokio::fs::metadata(source_parent).await,
-        tokio::fs::metadata(destination_parent).await,
+        Disk::process().fingerprint_followed(source_parent).await,
+        Disk::process()
+            .fingerprint_followed(destination_parent)
+            .await,
     ) else {
         return false;
     };
-    use std::os::unix::fs::MetadataExt;
-    if source_dir.dev() != destination_dir.dev() || source_dir.ino() != destination_dir.ino() {
+    if source_dir.same_file(&destination_dir) == Sameness::Different {
         return true;
     }
     let (Some(source_name), Some(destination_name)) = (source.file_name(), destination.file_name())
@@ -806,22 +804,31 @@ async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
 /// Whether two reads are one regular file, proven. A pair that cannot be
 /// told apart, such as two names on a filesystem that numbers every file
 /// zero, answers `false`, so no caller treats two files as one on a guess.
-pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+pub(super) fn same_regular_file(left: &Mark, right: &Mark) -> bool {
     regular_file_sameness(left, right) == Sameness::Same
 }
 
 /// Whether two reads are one regular file, two, or cannot be told apart.
-/// Anything but two regular files is [`Sameness::Different`]. Off unix the
-/// metadata carries no file number, and the pair answers
-/// [`Sameness::Different`] as it always has there.
-pub(super) fn regular_file_sameness(
-    left: &std::fs::Metadata,
-    right: &std::fs::Metadata,
-) -> Sameness {
-    if !left.is_file() || !right.is_file() || cfg!(not(unix)) {
+/// Anything but two regular files is [`Sameness::Different`]. The reads are
+/// the disk service's, so a Windows read carries the volume serial and file
+/// index where the volume keeps them, and cannot tell where it does not.
+pub(super) fn regular_file_sameness(left: &Mark, right: &Mark) -> Sameness {
+    if left.kind() != Some(EntryKind::File) || right.kind() != Some(EntryKind::File) {
         return Sameness::Different;
     }
-    Mark::of(left).same_file(&Mark::of(right))
+    left.same_file(right)
+}
+
+/// The disk service's read of a name a caller has already read through std,
+/// links not followed: the metadata's own mark on unix, with no probe, and
+/// one handle read on Windows, where std's metadata names no volume or file.
+/// `None` when that read fails.
+pub(super) async fn mark_beside(path: &Path, metadata: &std::fs::Metadata) -> Option<Mark> {
+    if cfg!(windows) {
+        Disk::process().fingerprint(path).await.ok()
+    } else {
+        Some(Mark::of(metadata))
+    }
 }
 
 // ── TitleReconciler ──────────────────────────────────────────────────────────
@@ -1467,23 +1474,28 @@ impl TitleReconciler for RootMoveReconciler<'_> {
 }
 
 /// Retire a source whose placement was a second link (or the same symlink), so
-/// no content hashes were recorded. Missing already is retired.
-#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
+/// no content hashes were recorded. Missing already is retired. The source
+/// goes only when the disk service reads both names as one regular file that
+/// has another name and the listing shows two entries, or when both are
+/// symbolic links to one target. A server that fakes a hard link with a
+/// symbolic link, or a volume whose reads cannot tell files apart, keeps it.
+#[allow(clippy::disallowed_methods)] // disk-guard: symlink target comparison and removal
 async fn retire_linked_source(
     source: &Path,
     destination: &Path,
     source_path: &str,
 ) -> AppResult<()> {
-    let source_metadata = match tokio::fs::symlink_metadata(source).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(AppError::Repository(error.to_string())),
+    let source_read = match Disk::process().fingerprint(source).await {
+        Ok(read) => read,
+        Err(reading) if reading.exists() == Some(false) => return Ok(()),
+        Err(reading) => return Err(AppError::Repository(reading.absence().into())),
     };
-    let destination_metadata = tokio::fs::symlink_metadata(destination)
+    let destination_read = Disk::process()
+        .fingerprint(destination)
         .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
-    let same_link = if source_metadata.file_type().is_symlink()
-        && destination_metadata.file_type().is_symlink()
+        .map_err(|reading| AppError::Repository(reading.absence().into()))?;
+    let same_link = if source_read.kind() == Some(EntryKind::Symlink)
+        && destination_read.kind() == Some(EntryKind::Symlink)
     {
         match (
             tokio::fs::read_link(source).await,
@@ -1495,9 +1507,9 @@ async fn retire_linked_source(
     } else {
         false
     };
-    let same_file = same_regular_file(&source_metadata, &destination_metadata);
+    let same_file = same_regular_file(&source_read, &destination_read);
     if same_file
-        && shared_inode(source, destination, &source_metadata, &destination_metadata).await
+        && shared_inode(source, destination, &source_read, &destination_read).await
             != SharedInode::SecondLink
     {
         // Removing the source would remove the only entry.

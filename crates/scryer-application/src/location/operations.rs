@@ -3720,7 +3720,13 @@ pub(crate) async fn quick_check_name_collisions(
         };
         // One file, or a pair the file numbers cannot tell apart, earns no
         // sampled proof: two names for one file are never a duplicate.
-        if super::execution::regular_file_sameness(&source_metadata, &destination_metadata)
+        let (Some(source_read), Some(destination_read)) = (
+            super::execution::mark_beside(&file.path, &source_metadata).await,
+            super::execution::mark_beside(&destination, &destination_metadata).await,
+        ) else {
+            continue;
+        };
+        if super::execution::regular_file_sameness(&source_read, &destination_read)
             != crate::disk::Sameness::Different
         {
             continue;

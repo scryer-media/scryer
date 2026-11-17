@@ -813,30 +813,28 @@ pub trait VolumeProbe: Send + Sync {
 }
 
 /// The real probe: the disk service's volume, with the drive or share on
-/// Windows, and the
-/// canonical [`crate::disk::capacity::StorageCapacity`] for free space.
+/// Windows, and the canonical [`crate::disk::capacity::StorageCapacity`] for
+/// free space. It answers for a root or folder as a whole, as the free-space
+/// estimate needs. Whether one file is linked or copied is the move's own
+/// per-file answer: a file on a volume whose reads cannot tell its files
+/// apart, or a symbolic link on Windows, is copied even where this probe
+/// names one volume for both roots.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemVolumeProbe;
 
 impl VolumeProbe for SystemVolumeProbe {
     fn volume_id(&self, path: &Path) -> Option<VolumeId> {
         // The volume a move's execution reads to choose a rename: one that
-        // names no volume is no answer, so the preview counts a copy, as the
-        // move makes one.
+        // names no volume is no answer, and the estimate counts a copy.
         let volume = crate::disk::Disk::process()
             .landing_volume_blocking(path)
             .filter(crate::disk::Mark::names_volume)?;
         #[cfg(windows)]
         {
             // Two drives or shares are two volumes whatever serials they
-            // read as, as the move's own answer has it.
-            let existing = crate::disk::Disk::process().nearest_existing_blocking(path)?;
-            let prefix = existing.components().next()?;
-            Some(VolumeId(format!(
-                "prefix:{}|{}",
-                prefix.as_os_str().to_string_lossy().to_uppercase(),
-                volume.to_stored()
-            )))
+            // read as, compared in the form the move compares them.
+            let prefix = crate::disk::Disk::drive_or_share(path)?;
+            Some(VolumeId(format!("prefix:{prefix}|{}", volume.to_stored())))
         }
         #[cfg(not(windows))]
         Some(VolumeId(volume.to_stored()))

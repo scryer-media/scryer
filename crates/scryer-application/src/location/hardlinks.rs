@@ -6,10 +6,12 @@
 //! the seeding copy is orphaned at the old path, and the bytes now occupy disk
 //! twice. Recycling one of several links frees no space at all.
 //!
-//! Detection is a `st_nlink` read on unix. Other platforms do not report a
-//! portable link count through `std::fs`, so they report
-//! [`LinkCount::Unsupported`] rather than guessing "1" — an unknown link count
-//! must never be presented as "no hardlinks".
+//! Detection is the disk service's read of the name, links not followed:
+//! `st_nlink` on unix and the link count of a handle on Windows. Where the
+//! read gives no count (a Windows file the process may not open, read from
+//! its folder's listing, or another platform) it reports
+//! [`LinkCount::Unsupported`] rather than guessing "1" — an unknown link
+//! count must never be presented as "no hardlinks".
 //!
 //! Warning construction is pure so previews and the executor summary can build
 //! the same warnings from the same facts. Wiring into the preview model happens
@@ -27,7 +29,8 @@ use crate::{AppError, AppResult};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkCount {
-    /// Link count read from filesystem metadata (`st_nlink` on unix).
+    /// Link count read from filesystem metadata (`st_nlink` on unix, the
+    /// handle's link count on Windows).
     Known(u64),
     /// This platform does not expose a hardlink count: not detected, and
     /// explicitly not "one".
@@ -81,10 +84,11 @@ impl HardlinkFact {
 
 /// Read the link count of `path` (blocking).
 ///
-/// On unix this is `st_nlink` from `symlink_metadata`, so a symlink reports its
-/// own link count rather than its target's. On other platforms the file is
-/// still stat'ed — so a missing or unreadable path is still an error — but the
-/// count comes back as [`LinkCount::Unsupported`].
+/// The link is not followed, so a symlink reports its own link count rather
+/// than its target's: `st_nlink` on unix, the handle's count on Windows.
+/// Where the read gives no count the file is still read — so a missing or
+/// unreadable path is still an error — but the count comes back as
+/// [`LinkCount::Unsupported`].
 pub fn link_count(path: &Path) -> AppResult<LinkCount> {
     let reading = Disk::process().uncached_blocking(path);
     if reading.exists() != Some(true) {

@@ -65,15 +65,16 @@ impl FileResolution {
                     }));
         }
         if self.disposition == ResolutionDisposition::Hardlink {
-            return match (
-                source_metadata,
-                tokio::fs::symlink_metadata(&destination).await,
-            ) {
-                (Ok(source), Ok(destination)) => {
-                    super::execution::same_regular_file(&source, &destination)
-                }
-                _ => false,
+            let Ok(source_metadata) = source_metadata else {
+                return false;
             };
+            let (Some(source_read), Ok(destination_read)) = (
+                super::execution::mark_beside(&source, &source_metadata).await,
+                crate::disk::Disk::process().fingerprint(&destination).await,
+            ) else {
+                return false;
+            };
+            return super::execution::same_regular_file(&source_read, &destination_read);
         }
         destination_version.as_deref() == Some(expected)
             && file_version(&source).await.ok() == self.source_version
@@ -773,7 +774,19 @@ pub async fn compare_existing(
     }
     // A pair that cannot be told apart is checked as one file would be: the
     // same path or one entry is refused, and two entries are compared below.
-    if super::execution::regular_file_sameness(&source_metadata, &destination_metadata)
+    // std's metadata names no file on Windows, so there the disk service
+    // reads each name once more; on unix the metadata's own mark is used.
+    let (Some(source_read), Some(destination_read)) = (
+        super::execution::mark_beside(source, &source_metadata).await,
+        super::execution::mark_beside(destination, &destination_metadata).await,
+    ) else {
+        return Err(AppError::Repository(format!(
+            "cannot inspect {} or {}",
+            source.display(),
+            destination.display()
+        )));
+    };
+    if super::execution::regular_file_sameness(&source_read, &destination_read)
         != crate::disk::Sameness::Different
     {
         if tokio::fs::canonicalize(source).await.ok()
@@ -784,13 +797,8 @@ pub async fn compare_existing(
                 "The source and destination are the same path.",
             ));
         }
-        match super::execution::shared_inode(
-            source,
-            destination,
-            &source_metadata,
-            &destination_metadata,
-        )
-        .await
+        match super::execution::shared_inode(source, destination, &source_read, &destination_read)
+            .await
         {
             super::execution::SharedInode::SecondLink => {
                 return Ok(VerifiedFile::same_filesystem_rename(

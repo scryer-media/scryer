@@ -606,4 +606,32 @@ fn a_windows_read_tells_files_apart_only_by_a_kept_index() {
     let unnamed = mark(on_serial(numbered(None, Some(11)), None));
     assert_eq!(unnamed.same_file(&read(7, 11, false)), Sameness::CannotTell);
     assert!(!unnamed.names_volume());
+    // Two volumes are two files before any number is looked at, kept or not.
+    assert_eq!(
+        read(7, 11, true).same_file(&read(8, 11, true)),
+        Sameness::Different
+    );
+    assert_eq!(
+        read(7, 11, true).same_file(&read(8, 11, false)),
+        Sameness::Different
+    );
+}
+
+/// A Windows volume serial of zero names no volume, from a stored lane or
+/// for the import worker's number alike, so it is the one unknown lane.
+#[test]
+fn a_windows_serial_of_zero_names_no_volume() {
+    for stored in ["windows-volume:0", "mark1:f:5:-:-:-:w0:-:-"] {
+        let read = Mark::from_stored(stored).expect(stored);
+        assert!(!read.names_volume(), "{stored}");
+    }
+    assert!(
+        Mark::from_stored("windows-volume:7")
+            .unwrap()
+            .names_volume()
+    );
+    if cfg!(windows) {
+        assert_eq!(Mark::on_volume(0).to_stored(), "unknown-volume");
+        assert_eq!(Mark::on_volume(7).to_stored(), "windows-volume:7");
+    }
 }

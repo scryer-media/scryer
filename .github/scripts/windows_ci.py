@@ -7,13 +7,23 @@ import subprocess
 import sys
 
 
-# These tests are gated by cfg(windows), either individually or by their module.
+# These tests are gated by cfg(windows), either individually or by their module,
+# or run everywhere and take a Windows-only path there (hard-link staging).
 # Keep the interactive Credential Manager round trip ignored as declared in Rust.
 WINDOWS_TESTS = {
     "scryer-application": [
         "windows_disk_space_query_smoke_test",
         "source_root_containment_accepts_windows_case_and_separator_variants",
         "current_is_windows_on_windows",
+        "a_real_second_link_is_a_second_link",
+        "an_alias_of_the_only_entry_is_never_a_second_link",
+        "a_linked_file_reached_by_an_unlisted_spelling_is_one_entry",
+        "another_case_of_a_linked_name_is_one_entry",
+        "no_copy_placement_refuses_a_self_move_without_removing_the_file",
+        "same_filesystem_placement_resumes_after_crash_before_verification_journal",
+        "no_copy_cleanup_preserves_source_if_survivor_was_replaced",
+        "same_filesystem_moves_keep_the_no_copy_fast_path",
+        "a_hard_link_placement_persists_no_content_hashes",
     ],
     "scryer-disk": [
         "non_utf8_windows_paths_round_trip",
@@ -22,9 +32,17 @@ WINDOWS_TESTS = {
         "a_windows_exclusive_rename_refuses_an_occupied_destination",
         "a_windows_exclusive_rename_moves_to_a_free_name",
         "a_windows_read_only_file_moves_without_a_staging_leftover",
-        "windows_names_a_volume_from_a_handle_and_tells_no_files_apart",
-        "windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial",
-        "windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies",
+        "windows_reads_a_volume_and_a_file_number_from_one_handle",
+        "windows_volumes_are_shared_only_with_one_prefix_and_one_known_serial",
+        "windows_two_names_on_one_drive_share_a_volume_and_a_move_renames",
+        "a_handle_reads_the_times_std_reads",
+        "one_handle_reads_what_std_reads_and_the_file_number_besides",
+        "a_link_reads_as_itself_unfollowed_and_as_its_target_followed",
+        "a_file_held_without_sharing_reads_from_its_folder_listing",
+        "a_name_that_cannot_be_followed_reads_as_itself",
+        "a_reparse_point_that_is_not_a_link_reads_as_a_file",
+        "a_reopened_handle_holds_the_same_file_only_by_a_known_number",
+        "a_no_follow_read_keeps_a_plain_file_and_refuses_a_folder",
         "windows_a_held_copy_refuses_a_reparse_point_at_its_name",
         "windows_a_no_follow_read_opens_a_file_and_refuses_a_file_symlink",
     ],

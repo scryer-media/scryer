@@ -318,7 +318,6 @@ fn placement_for(plan: &RootMoveExecutionPlan) -> TitlePlacementSnapshot {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(unix)]
 #[tokio::test]
 async fn no_copy_placement_refuses_a_self_move_without_removing_the_file() {
     let temp = tempfile::tempdir().unwrap();
@@ -377,7 +376,6 @@ async fn valid_hardlink_performs_zero_content_reads_even_after_unjournaled_resta
     std::fs::set_permissions(file.source(), std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn same_filesystem_placement_resumes_after_crash_before_verification_journal() {
     for symlink in [false, true] {
@@ -390,6 +388,11 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
         );
         let file = &plan.titles[0].files[0];
         write_file(&file.source(), b"hello world");
+        // A linked source is staged as a link of its own on unix only.
+        if symlink && cfg!(not(unix)) {
+            continue;
+        }
+        #[cfg(unix)]
         if symlink {
             let target = temp.path().join("original.mkv");
             std::fs::rename(file.source(), &target).unwrap();
@@ -449,7 +452,6 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn no_copy_cleanup_preserves_source_if_survivor_was_replaced() {
     struct FailingReconciler;
@@ -834,7 +836,6 @@ async fn changed_identical_copies_keep_the_source_and_catalog_intact() {
 
 /// A same-filesystem move copies no bytes; cleanup removes the old hard link
 /// after the journal and catalog have made the new path durable.
-#[cfg(unix)]
 #[tokio::test]
 async fn same_filesystem_moves_keep_the_no_copy_fast_path() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1034,7 +1035,6 @@ async fn a_transfer_that_already_flipped_its_library_is_admitted_on_resume() {
 /// FR-032/FR-041: a same-filesystem hard link copies no bytes, so there are no
 /// hashes to persist. Writing one anyway would put an unfounded value on the
 /// media file and take it off the backfill queue.
-#[cfg(unix)]
 #[tokio::test]
 async fn a_hard_link_placement_persists_no_content_hashes() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2556,7 +2556,11 @@ async fn a_run_that_has_not_reached_a_terminal_state_notifies_nothing() {
     assert!(refresh.requests().is_empty());
 }
 
-#[cfg(unix)]
+/// The disk service's read of a name, links not followed.
+async fn read_of(path: &Path) -> Mark {
+    Disk::process().fingerprint(path).await.expect("readable")
+}
+
 #[tokio::test]
 async fn a_real_second_link_is_a_second_link() {
     let temp = tempfile::tempdir().unwrap();
@@ -2564,14 +2568,12 @@ async fn a_real_second_link_is_a_second_link() {
     let destination = temp.path().join("linked.mkv");
     write_file(&source, b"hello world");
     std::fs::hard_link(&source, &destination).unwrap();
-    let source_metadata = std::fs::symlink_metadata(&source).unwrap();
-    let destination_metadata = std::fs::symlink_metadata(&destination).unwrap();
     assert_eq!(
         shared_inode(
             &source,
             &destination,
-            &source_metadata,
-            &destination_metadata
+            &read_of(&source).await,
+            &read_of(&destination).await
         )
         .await,
         SharedInode::SecondLink
@@ -2587,7 +2589,6 @@ async fn a_real_second_link_is_a_second_link() {
 /// case-folding mount does with `Movie.mkv` and `movie.mkv`) shares its inode
 /// with itself and has a link count of one. Removing either name would remove
 /// the only entry, so it is never a second link.
-#[cfg(unix)]
 #[tokio::test]
 async fn an_alias_of_the_only_entry_is_never_a_second_link() {
     let temp = tempfile::tempdir().unwrap();
@@ -2595,10 +2596,14 @@ async fn an_alias_of_the_only_entry_is_never_a_second_link() {
     let source = temp.path().join("movie.mkv");
     let alias = temp.path().join("sub").join("..").join("movie.mkv");
     write_file(&source, b"hello world");
-    let source_metadata = std::fs::symlink_metadata(&source).unwrap();
-    let alias_metadata = std::fs::symlink_metadata(&alias).unwrap();
     assert_eq!(
-        shared_inode(&source, &alias, &source_metadata, &alias_metadata).await,
+        shared_inode(
+            &source,
+            &alias,
+            &read_of(&source).await,
+            &read_of(&alias).await
+        )
+        .await,
         SharedInode::OneEntry
     );
     // The staging path refuses it (canonicalize already matches here).
@@ -2610,7 +2615,6 @@ async fn an_alias_of_the_only_entry_is_never_a_second_link() {
 
 /// A link count of two does not make two names in one directory two entries:
 /// the listing must hold both spellings exactly.
-#[cfg(unix)]
 #[tokio::test]
 async fn a_linked_file_reached_by_an_unlisted_spelling_is_one_entry() {
     let temp = tempfile::tempdir().unwrap();
@@ -2620,30 +2624,60 @@ async fn a_linked_file_reached_by_an_unlisted_spelling_is_one_entry() {
     // A seeding copy elsewhere raises the link count to two.
     std::fs::hard_link(&source, temp.path().join("sub").join("seed.mkv")).unwrap();
     let alias = temp.path().join("sub").join("..").join("movie.mkv");
-    let source_metadata = std::fs::symlink_metadata(&source).unwrap();
-    let alias_metadata = std::fs::symlink_metadata(&alias).unwrap();
     assert_eq!(
-        shared_inode(&source, &alias, &source_metadata, &alias_metadata).await,
+        shared_inode(
+            &source,
+            &alias,
+            &read_of(&source).await,
+            &read_of(&alias).await
+        )
+        .await,
         SharedInode::OneEntry
     );
+}
+
+/// On a volume that folds case, another spelling of a linked file's name
+/// reads as the same file with another name, but the listing holds only one
+/// spelling, so the pair is one entry and staging refuses it. Where the
+/// volume tells case apart the other spelling is absent and there is
+/// nothing to show.
+#[tokio::test]
+async fn another_case_of_a_linked_name_is_one_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("seed")).unwrap();
+    let source = temp.path().join("Movie.mkv");
+    write_file(&source, b"hello world");
+    std::fs::hard_link(&source, temp.path().join("seed").join("seed.mkv")).unwrap();
+    let alias = temp.path().join("movie.mkv");
+    let Ok(alias_read) = Disk::process().fingerprint(&alias).await else {
+        return;
+    };
+    assert_eq!(
+        shared_inode(&source, &alias, &read_of(&source).await, &alias_read).await,
+        SharedInode::OneEntry
+    );
+    stage_same_filesystem_file(&source, &alias)
+        .await
+        .expect_err("another spelling of the only entry is refused");
+    assert_eq!(std::fs::read(&source).unwrap(), b"hello world");
 }
 
 #[test]
 fn a_shared_inode_needs_a_known_link_count_of_two() {
     assert_eq!(
-        shared_inode_decision(true, 5, 5, Some(2)),
+        shared_inode_decision(true, 5, 5, true),
         SharedInode::SecondLink
     );
     assert_eq!(
-        shared_inode_decision(true, 5, 5, Some(1)),
+        shared_inode_decision(true, 5, 5, false),
         SharedInode::OneEntry
     );
     assert_eq!(
-        shared_inode_decision(true, 5, 5, None),
+        shared_inode_decision(true, 5, 5, false),
         SharedInode::OneEntry
     );
     assert_eq!(
-        shared_inode_decision(false, 5, 5, Some(2)),
+        shared_inode_decision(false, 5, 5, true),
         SharedInode::Distinct
     );
 }
@@ -2655,15 +2689,15 @@ fn a_shared_inode_needs_a_known_link_count_of_two() {
 #[test]
 fn a_shared_inode_with_different_lengths_is_compared_by_content() {
     assert_eq!(
-        shared_inode_decision(true, 5, 6, Some(2)),
+        shared_inode_decision(true, 5, 6, true),
         SharedInode::Distinct
     );
     assert_eq!(
-        shared_inode_decision(true, 6, 5, Some(1)),
+        shared_inode_decision(true, 6, 5, false),
         SharedInode::Distinct
     );
     assert_eq!(
-        shared_inode_decision(true, 5, 6, None),
+        shared_inode_decision(true, 5, 6, false),
         SharedInode::Distinct
     );
 }

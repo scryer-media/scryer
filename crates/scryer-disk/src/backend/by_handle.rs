@@ -6,38 +6,41 @@
 //! and opens a folder, and a read that does not follow links opens the link
 //! itself. A reparse point's tag is one more call on the same handle. Whether
 //! the volume keeps its file numbers is one call per volume serial, the first
-//! time it is seen, and remembered for the life of the process.
+//! time it is seen, and remembered for the life of the process whether the
+//! volume answered or not. Where std falls back, this does too, with one call
+//! each: a name the process may not open reads from its folder's listing, and
+//! a name that cannot be followed is read as itself unless it is a link.
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
-use windows_sys::Win32::Foundation::FILETIME;
+use windows_sys::Win32::Foundation::{FILETIME, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FileAttributeTagInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-    GetVolumeInformationByHandleW,
+    BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FileAttributeTagInfo, FindClose, FindExInfoBasic,
+    FindExSearchNameMatch, FindFirstFileExW, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, GetVolumeInformationByHandleW, WIN32_FIND_DATAW,
 };
 
+use super::win_facts::{self, VolumeAnswers};
 use super::{Extra, RawStat};
 use crate::reading::{EntryKind, FileIdentity};
 
-/// `FILE_SUPPORTS_OPEN_BY_FILE_ID`: the filesystem keeps a file's number
-/// for the file's life, so it can open a file by it.
-const SUPPORTS_OPEN_BY_FILE_ID: u32 = 0x0100_0000;
 /// Win32 errors on which std's own stat reads the parent's listing instead
 /// of a handle: a file another process holds without sharing, or one the
 /// process may not open even for its attributes.
 const ERROR_ACCESS_DENIED: i32 = 5;
 const ERROR_SHARING_VIOLATION: i32 = 32;
-/// FILETIME counts 100 ns intervals from 1601; this many lie before 1970.
-const INTERVALS_TO_UNIX_EPOCH: i64 = 116_444_736_000_000_000;
+/// The error a followed open gives for a reparse point whose filter is
+/// absent, such as an app execution alias; std reads such a name as itself.
+const ERROR_CANT_ACCESS_FILE: i32 = 1920;
+
+/// What each volume said about its file numbers, by serial.
+static VOLUMES: VolumeAnswers = VolumeAnswers::new();
 
 /// What one handle says about the file it holds.
 #[derive(Clone, Copy, Debug)]
@@ -49,8 +52,8 @@ pub(crate) struct ByHandle {
     index: u64,
     links: u32,
     len: u64,
-    modified: SystemTime,
-    created: SystemTime,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
     /// Whether the volume keeps file numbers that tell its files apart.
     numbered: bool,
 }
@@ -67,7 +70,7 @@ impl ByHandle {
         // SAFETY: the call above succeeded and filled the structure.
         let information = unsafe { information.assume_init() };
         let attributes = information.dwFileAttributes;
-        let tag = if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let tag = if attributes & win_facts::REPARSE_POINT != 0 {
             let mut tag_info = std::mem::MaybeUninit::<FILE_ATTRIBUTE_TAG_INFO>::uninit();
             // SAFETY: as above, with the buffer's own size.
             let read = unsafe {
@@ -98,29 +101,23 @@ impl ByHandle {
             len: (u64::from(information.nFileSizeHigh) << 32) | u64::from(information.nFileSizeLow),
             modified: system_time(information.ftLastWriteTime),
             created: system_time(information.ftCreationTime),
-            numbered: serial != 0 && keeps_file_numbers(file, serial),
+            numbered: serial != 0 && VOLUMES.keeps_numbers(serial, || volume_flags(file)),
         })
     }
 
     /// Whether the handle holds a reparse point.
     pub(crate) fn is_reparse_point(&self) -> bool {
-        self.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        self.attributes & win_facts::REPARSE_POINT != 0
     }
 
     /// Whether the handle holds a link or a junction: a reparse point whose
     /// tag names another path. std's own test for a link.
     pub(crate) fn is_name_surrogate(&self) -> bool {
-        self.is_reparse_point() && self.tag & 0x2000_0000 != 0
+        win_facts::is_name_surrogate(self.attributes, self.tag)
     }
 
     pub(crate) fn kind(&self) -> EntryKind {
-        if self.is_name_surrogate() {
-            EntryKind::Symlink
-        } else if self.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-            EntryKind::Directory
-        } else {
-            EntryKind::File
-        }
+        win_facts::kind(self.attributes, self.tag)
     }
 
     /// The volume serial and file index, where both tell files apart: a
@@ -133,19 +130,31 @@ impl ByHandle {
         FileIdentity::from_raw(u64::from(self.serial), self.index)
     }
 
+    /// Whether `later`, read from a handle opened on the same name after
+    /// this one, holds the same file: one non-zero volume serial and one
+    /// file index that is neither zero nor all ones. The index is taken as
+    /// given, kept by its volume or not, since the two opens are moments
+    /// apart; on ReFS two files can share a truncated index.
+    pub(crate) fn same_file_as(&self, later: &Self) -> bool {
+        self.serial != 0
+            && self.index != 0
+            && self.index != u64::MAX
+            && (self.serial, self.index) == (later.serial, later.index)
+    }
+
     pub(crate) fn raw_stat(&self) -> RawStat {
         let identity = self.identity();
         RawStat {
             kind: self.kind(),
             len: self.len,
-            modified: Some(self.modified),
+            modified: self.modified,
             identity,
             links: Some(u64::from(self.links)),
             extra: Extra {
                 serial: (self.serial != 0).then_some(u64::from(self.serial)),
                 inode: Some(self.index),
                 unnumbered: identity.is_none(),
-                created: Some(self.created),
+                created: self.created,
                 ..Extra::default()
             },
         }
@@ -153,53 +162,96 @@ impl ByHandle {
 }
 
 /// A stat of `path` from one handle, the link itself when `follow` is
-/// false. A file the process may not open even for its attributes is read
-/// as std reads it, without its volume or number.
+/// false. A name the process may not open even for its attributes reads
+/// from its folder's listing, without its volume or number; a followed name
+/// whose reparse point cannot be followed reads as itself, unless it is a
+/// link or a junction.
 pub(crate) fn stat(path: &Path, follow: bool) -> io::Result<RawStat> {
+    let error = match opened(path, follow) {
+        Ok(file) => return ByHandle::of(&file).map(|read| read.raw_stat()),
+        Err(error) => error,
+    };
+    match error.raw_os_error() {
+        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION) => {
+            match listed(path) {
+                // A followed name that is a link cannot be read past here.
+                Some(read) if !(follow && read.kind == EntryKind::Symlink) => Ok(read),
+                _ => Err(error),
+            }
+        }
+        Some(ERROR_CANT_ACCESS_FILE) if follow => match opened(path, false) {
+            Ok(file) => match ByHandle::of(&file)? {
+                read if !read.is_name_surrogate() => Ok(read.raw_stat()),
+                _ => Err(error),
+            },
+            Err(_) => Err(error),
+        },
+        _ => Err(error),
+    }
+}
+
+/// The handle a stat reads: no access asked, a folder opened, and the link
+/// itself when `follow` is false.
+fn opened(path: &Path, follow: bool) -> io::Result<File> {
     let flags = if follow {
         FILE_FLAG_BACKUP_SEMANTICS
     } else {
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
     };
-    let opened = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .access_mode(0)
         .custom_flags(flags)
-        .open(path);
-    match opened {
-        Ok(file) => ByHandle::of(&file).map(|read| read.raw_stat()),
-        Err(error)
-            if matches!(
-                error.raw_os_error(),
-                Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)
-            ) =>
-        {
-            let metadata = if follow {
-                std::fs::metadata(path)?
-            } else {
-                std::fs::symlink_metadata(path)?
-            };
-            Ok(RawStat::of(&metadata))
-        }
-        Err(error) => Err(error),
-    }
+        .open(path)
 }
 
-/// Whether the volume `file` is on keeps the numbers of its files for their
-/// life. FAT and exFAT derive a number from where the entry sits, so a
-/// rename changes it, and do not say they keep them. ReFS keeps 128-bit
-/// numbers, which the 64-bit index truncates, so two files there can share
-/// one; it is not trusted either. One call for each serial, remembered when
-/// it answers.
-fn keeps_file_numbers(file: &File, serial: u32) -> bool {
-    static KEPT: OnceLock<Mutex<HashMap<u32, bool>>> = OnceLock::new();
-    let kept = KEPT.get_or_init(Mutex::default);
-    if let Some(known) = kept.lock().ok().and_then(|kept| kept.get(&serial).copied()) {
-        return known;
+/// What the listing of `path`'s folder says of it, in one call, as std
+/// reads a name it may not open: no volume, no number, no link count.
+/// `None` when the listing does not say.
+fn listed(path: &Path) -> Option<RawStat> {
+    let wide = super::win32_path(path).ok()?;
+    let mut found = std::mem::MaybeUninit::<WIN32_FIND_DATAW>::uninit();
+    // SAFETY: the name is NUL-terminated and outlives the call, and the
+    // structure is the one FindExInfoBasic writes.
+    let search = unsafe {
+        FindFirstFileExW(
+            wide.as_ptr(),
+            FindExInfoBasic,
+            found.as_mut_ptr().cast(),
+            FindExSearchNameMatch,
+            std::ptr::null(),
+            0,
+        )
+    };
+    if search == INVALID_HANDLE_VALUE {
+        return None;
     }
+    // SAFETY: the search handle is the valid one just returned.
+    unsafe { FindClose(search) };
+    // SAFETY: the call above succeeded and filled the structure.
+    let found = unsafe { found.assume_init() };
+    let attributes = found.dwFileAttributes;
+    // The reparse tag, where the attributes name a reparse point.
+    let tag = found.dwReserved0;
+    Some(RawStat {
+        kind: win_facts::kind(attributes, tag),
+        len: (u64::from(found.nFileSizeHigh) << 32) | u64::from(found.nFileSizeLow),
+        modified: system_time(found.ftLastWriteTime),
+        identity: None,
+        links: None,
+        extra: Extra {
+            unnumbered: true,
+            created: system_time(found.ftCreationTime),
+            ..Extra::default()
+        },
+    })
+}
+
+/// The flags of the volume `file` is on, or `None` when it does not say.
+/// No name is asked for, so no buffer can be too short.
+fn volume_flags(file: &File) -> Option<u32> {
     let mut flags = 0u32;
-    let mut name = [0u16; 32];
-    // SAFETY: the handle stays open for the call; the name buffer's length
-    // is given in characters, and every other out pointer is null or valid.
+    // SAFETY: the handle stays open for the call; every out pointer but
+    // the flags is null, with a zero length.
     let answered = unsafe {
         GetVolumeInformationByHandleW(
             file.as_raw_handle(),
@@ -208,66 +260,36 @@ fn keeps_file_numbers(file: &File, serial: u32) -> bool {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             &mut flags,
-            name.as_mut_ptr(),
-            name.len() as u32,
+            std::ptr::null_mut(),
+            0,
         )
     };
-    if answered == 0 {
-        return false;
-    }
-    let end = name
-        .iter()
-        .position(|&unit| unit == 0)
-        .unwrap_or(name.len());
-    let refs = String::from_utf16_lossy(&name[..end]).eq_ignore_ascii_case("ReFS");
-    let keeps = flags & SUPPORTS_OPEN_BY_FILE_ID != 0 && !refs;
-    if let Ok(mut kept) = kept.lock() {
-        kept.insert(serial, keeps);
-    }
-    keeps
+    (answered != 0).then_some(flags)
 }
 
-/// The instant a FILETIME names, as std converts one.
-fn system_time(at: FILETIME) -> SystemTime {
-    let intervals = ((u64::from(at.dwHighDateTime) << 32) | u64::from(at.dwLowDateTime)) as i64;
-    let since = intervals.wrapping_sub(INTERVALS_TO_UNIX_EPOCH);
-    let span = |count: i64| {
-        let count = count.unsigned_abs();
-        Duration::new(count / 10_000_000, ((count % 10_000_000) * 100) as u32)
-    };
-    if since >= 0 {
-        UNIX_EPOCH + span(since)
-    } else {
-        UNIX_EPOCH - span(since)
-    }
+/// The instant a FILETIME names, as std converts one; `None` past what the
+/// conversion can hold.
+fn system_time(at: FILETIME) -> Option<SystemTime> {
+    win_facts::filetime((u64::from(at.dwHighDateTime) << 32) | u64::from(at.dwLowDateTime))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn filetime(intervals: u64) -> FILETIME {
-        FILETIME {
-            dwLowDateTime: intervals as u32,
-            dwHighDateTime: (intervals >> 32) as u32,
-        }
-    }
-
     #[test]
-    fn a_filetime_converts_as_std_converts_it() {
+    fn a_handle_reads_the_times_std_reads() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let read = ByHandle::of(file.as_file()).unwrap();
         let metadata = file.as_file().metadata().unwrap();
-        assert_eq!(Some(read.modified), metadata.modified().ok());
-        assert_eq!(Some(read.created), metadata.created().ok());
-        assert_eq!(
-            system_time(filetime(INTERVALS_TO_UNIX_EPOCH as u64)),
-            UNIX_EPOCH
-        );
-        assert_eq!(
-            system_time(filetime(INTERVALS_TO_UNIX_EPOCH as u64 - 15)),
-            UNIX_EPOCH - Duration::from_nanos(1_500)
-        );
+        assert_eq!(read.modified, metadata.modified().ok());
+        assert_eq!(read.created, metadata.created().ok());
+        // A FILETIME with the high bit set reads as no time, never a panic.
+        let far = FILETIME {
+            dwLowDateTime: u32::MAX,
+            dwHighDateTime: u32::MAX,
+        };
+        let _ = system_time(far);
     }
 
     #[test]
@@ -303,5 +325,129 @@ mod tests {
             stat(&folder.path().join("missing"), false),
             Err(error) if error.kind() == io::ErrorKind::NotFound
         ));
+    }
+
+    /// A stat that follows a link reads its target, and one that does not
+    /// reads the link: two files. A link or a junction to a folder reads so
+    /// too. Creating a symbolic link needs the right to; without it the test
+    /// shows nothing. A junction is not made here.
+    #[test]
+    fn a_link_reads_as_itself_unfollowed_and_as_its_target_followed() {
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("target.bin");
+        std::fs::write(&target, b"target").unwrap();
+        let (link, folder_link) = (folder.path().join("link.bin"), folder.path().join("linked"));
+        if std::os::windows::fs::symlink_file(&target, &link).is_err() {
+            return;
+        }
+        std::os::windows::fs::symlink_dir(folder.path(), &folder_link).unwrap();
+        let unfollowed = stat(&link, false).unwrap();
+        let followed = stat(&link, true).unwrap();
+        assert_eq!(unfollowed.kind, EntryKind::Symlink);
+        assert_eq!(followed.kind, EntryKind::File);
+        assert_eq!(followed.identity, stat(&target, false).unwrap().identity);
+        assert_ne!(unfollowed.identity, followed.identity);
+        assert_eq!(stat(&folder_link, false).unwrap().kind, EntryKind::Symlink);
+        assert_eq!(stat(&folder_link, true).unwrap().kind, EntryKind::Directory);
+    }
+
+    /// The system's paging file is held without sharing and cannot be opened
+    /// even for its attributes: it reads from the listing of its folder, as
+    /// std reads it, a file with no volume or number. A machine without one
+    /// at the usual name shows nothing.
+    #[test]
+    fn a_file_held_without_sharing_reads_from_its_folder_listing() {
+        let held = Path::new(r"C:\pagefile.sys");
+        let Ok(std_read) = std::fs::symlink_metadata(held) else {
+            return;
+        };
+        let read = stat(held, false).unwrap();
+        assert_eq!(read.kind, EntryKind::File);
+        assert_eq!(read.len, std_read.len());
+        assert_eq!(read.identity, None);
+        assert_eq!(read.links, None);
+        assert_eq!(stat(held, true).unwrap().len, std_read.len());
+    }
+
+    /// An app execution alias is a reparse point no followed open can read:
+    /// std reads it as itself, and so does this. A machine without one
+    /// shows nothing.
+    #[test]
+    fn a_name_that_cannot_be_followed_reads_as_itself() {
+        let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+            return;
+        };
+        let aliases = Path::new(&local).join("Microsoft").join("WindowsApps");
+        let Some(alias) = std::fs::read_dir(&aliases).ok().and_then(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| path.extension().is_some_and(|extension| extension == "exe"))
+        }) else {
+            return;
+        };
+        let std_read = std::fs::metadata(&alias).unwrap();
+        let read = stat(&alias, true).unwrap();
+        assert_eq!(read.len, std_read.len());
+        assert_eq!(read.kind == EntryKind::File, std_read.is_file());
+    }
+
+    /// A cloud placeholder, a deduplicated file and a WOF-compressed file are
+    /// reparse points that read as files.
+    #[test]
+    fn a_reparse_point_that_is_not_a_link_reads_as_a_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let plain = ByHandle::of(file.as_file()).unwrap();
+        assert!(!plain.is_reparse_point() && plain.kind() == EntryKind::File);
+        let tagged = |tag: u32| ByHandle {
+            attributes: plain.attributes | win_facts::REPARSE_POINT,
+            tag,
+            ..plain
+        };
+        assert!(tagged(0xA000_000C).is_name_surrogate());
+        for tag in [0x9000_001A, 0x8000_0013, 0x8000_0017] {
+            assert!(tagged(tag).is_reparse_point(), "{tag:#x}");
+            assert!(!tagged(tag).is_name_surrogate(), "{tag:#x}");
+            assert_eq!(tagged(tag).kind(), EntryKind::File, "{tag:#x}");
+        }
+    }
+
+    /// The second handle of a reopened name holds the first one's file only
+    /// with one known serial and one usable index.
+    #[test]
+    fn a_reopened_handle_holds_the_same_file_only_by_a_known_number() {
+        let folder = tempfile::tempdir().unwrap();
+        let (first, other) = (folder.path().join("a.bin"), folder.path().join("b.bin"));
+        std::fs::write(&first, b"a").unwrap();
+        std::fs::write(&other, b"b").unwrap();
+        let read = |path: &Path| ByHandle::of(&std::fs::File::open(path).unwrap()).unwrap();
+        let held = read(&first);
+        assert!(held.same_file_as(&read(&first)));
+        assert!(!held.same_file_as(&read(&other)));
+        for unknown in [
+            ByHandle { serial: 0, ..held },
+            ByHandle { index: 0, ..held },
+            ByHandle {
+                index: u64::MAX,
+                ..held
+            },
+        ] {
+            assert!(!unknown.same_file_as(&unknown), "{unknown:?}");
+        }
+    }
+
+    /// A read open that does not follow links holds a plain file as it is,
+    /// with one open, and refuses a folder.
+    #[test]
+    fn a_no_follow_read_keeps_a_plain_file_and_refuses_a_folder() {
+        use crate::backend::{DiskBackend, Refused, SystemBackend};
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("plain.bin");
+        std::fs::write(&path, b"plain").unwrap();
+        let open = crate::Open::read().without_following_links();
+        let file = SystemBackend.open(&path, open).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 5);
+        let refused = SystemBackend.open(folder.path(), open).unwrap_err();
+        assert_eq!(Refused::of(&refused), Some(Refused::NotAFile));
     }
 }

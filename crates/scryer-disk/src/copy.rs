@@ -1564,6 +1564,14 @@ impl Disk {
         }
     }
 
+    /// The drive or share a Windows path names, upper-cased and with any
+    /// verbatim prefix taken off, as a move compares them: `C:` for `C:\x`
+    /// and `\\?\C:\x`. `None` for a path with none. No probe.
+    #[cfg(windows)]
+    pub fn drive_or_share(path: &Path) -> Option<String> {
+        volume_prefix(path)
+    }
+
     fn same_filesystem(&self, source_path: &Path, destination: &Path) -> bool {
         // Only unix and Windows name a volume.
         if !cfg!(any(unix, windows)) {

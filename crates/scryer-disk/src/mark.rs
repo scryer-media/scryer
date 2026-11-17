@@ -122,6 +122,31 @@ enum Volume {
     Unknown,
 }
 
+/// `text` as [`Mark::to_stored`] writes it now, where an earlier mark stored
+/// a Windows volume serial of zero as a volume.
+fn zero_serial_as_unknown(text: &str) -> String {
+    if text == format!("{WINDOWS_LANE}0") {
+        return UNKNOWN_LANE.to_owned();
+    }
+    let mut fields: Vec<&str> = text.split(':').collect();
+    if fields.first() == Some(&STORED_TAG) && fields.get(6) == Some(&"w0") {
+        fields[6] = "-";
+    }
+    fields.join(":")
+}
+
+impl Volume {
+    /// A Windows volume by its serial. A serial of zero names none: it is
+    /// what a volume that has none reads as, and a stat that reads it keeps
+    /// no volume either.
+    fn windows(serial: u64) -> Self {
+        match serial {
+            0 => Self::Unknown,
+            serial => Self::Windows(serial),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Facts {
     kind: EntryKind,
@@ -174,15 +199,16 @@ impl Mark {
     }
 
     /// The mark of the volume the platform numbers `number`, a unix device
-    /// or a Windows volume serial. No probe. Only for the import worker,
-    /// whose payload carries that number until it carries a mark instead.
+    /// or a Windows volume serial. A serial of zero names no volume, as a
+    /// stat that reads one does. No probe. Only for the import worker, whose
+    /// payload carries that number until it carries a mark instead.
     #[doc(hidden)]
     pub fn on_volume(number: u64) -> Self {
         Self {
             volume: if cfg!(unix) {
                 Volume::Unix(number)
             } else if cfg!(windows) {
-                Volume::Windows(number)
+                Volume::windows(number)
             } else {
                 Volume::Unknown
             },
@@ -202,8 +228,11 @@ impl Mark {
         self.volume != Volume::Unknown
     }
 
-    /// Whether both marks are one file. A volume the read did not name, a
-    /// missing file number, or a zero number on both sides is
+    /// Whether both marks are one file. A volume either read did not name is
+    /// [`Sameness::CannotTell`]. Two named volumes that differ are
+    /// [`Sameness::Different`] before any file number is looked at, so two
+    /// marks without numbers on two volumes are two files. On one volume, a
+    /// missing file number or a zero number on both sides is
     /// [`Sameness::CannotTell`], never [`Sameness::Same`]. No probe.
     pub fn same_file(&self, other: &Self) -> Sameness {
         match (self.volume, other.volume) {
@@ -271,7 +300,7 @@ impl Mark {
     }
 
     /// The length read; `None` for a mark that names a volume only.
-    pub(crate) fn len(&self) -> Option<u64> {
+    pub fn len(&self) -> Option<u64> {
         self.facts.map(|facts| facts.len)
     }
 
@@ -339,7 +368,7 @@ impl Mark {
     }
 
     /// Whether the read said the file has a name besides this one.
-    pub(crate) fn has_other_names(&self) -> bool {
+    pub fn has_other_names(&self) -> bool {
         self.facts
             .is_some_and(|facts| facts.links.is_some_and(|links| links > 1))
     }
@@ -439,9 +468,14 @@ impl Mark {
     }
 
     /// The mark [`Self::to_stored`] wrote. `None` for text it did not write,
-    /// another spelling of a number it writes included.
+    /// another spelling of a number it writes included. A Windows volume
+    /// serial of zero, which earlier marks stored as a volume, reads as the
+    /// unknown volume it is.
     pub fn from_stored(text: &str) -> Option<Self> {
-        Self::parsed(text).filter(|mark| mark.to_stored() == text)
+        Self::parsed(text).filter(|mark| {
+            let stored = mark.to_stored();
+            stored == text || stored == zero_serial_as_unknown(text)
+        })
     }
 
     fn parsed(text: &str) -> Option<Self> {
@@ -457,7 +491,7 @@ impl Mark {
             return Some(volume_only(Volume::Unix(device.parse().ok()?)));
         }
         if let Some(serial) = text.strip_prefix(WINDOWS_LANE) {
-            return Some(volume_only(Volume::Windows(serial.parse().ok()?)));
+            return Some(volume_only(Volume::windows(serial.parse().ok()?)));
         }
         let fields: Vec<&str> = text.split(':').collect();
         let [
@@ -501,7 +535,7 @@ impl Mark {
         let volume = match volume.split_at_checked(1)? {
             ("-", "") => Volume::Unknown,
             ("u", device) => Volume::Unix(device.parse().ok()?),
-            ("w", serial) => Volume::Windows(serial.parse().ok()?),
+            ("w", serial) => Volume::windows(serial.parse().ok()?),
             _ => return None,
         };
         Some(Self {

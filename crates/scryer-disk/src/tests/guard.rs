@@ -32,7 +32,7 @@ const EXEMPT_DIRS: [&str; 5] = ["tests", "lib_tests", "benches", "examples", "ta
 const MARKERS: usize = 79;
 /// Files holding direct filesystem lines that carry no marker yet, with how
 /// many. An entry may shrink or go; none is added and none grows.
-const UNMARKED: [(&str, usize); 11] = [
+const UNMARKED: [(&str, usize); 10] = [
     ("scryer-application/src/file_source_signature.rs", 2),
     ("scryer-application/src/folder_ownership/scan_cache.rs", 1),
     ("scryer-application/src/import/archive_extractor.rs", 1),
@@ -42,7 +42,6 @@ const UNMARKED: [(&str, usize); 11] = [
         "scryer-application/src/library/leftover_title_folders.rs",
         2,
     ),
-    ("scryer-application/src/location/execution.rs", 1),
     ("scryer-application/src/subtitles/external_probe.rs", 1),
     (
         "scryer-infrastructure-datastore/src/migrations/assets.rs",

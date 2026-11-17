@@ -22,6 +22,8 @@ use super::{Access, Open, OpenMode, OwnerOnly, Replace};
 
 #[cfg(windows)]
 pub(crate) mod by_handle;
+#[cfg(any(windows, test))]
+pub(crate) mod win_facts;
 
 /// What one stat call said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -625,23 +627,15 @@ impl DiskBackend for SystemBackend {
         // On unix O_NOFOLLOW has already refused a link and a write open has
         // refused a folder, so only a read open, which opens a folder, needs
         // the handle's kind. Windows opens a reparse point itself, so every
-        // open that does not follow links reads it: a read open to refuse a
-        // link or a junction, a write open to refuse any reparse point.
-        let needs_kind = !open.follow_links && (cfg!(windows) || open.mode == OpenMode::Read);
+        // open that does not follow links reads it.
+        #[cfg(windows)]
+        if !open.follow_links {
+            return windows_held(file, path, open, options);
+        }
+        let needs_kind = !open.follow_links && open.mode == OpenMode::Read;
         if needs_kind {
             // The handle's own metadata: no further call on the path.
             let metadata = file.metadata()?;
-            // FILE_ATTRIBUTE_REPARSE_POINT: a write open refuses any reparse
-            // point at the name it holds, like a link. A read open refuses
-            // only links and junctions, below: a deduplicated, compressed or
-            // cloud-placeholder file is a reparse point and reads as its
-            // content.
-            #[cfg(windows)]
-            if open.mode != OpenMode::Read
-                && std::os::windows::fs::MetadataExt::file_attributes(&metadata) & 0x400 != 0
-            {
-                return Err(Refused::Link.into());
-            }
             let file_type = metadata.file_type();
             if file_type.is_symlink() {
                 return Err(Refused::Link.into());
@@ -942,32 +936,14 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
     // Win32 error codes a filesystem returns for an operation it lacks, and
     // a filter or a reparse point for one path alone.
     const ERROR_INVALID_FUNCTION: i32 = 1;
     const ERROR_NOT_SUPPORTED: i32 = 50;
 
-    let wide = |path: &Path| {
-        let value: Vec<u16> = path.as_os_str().encode_wide().collect();
-        if value.contains(&0) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "path contains an interior NUL",
-            ));
-        }
-        let mut value = long_path_form(value, || {
-            Ok(std::path::absolute(path)?
-                .as_os_str()
-                .encode_wide()
-                .collect())
-        })?;
-        value.push(0);
-        Ok(value)
-    };
-    let source = wide(source)?;
-    let dest = wide(dest)?;
+    let source = win32_path(source)?;
+    let dest = win32_path(dest)?;
     // SAFETY: both UTF-16 buffers are NUL-terminated and outlive the call.
     // No flags, as std's own no-replace rename: without
     // MOVEFILE_REPLACE_EXISTING an existing destination is refused, and
@@ -982,6 +958,68 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
         Some(ERROR_INVALID_FUNCTION) | Some(ERROR_NOT_SUPPORTED) => Err(AmbiguousRefusal.into()),
         _ => Err(error),
     }
+}
+
+/// What a Windows open that does not follow links keeps of the handle it
+/// opened on the reparse point itself. A link or a junction is refused, and
+/// anything but a regular file. A write open refuses any other reparse point
+/// too. A read open of one, a deduplicated, compressed or cloud-placeholder
+/// file, opens the name again without the flag: with it, CreateFileW skips
+/// the filter that reads such a file, and the handle would read the raw
+/// stream. The second handle must hold the file the first one held, one
+/// volume serial and one file index, or the name changed between the opens
+/// and is refused as a link. One open and one read of the handle for every
+/// such open, and a second of each for that reparse point alone.
+#[cfg(windows)]
+fn windows_held(
+    file: std::fs::File,
+    path: &Path,
+    open: Open,
+    mut options: std::fs::OpenOptions,
+) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let held = by_handle::ByHandle::of(&file)?;
+    if held.is_name_surrogate() {
+        return Err(Refused::Link.into());
+    }
+    if held.kind() != EntryKind::File {
+        return Err(Refused::NotAFile.into());
+    }
+    if !held.is_reparse_point() {
+        return Ok(file);
+    }
+    if open.mode != OpenMode::Read {
+        return Err(Refused::Link.into());
+    }
+    drop(file);
+    let reopened = options.custom_flags(0).open(path)?;
+    let read = by_handle::ByHandle::of(&reopened)?;
+    if read.kind() != EntryKind::File || !held.same_file_as(&read) {
+        return Err(Refused::Link.into());
+    }
+    Ok(reopened)
+}
+
+/// `path` as a NUL-terminated UTF-16 buffer a Win32 call takes, in its long
+/// form where it needs one.
+#[cfg(windows)]
+pub(crate) fn win32_path(path: &Path) -> io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    let value: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if value.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains an interior NUL",
+        ));
+    }
+    let mut value = long_path_form(value, || {
+        Ok(std::path::absolute(path)?
+            .as_os_str()
+            .encode_wide()
+            .collect())
+    })?;
+    value.push(0);
+    Ok(value)
 }
 
 /// `path` in the form Win32 calls accept past `MAX_PATH`, prepared as std
