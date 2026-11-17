@@ -15,8 +15,9 @@ pub use scryer_disk::{
     Access, AsideRemoval, CannotLink, Disk, DiskError, Done, Doubt, Drift, EntryAlias, EntryKind,
     Fallback, FreeNameMove, IfPresent, Leftover, Link, LinkAfter, LinkOutcome, LinkProof, Listed,
     Mark, Method, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed, Placement,
-    ReadBefore, Refused, Removal, Remove, Replace, Sameness, ScratchDir, Side, Staged, Staging,
-    StoredVersion, SyncOutcome, Unproven, Verify, Visited, VolumeClass, aside_path_for, reason,
+    PutBackAside, ReadBefore, Refused, Removal, Remove, Replace, Sameness, ScratchDir, Side,
+    Staged, Staging, StoredVersion, SyncOutcome, Unproven, Verify, Visited, VolumeClass,
+    aside_path_for, reason,
 };
 pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
 #[doc(hidden)]

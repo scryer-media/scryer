@@ -567,9 +567,13 @@ fn a_link_refused_for_a_named_reason_is_not_copied() {
 
 #[test]
 fn failures_are_classified_once_into_typed_refusals() {
+    // Windows answers an exclusive rename refused for any reason but a taken
+    // name or another volume by reserving a name and renaming onto it, so
+    // that rename is refused the same way; elsewhere it is never reached.
     let moved = |kind: io::ErrorKind| {
         let (disk, backend, _) = scripted();
         backend.fails("rename_no_replace", SOURCE, kind);
+        backend.fails("rename", SOURCE, kind);
         refusal(&disk, policy(Method::Move, Fallback::Copy))
     };
     assert_eq!(moved(io::ErrorKind::NotFound), Refused::SourceMissing);

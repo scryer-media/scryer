@@ -68,7 +68,7 @@ impl FileResolution {
             let Ok(source_metadata) = source_metadata else {
                 return false;
             };
-            let (Some(source_read), Ok(destination_read)) = (
+            let (Ok(source_read), Ok(destination_read)) = (
                 super::execution::mark_beside(&source, &source_metadata).await,
                 crate::disk::Disk::process().fingerprint(&destination).await,
             ) else {
@@ -776,22 +776,17 @@ pub async fn compare_existing(
     // same path or one entry is refused, and two entries are compared below.
     // std's metadata names no file on Windows, so there the disk service
     // reads each name once more; on unix the metadata's own mark is used.
-    let (Some(source_read), Some(destination_read)) = (
-        super::execution::mark_beside(source, &source_metadata).await,
-        super::execution::mark_beside(destination, &destination_metadata).await,
-    ) else {
-        return Err(AppError::Repository(format!(
-            "cannot inspect {} or {}",
-            source.display(),
-            destination.display()
-        )));
-    };
+    let source_read = super::execution::mark_beside(source, &source_metadata)
+        .await
+        .map_err(|reading| unread(source, reading))?;
+    let destination_read = super::execution::mark_beside(destination, &destination_metadata)
+        .await
+        .map_err(|reading| unread(destination, reading))?;
     if super::execution::regular_file_sameness(&source_read, &destination_read)
         != crate::disk::Sameness::Different
     {
-        if tokio::fs::canonicalize(source).await.ok()
-            == tokio::fs::canonicalize(destination).await.ok()
-        {
+        let resolved = super::execution::Resolved::of(source, destination).await;
+        if resolved.one_path() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
                 "The source and destination are the same path.",

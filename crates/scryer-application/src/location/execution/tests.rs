@@ -388,15 +388,22 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
         );
         let file = &plan.titles[0].files[0];
         write_file(&file.source(), b"hello world");
-        // A linked source is staged as a link of its own on unix only.
-        if symlink && cfg!(not(unix)) {
-            continue;
-        }
-        #[cfg(unix)]
+        // A linked source is staged as a link of its own on unix only; on
+        // Windows it takes the verified copy and lands as a regular file.
+        // Making a symbolic link there needs the right to; without it the
+        // linked case shows nothing.
         if symlink {
             let target = temp.path().join("original.mkv");
             std::fs::rename(file.source(), &target).unwrap();
+            #[cfg(unix)]
             std::os::unix::fs::symlink(&target, file.source()).unwrap();
+            #[cfg(windows)]
+            if let Err(error) = std::os::windows::fs::symlink_file(&target, file.source()) {
+                eprintln!(
+                    "skipped the linked-source case: this process may not create a symbolic link ({error})"
+                );
+                continue;
+            }
         }
         let store = InMemoryLocationOperationStore::new();
         let operation = queued_operation(
@@ -442,7 +449,7 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
                 .unwrap()
                 .file_type()
                 .is_symlink(),
-            symlink
+            symlink && cfg!(unix)
         );
         assert!(!file.source().exists());
         reconciler
@@ -2662,6 +2669,72 @@ async fn another_case_of_a_linked_name_is_one_entry() {
     assert_eq!(std::fs::read(&source).unwrap(), b"hello world");
 }
 
+/// Where the folders' reads cannot tell them apart, as on a volume that does
+/// not number its files, nothing makes them two folders: not their paths,
+/// nor how those resolve, since one folder reached through two server-side
+/// spellings resolves to two strings. Equal names there are one entry;
+/// resolving to one path is still a finding, of one path.
+#[tokio::test]
+async fn folders_the_reads_cannot_tell_apart_are_never_taken_for_two() {
+    assert!(!in_two_folders(Sameness::CannotTell));
+    assert!(!in_two_folders(Sameness::Same));
+    assert!(in_two_folders(Sameness::Different));
+    let resolved = |source: Option<&str>, destination: Option<&str>| Resolved {
+        source: source.map(PathBuf::from),
+        destination: destination.map(PathBuf::from),
+    };
+    assert!(resolved(Some("/fixture/a/movie.mkv"), Some("/fixture/a/movie.mkv")).one_path());
+    assert!(resolved(None, None).one_path());
+    assert!(!resolved(Some("/fixture/a/movie.mkv"), Some("/fixture/b/movie.mkv")).one_path());
+
+    // Two real folders, each with its own file under one name: where the
+    // reads cannot tell the folders apart, the pair is not two entries.
+    let temp = tempfile::tempdir().unwrap();
+    let (first, second) = (temp.path().join("a"), temp.path().join("b"));
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    write_file(&first.join("movie.mkv"), b"hello world");
+    write_file(&second.join("movie.mkv"), b"hello world");
+    let (source, destination) = (first.join("movie.mkv"), second.join("movie.mkv"));
+    assert!(!distinct_entries_in(Sameness::CannotTell, &source, &destination).await);
+    assert!(distinct_entries_in(Sameness::Different, &source, &destination).await);
+    // Two names in one folder are two entries only as both are listed.
+    write_file(&first.join("other.mkv"), b"hello world");
+    let other = first.join("other.mkv");
+    assert!(distinct_entries_in(Sameness::CannotTell, &source, &other).await);
+    let unlisted = first.join("absent.mkv");
+    assert!(!distinct_entries_in(Sameness::CannotTell, &source, &unlisted).await);
+}
+
+/// Another spelling of the only entry, in a folder spelled another way, read
+/// on a volume whose reads tell neither the files nor the folders apart, is
+/// one entry and refused; the file is still there afterwards.
+#[tokio::test]
+async fn an_alias_of_the_only_entry_where_the_reads_cannot_tell_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join("a");
+    std::fs::create_dir_all(folder.join("sub")).unwrap();
+    let source = folder.join("movie.mkv");
+    write_file(&source, b"hello world");
+    let alias = folder.join("sub").join("..").join("movie.mkv");
+    assert!(!distinct_entries_in(Sameness::CannotTell, &source, &alias).await);
+    // A read with no volume and no file number tells the files apart no
+    // more than the folders.
+    let unnumbered = Mark::from_stored("mark1:f:11:-:-:-:-:-:-").expect("a stored mark");
+    assert_eq!(
+        regular_file_sameness(&unnumbered, &unnumbered),
+        Sameness::CannotTell
+    );
+    assert_eq!(
+        shared_inode(&source, &alias, &unnumbered, &unnumbered).await,
+        SharedInode::OneEntry
+    );
+    stage_same_filesystem_file(&source, &alias)
+        .await
+        .expect_err("an alias of the only entry is refused");
+    assert_eq!(std::fs::read(&source).unwrap(), b"hello world");
+}
+
 #[test]
 fn a_shared_inode_needs_a_known_link_count_of_two() {
     assert_eq!(
@@ -2672,8 +2745,12 @@ fn a_shared_inode_needs_a_known_link_count_of_two() {
         shared_inode_decision(true, 5, 5, false),
         SharedInode::OneEntry
     );
+    // A read that gave no link count, as a stored mark carries none, is
+    // never taken for two names.
+    let uncounted = Mark::from_stored("mark1:f:5:-:-:-:u1:7:-").expect("a stored mark");
+    assert!(!uncounted.has_other_names());
     assert_eq!(
-        shared_inode_decision(true, 5, 5, false),
+        shared_inode_decision(true, 5, 5, uncounted.has_other_names()),
         SharedInode::OneEntry
     );
     assert_eq!(
@@ -2981,10 +3058,12 @@ async fn reconcile_writes_the_same_rows_from_one_listing_as_from_per_file_reads(
     assert_eq!(new_rows, old_rows);
     assert!(old_writes.contains(&"delete-media:mf-2".to_string()));
     assert!(old_writes.contains(&"delete-media:mf-4".to_string()));
+    // Stored paths keep the platform's own separator.
+    let repointed = ["<tmp>", "a", "Movie", "two.mkv"].join(std::path::MAIN_SEPARATOR_STR);
     assert!(
         old_writes
             .iter()
-            .any(|write| write == "media:mf-5=<tmp>/a/Movie/two.mkv"),
+            .any(|write| *write == format!("media:mf-5={repointed}")),
         "{old_writes:?}"
     );
     assert_eq!(old_reads, 4, "one question per identical copy");

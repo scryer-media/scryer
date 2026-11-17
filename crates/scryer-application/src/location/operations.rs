@@ -3669,8 +3669,9 @@ pub(super) async fn read_destination_entries(
 ///
 /// For each colliding pair:
 ///
-/// - the same regular file on both sides (a case-only rename, a hardlink) is
-///   left unsampled, so it can never read as its own duplicate;
+/// - the same regular file on both sides (a case-only rename, a hardlink),
+///   proven by file numbers, is left unsampled, so it can never read as its
+///   own duplicate; a pair they cannot tell apart is sampled;
 /// - different sizes need no sample: the planner rules the pair out on size;
 /// - equal sizes get a sampled proof on each side; a side that cannot be read
 ///   stays `None`, which the planner reports rather than guessing.
@@ -3718,17 +3719,25 @@ pub(crate) async fn quick_check_name_collisions(
         ) else {
             continue;
         };
-        // One file, or a pair the file numbers cannot tell apart, earns no
-        // sampled proof: two names for one file are never a duplicate.
-        let (Some(source_read), Some(destination_read)) = (
+        // One file earns no sampled proof: two names for one file are never
+        // a duplicate. A pair the file numbers cannot tell apart, or whose
+        // names the disk service could not read, is sampled like two files:
+        // a side that does not read stays `None` for the planner to report,
+        // and the transfer proves the pair in full, one entry refused. A
+        // sample never removes anything: a source beside an existing
+        // destination is dropped only as `Identical`, which only
+        // `compare_existing` sets, and that refuses a pair the reads cannot
+        // tell apart unless both names are listed in one folder.
+        let sameness = match (
             super::execution::mark_beside(&file.path, &source_metadata).await,
             super::execution::mark_beside(&destination, &destination_metadata).await,
-        ) else {
-            continue;
+        ) {
+            (Ok(source_read), Ok(destination_read)) => {
+                super::execution::regular_file_sameness(&source_read, &destination_read)
+            }
+            _ => crate::disk::Sameness::CannotTell,
         };
-        if super::execution::regular_file_sameness(&source_read, &destination_read)
-            != crate::disk::Sameness::Different
-        {
+        if sameness == crate::disk::Sameness::Same {
             continue;
         }
         // The planner compares the sizes it is handed; a fresh `stat` keeps

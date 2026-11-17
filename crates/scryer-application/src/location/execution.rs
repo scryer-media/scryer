@@ -35,8 +35,8 @@ use scryer_domain::MediaFacet;
 
 use crate::disk::reason::DISK_PATH_MISSING;
 use crate::disk::{
-    Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, Placed, Removal, Remove,
-    Sameness, Unproven,
+    Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, PathReading, Placed,
+    Removal, Remove, Sameness, Unproven,
 };
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
@@ -558,12 +558,17 @@ impl TitleFileMover for RootMoveFileMover {
 /// Place a second name for the same regular file without copying bytes. The
 /// source survives a crash before the verification journal is durable; cleanup
 /// removes that name only after the catalog has moved, and only when the two
-/// names read as one file that has another name. A source on a volume whose
-/// reads cannot tell its files apart (FAT, exFAT, ReFS, a share without file
-/// numbers, a filesystem that numbers every file zero) is not staged, since
-/// cleanup could never prove the second name: it takes the ordinary
-/// verified-copy path, as do other platforms. On Windows a linked source is
-/// not staged either. Each name is read once, links not followed.
+/// names read as one file that has another name. A symbolic link is staged
+/// as a link of its own on unix; anything else that is not a regular file,
+/// a symbolic link on Windows included, takes the ordinary verified-copy
+/// path, as every source does on other platforms. A regular file is linked
+/// only where its read tells it from every other file; on a volume whose
+/// reads cannot (FAT, exFAT, ReFS, a share without file numbers, a
+/// filesystem that numbers every file zero) cleanup could never prove the
+/// second name, so it is copied. A destination already there is not linked
+/// over: it is staged only as a proven second name of the source, refused
+/// as one entry under two spellings, and otherwise copied. Each name is read
+/// once, links not followed.
 #[allow(clippy::disallowed_methods)] // disk-guard: symlink placement
 async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppResult<bool> {
     let seen = Disk::process()
@@ -598,9 +603,8 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
         return Ok(false);
     }
     if let Ok(destination_read) = Disk::process().fingerprint(destination).await {
-        if tokio::fs::canonicalize(source).await.ok()
-            == tokio::fs::canonicalize(destination).await.ok()
-        {
+        let resolved = Resolved::of(source, destination).await;
+        if resolved.one_path() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
                 "source and destination are the same path",
@@ -758,11 +762,45 @@ pub(super) fn one_entry_refusal() -> AppError {
     )
 }
 
+/// Both paths as the platform resolves them, links and aliases followed;
+/// `None` for one that does not resolve. Used only to find one path: two
+/// resolutions that differ prove nothing, since one folder reached through
+/// two server-side spellings (a host name and its address, two shares over
+/// one folder) resolves to two strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Resolved {
+    source: Option<PathBuf>,
+    destination: Option<PathBuf>,
+}
+
+impl Resolved {
+    /// One resolution of each path.
+    pub(super) async fn of(source: &Path, destination: &Path) -> Self {
+        let disk = Disk::process();
+        Self {
+            source: disk.canonicalize(source).await.ok(),
+            destination: disk.canonicalize(destination).await.ok(),
+        }
+    }
+
+    /// Whether both resolve to one path, or neither resolves: either way the
+    /// pair is refused as the same path.
+    pub(super) fn one_path(&self) -> bool {
+        self.source == self.destination
+    }
+}
+
+/// Whether two names are in two folders, as the disk service's reads of the
+/// folders say. Folders the reads cannot tell apart are not two, whatever
+/// their paths resolve to. No probe.
+pub(super) fn in_two_folders(parents: Sameness) -> bool {
+    parents == Sameness::Different
+}
+
 /// Whether two paths are two directory entries. Names in two folders the
 /// disk service reads as different folders are; names in one folder, or in
 /// folders it cannot tell apart, are only when they differ and the listing of
 /// the source's folder holds both exactly.
-#[allow(clippy::disallowed_methods)] // disk-guard: early-exit listing
 async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     let (Some(source_parent), Some(destination_parent)) = (source.parent(), destination.parent())
     else {
@@ -776,9 +814,23 @@ async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     ) else {
         return false;
     };
-    if source_dir.same_file(&destination_dir) == Sameness::Different {
+    distinct_entries_in(source_dir.same_file(&destination_dir), source, destination).await
+}
+
+/// [`distinct_directory_entries`] once the folders are read: `parents` is
+/// how the disk service's reads of the two folders compare.
+#[allow(clippy::disallowed_methods)] // disk-guard: early-exit listing
+pub(super) async fn distinct_entries_in(
+    parents: Sameness,
+    source: &Path,
+    destination: &Path,
+) -> bool {
+    if in_two_folders(parents) {
         return true;
     }
+    let Some(source_parent) = source.parent() else {
+        return false;
+    };
     let (Some(source_name), Some(destination_name)) = (source.file_name(), destination.file_name())
     else {
         return false;
@@ -822,12 +874,16 @@ pub(super) fn regular_file_sameness(left: &Mark, right: &Mark) -> Sameness {
 /// The disk service's read of a name a caller has already read through std,
 /// links not followed: the metadata's own mark on unix, with no probe, and
 /// one handle read on Windows, where std's metadata names no volume or file.
-/// `None` when that read fails.
-pub(super) async fn mark_beside(path: &Path, metadata: &std::fs::Metadata) -> Option<Mark> {
+/// The reading when that read fails. Built from std metadata, the mark never
+/// proves a link.
+pub(super) async fn mark_beside(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<Mark, PathReading> {
     if cfg!(windows) {
-        Disk::process().fingerprint(path).await.ok()
+        Disk::process().fingerprint(path).await
     } else {
-        Some(Mark::of(metadata))
+        Ok(Mark::of(metadata))
     }
 }
 

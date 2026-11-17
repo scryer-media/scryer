@@ -897,14 +897,58 @@ fn a_claimed_move_that_fails_says_what_it_left_at_the_reserved_name() {
         "the reservation is kept"
     );
 
+    // A rename refused beside a source that is still there: a folder onto
+    // the reserved file is refused as the wrong kind on every platform.
+    let free = temp.path().join("free.mkv");
     let folder = temp.path().join("folder");
     std::fs::create_dir(&folder).unwrap();
-    let free = temp.path().join("free.mkv");
     let error = disk()
         .move_claimed_blocking(&folder, &free)
-        .expect_err("a folder does not go onto a file");
+        .expect_err("a folder never lands on the reservation");
+    assert_eq!(error.reason(), reason::DISK_WRONG_KIND);
     assert_eq!(error.left(), None, "the reservation is released");
     assert!(!free.exists());
+    assert!(folder.is_dir(), "the source is where it was");
+
+    // Windows also refuses to rename a file another handle holds without
+    // sharing its deletion.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let held = temp.path().join("held.mkv");
+        std::fs::write(&held, b"held").unwrap();
+        let _handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&held)
+            .unwrap();
+        let error = disk()
+            .move_claimed_blocking(&held, &free)
+            .expect_err("the rename is refused");
+        assert_eq!(error.left(), None, "the reservation is released");
+        assert!(!free.exists());
+        assert!(held.exists(), "the source is where it was");
+    }
+}
+
+/// A replacing rename refuses another kind of entry at the destination on
+/// every platform: a folder onto a file and a file onto a folder, both left
+/// as they were.
+#[test]
+fn a_replacing_move_refuses_another_kind_at_the_destination() {
+    let temp = tempfile::tempdir().unwrap();
+    let (folder, file) = (temp.path().join("folder"), temp.path().join("file.mkv"));
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("inside.mkv"), b"inside").unwrap();
+    std::fs::write(&file, b"file").unwrap();
+    for (source, dest) in [(&folder, &file), (&file, &folder)] {
+        let error = disk()
+            .move_replacing_blocking(source, dest)
+            .expect_err("another kind");
+        assert_eq!(error.reason(), reason::DISK_WRONG_KIND, "{source:?}");
+    }
+    assert_eq!(std::fs::read(folder.join("inside.mkv")).unwrap(), b"inside");
+    assert_eq!(std::fs::read(&file).unwrap(), b"file");
 }
 
 /// What an earlier attempt of a staged copy left at the destination name is

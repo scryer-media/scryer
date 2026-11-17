@@ -489,7 +489,7 @@ fn stable_import_source_snapshot(
 ) -> AppResult<ImportSourceSnapshot> {
     let initial = match initial_fingerprint {
         Some(fingerprint) => fingerprint.clone(),
-        None => fingerprint_import_source(path)?,
+        None => read_import_source_at_start(path, read_import_source)?.0,
     };
     let proof = import_content_proof(path)?;
     ensure_same_source(path, &initial)?;
@@ -536,12 +536,62 @@ fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> 
     read_import_source(path).map(|(fingerprint, _)| fingerprint)
 }
 
-/// The fingerprint, and the mark of the name itself from the same read, for
-/// a hard link to be proven against.
+/// `read`, one of [`read_import_source`] and [`read_import_source_marked`],
+/// as an import starts. A source that reads missing may be a file an
+/// interrupted cleanup set aside beside it: a regular file at its set-aside
+/// name is renamed back, never replacing anything, and the source is read
+/// again. Nothing is removed. Reads are added only where the source reads
+/// missing: one of the set-aside name, and, when a file was put back, its
+/// rename and the source's read again.
+fn read_import_source_at_start(
+    path: &Path,
+    read: fn(&Path) -> AppResult<(ImportSourceFingerprint, Mark)>,
+) -> AppResult<(ImportSourceFingerprint, Mark)> {
+    match read(path) {
+        Err(error)
+            if error.reason()
+                == Some(scryer_application::error_reasons::import::FILE_NOT_FOUND) =>
+        {
+            match Disk::process().put_back_set_aside_source_blocking(path) {
+                disk::PutBackAside::PutBack => read(path),
+                disk::PutBackAside::Nothing => Err(error),
+                disk::PutBackAside::Failed { at, error: failure } => {
+                    tracing::error!(
+                        source = %path.display(),
+                        at = %at.display(),
+                        error = %failure,
+                        "an import source left at its set-aside name could not be put back"
+                    );
+                    Err(error)
+                }
+            }
+        }
+        result => result,
+    }
+}
+
+/// The fingerprint, and the mark of the name itself built from the same
+/// read, with no further probe. On Windows that mark names no volume or
+/// file; [`read_import_source_marked`] reads one that does.
+fn read_import_source(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)> {
+    read_import_source_with(path, |_, link_meta| Mark::of(link_meta))
+}
+
+/// [`read_import_source`] with the mark [`name_mark`] reads: on Windows one
+/// more handle read of the name, for the two reads whose mark later reads
+/// are held to by file number, the source as an import starts and the
+/// destination once it lands.
+fn read_import_source_marked(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)> {
+    read_import_source_with(path, name_mark)
+}
+
 // disk-guard: the fingerprint holds the raw device, inode and owner uid, and a
 // failure's own error kind names the import reason; a reading carries neither.
 #[allow(clippy::disallowed_methods)]
-fn read_import_source(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)> {
+fn read_import_source_with(
+    path: &Path,
+    mark: impl FnOnce(&Path, &std::fs::Metadata) -> Mark,
+) -> AppResult<(ImportSourceFingerprint, Mark)> {
     let link_meta = std::fs::symlink_metadata(path).map_err(|e| {
         import_io_error(
             &e,
@@ -583,7 +633,7 @@ fn read_import_source(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)>
                 resolved_target,
             },
         };
-        return Ok((fingerprint, Mark::of(&link_meta)));
+        return Ok((fingerprint, mark(path, &link_meta)));
     }
     if !file_type.is_file() {
         return Err(AppError::Repository(format!(
@@ -595,7 +645,25 @@ fn read_import_source(path: &Path) -> AppResult<(ImportSourceFingerprint, Mark)>
         file: fingerprint_from_metadata(&link_meta)?,
         kind: ImportSourceKind::Regular,
     };
-    Ok((fingerprint, Mark::of(&link_meta)))
+    Ok((fingerprint, mark(path, &link_meta)))
+}
+
+/// The mark of `path`'s own name, links not followed, that later reads of
+/// the source and the destination are held to. Where std's metadata carries
+/// the file number, as on unix, it is that read's mark: no probe. On Windows
+/// std's metadata has no volume serial or file index, so the disk service
+/// reads the name once more from a handle and its mark carries them. Should
+/// that read fail, the mark has no number. Built from std metadata, it never
+/// proves a link itself: the link lane reads the source again through the
+/// disk service.
+fn name_mark(path: &Path, link_meta: &std::fs::Metadata) -> Mark {
+    #[cfg(windows)]
+    if let Ok(mark) = Disk::process().fingerprint_blocking(path) {
+        return mark;
+    }
+    #[cfg(not(windows))]
+    let _ = path;
+    Mark::of(link_meta)
 }
 
 fn fingerprint_from_metadata(metadata: &std::fs::Metadata) -> AppResult<FileFingerprint> {
@@ -936,11 +1004,13 @@ thread_local! {
 }
 
 /// Hard links the source to `dest` and has the disk service prove the new
-/// name against `seen`, the source as this import last read it. A link that
-/// does not prove is removed by the service before it answers; one it could
-/// not remove is an error, as is a new name that cannot be read or is no
-/// regular file. A name the service left alone because another writer's
-/// regular file holds it answers as an occupied destination.
+/// name against its own read of the source, made here and required to still
+/// be `seen`, the source as this import last read it: only the service's own
+/// read proves a link. A link that does not prove is removed by the service
+/// before it answers; one it could not remove is an error, as is a new name
+/// that cannot be read or is no regular file. A name the service left alone
+/// because another writer's regular file holds it answers as an occupied
+/// destination. One read of the source's name, on the link lane only.
 #[cfg_attr(not(test), allow(unused_variables))]
 fn hard_link_import_source(
     source: &Path,
@@ -951,6 +1021,22 @@ fn hard_link_import_source(
 ) -> AppResult<ImportLink> {
     #[cfg(test)]
     HARD_LINK_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
+    let read = Disk::process()
+        .fingerprint_blocking(source)
+        .map_err(|reading| {
+            AppError::Repository(format!(
+                "cannot read import source {}: {}",
+                source.display(),
+                reading.absence()
+            ))
+        })?;
+    if !seen.still_marks(&read) {
+        return Err(AppError::Repository(format!(
+            "import source changed during import: {}",
+            source.display()
+        )));
+    }
+    let seen = &read;
     #[cfg(test)]
     let forced = Mark::from_stored("unknown-volume").expect("the unknown lane is readable");
     #[cfg(test)]
@@ -1475,7 +1561,8 @@ fn prepare_marked_import_destination(
     dest: &Path,
     permissions: &ImportFilePermissions,
 ) -> AppResult<(ImportSourceFingerprint, Mark, u64, ImportDestinationGuard)> {
-    let (source_fingerprint, source_mark) = read_import_source(source)?;
+    let (source_fingerprint, source_mark) =
+        read_import_source_at_start(source, read_import_source_marked)?;
     let size = source_fingerprint.file.len;
     if size == 0 {
         return Err(AppError::Repository(format!(
@@ -1938,7 +2025,7 @@ fn copy_regular_source_to_destination(
     if let Some(after_promoted) = options.after_copy_promoted {
         after_promoted(source, dest);
     }
-    let (dest_fingerprint, landed) = match read_import_source(dest) {
+    let (dest_fingerprint, landed) = match read_import_source_marked(dest) {
         Ok((fingerprint, named)) => {
             let landed = match promoted {
                 Some(mark)
@@ -2174,8 +2261,10 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
 }
 
 /// [`take_back_placed`] after `error`, which says so when the destination
-/// is kept because the source no longer holds the data or did not read. The
-/// failure's routing fact is kept.
+/// is kept because the source no longer holds the data or did not read,
+/// whatever kind of failure `error` is. The failure's routing and reason are
+/// kept: a failure that needs reconciliation or was cancelled stays so, with
+/// the note added to its sentence.
 fn took_back(error: AppError, source: &Path, dest: &Path, landed: Landed<'_>) -> AppError {
     let taken_back = take_back_placed(source, dest, landed);
     let why = match taken_back {
@@ -2183,18 +2272,47 @@ fn took_back(error: AppError, source: &Path, dest: &Path, landed: Landed<'_>) ->
         TakeBack::KeptSourceUnread => "the source did not read",
         TakeBack::Removed | TakeBack::Kept => return error,
     };
-    if !matches!(
-        error,
-        AppError::Repository(_)
-            | AppError::RepositoryFailed { .. }
-            | AppError::RepositoryFailedWithFacts { .. }
-    ) {
-        return error;
-    }
-    let message = format!(
-        "{error}; {why}, so {} is kept as what may be its only copy",
+    let note = format!(
+        "{why}, so {} is kept as what may be its only copy",
         dest.display()
     );
+    let error = match error {
+        AppError::ManualReconciliationRequired(message) => {
+            return AppError::ManualReconciliationRequired(format!("{message}; {note}"));
+        }
+        AppError::ManualReconciliationRefused { message, reason } => {
+            return AppError::ManualReconciliationRefused {
+                message: format!("{message}; {note}"),
+                reason,
+            };
+        }
+        AppError::Canceled(message) => {
+            return AppError::Canceled(format!("{message}; {note}"));
+        }
+        AppError::ImportSourceChanged { path, message } => {
+            return AppError::ImportSourceChanged {
+                path,
+                message: format!("{message}; {note}"),
+            };
+        }
+        AppError::ImportSourceInspection { path, message } => {
+            return AppError::ImportSourceInspection {
+                path,
+                message: format!("{message}; {note}"),
+            };
+        }
+        error @ (AppError::Repository(_)
+        | AppError::RepositoryFailed { .. }
+        | AppError::RepositoryFailedWithFacts { .. }) => error,
+        other => match other.reason() {
+            Some(reason) => AppError::RepositoryFailed {
+                message: other.to_string(),
+                reason,
+            },
+            None => AppError::Repository(other.to_string()),
+        },
+    };
+    let message = format!("{error}; {note}");
     match (taken_back, landed) {
         (TakeBack::KeptForSource, Landed::Copy { .. }) => AppError::RepositoryFailedWithFacts {
             message,
@@ -2237,12 +2355,13 @@ fn remove_import_source_after_verified_import_blocking(
         )));
     }
 
-    let source_fingerprint = fingerprint_import_source(&guard.source_path).map_err(|_| {
-        AppError::Repository(format!(
-            "import source cleanup failed because source is missing or inaccessible: {}",
-            guard.source_path.display()
-        ))
-    })?;
+    let (source_fingerprint, source_mark) =
+        read_import_source(&guard.source_path).map_err(|_| {
+            AppError::Repository(format!(
+                "import source cleanup failed because source is missing or inaccessible: {}",
+                guard.source_path.display()
+            ))
+        })?;
     if source_identity_from_fingerprint(&source_fingerprint) != guard.source_identity {
         return Err(AppError::Repository(format!(
             "import source cleanup failed because source changed: {}",
@@ -2269,6 +2388,7 @@ fn remove_import_source_after_verified_import_blocking(
     if let Some(stored) = &guard.adopted_destination_mark {
         return remove_source_beside_adopted_destination(
             &guard.source_path,
+            &source_mark,
             &final_dest_path,
             stored,
             &options,
@@ -2295,9 +2415,11 @@ fn remove_import_source_after_verified_import_blocking(
 /// Removes a move's source beside a destination that was already there and
 /// was adopted, once the filesystem shows the two are separate entries. See
 /// [`Disk::remove_source_beside_blocking`]. Anything but a removal keeps the
-/// source's data and refuses.
+/// source's data and refuses. `source_mark` is the read of the source just
+/// proved current.
 fn remove_source_beside_adopted_destination(
     source: &Path,
+    source_mark: &Mark,
     dest: &Path,
     stored: &str,
     options: &ImportFileOptions,
@@ -2315,7 +2437,7 @@ fn remove_source_beside_adopted_destination(
             source.display()
         )));
     }
-    match Disk::process().remove_source_beside_blocking(source, dest, &adopted) {
+    match Disk::process().remove_source_beside_blocking(source, source_mark, dest, &adopted) {
         AsideRemoval::Removed => Ok(()),
         AsideRemoval::SameEntry => Err(import_destination_is_source(source, dest)),
         AsideRemoval::DestinationChanged => Err(AppError::Repository(format!(
@@ -2331,6 +2453,14 @@ fn remove_source_beside_adopted_destination(
             source,
             dest,
             &error.to_string(),
+        )),
+        AsideRemoval::AsideNameTaken { at, error } => Err(import_destination_alias_unknown(
+            source,
+            dest,
+            &format!(
+                "the name {} the source is set aside under is taken: {error}",
+                at.display()
+            ),
         )),
         AsideRemoval::NotRemoved(error) => Err(AppError::Repository(format!(
             "import source cleanup failed after destination verification; failed to remove source {}: {error}",
@@ -7025,17 +7155,13 @@ mod tests {
         std::fs::create_dir_all(dest.parent().unwrap()).expect("library");
         std::fs::write(&source, b"synthetic video bytes").expect("write source");
 
-        // A process that reads through a closed folder anyway, as root does,
-        // cannot make the source fail to read; the test would prove nothing.
-        let reopen = Reopen(downloads.clone());
-        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o000))
-            .expect("close the source folder");
-        let still_reads = std::fs::symlink_metadata(&source).is_ok();
-        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o755))
-            .expect("reopen the source folder");
-        if still_reads {
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root reads through a closed folder, so the source would read
+            // and the test would prove nothing.
             return;
         }
+        let reopen = Reopen(downloads.clone());
 
         let error = import_file_blocking_at_depth(
             source.clone(),
@@ -7059,10 +7185,10 @@ mod tests {
         .expect_err("a corrupted copy must not be imported");
         drop(reopen);
 
-        assert!(
-            error.to_string().contains("copy verification failed"),
-            "unexpected error: {error}"
-        );
+        // A failed proof names no reason, and a source that did not read is
+        // not one that is gone: no kept-copy reason or path is claimed.
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        assert_eq!(error.reason(), None, "{error:?}");
         assert!(
             dest.exists(),
             "the copy is kept while the source does not read"
@@ -7071,6 +7197,33 @@ mod tests {
             std::fs::read(&source).expect("the source is untouched"),
             b"synthetic video bytes"
         );
+    }
+
+    /// An import that finds its source missing puts back the file an
+    /// interrupted cleanup left at the source's set-aside name, then reads
+    /// the source as usual; with nothing set aside, the source is missing as
+    /// before. Nothing is removed.
+    #[test]
+    fn an_import_puts_back_a_source_an_interrupted_cleanup_set_aside() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let aside = disk::aside_path_for(&source);
+        std::fs::write(&aside, b"synthetic video bytes").expect("set-aside file");
+
+        snapshot_import_source_blocking(source.clone()).expect("the source is put back");
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"synthetic video bytes"
+        );
+        assert!(!aside.exists());
+
+        let missing = temp.path().join("absent-source.mkv");
+        let error = snapshot_import_source_blocking(missing.clone()).expect_err("missing");
+        assert_eq!(
+            error.reason(),
+            Some(scryer_application::error_reasons::import::FILE_NOT_FOUND)
+        );
+        assert!(!missing.exists());
     }
 
     /// A hard link whose source name is removed, or made to name another

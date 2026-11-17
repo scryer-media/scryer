@@ -78,7 +78,7 @@ use backend::{DiskBackend, SystemBackend};
 use cache::{StatCache, key_of};
 use volume::Volumes;
 
-pub use aside::{AsideRemoval, aside_path_for};
+pub use aside::{AsideRemoval, PutBackAside, aside_path_for};
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
 #[doc(hidden)]
@@ -1507,6 +1507,8 @@ impl Disk {
         let result = self.call("sync_handle", || self.inner.backend.sync_handle(&file));
         #[cfg(test)]
         let result = self.fault(CopyFault::Sync).map_or(result, Err);
+        // std's metadata of the handle: not a stat of the name, so the mark
+        // never proves a link.
         let marked = match mark && result.is_ok() {
             true => self
                 .call("handle_stat", || file.metadata())

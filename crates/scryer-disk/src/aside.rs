@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{DiskError, EntryKind, Mark, PathReading, Remove};
+use super::{DiskError, EntryKind, Mark, PathReading, Remove, Sameness, reason};
 
 /// How [`super::Disk::remove_source_beside_blocking`] ended. Every outcome but
 /// [`Self::Removed`] leaves the source's data in place; where, each says.
@@ -24,19 +24,35 @@ pub enum AsideRemoval {
     /// The destination holds another file than the one it was adopted as.
     /// The source was put back and nothing was removed.
     DestinationChanged,
-    /// The destination did not read once the source was aside, so nothing
-    /// says whether the two are one entry. The source was put back and
-    /// nothing was removed.
+    /// The destination, or its folder's listing, did not read once the
+    /// source was aside, so nothing says whether the two are one entry. The
+    /// source was put back and nothing was removed.
     DestinationUnread(PathReading),
     /// The destination checked out, but removing the set-aside name failed.
     /// The source was put back.
     NotRemoved(DiskError),
-    /// The source could not be renamed aside, a name left at the set-aside
-    /// name by an earlier attempt included. The source is where it was.
+    /// The source could not be renamed aside. The source is where it was.
     NotSetAside(DiskError),
+    /// The set-aside name `at` is already taken, by a file an interrupted
+    /// attempt left there or by anything else, so the source was not set
+    /// aside. The source is where it was, and nothing at `at` was touched.
+    AsideNameTaken { at: PathBuf, error: DiskError },
     /// Putting the source back failed, so its file is at `at`, the
     /// set-aside name in the source's own folder.
     PutBackFailed { at: PathBuf, error: DiskError },
+}
+
+/// What [`super::Disk::put_back_set_aside_source_blocking`] did.
+#[derive(Debug)]
+pub enum PutBackAside {
+    /// The set-aside name held a regular file and it was renamed back to
+    /// the source's name.
+    PutBack,
+    /// There was nothing to put back: no regular file at the set-aside name,
+    /// or the source's name is taken. Nothing was moved.
+    Nothing,
+    /// Renaming it back failed; it is still at `at`.
+    Failed { at: PathBuf, error: DiskError },
 }
 
 /// The one hidden name in `source`'s own folder its file is set aside under.
@@ -52,29 +68,49 @@ pub fn aside_path_for(source: &Path) -> PathBuf {
 impl super::Disk {
     /// Removes `source` once the filesystem shows that `kept`, a destination
     /// that already held the file and was adopted, is a separate entry.
+    /// `source_mark` is the caller's read of `source` that it has just
+    /// proved is still the file it imported; nothing reads it again.
     /// `kept_mark` is the read of `kept`, links not followed, taken when it
-    /// was adopted. The caller has just proved `source` is still the file it
-    /// read.
+    /// was adopted.
     ///
     /// 1. The source is renamed, never replacing anything, to
     ///    [`aside_path_for`]. A refused rename leaves it where it was.
     /// 2. `kept` is read, links not followed. A link is also read followed,
     ///    so a link that reached the source shows it no longer does.
-    /// 3. While `kept` still holds the file `kept_mark` marks, the set-aside
+    /// 3. Where `kept` now shows the source's own nonzero file number and
+    ///    length and no other name, it is the set-aside file seen through
+    ///    another view of one folder, whatever volume each read names: the
+    ///    source goes back.
+    /// 4. Where `kept` and the source are not on one known volume, `kept`'s
+    ///    folder is listed once and must hold `kept`'s name, byte for byte.
+    ///    A second view of a folder can keep answering a renamed name from
+    ///    its cache; the listing is the folder's own word. A name the listing
+    ///    lacks is the source's entry, and a listing that fails is unread.
+    /// 5. While `kept` still holds the file `kept_mark` marks, the set-aside
     ///    name is removed. Otherwise the source is renamed back, never
     ///    replacing anything.
     ///
-    /// Probes: one rename and one read of `kept`, a second read when `kept`
-    /// is a link, then one removal; a put-back adds one rename.
+    /// What stays unproven: on a second cached view of one folder, a name
+    /// whose file number that view makes up per name reads as another file
+    /// for as long as the view's cache holds it, and on one known volume no
+    /// listing is taken. A destination that is a second hard link of the
+    /// source's file elsewhere is kept and the source goes: the library
+    /// entry for the source's name is gone, the data is not.
+    ///
+    /// Probes, for one adopted destination: one rename and one read of
+    /// `kept`, a second read when `kept` is a link, then one removal. Where
+    /// the two are not on one known volume, one listing of `kept`'s folder
+    /// besides. A put-back adds one rename.
     pub fn remove_source_beside_blocking(
         &self,
         source: &Path,
+        source_mark: &Mark,
         kept: &Path,
         kept_mark: &Mark,
     ) -> AsideRemoval {
         let aside = aside_path_for(source);
         if let Err(error) = self.move_exclusive_blocking(source, &aside) {
-            return self.after_refused_set_aside(source, aside, error);
+            return self.after_refused_set_aside(source, source_mark, aside, error);
         }
 
         let kept_now = match self.fingerprint_blocking(kept) {
@@ -86,6 +122,9 @@ impl super::Disk {
                 return self.put_back(source, aside, AsideRemoval::DestinationUnread(reading));
             }
         };
+        if kept_now.is_numbered_as(source_mark) && !kept_now.has_other_names() {
+            return self.put_back(source, aside, AsideRemoval::SameEntry);
+        }
         if !kept_mark.still_marks(&kept_now) {
             return self.put_back(source, aside, AsideRemoval::DestinationChanged);
         }
@@ -100,29 +139,98 @@ impl super::Disk {
                 }
             }
         }
+        if kept_now.same_volume(source_mark) != Sameness::Same
+            && let Some(answer) = self.unlisted(kept)
+        {
+            return self.put_back(source, aside, answer);
+        }
 
         match self.remove_blocking(&aside, Remove::File) {
             Ok(_) => AsideRemoval::Removed,
-            Err(error) => self.put_back(source, aside, AsideRemoval::NotRemoved(error)),
+            Err(error) => match self.fingerprint_blocking(&aside) {
+                // The removal took effect though it answered a failure; the
+                // destination was shown to hold the file.
+                Err(PathReading::Missing { .. }) => AsideRemoval::Removed,
+                _ => self.put_back(source, aside, AsideRemoval::NotRemoved(error)),
+            },
         }
     }
 
-    /// After a set-aside rename failed. A failure that left something at the
-    /// set-aside name may have moved the source there and lost the reply, so
-    /// the source is read once and, when it is not where it was, put back.
+    /// Whether `kept`'s folder lists `kept`'s name byte for byte: `None` when
+    /// it does, else why the source goes back.
+    fn unlisted(&self, kept: &Path) -> Option<AsideRemoval> {
+        let (Some(folder), Some(name)) = (kept.parent(), kept.file_name()) else {
+            return Some(AsideRemoval::SameEntry);
+        };
+        match self.list_blocking(folder) {
+            Ok(listed) => match listed
+                .iter()
+                .any(|entry| entry.path.file_name() == Some(name))
+            {
+                true => None,
+                false => Some(AsideRemoval::SameEntry),
+            },
+            Err(error) => Some(AsideRemoval::DestinationUnread(PathReading::Unreachable {
+                observed_at: self.inner.clock.now(),
+                cause: error.reason(),
+            })),
+        }
+    }
+
+    /// After a set-aside rename failed. A taken set-aside name is named. A
+    /// failure that left something at the set-aside name may have moved the
+    /// source there and lost the reply, or left only a reservation of its
+    /// own: the set-aside name is read once, and the source is put back only
+    /// when that name holds the source's file.
     fn after_refused_set_aside(
         &self,
         source: &Path,
+        source_mark: &Mark,
         aside: PathBuf,
         error: DiskError,
     ) -> AsideRemoval {
         if error.left().is_none() {
+            if error.reason() == reason::DISK_DESTINATION_EXISTS {
+                return AsideRemoval::AsideNameTaken { at: aside, error };
+            }
             return AsideRemoval::NotSetAside(error);
         }
-        if self.fingerprint_blocking(source).is_ok() {
-            return AsideRemoval::NotSetAside(error);
+        match self.fingerprint_blocking(&aside) {
+            Ok(at_aside) if source_mark.still_marks(&at_aside) => {
+                self.put_back(source, aside, AsideRemoval::NotSetAside(error))
+            }
+            _ => AsideRemoval::NotSetAside(error),
         }
-        self.put_back(source, aside, AsideRemoval::NotSetAside(error))
+    }
+
+    /// Puts back a source an interrupted removal left at its set-aside name,
+    /// for an import that finds the source missing. Only a regular file at
+    /// the set-aside name is moved, and only by a rename that never replaces
+    /// anything: a source name that is taken again keeps what is there.
+    /// Nothing is removed.
+    ///
+    /// Probes: one read of the set-aside name, and one rename when it holds
+    /// a regular file.
+    pub fn put_back_set_aside_source_blocking(&self, source: &Path) -> PutBackAside {
+        let aside = aside_path_for(source);
+        match self.fingerprint_blocking(&aside) {
+            Ok(read) if read.kind() == Some(EntryKind::File) => {}
+            _ => return PutBackAside::Nothing,
+        }
+        match self.move_exclusive_blocking(&aside, source) {
+            Ok(_) => {
+                tracing::warn!(
+                    source = %source.display(),
+                    from = %aside.display(),
+                    "an import source an interrupted cleanup set aside was put back"
+                );
+                PutBackAside::PutBack
+            }
+            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+                PutBackAside::Nothing
+            }
+            Err(error) => PutBackAside::Failed { at: aside, error },
+        }
     }
 
     /// Renames the set-aside source back, never replacing anything, and

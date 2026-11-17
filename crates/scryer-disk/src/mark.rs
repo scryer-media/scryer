@@ -166,6 +166,12 @@ pub struct Mark {
     file: Option<u64>,
     /// Absent for a mark that names a volume only.
     facts: Option<Facts>,
+    /// Whether the disk service read this mark itself, by its own stat of a
+    /// name. A mark rebuilt from stored text or from a volume number is not,
+    /// and neither is one built from std metadata, whether a caller held it
+    /// or the service took it from a handle it opened: on Windows std's
+    /// metadata names no volume or file. None of those ever proves a link.
+    fresh: bool,
 }
 
 const STORED_TAG: &str = "mark1";
@@ -195,6 +201,7 @@ impl Mark {
                 owner: stat.extra.owner,
                 links: stat.links,
             }),
+            fresh: true,
         }
     }
 
@@ -214,13 +221,17 @@ impl Mark {
             },
             file: None,
             facts: None,
+            fresh: false,
         }
     }
 
     /// The mark of metadata a caller already holds from an open handle. No
-    /// probe.
+    /// probe. The disk service did not read it, so it never proves a link.
     pub fn of(metadata: &std::fs::Metadata) -> Self {
-        Self::of_stat(&RawStat::of(metadata))
+        Self {
+            fresh: false,
+            ..Self::of_stat(&RawStat::of(metadata))
+        }
     }
 
     /// Whether the read named the volume the path is on.
@@ -249,16 +260,22 @@ impl Mark {
 
     /// How this mark, read of a name just hard-linked, can be the file
     /// `seen` was read as before the link. Where both reads give a usable
-    /// file number, one volume and one number are the link. Where neither
-    /// does, a zero number on both sides or none at all, or where one read
-    /// names no volume to compare numbers on, only the content can say, and
-    /// only for a regular file with `seen`'s length and modification time.
-    /// `seen` must be a fresh read: a stored or volume-only mark never
-    /// proves. No probe.
+    /// file number on named volumes, one volume and one number are the link.
+    /// Only where neither read gives one, a zero number on both sides or
+    /// none at all, can the content say, and only for a regular file with
+    /// `seen`'s length and modification time. Where one read has a number and
+    /// the other has none, or a volume one read does not name, nothing
+    /// proves: a volume that numbers its files answers by number. `seen`
+    /// and the link must both be the disk service's own reads: a stored
+    /// mark, a volume-only mark or one built from std metadata never proves.
+    /// No probe.
     pub(crate) fn link_of(&self, seen: &Self) -> LinkLane {
         let (Some(linked), Some(before)) = (self.facts, seen.facts) else {
             return LinkLane::No;
         };
+        if !self.fresh || !seen.fresh {
+            return LinkLane::No;
+        }
         if linked.kind != EntryKind::File {
             return LinkLane::No;
         }
@@ -283,7 +300,6 @@ impl Mark {
                 false => LinkLane::No,
             },
             (None, None) => by_content,
-            _ if !named => by_content,
             _ => LinkLane::No,
         }
     }
@@ -348,6 +364,7 @@ impl Mark {
         if let Some(facts) = &mut mark.facts {
             facts.links = None;
         }
+        mark.fresh = false;
         mark
     }
 
@@ -365,6 +382,22 @@ impl Mark {
                     && self.compare(now).is_unwritten_by_its_owner()
             }
         }
+    }
+
+    /// Whether both reads give one nonzero file number and one length,
+    /// whatever volume each names: one file seen through two views of a
+    /// folder, a second mount, a share mounted twice, can name two volumes.
+    /// No probe.
+    pub(crate) fn is_numbered_as(&self, other: &Self) -> bool {
+        let numbered = matches!(
+            (self.file, other.file),
+            (Some(here), Some(there)) if here != 0 && here == there
+        );
+        numbered
+            && matches!(
+                (self.facts, other.facts),
+                (Some(here), Some(there)) if here.len == there.len
+            )
     }
 
     /// Whether the read said the file has a name besides this one.
@@ -395,6 +428,7 @@ impl Mark {
             volume: self.volume,
             file: None,
             facts: None,
+            fresh: false,
         }
     }
 
@@ -483,6 +517,7 @@ impl Mark {
             volume,
             file: None,
             facts: None,
+            fresh: false,
         };
         if text == UNKNOWN_LANE {
             return Some(volume_only(Volume::Unknown));
@@ -557,6 +592,7 @@ impl Mark {
                 owner: number(owner)?,
                 links: None,
             }),
+            fresh: false,
         })
     }
 }

@@ -593,6 +593,10 @@ mod tests {
         assert!(listing.titles[0].renames[0].done);
     }
 
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn a_dedup_names_the_destination_copy_that_survives() {
         let mut title = title("title-1", 1);
@@ -734,6 +738,10 @@ mod tests {
 
     /// A file tracked outside its title's folder lands in the destination
     /// folder root, so its survivor does too.
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn a_dedup_outside_the_title_folder_falls_back_to_the_destination_root() {
         let mut title = title("title-1", 1);

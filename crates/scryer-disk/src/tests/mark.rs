@@ -178,10 +178,11 @@ fn a_label_writes_a_time_on_either_side_of_the_epoch() {
         mark(unnumbered).label()
     };
     assert_eq!(label(None), "len=5 modified=unknown");
+    // Whole 100 ns ticks, the finest time Windows holds.
     for (modified, written) in [
         (
-            epoch + pause(1_700_000_000, 123_456_789),
-            "1700000000.123456789",
+            epoch + pause(1_700_000_000, 123_456_700),
+            "1700000000.123456700",
         ),
         (epoch + pause(0, 500_000_000), "0.500000000"),
         (epoch - pause(0, 500_000_000), "-0.500000000"),

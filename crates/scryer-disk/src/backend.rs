@@ -211,6 +211,17 @@ pub(crate) enum Refused {
     Link,
     #[error("the path is not a regular file")]
     NotAFile,
+    /// A second open of the name, made for a reparse point that is no link,
+    /// held another file than the first.
+    #[cfg(windows)]
+    #[error("the name held another file when it was opened again")]
+    Swapped,
+    /// A second open of the name, made for a reparse point that is no link,
+    /// cannot be shown to hold the file the first held: the volume gives no
+    /// file numbers to compare.
+    #[cfg(windows)]
+    #[error("the file opened again cannot be confirmed as the one first opened")]
+    Unconfirmed,
 }
 
 impl Refused {
@@ -304,13 +315,17 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn remove_tree_clearing_readonly(&self, path: &Path) -> io::Result<()> {
         self.remove_tree(path)
     }
-    /// Replaces an existing destination.
+    /// Replaces an existing destination of the source's kind. A folder
+    /// onto a file fails as `NotADirectory`, and a file onto a folder as
+    /// `IsADirectory`, on every platform.
     fn rename(&self, source: &Path, dest: &Path) -> io::Result<()>;
     /// Fails with `AlreadyExists` when `dest` exists, and with `Unsupported`
     /// when the filesystem has no exclusive rename.
     fn rename_no_replace(&self, source: &Path, dest: &Path) -> io::Result<()>;
     /// Reserves `dest` with an exclusive create, then renames over the
-    /// reservation, so a destination that appeared is never replaced.
+    /// reservation, so a destination that appeared is never replaced. The
+    /// reservation is a file, so a folder is refused as [`Self::rename`]
+    /// refuses it, and the reservation released.
     fn rename_claimed(&self, source: &Path, dest: &Path) -> Result<(), ClaimedRenameFailed>;
     fn hard_link(&self, source: &Path, dest: &Path) -> io::Result<()>;
     fn symlink(&self, target: &Path, at: &Path) -> io::Result<()>;
@@ -477,6 +492,8 @@ impl DiskBackend for SystemBackend {
     }
 
     fn rename(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        #[cfg(windows)]
+        refuse_another_kind(source, dest)?;
         std::fs::rename(source, dest)
     }
 
@@ -486,7 +503,15 @@ impl DiskBackend for SystemBackend {
 
     fn rename_claimed(&self, source: &Path, dest: &Path) -> Result<(), ClaimedRenameFailed> {
         self.open(dest, Open::create_new())?;
-        std::fs::rename(source, dest).map_err(|error| {
+        // The name holds the empty file just made, so only the source's kind
+        // is read before the rename: on Windows one handle read per claimed
+        // rename, links not followed, and none of the reservation; none on
+        // unix.
+        #[cfg(windows)]
+        let renamed = refuse_folder_onto_file(source).and_then(|()| std::fs::rename(source, dest));
+        #[cfg(not(windows))]
+        let renamed = std::fs::rename(source, dest);
+        renamed.map_err(|error| {
             // Release the empty reservation, and only that: a share can apply
             // the rename and lose the reply, leaving the only copy here. An
             // empty file there may be an empty source moved that way, so it
@@ -614,8 +639,9 @@ impl DiskBackend for SystemBackend {
         #[cfg(windows)]
         if !open.follow_links {
             use std::os::windows::fs::OpenOptionsExt;
-            // FILE_FLAG_OPEN_REPARSE_POINT: open a link itself, not its target.
-            options.custom_flags(0x0020_0000);
+            // Open a link itself, not its target, and a folder too, so the
+            // handle's own facts refuse it as one.
+            options.custom_flags(NO_FOLLOW_FLAGS);
         }
         let file = options.open(path).map_err(|error| {
             if !open.follow_links && is_link_loop(&error) {
@@ -960,6 +986,55 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     }
 }
 
+/// Refuses a replacing rename between two kinds, as unix refuses it. A
+/// Windows rename that replaces puts a folder over a file where the volume
+/// lacks POSIX rename semantics, such as FAT and many shares. Where the
+/// destination exists, two handle reads, links not followed; where it does
+/// not, one. Between these reads and the rename the names can change: the
+/// rename then does what Windows does.
+#[cfg(windows)]
+fn refuse_another_kind(source: &Path, dest: &Path) -> io::Result<()> {
+    let Ok(dest_is_folder) = is_folder(dest) else {
+        return Ok(());
+    };
+    match (is_folder(source)?, dest_is_folder) {
+        (true, false) => Err(io::ErrorKind::NotADirectory.into()),
+        (false, true) => Err(io::ErrorKind::IsADirectory.into()),
+        _ => Ok(()),
+    }
+}
+
+/// [`refuse_another_kind`] where the destination is known to be a file:
+/// a folder source is refused. One handle read, links not followed.
+#[cfg(windows)]
+fn refuse_folder_onto_file(source: &Path) -> io::Result<()> {
+    match is_folder(source)? {
+        true => Err(io::ErrorKind::NotADirectory.into()),
+        false => Ok(()),
+    }
+}
+
+/// Whether a Windows handle read of `path`, links not followed, is a folder.
+#[cfg(windows)]
+fn is_folder(path: &Path) -> io::Result<bool> {
+    by_handle::stat(path, false).map(|read| read.kind == EntryKind::Directory)
+}
+
+/// The flags of a Windows open that does not follow links:
+/// FILE_FLAG_OPEN_REPARSE_POINT opens a link or junction itself, and
+/// FILE_FLAG_BACKUP_SEMANTICS opens a folder, which a file open is otherwise
+/// denied, so the handle's facts say what the name is.
+#[cfg(windows)]
+const NO_FOLLOW_FLAGS: u32 = 0x0020_0000 | 0x0200_0000;
+
+/// No flags, for the reopen that follows a reparse point that is no link:
+/// the plain open the filter of a deduplicated, compressed or
+/// cloud-placeholder file answers as it answers any reader. A folder that
+/// took the name between the opens is refused either way: this open is
+/// denied it, and a handle to one is refused by its facts.
+#[cfg(windows)]
+const REOPEN_FLAGS: u32 = 0;
+
 /// What a Windows open that does not follow links keeps of the handle it
 /// opened on the reparse point itself. A link or a junction is refused, and
 /// anything but a regular file. A write open refuses any other reparse point
@@ -967,9 +1042,10 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
 /// file, opens the name again without the flag: with it, CreateFileW skips
 /// the filter that reads such a file, and the handle would read the raw
 /// stream. The second handle must hold the file the first one held, one
-/// volume serial and one file index, or the name changed between the opens
-/// and is refused as a link. One open and one read of the handle for every
-/// such open, and a second of each for that reparse point alone.
+/// volume serial and one file index: another file is refused as swapped,
+/// and a volume with no numbers to compare as unconfirmed. One open and one
+/// read of the handle for every such open, and a second of each for that
+/// reparse point alone.
 #[cfg(windows)]
 fn windows_held(
     file: std::fs::File,
@@ -992,10 +1068,17 @@ fn windows_held(
         return Err(Refused::Link.into());
     }
     drop(file);
-    let reopened = options.custom_flags(0).open(path)?;
+    let reopened = options.custom_flags(REOPEN_FLAGS).open(path)?;
     let read = by_handle::ByHandle::of(&reopened)?;
-    if read.kind() != EntryKind::File || !held.same_file_as(&read) {
-        return Err(Refused::Link.into());
+    // Another kind is another file, numbered or not.
+    if read.kind() != EntryKind::File {
+        return Err(Refused::Swapped.into());
+    }
+    if !held.tells_files_apart() {
+        return Err(Refused::Unconfirmed.into());
+    }
+    if !held.same_file_as(&read) {
+        return Err(Refused::Swapped.into());
     }
     Ok(reopened)
 }

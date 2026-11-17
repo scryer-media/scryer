@@ -68,14 +68,24 @@ pub(crate) fn keeps_numbers(flags: u32) -> bool {
 
 /// What a volume answered about its file numbers, by serial: a few slots a
 /// stat reads without a lock. A serial lands in one slot and pushes out the
-/// one before it; a volume that did not answer is remembered as keeping no
-/// numbers, so its stats do not ask again.
+/// one before it. An answer is remembered. A volume that did not answer
+/// leaves the reads without numbers and is not asked again until
+/// [`ASK_AGAIN_AFTER`] reads of it have gone by, so one that never answers
+/// is asked once in that many reads rather than on every one.
 pub(crate) struct VolumeAnswers {
     slots: [AtomicU64; 16],
 }
 
-const KNOWN: u64 = 0b10;
-const KEEPS: u64 = 0b01;
+const KNOWN: u64 = 0b010;
+const KEEPS: u64 = 0b001;
+const UNANSWERED: u64 = 0b100;
+/// Where a slot counts the reads a volume that did not answer has gone
+/// unasked.
+const SKIPPED_SHIFT: u32 = 8;
+const SKIPPED_MASK: u64 = 0xFFFF;
+/// How many reads of a volume that did not answer go by before it is asked
+/// again.
+pub(crate) const ASK_AGAIN_AFTER: u64 = 256;
 
 impl VolumeAnswers {
     pub(crate) const fn new() -> Self {
@@ -86,14 +96,29 @@ impl VolumeAnswers {
 
     /// Whether the volume `serial` keeps its file numbers: the remembered
     /// answer, or `ask`'s, which gives the volume's flags or `None` when the
-    /// volume did not say.
+    /// volume did not say. One that did not say is `false`, and is not asked
+    /// again until [`ASK_AGAIN_AFTER`] reads of it have gone by.
     pub(crate) fn keeps_numbers(&self, serial: u32, ask: impl FnOnce() -> Option<u32>) -> bool {
         let slot = &self.slots[serial as usize % self.slots.len()];
         let held = slot.load(Ordering::Relaxed);
-        if held & KNOWN != 0 && (held >> 32) as u32 == serial {
-            return held & KEEPS != 0;
+        if (held >> 32) as u32 == serial {
+            if held & KNOWN != 0 {
+                return held & KEEPS != 0;
+            }
+            let skipped = (held >> SKIPPED_SHIFT) & SKIPPED_MASK;
+            if held & UNANSWERED != 0 && skipped < ASK_AGAIN_AFTER {
+                slot.store(
+                    (u64::from(serial) << 32) | UNANSWERED | ((skipped + 1) << SKIPPED_SHIFT),
+                    Ordering::Relaxed,
+                );
+                return false;
+            }
         }
-        let keeps = ask().is_some_and(keeps_numbers);
+        let Some(flags) = ask() else {
+            slot.store((u64::from(serial) << 32) | UNANSWERED, Ordering::Relaxed);
+            return false;
+        };
+        let keeps = keeps_numbers(flags);
         slot.store(
             (u64::from(serial) << 32) | KNOWN | u64::from(keeps),
             Ordering::Relaxed,
@@ -139,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn a_volume_is_asked_once_whether_it_answered_or_not() {
+    fn a_volume_is_asked_once_it_answers_and_now_and_then_until_it_does() {
         let answers = VolumeAnswers::new();
         let asked = Cell::new(0);
         let ask = |flags: Option<u32>| {
@@ -152,15 +177,37 @@ mod tests {
         assert!(answers.keeps_numbers(7, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
         assert!(answers.keeps_numbers(7, ask(None)));
         assert_eq!(asked.get(), 1);
-        // A volume that did not answer keeps no numbers, and is not asked
-        // again.
+        // A volume that did not answer gives its reads no numbers, and is
+        // not asked again until ASK_AGAIN_AFTER reads have gone by; once it
+        // answers, the answer is kept.
         assert!(!answers.keeps_numbers(9, ask(None)));
-        assert!(!answers.keeps_numbers(9, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
         assert_eq!(asked.get(), 2);
+        for _ in 0..ASK_AGAIN_AFTER {
+            assert!(!answers.keeps_numbers(9, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
+        }
+        assert_eq!(asked.get(), 2);
+        assert!(!answers.keeps_numbers(9, ask(None)));
+        assert_eq!(asked.get(), 3);
+        for _ in 0..ASK_AGAIN_AFTER {
+            assert!(!answers.keeps_numbers(9, ask(None)));
+        }
+        assert!(answers.keeps_numbers(9, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
+        assert!(answers.keeps_numbers(9, ask(None)));
+        assert_eq!(asked.get(), 4);
+        // A volume that answered it keeps none is remembered so.
+        assert!(!answers.keeps_numbers(11, ask(Some(0))));
+        assert!(!answers.keeps_numbers(11, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
+        assert_eq!(asked.get(), 5);
         // Another serial in the same slot pushes the first one out.
         assert!(!answers.keeps_numbers(7 + 16, ask(Some(0))));
         assert!(answers.keeps_numbers(7, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
-        assert_eq!(asked.get(), 4);
+        assert_eq!(asked.get(), 7);
+        // A volume that did not answer is pushed out the same way, and
+        // asked when next seen.
+        assert!(!answers.keeps_numbers(13, ask(None)));
+        assert!(!answers.keeps_numbers(13 + 16, ask(Some(0))));
+        assert!(answers.keeps_numbers(13, ask(Some(SUPPORTS_OPEN_BY_FILE_ID))));
+        assert_eq!(asked.get(), 10);
     }
 
     #[test]

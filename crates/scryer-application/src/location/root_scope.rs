@@ -2135,7 +2135,10 @@ fn classification_from(
 mod plan_test_support {
     use super::*;
 
+    // Only `merge_identity`, used by tests gated to unix, needs these.
+    #[cfg(unix)]
     use crate::location::identity::{DestinationIdentityOutcome, IdentityCandidate};
+    #[cfg(unix)]
     use crate::location::merge::DestinationIdentityMatch;
     use crate::location::preview::{PlanConfirmationError, PlanConfirmationRequest};
 
@@ -2156,6 +2159,8 @@ mod plan_test_support {
         }
     }
 
+    // Only tests gated to unix, for their POSIX fixture roots, use this.
+    #[cfg(unix)]
     pub(super) fn companion(path: &str, size_bytes: u64) -> SourceFile {
         SourceFile {
             media_file_id: None,
@@ -2240,6 +2245,8 @@ mod plan_test_support {
     }
 
     /// The detection outcome that makes a title a merge candidate (FR-055).
+    // Only tests gated to unix, for their POSIX fixture roots, use this.
+    #[cfg(unix)]
     pub(super) fn merge_identity(title_id: &str, title_name: &str) -> DestinationIdentityOutcome {
         DestinationIdentityOutcome {
             match_kind: DestinationIdentityMatch::Unique,
@@ -2331,6 +2338,8 @@ mod plan_test_support {
     }
 
     /// Every plan item of `kind`, whatever section it landed in.
+    // Only tests gated to unix, for their POSIX fixture roots, use this.
+    #[cfg(unix)]
     pub(super) fn items_of(planned: &PlannedRootScope, kind: PlanItemKind) -> Vec<&PlanItem> {
         planned
             .plan
@@ -2340,6 +2349,8 @@ mod plan_test_support {
     }
 
     /// The details of every plan item of `kind` carrying `reason_code`.
+    // Only tests gated to unix, for their POSIX fixture roots, use this.
+    #[cfg(unix)]
     pub(super) fn details_for<'a>(
         planned: &'a PlannedRootScope,
         kind: PlanItemKind,
@@ -2760,6 +2771,10 @@ mod change_path_tests {
     /// re-anchored from the source root onto the new path, however deeply the
     /// folder is nested — and every file inside it keeps its position, because
     /// the shared planner lays a file down relative to the folder it was given.
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn nested_folders_and_files_keep_their_root_relative_layout() {
         let planned = build_root_scope_plan(&request(vec![title(
@@ -2793,6 +2808,10 @@ mod change_path_tests {
     /// everywhere — it lands in the destination folder's root, and the preview
     /// says so. The root-relative special case a root change used to have is
     /// gone, so one planner answers this for every workflow.
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn a_tracked_file_outside_its_title_folder_lands_in_the_destination_folder() {
         let planned = build_root_scope_plan(&request(vec![title(
@@ -2894,6 +2913,8 @@ mod fold_tests {
     use super::plan_test_support::*;
     use super::*;
 
+    // Only tests gated to unix, for their POSIX fixture roots, use this.
+    #[cfg(unix)]
     use crate::location::collisions::ContentFacts;
     use crate::location::identity::{DestinationIdentityOutcome, IdentityCandidate};
     use crate::location::merge::DestinationIdentityMatch;
@@ -2942,6 +2963,10 @@ mod fold_tests {
         );
     }
 
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn overlapping_roots_and_unreadable_roots_are_refused() {
         let mut nested = facts();
@@ -3005,6 +3030,10 @@ mod fold_tests {
 
     /// FR-025: two unrelated titles calculating the same destination folder never
     /// merge over the name — the incoming folder gets a unique previewed one.
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn an_unrelated_title_owning_the_name_gets_the_incoming_folder_uniqued() {
         let resolved = resolve_root_scope_folders(&resolution(
@@ -3024,6 +3053,10 @@ mod fold_tests {
         );
     }
 
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn untracked_destination_content_also_forces_a_unique_name() {
         let resolved = resolve_root_scope_folders(&resolution(
@@ -3038,6 +3071,10 @@ mod fold_tests {
         );
     }
 
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn a_uniqued_name_that_is_also_taken_is_numbered() {
         let resolved = resolve_root_scope_folders(&resolution(
@@ -3120,6 +3157,10 @@ mod fold_tests {
 
     // ── FR-023/FR-024 accounting and classification ──────────────────────────
 
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn every_assigned_title_is_accounted_for_and_the_seven_classifications_close() {
         let moving = folded(
@@ -3244,6 +3285,10 @@ mod fold_tests {
     /// FR-025/FR-063: a fold plans against the folder resolution settled on,
     /// not against the source root's layout — and a merge target keeps the
     /// folder it already owns, with no rename line contradicting the merge.
+    // The fixture roots are POSIX paths, which Windows reads as drive-relative:
+    // a planner there joins them with `\` and refuses them as roots, as it
+    // should. What this asserts is the layout on an absolute root.
+    #[cfg(unix)]
     #[test]
     fn a_fold_plans_against_the_resolved_folder_and_a_merge_target_keeps_its_own() {
         let uniqued = folded(

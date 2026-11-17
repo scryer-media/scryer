@@ -6,8 +6,9 @@
 //! and opens a folder, and a read that does not follow links opens the link
 //! itself. A reparse point's tag is one more call on the same handle. Whether
 //! the volume keeps its file numbers is one call per volume serial, the first
-//! time it is seen, and remembered for the life of the process whether the
-//! volume answered or not. Where std falls back, this does too, with one call
+//! time it is seen, and an answer is remembered for the life of the process;
+//! a volume that did not answer is asked again only once a bounded number of
+//! its reads have gone by. Where std falls back, this does too, with one call
 //! each: a name the process may not open reads from its folder's listing, and
 //! a name that cannot be followed is read as itself unless it is a link.
 
@@ -136,10 +137,14 @@ impl ByHandle {
     /// given, kept by its volume or not, since the two opens are moments
     /// apart; on ReFS two files can share a truncated index.
     pub(crate) fn same_file_as(&self, later: &Self) -> bool {
-        self.serial != 0
-            && self.index != 0
-            && self.index != u64::MAX
-            && (self.serial, self.index) == (later.serial, later.index)
+        self.tells_files_apart() && (self.serial, self.index) == (later.serial, later.index)
+    }
+
+    /// Whether this read carries a volume serial and file index that can
+    /// tell its file from another: [`Self::same_file_as`] can only answer
+    /// yes where it does.
+    pub(crate) fn tells_files_apart(&self) -> bool {
+        self.serial != 0 && self.index != 0 && self.index != u64::MAX
     }
 
     pub(crate) fn raw_stat(&self) -> RawStat {

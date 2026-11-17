@@ -293,6 +293,12 @@ pub(crate) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<
             ));
         }
         current.push(component);
+        // A Windows prefix alone is no folder: `C:` names the drive's current
+        // folder, and `\\?\C:` the volume device, whose handle answers no
+        // file information. The root after it is the first entry to read.
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
         match tokio::fs::symlink_metadata(&current).await {
             Ok(meta) => {
                 #[cfg(windows)]

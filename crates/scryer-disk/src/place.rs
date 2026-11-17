@@ -527,13 +527,15 @@ impl Disk {
     ///
     /// Once the link is made its new name is read, itself, and must be the
     /// file `seen` was read as before the link: the same volume and file
-    /// number where both reads give a usable one. Where neither does, a zero
-    /// number on both sides or none, or where `seen` names no volume, the
-    /// new name must have `seen`'s length and modification time and both
-    /// names must hash alike in their first and last MiB, and
-    /// [`Placed::proven_by`] says the content proved it.
-    /// [`LinkProof::NameAndLength`] reads what the name resolves to as well. `seen` must come from a read made for this call: a stored mark
-    /// or one that names a volume only never proves.
+    /// number where both reads give a usable one. Only where neither does, a
+    /// zero number on both sides or none, must the new name instead have
+    /// `seen`'s length and modification time and both names hash alike in
+    /// their first and last MiB, and [`Placed::proven_by`] says the content
+    /// proved it. Where one read gives a usable number and the other does
+    /// not, nothing proves the link. [`LinkProof::NameAndLength`] reads what
+    /// the name resolves to as well. `seen` must be this service's own read:
+    /// a stored mark, one that names a volume only, or one built from std
+    /// metadata ([`Mark::of`]) never proves.
     ///
     /// A link that does not prove is removed: only the name this call
     /// created, and only when the link call itself succeeded. A name that

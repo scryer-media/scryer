@@ -394,6 +394,12 @@ fn classify(error: &io::Error) -> &'static str {
         return match refusal {
             super::backend::Refused::Link => reason::DISK_LINK_NOT_FOLLOWED,
             super::backend::Refused::NotAFile => reason::DISK_WRONG_KIND,
+            // Answered with the code a swapped or unconfirmed reopen had
+            // before each was its own refusal, until each has a code.
+            #[cfg(windows)]
+            super::backend::Refused::Swapped | super::backend::Refused::Unconfirmed => {
+                reason::DISK_LINK_NOT_FOLLOWED
+            }
         };
     }
     match error.kind() {

@@ -398,6 +398,22 @@ pub fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Optio
         }
         previous_was_separator = is_separator;
     }
+    // A `.` segment past the first names the folder it is in, as Windows
+    // itself reads it and as the posix rule's components drop it; a leading
+    // `.` and every `..` are kept, as there.
+    if normalized.split('/').skip(1).any(|segment| segment == ".") {
+        let kept: Vec<&str> = normalized
+            .split('/')
+            .enumerate()
+            .filter(|(at, segment)| *at == 0 || *segment != ".")
+            .map(|(_, segment)| segment)
+            .collect();
+        let ends_open = normalized.ends_with("/.");
+        normalized = kept.join("/");
+        if ends_open && !normalized.ends_with('/') {
+            normalized.push('/');
+        }
+    }
 
     while normalized.len() > 1 && normalized.ends_with('/') {
         if normalized.len() == 3 && normalized.as_bytes().get(1) == Some(&b':') {
@@ -663,14 +679,21 @@ mod tests {
     /// form. Each has to be reachable from the others' candidate sets.
     #[test]
     fn folder_path_candidates_cover_the_spellings_of_one_folder() {
+        // The lookup compares both sides through the platform's fold: plain
+        // equality off Windows, case and separator folded on it.
+        let folded = |value: &str| super::folder_path_lookup_key_for_platform(value, cfg!(windows));
+        let reaches = |from: &str, to: &str| {
+            super::folder_path_match_candidates(from)
+                .iter()
+                .any(|candidate| folded(candidate) == folded(to))
+        };
         let canonical = "/media/movies/Arrival (2016)";
         for stored in [
             "/media/movies/Arrival (2016)/",
             "/media/movies/./Arrival (2016)",
         ] {
             assert!(
-                super::folder_path_match_candidates(canonical).contains(&stored.to_string())
-                    || super::folder_path_match_candidates(stored).contains(&canonical.to_string()),
+                reaches(canonical, stored) || reaches(stored, canonical),
                 "{stored} is not reachable from {canonical}"
             );
         }
@@ -841,6 +864,9 @@ mod tests {
 
     #[test]
     fn folder_identity_normalizes_separators_and_trailing_separators() {
+        // The posix rule reads the path with the host's own path type, and
+        // only a unix host applies it.
+        #[cfg(unix)]
         assert_eq!(
             folder_path_identity_key_for_platform("/library//Show/", false),
             Some("/library/Show".to_string())
@@ -848,6 +874,21 @@ mod tests {
         assert_eq!(
             folder_path_identity_key_for_platform(r"C:\\Media\\Show\\", true),
             Some("c:/media/show".to_string())
+        );
+        for dotted in [r"C:\Media\.\Show", r"C:\Media\Show\.", "c:/./media/show/"] {
+            assert_eq!(
+                folder_path_identity_key_for_platform(dotted, true),
+                Some("c:/media/show".to_string()),
+                "{dotted}"
+            );
+        }
+        assert_eq!(
+            folder_path_identity_key_for_platform(r"C:\.", true),
+            Some("c:/".to_string())
+        );
+        assert_eq!(
+            folder_path_identity_key_for_platform(r"C:\Media\..\Show", true),
+            Some("c:/media/../show".to_string())
         );
     }
 
@@ -863,6 +904,9 @@ mod tests {
         );
     }
 
+    /// The posix rule reads the path with the host's own path type, and only
+    /// a unix host applies it; a Windows host reads `\` as a separator.
+    #[cfg(unix)]
     #[test]
     fn posix_folder_identity_preserves_backslashes_and_whitespace() {
         assert_ne!(

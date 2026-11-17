@@ -72,8 +72,6 @@ fn a_link_whose_new_name_is_the_file_seen_is_proven() {
     for (linked, seen) in [
         (numbered(0, 17), numbered(0, 17)),
         (unnumbered(17, 40), unnumbered(17, 40)),
-        // A source read that names no volume has no number to compare.
-        (numbered(7, 17), unnumbered(17, 0)),
     ] {
         let (disk, backend) = scripted();
         backend.stat_is(
@@ -90,6 +88,70 @@ fn a_link_whose_new_name_is_the_file_seen_is_proven() {
         assert_eq!(placed.proven_by, Some(LinkProven::Content));
         assert_eq!(backend.paths_of("open"), [p(SOURCE), p(DEST)]);
         assert_eq!(backend.calls_of("remove_file"), 0);
+    }
+
+    // Where one read has a number and the other none, the volume numbers its
+    // files and nothing proves: the content is not asked, and the name this
+    // call made is removed.
+    for (linked, seen) in [
+        (numbered(7, 17), unnumbered(17, 0)),
+        (unnumbered(17, 0), numbered(7, 17)),
+    ] {
+        let (disk, backend) = scripted();
+        backend.stat_is(
+            DEST,
+            Ok(RawStat {
+                modified: seen.modified,
+                ..linked
+            }),
+        );
+        backend.holds(SOURCE, b"seventeen bytes..");
+        backend.holds(DEST, b"seventeen bytes..");
+        let refusal =
+            prove(&disk, Fallback::None, &seen, LinkProof::NameAndLength).expect_err("unproven");
+        assert_eq!(
+            refusal.refused,
+            Refused::CannotLink(CannotLink::Unverifiable)
+        );
+        let doubt = &refusal.unproven.as_ref().expect("says why").doubt;
+        assert!(matches!(doubt, Doubt::OtherFile { .. }), "{doubt:?}");
+        assert_eq!(backend.calls_of("open"), 0, "no content is read");
+        assert_eq!(backend.paths_of("remove_file"), [p(DEST)]);
+    }
+}
+
+/// Only the service's own read proves: the same read stored and read back,
+/// or naming its volume alone, does not, on any lane, and the name the call
+/// made is removed without its content being read.
+#[test]
+fn a_stored_or_volume_only_mark_never_proves_a_link() {
+    for stat in [numbered(7, 17), numbered(0, 17), unnumbered(17, 40)] {
+        let read = Mark::of_stat(&stat);
+        let stored = Mark::from_stored(&read.to_stored()).expect("stored");
+        for seen in [read.as_stored(), stored, read.volume()] {
+            let (disk, backend) = scripted();
+            backend.stat_is(DEST, Ok(stat));
+            backend.holds(SOURCE, b"seventeen bytes..");
+            backend.holds(DEST, b"seventeen bytes..");
+            let refusal = disk
+                .place_proven_blocking(
+                    &p(SOURCE),
+                    &p(DEST),
+                    linking(Fallback::None),
+                    &seen,
+                    LinkProof::Name,
+                )
+                .expect_err("never proven");
+            assert_eq!(
+                refusal.refused,
+                Refused::CannotLink(CannotLink::Unverifiable),
+                "{seen:?}"
+            );
+            let doubt = &refusal.unproven.as_ref().expect("says why").doubt;
+            assert!(matches!(doubt, Doubt::OtherFile { .. }), "{doubt:?}");
+            assert_eq!(backend.calls_of("open"), 0, "no content is read");
+            assert_eq!(backend.paths_of("remove_file"), [p(DEST)]);
+        }
     }
 }
 
@@ -351,13 +413,13 @@ fn a_regular_file_that_is_not_the_link_goes_only_with_the_sources_facts() {
             let refusal =
                 prove(&disk, fallback, &seen, LinkProof::NameAndLength).expect_err("not the link");
             let unproven = refusal.unproven.as_ref().expect("says why");
-            // A name that reads with no volume against a numbered source can
-            // be told only by its content, which here cannot be read.
-            let doubt_seen = match index {
-                1 => matches!(unproven.doubt, Doubt::Unread(_)),
-                _ => matches!(unproven.doubt, Doubt::OtherFile { .. }),
-            };
-            assert!(doubt_seen, "case {index}: {:?}", unproven.doubt);
+            // A name that reads with no number against a numbered source is
+            // not the link either: no content is asked.
+            assert!(
+                matches!(unproven.doubt, Doubt::OtherFile { .. }),
+                "case {index}: {:?}",
+                unproven.doubt
+            );
             let after = match removed {
                 true => LinkAfter::Removed,
                 false => LinkAfter::LeftAlone,
@@ -451,8 +513,10 @@ mod on_real_files {
         Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)))
     }
 
+    /// The disk service's own read, as a caller's seen mark is: on a volume
+    /// that numbers its files, it carries the number.
     fn mark(path: &Path) -> Mark {
-        Mark::of(&std::fs::symlink_metadata(path).expect("fixture metadata"))
+        disk().fingerprint_blocking(path).expect("fixture metadata")
     }
 
     fn names(dir: &Path) -> Vec<String> {
