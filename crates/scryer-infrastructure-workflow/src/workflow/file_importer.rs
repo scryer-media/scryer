@@ -2056,17 +2056,20 @@ enum TakeBack {
     /// The source name is gone, or holds another file than the one the
     /// import placed from, so the destination may be the last copy.
     KeptForSource,
+    /// A copy whose source did not read: nothing says the source still
+    /// holds the data, so the copy may be the last one.
+    KeptSourceUnread,
 }
 
 /// Removes what an import placed at `dest` after a check on it failed.
 ///
 /// The source is read first. While its name is gone, or holds another file
 /// than the one a copy read or a hard link shares, the destination may be
-/// the last copy of the data and is kept. A source that does not read says
-/// nothing of where the data is: a hard link is kept, since it is the
-/// source's own file and cannot be taken for a copy; a copy or a link is
-/// taken back, so that a copy that failed its check is never left at the
-/// final name for a retry to adopt.
+/// the last copy of the data and is kept. A copy is removed only while the
+/// source reads and is still the file the copy was read from, so a copy
+/// whose source does not read is kept at its final name too. A hard link
+/// whose source does not read is kept, since it is the source's own file; a
+/// link, which holds no data, is taken back.
 ///
 /// Then the destination is removed only while its name still holds what
 /// `landed` marks. Anything else there, a name that does not read, or no
@@ -2106,6 +2109,14 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
             );
             return TakeBack::Kept;
         }
+        Err(_) if matches!(landed, Landed::Copy { .. }) => {
+            tracing::warn!(
+                source = %source.display(),
+                dest = %dest.display(),
+                "the import source did not read, so the copy may be the only one; it is kept"
+            );
+            return TakeBack::KeptSourceUnread;
+        }
         Err(_) => {}
     }
     let still_placed = Disk::process()
@@ -2124,17 +2135,19 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
 }
 
 /// [`take_back_placed`] after `error`, which says so when the destination
-/// is kept because the source no longer holds the data. The failure's
-/// routing fact is kept.
+/// is kept because the source no longer holds the data or did not read. The
+/// failure's routing fact is kept.
 fn took_back(error: AppError, source: &Path, dest: &Path, landed: Landed<'_>) -> AppError {
-    if take_back_placed(source, dest, landed) != TakeBack::KeptForSource {
-        return error;
-    }
+    let why = match take_back_placed(source, dest, landed) {
+        TakeBack::KeptForSource => "the source no longer holds this file",
+        TakeBack::KeptSourceUnread => "the source did not read",
+        TakeBack::Removed | TakeBack::Kept => return error,
+    };
     match &error {
         AppError::Repository(_) | AppError::RepositoryFailed { .. } => import_error_context(
             &error,
             format!(
-                "{error}; the source no longer holds this file, so {} is kept as what may be its only copy",
+                "{error}; {why}, so {} is kept as what may be its only copy",
                 dest.display()
             ),
         ),
@@ -6839,13 +6852,12 @@ mod tests {
         }
     }
 
-    /// A copy that failed its proof is removed even when the source then
-    /// does not read: one failed read of the source says nothing of where
-    /// the data is, and a corrupt copy left at the final name could be
-    /// adopted by a retry.
+    /// A copy that failed its proof is kept at its final name when the
+    /// source then does not read: nothing says the source still holds the
+    /// data, so the copy may be the only one. The source is untouched.
     #[cfg(unix)]
     #[test]
-    fn a_copy_that_failed_its_proof_is_removed_when_the_source_does_not_read() {
+    fn a_copy_that_failed_its_proof_is_kept_when_the_source_does_not_read() {
         use std::os::unix::fs::PermissionsExt;
 
         /// Opens the folder again when dropped, so a failing assertion never
@@ -6903,7 +6915,10 @@ mod tests {
             error.to_string().contains("copy verification failed"),
             "unexpected error: {error}"
         );
-        assert!(!dest.exists(), "the corrupt copy is removed");
+        assert!(
+            dest.exists(),
+            "the copy is kept while the source does not read"
+        );
         assert_eq!(
             std::fs::read(&source).expect("the source is untouched"),
             b"synthetic video bytes"
