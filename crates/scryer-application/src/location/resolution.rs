@@ -118,7 +118,7 @@ impl FileResolution {
 
 use super::executor::{
     FileAbandonment, FileMoveRequest, PlannedFile, PlannedTitle, TitleFileMover,
-    move_error_is_transient,
+    move_error_may_be_storage_loss,
 };
 use super::model::{
     AppliedVerificationDepth, FileVerificationOutcome, KnownSourceContent, VerificationDepth,
@@ -196,7 +196,7 @@ impl ConflictResolver {
                 // keep waiting for the attempt that places the media file. The
                 // runner reports a file it gives up on through
                 // `media_abandoned`.
-                Err(error) if move_error_is_transient(error) => None,
+                Err(error) if move_error_may_be_storage_loss(error) => None,
                 Ok(file) if file.outcome == FileVerificationOutcome::Unavailable => None,
                 _ => Some(Err(MediaUnplaced::NotTransferred)),
             };

@@ -490,9 +490,11 @@ pub const PROGRESS_PULSE_INTERVAL: Duration = Duration::from_secs(5);
 ///
 /// A verification mismatch is deliberately *not* covered: a mismatch is
 /// evidence about the bytes, not a hiccup, and retrying it would turn a caught
-/// corruption into a loop (FR-044, C4). Only an I/O-shaped error
-/// ([`AppError::Repository`]) — a dropped network mount, a momentary ENOSPC, a
-/// blocked descriptor — is worth a second look.
+/// corruption into a loop (FR-044, C4). Only storage that did not answer — a
+/// dropped network mount, a blocked descriptor, an I/O error with no lasting
+/// cause — is worth a second look. A full or denied destination and a missing
+/// source are lasting and fail at once, unless the storage itself has gone
+/// away, in which case the runner waits for it and tries again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMoveRetry {
     /// Total attempts, including the first. `1` disables retrying.
@@ -539,6 +541,21 @@ pub(super) fn move_error_is_transient(error: &AppError) -> bool {
         | AppError::RepositoryFailure { .. } => true,
         _ => false,
     }
+}
+
+/// Whether an error can be what storage that went away mid-run looks like:
+/// anything transient, and the lasting refusals an unmounted share also gives
+/// (a source that reads as missing or denied, a destination that reads as full
+/// or denied). The runner asks whether storage is still there before it
+/// trusts one of these as the file's answer.
+pub(super) fn move_error_may_be_storage_loss(error: &AppError) -> bool {
+    use crate::error_reasons::location;
+    move_error_is_transient(error)
+        || matches!(error, AppError::RepositoryFailed { .. })
+        || matches!(
+            error.validation_reason(),
+            Some(location::DESTINATION_NO_SPACE | location::DESTINATION_PERMISSION_DENIED)
+        )
 }
 
 /// The reason code a run-level stop writes on the operation row.
@@ -3107,6 +3124,97 @@ mod tests {
         assert_eq!(mover.attempts.load(Ordering::SeqCst), 2);
         assert!(!hub.has_storage_waiters("op-1"));
         assert_eq!(reconciler.cleaned.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lasting_refusal_waits_for_storage_that_left_and_fails_at_once_when_it_is_there() {
+        use crate::disk::Refused;
+        struct RefuseOnce {
+            destination: PathBuf,
+            detached: PathBuf,
+            disconnect: bool,
+            refused: Refused,
+            attempts: AtomicU64,
+        }
+        #[async_trait]
+        impl TitleFileMover for RefuseOnce {
+            async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    if self.disconnect {
+                        std::fs::rename(&self.destination, &self.detached).unwrap();
+                    }
+                    return Err(crate::location::verify::copy_refusal(
+                        self.refused,
+                        "synthetic".to_owned(),
+                    ));
+                }
+                Ok(VerifiedFile {
+                    source_path: request.file.source_path.clone(),
+                    destination_path: request.file.destination_path.clone(),
+                    hashes: None,
+                    depth: AppliedVerificationDepth::exact(request.depth),
+                    outcome: FileVerificationOutcome::Verified,
+                    detail: None,
+                })
+            }
+        }
+        for refused in [Refused::SourceMissing, Refused::NoSpace] {
+            for disconnect in [true, false] {
+                let temp = tempfile::tempdir().unwrap();
+                let destination = temp.path().join("destination");
+                std::fs::create_dir(&destination).unwrap();
+                let mover = RefuseOnce {
+                    detached: temp.path().join("detached"),
+                    destination,
+                    disconnect,
+                    refused,
+                    attempts: AtomicU64::new(0),
+                };
+                let mut title = planned_title("first", 0, 1);
+                title.files[0].source_path = temp.path().join("source.mkv");
+                title.files[0].destination_path = mover.destination.join("file.mkv");
+                let plan = OperationWorkPlan::new(vec![title]);
+                let store = FakeStore::with_operation(operation());
+                let admission = ScriptedAdmission::new(&[]);
+                let reconciler = RecordingReconciler::default();
+                let hub = crate::location::live::TransferHub::default();
+                let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+                    .with_transfers(&hub);
+                let run = runner.run("op-1", &plan);
+                tokio::pin!(run);
+                // A run that ends without waiting ends this loop too, so a
+                // missed wait fails the assertions below instead of hanging.
+                let result = loop {
+                    tokio::select! {
+                        result = &mut run => break result,
+                        () = tokio::task::yield_now() => {
+                            if disconnect && hub.has_storage_waiters("op-1") {
+                                assert_eq!(mover.attempts.load(Ordering::SeqCst), 1);
+                                std::fs::rename(&mover.detached, &mover.destination).unwrap();
+                                break run.await;
+                            }
+                        }
+                    }
+                };
+                let result = result.unwrap();
+                if disconnect {
+                    assert_eq!(
+                        result.state,
+                        LocationOperationState::Completed,
+                        "{refused:?} waits for storage and resumes"
+                    );
+                    assert_eq!(mover.attempts.load(Ordering::SeqCst), 2, "{refused:?}");
+                } else {
+                    assert_eq!(
+                        result.state,
+                        LocationOperationState::Failed,
+                        "{refused:?} with storage present fails"
+                    );
+                    assert_eq!(mover.attempts.load(Ordering::SeqCst), 1, "{refused:?}");
+                }
+                assert!(!hub.has_storage_waiters("op-1"));
+            }
+        }
     }
 
     #[tokio::test(start_paused = true)]
