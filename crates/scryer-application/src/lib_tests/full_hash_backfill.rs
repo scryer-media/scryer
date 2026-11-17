@@ -571,6 +571,7 @@ async fn a_file_hashed_since_the_queue_page_is_skipped() {
                 move_crc: Some(1),
                 crc_algorithm: Some(crate::location::model::MoveCrcAlgorithm::Crc64Nvme),
                 hash_computed_at: Some(Utc::now()),
+                mark: None,
             },
         )
         .await
@@ -955,6 +956,7 @@ async fn seed_scanned_movie_with_hashes(
                 move_crc: Some(42),
                 crc_algorithm: Some(crate::location::model::MoveCrcAlgorithm::Crc64Nvme),
                 hash_computed_at: Some(Utc::now()),
+                mark: None,
             },
         )
         .await

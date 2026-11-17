@@ -327,6 +327,11 @@ pub struct PersistedContentHashes {
     /// vintage can be attested from one that cannot (see
     /// [`crate::location::collisions::FullHash`]).
     pub hash_computed_at: Option<DateTime<Utc>>,
+    /// The stored mark of the file the hash was read of, written and cleared
+    /// with the hash. Absent for a hash stored without one, which is judged
+    /// by the row's size and source signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
 }
 
 impl PersistedContentHashes {
@@ -337,7 +342,26 @@ impl PersistedContentHashes {
             move_crc: Some(hashes.move_crc),
             crc_algorithm: Some(hashes.crc_algorithm),
             hash_computed_at: Some(computed_at),
+            mark: None,
         }
+    }
+
+    /// What the disk service read, stamped with when, and the mark it was
+    /// read against.
+    pub fn from_known(known: &crate::disk::KnownHash, computed_at: DateTime<Utc>) -> Self {
+        Self {
+            full_blake3: known.blake3.clone(),
+            move_crc: known.crc,
+            crc_algorithm: known.crc.map(|_| MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(computed_at),
+            mark: Some(known.mark.to_stored()),
+        }
+    }
+
+    /// The same hash, held to `mark`.
+    pub fn with_mark(mut self, mark: &crate::disk::Mark) -> Self {
+        self.mark = Some(mark.to_stored());
+        self
     }
 }
 

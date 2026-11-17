@@ -55,3 +55,74 @@ pub fn file_source_signature_from_metadata(
         })
     }
 }
+
+/// The modification time a signature in this platform's scheme records, read
+/// back from its text. `None` for another platform's scheme or text this
+/// build did not write.
+pub fn modified_from_signature(scheme: &str, value: &str) -> Option<std::time::SystemTime> {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    if scheme != MEDIA_FILE_SOURCE_SIGNATURE_SCHEME {
+        return None;
+    }
+
+    #[cfg(windows)]
+    {
+        // 100-nanosecond intervals since 1601-01-01, the FILETIME epoch.
+        const FILETIME_TO_UNIX_SECS: u64 = 11_644_473_600;
+        let ticks: u64 = value.trim().parse().ok()?;
+        let since_1601 = Duration::new(ticks / 10_000_000, ((ticks % 10_000_000) * 100) as u32);
+        let filetime_epoch = UNIX_EPOCH.checked_sub(Duration::from_secs(FILETIME_TO_UNIX_SECS))?;
+        filetime_epoch.checked_add(since_1601)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let (secs, nanos) = value.trim().split_once(':')?;
+        let nanos: u32 = nanos.parse().ok().filter(|nanos| *nanos < 1_000_000_000)?;
+        // A time before the epoch is spelled with a negative seconds count,
+        // and the nanoseconds still count forward from it.
+        if let Some(before) = secs.strip_prefix('-') {
+            let secs: u64 = before.parse().ok()?;
+            #[cfg(unix)]
+            {
+                UNIX_EPOCH
+                    .checked_sub(Duration::from_secs(secs))?
+                    .checked_add(Duration::from_nanos(u64::from(nanos)))
+            }
+            #[cfg(not(unix))]
+            {
+                UNIX_EPOCH.checked_sub(Duration::new(secs, nanos))
+            }
+        } else {
+            let secs: u64 = secs.parse().ok()?;
+            UNIX_EPOCH.checked_add(Duration::new(secs, nanos))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signature_reads_back_as_the_modification_time_it_records() {
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        let metadata = file.as_file().metadata().expect("metadata");
+        let signature = file_source_signature_from_metadata(&metadata).expect("signature");
+
+        assert_eq!(
+            modified_from_signature(&signature.scheme, &signature.value),
+            Some(metadata.modified().expect("modified"))
+        );
+    }
+
+    #[test]
+    fn another_scheme_or_foreign_text_reads_as_nothing() {
+        assert_eq!(modified_from_signature("another_scheme_v1", "1:2"), None);
+        assert_eq!(
+            modified_from_signature(MEDIA_FILE_SOURCE_SIGNATURE_SCHEME, "not a time"),
+            None
+        );
+    }
+}

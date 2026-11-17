@@ -9839,6 +9839,17 @@ pub struct MediaFileHashCandidate {
     pub size_bytes: i64,
 }
 
+/// The whole-file hash a media file row stores, with the facts the row
+/// judges it by: the recorded size, and the source signature for a hash
+/// stored without a mark.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredMediaFileHash {
+    pub size_bytes: i64,
+    pub source_signature_scheme: Option<String>,
+    pub source_signature_value: Option<String>,
+    pub hashes: crate::location::model::PersistedContentHashes,
+}
+
 #[async_trait]
 pub trait MediaFileRepository: Send + Sync {
     /// Stable, bounded pages of files in an explicit score-refresh selection.
@@ -10231,6 +10242,30 @@ pub trait MediaFileRepository: Send + Sync {
     /// (FR-046). Returns whether a row actually changed.
     async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
         let _ = file_id;
+        Ok(false)
+    }
+
+    /// The whole-file hash stored on `row`, by the row's id or by its title
+    /// and stored path. `None` when the row is absent or holds no hash. The
+    /// default stores nothing.
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+    ) -> AppResult<Option<StoredMediaFileHash>> {
+        let _ = row;
+        Ok(None)
+    }
+
+    /// Store a whole-file hash, with its mark, on `row` while the row still
+    /// records `size_bytes`. Returns whether a row changed. The default
+    /// stores nothing.
+    async fn record_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+        size_bytes: i64,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let _ = (row, size_bytes, hashes);
         Ok(false)
     }
 

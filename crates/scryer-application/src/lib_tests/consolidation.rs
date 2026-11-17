@@ -274,6 +274,7 @@ impl ConsolidationFixture {
                     move_crc: None,
                     crc_algorithm: None,
                     hash_computed_at: Some(Utc::now()),
+                    mark: None,
                 },
             )
             .await

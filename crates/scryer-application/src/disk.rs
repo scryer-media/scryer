@@ -7,6 +7,7 @@
 //! which samples the library roots.
 
 pub(crate) mod capacity;
+mod hash_store;
 pub mod placement;
 
 #[cfg(test)]
@@ -27,6 +28,9 @@ pub use scryer_disk::{
     FILE_NAME_MAX_BYTES, Landing, Phase, Progress, Proof, RESUMABLE_STAGING_SUFFIX, StagedCause,
     StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep, Verdict, Watch,
     resumable_staging_path,
+};
+pub use scryer_disk::{
+    Fresh, FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture,
 };
 
 #[cfg(test)]

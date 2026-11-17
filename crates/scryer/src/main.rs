@@ -2171,6 +2171,7 @@ async fn bootstrap_application(
     // The disk owner learns the roots it caches and bounds; root writes
     // install them again.
     app_use_case.install_disk_volumes().await;
+    app_use_case.install_disk_hash_store();
 
     // After root reconciliation, so it reads the roots the library really has.
     application_migrator

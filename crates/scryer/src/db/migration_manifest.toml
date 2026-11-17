@@ -4364,6 +4364,23 @@ file = "postgres/migrations/0360_lifecycle_candidate_actions_conflict.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 361
+description = "media file full hash mark"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0361_media_file_full_hash_mark.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0361_media_file_full_hash_mark.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"
@@ -4373,4 +4390,3 @@ engine = "sqlite"
 through_version = 341
 file = "postgres/baselines/0341_baseline.sql"
 engine = "postgres"
-
