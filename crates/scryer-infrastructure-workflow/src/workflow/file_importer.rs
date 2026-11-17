@@ -5366,7 +5366,10 @@ mod tests {
                 .fingerprint_blocking(&source)
                 .expect("source mark");
             let placed = Disk::process().fingerprint_blocking(&dest).ok();
-            std::fs::remove_file(&dest).expect("take the placed file away");
+            // Moved aside, not removed, so its file number stays taken and
+            // what is put at the name next cannot be numbered as it was.
+            std::fs::rename(&dest, dir.path().join("placed-aside.mkv"))
+                .expect("move the placed file aside");
             let _listener = match socket {
                 true => Some(std::os::unix::net::UnixListener::bind(&dest).expect("bind socket")),
                 false => {
@@ -6745,6 +6748,16 @@ mod tests {
     #[test]
     fn a_copy_that_failed_its_proof_is_removed_when_the_source_does_not_read() {
         use std::os::unix::fs::PermissionsExt;
+
+        /// Opens the folder again when dropped, so a failing assertion never
+        /// leaves the temporary folder undeletable.
+        struct Reopen(PathBuf);
+        impl Drop for Reopen {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+
         let temp = tempfile::tempdir().expect("tempdir");
         let downloads = temp.path().join("downloads");
         std::fs::create_dir_all(&downloads).expect("downloads");
@@ -6752,6 +6765,18 @@ mod tests {
         let dest = temp.path().join("library/Sample.Title.mkv");
         std::fs::create_dir_all(dest.parent().unwrap()).expect("library");
         std::fs::write(&source, b"synthetic video bytes").expect("write source");
+
+        // A process that reads through a closed folder anyway, as root does,
+        // cannot make the source fail to read; the test would prove nothing.
+        let reopen = Reopen(downloads.clone());
+        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o000))
+            .expect("close the source folder");
+        let still_reads = std::fs::symlink_metadata(&source).is_ok();
+        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o755))
+            .expect("reopen the source folder");
+        if still_reads {
+            return;
+        }
 
         let error = import_file_blocking_at_depth(
             source.clone(),
@@ -6773,8 +6798,7 @@ mod tests {
             ImportFilePermissions::default(),
         )
         .expect_err("a corrupted copy must not be imported");
-        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o755))
-            .expect("reopen the source folder");
+        drop(reopen);
 
         assert!(
             error.to_string().contains("copy verification failed"),
