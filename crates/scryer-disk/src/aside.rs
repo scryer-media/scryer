@@ -28,9 +28,20 @@ pub enum AsideRemoval {
     /// source was aside, so nothing says whether the two are one entry. The
     /// source was put back and nothing was removed.
     DestinationUnread(PathReading),
+    /// The destination read once the source was aside, but what it showed
+    /// does not tell whether the two are one entry: its folder's listing
+    /// lacks its name as spelled, or it shows the source's file number off
+    /// the source's own named volume. The source was put back and nothing
+    /// was removed.
+    CannotTell,
     /// The destination checked out, but removing the set-aside name failed.
     /// The source was put back.
     NotRemoved(DiskError),
+    /// The destination checked out, removing the set-aside name answered a
+    /// failure, and the name then read missing: it may have been removed, or
+    /// another import may have put the source back meanwhile. Nothing more
+    /// was done; where the file is was not read.
+    RemovalUnconfirmed(DiskError),
     /// The source could not be renamed aside. The source is where it was.
     NotSetAside(DiskError),
     /// The set-aside name `at` is already taken, by a file an interrupted
@@ -78,14 +89,18 @@ impl super::Disk {
     /// 2. `kept` is read, links not followed. A link is also read followed,
     ///    so a link that reached the source shows it no longer does.
     /// 3. Where `kept` now shows the source's own nonzero file number and
-    ///    length and no other name, it is the set-aside file seen through
-    ///    another view of one folder, whatever volume each read names: the
-    ///    source goes back.
+    ///    length and no other name, on the source's own named volume, it is
+    ///    the set-aside file: the source goes back. The same number and
+    ///    length on another volume, or one not named, cannot tell: a second
+    ///    view of one folder can name another volume, and two volumes can
+    ///    number a file alike. The source goes back either way.
     /// 4. Where `kept` and the source are not on one known volume, `kept`'s
     ///    folder is listed once and must hold `kept`'s name, byte for byte.
     ///    A second view of a folder can keep answering a renamed name from
     ///    its cache; the listing is the folder's own word. A name the listing
-    ///    lacks is the source's entry, and a listing that fails is unread.
+    ///    lacks as spelled cannot tell, since the folder may hold it in
+    ///    another case or normalization; a listing that fails is unread. The
+    ///    source goes back either way.
     /// 5. While `kept` still holds the file `kept_mark` marks, the set-aside
     ///    name is removed. Otherwise the source is renamed back, never
     ///    replacing anything.
@@ -122,8 +137,14 @@ impl super::Disk {
                 return self.put_back(source, aside, AsideRemoval::DestinationUnread(reading));
             }
         };
-        if kept_now.is_numbered_as(source_mark) && !kept_now.has_other_names() {
-            return self.put_back(source, aside, AsideRemoval::SameEntry);
+        if !kept_now.has_other_names() {
+            match kept_now.numbered_as(source_mark) {
+                Sameness::Same => return self.put_back(source, aside, AsideRemoval::SameEntry),
+                Sameness::CannotTell => {
+                    return self.put_back(source, aside, AsideRemoval::CannotTell);
+                }
+                Sameness::Different => {}
+            }
         }
         if !kept_mark.still_marks(&kept_now) {
             return self.put_back(source, aside, AsideRemoval::DestinationChanged);
@@ -148,19 +169,21 @@ impl super::Disk {
         match self.remove_blocking(&aside, Remove::File) {
             Ok(_) => AsideRemoval::Removed,
             Err(error) => match self.fingerprint_blocking(&aside) {
-                // The removal took effect though it answered a failure; the
-                // destination was shown to hold the file.
-                Err(PathReading::Missing { .. }) => AsideRemoval::Removed,
+                // The removal may have taken effect though it answered a
+                // failure, or another import may have put the source back:
+                // gone from the set-aside name is no proof of either.
+                Err(PathReading::Missing { .. }) => AsideRemoval::RemovalUnconfirmed(error),
                 _ => self.put_back(source, aside, AsideRemoval::NotRemoved(error)),
             },
         }
     }
 
     /// Whether `kept`'s folder lists `kept`'s name byte for byte: `None` when
-    /// it does, else why the source goes back.
+    /// it does, else why the source goes back. A name not listed as spelled
+    /// cannot tell: the folder may list it in another case or normalization.
     fn unlisted(&self, kept: &Path) -> Option<AsideRemoval> {
         let (Some(folder), Some(name)) = (kept.parent(), kept.file_name()) else {
-            return Some(AsideRemoval::SameEntry);
+            return Some(AsideRemoval::CannotTell);
         };
         match self.list_blocking(folder) {
             Ok(listed) => match listed
@@ -168,7 +191,7 @@ impl super::Disk {
                 .any(|entry| entry.path.file_name() == Some(name))
             {
                 true => None,
-                false => Some(AsideRemoval::SameEntry),
+                false => Some(AsideRemoval::CannotTell),
             },
             Err(error) => Some(AsideRemoval::DestinationUnread(PathReading::Unreachable {
                 observed_at: self.inner.clock.now(),
@@ -180,8 +203,13 @@ impl super::Disk {
     /// After a set-aside rename failed. A taken set-aside name is named. A
     /// failure that left something at the set-aside name may have moved the
     /// source there and lost the reply, or left only a reservation of its
-    /// own: the set-aside name is read once, and the source is put back only
-    /// when that name holds the source's file.
+    /// own: the set-aside name is read once, and the source is put back when
+    /// that name holds the source's file. Where it holds another nonempty
+    /// regular file, the source is read once too: a source that reads
+    /// missing went to the set-aside name under a number its volume made up
+    /// for the new name, and is put back. An empty file there is a
+    /// reservation and is never put back as the source. A put-back never
+    /// replaces anything.
     fn after_refused_set_aside(
         &self,
         source: &Path,
@@ -195,26 +223,35 @@ impl super::Disk {
             }
             return AsideRemoval::NotSetAside(error);
         }
-        match self.fingerprint_blocking(&aside) {
-            Ok(at_aside) if source_mark.still_marks(&at_aside) => {
-                self.put_back(source, aside, AsideRemoval::NotSetAside(error))
-            }
-            _ => AsideRemoval::NotSetAside(error),
+        let at_aside = match self.fingerprint_blocking(&aside) {
+            Ok(read) if read.kind() == Some(EntryKind::File) && !read.is_len(0) => read,
+            _ => return AsideRemoval::NotSetAside(error),
+        };
+        if source_mark.still_marks(&at_aside)
+            || matches!(
+                self.fingerprint_blocking(source),
+                Err(PathReading::Missing { .. })
+            )
+        {
+            return self.put_back(source, aside, AsideRemoval::NotSetAside(error));
         }
+        AsideRemoval::NotSetAside(error)
     }
 
     /// Puts back a source an interrupted removal left at its set-aside name,
-    /// for an import that finds the source missing. Only a regular file at
-    /// the set-aside name is moved, and only by a rename that never replaces
-    /// anything: a source name that is taken again keeps what is there.
-    /// Nothing is removed.
+    /// for an import that finds the source missing. Only a nonempty regular
+    /// file at the set-aside name is moved, and only by a rename that never
+    /// replaces anything: a source name that is taken again keeps what is
+    /// there, and an empty file is a reservation, never the source. Nothing
+    /// is removed. The caller keeps this from running while a removal of the
+    /// same source is in flight.
     ///
     /// Probes: one read of the set-aside name, and one rename when it holds
     /// a regular file.
     pub fn put_back_set_aside_source_blocking(&self, source: &Path) -> PutBackAside {
         let aside = aside_path_for(source);
         match self.fingerprint_blocking(&aside) {
-            Ok(read) if read.kind() == Some(EntryKind::File) => {}
+            Ok(read) if read.kind() == Some(EntryKind::File) && !read.is_len(0) => {}
             _ => return PutBackAside::Nothing,
         }
         match self.move_exclusive_blocking(&aside, source) {

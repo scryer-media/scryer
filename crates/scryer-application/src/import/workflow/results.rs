@@ -746,6 +746,35 @@ async fn reconcile_terminal_download_cleanup(
         }
     }
 
+    // A claimed cleanup waits while an archive or subtitle delivery of the
+    // download still holds its sources. A cleanup without a claim of its own
+    // waits here the same way before anything is removed.
+    if record.is_none()
+        && let Some(download_id) = canonical_download_id
+    {
+        match app
+            .services
+            .workflow
+            .imports
+            .archive_processing_pending_for_download(download_id)
+            .await
+        {
+            Ok(false) => {}
+            Ok(true) => {
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%download_id, error = %error,
+                    "could not tell whether the download's sources are still held; cleanup deferred");
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+        }
+    }
+
     let is_history = matches!(
         state,
         TrackedDownloadState::Imported

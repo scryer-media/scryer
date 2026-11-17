@@ -506,7 +506,29 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
     // No tracked row on this path, so the client entry is assumed present and
     // the seeding gate decides on the client's own evidence. A torrent still
     // working off its goal is left alone; the tracked poller picks it up and
-    // parks it in `ImportedSeeding`.
+    // parks it in `ImportedSeeding`. While an archive or subtitle delivery of
+    // the same download still holds its sources, nothing is removed yet.
+    if let Some(download_id) = completed
+        .download_id
+        .as_deref()
+        .and_then(scryer_domain::download_identity::DownloadId::parse)
+    {
+        match app
+            .services
+            .workflow
+            .imports
+            .archive_processing_pending_for_download(&download_id)
+            .await
+        {
+            Ok(false) => {}
+            Ok(true) => return,
+            Err(error) => {
+                tracing::warn!(%download_id, error = %error,
+                    "could not tell whether the download's sources are still held; cleanup deferred");
+                return;
+            }
+        }
+    }
     let _ = reconcile_terminal_download_cleanup(
         app,
         None,
@@ -838,12 +860,17 @@ fn import_record_proves_prior_import(record: &ImportRecord, current_import_id: &
     }
 }
 
+/// Whether another record already imported this source, so this manual
+/// import can mark the download imported without placing anything. Neither
+/// another record nor the download's tracked state counts while one of the
+/// download's imports ended where only the operator can settle what is on
+/// disk: that refusal is returned instead, and the import stays blocked.
 async fn manual_import_source_was_already_imported(
     app: &AppUseCase,
     source: &AuthorizedManualImportSource,
     current_import_id: &str,
 ) -> AppResult<bool> {
-    if app
+    let tracked_imported = app
         .services
         .workflow
         .download_submissions
@@ -851,22 +878,63 @@ async fn manual_import_source_was_already_imported(
         .await?
         .as_deref()
         .and_then(TrackedDownloadState::from_str_opt)
-        .is_some_and(TrackedDownloadState::counts_as_imported)
-    {
-        return Ok(true);
-    }
-    if source.title.facet != MediaFacet::Movie {
+        .is_some_and(TrackedDownloadState::counts_as_imported);
+    if !tracked_imported && source.title.facet != MediaFacet::Movie {
         return Ok(false);
     }
 
-    Ok(app
+    let records = app
         .services
         .workflow
         .imports
         .list_imports_for_identities(std::slice::from_ref(&source.identity))
-        .await?
+        .await?;
+    let proven = tracked_imported
+        || (source.title.facet == MediaFacet::Movie
+            && records
+                .iter()
+                .any(|record| import_record_proves_prior_import(record, current_import_id)));
+    if !proven {
+        return Ok(false);
+    }
+    match records
         .iter()
-        .any(|record| import_record_proves_prior_import(record, current_import_id)))
+        .find_map(|record| unresolved_reconciliation(record, current_import_id))
+    {
+        Some(refusal) => Err(refusal),
+        None => Ok(true),
+    }
+}
+
+/// The refusal a record of the download still stands on: its latest result
+/// ended where only the operator can settle what is on disk. The refusal
+/// carries the record's own reason code where it names a known one.
+fn unresolved_reconciliation(record: &ImportRecord, current_import_id: &str) -> Option<AppError> {
+    if record.id == current_import_id {
+        return None;
+    }
+    let message = format!(
+        "import {} of this download still needs manual reconciliation; another import is no proof this one was imported",
+        record.id
+    );
+    if manual_import_record_requires_reconciliation(record) {
+        return Some(AppError::ManualReconciliationRequired(message));
+    }
+    let result = record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
+        .filter(|result| result.needs_reconciliation)?;
+    let reason = result.reason_code.as_deref().and_then(|code| {
+        crate::error_reasons::import::ALL
+            .iter()
+            .copied()
+            .find(|known| *known == code)
+    });
+    Some(match reason {
+        Some(reason) => AppError::ManualReconciliationRefused { message, reason },
+        None => AppError::ManualReconciliationRequired(message),
+    })
 }
 
 fn source_path_canonical(source_path: &Path) -> AppResult<PathBuf> {

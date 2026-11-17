@@ -284,6 +284,45 @@ impl ImportPlacementCoordinator {
     }
 }
 
+/// One import at a time at each source path, in this process: whatever
+/// reads a source as an import starts, which may put back a source an
+/// interrupted cleanup set aside, and whatever removes a source beside its
+/// destination, which sets it aside first, waits its turn at that path. So
+/// an import never puts back a source another import's cleanup has set aside
+/// that moment, and a cleanup never reports a put-back source removed. The
+/// work itself may run in a worker process; the turn is held here around
+/// it. Paths are compared as given.
+#[derive(Default)]
+struct SourceTurns {
+    turns: std::sync::Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
+}
+
+impl SourceTurns {
+    fn shared() -> &'static Self {
+        static SHARED: OnceLock<SourceTurns> = OnceLock::new();
+        SHARED.get_or_init(Self::default)
+    }
+
+    async fn take(&self, source: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+        let turn = {
+            let mut turns = self
+                .turns
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            turns.retain(|_, turn| turn.strong_count() > 0);
+            match turns.get(source).and_then(Weak::upgrade) {
+                Some(turn) => turn,
+                None => {
+                    let turn = Arc::new(tokio::sync::Mutex::new(()));
+                    turns.insert(source.to_path_buf(), Arc::downgrade(&turn));
+                    turn
+                }
+            }
+        };
+        turn.lock_owned().await
+    }
+}
+
 pub struct FsFileImporter {
     placement: ImportPlacementCoordinator,
     worker_executable: Option<PathBuf>,
@@ -546,7 +585,8 @@ fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> 
 /// as an import starts. A source that reads missing may be a file an
 /// interrupted cleanup set aside beside it: a regular file at its set-aside
 /// name is renamed back, never replacing anything, and the source is read
-/// again. Nothing is removed. Reads are added only where the source reads
+/// again. Every caller runs under the source's [`SourceTurns`] turn, so no
+/// cleanup of the same path is in flight in this process. Nothing is removed. Reads are added only where the source reads
 /// missing: one of the set-aside name, and, when a file was put back, its
 /// rename and the source's read again.
 fn read_import_source_at_start<T>(path: &Path, read: fn(&Path) -> AppResult<T>) -> AppResult<T> {
@@ -2058,29 +2098,12 @@ fn copy_regular_source_to_destination(
             };
             (fingerprint.file, landed)
         }
-        Err(error) => {
-            return Err(took_back(
-                error,
-                source,
-                dest,
-                Landed::Copy {
-                    placed: promoted.as_ref(),
-                    source: source_mark,
-                },
-            ));
-        }
+        // A destination that does not read, or a source that changed while
+        // it was copied, leaves the copy where it is: neither says the copy is
+        // not the data the source last held.
+        Err(error) => return Err(error),
     };
-    if let Err(error) = ensure_same_source(source, source_fingerprint) {
-        return Err(took_back(
-            error,
-            source,
-            dest,
-            Landed::Copy {
-                placed: landed.as_ref(),
-                source: source_mark,
-            },
-        ));
-    }
+    ensure_same_source(source, source_fingerprint)?;
 
     if dest_fingerprint.len != size {
         return Err(took_back(
@@ -2475,6 +2498,11 @@ fn remove_source_beside_adopted_destination(
             dest,
             &reading.describe_absence().to_string(),
         )),
+        AsideRemoval::CannotTell => Err(import_destination_alias_unknown(
+            source,
+            dest,
+            "what the destination showed once the source was set aside does not tell",
+        )),
         AsideRemoval::NotSetAside(error) => Err(import_destination_alias_unknown(
             source,
             dest,
@@ -2490,6 +2518,10 @@ fn remove_source_beside_adopted_destination(
         )),
         AsideRemoval::NotRemoved(error) => Err(AppError::Repository(format!(
             "import source cleanup failed after destination verification; failed to remove source {}: {error}",
+            source.display()
+        ))),
+        AsideRemoval::RemovalUnconfirmed(error) => Err(AppError::Repository(format!(
+            "import source cleanup could not confirm removing source {}: {error}; it no longer reads at its set-aside name",
             source.display()
         ))),
         AsideRemoval::PutBackFailed { at, error } => Err(import_destination_alias_unknown(
@@ -2542,6 +2574,10 @@ struct PreparedImportPlacement {
     /// this process, so the fast lane hands straight to the copy lane.
     #[serde(default)]
     hard_link_identity_unverifiable: bool,
+    /// The source's mark as the fast lane read it, stored. The copy lane
+    /// holds the source to it instead of reading the source's handle again.
+    #[serde(default)]
+    source_mark: Option<String>,
 }
 
 enum FastPlacementResult {
@@ -2585,6 +2621,7 @@ fn prepare_import_placement_blocking(
         volume_key,
         archive_workspace_source: false,
         hard_link_identity_unverifiable: false,
+        source_mark: None,
     })
 }
 
@@ -2659,7 +2696,7 @@ fn finish_renamed_archive_output(prepared: PreparedImportPlacement) -> ImportFil
 }
 
 fn try_fast_import_placement_blocking(
-    prepared: PreparedImportPlacement,
+    mut prepared: PreparedImportPlacement,
 ) -> AppResult<FastPlacementResult> {
     let source_mark = same_source_mark(&prepared.source, &prepared.source_fingerprint)?;
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
@@ -2790,6 +2827,7 @@ fn try_fast_import_placement_blocking(
     }
 
     ensure_import_destination_absent(&prepared.dest)?;
+    prepared.source_mark = Some(source_mark.to_stored());
     Ok(FastPlacementResult::CopyRequired {
         prepared,
         hard_link_identity_mismatch,
@@ -2956,20 +2994,22 @@ fn reconcile_existing_destination(
     // A destination that names the source's own entry, through a linked or
     // mounted folder, another spelling, or a link that resolves to it, proves
     // equal to the source; a move that then removed the source would leave
-    // nothing there. One cheap look refuses the plain cases here. The rest is
-    // settled when the source is removed: it is set aside first, and removed
-    // only while the destination still holds the file adopted here.
-    if source_cleanup_required {
-        match Disk::process().entry_alias_blocking(source, dest, &existing) {
-            EntryAlias::Distinct => {}
-            EntryAlias::Same => return Err(import_destination_is_source(source, dest)),
-            EntryAlias::CannotTell => {
-                return Err(import_destination_alias_unknown(
-                    source,
-                    dest,
-                    "the source did not read",
-                ));
-            }
+    // nothing there, and a copy or link import that adopted it would leave a
+    // library file the download client still owns and may remove. One cheap
+    // look refuses the plain cases here in every mode; a destination with
+    // another name, such as a link an earlier import made, reads as distinct
+    // without it. The rest is settled when a move removes the source: it is
+    // set aside first, and removed only while the destination still holds
+    // the file adopted here.
+    match Disk::process().entry_alias_blocking(source, dest, &existing) {
+        EntryAlias::Distinct => {}
+        EntryAlias::Same => return Err(import_destination_is_source(source, dest)),
+        EntryAlias::CannotTell => {
+            return Err(import_destination_alias_unknown(
+                source,
+                dest,
+                "the source did not read",
+            ));
         }
     }
     ensure_same_source(source, source_fingerprint)?;
@@ -3027,7 +3067,16 @@ fn reconcile_existing_destination(
 }
 
 fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult<ImportFileResult> {
-    let source_mark = same_source_mark(&prepared.source, &prepared.source_fingerprint)?;
+    // The fast lane read the source's mark; holding the source to that mark
+    // costs only the fingerprint read here. A mark it did not carry, or one
+    // that does not read back, is read again.
+    let source_mark = match prepared.source_mark.as_deref().and_then(Mark::from_stored) {
+        Some(mark) => {
+            ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
+            mark
+        }
+        None => same_source_mark(&prepared.source, &prepared.source_fingerprint)?,
+    };
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
     ensure_import_destination_absent(&prepared.dest)?;
     let (verification, landed) = copy_regular_source_to_destination(
@@ -3401,6 +3450,9 @@ enum ImportFileWorkerEvent {
         volume_key: String,
         #[serde(default)]
         hard_link_identity_mismatch: Option<HardLinkIdentityMismatch>,
+        /// The source's mark the fast lane read, stored, for the copy lane.
+        #[serde(default)]
+        source_mark: Option<String>,
     },
     Progress {
         nonce: u64,
@@ -3752,6 +3804,7 @@ pub fn run_import_file_worker() -> i32 {
                             nonce,
                             volume_key: prepared.volume_key,
                             hard_link_identity_mismatch,
+                            source_mark: prepared.source_mark,
                         },
                     )
                     .map_err(ImportFileWorkerError::from),
@@ -4124,6 +4177,7 @@ impl FileImporter for FsFileImporter {
     }
 
     async fn snapshot_import_source(&self, source: &Path) -> AppResult<ImportSourceSnapshot> {
+        let _turn = SourceTurns::shared().take(source).await;
         if let Some(executable) = &self.worker_executable {
             let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
             let request = ImportFileWorkerRequest::Snapshot {
@@ -4196,6 +4250,7 @@ impl FileImporter for FsFileImporter {
         progress: Option<ImportFileTransferProgressSender>,
         permissions: &ImportFilePermissions,
     ) -> AppResult<ImportFileResult> {
+        let _turn = SourceTurns::shared().take(source).await;
         let source = source.to_path_buf();
         let dest = dest.to_path_buf();
         let expected_source = expected_source.cloned();
@@ -4271,6 +4326,7 @@ impl FileImporter for FsFileImporter {
         guard: ImportSourceCleanupGuard,
         final_dest_path: &Path,
     ) -> AppResult<()> {
+        let _turn = SourceTurns::shared().take(&guard.source_path).await;
         let final_dest_path = final_dest_path.to_path_buf();
 
         tokio::task::spawn_blocking(move || {
@@ -4290,6 +4346,8 @@ impl FileImporter for FsFileImporter {
         final_dest_path: &Path,
         context: &ImportFileExecutionContext,
     ) -> AppResult<()> {
+        // Before any lane permit, as a placement takes it.
+        let _turn = SourceTurns::shared().take(&guard.source_path).await;
         let client_key = context.client_lane_key().to_string();
         let _fast_permit = self
             .placement
@@ -4353,6 +4411,12 @@ impl FsFileImporter {
         verification_depth: VerificationDepth,
     ) -> AppResult<ImportFileResult> {
         let cancellation = context.cancellation_token();
+        // Before any lane permit, as a cleanup takes it.
+        let _turn = wait_for_import_operation_or_cancel(
+            cancellation.as_ref(),
+            SourceTurns::shared().take(source),
+        )
+        .await?;
         if let Some(executable) = &self.worker_executable {
             let preparation_permit = wait_for_import_operation_or_cancel(
                 cancellation.as_ref(),
@@ -4452,6 +4516,7 @@ impl FsFileImporter {
                     ImportFileWorkerEvent::CopyRequired {
                         volume_key: reported_volume_key,
                         hard_link_identity_mismatch,
+                        source_mark,
                         ..
                     } => {
                         if reported_volume_key != volume_key {
@@ -4486,9 +4551,13 @@ impl FsFileImporter {
                         let copy_request = ImportFileWorkerRequest::Copy {
                             version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
                             nonce: IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed),
-                            prepared: prepared
-                                .take()
-                                .expect("prepared import is consumed once by copy handoff"),
+                            prepared: {
+                                let mut prepared = prepared
+                                    .take()
+                                    .expect("prepared import is consumed once by copy handoff");
+                                prepared.source_mark = source_mark;
+                                prepared
+                            },
                         };
                         session = spawn_import_file_worker(executable, &copy_request).await?;
                     }
@@ -5933,6 +6002,59 @@ mod tests {
         }
     }
 
+    /// A link import is refused when its destination is the source's own
+    /// entry under another spelling, since the client may later remove the
+    /// data the library would point at. A destination that is a second link
+    /// of the source, which an earlier link import made, is still that
+    /// import, as it was before. Nothing is removed in either case.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_import_onto_the_sources_own_entry_is_refused_but_a_second_link_is_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("downloads").join("source.mkv");
+        std::fs::create_dir_all(source.parent().expect("parent")).expect("downloads");
+        std::fs::write(&source, b"only video bytes").expect("write source");
+        let bytes = Some(b"only video bytes".to_vec());
+        let link_import = |dest: &Path| {
+            import_file_blocking(
+                source.clone(),
+                dest.to_path_buf(),
+                ImportMode::HardlinkOrCopy,
+                ImportFileOptions::default(),
+                None,
+                None,
+                ImportFilePermissions::default(),
+            )
+        };
+
+        // The source's own name, reached through a symlinked folder.
+        let alias = dir.path().join("library");
+        std::os::unix::fs::symlink(source.parent().expect("parent"), &alias)
+            .expect("folder symlink");
+        let error = link_import(&alias.join("source.mkv")).expect_err("one entry, two spellings");
+        assert!(error.requires_manual_reconciliation(), "{error:?}");
+        assert_eq!(
+            error.reason(),
+            Some(scryer_application::error_reasons::import::DESTINATION_IS_SOURCE),
+            "{error:?}"
+        );
+        assert_eq!(std::fs::read(&source).ok(), bytes);
+
+        // A second link an earlier import made.
+        let shelf = dir.path().join("shelf");
+        std::fs::create_dir_all(&shelf).expect("shelf");
+        let linked = shelf.join("Imported.Movie.mkv");
+        std::fs::hard_link(&source, &linked).expect("hard link");
+        let result = link_import(&linked).expect("a second link is the import");
+        assert_eq!(
+            result.destination_disposition,
+            ImportDestinationDisposition::AlreadyPresent
+        );
+        assert!(result.source_cleanup.is_none(), "{result:?}");
+        assert_eq!(std::fs::read(&source).ok(), bytes);
+        assert_eq!(std::fs::read(&linked).ok(), bytes);
+    }
+
     /// A destination that is another entry is the import, and the move
     /// finishes by removing the source name: a second name of the source
     /// file, and a symlink to another file with the same content.
@@ -6971,9 +7093,10 @@ mod tests {
     }
 
     /// A copy that holds the destination name and then finds the source
-    /// changed takes back that copy, and nothing beside it.
+    /// changed is left where it is, and so is everything beside it: the
+    /// source changing does not say the copy is not the data it last held.
     #[test]
-    fn a_source_that_changes_once_its_copy_landed_takes_the_copy_back() {
+    fn a_source_that_changes_once_its_copy_landed_keeps_the_copy() {
         let temp = tempfile::tempdir().expect("tempdir");
         let source = temp.path().join("sample-source.mkv");
         let dest = temp.path().join("Sample.Title.mkv");
@@ -7008,7 +7131,10 @@ mod tests {
             said.contains("import source changed during import"),
             "{said}"
         );
-        assert!(!dest.exists(), "the copy this import landed is taken back");
+        assert_eq!(
+            std::fs::read(&dest).expect("the copy this import landed is kept"),
+            b"synthetic video bytes"
+        );
         assert!(!scryer_application::import_staging_path(&dest).exists());
         assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");
         assert_eq!(
@@ -7017,12 +7143,16 @@ mod tests {
         );
     }
 
-    /// A source swapped, once its copy landed, for another file of the same
-    /// length and modification time is not the file the copy was read from:
-    /// the copy may hold the only original bytes, so it is kept, and the
-    /// look-alike is left as it is.
+    /// A copy that fails its proof is kept when the source was swapped, once
+    /// the copy was proved, for another file of the same length and
+    /// modification time: that file is not the one the copy was read from, so
+    /// the copy may hold the only original bytes. The look-alike is left as
+    /// it is. Only a mark that tells one file from another sees the swap; on
+    /// Windows that is the source's file number, read through its handle.
     #[test]
     fn a_look_alike_swapped_in_for_the_source_keeps_the_landed_copy() {
+        use scryer_application::error_reasons::import;
+
         let temp = tempfile::tempdir().expect("tempdir");
         let source = temp.path().join("sample-source.mkv");
         let dest = temp.path().join("Sample.Title.mkv");
@@ -7030,7 +7160,8 @@ mod tests {
         let (fingerprint, mark) = read_import_source_marked(&source).expect("read source");
         let size = std::fs::metadata(&source).expect("source metadata").len();
         let options = ImportFileOptions {
-            after_copy_promoted: Some(|source, _| {
+            force_destination_corruption: true,
+            after_copy_assessed: Some(|source, _| {
                 let modified = std::fs::metadata(source)
                     .and_then(|metadata| metadata.modified())
                     .expect("source time");
@@ -7053,17 +7184,29 @@ mod tests {
             &mark,
             size,
             options,
-            VerificationDepth::Quick,
+            VerificationDepth::Full,
             None,
             None,
         )
-        .expect_err("the source is another file");
+        .expect_err("a corrupted copy must not be imported");
 
-        let said = error.to_string();
-        assert!(said.contains("may be its only copy"), "{said}");
         assert_eq!(
-            std::fs::read(&dest).expect("the landed copy is kept"),
-            b"synthetic video bytes"
+            error.reason(),
+            Some(import::COPY_KEPT_SOURCE_GONE),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.refusal_facts(),
+            [RefusalFact {
+                key: import::KEPT_PATH_FACT,
+                value: RefusalFactValue::Text(dest.display().to_string()),
+            }]
+        );
+        assert_eq!(
+            std::fs::metadata(&dest)
+                .expect("the landed copy is kept")
+                .len(),
+            size
         );
         assert_eq!(
             std::fs::read(&source).expect("source"),
@@ -7304,6 +7447,37 @@ mod tests {
             Some(scryer_application::error_reasons::import::FILE_NOT_FOUND)
         );
         assert!(!missing.exists());
+    }
+
+    /// While a cleanup holds its turn at a source path, an import of that
+    /// path does not start, so it cannot put back a source the cleanup has
+    /// set aside that moment; once the turn is given up, the import puts it
+    /// back as usual.
+    #[tokio::test]
+    async fn an_import_waits_for_a_cleanup_of_its_source_before_putting_it_back() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let aside = disk::aside_path_for(&source);
+        std::fs::write(&aside, b"synthetic video bytes").expect("set-aside file");
+        let importer = FsFileImporter::new();
+
+        let cleanup_turn = SourceTurns::shared().take(&source).await;
+        let mut snapshot = std::pin::pin!(importer.snapshot_import_source(&source));
+        tokio::select! {
+            biased;
+            _ = &mut snapshot => panic!("the import started during the cleanup's turn"),
+            () = std::future::ready(()) => {}
+        }
+        assert!(aside.exists(), "nothing is put back during the cleanup");
+        assert!(!source.exists());
+
+        drop(cleanup_turn);
+        snapshot.await.expect("the source is put back");
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"synthetic video bytes"
+        );
+        assert!(!aside.exists());
     }
 
     /// A hard link whose source name is removed, or made to name another

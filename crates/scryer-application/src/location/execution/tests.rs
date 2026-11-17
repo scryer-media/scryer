@@ -3453,11 +3453,12 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
     }
 }
 
-/// A linked source that took a verified copy is cleaned up by the file it
-/// names: unchanged, only the link's own name goes and the file it names is
-/// kept; rewritten behind the link where no sample reaches, the link is kept.
+/// A linked source that took a verified copy is not removed at cleanup,
+/// whether or not the file it names changed: the cleanup refuses it as a
+/// source that is no longer the regular file it copied, and keeps the link,
+/// the file it names and the copy.
 #[tokio::test]
-async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
+async fn a_linked_source_with_a_copy_keeps_its_link_at_cleanup() {
     for rewritten in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let plan = single_title_plan(
@@ -3474,9 +3475,7 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
         std::os::unix::fs::symlink(&named, file.source()).unwrap();
         #[cfg(windows)]
         if let Err(error) = std::os::windows::fs::symlink_file(&named, file.source()) {
-            eprintln!(
-                "skipped the linked-source case: this process may not create a symbolic link ({error})"
-            );
+            eprintln!("skipped: this process may not create a symbolic link ({error})");
             return;
         }
         let store = Arc::new(InMemoryLocationOperationStore::new());
@@ -3525,18 +3524,19 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await;
 
-        let link_kept = std::fs::symlink_metadata(file.source()).is_ok();
-        if rewritten {
-            let error = result.expect_err("a rewrite behind the link keeps it");
-            assert_eq!(
-                error.validation_reason(),
-                Some(crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP)
-            );
-            assert!(link_kept, "the link is preserved");
-        } else {
-            result.expect("cleanup");
-            assert!(!link_kept, "the link's own name is removed");
-        }
+        let error = result.expect_err("a linked source is kept");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP),
+            "rewritten: {rewritten}"
+        );
+        assert!(
+            std::fs::symlink_metadata(file.source())
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link is preserved"
+        );
         assert_eq!(
             std::fs::read(&named).unwrap().len(),
             THREE_SAMPLE_WINDOWS,
@@ -3548,6 +3548,78 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
         );
         assert!(recycler.recycled().is_empty());
     }
+}
+
+/// A title that holds a file and a relative link to it, both placed as links
+/// of their own by a move on one volume, completes with the resolver
+/// recording each: placing one stages the other's file under a new name,
+/// which must not read as the link's source having changed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_link_and_its_target_in_one_title_move_as_links_and_complete() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "Emberfall.mkv",
+        11,
+    );
+    let mut linked = plan.titles[0].files[0].clone();
+    linked.media_file_id = Some("mf-2".to_string());
+    linked.source_path = linked
+        .source_path
+        .replace("Emberfall.mkv", "Emberfall.Extra.mkv");
+    linked.destination_path = linked
+        .destination_path
+        .replace("Emberfall.mkv", "Emberfall.Extra.mkv");
+    // The link first, so it is placed before the file it names moves.
+    plan.titles[0].files.insert(0, linked);
+    let target = plan.titles[0].files[1].clone();
+    let link = plan.titles[0].files[0].clone();
+    write_file(&target.source(), b"hello world");
+    std::os::unix::fs::symlink("Emberfall.mkv", link.source()).unwrap();
+
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    store.insert_operation(operation.clone());
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions().with_resolver(Arc::new(
+        crate::location::resolution::ConflictResolver::new(
+            store.clone(),
+            BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+        ),
+    ));
+    let work = plan.to_work_plan();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let result = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
+        .run("op-1", &work)
+        .await
+        .unwrap();
+    let title = store.checkpoint("op-1", "title-1");
+    assert_eq!(
+        result.state,
+        LocationOperationState::Completed,
+        "title reason {:?}, detail {:?}",
+        title.as_ref().and_then(|title| title.reason_code),
+        title.as_ref().and_then(|title| title.detail.clone()),
+    );
+    assert_eq!(std::fs::read(target.destination()).unwrap(), b"hello world");
+    assert!(
+        std::fs::symlink_metadata(link.destination())
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(link.destination()).unwrap(), b"hello world");
+    assert!(std::fs::symlink_metadata(link.source()).is_err());
+    assert!(std::fs::symlink_metadata(target.source()).is_err());
 }
 
 /// For unchanged files, cleanup removes and keeps exactly the same sources

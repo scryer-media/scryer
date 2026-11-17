@@ -1,3 +1,14 @@
+/// An automatic import left pending on a download whose block is in error
+/// stopped where only the operator can settle what is on disk; nothing picks
+/// it up again on its own. The row shows the block and its reason, not a
+/// pending import, the same as the tracked projection does.
+fn automatic_import_stopped_by_block(item: &DownloadQueueItem, record: &ImportRecord) -> bool {
+    record.import_type != ImportType::ManualImport
+        && record.status == ImportStatus::Pending
+        && item.tracked_state == Some(TrackedDownloadState::ImportBlocked)
+        && item.tracked_status == Some(scryer_domain::TrackedDownloadStatus::Error)
+}
+
 async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [DownloadQueueItem]) {
     let import_sources = items
         .iter()
@@ -103,7 +114,9 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
         if queue_item_import_state_eligible(item) {
             if let Some(record) = manual_records.get(&import_key) {
                 apply_import_record_to_queue_item(item, record);
-            } else if let Some(record) = fallback_records.get(&import_key) {
+            } else if let Some(record) = fallback_records.get(&import_key)
+                && !automatic_import_stopped_by_block(item, record)
+            {
                 apply_import_record_to_queue_item(item, record);
             }
         }

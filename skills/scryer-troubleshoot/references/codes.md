@@ -67,7 +67,12 @@ IMPORT_FAILED, IGNORED, REMOVING, REMOVE_FAILED.
 IMPORTED_SEEDING, IMPORT_BLOCKED, FAILED_PENDING, FAILED, IGNORED.
 
 `attentionReasonCode`: `IMPORT_<importErrorCode>`, `IMPORT_FAILED`, or
-`download_password_retry`. `passwordFailureCode`:
+`download_password_retry`. A download blocked for manual reconciliation
+(`trackedState` IMPORT_BLOCKED) carries the import's refusal instead:
+`IMPORT_DESTINATION_IS_SOURCE` (the existing destination is the source's own
+file) or `IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it
+is). Nothing was removed in either case. After a client refresh or a restart
+the block may show only its sentence. `passwordFailureCode`:
 ARCHIVE_PASSWORD_REQUIRED, ARCHIVE_PASSWORD_OR_CORRUPTION.
 
 `importErrorCode`:

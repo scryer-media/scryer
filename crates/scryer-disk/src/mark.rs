@@ -384,20 +384,24 @@ impl Mark {
         }
     }
 
-    /// Whether both reads give one nonzero file number and one length,
-    /// whatever volume each names: one file seen through two views of a
-    /// folder, a second mount, a share mounted twice, can name two volumes.
-    /// No probe.
-    pub(crate) fn is_numbered_as(&self, other: &Self) -> bool {
+    /// Whether both reads give one nonzero file number and one length, and
+    /// so name one file: [`Sameness::Same`] only on one named volume. The same
+    /// number and length on another volume, or one not named, cannot tell: a
+    /// second view of one folder can name another volume, and two volumes
+    /// can each number a file alike. No probe.
+    pub(crate) fn numbered_as(&self, other: &Self) -> Sameness {
         let numbered = matches!(
             (self.file, other.file),
             (Some(here), Some(there)) if here != 0 && here == there
+        ) && matches!(
+            (self.facts, other.facts),
+            (Some(here), Some(there)) if here.len == there.len
         );
-        numbered
-            && matches!(
-                (self.facts, other.facts),
-                (Some(here), Some(there)) if here.len == there.len
-            )
+        match (numbered, self.same_volume(other)) {
+            (false, _) => Sameness::Different,
+            (true, Sameness::Same) => Sameness::Same,
+            (true, _) => Sameness::CannotTell,
+        }
     }
 
     /// Whether the read said the file has a name besides this one.

@@ -480,9 +480,17 @@ export function mergeAuthoritativeQueueItems(
   return sortDownloadQueueItems(merged);
 }
 
+/** Import refusals that block a download for reconciliation. */
+const IMPORT_ATTENTION_REFUSAL_KEYS: Readonly<Record<string, string>> = {
+  IMPORT_DESTINATION_IS_SOURCE: "error.reason.IMPORT_DESTINATION_IS_SOURCE",
+  IMPORT_DESTINATION_ALIAS_UNKNOWN:
+    "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN",
+};
+
 const QUEUE_ATTENTION_REASON_KEYS: Readonly<Record<string, string>> = {
   ...HTTP_RELEASE_REFUSAL_KEYS,
   ...MEDIA_REFUSAL_KEYS,
+  ...IMPORT_ATTENTION_REFUSAL_KEYS,
   download_password_retry: "queue.attention.downloadPasswordRetry",
 };
 
@@ -502,12 +510,16 @@ export function buildQueueStatusDetail(
     ...(code &&
     t &&
     (Object.hasOwn(HTTP_RELEASE_REFUSAL_KEYS, code) ||
-      Object.hasOwn(MEDIA_REFUSAL_KEYS, code))
+      Object.hasOwn(MEDIA_REFUSAL_KEYS, code) ||
+      Object.hasOwn(IMPORT_ATTENTION_REFUSAL_KEYS, code))
       ? []
       : (queueItem.trackedStatusMessages ?? [])),
     key && t ? t(key) : reason,
     queueItem.deleteErrorMessage,
-    code && t && Object.hasOwn(MEDIA_REFUSAL_KEYS, code)
+    code &&
+    t &&
+    (Object.hasOwn(MEDIA_REFUSAL_KEYS, code) ||
+      Object.hasOwn(IMPORT_ATTENTION_REFUSAL_KEYS, code))
       ? null
       : queueItem.importErrorMessage,
   ]

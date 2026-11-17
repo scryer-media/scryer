@@ -125,19 +125,29 @@ fn on_the_sources_volume_a_destination_still_read_as_adopted_lets_the_set_aside_
 }
 
 /// A destination that shows the source's own nonzero file number and length
-/// and no other name is the set-aside file seen through another view, though
-/// its read names another volume or none: the source goes back, with no
-/// listing. With another name it is a second link, judged as any other
+/// and no other name, on the source's own volume, is the set-aside file: the
+/// source goes back. On another volume the same number cannot tell whether it is a second view of one folder or another
+/// volume's file numbered alike, and the source goes back too. No listing
+/// either way. With another name it is a second link, judged as any other
 /// destination off the source's volume.
 #[test]
-fn a_destination_with_the_sources_number_and_no_other_name_is_its_entry_on_any_volume() {
+fn a_destination_with_the_sources_number_and_no_other_name_keeps_the_source() {
     let dest = "/srv/fixture-media/mount-b/downloads/sample.mkv";
-    for kept in [on_volume(2, 7, Some(1)), on_volume(2, 7, None)] {
+    let kepts = [
+        (on_volume(1, 7, Some(1)), true),
+        (on_volume(2, 7, Some(1)), false),
+        (on_volume(2, 7, None), false),
+    ];
+    for (kept, one_volume) in kepts {
         let (disk, backend) = scripted();
         backend.stat_is(dest, Ok(kept));
         let answer =
             disk.remove_source_beside_blocking(&p(SOURCE), &source_mark(), &p(dest), &mark(kept));
-        assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
+        if one_volume {
+            assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
+        } else {
+            assert!(matches!(answer, AsideRemoval::CannotTell), "{answer:?}");
+        }
         assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE), aside()]);
         assert_eq!(
             backend.calls_of("list") + backend.calls_of("remove_file"),
@@ -160,8 +170,9 @@ fn a_destination_with_the_sources_number_and_no_other_name_is_its_entry_on_any_v
 
 /// Off the source's known volume, the destination's folder is listed once
 /// and must hold its name byte for byte before the set-aside name goes. A
-/// name the listing lacks, another spelling of it included, is the source's
-/// entry; a listing that fails is unread. Either way the source goes back.
+/// name the listing lacks, another spelling of it included, cannot tell
+/// whether it is the source's entry or the same name in another case; a
+/// listing that fails is unread. Either way the source goes back.
 #[test]
 fn off_the_sources_volume_the_destination_must_be_listed_in_its_folder() {
     let folder = "/srv/fixture-media/share";
@@ -186,7 +197,7 @@ fn off_the_sources_volume_the_destination_must_be_listed_in_its_folder() {
                 &p(dest),
                 &mark(kept),
             );
-            assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
+            assert!(matches!(answer, AsideRemoval::CannotTell), "{answer:?}");
             assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE), aside()]);
             assert_eq!(backend.calls_of("remove_file"), 0);
         }
@@ -315,9 +326,11 @@ fn a_refused_set_aside_leaves_the_source_alone_and_names_a_taken_name() {
 /// Where only a claimed rename is offered, a failure that left something at
 /// the set-aside name may have moved the source there, or left only its own
 /// reservation. The set-aside name is read once, and the source put back
-/// only when that name holds the source's file: a reservation, an empty
-/// file, or nothing there is no source that moved, so nothing is put back
-/// and no failed put-back is reported.
+/// when that name holds the source's file: a reservation, an empty file, or
+/// nothing there is no source that moved, so nothing is put back and no
+/// failed put-back is reported. A nonempty file under another number is put
+/// back only when the source then reads missing: the volume numbered the
+/// moved file anew.
 #[test]
 fn a_claimed_set_aside_that_left_a_name_puts_back_only_the_sources_own_file() {
     let dest = "/srv/fixture-media/library/sample.mkv";
@@ -365,12 +378,51 @@ fn a_claimed_set_aside_that_left_a_name_puts_back_only_the_sources_own_file() {
         [p(SOURCE), aside.clone()]
     );
     assert_eq!(backend.calls_of("remove_file"), 0);
+
+    // Renumbered at the set-aside name: put back only once the source reads
+    // missing, and an empty reservation never, whatever the source reads.
+    for (source_read, put_back) in [
+        (Err(io::ErrorKind::NotFound), true),
+        (Ok(named(7, 1)), false),
+        (Err(io::ErrorKind::TimedOut), false),
+    ] {
+        let (disk, backend) = claimed();
+        backend.stat_is(aside.to_str().unwrap(), Ok(named(41, 1)));
+        backend.stat_is(SOURCE, source_read);
+        let answer = disk.remove_source_beside_blocking(
+            &p(SOURCE),
+            &source_mark(),
+            &p(dest),
+            &mark(named(8, 1)),
+        );
+        assert!(matches!(answer, AsideRemoval::NotSetAside(_)), "{answer:?}");
+        assert_eq!(backend.paths_of("lstat"), [aside.clone(), p(SOURCE)]);
+        let renamed: &[PathBuf] = if put_back {
+            &[p(SOURCE), aside.clone()]
+        } else {
+            &[p(SOURCE)]
+        };
+        assert_eq!(backend.paths_of("rename_claimed"), renamed);
+        assert_eq!(backend.calls_of("remove_file"), 0);
+    }
+    let (disk, backend) = claimed();
+    backend.stat_is(aside.to_str().unwrap(), Ok(reservation));
+    backend.stat_is(SOURCE, Err(io::ErrorKind::NotFound));
+    let answer = disk.remove_source_beside_blocking(
+        &p(SOURCE),
+        &source_mark(),
+        &p(dest),
+        &mark(named(8, 1)),
+    );
+    assert!(matches!(answer, AsideRemoval::NotSetAside(_)), "{answer:?}");
+    assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+    assert_eq!(backend.paths_of("rename_claimed"), [p(SOURCE)]);
 }
 
 /// A put-back that fails says where the source's file is: at the set-aside
 /// name. A removal of the set-aside name that fails reads that name: while
 /// the file is still there the source is put back, and a name that reads
-/// gone was removed after all, the destination having held the file.
+/// gone is not taken as removed, since another import may have put it back.
 #[test]
 fn a_failed_put_back_or_removal_says_where_the_file_is() {
     let dest = "/srv/fixture-media/library/sample.mkv";
@@ -451,15 +503,19 @@ fn a_failed_put_back_or_removal_says_where_the_file_is() {
         &p(dest),
         &mark(named(8, 1)),
     );
-    assert!(matches!(answer, AsideRemoval::Removed), "{answer:?}");
+    assert!(
+        matches!(answer, AsideRemoval::RemovalUnconfirmed(_)),
+        "{answer:?}"
+    );
     assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE)]);
     assert_eq!(backend.paths_of("lstat"), [p(dest), aside]);
 }
 
 /// An import that finds its source missing puts back a regular file an
 /// interrupted cleanup left at the set-aside name, by a rename that never
-/// replaces anything. Nothing at that name, a folder there, or a source name
-/// taken again moves nothing, and nothing is removed.
+/// replaces anything. Nothing at that name, a folder or an empty reservation
+/// there, or a source name taken again moves nothing, and nothing is
+/// removed.
 #[test]
 fn a_set_aside_source_left_by_an_interruption_is_put_back() {
     let aside = aside();
@@ -475,7 +531,11 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
         kind: EntryKind::Directory,
         ..named(7, 1)
     };
-    for at_aside in [None, Some(folder)] {
+    let reservation = RawStat {
+        len: 0,
+        ..named(7, 1)
+    };
+    for at_aside in [None, Some(folder), Some(reservation)] {
         let (disk, backend) = scripted();
         if let Some(stat) = at_aside {
             backend.stat_is(aside.to_str().unwrap(), Ok(stat));

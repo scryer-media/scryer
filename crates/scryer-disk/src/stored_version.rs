@@ -5,10 +5,17 @@
 //!
 //! On unix a version is `dev:ino:len:mtime:mtime_nsec:ctime:ctime_nsec`; a
 //! symlink's is `symlink:<target>:<modified>`, and other platforms write
-//! `len:<scheme>:<value>`. Only the leading fields are compared: the device
-//! and file number say which file, and the length and modification time with
-//! them say its content is as recorded. A change time is not compared, since
-//! removing another link to the file changes it.
+//! `len:<scheme>:<value>`. Only the leading `:`-separated fields are
+//! compared: on unix the device and file number say which file, and the
+//! length and modification time with them say its content is as recorded. A
+//! change time is not compared, since removing another link to the file
+//! changes it.
+//!
+//! The other spellings are split the same way, so they compare less than
+//! they hold. A symlink's leading fields are a prefix of its target and the
+//! link's own time (a target or time holding `:` ends them early), never the
+//! file it names, so a symlink's version says nothing about that file's
+//! content. The other platforms' spelling holds no file number at all.
 
 use crate::Sameness;
 

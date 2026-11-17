@@ -715,24 +715,12 @@ async fn file_version_from_metadata(
         let target = tokio::fs::read_link(path)
             .await
             .map_err(|error| file_error(path, error))?;
-        // A link's own entry does not change when the file it names is
-        // rewritten, so the version also carries that file's: a source that
-        // really changed behind its link reads as changed. A link that names
-        // nothing readable carries no second part.
-        let named = match tokio::fs::metadata(path).await {
-            Ok(named) if named.is_file() => regular_file_version(path, &named)?,
-            _ => "-".to_owned(),
-        };
         return Ok(format!(
-            "symlink:{}:{:?}:{named}",
+            "symlink:{}:{:?}",
             path_to_stored_string(&target),
             metadata.modified()
         ));
     }
-    regular_file_version(path, metadata)
-}
-
-fn regular_file_version(path: &Path, metadata: &std::fs::Metadata) -> AppResult<String> {
     if !metadata.is_file() {
         return Err(file_error(path, "not a regular file"));
     }

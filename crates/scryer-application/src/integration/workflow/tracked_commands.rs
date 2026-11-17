@@ -379,10 +379,20 @@ fn apply_tracked_download_activity_projection(
             // never learns of it. Clearing it was what left a failed manual
             // import invisible everywhere: the row went back to the original
             // block message with `importStatus: null`.
-            let keep_import_status = matches!(
+            //
+            // An automatic import left pending by a block in error is not
+            // waiting on anything: it stopped where only the operator can
+            // settle what is on disk, and nothing picks it up again on its
+            // own. Showing it as pending hid the block and its reason, so the
+            // row shows the block instead.
+            let stopped_automatic_import = item.import_status == Some(ImportStatus::Pending)
+                && item.import_type != Some(ImportType::ManualImport)
+                && tracked.status == scryer_domain::TrackedDownloadStatus::Error;
+            let keep_import_status = (matches!(
                 item.import_status,
                 Some(ImportStatus::Pending | ImportStatus::Running | ImportStatus::Processing)
-            ) || (item.import_type == Some(ImportType::ManualImport)
+            ) && !stopped_automatic_import)
+                || (item.import_type == Some(ImportType::ManualImport)
                 && matches!(
                     item.import_status,
                     Some(ImportStatus::Failed | ImportStatus::Skipped)
