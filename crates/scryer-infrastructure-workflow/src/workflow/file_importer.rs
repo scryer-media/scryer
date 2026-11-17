@@ -437,12 +437,16 @@ fn cleanup_guard(
     })
 }
 
+/// The cleanup guard of a move whose destination this import has just
+/// placed. When it cannot be built, what this import placed is taken back:
+/// `placed` is the mark of that file, as [`take_back_placed`] reads it.
 fn cleanup_guard_after_placement(
     source_cleanup_required: bool,
     source: &Path,
     dest: &Path,
     source_fingerprint: &ImportSourceFingerprint,
     size: u64,
+    placed: Option<&Mark>,
 ) -> AppResult<Option<ImportSourceCleanupGuard>> {
     if !source_cleanup_required {
         return Ok(None);
@@ -451,7 +455,7 @@ fn cleanup_guard_after_placement(
     match cleanup_guard(source, dest, source_fingerprint, size) {
         Ok(guard) => Ok(Some(guard)),
         Err(error) => {
-            let _ = Disk::process().remove_blocking(dest, Remove::File);
+            take_back_placed(dest, placed);
             Err(error)
         }
     }
@@ -837,6 +841,10 @@ struct ImportFileOptions {
     /// the source and the copy again.
     #[cfg(test)]
     after_copy_promoted: Option<fn(&Path, &Path)>,
+    /// Runs once a copy is verified, before the import builds its cleanup
+    /// guard.
+    #[cfg(test)]
+    after_copy_verified: Option<fn(&Path, &Path)>,
 }
 
 /// What the disk service is made to answer for an unproven hard link, in
@@ -1632,7 +1640,7 @@ fn import_symlink_source(
     dest: &Path,
     source_fingerprint: &ImportSourceFingerprint,
     size: u64,
-) -> AppResult<()> {
+) -> AppResult<Mark> {
     #[cfg(not(unix))]
     {
         let _ = dest;
@@ -1675,15 +1683,18 @@ fn import_symlink_source(
             )
         })?;
         if !dest_meta.file_type().is_symlink() {
-            let _ = Disk::process().remove_blocking(dest, Remove::File);
+            // Something other than the link this import made holds the name;
+            // it is not this import's to remove.
             return Err(AppError::Repository(format!(
                 "import destination is not a symlink: {}",
                 dest.display()
             )));
         }
+        // The link this import made, from the read just taken.
+        let made = Mark::of(&dest_meta);
         ensure_same_source(source, source_fingerprint)?;
         let dest_target_meta = std::fs::metadata(dest).map_err(|e| {
-            let _ = Disk::process().remove_blocking(dest, Remove::File);
+            take_back_placed(dest, Some(&made));
             AppError::Repository(format!(
                 "imported symlink target is unavailable: {}: {}",
                 dest.display(),
@@ -1691,7 +1702,7 @@ fn import_symlink_source(
             ))
         })?;
         if dest_target_meta.len() != size {
-            let _ = Disk::process().remove_blocking(dest, Remove::File);
+            take_back_placed(dest, Some(&made));
             return Err(AppError::Repository(format!(
                 "symlink import size mismatch: source={} dest={}",
                 size,
@@ -1699,7 +1710,7 @@ fn import_symlink_source(
             )));
         }
 
-        Ok(())
+        Ok(made)
     }
 }
 
@@ -1818,7 +1829,7 @@ fn copy_regular_source_to_destination(
     depth: VerificationDepth,
     progress: Option<&ImportFileTransferProgressSender>,
     cancellation: Option<&scryer_application::ImportCancellation>,
-) -> AppResult<ImportVerification> {
+) -> AppResult<(ImportVerification, Option<Mark>)> {
     let temp_dest = scryer_application::import_staging_path(dest);
     let sender = progress.cloned();
     let watch = Watch {
@@ -1874,19 +1885,27 @@ fn copy_regular_source_to_destination(
     // is under the name is read first, and a check that fails after this
     // removes it only while it is still the file read here, as the size check
     // below does. A name that does not read is left as it is.
-    let (dest_fingerprint, landed) = read_import_source(dest)?;
-    let dest_fingerprint = dest_fingerprint.file;
+    // The file the copy promoted, read through its own handle before it
+    // took the name: a later read of the name may already be another file.
+    let landed = copied.promoted;
     #[cfg(test)]
     if let Some(after_promoted) = options.after_copy_promoted {
         after_promoted(source, dest);
     }
+    let dest_fingerprint = match read_import_source(dest) {
+        Ok((fingerprint, _)) => fingerprint.file,
+        Err(error) => {
+            take_back_placed(dest, landed.as_ref());
+            return Err(error);
+        }
+    };
     if let Err(error) = ensure_same_source(source, source_fingerprint) {
-        take_back_landed_copy(dest, &landed);
+        take_back_placed(dest, landed.as_ref());
         return Err(error);
     }
 
     if dest_fingerprint.len != size {
-        take_back_landed_copy(dest, &landed);
+        take_back_placed(dest, landed.as_ref());
         return Err(AppError::Repository(format!(
             "copy size mismatch: source={} dest={}",
             size, dest_fingerprint.len
@@ -1935,7 +1954,7 @@ fn copy_regular_source_to_destination(
             .detail
             .clone()
             .unwrap_or_else(|| "no detail recorded".to_string());
-        take_back_landed_copy(dest, &landed);
+        take_back_placed(dest, landed.as_ref());
         return Err(AppError::Repository(format!(
             "copy verification failed at depth {} for {}: {} ({detail})",
             verification.depth.label(),
@@ -1944,32 +1963,40 @@ fn copy_regular_source_to_destination(
         )));
     }
 
-    Ok(verification)
+    #[cfg(test)]
+    if let Some(after_verified) = options.after_copy_verified {
+        after_verified(source, dest);
+    }
+    Ok((verification, landed))
 }
 
-/// Removes the copy an import landed at `dest` after a check on it failed,
-/// only while the name still holds the file read as `landed` once the copy
-/// took it: the same file where the platform numbers files, and otherwise a
-/// regular file whose length, modification time and owner held. Anything else
-/// there, or a name that does not read, is kept. One read of the name.
-fn take_back_landed_copy(dest: &Path, landed: &Mark) {
-    let still_landed =
+/// Removes what an import placed at `dest` after a check on it failed, only
+/// while the name still holds the file `placed` marks: the staged file a
+/// copy promoted, the source a hard link names, or the link this import
+/// made. That is the same file where the platform numbers files, and
+/// otherwise an entry of the same kind whose length, modification time and
+/// owner held. Anything else there, a name that does not read, or no mark,
+/// is kept. One read of the name.
+fn take_back_placed(dest: &Path, placed: Option<&Mark>) {
+    let still_placed = placed.is_some_and(|placed| {
         Disk::process()
             .fingerprint_blocking(dest)
-            .is_ok_and(|now| match now.same_file(landed) {
+            .is_ok_and(|now| match now.same_file(placed) {
                 Sameness::Same => true,
                 Sameness::Different => false,
                 Sameness::CannotTell => {
-                    now.kind() == Some(EntryKind::File)
-                        && landed.compare(&now).is_unwritten_by_its_owner()
+                    now.kind().is_some()
+                        && now.kind() == placed.kind()
+                        && placed.compare(&now).is_unwritten_by_its_owner()
                 }
-            });
-    if still_landed {
+            })
+    });
+    if still_placed {
         let _ = Disk::process().remove_blocking(dest, Remove::File);
     } else {
         tracing::warn!(
             dest = %dest.display(),
-            "the import's landed copy is no longer what holds the destination name, or the name does not read; it is kept"
+            "what the import placed is no longer what holds the destination name, or the name does not read; it is kept"
         );
     }
 }
@@ -2160,9 +2187,12 @@ fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
     Mark::on_volume(number).to_stored()
 }
 
+/// `placed` marks what this import placed at the destination; see
+/// [`take_back_placed`].
 fn finish_prepared_import(
     prepared: PreparedImportPlacement,
     strategy: ImportStrategy,
+    placed: Option<&Mark>,
 ) -> AppResult<ImportFileResult> {
     let source_cleanup = cleanup_guard_after_placement(
         prepared.source_cleanup_required,
@@ -2170,6 +2200,7 @@ fn finish_prepared_import(
         &prepared.dest,
         &prepared.source_fingerprint,
         prepared.size,
+        placed,
     )?;
     Ok(ImportFileResult {
         strategy,
@@ -2217,7 +2248,7 @@ fn try_fast_import_placement_blocking(
     }
 
     if let ImportSourceKind::Symlink { .. } = &prepared.source_fingerprint.kind {
-        import_symlink_source(
+        let made = import_symlink_source(
             &prepared.source,
             &prepared.dest,
             &prepared.source_fingerprint,
@@ -2227,7 +2258,7 @@ fn try_fast_import_placement_blocking(
             &prepared.destination_guard,
             &prepared.dest,
         )?;
-        return finish_prepared_import(prepared, ImportStrategy::Symlink)
+        return finish_prepared_import(prepared, ImportStrategy::Symlink, Some(&made))
             .map(FastPlacementResult::Finished);
     }
 
@@ -2278,8 +2309,12 @@ fn try_fast_import_placement_blocking(
                     &prepared.options,
                     &prepared.permissions,
                 );
-                return finish_prepared_import(prepared, ImportStrategy::HardLink)
-                    .map(FastPlacementResult::Finished);
+                return finish_prepared_import(
+                    prepared,
+                    ImportStrategy::HardLink,
+                    Some(&source_mark),
+                )
+                .map(FastPlacementResult::Finished);
             }
             ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => {
                 hard_link_identity_mismatch = Some(mismatch);
@@ -2554,7 +2589,7 @@ fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult
     let source_mark = same_source_mark(&prepared.source, &prepared.source_fingerprint)?;
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
     ensure_import_destination_absent(&prepared.dest)?;
-    let verification = copy_regular_source_to_destination(
+    let (verification, landed) = copy_regular_source_to_destination(
         &prepared.source,
         &prepared.dest,
         &prepared.source_fingerprint,
@@ -2570,7 +2605,7 @@ fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult
     // The source-cleanup guard is only built once verification passed, so
     // An unproven copy therefore has no guard to remove
     // anything with.
-    let mut result = finish_prepared_import(prepared, ImportStrategy::Copy)?;
+    let mut result = finish_prepared_import(prepared, ImportStrategy::Copy, landed.as_ref())?;
     result.verification = Some(verification);
     Ok(result)
 }
@@ -2604,7 +2639,7 @@ fn import_hardlink_or_copy_blocking(
     }
 
     if let ImportSourceKind::Symlink { .. } = &source_fingerprint.kind {
-        import_symlink_source(&source, &dest, &source_fingerprint, size)?;
+        let made = import_symlink_source(&source, &dest, &source_fingerprint, size)?;
         validate_import_destination_guard_after_placement(&destination_guard, &dest)?;
         let source_cleanup = cleanup_guard_after_placement(
             source_cleanup_required,
@@ -2612,6 +2647,7 @@ fn import_hardlink_or_copy_blocking(
             &dest,
             &source_fingerprint,
             size,
+            Some(&made),
         )?;
         return Ok(ImportFileResult {
             strategy: ImportStrategy::Symlink,
@@ -2667,6 +2703,7 @@ fn import_hardlink_or_copy_blocking(
                     &dest,
                     &source_fingerprint,
                     size,
+                    Some(&source_mark),
                 )?;
                 return Ok(ImportFileResult {
                     strategy: ImportStrategy::HardLink,
@@ -2723,7 +2760,7 @@ fn import_hardlink_or_copy_blocking(
         }
     }
 
-    let verification = copy_regular_source_to_destination(
+    let (verification, landed) = copy_regular_source_to_destination(
         &source,
         &dest,
         &source_fingerprint,
@@ -2743,6 +2780,7 @@ fn import_hardlink_or_copy_blocking(
         &dest,
         &source_fingerprint,
         size,
+        landed.as_ref(),
     )?;
     Ok(ImportFileResult {
         strategy: ImportStrategy::Copy,
@@ -6093,7 +6131,8 @@ mod tests {
             VerificationDepth::Quick,
             Some(&progress_tx),
             None,
-        );
+        )
+        .map(|(verification, _)| verification);
         let mut updates = Vec::new();
         while let Ok(update) = progress_rx.try_recv() {
             updates.push(update);
@@ -6350,6 +6389,46 @@ mod tests {
         assert_eq!(
             std::fs::read(&dest).expect("the replacing file is kept"),
             b"someone else's file"
+        );
+    }
+
+    /// A move whose cleanup guard cannot be built after the copy was
+    /// verified takes back only the copy it made: a file another writer put
+    /// at the destination name since is kept, and so is the source.
+    #[test]
+    fn a_failing_cleanup_guard_never_removes_a_file_that_replaced_the_copy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("Sample.Title.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+
+        import_file_blocking_at_depth(
+            source.clone(),
+            dest.clone(),
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                after_copy_verified: Some(|_, dest| {
+                    let other = dest.with_file_name("Sample.Other.mkv");
+                    std::fs::write(&other, b"someone else's file").expect("write other");
+                    std::fs::rename(&other, dest).expect("replace the copy");
+                }),
+                ..Default::default()
+            },
+            VerificationDepth::Quick,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect_err("the destination no longer matches the source");
+
+        assert_eq!(
+            std::fs::read(&dest).expect("the replacing file is kept"),
+            b"someone else's file"
+        );
+        assert_eq!(
+            std::fs::read(&source).expect("the source is kept"),
+            b"synthetic video bytes"
         );
     }
 
