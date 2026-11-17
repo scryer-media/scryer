@@ -2101,7 +2101,7 @@ pub trait TitleRepository: Send + Sync {
     /// which is exactly what this default does. A narrowing repository must
     /// compare at least as loosely as `folder_paths_match` does: on Windows
     /// that means folding both sides through
-    /// [`crate::stored_paths::folder_path_lookup_key`] (case and separator
+    /// [`crate::stored_paths::folder_path_lookup_key_for_platform`] (case and separator
     /// insensitive) rather than plain equality, or a stored `C:\Media\Show`
     /// is invisible to a scan that supplies `c:/media/show`.
     ///

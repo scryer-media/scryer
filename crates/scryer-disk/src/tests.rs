@@ -3121,3 +3121,29 @@ mod system {
         }
     }
 }
+
+/// A write the handle refuses is a write failure on the path in the
+/// platform's own words, and leaves the file as it was.
+#[tokio::test]
+async fn a_write_through_a_handle_that_refuses_it_fails_on_the_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("fixture.nfo");
+    std::fs::write(&path, b"kept").expect("fixture");
+    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+
+    let mut read_only = tokio::fs::File::open(&path).await.expect("handle");
+    let refused = disk.write_through(&path, &mut read_only, b"synthetic");
+    let error = refused
+        .await
+        .expect_err("a read-only handle takes no bytes");
+    assert_eq!((error.verb(), error.path()), (DiskVerb::Write, &*path));
+    let (shown, words) = (error.to_string(), error.words().to_string());
+    assert!(!words.is_empty() && shown.ends_with(&format!("{}: {words}", path.display())));
+    assert_eq!(std::fs::read(&path).expect("fixture"), b"kept");
+
+    let mut options = tokio::fs::OpenOptions::new();
+    let mut writable = options.write(true).open(&path).await.expect("handle");
+    let written = disk.write_through(&path, &mut writable, b"synthetic");
+    written.await.expect("a writable handle takes them");
+    assert_eq!(std::fs::read(&path).expect("fixture"), b"synthetic");
+}

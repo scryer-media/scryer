@@ -222,7 +222,7 @@ pub(crate) fn build_component_sandbox(
         .map_err(|error| {
             AppError::Repository(format!(
                 "failed to create archive plugin scratch dir: {}",
-                std::io::Error::from(error)
+                error.words()
             ))
         })?;
 

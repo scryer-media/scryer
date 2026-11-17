@@ -74,8 +74,7 @@ pub fn spawn_dump_thread() {
     if let Err(error) =
         disk.create_dir_blocking(Path::new(&dir), scryer_application::disk::Parents::Create)
     {
-        let error = std::io::Error::from(error);
-        eprintln!("jemalloc-prof: cannot create {dir}: {error}");
+        eprintln!("jemalloc-prof: cannot create {dir}: {}", error.words());
         return;
     }
     let interval = std::time::Duration::from_secs(secs);

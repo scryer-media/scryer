@@ -760,6 +760,74 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
     open.send(()).unwrap();
 }
 
+/// A recorded copy whose destination volume does not answer within the bound
+/// is refused before it takes a thread or a turn; one whose volume
+/// answers takes its turn on that volume's own lane, once.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_copy_whose_volume_does_not_answer_is_refused_before_its_turn() {
+    use super::copying::{turn_is_free, turns_held};
+    use super::mark::numbered;
+    let folder = "/srv/fixture-media/Fixture Show";
+    let direct = Placement {
+        verify: Verify::Recorded(Evidence {
+            depth: Depth::Full,
+            landing: Landing::Direct,
+        }),
+        ..policy(Method::Copy, Fallback::None)
+    };
+    let (disk, backend, _) = scripted();
+    // Two workers, so a second turn would be counted instead of parking.
+    disk.install_copy_workers(2);
+    backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let watch = Watch {
+        progress: Progress::to({
+            let (seen, disk) = (seen.clone(), disk.clone());
+            move |phase, _| {
+                let held = turns_held(&disk.copy_admission(), "unix-dev:7");
+                seen.lock().unwrap().push((phase, held));
+            }
+        }),
+        cancel: Cancel::never(),
+    };
+    let placed = disk.place_watched(SOURCE, DEST, direct, watch).await;
+    assert_eq!(placed.expect("copied").done, Done::Copied);
+    let seen = seen.lock().unwrap();
+    let waits = seen.iter().filter(|(phase, _)| *phase == Phase::Waiting);
+    assert_eq!(waits.count(), 1, "one wait: {seen:?}");
+    assert!(
+        seen.contains(&(Phase::Copying, 1)),
+        "its own lane: {seen:?}"
+    );
+    drop(seen);
+
+    let (disk, backend, _) = scripted();
+    disk.install_copy_workers(1);
+    backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
+    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
+    let (open, gate) = mpsc::channel::<()>();
+    *backend.gate.lock().unwrap() = Some(gate);
+    *backend.gate_under.lock().unwrap() = Some(p(folder));
+    let silent = disk
+        .place_watched(SOURCE, DEST, direct, Watch::nobody())
+        .await
+        .expect_err("refused");
+    assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
+    assert_eq!(
+        silent.to_string(),
+        format!("failed to inspect the volume of {DEST}: the disk did not answer in time")
+    );
+    // The one call made is the held volume read: nothing was opened,
+    // and no thread ran a placement that would have read the source.
+    assert_eq!(backend.calls_of("open"), 0);
+    assert!(!backend.paths_of("stat").contains(&p(SOURCE)));
+    let free = |lane| turn_is_free(&disk.copy_admission(), lane);
+    assert!(free("unknown-volume") && free("unix-dev:7"));
+    drop(open);
+}
+
 /// The early reading of the staged name is only a fast path: a file that
 /// takes the name while the copy waits for its turn is met by the exclusive
 /// create, refused in the same words, and left alone.

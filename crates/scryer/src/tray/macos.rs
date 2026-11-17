@@ -203,7 +203,7 @@ fn acquire_instance_lock(profile_dir: &Path) -> Result<Option<File>, String> {
             format!(
                 "failed to open the Scryer instance lock at {}: {}",
                 path.display(),
-                std::io::Error::from(error)
+                error.words()
             )
         })?;
     // `File::try_lock` is an exclusive, non-blocking `flock` here.

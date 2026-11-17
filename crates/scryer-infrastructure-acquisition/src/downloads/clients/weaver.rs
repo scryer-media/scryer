@@ -868,7 +868,7 @@ impl WeaverDownloadClient {
                             AppError::Repository(format!(
                                 "failed to open weaver upload artifact {}: {}",
                                 upload_path.display(),
-                                std::io::Error::from(error)
+                                error.words()
                             ))
                         })?;
                     let part = multipart::Part::stream_with_length(
@@ -1999,7 +1999,7 @@ impl DownloadClient for WeaverDownloadClient {
                             AppError::Repository(format!(
                                 "failed to read staged nzb {}: {}",
                                 staged.staged_nzb.compressed_path.display(),
-                                std::io::Error::from(read_error)
+                                read_error.words()
                             ))
                         })?;
                     let nzb_bytes = zstd::stream::decode_all(std::io::Cursor::new(compressed_bytes))

@@ -656,7 +656,7 @@ impl TitleFuzzyIndex {
         Disk::process()
             .remove_blocking(&self.meta_path(), Remove::File)
             .map(drop)
-            .map_err(|error| AppError::Repository(std::io::Error::from(error).to_string()))
+            .map_err(|error| AppError::Repository(error.words().to_string()))
     }
 
     fn ready(&self) -> bool {
@@ -1005,7 +1005,7 @@ fn index_path_error(path: &Path, error: DiskError) -> AppError {
     if error.reason() == reason::DISK_LINK_NOT_FOLLOWED {
         return symlink_refused(path);
     }
-    AppError::Repository(std::io::Error::from(error).to_string())
+    AppError::Repository(error.words().to_string())
 }
 
 fn open_index_files(dir: &Path) -> tantivy::Result<(Index, IndexReader)> {
@@ -1062,7 +1062,7 @@ fn open_owned_index(dir: &Path) -> AppResult<(std::fs::File, Index, IndexReader)
         .ok_or_else(|| AppError::Repository("title index has no parent".into()))?;
     let disk = Disk::process();
     disk.create_dir_blocking(parent, Parents::Create)
-        .map_err(|error| AppError::Repository(std::io::Error::from(error).to_string()))?;
+        .map_err(|error| AppError::Repository(error.words().to_string()))?;
     let lock_path = parent.join("title-fuzzy-index.lock");
     let ownership = disk
         .open_blocking(&lock_path, Open::create_or_keep().without_following_links())
@@ -1106,9 +1106,7 @@ fn open_owned_index(dir: &Path) -> AppResult<(std::fs::File, Index, IndexReader)
                     Ok(()) => break candidate,
                     Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => suffix += 1,
                     Err(error) => {
-                        return Err(AppError::Repository(
-                            std::io::Error::from(error).to_string(),
-                        ));
+                        return Err(AppError::Repository(error.words().to_string()));
                     }
                 }
             };

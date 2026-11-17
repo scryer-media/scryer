@@ -12,8 +12,8 @@ use scryer_application::{AppError, AppResult, PendingStagedNzb, StagedNzbRef, St
 
 /// A failure to `what` at `path`, in the platform's own words.
 fn failed(what: &str, path: &Path, error: DiskError) -> AppError {
-    let words = std::io::Error::from(error);
-    AppError::Repository(format!("failed to {what} {}: {words}", path.display()))
+    let (path, words) = (path.display(), error.words());
+    AppError::Repository(format!("failed to {what} {path}: {words}"))
 }
 
 #[derive(Clone)]

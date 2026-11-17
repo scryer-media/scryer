@@ -350,7 +350,7 @@ pub(crate) async fn test_http_download_dir(config_json: &str) -> AppResult<()> {
             format!(
                 "the download directory {} is not writable: {}",
                 settings.download_dir.display(),
-                std::io::Error::from(error)
+                error.words()
             ),
         )
     };

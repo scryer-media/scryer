@@ -779,7 +779,7 @@ impl ServerSupervisor {
                 format!(
                     "failed to create Scryer desktop profile at {}: {}",
                     self.profile_dir.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 )
             })
     }
@@ -1133,7 +1133,7 @@ pub(crate) fn remove_desktop_profile(profile_dir: &Path) -> Vec<String> {
             return vec![format!(
                 "cannot read {}: {}",
                 profile_dir.display(),
-                std::io::Error::from(error)
+                error.words()
             )];
         }
     };
@@ -1234,7 +1234,7 @@ fn configure_server_console(command: &mut Command, logs_dir: &Path) -> Result<()
             format!(
                 "failed to capture server console at {}: {}",
                 path.display(),
-                std::io::Error::from(error)
+                error.words()
             )
         })?;
     command.stderr(output);

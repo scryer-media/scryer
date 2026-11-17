@@ -18,7 +18,7 @@ async fn create_dir(path: &Path) -> Result<(), String> {
     Disk::process()
         .create_dir(path, Parents::Create)
         .await
-        .map_err(|e| std::io::Error::from(e).to_string())
+        .map_err(|e| e.words().to_string())
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

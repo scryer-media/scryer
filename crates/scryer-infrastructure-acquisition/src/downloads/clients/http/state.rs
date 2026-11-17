@@ -422,7 +422,7 @@ impl HttpStateStore {
                 return Err(AppError::Repository(format!(
                     "the HTTP downloader could not read its queue at {}: {}",
                     self.path.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 )));
             }
         };
@@ -455,7 +455,7 @@ impl HttpStateStore {
                     format!(
                         "the download directory is not writable ({}): {}",
                         parent.display(),
-                        std::io::Error::from(error)
+                        error.words()
                     ),
                 )
             })?;
@@ -472,7 +472,7 @@ impl HttpStateStore {
                             format!(
                                 "the HTTP downloader's queue at {} is not writable: {}",
                                 self.path.display(),
-                                std::io::Error::from(error)
+                                error.words()
                             ),
                         )
                     })
@@ -545,7 +545,7 @@ impl HttpStateStore {
                 AppError::Repository(format!(
                     "the HTTP downloader could not record progress at {}: {}",
                     path.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             })
     }

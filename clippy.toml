@@ -21,7 +21,7 @@
 #
 # The only standing exemptions are: the disk service crate itself; test,
 # example, bench and build-script code; the crates that do not depend on
-# scryer-application (scryer-mediainfo, scryer-logging, scryer-launcher); and
+# scryer-application (scryer-launcher, scryer-mediainfo, scryer-mock-apis); and
 # the plugin WASI sandbox, which manages its own preopened directories. Each
 # carries `allow(clippy::disallowed_methods)` with a `// disk-guard:` comment
 # saying which exemption it is. Until a crate is converted it carries one

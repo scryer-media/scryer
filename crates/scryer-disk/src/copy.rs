@@ -258,7 +258,7 @@ pub struct Watch {
 }
 
 impl Watch {
-    pub fn nobody() -> Self {
+    pub(crate) fn nobody() -> Self {
         Self {
             progress: Progress::none(),
             cancel: Cancel::never(),
@@ -898,7 +898,7 @@ impl Disk {
 
     /// Read one file end to end and produce its content hashes, reporting
     /// the bytes read as [`Phase::Verifying`].
-    pub fn hash_file_blocking(
+    pub(crate) fn hash_file_blocking(
         &self,
         path: &Path,
         progress: &Progress,
@@ -1156,12 +1156,17 @@ impl Disk {
     }
 
     /// A turn on the volume `dest` will land on. The volume is read within
-    /// the root's bound; when it does not answer in time there is no turn,
-    /// and the copy waits for its own on the thread it runs on.
-    pub(crate) async fn copy_turn(&self, dest: &Path) -> Option<CopyPermit> {
-        let read = |disk: &Self, dest: &Path| Some(disk.copy_lane(dest));
-        let lane = self.probe_with(dest.to_path_buf(), read, |_| None).await?;
-        Some(self.copy_admission().acquire_keyed(&lane).await)
+    /// the root's bound; when it does not answer there is no turn and the
+    /// copy is refused as one whose destination could not be read.
+    pub(crate) async fn copy_turn(&self, dest: &Path) -> Result<CopyPermit, Fail> {
+        let read = |disk: &Self, dest: &Path| Ok(disk.copy_lane(dest));
+        let lane = self.probe_with(dest.to_path_buf(), read, Err).await;
+        let lane = lane.map_err(|reading| {
+            let why = reading.describe_absence();
+            let detail = format!("failed to inspect the volume of {}: {why}", dest.display());
+            Fail::unread(reading, Side::Destination, detail)
+        })?;
+        Ok(self.copy_admission().acquire_keyed(&lane).await)
     }
 
     /// Whether a move from `source` to `destination` can be a rename: both

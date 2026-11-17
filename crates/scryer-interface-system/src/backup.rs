@@ -387,7 +387,7 @@ impl BackupMutations {
             .map_err(|error| {
                 to_gql_error(AppError::Repository(format!(
                     "failed to create restore staging directory: {}",
-                    std::io::Error::from(error)
+                    error.words()
                 )))
             })?;
         disk.restrict_to_owner(&upload_dir, OwnerOnly::Directory)
@@ -396,7 +396,7 @@ impl BackupMutations {
             .map_err(|error| {
                 to_gql_error(AppError::Repository(format!(
                     "failed to protect restore staging directory: {}",
-                    std::io::Error::from(error)
+                    error.words()
                 )))
             })?;
 
@@ -851,7 +851,7 @@ async fn write_uploaded_bundle(
             .map_err(|error| {
                 AppError::Repository(format!(
                     "failed to create restore staging bundle: {}",
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             })?;
         let mut reader = upload.into_read();
@@ -889,7 +889,7 @@ fn stage_restore_bundle(
         .map_err(|error| {
             AppError::Repository(format!(
                 "failed to create pending restore directory: {}",
-                std::io::Error::from(error)
+                error.words()
             ))
         })?;
     ensure_owner_only_dir_permissions(&pending_dir).map_err(|error| {
@@ -991,7 +991,7 @@ fn write_owner_only_file_atomically(path: &Path, contents: &str) -> Result<(), A
             AppError::Repository(format!(
                 "failed to write restore secrets {}: {}",
                 path.display(),
-                std::io::Error::from(error)
+                error.words()
             ))
         })
 }

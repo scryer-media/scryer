@@ -152,7 +152,7 @@ impl SqliteServices {
                             AppError::Repository(format!(
                                 "cannot create database directory {}: {}",
                                 parent.display(),
-                                std::io::Error::from(err),
+                                err.words(),
                             ))
                         })?;
                 }

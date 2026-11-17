@@ -12,19 +12,18 @@ pub mod placement;
 #[cfg(test)]
 pub(crate) use scryer_disk::open_cache_bypassed;
 pub use scryer_disk::{
-    Access, CannotLink, DISK_STAT_REUSE, Disk, DiskError, DiskPass, DiskVerb, Done, Drift,
-    EntryKind, Fallback, FileIdentity, FreeNameMove, IfPresent, KeptPermissions, Link, LinkOutcome,
-    Listed, Mark, Method, MoveOutcome, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed,
-    Placement, Refused, Removal, Remove, Replace, Sameness, ScratchDir, Side, Staged, Staging,
-    SyncOutcome, Verify, Visited, VolumeClass, is_cross_device_error, reason,
+    Access, Disk, DiskError, Done, Drift, EntryKind, Fallback, FreeNameMove, IfPresent, Link,
+    LinkOutcome, Listed, Mark, Method, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed,
+    Placement, Refused, Removal, Remove, Replace, ScratchDir, Side, Staged, Staging, SyncOutcome,
+    Verify, Visited, VolumeClass, reason,
 };
 pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
 #[doc(hidden)]
 pub use scryer_disk::{CacheBypass, ReadBackHandle, ReadBackOpener};
 pub use scryer_disk::{
-    Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
-    Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
-    RESUMABLE_STAGING_SUFFIX, Verdict, Watch, resumable_staging_path,
+    Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CrcKind, Depth, Evidence,
+    FILE_NAME_MAX_BYTES, Landing, Phase, Progress, Proof, RESUMABLE_STAGING_SUFFIX, Verdict, Watch,
+    resumable_staging_path,
 };
 
 #[cfg(test)]

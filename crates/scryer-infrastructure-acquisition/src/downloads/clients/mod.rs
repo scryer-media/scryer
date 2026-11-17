@@ -458,7 +458,7 @@ impl<R: Read> TeeZstdReader<R> {
                 AppError::Repository(format!(
                     "failed to create staged nzb file {}: {}",
                     output_path.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             })?;
         let writer = std::io::BufWriter::new(file);

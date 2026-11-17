@@ -321,12 +321,11 @@ fn postgres_password(url: &url::Url) -> AppResult<String> {
         let password = scryer_application::disk::Disk::process()
             .read_to_string_blocking(std::path::Path::new(&password_file))
             .map_err(|error| {
-                let error = std::io::Error::from(error);
                 AppError::validation_refused(
                     crate::error_reasons::DATASTORE_PASSWORD_FILE_UNREADABLE,
                     format!(
-                        "failed to read SCRYER_DB_PASSWORD_FILE {}: {error}",
-                        password_file
+                        "failed to read SCRYER_DB_PASSWORD_FILE {password_file}: {}",
+                        error.words()
                     ),
                 )
             })?;

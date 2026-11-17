@@ -592,7 +592,7 @@ impl RestoreRowReader {
             .open(part_path, scryer_application::disk::Open::read())
             .await
             .map_err(|error| {
-                let error = std::io::Error::from(error);
+                let error = error.words();
                 AppError::validation_refused(
                     crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
                     format!("backup table payload missing for {table}: {error}"),

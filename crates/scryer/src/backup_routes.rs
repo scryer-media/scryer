@@ -291,7 +291,7 @@ async fn load_backup_metadata(backup_dir: &Path, filename: &str) -> Result<Backu
     let bytes = Disk::process().read(&path).await.map_err(|error| {
         AppError::not_found_reason(
             crate::error_reasons::HTTP_BACKUP_METADATA_NOT_FOUND,
-            format!("backup metadata not found: {}", std::io::Error::from(error)),
+            format!("backup metadata not found: {}", error.words()),
         )
     })?;
     serde_json::from_slice::<BackupInfo>(&bytes)
@@ -357,7 +357,7 @@ pub(crate) async fn download_backup_handler(
         Err(error) => {
             return map_app_error(AppError::not_found_reason(
                 crate::error_reasons::HTTP_BACKUP_BUNDLE_NOT_FOUND,
-                format!("backup bundle not found: {}", std::io::Error::from(error)),
+                format!("backup bundle not found: {}", error.words()),
             ));
         }
     };

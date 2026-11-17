@@ -1440,7 +1440,7 @@ fn validate_import_destination_guard_after_placement(
                 Err(cleanup_error) => Err(AppError::Repository(format!(
                     "{validation_message}; additionally failed to remove placed import destination {} after validation failure: {}",
                     returned_dest.display(),
-                    io::Error::from(cleanup_error)
+                    cleanup_error.words()
                 ))),
             }
         }
@@ -2300,7 +2300,7 @@ fn release_archive_rename_reservation(
                 return Err(AppError::Repository(format!(
                     "failed to release destination reservation {}: {}",
                     prepared.dest.display(),
-                    io::Error::from(error)
+                    error.words()
                 )));
             }
         }
@@ -2313,7 +2313,6 @@ fn release_archive_rename_reservation(
     }
     tracing::debug!(
         error = %rename_error,
-        cross_device = scryer_application::disk::is_cross_device_error(rename_error),
         "archive workspace rename is ineligible; trying the link and copy lanes"
     );
     Ok(false)

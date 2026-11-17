@@ -389,7 +389,7 @@ impl NzbgetDownloadClient {
                             AppError::Repository(format!(
                                 "failed to open staged nzb {}: {}",
                                 compressed_path.display(),
-                                std::io::Error::from(error)
+                                error.words()
                             ))
                         })?;
                     let mut request = self

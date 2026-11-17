@@ -806,7 +806,7 @@ impl TrayState {
                 format!(
                     "failed to create the WebView2 profile at {}: {}",
                     user_data_folder.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 )
             })?;
 
@@ -2518,7 +2518,7 @@ mod smoke {
                 fail(&format!(
                     "failed to create the smoke user data folder at {}: {}",
                     user_data_folder.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             });
 

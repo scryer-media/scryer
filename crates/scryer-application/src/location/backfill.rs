@@ -1,11 +1,11 @@
-//! Full-hash backfill: the slow convergence job (FR-047, plan D9).
+//! Full-hash backfill: the slow convergence job.
 //!
 //! Every other producer of a full BLAKE3 in this feature gets it for free —
 //! [`crate::location::verify`] hashes bytes it was already copying. This job
 //! exists for the catalog that was never copied: files that were scanned,
-//! hardlinked, or imported before 0205 existed, and files a scan invalidated
-//! (FR-046). It reads them for no other reason than to hash them, which is why
-//! everything below is about *not* getting in the way.
+//! hardlinked, or imported before full hashes were recorded, and files a scan
+//! invalidated. It reads them for no other reason than to hash them, which is
+//! why everything below is about *not* getting in the way.
 //!
 //! # Shape
 //!

@@ -1427,7 +1427,7 @@ async fn restore_without_overwrite(
                             "failed to claim restore destination {} after hard link failed ({}): {}",
                             destination.display(),
                             link_error,
-                            std::io::Error::from(error)
+                            error.words()
                         )));
                     }
                 };
@@ -2584,7 +2584,7 @@ async fn relocate_entry(
                     return Err(format!(
                         "could not move the entry to {}: {}",
                         dest.display(),
-                        std::io::Error::from(error)
+                        error.words()
                     ));
                 }
             },

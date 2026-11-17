@@ -831,7 +831,7 @@ impl ImageProxyRuntime {
             Err(error) => Err(AppError::Repository(format!(
                 "failed to remove image cache file {}: {}",
                 path.display(),
-                std::io::Error::from(error)
+                error.words()
             ))),
         }
     }
@@ -1178,10 +1178,7 @@ fn outbound_error(error: OutboundHttpError) -> AppError {
 
 /// The repository error the image cache raises for a failed disk call.
 fn cache_failure(action: &'static str) -> impl FnOnce(DiskError) -> AppError {
-    move |error| {
-        let error = std::io::Error::from(error);
-        AppError::Repository(format!("failed to {action}: {error}"))
-    }
+    move |error| AppError::Repository(format!("failed to {action}: {}", error.words()))
 }
 
 #[cfg(test)]

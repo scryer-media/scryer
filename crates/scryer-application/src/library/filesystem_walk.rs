@@ -288,14 +288,14 @@ impl FilesystemWalker {
             AppError::Repository(format!(
                 "failed to read directory {}: {}",
                 dir.display(),
-                std::io::Error::from(error)
+                error.words()
             ))
         })?;
         if let Some((what, path, error)) = failure {
             return Err(AppError::Repository(format!(
                 "{what} {}: {}",
                 path.display(),
-                std::io::Error::from(error)
+                error.words()
             )));
         }
 
@@ -424,7 +424,7 @@ fn canonical(path: &Path) -> AppResult<PathBuf> {
             AppError::Repository(format!(
                 "failed to resolve directory {}: {}",
                 path.display(),
-                std::io::Error::from(error)
+                error.words()
             ))
         })
 }

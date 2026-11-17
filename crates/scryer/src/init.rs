@@ -91,7 +91,7 @@ fn run_init_docker(args: Vec<String>) {
                 Access::Default,
             )
             .unwrap_or_else(|e| {
-                eprintln!("error: failed to write {path}: {}", io::Error::from(e));
+                eprintln!("error: failed to write {path}: {}", e.words());
                 std::process::exit(1);
             });
         };
@@ -103,7 +103,7 @@ fn run_init_docker(args: Vec<String>) {
             .unwrap_or_else(|e| {
                 eprintln!(
                     "warning: could not set {KEY_FILE} permissions to 600: {}",
-                    io::Error::from(e)
+                    e.words()
                 );
             });
         eprintln!("wrote {compose_path}");

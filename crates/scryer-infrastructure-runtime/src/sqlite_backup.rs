@@ -461,10 +461,10 @@ impl TablePartWriter {
             let file = scryer_application::disk::Disk::process()
                 .open_blocking(&output_path, scryer_application::disk::Open::create())
                 .map_err(|error| {
-                    let error = std::io::Error::from(error);
                     AppError::Repository(format!(
-                        "failed to create {create_label} {}: {error}",
-                        output_path.display()
+                        "failed to create {create_label} {}: {}",
+                        output_path.display(),
+                        error.words()
                     ))
                 })?;
             Ok(Self {

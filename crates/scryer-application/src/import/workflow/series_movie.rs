@@ -239,7 +239,7 @@ async fn run_import(
 ///
 /// All three leave the download in `ImportBlocked` — `result_state.rs` maps
 /// every non-`Imported` decision there — so the dispositions differ only in
-/// their side effects (design §9, D17 restated).
+/// their side effects.
 async fn carry_out_import_rejection(
     app: &AppUseCase,
     actor: &User,
@@ -473,12 +473,12 @@ async fn relocate_titleless_archive_workspace_for_title(
             {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
-            let error = std::io::Error::from(error);
             Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING, format!(
-                "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
+                "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {}",
                 title_name,
                 extracted_dir.display(),
-                target.display()
+                target.display(),
+                error.words()
             )))
         }
     }
@@ -1228,8 +1228,8 @@ async fn dispatch_completed_import_target(
     subtitle_deliveries: &mut Vec<(PathBuf, PathBuf)>,
 ) -> AppResult<ImportResult> {
     // The target title is settled and nothing has been written yet: the last
-    // point an import can be refused cleanly while an operation owns the title
-    // (FR-084). The refusal reaches the operator as a failed import record.
+    // point an import can be refused cleanly while an operation owns the title.
+    // The refusal reaches the operator as a failed import record.
     let _location_guard = app
         .acquire_location_title_mutation(
             &crate::location::ownership_guard::COMPLETED_IMPORT_ENTRY,
@@ -3042,7 +3042,7 @@ async fn import_series_movie_download(
         // Every primary file of the title, not the handful that happen to sit at
         // this import's destination path: the subject holds *every* file linked
         // to this series-movie link, wherever it lives, so a path filter here
-        // used to leave the lookup empty and panic (D14/A1).
+        // used to leave the lookup empty and panic.
         incumbent_rows: crate::import_decide::IncumbentRows::Title(&existing_files),
         scope_label: "this series-movie link",
     };
@@ -3893,19 +3893,6 @@ mod archive_relocation_tests {
         ));
         assert!(source.is_dir());
         assert!(!moved.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cross_device_rename_error_is_detected() {
-        let error = std::io::Error::from_raw_os_error(18);
-        assert!(crate::disk::is_cross_device_error(&error));
-    }
-
-    #[test]
-    fn unrelated_rename_error_is_not_cross_device() {
-        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        assert!(!crate::disk::is_cross_device_error(&error));
     }
 }
 

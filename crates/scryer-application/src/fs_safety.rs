@@ -42,7 +42,7 @@ pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {
             Ok(false) => (reasons::CONFIGURED_MEDIA_ROOT_EMPTY, "is empty".to_string()),
             Err(error) => (
                 reasons::CONFIGURED_MEDIA_ROOT_UNREADABLE,
-                format!("is unreadable: {}", io::Error::from(error)),
+                format!("is unreadable: {}", error.words()),
             ),
         },
         Some(EntryKind::Symlink) => (

@@ -19,8 +19,9 @@ pub mod reason {
     /// disk.
     pub const DISK_NOT_OBSERVED: &str = "DISK_NOT_OBSERVED";
     /// The storage could not be reached: a stale handle, a dropped connection,
-    /// a host or network that is down. Also the unknown reason of every
-    /// unreachable reading, whose own cause says which.
+    /// a host or network that is down. Also the generic reason of a reading
+    /// that got no answer for a cause with no code of its own, a bounded read
+    /// that was refused or failed included.
     pub const DISK_PATH_UNREACHABLE: &str = "DISK_PATH_UNREACHABLE";
     /// The disk did not answer within the owner's bound.
     pub const DISK_TIMED_OUT: &str = "DISK_TIMED_OUT";
@@ -332,12 +333,18 @@ impl DiskError {
         self.reason
     }
 
-    pub fn verb(&self) -> DiskVerb {
+    #[cfg(test)]
+    pub(crate) fn verb(&self) -> DiskVerb {
         self.verb
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The platform's own words for the failure, without the verb or path.
+    pub fn words(&self) -> impl std::fmt::Display + '_ {
+        &self.source
     }
 }
 
@@ -396,7 +403,7 @@ fn classify(error: &io::Error) -> &'static str {
 /// The bare numbers differ per platform: 18 is `EXDEV` on Unix, while 17 is
 /// `ERROR_NOT_SAME_DEVICE` on Windows and `EEXIST` on Unix. Matching both
 /// everywhere sent existing-destination failures down copy-and-delete paths.
-pub fn is_cross_device_error(error: &io::Error) -> bool {
+pub(crate) fn is_cross_device_error(error: &io::Error) -> bool {
     if error.kind() == io::ErrorKind::CrossesDevices {
         return true;
     }
@@ -528,6 +535,15 @@ mod tests {
             )));
         }
         assert!(!is_cross_device_error(&io::Error::from_raw_os_error(5)));
+        // What a caller sees is the reason code, never the raw number.
+        let moved = |error| DiskError::new(DiskVerb::Move, Path::new("fixture"), error);
+        #[cfg(unix)]
+        assert_eq!(
+            moved(io::Error::from_raw_os_error(libc::EXDEV)).reason(),
+            reason::DISK_MOVE_NEEDS_COPY
+        );
+        let denied = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        assert_eq!(moved(denied).reason(), reason::DISK_PERMISSION_DENIED);
     }
 
     #[test]

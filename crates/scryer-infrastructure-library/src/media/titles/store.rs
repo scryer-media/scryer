@@ -497,7 +497,7 @@ const TITLE_ID_LIST_BIND_CHUNK: usize = 900;
 /// superset. On Windows the matcher lowercases and treats `/` and `\` as one
 /// separator, so a stored `C:\Media\Show` has to be reachable from a scanned
 /// `c:/media/show`; both sides go through
-/// [`scryer_application::stored_paths::folder_path_lookup_key`] — in SQL,
+/// [`scryer_application::stored_paths::folder_path_lookup_key_for_platform`] — in SQL,
 /// `lower(replace(folder_path, '/', '\'))`, which sqlite and postgres both
 /// understand and which migration 0253 indexes.
 ///

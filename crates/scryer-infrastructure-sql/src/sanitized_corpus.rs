@@ -61,10 +61,10 @@ pub fn load_sanitized_jsonl(path: &Path) -> Result<Vec<Vec<u8>>, String> {
     let source = scryer_application::disk::Disk::process()
         .read_to_string_blocking(path)
         .map_err(|error| {
-            let error = std::io::Error::from(error);
             format!(
-                "failed to read sanitized corpus {}: {error}",
-                path.display()
+                "failed to read sanitized corpus {}: {}",
+                path.display(),
+                error.words()
             )
         })?;
     let mut samples = Vec::new();

@@ -324,7 +324,7 @@ impl Disk {
     /// for its turn on the destination's volume, and that wait does not
     /// observe `watch`'s cancel. Never call it on a runtime worker thread:
     /// it would hold the worker for the wait and the copy.
-    pub fn place_watched_blocking(
+    pub(crate) fn place_watched_blocking(
         &self,
         source: &Path,
         dest: &Path,
@@ -381,10 +381,12 @@ impl Disk {
     }
 
     /// [`Self::place_watched_blocking`] off the async runtime. A recorded
-    /// copy first reads its staged name within the root's bound, then waits
-    /// for its turn on the destination's volume before it takes a thread,
-    /// and gives the turn back before the copy is proven. A link that falls
-    /// back to a recorded copy waits for its turn on the thread it has.
+    /// copy first reads its staged name and its destination's volume within
+    /// the root's bound, and is refused before it takes a thread when either
+    /// does not answer. It then waits for its turn on that volume, takes a
+    /// thread, and gives the turn back before the copy is proven. A link
+    /// that falls back to a recorded copy waits for its turn on the thread
+    /// it has.
     pub async fn place_watched(
         &self,
         source: impl Into<PathBuf>,
@@ -395,6 +397,11 @@ impl Disk {
         let (disk, source, dest) = (self.clone(), source.into(), dest.into());
         let recorded = matches!(policy.verify, Verify::Recorded(_));
         let mut staged_free = false;
+        let refuse = |fail: Fail| PlaceRefusal {
+            asked: policy.method,
+            refused: fail.refused,
+            detail: fail.detail,
+        };
         let permit = match policy {
             Placement {
                 method: Method::Copy,
@@ -406,17 +413,11 @@ impl Disk {
                 if evidence.landing == Landing::Staged {
                     let staged = resumable_staging_path(&dest);
                     let reading = self.uncached(staged.clone()).await;
-                    if let Err(fail) = staged_name_is_free(&staged, reading) {
-                        return Err(PlaceRefusal {
-                            asked: policy.method,
-                            refused: fail.refused,
-                            detail: fail.detail,
-                        });
-                    }
+                    staged_name_is_free(&staged, reading).map_err(refuse)?;
                     staged_free = true;
                 }
                 watch.progress.report(Phase::Waiting, 0);
-                self.copy_turn(&dest).await
+                Some(self.copy_turn(&dest).await.map_err(refuse)?)
             }
             _ => None,
         };

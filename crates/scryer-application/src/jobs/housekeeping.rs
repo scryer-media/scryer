@@ -365,11 +365,11 @@ async fn selected_names_in_recycle_bin(
         AppError::Repository(format!(
             "failed to read recycle bin directory {}: {}",
             base_path.display(),
-            std::io::Error::from(error)
+            error.words()
         ))
     })?;
     names.map_err(|error| {
-        let error = std::io::Error::from(error);
+        let error = error.words();
         AppError::Repository(format!("failed to read recycle bin entry: {error}"))
     })
 }

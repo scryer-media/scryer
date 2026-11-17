@@ -309,13 +309,8 @@ pub fn folder_path_match_candidates(folder_path: &str) -> Vec<String> {
 ///
 /// The repository's SQL twin of this is `lower(replace(folder_path, '/', '\'))`,
 /// which both dialects understand; it is only applied to plain stored paths,
-/// because the escape form is compared by exact equality instead.
-pub fn folder_path_lookup_key(folder_path: &str) -> String {
-    folder_path_lookup_key_for_platform(folder_path, cfg!(windows))
-}
-
-/// [`folder_path_lookup_key`] with the platform rule chosen explicitly, so the
-/// Windows rule can be asserted and applied from any host.
+/// because the escape form is compared by exact equality instead. The caller
+/// names the platform rule, so the Windows rule can be asserted from any host.
 pub fn folder_path_lookup_key_for_platform(folder_path: &str, windows: bool) -> String {
     if !windows {
         return folder_path.to_string();

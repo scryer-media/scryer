@@ -1,5 +1,4 @@
-//! The root-move execution path: the three runner seams, wired end to end
-//! (US2, FR-030–033, FR-044, FR-076, FR-089).
+//! The root-move execution path: the three runner seams, wired end to end.
 //!
 //! [`crate::location::executor::LocationOperationRunner`] owns the state
 //! machine, the checkpoints, the cancel points, and the resume cursor. This
@@ -7,9 +6,9 @@
 //!
 //! | Seam | Implementation here | What it guarantees |
 //! |---|---|---|
-//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem link placement without copying bytes; otherwise a verified streaming copy at the operation's depth (FR-040–043), or a proof of a destination an interrupted run already placed. The source survives until the journal and catalog are durable. Configured permissions land on the destination straight after verification (FR-031). |
-//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order (FR-031, FR-044). For a title that merges into an existing destination title, the flip is replaced by the US7 merge engine's Groups 1–5 transaction (FR-063–FR-067). |
-//! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The FR-089 scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
+//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem link placement without copying bytes; otherwise a verified streaming copy at the operation's depth, or a proof of a destination an interrupted run already placed. The source survives until the journal and catalog are durable. Configured permissions land on the destination straight after verification. |
+//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order. For a title that merges into an existing destination title, the flip is replaced by the merge engine's single catalog transaction. |
+//! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
 //!
 //! # Why the source is never touched by the mover
 //!

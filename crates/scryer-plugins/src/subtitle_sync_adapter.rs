@@ -50,9 +50,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use scryer_application::disk::{
-    Access, Disk, DiskError, EntryKind, PathReading, Replace, ScratchDir,
-};
+use scryer_application::disk::{Access, Disk, EntryKind, PathReading, Replace, ScratchDir};
 use scryer_application::{AppError, AppResult, SubtitleSyncClient, SubtitleSyncJob};
 use scryer_plugin_sdk::command::{
     PluginCommand, PluginCommandRequest, PluginCommandResult, PluginSubtitleCommand,
@@ -516,7 +514,7 @@ fn read_guest_output_file(output_root: &Path, path: &Path) -> AppResult<Vec<u8>>
     }
 
     disk.read_blocking(&canonical)
-        .map_err(|error: DiskError| read_failed(&std::io::Error::from(error)))
+        .map_err(|error| read_failed(&error.words()))
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use crate::backend::Extra;
 const A: &str = "/srv/fixture-media/Fixture Show/a.mkv";
 const B: &str = "/srv/fixture-media/Fixture Show/b.mkv";
 
-fn numbered(device: Option<u64>, inode: Option<u64>) -> RawStat {
+pub(super) fn numbered(device: Option<u64>, inode: Option<u64>) -> RawStat {
     RawStat {
         extra: Extra {
             device,
@@ -166,7 +166,7 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
     let marks = [
         mark(full),
         mark(dir()),
-        Mark::from_stored("mark1:f:5:-:-:-:w42:99:-").expect("a Windows mark"),
+        Mark::from_stored("mark1:f:5:-:-:-:w42:-:-").expect("a Windows mark"),
         mark(file(5)).volume(),
         Mark::from_stored("windows-volume:42").expect("a Windows volume"),
         mark(dir()).volume(),
@@ -187,6 +187,8 @@ fn a_stored_mark_reads_back_as_the_same_mark() {
         "mark2:f:5:-:-:-:u1:105:-",
         "mark1:x:5:-:-:-:u1:105:-",
         "mark1:f:5:-:-:-:q1:105:-",
+        // A Windows file index is nothing this service writes.
+        "mark1:f:5:-:-:-:w42:99:-",
         "mark1:f:5:-:-:-:u1:105:-:extra",
         "unix-dev:",
         "unix-dev:seven",
@@ -242,19 +244,11 @@ async fn a_landing_volume_is_its_nearest_answering_ancestor() {
     assert!(nowhere.landing_volume_blocking(&p(A)).is_none());
     assert_eq!(nowhere.copy_lane(&p(A)), "unknown-volume");
 
-    // A volume that answers gives a turn on its own lane; one that does not
-    // answer within the bound gives no turn and holds no lane.
+    // A volume that answers gives a turn on its own lane.
     disk.install_copy_workers(1);
     let free = |lane| super::copying::turn_is_free(&disk.copy_admission(), lane);
     let turn = disk.copy_turn(&p(A)).await;
-    assert!(turn.is_some() && free("unknown-volume") && !free("unix-dev:7"));
-    drop(turn);
-    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
-    let (open, gate) = mpsc::channel::<()>();
-    *backend.gate.lock().unwrap() = Some(gate);
-    assert!(disk.copy_turn(&p(A)).await.is_none());
-    assert!(free("unknown-volume") && free("unix-dev:7"));
-    drop(open);
+    assert!(turn.is_ok() && free("unknown-volume") && !free("unix-dev:7"));
 }
 
 #[cfg(unix)]

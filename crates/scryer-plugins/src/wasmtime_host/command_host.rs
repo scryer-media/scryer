@@ -769,7 +769,7 @@ fn extract_archive(
     let workspace = disk.scratch_dir_blocking("scry-ex-").map_err(|error| {
         ArchiveExtractFailure::temporary(format!(
             "failed to create archive extraction workspace: {}",
-            std::io::Error::from(error)
+            error.words()
         ))
     })?;
     let archive_path = workspace
@@ -784,7 +784,7 @@ fn extract_archive(
     .map_err(|error| {
         ArchiveExtractFailure::temporary(format!(
             "failed to stage archive artifact: {}",
-            std::io::Error::from(error)
+            error.words()
         ))
     })?;
     let output_dir = workspace.path().join(STAGED_ARCHIVE_OUTPUT_DIR);
@@ -792,7 +792,7 @@ fn extract_archive(
         .map_err(|error| {
             ArchiveExtractFailure::temporary(format!(
                 "failed to create archive extraction output directory: {}",
-                std::io::Error::from(error)
+                error.words()
             ))
         })?;
 
@@ -879,7 +879,7 @@ fn collect_extracted_files(
         let entries = disk.list_blocking(&dir).map_err(|error| {
             ArchiveExtractFailure::temporary(format!(
                 "failed to read archive extraction output: {}",
-                std::io::Error::from(error)
+                error.words()
             ))
         })?;
         for entry in entries {

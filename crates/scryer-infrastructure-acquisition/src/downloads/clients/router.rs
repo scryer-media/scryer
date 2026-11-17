@@ -64,7 +64,7 @@ async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> 
             AppError::Repository(format!(
                 "failed to open staged nzb {}: {}",
                 staged_nzb.compressed_path.display(),
-                std::io::Error::from(error)
+                error.words()
             ))
         })?;
     let mut decoder =

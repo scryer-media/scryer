@@ -136,7 +136,7 @@ impl Mark {
     }
 
     /// Whether both marks are one file. No probe.
-    pub fn same_file(&self, other: &Self) -> Sameness {
+    pub(crate) fn same_file(&self, other: &Self) -> Sameness {
         match (self.volume, other.volume) {
             (Volume::Unknown, _) | (_, Volume::Unknown) => return Sameness::CannotTell,
             (left, right) if left != right => return Sameness::Different,
@@ -321,7 +321,8 @@ impl Mark {
         let volume = match volume.split_at_checked(1)? {
             ("-", "") => Volume::Unknown,
             ("u", device) => Volume::Unix(device.parse().ok()?),
-            ("w", serial) => Volume::Windows(serial.parse().ok()?),
+            // No Windows mark carries a file index.
+            ("w", serial) if file == "-" => Volume::Windows(serial.parse().ok()?),
             _ => return None,
         };
         Some(Self {

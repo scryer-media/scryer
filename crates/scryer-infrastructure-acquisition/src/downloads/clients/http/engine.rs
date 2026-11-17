@@ -685,7 +685,7 @@ impl HttpEngine {
                 TransferError::Permanent(format!(
                     "could not create {}: {}",
                     output_dir.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             })?;
         let mut index = 0;

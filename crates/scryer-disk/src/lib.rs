@@ -93,9 +93,8 @@ pub use place::{
     CannotLink, Done, Fallback, FreeNameMove, Method, PlaceRefusal, Placed, Placement, Refused,
     Side, Verify,
 };
-pub use reading::{
-    DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, is_cross_device_error, reason,
-};
+pub use reading::{DiskError, EntryKind, FileIdentity, PathReading, reason};
+pub(crate) use reading::{DiskVerb, is_cross_device_error};
 pub use sample::{CONTENT_SAMPLE_BYTES, ContentSample, SampleStep, sample_reader};
 pub use volume::VolumeClass;
 #[doc(hidden)]
@@ -1078,39 +1077,19 @@ impl Disk {
             .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
     }
 
-    pub async fn move_claimed(
-        &self,
-        source: impl Into<PathBuf>,
-        dest: impl Into<PathBuf>,
-    ) -> Result<MoveOutcome, DiskError> {
-        let dest = dest.into();
-        self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
-            disk.move_claimed_blocking(source, &dest)
-        })
-        .await
-    }
-
     /// Give `dest` the permissions `source` has, following links, where the
     /// platform has owner, group and other permissions; elsewhere nothing
     /// changes.
-    pub fn copy_permissions_blocking(&self, source: &Path, dest: &Path) -> Result<(), DiskError> {
+    pub(crate) fn copy_permissions_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<(), DiskError> {
         let result = self.call("copy_permissions", || {
             self.inner.backend.copy_permissions(source, dest)
         });
         self.inner.cache.evict(&key_of(dest));
         result.map_err(|error| DiskError::new(DiskVerb::Change, dest, error))
-    }
-
-    pub async fn copy_permissions(
-        &self,
-        source: impl Into<PathBuf>,
-        dest: impl Into<PathBuf>,
-    ) -> Result<(), DiskError> {
-        let source = source.into();
-        self.run(DiskVerb::Change, dest.into(), None, move |disk, dest| {
-            disk.copy_permissions_blocking(&source, dest)
-        })
-        .await
     }
 
     /// Link `dest` to `source`. A destination that cannot hold the link
@@ -1182,7 +1161,7 @@ impl Disk {
         result.map_err(|error| DiskError::new(DiskVerb::CreateDir, path, error))
     }
 
-    pub async fn create_dir_as(
+    async fn create_dir_as(
         &self,
         path: impl Into<PathBuf>,
         parents: Parents,
@@ -1205,7 +1184,7 @@ impl Disk {
     /// effort; the caller gets the original error either way. A sibling it
     /// did not create (the exclusive create was refused) is left alone, and
     /// it never removes `path` or a parent directory it created.
-    pub fn write_atomic_blocking(
+    pub(crate) fn write_atomic_blocking(
         &self,
         path: &Path,
         bytes: &[u8],
@@ -1639,7 +1618,11 @@ impl Disk {
 
     /// Set the modification time of the existing file at `path`, following a
     /// link.
-    pub fn set_modified_blocking(&self, path: &Path, at: SystemTime) -> Result<(), DiskError> {
+    pub(crate) fn set_modified_blocking(
+        &self,
+        path: &Path,
+        at: SystemTime,
+    ) -> Result<(), DiskError> {
         let result = self.call("set_modified", || self.inner.backend.set_modified(path, at));
         self.inner.cache.evict(&key_of(path));
         result.map_err(|error| DiskError::new(DiskVerb::Change, path, error))

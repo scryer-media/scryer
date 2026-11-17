@@ -277,7 +277,7 @@ impl SabnzbdDownloadClient {
                 AppError::Repository(format!(
                     "failed to open staged nzb {}: {}",
                     staged_nzb.compressed_path.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             })?;
         let mut output = disk
@@ -287,7 +287,7 @@ impl SabnzbdDownloadClient {
                 AppError::Repository(format!(
                     "failed to create sabnzbd nzb file {}: {}",
                     nzb_path.display(),
-                    std::io::Error::from(error)
+                    error.words()
                 ))
             })?;
 
@@ -914,7 +914,7 @@ impl SabnzbdDownloadClient {
                                     AppError::Repository(format!(
                                         "failed to reopen sabnzbd upload file {}: {}",
                                         path.display(),
-                                        std::io::Error::from(error)
+                                        error.words()
                                     ))
                                 })?;
                             multipart::Part::stream_with_length(

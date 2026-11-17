@@ -453,7 +453,7 @@ impl LibraryScanner for FileSystemLibraryScanner {
             listed.map_err(|err| {
                 AppError::validation_refused(
                     crate::error_reasons::MEDIA_LIBRARY_PATH_UNAVAILABLE,
-                    format!("library path error: {}", std::io::Error::from(err)),
+                    format!("library path error: {}", err.words()),
                 )
             })?;
             files.sort_by(|left, right| left.path.cmp(&right.path));

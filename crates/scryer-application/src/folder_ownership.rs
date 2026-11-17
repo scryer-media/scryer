@@ -93,7 +93,7 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
                         format!(
                             "cannot resolve title folder {}: {}",
                             ancestor.display(),
-                            std::io::Error::from(error)
+                            error.words()
                         ),
                     )
                 })?;
@@ -1568,7 +1568,7 @@ async fn ensure_unowned_folder_claimable(
             .has_entries(folder_path)
             .await
             .if_present()
-            .map_err(|error| AppError::Repository(std::io::Error::from(error).to_string()))?
+            .map_err(|error| AppError::Repository(error.words().to_string()))?
             .unwrap_or(false)
     };
     let contents_probe_ms = elapsed_ms(stage);

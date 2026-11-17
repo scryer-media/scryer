@@ -1569,7 +1569,7 @@ pub(crate) async fn publish_part(part_path: &Path, final_path: &Path) -> Result<
                 return Err(destination_exists(final_path));
             }
         }
-        Err(error) => return Err(publication_failed(std::io::Error::from(error).to_string())),
+        Err(error) => return Err(publication_failed(error.words().to_string())),
     }
     let not_removed = |why: String| {
         TransferError::Permanent(format!(
@@ -1582,7 +1582,7 @@ pub(crate) async fn publish_part(part_path: &Path, final_path: &Path) -> Result<
     match disk.remove(part_path, Remove::File).await {
         Ok(Removal::Removed) => Ok(()),
         Ok(Removal::AlreadyAbsent) => Err(not_removed("it was already gone".into())),
-        Err(error) => Err(not_removed(std::io::Error::from(error).to_string())),
+        Err(error) => Err(not_removed(error.words().to_string())),
     }
 }
 

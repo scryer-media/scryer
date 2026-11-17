@@ -73,7 +73,7 @@ impl KeyStore for KeyFile {
                     format!(
                         "failed to create directory {}: {}",
                         parent.display(),
-                        std::io::Error::from(e)
+                        e.words()
                     )
                 })?;
         }
@@ -86,7 +86,7 @@ impl KeyStore for KeyFile {
                 format!(
                     "failed to create key file at {}: {}",
                     self.path.display(),
-                    std::io::Error::from(e)
+                    e.words()
                 )
             })?;
         file.write_all(key_base64.as_bytes())
@@ -102,7 +102,7 @@ impl KeyStore for KeyFile {
                 format!(
                     "failed to delete key file at {}: {}",
                     self.path.display(),
-                    std::io::Error::from(e)
+                    e.words()
                 )
             })
     }

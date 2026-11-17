@@ -6,10 +6,10 @@
 #[cfg(test)]
 pub(crate) use scryer_disk::stored_paths::folder_path_identity_key_for_platform;
 pub use scryer_disk::stored_paths::{
-    folder_path_identity_key, folder_path_lookup_key, folder_path_lookup_key_for_platform,
-    folder_path_match_candidates, folder_paths_match, is_escaped_stored_path, lexically_normalize,
-    path_identity_key, path_to_stored_string, paths_match, paths_match_ignoring_case,
-    stored_file_name, stored_path_to_display_string, stored_path_to_path_buf,
+    folder_path_identity_key, folder_path_lookup_key_for_platform, folder_path_match_candidates,
+    folder_paths_match, is_escaped_stored_path, lexically_normalize, path_identity_key,
+    path_to_stored_string, paths_match, paths_match_ignoring_case, stored_file_name,
+    stored_path_to_display_string, stored_path_to_path_buf,
 };
 pub(crate) use scryer_disk::stored_paths::{
     lowercase_os_str, native_name_suffix, stored_path_is_lexically_within_folder,
