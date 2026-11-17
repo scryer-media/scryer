@@ -1597,10 +1597,7 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         Ok(entries
             .iter()
             .rev()
-            .filter(|entry| {
-                !entry.download_client_item_id.is_empty()
-                    && item_ids.contains(&entry.download_client_item_id)
-            })
+            .filter(|entry| item_ids.contains(&entry.download_client_item_id))
             .cloned()
             .collect())
     }

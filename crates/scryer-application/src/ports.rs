@@ -8055,15 +8055,14 @@ pub trait DownloadSubmissionRepository: Send + Sync {
     /// The submissions whose client item id is one of `item_ids`, whatever
     /// their client or title, newest submission first. For a caller that
     /// holds item ids without a client type. SQL stores read them through the
-    /// item-id index, so callers may pass a selection of any size. The
-    /// default answers none, which is right only for a repository that holds
-    /// no submissions: every repository that stores them overrides it.
+    /// item-id index, so callers may pass a selection of any size. There is
+    /// no default: the failed-download check finds its work through this
+    /// read, so a wrapper that did not forward it would silently turn that
+    /// check off.
     async fn list_for_client_item_ids(
         &self,
-        _item_ids: &[String],
-    ) -> AppResult<Vec<DownloadSubmission>> {
-        Ok(Vec::new())
-    }
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>>;
 
     /// On-demand recovery rows for durable password retries with an active,
     /// matching client binding, including jobs absent from the native queue.

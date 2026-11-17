@@ -953,6 +953,11 @@ fn submissions_for_client_item_ids_sql(datastore: &StoreDatastore, count: usize)
             placeholders(count)
         ),
     )
+    .replacen(
+        "SELECT ",
+        "SELECT download_submissions.submitted_at AS item_lookup_submitted_at, ",
+        1,
+    )
 }
 
 #[async_trait]
@@ -2134,13 +2139,35 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         // return are the same however the caller listed them.
         let item_ids = item_ids.iter().collect::<std::collections::BTreeSet<_>>();
         let item_ids = item_ids.into_iter().cloned().collect::<Vec<_>>();
-        let mut out = Vec::new();
+        let mut found = Vec::new();
+        let mut statements = 0usize;
         for chunk in item_ids.chunks(DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE) {
+            statements += 1;
             let sql = submissions_for_client_item_ids_sql(&self.datastore, chunk.len());
             let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
-            out.extend(fetch_download_submissions(self.datastore.read_exec(), &sql, &args).await?);
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                found.push((
+                    lenient_timestamp(&row, "item_lookup_submitted_at")?,
+                    download_submission_from_row(&row)?,
+                ));
+            }
         }
-        Ok(out)
+        // One statement already answers newest first. Several each answer in
+        // that order for their own ids, so their rows are merged into it.
+        if statements > 1 {
+            found.sort_by(|(left_at, left), (right_at, right)| {
+                right_at.cmp(left_at).then_with(|| {
+                    right
+                        .download_id
+                        .to_string()
+                        .cmp(&left.download_id.to_string())
+                })
+            });
+        }
+        Ok(found
+            .into_iter()
+            .map(|(_, submission)| submission)
+            .collect())
     }
 
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
@@ -7804,9 +7831,10 @@ mod seed_goal_tests {
         )
         .await;
         assert!(
-            plan.iter()
-                .any(|line| line.contains("SEARCH download_submissions")
-                    && line.contains("idx_download_submissions_client_item")),
+            plan.iter().any(
+                |line| line.starts_with("SEARCH download_submissions USING INDEX ")
+                    && line.contains(" idx_download_submissions_client_item (")
+            ),
             "the legacy fallback must be searched by locator: {plan:#?}"
         );
         assert!(
@@ -7826,9 +7854,10 @@ mod seed_goal_tests {
             .to_vec();
         let plan = query_plan(&store, &sql, &args).await;
         assert!(
-            plan.iter()
-                .any(|line| line.contains("SEARCH download_submissions")
-                    && line.contains("idx_download_submissions_client_item_id")),
+            plan.iter().any(
+                |line| line.starts_with("SEARCH download_submissions USING INDEX ")
+                    && line.contains(" idx_download_submissions_client_item_id (")
+            ),
             "submissions must be searched by item id: {plan:#?}"
         );
         assert!(
@@ -7890,10 +7919,54 @@ mod seed_goal_tests {
         requested.push("shared-job".to_string());
         assert!(requested.len() > DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE);
 
+        // The requested ids need two statements, and the last of them holds
+        // both the newest and the oldest submission.
+        for (item_id, submitted_at) in [
+            ("shared-job", "2031-06-01T00:00:00Z"),
+            ("colon:job", "2001-06-01T00:00:00Z"),
+        ] {
+            SqlRuntime::execute(
+                store.datastore.read_exec(),
+                "UPDATE download_submissions SET submitted_at = {}
+                  WHERE download_client_item_id = {}",
+                &[
+                    SqlArg::Text(submitted_at.to_string()),
+                    SqlArg::Text(item_id.to_string()),
+                ],
+            )
+            .await
+            .expect("submission time should update");
+        }
+
         let read = store
             .list_for_client_item_ids(&requested)
             .await
             .expect("submissions should list by item id");
+        let newest_first = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            "SELECT id FROM download_submissions
+              WHERE download_client_item_id IS NOT NULL
+                AND download_client_item_id <> 'unrequested-job'
+              ORDER BY submitted_at DESC, id DESC",
+            &[],
+        )
+        .await
+        .expect("ordered ids should read")
+        .iter()
+        .map(|row| row.text("id").expect("id column"))
+        .collect::<Vec<_>>();
+        assert_eq!(
+            read.iter()
+                .map(|submission| submission.download_id.to_string())
+                .collect::<Vec<_>>(),
+            newest_first,
+            "rows of every statement are merged into one newest-first order"
+        );
+        assert_eq!(read[0].download_client_item_id, "shared-job");
+        assert_eq!(
+            read.last().map(|row| row.download_client_item_id.as_str()),
+            Some("colon:job")
+        );
         let key = |submission: &DownloadSubmission| {
             (
                 submission.download_client_item_id.clone(),

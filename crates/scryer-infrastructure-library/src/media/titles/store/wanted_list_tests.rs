@@ -1226,6 +1226,25 @@ async fn sqlite_grabbed_scopes_for_titles_are_exactly_the_named_titles_grabbed_s
             "max_binds {max_binds:?}"
         );
     }
+    // More titles than one statement takes once the list is split. In byte
+    // order the padding sits between the two titles that have scopes, so the
+    // first statement returns the older rows and the second the newer ones;
+    // the answer is still the one newest-first order.
+    let mut many = named.clone();
+    many.extend((0..1_100).map(|n| format!("wl-n-{n:04}")));
+    let split = {
+        let _lowered = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+        wanted
+            .list_grabbed_acquisition_scopes_for_titles(&many)
+            .await
+            .unwrap()
+    };
+    assert_eq!(format!("{split:?}"), format!("{expected:?}"));
+    assert_eq!(
+        split.last().map(|row| row.title_id.as_str()),
+        Some("wl-movie-a"),
+        "the first statement's row is the oldest and comes last"
+    );
     assert!(
         wanted
             .list_grabbed_acquisition_scopes_for_titles(&[])
