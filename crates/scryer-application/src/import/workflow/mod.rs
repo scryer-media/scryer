@@ -48,6 +48,19 @@ pub fn import_staging_path(dest: &Path) -> PathBuf {
     name.push(".tmp_import");
     dest.with_file_name(name)
 }
+
+/// The staged names a cancelled import clears: the one it writes now, and
+/// the one imports wrote before, the destination's extension replaced by
+/// `tmp_import`, which may be left from an import cancelled under that
+/// spelling. A name that is the destination itself is never one of them.
+fn cancelled_import_staging_paths(dest: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![import_staging_path(dest)];
+    let earlier = dest.with_extension("tmp_import");
+    if earlier != dest && !paths.contains(&earlier) {
+        paths.push(earlier);
+    }
+    paths
+}
 use std::time::{Duration, Instant};
 
 const IMPORT_TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -281,17 +294,18 @@ pub(crate) async fn import_file_with_record_progress(
         .await;
 
     if matches!(&result, Err(AppError::Canceled(_))) {
-        let temporary_destination = import_staging_path(dest);
-        if let Err(error) = Disk::process()
-            .remove(&temporary_destination, Remove::File)
-            .await
-        {
-            tracing::warn!(
-                import_id,
-                path = %temporary_destination.display(),
-                error = %error,
-                "failed to remove cancelled import temporary destination"
-            );
+        for temporary_destination in cancelled_import_staging_paths(dest) {
+            if let Err(error) = Disk::process()
+                .remove(&temporary_destination, Remove::File)
+                .await
+            {
+                tracing::warn!(
+                    import_id,
+                    path = %temporary_destination.display(),
+                    error = %error,
+                    "failed to remove cancelled import temporary destination"
+                );
+            }
         }
     }
 
