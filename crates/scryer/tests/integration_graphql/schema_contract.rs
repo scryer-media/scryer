@@ -809,8 +809,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // The rule builder reads its value and output contract per family from
     // `ruleBuilderSchema`: 200->201.
     assert!(query_field_names.contains(&"ruleBuilderSchema"));
+    // Background grabs add the grabJobResult query root: query 201->202.
     assert_eq!(
-        query_field_count, 201,
+        query_field_count, 202,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -935,8 +936,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `dismissPluginRestoreWarnings`, which returns the existing catalog
     // status payload: 296->297.
     assert!(mutation_field_names.contains(&"dismissPluginRestoreWarnings"));
+    // Background grabs add the startGrab mutation root: mutation 297->298.
     assert_eq!(
-        mutation_field_count, 297,
+        mutation_field_count, 298,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1540,17 +1542,21 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"RequestRuleEvaluationModeValue"));
     // A lifecycle rule's state says what enabling it allows, so
     // LifecycleEffectArming is gone: public types 1046->1045, ENUM 217->216.
+    // Background grabs add StartGrabPayload and GrabJobResultPayload, and the
+    // StartGrabInput, GrabIndexerSearchAssignmentInput and
+    // GrabStandbyReleaseInput inputs: OBJECT 570->572, INPUT_OBJECT 247->250,
+    // public types 1045->1050. RELEASE_GRAB joins the existing job key enum.
     assert_eq!(
         public_types.len(),
-        1045,
+        1050,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 570);
+    assert_eq!(kind_count("OBJECT"), 572);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
-    assert_eq!(kind_count("INPUT_OBJECT"), 247);
+    assert_eq!(kind_count("INPUT_OBJECT"), 250);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     assert_eq!(kind_count("ENUM"), 216);

@@ -1569,135 +1569,6 @@ export const updateServiceSettingsMutation = `mutation UpdateServiceSettings($in
   }
 }`;
 
-export const queueIndexerSearchAssignmentMutation = `mutation QueueIndexerSearchAssignment($input: QueueDownloadInput!, $routing: IndexerGrabSelectionInput!, $replacement: Boolean!) {
-  queueIndexerSearchAssignment(input: $input, routing: $routing, replacement: $replacement) {
-    status
-    jobId
-    titleId
-    titleName
-    sourceTitle
-    sourceKind
-    conflict {
-      titleId
-      titleName
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      sourceKind
-      state
-      replaceable
-      scope {
-        __typename
-        ... on EpisodeScopePayload {
-          episodeId
-        }
-        ... on EpisodeSetScopePayload {
-          episodeIds
-        }
-        ... on SeriesMovieScopePayload {
-          seriesMovieLinkId
-        }
-        ... on CollectionScopePayload {
-          collectionId
-        }
-        ... on TitleScopePayload {
-          wholeTitle
-        }
-        ... on OrphanScopePayload {
-          orphaned
-        }
-      }
-    }
-  }
-}`;
-
-export const queueExistingMutation = `mutation QueueExisting($input: QueueDownloadInput!) {
-  queueExistingTitleDownload(input: $input) {
-    status
-    jobId
-    titleId
-    titleName
-    sourceTitle
-    sourceKind
-    conflict {
-      titleId
-      titleName
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      sourceKind
-      state
-      replaceable
-      scope {
-        __typename
-        ... on EpisodeScopePayload {
-          episodeId
-        }
-        ... on EpisodeSetScopePayload {
-          episodeIds
-        }
-        ... on SeriesMovieScopePayload {
-          seriesMovieLinkId
-        }
-        ... on CollectionScopePayload {
-          collectionId
-        }
-        ... on TitleScopePayload {
-          wholeTitle
-        }
-        ... on OrphanScopePayload {
-          orphaned
-        }
-      }
-    }
-  }
-}`;
-
-export const queueReplacementMutation = `mutation QueueReplacement($input: QueueDownloadInput!) {
-  queueReplacementRelease(input: $input) {
-    status
-    jobId
-    titleId
-    titleName
-    sourceTitle
-    sourceKind
-    conflict {
-      titleId
-      titleName
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      sourceKind
-      state
-      replaceable
-      scope {
-        __typename
-        ... on EpisodeScopePayload {
-          episodeId
-        }
-        ... on EpisodeSetScopePayload {
-          episodeIds
-        }
-        ... on SeriesMovieScopePayload {
-          seriesMovieLinkId
-        }
-        ... on CollectionScopePayload {
-          collectionId
-        }
-        ... on TitleScopePayload {
-          wholeTitle
-        }
-        ... on OrphanScopePayload {
-          orphaned
-        }
-      }
-    }
-  }
-}`;
-
 export const triggerTitleMismatchRecoverySearchMutation = `mutation TriggerTitleMismatchRecoverySearch($titleId: ID!) {
   triggerTitleMismatchRecoverySearch(titleId: $titleId) {
     titleId
@@ -2210,13 +2081,14 @@ export const issueInteractiveReleaseCandidateTokenMutation = `mutation IssueInte
   }
 }`;
 
-// Spec 0002 D8: grabs a search row with no catalog title behind it. The client's
-// own routing category applies, so there is no category input here.
-export const queueUnlinkedReleaseMutation = `mutation QueueUnlinkedRelease($input: QueueUnlinkedReleaseInput!) {
-  queueUnlinkedRelease(input: $input) {
-    downloadId
-    clientName
-    sourceTitle
+// Starts a grab in the background. The request returns as soon as the job is
+// recorded; `grabJobResultQuery` reads the outcome once the job has finished.
+export const startGrabMutation = `mutation StartGrab($input: StartGrabInput!) {
+  startGrab(input: $input) {
+    jobRun {
+      id jobKey displayName category section status triggerSource
+      startedAt completedAt summaryJson summaryText errorText progressJson
+    }
   }
 }`;
 
@@ -2244,43 +2116,6 @@ export const triggerRssSyncMutation = `mutation TriggerRssSync {
 }`;
 
 // ── Pending Releases ─────────────────────────────────────────────────────
-
-export const forceGrabPendingReleaseMutation = `mutation ForceGrabPendingRelease($id: ID!) {
-  forceGrabPendingRelease(id: $id) {
-    id
-    grabbed
-  }
-}`;
-
-export const queueStandbyReleaseMutation = `mutation QueueStandbyRelease($id: ID!, $choice: StandbyQueueChoiceValue!, $confirmed: [StandbyConflictIdentityInput!]!) {
-  queueStandbyRelease(id: $id, choice: $choice, confirmed: $confirmed) {
-    grabbed
-    conflicts {
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      titleName
-      state
-    }
-    cancelled {
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      titleName
-      state
-    }
-    cancelFailed {
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      titleName
-      state
-    }
-  }
-}`;
 
 export const dismissPendingReleaseMutation = `mutation DismissPendingRelease($id: ID!) {
   dismissPendingRelease(id: $id) {

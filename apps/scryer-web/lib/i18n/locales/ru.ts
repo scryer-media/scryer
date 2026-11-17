@@ -8645,6 +8645,8 @@ const ru: LocaleDictionary = {
     "Для туннелей WireGuard требуется открытый ключ узла из раздела `[Peer]`.",
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY":
     "Для туннелей WireGuard требуется закрытый ключ; ключи WireGuard — это 32 байта в base64, в точности как их выводит `wg genkey` (44 символа, оканчивающиеся на `=`).",
+  "error.reason.JOB_RELEASE_GRAB_JOBS_INVALID":
+    "Задания захвата релиза необходимо запускать через мутацию захвата.",
   "error.reason.JOB_TASK_FAILED":
     "Запрошенная фоновая задача завершилась с ошибкой.",
   "error.reason.JOB_ACQUISITION_SEARCH_JOBS_INVALID":
@@ -13527,6 +13529,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.AcquisitionSearch.name": "Поиск для загрузки",
   "jobs.builtin.AcquisitionSearch.description":
     "Интерактивный поиск загрузок для выбранных отсутствующих материалов или улучшений качества.",
+  "jobs.builtin.ReleaseGrab.name": "Загрузка релиза",
+  "jobs.builtin.ReleaseGrab.description":
+    "Передача одного выбранного оператором релиза клиенту загрузки в фоновом режиме.",
   "jobs.builtin.ApplicationUpgrade.name": "Обновление приложения",
   "jobs.builtin.ApplicationUpgrade.description":
     "Загрузка, проверка и применение подписанного обновления приложения.",

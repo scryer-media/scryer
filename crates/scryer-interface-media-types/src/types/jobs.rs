@@ -66,6 +66,8 @@ pub enum JobKeyValue {
     RecycleBinPurge,
     /// Acquisition search.
     AcquisitionSearch,
+    /// One operator-chosen release handed to a download client.
+    ReleaseGrab,
     /// Application upgrade.
     ApplicationUpgrade,
     /// Location operation: a root move, transfer, or other placement change.

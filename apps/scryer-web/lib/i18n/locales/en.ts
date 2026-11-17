@@ -1772,6 +1772,8 @@ const en: LocaleDictionary = {
     "WireGuard tunnels require the peer's public key from the `[Peer]` section.",
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY":
     "WireGuard tunnels require a private key; WireGuard keys are 32 bytes of base64, exactly as `wg genkey` prints them (44 characters ending in `=`).",
+  "error.reason.JOB_RELEASE_GRAB_JOBS_INVALID":
+    "Release grab jobs must be started from the grab mutation.",
   "error.reason.JOB_TASK_FAILED": "The requested background task failed.",
   "error.reason.JOB_ACQUISITION_SEARCH_JOBS_INVALID":
     "Acquisition search jobs must be started from the acquisition search mutation.",
@@ -12927,6 +12929,9 @@ const en: LocaleDictionary = {
   "jobs.builtin.AcquisitionSearch.name": "Acquisition Search",
   "jobs.builtin.AcquisitionSearch.description":
     "Interactive acquisition search over the selected wanted/upgrade scopes.",
+  "jobs.builtin.ReleaseGrab.name": "Release Grab",
+  "jobs.builtin.ReleaseGrab.description":
+    "Hand one operator-chosen release to a download client in the background.",
   "jobs.builtin.ApplicationUpgrade.name": "Application Upgrade",
   "jobs.builtin.ApplicationUpgrade.description":
     "Download, verify, and apply a signed application upgrade.",

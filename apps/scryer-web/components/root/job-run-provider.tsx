@@ -52,8 +52,12 @@ const JobRunToastContext = React.createContext<JobRunToastContextValue | null>(
   null,
 );
 
-function usesDedicatedLibraryScanToast(jobKey: JobKey): boolean {
+// Jobs whose progress and outcome are shown where they were started, so the
+// shared job toast stays out of the way: library scans have their own toast,
+// and a grab reports on the button or dialog that asked for it.
+function reportsOutsideJobToast(jobKey: JobKey): boolean {
   return (
+    jobKey === "RELEASE_GRAB" ||
     jobKey === "LIBRARY_SCAN_MOVIES" ||
     jobKey === "LIBRARY_SCAN_SERIES" ||
     jobKey === "LIBRARY_SCAN_ANIME" ||
@@ -428,7 +432,7 @@ export function JobRunProvider({
 
       const isInteractiveRun = interactiveRunIdsRef.current.has(run.id);
       const shouldRender =
-        isInteractiveRun && !usesDedicatedLibraryScanToast(run.jobKey);
+        isInteractiveRun && !reportsOutsideJobToast(run.jobKey);
 
       if (!shouldRender) {
         if (isTerminalJobRunStatus(run.status)) {

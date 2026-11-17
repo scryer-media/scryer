@@ -1928,6 +1928,44 @@ pub struct ForceGrabPendingReleasePayload {
     pub grabbed: bool,
 }
 
+/// The result of asking to queue a saved standby candidate.
+#[derive(SimpleObject, Clone)]
+pub struct QueueStandbyReleasePayload {
+    /// Whether the release is now queued (or already was).
+    pub grabbed: bool,
+    /// Running downloads of this title that still need the operator's choice.
+    pub conflicts: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts whose client accepted the cancel request. Scryer stops
+    /// tracking them; a client may still finish a job it was post-processing.
+    pub cancelled: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts whose cancel request failed. They keep running and stay
+    /// tracked; the release is queued anyway.
+    pub cancel_failed: Vec<QueueDownloadConflictPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A grab accepted to run in the background.
+pub struct StartGrabPayload {
+    /// The job doing the grab. Follow it on the job-run event stream, then
+    /// read its outcome with `grabJobResult`.
+    pub job_run: super::JobRunPayload,
+}
+
+#[derive(SimpleObject, Clone, Default)]
+/// Outcome of a finished background grab. Exactly one field is set: the one
+/// matching the kind of grab that was started, holding what the matching
+/// synchronous mutation would have returned.
+pub struct GrabJobResultPayload {
+    /// Outcome of an `existing`, `replacement` or `indexerSearchAssignment` grab.
+    pub queued: Option<QueueDownloadPayload>,
+    /// Outcome of an `unlinked` grab.
+    pub unlinked: Option<QueueUnlinkedReleasePayload>,
+    /// Outcome of a `standby` grab.
+    pub standby: Option<QueueStandbyReleasePayload>,
+    /// Outcome of a `pending` grab.
+    pub pending: Option<ForceGrabPendingReleasePayload>,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Identifier of a dismissed pending release.
 pub struct DismissPendingReleasePayload {

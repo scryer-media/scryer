@@ -216,73 +216,7 @@ impl DownloadMutations {
     ) -> GqlResult<QueueDownloadPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let QueueDownloadInput {
-            title_id,
-            candidate_token,
-            size_bytes,
-            scope: _,
-            replace_in_progress,
-            purpose,
-            override_movie_availability: _,
-        } = input;
-        let title_id = title_id.to_string();
-        let outcome = app
-            .queue_indexer_search_assignment(
-                &actor,
-                &title_id,
-                &candidate_token,
-                size_bytes.map(i64::from),
-                SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(false)),
-                replacement,
-                match purpose.unwrap_or(QueueDownloadPurposeValue::Standard) {
-                    QueueDownloadPurposeValue::Standard => {
-                        scryer_application::DownloadSubmissionPurpose::Standard
-                    }
-                    QueueDownloadPurposeValue::AdditionalFile => {
-                        scryer_application::DownloadSubmissionPurpose::AdditionalFile
-                    }
-                },
-                scryer_application::IndexerGrabSelection {
-                    client_id: routing.client_id.to_string(),
-                    category: routing.category,
-                },
-            )
-            .await
-            .map_err(to_gql_error)?;
-        let title = app
-            .get_title_for_download_actions(&actor, &title_id)
-            .await
-            .map_err(to_gql_error)?
-            .ok_or_else(|| {
-                to_gql_error(AppError::not_found_reason(
-                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
-                    format!("title {title_id}"),
-                ))
-            })?;
-
-        Ok(match outcome {
-            QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
-                status: QueueDownloadResultStatusValue::Queued,
-                job_id: Some(queued.job_id.into()),
-                title_id: title.id.into(),
-                title_name: title.name,
-                source_title: queued.queued_release.source_title,
-                source_kind: queued
-                    .queued_release
-                    .source_kind
-                    .map(DownloadSourceKindValue::from_application),
-                conflict: None,
-            },
-            QueueDownloadOutcome::Conflict(conflict) => QueueDownloadPayload {
-                status: QueueDownloadResultStatusValue::Conflict,
-                job_id: None,
-                title_id: title.id.into(),
-                title_name: title.name,
-                source_title: None,
-                source_kind: None,
-                conflict: Some(queue_download_conflict_payload(conflict)),
-            },
-        })
+        queue_indexer_search_assignment(&app, &actor, input, routing, replacement).await
     }
 
     /// Queue the release represented by a signed candidate token for an existing title.
@@ -297,64 +231,7 @@ impl DownloadMutations {
     ) -> GqlResult<QueueDownloadPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let QueueDownloadInput {
-            title_id,
-            candidate_token,
-            size_bytes,
-            scope,
-            replace_in_progress,
-            purpose,
-            override_movie_availability: _,
-        } = input;
-        let title_id = title_id.to_string();
-        let outcome = app
-            .queue_existing_title_download_from_candidate_token_with_purpose(
-                &actor,
-                &title_id,
-                &candidate_token,
-                scope.into_application(),
-                SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(false)),
-                purpose
-                    .map(|value| value.into_application())
-                    .unwrap_or_default(),
-                size_bytes.map(i64::from),
-            )
-            .await
-            .map_err(to_gql_error)?;
-        let title = app
-            .get_title_for_download_actions(&actor, &title_id)
-            .await
-            .map_err(to_gql_error)?
-            .ok_or_else(|| {
-                to_gql_error(AppError::not_found_reason(
-                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
-                    format!("title {title_id}"),
-                ))
-            })?;
-
-        Ok(match outcome {
-            QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
-                status: QueueDownloadResultStatusValue::Queued,
-                job_id: Some(queued.job_id.into()),
-                title_id: title.id.into(),
-                title_name: title.name,
-                source_title: queued.queued_release.source_title,
-                source_kind: queued
-                    .queued_release
-                    .source_kind
-                    .map(DownloadSourceKindValue::from_application),
-                conflict: None,
-            },
-            QueueDownloadOutcome::Conflict(conflict) => QueueDownloadPayload {
-                status: QueueDownloadResultStatusValue::Conflict,
-                job_id: None,
-                title_id: title.id.into(),
-                title_name: title.name,
-                source_title: None,
-                source_kind: None,
-                conflict: Some(queue_download_conflict_payload(conflict)),
-            },
-        })
+        queue_existing_title_download(&app, &actor, input).await
     }
 
     /// Queue an operator-chosen release to replace the existing primary file.
@@ -370,60 +247,7 @@ impl DownloadMutations {
     ) -> GqlResult<QueueDownloadPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let QueueDownloadInput {
-            title_id,
-            candidate_token,
-            size_bytes,
-            scope: _,
-            replace_in_progress,
-            purpose: _,
-            override_movie_availability: _,
-        } = input;
-        let title_id = title_id.to_string();
-        let outcome = app
-            .queue_replacement_release_from_candidate_token(
-                &actor,
-                &title_id,
-                &candidate_token,
-                SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(true)),
-                size_bytes.map(i64::from),
-            )
-            .await
-            .map_err(to_gql_error)?;
-        let title = app
-            .get_title_for_download_actions(&actor, &title_id)
-            .await
-            .map_err(to_gql_error)?
-            .ok_or_else(|| {
-                to_gql_error(AppError::not_found_reason(
-                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
-                    format!("title {title_id}"),
-                ))
-            })?;
-
-        Ok(match outcome {
-            QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
-                status: QueueDownloadResultStatusValue::Queued,
-                job_id: Some(queued.job_id.into()),
-                title_id: title.id.into(),
-                title_name: title.name,
-                source_title: queued.queued_release.source_title,
-                source_kind: queued
-                    .queued_release
-                    .source_kind
-                    .map(DownloadSourceKindValue::from_application),
-                conflict: None,
-            },
-            QueueDownloadOutcome::Conflict(conflict) => QueueDownloadPayload {
-                status: QueueDownloadResultStatusValue::Conflict,
-                job_id: None,
-                title_id: title.id.into(),
-                title_name: title.name,
-                source_title: None,
-                source_kind: None,
-                conflict: Some(queue_download_conflict_payload(conflict)),
-            },
-        })
+        queue_replacement_release(&app, &actor, input).await
     }
 
     /// Select and queue the best available release for a title within the requested scope.
@@ -971,4 +795,209 @@ mod tests {
             Some("import-1")
         );
     }
+}
+
+/// Queue a signed candidate with an operator-selected client and category.
+pub(crate) async fn queue_indexer_search_assignment(
+    app: &AppUseCase,
+    actor: &User,
+    input: QueueDownloadInput,
+    routing: IndexerGrabSelectionInput,
+    replacement: bool,
+) -> GqlResult<QueueDownloadPayload> {
+    let QueueDownloadInput {
+        title_id,
+        candidate_token,
+        size_bytes,
+        scope: _,
+        replace_in_progress,
+        purpose,
+        override_movie_availability: _,
+    } = input;
+    let title_id = title_id.to_string();
+    let outcome = app
+        .queue_indexer_search_assignment(
+            actor,
+            &title_id,
+            &candidate_token,
+            size_bytes.map(i64::from),
+            SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(false)),
+            replacement,
+            match purpose.unwrap_or(QueueDownloadPurposeValue::Standard) {
+                QueueDownloadPurposeValue::Standard => {
+                    scryer_application::DownloadSubmissionPurpose::Standard
+                }
+                QueueDownloadPurposeValue::AdditionalFile => {
+                    scryer_application::DownloadSubmissionPurpose::AdditionalFile
+                }
+            },
+            scryer_application::IndexerGrabSelection {
+                client_id: routing.client_id.to_string(),
+                category: routing.category,
+            },
+        )
+        .await
+        .map_err(to_gql_error)?;
+    let title = app
+        .get_title_for_download_actions(actor, &title_id)
+        .await
+        .map_err(to_gql_error)?
+        .ok_or_else(|| {
+            to_gql_error(AppError::not_found_reason(
+                scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                format!("title {title_id}"),
+            ))
+        })?;
+
+    Ok(match outcome {
+        QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
+            status: QueueDownloadResultStatusValue::Queued,
+            job_id: Some(queued.job_id.into()),
+            title_id: title.id.into(),
+            title_name: title.name,
+            source_title: queued.queued_release.source_title,
+            source_kind: queued
+                .queued_release
+                .source_kind
+                .map(DownloadSourceKindValue::from_application),
+            conflict: None,
+        },
+        QueueDownloadOutcome::Conflict(conflict) => QueueDownloadPayload {
+            status: QueueDownloadResultStatusValue::Conflict,
+            job_id: None,
+            title_id: title.id.into(),
+            title_name: title.name,
+            source_title: None,
+            source_kind: None,
+            conflict: Some(queue_download_conflict_payload(conflict)),
+        },
+    })
+}
+
+/// Queue a signed candidate for an existing title.
+pub(crate) async fn queue_existing_title_download(
+    app: &AppUseCase,
+    actor: &User,
+    input: QueueDownloadInput,
+) -> GqlResult<QueueDownloadPayload> {
+    let QueueDownloadInput {
+        title_id,
+        candidate_token,
+        size_bytes,
+        scope,
+        replace_in_progress,
+        purpose,
+        override_movie_availability: _,
+    } = input;
+    let title_id = title_id.to_string();
+    let outcome = app
+        .queue_existing_title_download_from_candidate_token_with_purpose(
+            actor,
+            &title_id,
+            &candidate_token,
+            scope.into_application(),
+            SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(false)),
+            purpose
+                .map(|value| value.into_application())
+                .unwrap_or_default(),
+            size_bytes.map(i64::from),
+        )
+        .await
+        .map_err(to_gql_error)?;
+    let title = app
+        .get_title_for_download_actions(actor, &title_id)
+        .await
+        .map_err(to_gql_error)?
+        .ok_or_else(|| {
+            to_gql_error(AppError::not_found_reason(
+                scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                format!("title {title_id}"),
+            ))
+        })?;
+
+    Ok(match outcome {
+        QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
+            status: QueueDownloadResultStatusValue::Queued,
+            job_id: Some(queued.job_id.into()),
+            title_id: title.id.into(),
+            title_name: title.name,
+            source_title: queued.queued_release.source_title,
+            source_kind: queued
+                .queued_release
+                .source_kind
+                .map(DownloadSourceKindValue::from_application),
+            conflict: None,
+        },
+        QueueDownloadOutcome::Conflict(conflict) => QueueDownloadPayload {
+            status: QueueDownloadResultStatusValue::Conflict,
+            job_id: None,
+            title_id: title.id.into(),
+            title_name: title.name,
+            source_title: None,
+            source_kind: None,
+            conflict: Some(queue_download_conflict_payload(conflict)),
+        },
+    })
+}
+
+/// Queue an operator-chosen release to replace the existing primary file.
+pub(crate) async fn queue_replacement_release(
+    app: &AppUseCase,
+    actor: &User,
+    input: QueueDownloadInput,
+) -> GqlResult<QueueDownloadPayload> {
+    let QueueDownloadInput {
+        title_id,
+        candidate_token,
+        size_bytes,
+        scope: _,
+        replace_in_progress,
+        purpose: _,
+        override_movie_availability: _,
+    } = input;
+    let title_id = title_id.to_string();
+    let outcome = app
+        .queue_replacement_release_from_candidate_token(
+            actor,
+            &title_id,
+            &candidate_token,
+            SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(true)),
+            size_bytes.map(i64::from),
+        )
+        .await
+        .map_err(to_gql_error)?;
+    let title = app
+        .get_title_for_download_actions(actor, &title_id)
+        .await
+        .map_err(to_gql_error)?
+        .ok_or_else(|| {
+            to_gql_error(AppError::not_found_reason(
+                scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                format!("title {title_id}"),
+            ))
+        })?;
+
+    Ok(match outcome {
+        QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
+            status: QueueDownloadResultStatusValue::Queued,
+            job_id: Some(queued.job_id.into()),
+            title_id: title.id.into(),
+            title_name: title.name,
+            source_title: queued.queued_release.source_title,
+            source_kind: queued
+                .queued_release
+                .source_kind
+                .map(DownloadSourceKindValue::from_application),
+            conflict: None,
+        },
+        QueueDownloadOutcome::Conflict(conflict) => QueueDownloadPayload {
+            status: QueueDownloadResultStatusValue::Conflict,
+            job_id: None,
+            title_id: title.id.into(),
+            title_name: title.name,
+            source_title: None,
+            source_kind: None,
+            conflict: Some(queue_download_conflict_payload(conflict)),
+        },
+    })
 }

@@ -192,6 +192,7 @@ pub enum JobKey {
     RecycleBinRestore,
     RecycleBinPurge,
     AcquisitionSearch,
+    ReleaseGrab,
     ApplicationUpgrade,
     // Matches `as_str` and the stored `job_key`.
     #[serde(rename = "lifecycle_rule_evaluation")]
@@ -251,6 +252,7 @@ impl JobKey {
             Self::RecycleBinRestore => "recycle_bin_restore",
             Self::RecycleBinPurge => "recycle_bin_purge",
             Self::AcquisitionSearch => "acquisition_search",
+            Self::ReleaseGrab => "release_grab",
             Self::ApplicationUpgrade => "application_upgrade",
             Self::LifecycleRuleEvaluation => "lifecycle_rule_evaluation",
             Self::MediaServerSignalSync => "media_server_signal_sync",
@@ -290,6 +292,7 @@ impl JobKey {
             "recycle_bin_restore" => Some(Self::RecycleBinRestore),
             "recycle_bin_purge" => Some(Self::RecycleBinPurge),
             "acquisition_search" => Some(Self::AcquisitionSearch),
+            "release_grab" => Some(Self::ReleaseGrab),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
             "lifecycle_rule_evaluation" => Some(Self::LifecycleRuleEvaluation),
             "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
@@ -330,6 +333,7 @@ impl JobKey {
             Self::RecycleBinRestore => "Recycle Bin Restore",
             Self::RecycleBinPurge => "Recycle Bin Purge",
             Self::AcquisitionSearch => "Acquisition Search",
+            Self::ReleaseGrab => "Release Grab",
             Self::ApplicationUpgrade => "Application Upgrade",
             Self::LifecycleRuleEvaluation => "Lifecycle Rule Evaluation",
             Self::MediaServerSignalSync => "Media Server Signal Sync",
@@ -390,6 +394,9 @@ impl JobKey {
             Self::MediaFileDeletion => "Delete a media file from disk and the catalog.",
             Self::RecycleBinRestore => "Restore a recycled file to its library.",
             Self::RecycleBinPurge => "Permanently delete selected recycled files.",
+            Self::ReleaseGrab => {
+                "Hand one operator-chosen release to a download client in the background."
+            }
             Self::AcquisitionSearch => {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
@@ -419,7 +426,7 @@ impl JobKey {
             | Self::BackgroundLibraryRefreshMovies
             | Self::BackgroundLibraryRefreshSeries
             | Self::BackgroundLibraryRefreshAnime => JobCategory::Library,
-            Self::ProwlarrSync | Self::RssSync | Self::AcquisitionSearch => {
+            Self::ProwlarrSync | Self::RssSync | Self::AcquisitionSearch | Self::ReleaseGrab => {
                 JobCategory::Acquisition
             }
             Self::SubtitleSearch => JobCategory::Subtitles,
@@ -490,6 +497,7 @@ impl JobKey {
             | Self::RecycleBinPurge
             | Self::PendingReleaseProcessing
             | Self::AcquisitionSearch
+            | Self::ReleaseGrab
             | Self::ApplicationUpgrade
             | Self::LocationOperation
             | Self::CustomJob
@@ -529,6 +537,7 @@ impl JobKey {
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
             | Self::AcquisitionSearch
+            | Self::ReleaseGrab
             | Self::ApplicationUpgrade
             | Self::LocationOperation => "Manual only",
             Self::CustomJob => "User-defined schedule",
@@ -582,6 +591,7 @@ impl JobKey {
                 | Self::RecycleBinRestore
                 | Self::RecycleBinPurge
                 | Self::AcquisitionSearch
+                | Self::ReleaseGrab
                 | Self::ApplicationUpgrade
                 | Self::LocationOperation
                 | Self::SourceImport

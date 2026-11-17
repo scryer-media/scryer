@@ -9,13 +9,8 @@ import type { Operation } from "@urql/core";
 // connection, so they are sent through the slow lane (`slow-lane.ts`), which
 // lets only a few of them hold a connection at a time.
 export const LONG_OPERATION_NAMES: ReadonlySet<string> = new Set([
-  // Grabs: fetch the release from the indexer, hand it to the client.
-  "QueueExisting",
-  "QueueReplacement",
-  "QueueIndexerSearchAssignment",
-  "QueueUnlinkedRelease",
-  "QueueStandbyRelease",
-  "ForceGrabPendingRelease",
+  // Adding a title and grabbing its first release in one request. Every
+  // other grab runs as a background job (`use-grab.ts`) and holds no request.
   "AddTitleAndQueue",
   // Imports and scans.
   "RetryImport",

@@ -355,6 +355,7 @@ pub use acquisition::delay_profile::{
     normalize_delay_profile, parse_delay_profile_catalog, resolve_delay_decision,
     resolve_delay_profile, validate_delay_profile_catalog,
 };
+pub use acquisition::grab_job::{GrabJobOutcome, GrabJobReport};
 pub use acquisition::policy::AcquisitionThresholds;
 pub use acquisition::seed_goals::{
     ReleaseSeedMinimums, ResolvedSeedGoals, SeedGoalRequest, SeedGoalResolutionSource,

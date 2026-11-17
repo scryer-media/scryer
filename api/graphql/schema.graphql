@@ -8282,6 +8282,66 @@ type GeneralSettingsPayload {
 }
 
 """
+A signed candidate queued with an operator-selected client and category.
+"""
+input GrabIndexerSearchAssignmentInput {
+	"""
+	Signed candidate token and submission options; the token supplies the release identity.
+	"""
+	input: QueueDownloadInput!
+	"""
+	Operator-selected client and optional category override.
+	"""
+	routing: IndexerGrabSelectionInput!
+	"""
+	Whether this release replaces existing owned media.
+	"""
+	replacement: Boolean!
+}
+
+"""
+Outcome of a finished background grab. Exactly one field is set: the one
+matching the kind of grab that was started, holding what the matching
+synchronous mutation would have returned.
+"""
+type GrabJobResultPayload {
+	"""
+	Outcome of an `existing`, `replacement` or `indexerSearchAssignment` grab.
+	"""
+	queued: QueueDownloadPayload
+	"""
+	Outcome of an `unlinked` grab.
+	"""
+	unlinked: QueueUnlinkedReleasePayload
+	"""
+	Outcome of a `standby` grab.
+	"""
+	standby: QueueStandbyReleasePayload
+	"""
+	Outcome of a `pending` grab.
+	"""
+	pending: ForceGrabPendingReleasePayload
+}
+
+"""
+A saved standby candidate to queue.
+"""
+input GrabStandbyReleaseInput {
+	"""
+	The saved standby candidate to queue.
+	"""
+	id: ID!
+	"""
+	What to do about downloads of this title that are already running.
+	"""
+	choice: StandbyQueueChoiceValue! = CHECK
+	"""
+	The conflicts the operator saw and confirmed; any other running download is listed again instead.
+	"""
+	confirmed: [StandbyConflictIdentityInput!]! = []
+}
+
+"""
 What the download client's removal policy does with the download after release.
 """
 enum HeldDownloadClientPolicyValue {
@@ -10511,6 +10571,10 @@ enum JobKeyValue {
 	Acquisition search.
 	"""
 	ACQUISITION_SEARCH
+	"""
+	One operator-chosen release handed to a download client.
+	"""
+	RELEASE_GRAB
 	"""
 	Application upgrade.
 	"""
@@ -21481,6 +21545,18 @@ type MutationRoot {
 		id: ID!
 	): CancelAcquisitionSearchPayload!
 	"""
+	Start a grab in the background and return its job at once.
+	The grab runs exactly as the matching synchronous mutation does, and
+	`grabJobResult` returns that mutation's payload or error once the job
+	has finished.
+	"""
+	startGrab(
+		"""
+		The one grab to run.
+		"""
+		input: StartGrabInput!
+	): StartGrabPayload!
+	"""
 	Create a catalog rule set with optional facet scope, priority, and enabled state.
 	"""
 	createRuleSet(
@@ -26767,6 +26843,20 @@ type QueryRoot {
 		titleId: ID!
 	): TitleAcquisitionDiagnosticsPayload!
 	"""
+	Return the outcome of a finished background grab started with `startGrab`.
+	The payload is what the matching synchronous mutation would have returned,
+	and a grab that was refused or failed raises that mutation's error here.
+	Null while the grab is still running, when the caller did not start it,
+	and once the outcome is no longer held; outcomes are kept in memory and a
+	restart drops them, while the job run keeps how the grab ended.
+	"""
+	grabJobResult(
+		"""
+		Job run ID returned by `startGrab`.
+		"""
+		id: ID!
+	): GrabJobResultPayload
+	"""
 	Return progress for an interactive acquisition-search job, or null when no such job exists.
 	"""
 	acquisitionSearchJob(
@@ -31455,6 +31545,47 @@ input StartExternalImportProwlarrWarmupInput {
 	Connection URL and API key.
 	"""
 	connection: ExternalImportConnectionInput!
+}
+
+"""
+The grab to run. Each choice takes what the matching synchronous mutation takes.
+"""
+input StartGrabInput @oneOf {
+	"""
+	As `queueExistingTitleDownload`.
+	"""
+	existing: QueueDownloadInput
+	"""
+	As `queueReplacementRelease`.
+	"""
+	replacement: QueueDownloadInput
+	"""
+	As `queueIndexerSearchAssignment`.
+	"""
+	indexerSearchAssignment: GrabIndexerSearchAssignmentInput
+	"""
+	As `queueUnlinkedRelease`.
+	"""
+	unlinked: QueueUnlinkedReleaseInput
+	"""
+	As `queueStandbyRelease`.
+	"""
+	standby: GrabStandbyReleaseInput
+	"""
+	As `forceGrabPendingRelease`: the pending-release identity to grab.
+	"""
+	pending: ID
+}
+
+"""
+A grab accepted to run in the background.
+"""
+type StartGrabPayload {
+	"""
+	The job doing the grab. Follow it on the job-run event stream, then
+	read its outcome with `grabJobResult`.
+	"""
+	jobRun: JobRunPayload!
 }
 
 """

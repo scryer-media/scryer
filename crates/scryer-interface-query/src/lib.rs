@@ -4081,6 +4081,21 @@ impl AcquisitionQueries {
         )
     }
 
+    /// Return the outcome of a finished background grab started with `startGrab`.
+    /// The payload is what the matching synchronous mutation would have returned,
+    /// and a grab that was refused or failed raises that mutation's error here.
+    /// Null while the grab is still running, when the caller did not start it,
+    /// and once the outcome is no longer held; outcomes are kept in memory and a
+    /// restart drops them, while the job run keeps how the grab ended.
+    async fn grab_job_result(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Job run ID returned by `startGrab`.")] id: ID,
+    ) -> GqlResult<Option<GrabJobResultPayload>> {
+        let actor = actor_from_ctx(ctx)?;
+        scryer_interface_media::grab_results::grab_result_for(id.as_ref(), &actor.id).transpose()
+    }
+
     /// Return progress for an interactive acquisition-search job, or null when no such job exists.
     async fn acquisition_search_job(
         &self,

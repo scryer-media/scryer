@@ -5197,6 +5197,8 @@ pub mod jobs {
     pub const RECYCLE_PURGE_JOBS_INVALID: &str = "JOB_RECYCLE_PURGE_JOBS_INVALID";
     /// Acquisition search jobs must be started from the acquisition search mutation.
     pub const ACQUISITION_SEARCH_JOBS_INVALID: &str = "JOB_ACQUISITION_SEARCH_JOBS_INVALID";
+    /// Release grab jobs must be started from the grab mutation.
+    pub const RELEASE_GRAB_JOBS_INVALID: &str = "JOB_RELEASE_GRAB_JOBS_INVALID";
     /// Application upgrade jobs must be started from the application upgrade mutation.
     pub const APPLICATION_UPGRADE_JOBS_INVALID: &str = "JOB_APPLICATION_UPGRADE_JOBS_INVALID";
     /// Location operations must be started from the location operation mutation.
@@ -5272,6 +5274,7 @@ pub mod jobs {
         RECYCLE_RESTORE_JOBS_INVALID,
         RECYCLE_PURGE_JOBS_INVALID,
         ACQUISITION_SEARCH_JOBS_INVALID,
+        RELEASE_GRAB_JOBS_INVALID,
         APPLICATION_UPGRADE_JOBS_INVALID,
         LOCATION_OPERATIONS_INVALID,
         DISCOVERY_INCREMENTAL_REQUIRES_ACTIVE_GENERATION,

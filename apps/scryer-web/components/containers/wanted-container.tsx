@@ -6,6 +6,7 @@ import type {
   WantedSection,
 } from "@/components/root/types";
 import { useClient, useMutation } from "urql";
+import { useGrab } from "@/lib/hooks/use-grab";
 import { WantedView } from "@/components/views/wanted-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
 import {
@@ -27,8 +28,6 @@ import {
   triggerTitleMismatchRecoverySearchMutation,
   pauseWantedItemMutation,
   resumeWantedItemMutation,
-  queueReplacementMutation,
-  forceGrabPendingReleaseMutation,
   dismissPendingReleaseMutation,
 } from "@/lib/graphql/mutations";
 import type {
@@ -195,7 +194,7 @@ export const WantedContainer = memo(function WantedContainer({
   const [pendingLoading, setPendingLoading] = useState(false);
   const [pendingLoadingMore, setPendingLoadingMore] = useState(false);
   const pendingLoadInFlightRef = useRef(false);
-  const [, executeForceGrab] = useMutation(forceGrabPendingReleaseMutation);
+  const grab = useGrab();
   const [, executeDismiss] = useMutation(dismissPendingReleaseMutation);
 
   useEffect(() => {
@@ -330,21 +329,22 @@ export const WantedContainer = memo(function WantedContainer({
 
   const forceGrabPending = useCallback(
     async (id: string) => {
-      const { data, error } = await executeForceGrab({ id });
-      if (error) {
+      try {
+        const outcome = await grab({ pending: id });
+        if (outcome.pending?.grabbed === false) {
+          setGlobalStatus(t("pending.grabRejected"), { level: "ERROR" });
+        } else {
+          setGlobalStatus(t("pending.grabbed"));
+        }
+        void refreshPending();
+      } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
-      } else if (data?.forceGrabPendingRelease?.grabbed === false) {
-        setGlobalStatus(t("pending.grabRejected"), { level: "ERROR" });
-        void refreshPending();
-      } else {
-        setGlobalStatus(t("pending.grabbed"));
-        void refreshPending();
       }
     },
-    [executeForceGrab, refreshPending, setGlobalStatus, t],
+    [grab, refreshPending, setGlobalStatus, t],
   );
 
   const dismissPending = useCallback(
@@ -912,11 +912,8 @@ export const WantedContainer = memo(function WantedContainer({
         const payload = await retryWithReplaceOnConflict(
           input,
           async (nextInput) => {
-            const { data, error } = await client
-              .mutation(queueReplacementMutation, { input: nextInput })
-              .toPromise();
-            if (error) throw error;
-            return data?.queueReplacementRelease;
+            const outcome = await grab({ replacement: nextInput });
+            return outcome.queued;
           },
           conflictMessage,
           confirmReplaceConflict,
@@ -931,7 +928,7 @@ export const WantedContainer = memo(function WantedContainer({
         });
       }
     },
-    [client, confirmReplaceConflict, setGlobalStatus, t],
+    [confirmReplaceConflict, grab, setGlobalStatus, t],
   );
 
   // "Search All" is one server job over the filtered Upgrades scope set

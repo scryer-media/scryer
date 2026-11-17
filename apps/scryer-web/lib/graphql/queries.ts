@@ -6212,3 +6212,70 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     }
   }
 }`;
+
+const GRAB_CONFLICT_FIELDS = `
+        titleId
+        titleName
+        downloadClientId
+        downloadClientType
+        downloadClientItemId
+        sourceTitle
+        sourceKind
+        state
+        replaceable`;
+
+// The outcome of a finished background grab: what the matching synchronous
+// mutation would have returned, or that mutation's error.
+export const grabJobResultQuery = `query GrabJobResult($id: ID!) {
+  grabJobResult(id: $id) {
+    queued {
+      status
+      jobId
+      titleId
+      titleName
+      sourceTitle
+      sourceKind
+      conflict {${GRAB_CONFLICT_FIELDS}
+        scope {
+          __typename
+          ... on EpisodeScopePayload {
+            episodeId
+          }
+          ... on EpisodeSetScopePayload {
+            episodeIds
+          }
+          ... on SeriesMovieScopePayload {
+            seriesMovieLinkId
+          }
+          ... on CollectionScopePayload {
+            collectionId
+          }
+          ... on TitleScopePayload {
+            wholeTitle
+          }
+          ... on OrphanScopePayload {
+            orphaned
+          }
+        }
+      }
+    }
+    unlinked {
+      downloadId
+      clientName
+      sourceTitle
+    }
+    standby {
+      grabbed
+      conflicts {${GRAB_CONFLICT_FIELDS}
+      }
+      cancelled {${GRAB_CONFLICT_FIELDS}
+      }
+      cancelFailed {${GRAB_CONFLICT_FIELDS}
+      }
+    }
+    pending {
+      id
+      grabbed
+    }
+  }
+}`;

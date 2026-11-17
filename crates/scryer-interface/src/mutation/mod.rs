@@ -15,7 +15,7 @@ mod subtitle;
 mod titles;
 
 use scryer_interface_acquisition::{
-    DownloadMutations, JobMutations, MediaRequestMutations, PostProcessingMutations,
+    DownloadMutations, GrabMutations, JobMutations, MediaRequestMutations, PostProcessingMutations,
     WantedMutations,
 };
 use scryer_interface_import::ExternalImportMutations;
@@ -39,6 +39,7 @@ pub struct MutationRoot(
     location::LocationMutations,
     MediaRequestMutations,
     WantedMutations,
+    GrabMutations,
     rules::RulesMutations,
     lifecycle_rules::LifecycleRuleMutations,
     request_rules::RequestRuleMutations,

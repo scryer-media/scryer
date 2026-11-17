@@ -909,7 +909,10 @@ impl AppUseCase {
 
             // The library is gone once the run finishes, so a library grant
             // cannot be checked again; the run's own actor passed it at start.
-            JobKey::TitleDeletion | JobKey::LibraryDeletion | JobKey::TitleRename => Ok(true),
+            JobKey::TitleDeletion
+            | JobKey::LibraryDeletion
+            | JobKey::TitleRename
+            | JobKey::ReleaseGrab => Ok(true),
             JobKey::MediaFileRescore
             | JobKey::MediaFileDeletion
             | JobKey::RecycleBinRestore
@@ -1019,6 +1022,7 @@ impl AppUseCase {
                     | JobKey::TitleDeletion
                     | JobKey::LibraryDeletion
                     | JobKey::TitleRename
+                    | JobKey::ReleaseGrab
                     | JobKey::MediaFileDeletion
                     | JobKey::MediaFileRescore
                     | JobKey::RecycleBinRestore
@@ -2315,6 +2319,10 @@ impl AppUseCase {
             JobKey::RecycleBinPurge => Err(AppError::validation_refused(
                 crate::error_reasons::jobs::RECYCLE_PURGE_JOBS_INVALID,
                 "recycle purge jobs must be started from the recycle bin mutation",
+            )),
+            JobKey::ReleaseGrab => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::RELEASE_GRAB_JOBS_INVALID,
+                "release grab jobs must be started from the grab mutation",
             )),
             JobKey::AcquisitionSearch => Err(AppError::validation_refused(
                 crate::error_reasons::jobs::ACQUISITION_SEARCH_JOBS_INVALID,
