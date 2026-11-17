@@ -309,8 +309,12 @@ impl DiskBackend for Scripted {
             false => Ok(()),
         }
     }
-    fn rename_claimed(&self, source: &Path, _dest: &Path) -> io::Result<()> {
-        self.record("rename_claimed", source)
+    fn rename_claimed(
+        &self,
+        source: &Path,
+        _dest: &Path,
+    ) -> Result<(), super::backend::ClaimedRenameFailed> {
+        Ok(self.record("rename_claimed", source)?)
     }
     fn hard_link(&self, _source: &Path, dest: &Path) -> io::Result<()> {
         self.record("hard_link", dest)

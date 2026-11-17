@@ -89,7 +89,8 @@ pub use copy::{
 };
 pub use mark::{Drift, Mark, Sameness};
 pub use place::{
-    CannotLink, Done, Doubt, Fallback, FreeNameMove, LinkAfter, LinkProof, Method, PlaceRefusal,
+    CannotLink, Done, Doubt, Fallback, FreeNameMove, Leftover, LinkAfter, LinkProof, Method,
+    PlaceRefusal,
     Placed, Placement, Refused, Side, Unproven, Verify,
 };
 pub use reading::{DiskError, EntryKind, FileIdentity, PathReading, reason};
@@ -1084,6 +1085,7 @@ impl Disk {
     /// and renaming over the reservation, which is removed again if the
     /// rename fails and it still reads as empty. For a caller that reserves the name whatever the
     /// filesystem offers; anything else uses [`Self::move_exclusive_blocking`].
+    /// A failure that left something at `dest` says so in [`DiskError::left`].
     pub fn move_claimed_blocking(
         &self,
         source: &Path,
@@ -1094,9 +1096,12 @@ impl Disk {
         });
         self.inner.cache.evict_subtree(&key_of(source));
         self.inner.cache.evict_subtree(&key_of(dest));
-        result
-            .map(|()| MoveOutcome::Renamed)
-            .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
+        result.map(|()| MoveOutcome::Renamed).map_err(|failed| {
+            let left = failed
+                .reservation_left
+                .then(|| Leftover::AtReservedName { at: dest.into() });
+            DiskError::new(DiskVerb::Move, source, failed.error).leaving(left)
+        })
     }
 
     /// Give `dest` the permissions `source` has, following links, where the
@@ -1701,6 +1706,7 @@ impl Disk {
             self.call("rename_claimed", || {
                 self.inner.backend.rename_claimed(source, dest)
             })
+            .map_err(|failed| failed.error)
         })
     }
 

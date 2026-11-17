@@ -63,7 +63,7 @@ use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::mark::UNKNOWN_LANE;
-use super::place::{Fail, Job, Refused, Side};
+use super::place::{Fail, Job, Leftover, Refused, Side};
 use super::reading::reason;
 use super::sample::{ContentSample, SampleStep, sample_reader};
 use super::{
@@ -965,13 +965,16 @@ pub struct StagedCopied {
 }
 
 /// A staged copy that did not land. The staged name holds nothing of it
-/// unless the cleanup itself failed, and the destination name was not taken.
+/// unless the cleanup itself failed, and the destination name was not taken
+/// unless [`Self::left`] says what is there.
 #[derive(Debug)]
 pub struct StagedCopyRefusal {
     pub step: StagedStep,
     pub cause: StagedCause,
     /// Attempts made, this one included.
     pub attempts: usize,
+    /// What a failed promotion left at the destination name it reserved.
+    pub left: Option<Leftover>,
 }
 
 impl Disk {
@@ -991,18 +994,21 @@ impl Disk {
     ) -> Result<StagedCopied, StagedCopyRefusal> {
         let mut attempts = 1;
         loop {
-            let refused = |step, cause| StagedCopyRefusal {
+            let mut left = None;
+            let refused = |step, cause, left| StagedCopyRefusal {
                 step,
                 cause,
                 attempts,
+                left,
             };
             if let Err(error) = self.remove_blocking(how.staged, Remove::File) {
                 return Err(refused(
                     StagedStep::ClearStaged,
                     StagedCause::Io(error.into()),
+                    None,
                 ));
             }
-            let (step, cause) = match self.copy_staged_once(source, dest, how, watch) {
+            let (step, cause) = match self.copy_staged_once(source, dest, how, watch, &mut left) {
                 Ok(copied) => return Ok(copied),
                 Err(failed) => failed,
             };
@@ -1015,7 +1021,7 @@ impl Disk {
                 );
             match how.bad_handle_pauses.get(attempts - 1) {
                 Some(pause) if dropped_handle => self.inner.clock.pause(*pause),
-                _ => return Err(refused(step, cause)),
+                _ => return Err(refused(step, cause, left)),
             }
             attempts += 1;
         }
@@ -1028,6 +1034,7 @@ impl Disk {
         dest: &Path,
         how: &StagedCopy<'_>,
         watch: &Watch,
+        left: &mut Option<Leftover>,
     ) -> Result<StagedCopied, (StagedStep, StagedCause)> {
         if watch.cancel.is_cancelled() {
             return Err((StagedStep::SourceBefore, StagedCause::Cancelled));
@@ -1081,8 +1088,10 @@ impl Disk {
             (step, cause)
         })?;
         still(StagedStep::SourceAfter)?;
-        self.move_claimed_blocking(how.staged, dest)
-            .map_err(|error| (StagedStep::Promote, StagedCause::Io(error.into())))?;
+        self.move_claimed_blocking(how.staged, dest).map_err(|error| {
+            *left = error.left().cloned();
+            (StagedStep::Promote, StagedCause::Io(error.into()))
+        })?;
         Ok(StagedCopied {
             hashes: written.hashes.expect("a staged copy hashes"),
             sync: written.sync,

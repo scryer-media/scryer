@@ -333,6 +333,7 @@ async fn the_turn_is_given_back_before_the_copy_is_proven() {
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        left: Default::default(),
         source_read: Default::default(),
         folder_is_dir: false,
         wrote_dest: Default::default(),
@@ -440,6 +441,7 @@ fn a_move_that_would_need_a_recorded_copy_is_refused() {
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        left: Default::default(),
         source_read: Default::default(),
         folder_is_dir: false,
         wrote_dest: Default::default(),
@@ -823,4 +825,27 @@ fn a_cancelled_staged_copy_leaves_nothing_staged() {
     assert!(matches!(refusal.cause, StagedCause::Cancelled));
     assert_eq!(refusal.attempts, 1);
     assert!(fixture.left_nothing());
+}
+
+/// A claimed move whose rename fails beside a source that does not read as
+/// present leaves its reservation, and the failure says where, in a typed
+/// field.
+#[test]
+fn a_claimed_move_that_fails_says_what_it_left_at_the_reserved_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let (missing, dest) = (temp.path().join("missing.mkv"), temp.path().join("dest.mkv"));
+    let error = disk()
+        .move_claimed_blocking(&missing, &dest)
+        .expect_err("nothing to move");
+    assert_eq!(error.left(), Some(&Leftover::AtReservedName { at: dest.clone() }));
+    assert_eq!(std::fs::read(&dest).unwrap(), b"", "the reservation is kept");
+
+    let folder = temp.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let free = temp.path().join("free.mkv");
+    let error = disk()
+        .move_claimed_blocking(&folder, &free)
+        .expect_err("a folder does not go onto a file");
+    assert_eq!(error.left(), None, "the reservation is released");
+    assert!(!free.exists());
 }

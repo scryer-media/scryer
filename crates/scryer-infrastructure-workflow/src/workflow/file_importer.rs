@@ -6079,6 +6079,7 @@ mod tests {
                 step,
                 cause,
                 attempts,
+                left: None,
             };
             import_copy_refusal(&source, &dest, &staged, &fingerprint, refusal)
         };

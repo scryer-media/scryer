@@ -64,6 +64,7 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         copied: Default::default(),
         prove: None,
         unproven: Default::default(),
+        left: Default::default(),
         source_read: Default::default(),
         folder_is_dir: false,
         wrote_dest: Default::default(),
@@ -1558,11 +1559,13 @@ mod real {
         // The source's folder is gone, so the put-back has nowhere to go.
         write(&staged, b"");
         let source = dir.path().join("vanished").join("source.mkv");
-        let said = job(&disk, &source, &dest, moving())
-            .roll_back(&staged, StagedHolds::EmptyClaim)
-            .expect("the refusal says what became of the empty file");
-        assert!(said.contains("is left in place"), "{said}");
-        assert!(said.contains("putting it back"), "{said}");
+        let failed = job(&disk, &source, &dest, moving());
+        let said = failed.roll_back(&staged, StagedHolds::EmptyClaim);
+        assert!(said.is_some(), "the refusal says what became of the empty file");
+        assert_eq!(
+            failed.left.take(),
+            vec![Leftover::PutBackFailed { at: staged.clone() }]
+        );
         assert_eq!(std::fs::read(&staged).expect("kept"), b"");
 
         // The source's folder does not let its name be read.
@@ -1577,11 +1580,14 @@ mod real {
             set(0o755).expect("unlock");
             return;
         }
-        let said = job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::EmptyClaim);
+        let unread = job(&disk, &source, &dest, moving());
+        let said = unread.roll_back(&staged, StagedHolds::EmptyClaim);
         set(0o755).expect("unlock");
-        let said = said.expect("the refusal says what became of the empty file");
-        assert!(said.contains("is left in place"), "{said}");
-        assert!(!said.contains("putting it back"), "{said}");
+        assert!(said.is_some(), "the refusal says what became of the empty file");
+        assert_eq!(
+            unread.left.take(),
+            vec![Leftover::AtReservedName { at: staged.clone() }]
+        );
         assert_eq!(std::fs::read(&staged).expect("kept"), b"");
         assert_eq!(std::fs::read(&source).expect("source"), b"payload");
         assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");

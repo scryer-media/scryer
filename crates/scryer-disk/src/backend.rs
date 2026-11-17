@@ -237,6 +237,26 @@ impl From<AmbiguousRefusal> for io::Error {
     }
 }
 
+/// A claimed rename that failed, and whether something is still at the
+/// destination name it reserved: the empty reservation, which may be the
+/// source moved by a rename that reported failure, or whatever the name holds
+/// that is not the reservation.
+#[derive(Debug)]
+pub(crate) struct ClaimedRenameFailed {
+    pub(crate) error: io::Error,
+    pub(crate) reservation_left: bool,
+}
+
+/// A failure before anything was reserved.
+impl From<io::Error> for ClaimedRenameFailed {
+    fn from(error: io::Error) -> Self {
+        Self {
+            error,
+            reservation_left: false,
+        }
+    }
+}
+
 /// The disk seam. One method per platform operation.
 pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// Follows links.
@@ -284,7 +304,7 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn rename_no_replace(&self, source: &Path, dest: &Path) -> io::Result<()>;
     /// Reserves `dest` with an exclusive create, then renames over the
     /// reservation, so a destination that appeared is never replaced.
-    fn rename_claimed(&self, source: &Path, dest: &Path) -> io::Result<()>;
+    fn rename_claimed(&self, source: &Path, dest: &Path) -> Result<(), ClaimedRenameFailed>;
     fn hard_link(&self, source: &Path, dest: &Path) -> io::Result<()>;
     fn symlink(&self, target: &Path, at: &Path) -> io::Result<()>;
     /// Creates `path` and its missing parents, each with `access`.
@@ -456,37 +476,48 @@ impl DiskBackend for SystemBackend {
         exclusive_rename(source, dest)
     }
 
-    fn rename_claimed(&self, source: &Path, dest: &Path) -> io::Result<()> {
+    fn rename_claimed(&self, source: &Path, dest: &Path) -> Result<(), ClaimedRenameFailed> {
         self.open(dest, Open::create_new())?;
-        std::fs::rename(source, dest).inspect_err(|_| {
+        std::fs::rename(source, dest).map_err(|error| {
             // Release the empty reservation, and only that: a share can apply
             // the rename and lose the reply, leaving the only copy here. An
             // empty file there may be an empty source moved that way, so it
             // goes only while the source still reads as present: one look at
             // the source, on this failure alone.
-            match self.lstat(dest) {
+            let reservation_left = match self.lstat(dest) {
                 Ok(stat) if stat.kind == EntryKind::File && stat.len == 0 => {
                     match self.lstat(source) {
-                        Ok(_) => {
-                            let _ = std::fs::remove_file(dest);
+                        Ok(_) => std::fs::remove_file(dest).is_err(),
+                        Err(error) => {
+                            tracing::error!(
+                                path = %dest.display(),
+                                source = %source.display(),
+                                error = %error,
+                                "a rename reported failure and its source does not read as present; the empty file at its reserved name is left in place"
+                            );
+                            true
                         }
-                        Err(error) => tracing::error!(
-                            path = %dest.display(),
-                            source = %source.display(),
-                            error = %error,
-                            "a rename reported failure and its source does not read as present; the empty file at its reserved name is left in place"
-                        ),
                     }
                 }
-                Ok(_) => tracing::warn!(
-                    path = %dest.display(),
-                    "a rename reported failure and its reserved name is not an empty file; it is left in place"
-                ),
-                Err(error) => tracing::warn!(
-                    path = %dest.display(),
-                    error = %error,
-                    "a rename reported failure and its reserved name could not be read; it is left in place"
-                ),
+                Ok(_) => {
+                    tracing::warn!(
+                        path = %dest.display(),
+                        "a rename reported failure and its reserved name is not an empty file; it is left in place"
+                    );
+                    true
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        path = %dest.display(),
+                        error = %error,
+                        "a rename reported failure and its reserved name could not be read; it is left in place"
+                    );
+                    true
+                }
+            };
+            ClaimedRenameFailed {
+                error,
+                reservation_left,
             }
         })
     }
@@ -1155,8 +1186,9 @@ mod tests {
         let dest = directory.path().join("dest.mkv");
         backend_write(&staged, b"staged");
         backend_write(&dest, b"dest");
-        let error = SystemBackend.rename_claimed(&staged, &dest).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        let failed = SystemBackend.rename_claimed(&staged, &dest).unwrap_err();
+        assert_eq!(failed.error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(!failed.reservation_left, "nothing was reserved");
         assert_eq!(std::fs::read(&dest).unwrap(), b"dest");
 
         let free = directory.path().join("free.mkv");
@@ -1325,7 +1357,8 @@ mod tests {
         let claimed = SystemBackend
             .rename_claimed(&source, &dest)
             .expect_err("a claimed rename refuses too");
-        assert_eq!(claimed.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(claimed.error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(!claimed.reservation_left);
         assert_eq!(std::fs::read(&dest).unwrap(), b"keep me");
         assert_eq!(std::fs::read(&source).unwrap(), b"source");
     }
@@ -1343,14 +1376,14 @@ mod tests {
         let folder = dir.path().join("invented-folder");
         std::fs::create_dir(&folder).unwrap();
         let dest = dir.path().join("invented-present.bin");
-        SystemBackend.rename_claimed(&folder, &dest).unwrap_err();
+        assert!(!SystemBackend.rename_claimed(&folder, &dest).unwrap_err().reservation_left);
         assert!(std::fs::symlink_metadata(&dest).is_err(), "claim released");
         assert!(folder.is_dir());
 
         // Absent: nothing to rename.
         let missing = dir.path().join("invented-missing.bin");
         let dest = dir.path().join("invented-absent.bin");
-        SystemBackend.rename_claimed(&missing, &dest).unwrap_err();
+        assert!(SystemBackend.rename_claimed(&missing, &dest).unwrap_err().reservation_left);
         assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
 
         // Unreadable: the source's folder cannot be searched.
@@ -1362,7 +1395,7 @@ mod tests {
         // A user the permissions do not bind reads it anyway; nothing to test.
         if std::fs::symlink_metadata(&hidden).is_err() {
             let dest = dir.path().join("invented-unread.bin");
-            SystemBackend.rename_claimed(&hidden, &dest).unwrap_err();
+            assert!(SystemBackend.rename_claimed(&hidden, &dest).unwrap_err().reservation_left);
             assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
         }
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();

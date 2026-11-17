@@ -310,6 +310,7 @@ pub struct DiskError {
     path: PathBuf,
     #[source]
     source: io::Error,
+    left: Option<super::Leftover>,
 }
 
 impl DiskError {
@@ -319,7 +320,20 @@ impl DiskError {
             reason: classify(&source),
             path: path.to_path_buf(),
             source,
+            left: None,
         }
+    }
+
+    /// The same failure, saying also what it left away from where it was.
+    pub(crate) fn leaving(mut self, left: Option<super::Leftover>) -> Self {
+        self.left = left;
+        self
+    }
+
+    /// A file the failed operation left away from where it started, and
+    /// where; `None` when it left nothing so.
+    pub fn left(&self) -> Option<&super::Leftover> {
+        self.left.as_ref()
     }
 
     pub(crate) fn timed_out(verb: DiskVerb, path: &Path, timeout: std::time::Duration) -> Self {
