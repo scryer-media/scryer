@@ -6,7 +6,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { startGrabMutation } from "@/lib/graphql/mutations";
 import { grabJobResultQuery } from "@/lib/graphql/queries";
 import type { JobRun } from "@/lib/types";
-import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 
 export type GrabConflict = {
   titleId: string;
@@ -101,10 +101,15 @@ export function useGrab(): (request: GrabRequest) => Promise<GrabOutcome> {
 
       // Registered with the provider itself, not through the calling
       // component, so the wait outlives a page change and the grab still
-      // reports how it ended.
+      // reports how it ended. The provider always settles the wait: with the
+      // run once it ends, or with its last state when it can no longer be
+      // followed.
       const finished = await new Promise<JobRun>((resolve) => {
         registerInteractiveJobRun(run, resolve);
       });
+      if (!isTerminalJobRunStatus(finished.status)) {
+        throw new Error(t("status.grabOutcomeUnknown"));
+      }
       const outcome = await client
         .query(
           grabJobResultQuery,

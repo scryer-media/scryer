@@ -8373,6 +8373,8 @@ const en: LocaleDictionary = {
   "status.grabFailed": "The grab failed.",
   "status.grabResultUnavailable":
     "The grab finished, but its result is no longer available. Check the download queue.",
+  "status.grabOutcomeUnknown":
+    "The grab could not be followed to its end. Check the download queue.",
   "status.apiError": "Request failed",
   "status.permissionDenied": "You do not have permission for this action.",
 

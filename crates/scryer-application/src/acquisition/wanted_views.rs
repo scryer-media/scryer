@@ -1399,42 +1399,65 @@ impl AppUseCase {
         // Tracked by the restore coordinator so a restore waits for the
         // search instead of replacing the database under it.
         self.restore_coordinator().spawn_task(async move {
-            let mut run = run;
-            let search_guard = match search_guard {
-                Some(guard) => guard,
-                None => {
-                    let admission = app.runtime.jobs.acquisition_search_lock.clone();
-                    let guard = tokio::select! {
-                        guard = admission.lock_owned() => guard,
-                        _ = cancellation.cancelled() => {
-                            let total = plan.scope_count();
-                            app.finish_acquisition_search_job(
-                                run,
-                                actor_event,
-                                total,
-                                0,
-                                0,
-                                0,
-                                false,
-                                true,
-                            )
-                            .await;
-                            return;
-                        }
-                    };
-                    run.status = JobRunStatus::Running;
-                    guard
-                }
-            };
-            app.run_acquisition_search_job(
-                run,
-                actor,
-                actor_event,
-                plan,
-                cancellation,
-                search_guard,
-            )
-            .await;
+            // A panic inside the search is caught here, so it still ends the
+            // job run and releases its cancellation entry instead of leaving
+            // the run listed as running.
+            let panic_run = run.clone();
+            let panic_actor = actor_event.clone();
+            let panic_total = plan.scope_count();
+            let worker = app.clone();
+            let search = std::panic::AssertUnwindSafe(async move {
+                let app = worker;
+                let mut run = run;
+                let search_guard = match search_guard {
+                    Some(guard) => guard,
+                    None => {
+                        let admission = app.runtime.jobs.acquisition_search_lock.clone();
+                        let guard = tokio::select! {
+                            guard = admission.lock_owned() => guard,
+                            _ = cancellation.cancelled() => {
+                                let total = plan.scope_count();
+                                app.finish_acquisition_search_job(
+                                    run,
+                                    actor_event,
+                                    total,
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    true,
+                                )
+                                .await;
+                                return;
+                            }
+                        };
+                        run.status = JobRunStatus::Running;
+                        guard
+                    }
+                };
+                app.run_acquisition_search_job(
+                    run,
+                    actor,
+                    actor_event,
+                    plan,
+                    cancellation,
+                    search_guard,
+                )
+                .await;
+            });
+            if futures_util::FutureExt::catch_unwind(search).await.is_err() {
+                app.finish_acquisition_search_job(
+                    panic_run,
+                    panic_actor,
+                    panic_total,
+                    1,
+                    0,
+                    1,
+                    false,
+                    false,
+                )
+                .await;
+            }
         });
 
         Ok(run_payload)
