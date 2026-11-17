@@ -3008,6 +3008,27 @@ mod ws_origin_tests {
             .expect("connection closes once the auth epoch moves on");
     }
 
+    /// A connection opened after an invalidation that no connection heard
+    /// stays open: the epoch it reads and the epoch it watches agree.
+    #[tokio::test]
+    async fn a_connection_after_an_unheard_invalidation_stays_open() {
+        use futures_util::FutureExt;
+        let auth_runtime = AuthRuntimeStateHandle::new(super::tests::auth_enabled_snapshot());
+        auth_runtime.invalidate_connections();
+        auth_runtime.apply_saved_security_settings(false, false);
+
+        // As `graphql_ws_handler` does at the upgrade.
+        let connection_epoch = auth_runtime.snapshot().epoch;
+        let auth_epoch = auth_runtime.subscribe_epoch();
+        let mut until_stale = Box::pin(until_auth_epoch_moves_past(auth_epoch, connection_epoch));
+        assert!((&mut until_stale).now_or_never().is_none());
+
+        auth_runtime.invalidate_connections();
+        tokio::time::timeout(Duration::from_secs(30), until_stale)
+            .await
+            .expect("a later invalidation still closes it");
+    }
+
     #[tokio::test]
     async fn epoch_changed_before_upgrade_closes_immediately() {
         let (_sender, receiver) = tokio::sync::watch::channel(8_u64);
@@ -4954,7 +4975,7 @@ mod tests {
         }
     }
 
-    fn auth_enabled_snapshot() -> scryer_interface::context::AuthRuntimeStateSnapshot {
+    pub(super) fn auth_enabled_snapshot() -> scryer_interface::context::AuthRuntimeStateSnapshot {
         scryer_interface::context::AuthRuntimeStateSnapshot {
             form_login_enabled: true,
             skip_login_for_local_ips: false,
