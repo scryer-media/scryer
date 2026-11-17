@@ -947,8 +947,6 @@ async fn retain_adopted_passwords_tx(
     Ok(())
 }
 
-/// The submissions with one of `count` client item ids, newest first. The
-/// item-id index answers the filter; the order is a sort of the few matches.
 /// Submissions with a password retry pending. They are read from
 /// `idx_download_submissions_password_retry`, which holds only those rows.
 ///
@@ -996,6 +994,8 @@ fn active_unbound_submitted_before_sql(datastore: &StoreDatastore) -> String {
     )
 }
 
+/// The submissions with one of `count` client item ids, newest first. The
+/// item-id index answers the filter; the order is a sort of the few matches.
 fn submissions_for_client_item_ids_sql(datastore: &StoreDatastore, count: usize) -> String {
     download_submission_select_sql(
         datastore,

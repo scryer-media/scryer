@@ -511,7 +511,7 @@ const RELEASE_DECISION_IDENTITY_SELECT_SQL: &str = "SELECT id
         AND COALESCE(release_url, '') = {}
         AND release_title = {}
         AND COALESCE(release_size_bytes, -1) = {}
-      ORDER BY COALESCE(created_at, created_at) DESC
+      ORDER BY COALESCE(created_at, created_at) DESC, id DESC
       LIMIT 1";
 
 fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
@@ -652,8 +652,8 @@ const WANTED_LATEST_DECISION_COLUMNS_SQL: &str = "
 
 /// Whether the wanted row `w` is eligible for title-mismatch recovery: it is
 /// wanted, has a release decision, and every one of its decisions is a title
-/// mismatch. Both probes are served by the `(wanted_item_id, created_at)`
-/// index on `release_decisions`.
+/// mismatch. Both probes are answered from `idx_release_decisions_identity`,
+/// which holds the scope and the decision code.
 const WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL: &str = "(w.status = 'wanted'
                  AND EXISTS (
                      SELECT 1
