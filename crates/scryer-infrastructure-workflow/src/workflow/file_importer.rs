@@ -7449,6 +7449,24 @@ mod tests {
         assert!(!missing.exists());
     }
 
+    /// A turn given up leaves nothing behind once another is taken: the map
+    /// holds only turns held or awaited, however many paths came before.
+    #[tokio::test]
+    async fn source_turns_keep_only_turns_still_held() {
+        let turns = SourceTurns::default();
+        for index in 0..1_000 {
+            let _turn = turns
+                .take(Path::new(&format!("/srv/fixture-media/sample-{index}.mkv")))
+                .await;
+        }
+        let held = turns.take(Path::new("/srv/fixture-media/held.mkv")).await;
+        let live = |turns: &SourceTurns| turns.turns.lock().expect("turns").len();
+        assert_eq!(live(&turns), 1);
+        drop(held);
+        let _next = turns.take(Path::new("/srv/fixture-media/next.mkv")).await;
+        assert_eq!(live(&turns), 1);
+    }
+
     /// While a cleanup holds its turn at a source path, an import of that
     /// path does not start, so it cannot put back a source the cleanup has
     /// set aside that moment; once the turn is given up, the import puts it
