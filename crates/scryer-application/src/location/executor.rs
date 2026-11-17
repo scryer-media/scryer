@@ -558,7 +558,13 @@ pub(super) fn move_error_may_be_storage_loss(error: &AppError) -> bool {
         || matches!(error, AppError::RepositoryFailed { .. })
         || matches!(
             error.validation_reason(),
-            Some(location::DESTINATION_NO_SPACE | location::DESTINATION_PERMISSION_DENIED)
+            Some(
+                location::DESTINATION_NO_SPACE
+                    | location::DESTINATION_PERMISSION_DENIED
+                    // A link proof whose read failed as the mount dropped,
+                    // and whose removal then failed too.
+                    | location::UNPROVEN_LINK_NOT_REMOVED
+            )
         )
 }
 
@@ -3137,7 +3143,8 @@ mod tests {
             destination: PathBuf,
             detached: PathBuf,
             disconnect: bool,
-            refused: Refused,
+            /// `None` is a link left unproven at its name.
+            refused: Option<Refused>,
             attempts: AtomicU64,
         }
         #[async_trait]
@@ -3147,10 +3154,25 @@ mod tests {
                     if self.disconnect {
                         std::fs::rename(&self.destination, &self.detached).unwrap();
                     }
-                    return Err(crate::location::verify::copy_refusal(
-                        self.refused,
-                        "synthetic".to_owned(),
-                    ));
+                    return Err(match self.refused {
+                        Some(refused) => {
+                            crate::location::verify::copy_refusal(refused, "synthetic".to_owned())
+                        }
+                        None => {
+                            use crate::disk::{Doubt, LinkAfter, Mark, Unproven};
+                            let unproven = Unproven {
+                                doubt: Doubt::OtherFile {
+                                    linked: Mark::on_volume(7),
+                                },
+                                after: LinkAfter::NotRemoved,
+                            };
+                            crate::location::execution::unproven_link_answer(
+                                &request.file.destination_path,
+                                Some(unproven),
+                            )
+                            .expect_err("an unproven link is refused")
+                        }
+                    });
                 }
                 Ok(VerifiedFile {
                     source_path: request.file.source_path.clone(),
@@ -3162,7 +3184,7 @@ mod tests {
                 })
             }
         }
-        for refused in [Refused::SourceMissing, Refused::NoSpace] {
+        for refused in [Some(Refused::SourceMissing), Some(Refused::NoSpace), None] {
             for disconnect in [true, false] {
                 let temp = tempfile::tempdir().unwrap();
                 let destination = temp.path().join("destination");
