@@ -341,12 +341,13 @@ fn windows_names_a_volume_from_a_handle_and_tells_no_files_apart() {
     assert_eq!(volume.to_stored(), disk.copy_lane(&missing));
 }
 
-/// On Windows a move is a rename only when the source's volume serial is the
-/// one its destination's nearest existing folder answers. A serial either
-/// side does not answer, or a linked source, leaves the move to the copy.
+/// On Windows two paths share a volume only when they name one drive or
+/// share and answer one non-zero volume serial. A serial either side does
+/// not answer, a serial of zero, or a linked source is no answer. A move
+/// asks none of this: it copies on Windows, reading nothing first.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_a_move_renames_only_between_equal_volume_serials() {
+async fn windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial() {
     let folder = "/srv/fixture-media/Fixture Show";
     let setup = |source: Option<u64>, landing: Option<u64>| {
         let (disk, backend) = scripted();
@@ -362,17 +363,24 @@ async fn windows_a_move_renames_only_between_equal_volume_serials() {
     };
 
     let (equal, backend) = setup(Some(7), Some(7));
-    assert!(equal.renames_between(&p(B), &p(A)).await);
+    assert!(equal.shares_volume(&p(B), &p(A)).await);
     assert_eq!(backend.paths_of("volume_serial"), [p(B), p(folder)]);
+    // A move reads nothing to decide: it copies.
+    let before = backend.paths_of("volume_serial").len();
+    assert!(!equal.renames_between(&p(B), &p(A)).await);
+    assert_eq!(backend.paths_of("volume_serial").len(), before);
 
     let (different, _) = setup(Some(7), Some(8));
-    assert!(!different.renames_between(&p(B), &p(A)).await);
+    assert!(!different.shares_volume(&p(B), &p(A)).await);
+
+    let (zero, _) = setup(Some(0), Some(0));
+    assert!(!zero.shares_volume(&p(B), &p(A)).await);
 
     let (source_unread, _) = setup(None, Some(7));
-    assert!(!source_unread.renames_between(&p(B), &p(A)).await);
+    assert!(!source_unread.shares_volume(&p(B), &p(A)).await);
 
     let (landing_unread, _) = setup(Some(7), None);
-    assert!(!landing_unread.renames_between(&p(B), &p(A)).await);
+    assert!(!landing_unread.shares_volume(&p(B), &p(A)).await);
 
     let (linked, backend) = setup(Some(7), Some(7));
     backend.stat_is(
@@ -382,29 +390,67 @@ async fn windows_a_move_renames_only_between_equal_volume_serials() {
             ..file(5)
         }),
     );
-    assert!(!linked.renames_between(&p(B), &p(A)).await);
+    assert!(!linked.shares_volume(&p(B), &p(A)).await);
     assert!(backend.paths_of("volume_serial").is_empty());
 
     let (missing, _) = setup(Some(7), Some(7));
-    assert!(!missing.renames_between(&p(A), &p(B)).await);
+    assert!(!missing.shares_volume(&p(A), &p(B)).await);
+
+    // One serial on two drives or two shares is still two volumes, and
+    // nothing is read to say so; one drive spelt in two cases is one.
+    let drive = r"C:\fixture-media\b.mkv";
+    for (other, other_folder, shared) in [
+        (r"D:\fixture-media\a.mkv", r"D:\fixture-media", false),
+        (
+            r"\\fixture-host\media\a.mkv",
+            r"\\fixture-host\media",
+            false,
+        ),
+        (r"c:\fixture-media\a.mkv", r"c:\fixture-media", true),
+    ] {
+        let (disk, backend) = scripted();
+        backend.stat_is(drive, Ok(file(5)));
+        backend.serial_is(drive, 7);
+        backend.stat_is(other_folder, Ok(dir()));
+        backend.serial_is(other_folder, 7);
+        assert_eq!(
+            disk.shares_volume(&p(drive), &p(other)).await,
+            shared,
+            "{other}"
+        );
+        if !shared {
+            assert!(backend.paths_of("volume_serial").is_empty(), "{other}");
+            assert_eq!(backend.calls_of("lstat"), 0, "{other}");
+        }
+    }
+    let share = r"\\fixture-host\media\b.mkv";
+    let (disk, backend) = scripted();
+    backend.stat_is(share, Ok(file(5)));
+    backend.serial_is(share, 7);
+    backend.stat_is(r"\\fixture-host\other", Ok(dir()));
+    backend.serial_is(r"\\fixture-host\other", 7);
+    assert!(
+        !disk
+            .shares_volume(&p(share), &p(r"\\fixture-host\other\a.mkv"))
+            .await
+    );
 }
 
 /// Two names on one drive, the destination's folder not made yet, are on one
-/// volume, so a Windows move between them can be a rename; a source that is
-/// not there answers no.
+/// volume; a source that is not there answers no. A move between them still
+/// copies on Windows.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_a_move_within_one_drive_can_be_a_rename() {
+async fn windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.mkv");
     std::fs::write(&source, b"synthetic").unwrap();
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
-    assert!(
-        disk.renames_between(&source, &temp.path().join("beside.mkv"))
-            .await
-    );
+    let beside = temp.path().join("beside.mkv");
+    assert!(disk.shares_volume(&source, &beside).await);
+    assert!(!disk.renames_between(&source, &beside).await);
     let nested = temp.path().join("not-created/yet/destination.mkv");
-    assert!(disk.renames_between(&source, &nested).await);
+    assert!(disk.shares_volume(&source, &nested).await);
     let missing = temp.path().join("missing.mkv");
-    assert!(!disk.renames_between(&missing, &nested).await);
+    assert!(!disk.shares_volume(&missing, &nested).await);
 }

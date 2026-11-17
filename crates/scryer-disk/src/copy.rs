@@ -1479,7 +1479,13 @@ impl Disk {
     /// are on one filesystem. An unknown answer is `false`, which only ever
     /// costs a copy. The destination usually does not exist yet, so its
     /// nearest existing ancestor is what is compared.
+    ///
+    /// Only unix answers: a move on any other platform copies, so it reads
+    /// nothing here.
     pub async fn renames_between(&self, source: &Path, destination: &Path) -> bool {
+        if !cfg!(unix) {
+            return false;
+        }
         let (disk, source, destination) = (
             self.clone(),
             source.to_path_buf(),
@@ -1490,9 +1496,37 @@ impl Disk {
             .unwrap_or(false)
     }
 
+    /// Whether `source` and the volume `destination` lands on are one
+    /// volume, read within the destination root's bound; unknown is `false`.
+    /// On Windows both must name the same drive or share and answer the same
+    /// non-zero volume serial. Nothing asks this on the way to a move: see
+    /// [`Self::renames_between`].
+    pub async fn shares_volume(&self, source: &Path, destination: &Path) -> bool {
+        let (disk, source_path, landing) = (
+            self.clone(),
+            source.to_path_buf(),
+            destination.to_path_buf(),
+        );
+        let timeout = self.traits(destination).probe_timeout;
+        match self
+            .bounded(destination, timeout, move || {
+                disk.same_filesystem(&source_path, &landing)
+            })
+            .await
+        {
+            super::Bounded::Done(same) => same,
+            _ => false,
+        }
+    }
+
     fn same_filesystem(&self, source_path: &Path, destination: &Path) -> bool {
         // Only unix and Windows name a volume.
         if !cfg!(any(unix, windows)) {
+            return false;
+        }
+        // Two drives or shares are two volumes, whatever serials they answer.
+        #[cfg(windows)]
+        if volume_prefix(source_path) != volume_prefix(destination) {
             return false;
         }
         // A symlinked source lives on the filesystem holding the link, not
@@ -1502,13 +1536,16 @@ impl Disk {
         };
         // A plain read names no volume on Windows. The volume comes from a
         // handle, which follows a link, so a linked source is left to the
-        // copy rather than judged by its target's volume.
+        // copy rather than judged by its target's volume. A serial of zero
+        // is not one.
         #[cfg(windows)]
         let source = match source.kind() {
             Some(super::EntryKind::Symlink) | None => return false,
             Some(_) => match self.volume_at(source_path) {
-                Some(volume) => volume,
-                None => return false,
+                Some(volume) if volume.same_volume(&Mark::on_volume(0)) == Sameness::Different => {
+                    volume
+                }
+                _ => return false,
             },
         };
         let mut candidate = Some(destination);
@@ -1525,6 +1562,28 @@ impl Disk {
         }
         false
     }
+}
+
+/// The drive or share a Windows path names, upper-cased: `C:` for `C:\x` and
+/// `\\?\C:\x`, `\\SERVER\SHARE` for `\\server\share\x` and its verbatim
+/// form, the prefix's own text otherwise, and `None` for a path with none.
+#[cfg(windows)]
+fn volume_prefix(path: &Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return None;
+    };
+    Some(match prefix.kind() {
+        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+            format!("{}:", char::from(letter).to_ascii_uppercase())
+        }
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!(
+            "\\\\{}\\{}",
+            server.to_string_lossy().to_uppercase(),
+            share.to_string_lossy().to_uppercase()
+        ),
+        _ => prefix.as_os_str().to_string_lossy().to_uppercase(),
+    })
 }
 
 /// Reads the whole destination back and compares it against what the copy

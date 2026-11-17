@@ -23,8 +23,8 @@ WINDOWS_TESTS = {
         "a_windows_exclusive_rename_moves_to_a_free_name",
         "a_windows_read_only_file_moves_without_a_staging_leftover",
         "windows_names_a_volume_from_a_handle_and_tells_no_files_apart",
-        "windows_a_move_renames_only_between_equal_volume_serials",
-        "windows_a_move_within_one_drive_can_be_a_rename",
+        "windows_volumes_are_shared_only_with_one_prefix_and_one_nonzero_serial",
+        "windows_two_names_on_one_drive_share_a_volume_but_a_move_still_copies",
     ],
     "scryer-infrastructure-library": [
         "rename_path_key_folds_case_and_separators_on_windows",
