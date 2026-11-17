@@ -528,14 +528,17 @@ impl FileMoveRetry {
 }
 
 /// Whether an error is the transient, I/O-shaped kind a retry can help with.
+/// A source that is not there is not: it does not come back on a retry.
 pub(super) fn move_error_is_transient(error: &AppError) -> bool {
-    matches!(
-        error,
+    match error {
+        AppError::RepositoryFailed { reason, .. } => {
+            *reason != crate::disk::reason::DISK_PATH_MISSING
+        }
         AppError::Repository(_)
-            | AppError::TemporaryUnavailable { .. }
-            | AppError::RepositoryFailure { .. }
-            | AppError::RepositoryFailed { .. }
-    )
+        | AppError::TemporaryUnavailable { .. }
+        | AppError::RepositoryFailure { .. } => true,
+        _ => false,
+    }
 }
 
 /// The reason code a run-level stop writes on the operation row.
@@ -5119,6 +5122,78 @@ mod tests {
             1,
             "a mismatch is a fact about the copy, not a transient failure"
         );
+    }
+
+    /// A full destination, a denied one and a missing source are moved once
+    /// and fail the title; a timed out destination is moved again and the
+    /// title completes.
+    #[tokio::test]
+    async fn only_storage_that_did_not_answer_is_moved_again() {
+        use crate::disk::{Refused, Side};
+        let failing = "/destination/title-1/1.mkv";
+        for (refused, retried) in [
+            (Refused::NoSpace, false),
+            (Refused::Denied, false),
+            (Refused::SourceMissing, false),
+            (Refused::Unreachable(Side::Destination), true),
+        ] {
+            let store = FakeStore::with_operation(operation());
+            let mover = FailFirstWithMover {
+                attempts: Mutex::new(BTreeMap::new()),
+                fail_once: failing.to_string(),
+                error: crate::location::verify::copy_refusal(refused, "synthetic".to_owned()),
+            };
+            let admission = ScriptedAdmission::new(&[]);
+            let reconciler = RecordingReconciler::default();
+            let plan = two_title_plan();
+            let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+                .with_file_move_retry(FileMoveRetry {
+                    attempts: 3,
+                    base_delay: Duration::ZERO,
+                })
+                .run("op-1", &plan)
+                .await
+                .expect("a run returns an outcome");
+            let attempts = mover.attempts.lock().expect("lock").get(failing).copied();
+            assert_eq!(attempts, Some(if retried { 2 } else { 1 }), "{refused:?}");
+            assert_eq!(
+                outcome.state == LocationOperationState::Completed,
+                retried,
+                "{refused:?}: {outcome:?}"
+            );
+        }
+    }
+
+    /// Fails one destination on its first attempt with `error` and succeeds
+    /// on every attempt after that.
+    struct FailFirstWithMover {
+        attempts: Mutex<BTreeMap<String, u32>>,
+        fail_once: String,
+        error: AppError,
+    }
+
+    #[async_trait]
+    impl TitleFileMover for FailFirstWithMover {
+        async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            let destination = request.file.stored_destination();
+            let attempt = {
+                let mut attempts = self.attempts.lock().expect("lock");
+                let attempt = attempts.entry(destination.clone()).or_insert(0);
+                *attempt += 1;
+                *attempt
+            };
+            if destination == self.fail_once && attempt == 1 {
+                return Err(self.error.clone());
+            }
+            Ok(VerifiedFile {
+                source_path: request.file.source_path.clone(),
+                destination_path: request.file.destination_path.clone(),
+                hashes: None,
+                depth: AppliedVerificationDepth::exact(request.depth),
+                outcome: FileVerificationOutcome::Verified,
+                detail: None,
+            })
+        }
     }
 
     /// Fails one destination on its first attempt with an I/O-shaped error and

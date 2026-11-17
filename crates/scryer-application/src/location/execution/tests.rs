@@ -3478,3 +3478,55 @@ async fn a_full_copy_that_disagrees_with_the_stored_full_hash_keeps_the_source()
         }
     }
 }
+
+/// A link that did not prove and could not be removed is refused with its
+/// own reason and the path it was left at as a fact; a link removed, already
+/// gone or left alone stays a source that changed, and no link at all is
+/// the copy's to make.
+#[test]
+fn an_unproven_link_that_could_not_be_removed_names_where_it_was_left() {
+    use crate::disk::{Doubt, LinkAfter, Mark, Unproven};
+    use crate::error_reasons::location;
+    let destination = Path::new("/srv/fixture-media/Fixture Show/Fixture Show - S01E01.mkv");
+    let unproven = |after| {
+        Some(Unproven {
+            doubt: Doubt::OtherFile {
+                linked: Mark::on_volume(7),
+            },
+            after,
+        })
+    };
+
+    assert!(!unproven_link_answer(destination, None).unwrap());
+
+    let left =
+        unproven_link_answer(destination, unproven(LinkAfter::NotRemoved)).expect_err("refused");
+    assert_eq!(
+        left.validation_reason(),
+        Some(location::UNPROVEN_LINK_NOT_REMOVED)
+    );
+    let AppError::ValidationRefused { facts, .. } = &left else {
+        panic!("{left:?}");
+    };
+    assert_eq!(
+        facts,
+        &[crate::RefusalFact::new(
+            location::LEFT_BEHIND_PATH_FACT,
+            path_to_stored_string(destination),
+        )]
+    );
+    assert!(!crate::location::executor::move_error_is_transient(&left));
+
+    for after in [
+        LinkAfter::Removed,
+        LinkAfter::AlreadyGone,
+        LinkAfter::LeftAlone,
+    ] {
+        let changed = unproven_link_answer(destination, unproven(after)).expect_err("refused");
+        assert_eq!(
+            changed.validation_reason(),
+            Some(location::SOURCE_CHANGED_DURING_FILE_PLACEMENT),
+            "{after:?}"
+        );
+    }
+}

@@ -35,8 +35,8 @@ use scryer_domain::MediaFacet;
 
 use crate::disk::reason::DISK_PATH_MISSING;
 use crate::disk::{
-    Disk, Done, Doubt, EntryKind, LinkProof, Mark, Parents, Placed, Removal, Remove, Sameness,
-    Unproven,
+    Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, Placed, Removal, Remove,
+    Sameness, Unproven,
 };
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
@@ -626,7 +626,17 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
         }
         Err(refusal) => refusal,
     };
-    match refusal.unproven {
+    unproven_link_answer(destination, refusal.unproven)
+}
+
+/// What staging answers for a refused link: `Ok(false)` when no link was
+/// made and the ordinary verified copy takes over, and a refusal for a link
+/// that was made and did not prove.
+pub(super) fn unproven_link_answer(
+    destination: &Path,
+    unproven: Option<Unproven>,
+) -> AppResult<bool> {
+    match unproven {
         // No link was made: the ordinary verified copy takes over.
         None => Ok(false),
         // The read that failed is the answer, whatever became of the name.
@@ -638,7 +648,23 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             destination.display(),
             error.words()
         ))),
-        // Another file at the name, removed or not.
+        // A link that did not prove and is still at the name: the path it
+        // was left at travels as its own fact.
+        Some(Unproven {
+            after: LinkAfter::NotRemoved,
+            ..
+        }) => Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::location::UNPROVEN_LINK_NOT_REMOVED,
+            format!(
+                "the link made at {} could not be proven and could not be removed; the source was kept",
+                destination.display()
+            ),
+            vec![crate::RefusalFact::new(
+                crate::error_reasons::location::LEFT_BEHIND_PATH_FACT,
+                path_to_stored_string(destination),
+            )],
+        )),
+        // Another file at the name, removed, already gone or left alone.
         Some(_) => Err(AppError::validation_refused(
             crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
             "source changed during file placement",

@@ -313,12 +313,27 @@ pub trait FileVerificationRecorder: Send + Sync {
     async fn record_file_verification(&self, record: FileVerificationRecord) -> AppResult<()>;
 }
 
-fn copy_refusal(refused: Refused, sentence: String) -> AppError {
+pub(super) fn copy_refusal(refused: Refused, sentence: String) -> AppError {
     match refused {
         Refused::StagingOccupied => AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_OCCUPIED,
             sentence,
         ),
+        // A full destination or one Scryer may not write to stays so on a
+        // retry: each is a refusal with its own reason.
+        Refused::NoSpace => AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_NO_SPACE,
+            sentence,
+        ),
+        Refused::Denied => AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_PERMISSION_DENIED,
+            sentence,
+        ),
+        // A source that is not there does not come back on a retry either.
+        Refused::SourceMissing => AppError::RepositoryFailed {
+            message: sentence,
+            reason: refused.reason(),
+        },
         // Storage that timed out or could not be reached carries its own
         // variant and reason; every other refusal is a repository failure.
         Refused::Unreachable(_) => AppError::temporary_unavailable_reason(
@@ -1324,9 +1339,85 @@ mod tests {
         assert!(crate::location::executor::move_error_is_transient(
             &unreachable
         ));
-        for lasting in [Refused::Denied, Refused::Failed] {
-            assert!(matches!(refused(lasting), AppError::Repository(_)));
+        assert!(matches!(refused(Refused::Failed), AppError::Repository(_)));
+    }
+
+    /// A full destination, one Scryer may not write to, and a source that is
+    /// not there each carry their own reason and are not retried; a timed
+    /// out or unreachable one still is.
+    #[test]
+    fn lasting_copy_refusals_carry_their_reason_and_are_not_retried() {
+        use crate::error_reasons::location;
+        let refused = |refused| copy_refusal(refused, "synthetic".to_owned());
+        for (lasting, reason) in [
+            (Refused::NoSpace, location::DESTINATION_NO_SPACE),
+            (Refused::Denied, location::DESTINATION_PERMISSION_DENIED),
+            (
+                Refused::SourceMissing,
+                crate::disk::reason::DISK_PATH_MISSING,
+            ),
+        ] {
+            let error = refused(lasting);
+            assert_eq!(error.reason(), Some(reason), "{lasting:?}");
+            assert!(
+                !crate::location::executor::move_error_is_transient(&error),
+                "{lasting:?}"
+            );
         }
+        for side in [crate::disk::Side::Source, crate::disk::Side::Destination] {
+            assert!(crate::location::executor::move_error_is_transient(
+                &refused(Refused::Unreachable(side))
+            ));
+        }
+    }
+
+    /// A copy into a folder Scryer may not write to, and one from a source
+    /// that is not there, reach the caller with their reasons.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_denied_destination_and_a_missing_source_reach_the_caller_with_their_reasons() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, 16);
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let copy = |source: PathBuf, destination: PathBuf| async move {
+            recorded_copy(
+                &Disk::process(),
+                &source,
+                &destination,
+                crate::disk::placement::verified_copy(
+                    VerificationDepth::Quick,
+                    DestinationClaim::ClaimHere,
+                ),
+                &CopyProgress::none(),
+            )
+            .await
+            .expect_err("refused")
+        };
+        let denied = copy(source.clone(), locked.join("destination.bin")).await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            denied.reason(),
+            Some(crate::error_reasons::location::DESTINATION_PERMISSION_DENIED),
+            "{denied:?}"
+        );
+        assert!(std::fs::read_dir(&locked).unwrap().next().is_none());
+
+        let missing = copy(
+            dir.path().join("missing.bin"),
+            dir.path().join("destination.bin"),
+        )
+        .await;
+        assert_eq!(
+            missing.reason(),
+            Some(crate::disk::reason::DISK_PATH_MISSING),
+            "{missing:?}"
+        );
+        assert!(!dir.path().join("destination.bin").exists());
+        assert_eq!(std::fs::read(&source).unwrap().len(), 16);
     }
 
     /// Two paths under one temp directory are on one filesystem, and a source

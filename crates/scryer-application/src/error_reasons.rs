@@ -2344,6 +2344,12 @@ pub mod location {
     /// Source changed during file placement.
     pub const SOURCE_CHANGED_DURING_FILE_PLACEMENT: &str =
         "LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT";
+    /// A hard link made at the destination could not be proven to be the source and could not be removed. It is left at the path named by [`LEFT_BEHIND_PATH_FACT`]; the source was kept.
+    pub const UNPROVEN_LINK_NOT_REMOVED: &str = "LOCATION_UNPROVEN_LINK_NOT_REMOVED";
+    /// The destination has no room for the file. The source was kept.
+    pub const DESTINATION_NO_SPACE: &str = "LOCATION_DESTINATION_NO_SPACE";
+    /// Scryer is not allowed to write the file there. The source was kept.
+    pub const DESTINATION_PERMISSION_DENIED: &str = "LOCATION_DESTINATION_PERMISSION_DENIED";
     /// The confirmed plan has no instructions for this title.
     pub const CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE: &str =
         "LOCATION_CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE";
@@ -2592,6 +2598,9 @@ pub mod location {
         MERGE_TITLE_INTO_BLOCKED,
         SOURCE_DESTINATION_SAME_PATH,
         SOURCE_CHANGED_DURING_FILE_PLACEMENT,
+        UNPROVEN_LINK_NOT_REMOVED,
+        DESTINATION_NO_SPACE,
+        DESTINATION_PERMISSION_DENIED,
         CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE,
         FILE_CHANGED_BEFORE_SOURCE_CLEANUP,
         DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE,
@@ -2674,6 +2683,36 @@ pub mod location {
         RECOVERY_DESTINATION_CONTENT_MISMATCH,
         RECOVERY_TITLE_CHANGED,
     ];
+
+    /// The path where an unproven link that could not be removed was left.
+    pub const LEFT_BEHIND_PATH_FACT: &str = "leftBehindPath";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[LEFT_BEHIND_PATH_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod plugins {

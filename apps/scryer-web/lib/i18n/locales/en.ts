@@ -2083,8 +2083,12 @@ const en: LocaleDictionary = {
     "The destination changed during comparison. The source was preserved; try again when the files are no longer changing.",
   "error.reason.LOCATION_DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE":
     "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again.",
+  "error.reason.LOCATION_DESTINATION_NO_SPACE":
+    "The destination does not have enough free space for this file. The source was preserved; free space there and try again.",
   "error.reason.LOCATION_DESTINATION_OCCUPIED":
     "The destination staging path is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
+  "error.reason.LOCATION_DESTINATION_PERMISSION_DENIED":
+    "Scryer is not allowed to write this file at the destination. The source was preserved; check the folder's permissions and try again.",
   "error.reason.LOCATION_DESTINATION_REQUIRED":
     "Choose a destination library or root.",
   "error.reason.LOCATION_DESTINATION_TITLE_NOT_FOUND":
@@ -2293,6 +2297,8 @@ const en: LocaleDictionary = {
     "The transferred file needs to be verified again before its catalog entry can be updated.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION":
     "The transferred file has not finished verification. Its catalog entry was left unchanged.",
+  "error.reason.LOCATION_UNPROVEN_LINK_NOT_REMOVED":
+    "A link made at the destination could not be proven to be the source and could not be removed, so it is still there. The source was preserved; check that path before trying again.",
   "error.reason.LOCATION_VERIFICATION_FAILED":
     "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
