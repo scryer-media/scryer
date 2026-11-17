@@ -193,7 +193,6 @@ const SCHEMA: RuleBuilderSchema = {
   labels: {
     outputs: "sample.outputs",
     outputsHelp: "sample.outputsHelp",
-    conditionsHelp: "sample.conditionsHelp",
   },
 };
 

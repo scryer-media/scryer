@@ -5143,8 +5143,6 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderTitle": "Правило",
   "settings.ruleBuilderModeLabel": "Редактор",
   "settings.ruleBuilderModeSimple": "Простой",
-  "settings.ruleBuilderModeHelp":
-    "Простой режим собирает правило из условий и результатов и сам пишет Rego. Расширенный режим показывает этот Rego, и в простой режим можно вернуться, пока вы его не изменили. После изменения кода правило останется расширенным.",
   "settings.ruleBuilderUnavailable":
     "Код этого правила был изменён вручную или создан не простым конструктором, поэтому его можно редактировать только как Rego.",
   "settings.ruleBuilderEditAsRego": "Редактировать как Rego",
@@ -5153,8 +5151,6 @@ const ru: LocaleDictionary = {
     "После изменения кода правило останется расширенным и больше не откроется в простом режиме, даже после сохранения.",
   "settings.ruleBuilderIncomplete": "Некоторые параметры не заполнены. Исправьте отмеченные в конструкторе пункты и сохраните.",
   "settings.ruleBuilderConditions": "Условия",
-  "settings.lifecycleBuilderConditionsHelp":
-    "Каждое условие проверяет один факт об объекте. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применились действия.",
   "settings.ruleBuilderJoinAll": "Выполняются все условия",
   "settings.ruleBuilderJoinAny": "Выполняется любое условие",
   "settings.ruleBuilderAddCondition": "Добавить условие",
@@ -5241,8 +5237,6 @@ const ru: LocaleDictionary = {
   "settings.scoringBuilderOutputs": "Оценка",
   "settings.scoringBuilderOutputsHelp":
     "Выберите одно: добавить баллы к оценке релиза или заблокировать релиз. Код называет запись оценки в трассировке решений.",
-  "settings.scoringBuilderConditionsHelp":
-    "Каждое условие проверяет один факт о релизе, профиле или файле. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилась оценка.",
   "settings.scoringBuilderAdjustScore": "Изменить оценку",
   "settings.scoringBuilderBlock": "Заблокировать релиз",
   "settings.scoringBuilderCode": "Код",
@@ -5257,8 +5251,6 @@ const ru: LocaleDictionary = {
   "settings.requestDeclaredActionsNone": "Ничего не объявлено",
   "settings.requestRuleWarningsTitle": "Предупреждения",
   "settings.requestRuleWarningLocation": "Строка {{line}}, столбец {{column}}:",
-  "settings.requestBuilderConditionsHelp":
-    "Каждое условие проверяет один факт о запросе, тайтле, библиотеке или времени. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилось решение.",
   "settings.requestBuilderOriginManual": "Запрошено вручную",
   "settings.requestBuilderOriginPublicList": "Из публичного списка",
   "settings.requestBuilderOriginPersonalList": "Из личного списка",

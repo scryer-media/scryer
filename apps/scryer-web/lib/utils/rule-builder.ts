@@ -233,7 +233,6 @@ export type RuleBuilderSchema = {
   labels: {
     outputs: string;
     outputsHelp: string;
-    conditionsHelp: string;
     /// Shown on an output the rule's variant cannot declare.
     outputNotInVariant?: string;
   };

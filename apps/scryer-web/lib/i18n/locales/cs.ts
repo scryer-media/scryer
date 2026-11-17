@@ -5549,8 +5549,6 @@ const cs: LocaleDictionary = {
   "settings.ruleBuilderTitle": "Pravidlo",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Jednoduchý",
-  "settings.ruleBuilderModeHelp":
-    "Jednoduchý režim sestaví pravidlo z podmínek a výsledků a napíše Rego za vás. Pokročilý režim toto Rego zobrazí a do jednoduchého režimu se můžete vrátit, dokud ho neupravíte. Jakmile kód upravíte, pravidlo musí zůstat pokročilé.",
   "settings.ruleBuilderUnavailable":
     "Kód tohoto pravidla byl upraven ručně nebo nevznikl v jednoduchém editoru, takže jej lze upravovat jen jako Rego.",
   "settings.ruleBuilderEditAsRego": "Upravit jako Rego",
@@ -5559,8 +5557,6 @@ const cs: LocaleDictionary = {
     "Jakmile kód upravíte, pravidlo musí zůstat pokročilé a už ho nebude možné otevřít v jednoduchém režimu, ani po uložení.",
   "settings.ruleBuilderIncomplete": "Některé volby nejsou dokončené. Opravte položky označené v editoru pravidla a pak uložte.",
   "settings.ruleBuilderConditions": "Podmínky",
-  "settings.lifecycleBuilderConditionsHelp":
-    "Každá podmínka ověřuje jeden údaj o položce. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se akce použily.",
   "settings.ruleBuilderJoinAll": "Platí všechny podmínky",
   "settings.ruleBuilderJoinAny": "Platí kterákoli podmínka",
   "settings.ruleBuilderAddCondition": "Přidat podmínku",
@@ -5647,8 +5643,6 @@ const cs: LocaleDictionary = {
   "settings.scoringBuilderOutputs": "Skóre",
   "settings.scoringBuilderOutputsHelp":
     "Vyberte jednu možnost: přičíst body ke skóre vydání, nebo vydání zablokovat. Kód pojmenovává položku skóre v záznamech rozhodnutí.",
-  "settings.scoringBuilderConditionsHelp":
-    "Každá podmínka ověřuje jeden údaj o vydání, profilu nebo souboru. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se skóre použilo.",
   "settings.scoringBuilderAdjustScore": "Upravit skóre",
   "settings.scoringBuilderBlock": "Zablokovat vydání",
   "settings.scoringBuilderCode": "Kód",
@@ -5663,8 +5657,6 @@ const cs: LocaleDictionary = {
   "settings.requestDeclaredActionsNone": "Nic není deklarováno",
   "settings.requestRuleWarningsTitle": "Upozornění",
   "settings.requestRuleWarningLocation": "Řádek {{line}}, sloupec {{column}}:",
-  "settings.requestBuilderConditionsHelp":
-    "Každá podmínka ověřuje jeden údaj o žádosti, titulu, knihovně nebo čase. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se rozhodnutí použilo.",
   "settings.requestBuilderOriginManual": "Zadáno ručně",
   "settings.requestBuilderOriginPublicList": "Z veřejného seznamu",
   "settings.requestBuilderOriginPersonalList": "Z osobního seznamu",

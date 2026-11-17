@@ -4780,8 +4780,6 @@ const zh_HK: LocaleDictionary = {
   "settings.ruleBuilderTitle": "規則",
   "settings.ruleBuilderModeLabel": "編輯器",
   "settings.ruleBuilderModeSimple": "簡易",
-  "settings.ruleBuilderModeHelp":
-    "簡易模式會按條件同結果建立規則，並自動寫好 Rego。進階模式會顯示呢段 Rego，喺你修改之前隨時可以切換返簡易模式。一旦修改代碼，呢條規則就必須保持為進階規則。",
   "settings.ruleBuilderUnavailable":
     "呢條規則嘅原始碼曾經手動編輯，或者唔係由簡易建構器產生，所以只可以用 Rego 編輯。",
   "settings.ruleBuilderEditAsRego": "以 Rego 編輯",
@@ -4790,8 +4788,6 @@ const zh_HK: LocaleDictionary = {
     "一旦修改代碼，呢條規則就必須保持為進階規則，之後唔可以再用簡易模式開啟，儲存之後都一樣。",
   "settings.ruleBuilderIncomplete": "部分選項未完成。請修正建構器入面標示嘅項目再儲存。",
   "settings.ruleBuilderConditions": "條件",
-  "settings.lifecycleBuilderConditionsHelp":
-    "每個條件檢查項目嘅一項事實。請揀要符合所有條件，定係符合任何一個條件，動作先會套用。",
   "settings.ruleBuilderJoinAll": "符合所有條件",
   "settings.ruleBuilderJoinAny": "符合任何一個條件",
   "settings.ruleBuilderAddCondition": "新增條件",
@@ -4868,8 +4864,6 @@ const zh_HK: LocaleDictionary = {
   "settings.scoringBuilderOutputs": "分數",
   "settings.scoringBuilderOutputsHelp":
     "揀一個：為發佈加分，或者封鎖呢個發佈。代碼會喺決策記錄入面標示呢項分數。",
-  "settings.scoringBuilderConditionsHelp":
-    "每個條件檢查發佈、設定檔或者檔案嘅一項事實。請揀要符合所有條件，定係符合任何一個條件，分數先會套用。",
   "settings.scoringBuilderAdjustScore": "調整分數",
   "settings.scoringBuilderBlock": "封鎖發佈",
   "settings.scoringBuilderCode": "代碼",
@@ -4884,8 +4878,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestDeclaredActionsNone": "冇宣告任何內容",
   "settings.requestRuleWarningsTitle": "警告",
   "settings.requestRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
-  "settings.requestBuilderConditionsHelp":
-    "每個條件檢查請求、作品、媒體庫或者時間嘅一項事實。請揀要符合所有條件，定係符合任何一個條件，決定先會套用。",
   "settings.requestBuilderOriginManual": "手動請求",
   "settings.requestBuilderOriginPublicList": "來自公開清單",
   "settings.requestBuilderOriginPersonalList": "來自個人清單",

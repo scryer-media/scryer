@@ -64,6 +64,5 @@ export const LIFECYCLE_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   labels: {
     outputs: "label.actions",
     outputsHelp: "settings.lifecycleBuilderActionsHelp",
-    conditionsHelp: "settings.lifecycleBuilderConditionsHelp",
   },
 };

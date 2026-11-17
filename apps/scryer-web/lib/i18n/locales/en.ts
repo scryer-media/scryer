@@ -10214,8 +10214,6 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderTitle": "Rule",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Simple",
-  "settings.ruleBuilderModeHelp":
-    "Simple builds the rule from conditions and outcomes and writes the Rego for you. Advanced shows that Rego, and you can switch back to Simple until you edit it. Once you edit the code, the rule must stay an Advanced rule.",
   "settings.ruleBuilderUnavailable":
     "This rule's source was edited by hand or did not come from the simple builder, so it can only be edited as Rego.",
   "settings.ruleBuilderEditAsRego": "Edit as Rego",
@@ -10224,8 +10222,6 @@ const en: LocaleDictionary = {
     "Once you edit the code, it must stay an Advanced rule and can no longer be opened in Simple, even after you save it.",
   "settings.ruleBuilderIncomplete": "Some choices are unfinished. Fix the items marked in the builder, then save.",
   "settings.ruleBuilderConditions": "Conditions",
-  "settings.lifecycleBuilderConditionsHelp":
-    "Each condition checks one fact about the subject. Choose whether every condition or any one of them must hold for the actions to apply.",
   "settings.ruleBuilderJoinAll": "All conditions match",
   "settings.ruleBuilderJoinAny": "Any condition matches",
   "settings.ruleBuilderAddCondition": "Add condition",
@@ -10310,8 +10306,6 @@ const en: LocaleDictionary = {
   "settings.scoringBuilderOutputs": "Score",
   "settings.scoringBuilderOutputsHelp":
     "Choose one: add points to the release's score, or block the release. The code names the score entry in decision traces.",
-  "settings.scoringBuilderConditionsHelp":
-    "Each condition checks one fact about the release, the profile or the file. Choose whether every condition or any one of them must hold for the score to apply.",
   "settings.scoringBuilderAdjustScore": "Adjust score",
   "settings.scoringBuilderBlock": "Block release",
   "settings.scoringBuilderCode": "Code",
@@ -10326,8 +10320,6 @@ const en: LocaleDictionary = {
   "settings.requestDeclaredActionsNone": "Nothing declared",
   "settings.requestRuleWarningsTitle": "Warnings",
   "settings.requestRuleWarningLocation": "Line {{line}}, column {{column}}:",
-  "settings.requestBuilderConditionsHelp":
-    "Each condition checks one fact about the request, the title, the library or the time. Choose whether every condition or any one of them must hold for the decision to apply.",
   "settings.requestBuilderOriginManual": "Requested by hand",
   "settings.requestBuilderOriginPublicList": "From a public list",
   "settings.requestBuilderOriginPersonalList": "From a personal list",

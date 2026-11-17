@@ -4787,8 +4787,6 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleBuilderTitle": "規則",
   "settings.ruleBuilderModeLabel": "編輯器",
   "settings.ruleBuilderModeSimple": "簡易",
-  "settings.ruleBuilderModeHelp":
-    "簡易模式會依條件與結果建立規則，並自動撰寫 Rego。進階模式會顯示這段 Rego，在您修改之前隨時可以切換回簡易模式。一旦修改程式碼，此規則就必須維持為進階規則。",
   "settings.ruleBuilderUnavailable":
     "此規則的原始碼曾經手動編輯，或不是由簡易建構器產生，因此只能以 Rego 編輯。",
   "settings.ruleBuilderEditAsRego": "以 Rego 編輯",
@@ -4797,8 +4795,6 @@ const zh_TW: LocaleDictionary = {
     "一旦修改程式碼，此規則就必須維持為進階規則，之後無法再以簡易模式開啟，儲存後也是如此。",
   "settings.ruleBuilderIncomplete": "部分選項尚未完成。請修正建構器中標示的項目後再儲存。",
   "settings.ruleBuilderConditions": "條件",
-  "settings.lifecycleBuilderConditionsHelp":
-    "每個條件檢查項目的一項事實。請選擇必須符合所有條件，或只要符合任一條件，動作才會套用。",
   "settings.ruleBuilderJoinAll": "符合所有條件",
   "settings.ruleBuilderJoinAny": "符合任一條件",
   "settings.ruleBuilderAddCondition": "新增條件",
@@ -4876,8 +4872,6 @@ const zh_TW: LocaleDictionary = {
   "settings.scoringBuilderOutputs": "分數",
   "settings.scoringBuilderOutputsHelp":
     "選擇一項：為發行版加分，或封鎖此發行版。代碼會在決策記錄中標示此分數項目。",
-  "settings.scoringBuilderConditionsHelp":
-    "每個條件檢查發行版、設定檔或檔案的一項事實。請選擇必須符合所有條件，或只要符合任一條件，分數才會套用。",
   "settings.scoringBuilderAdjustScore": "調整分數",
   "settings.scoringBuilderBlock": "封鎖發行版",
   "settings.scoringBuilderCode": "代碼",
@@ -4892,8 +4886,6 @@ const zh_TW: LocaleDictionary = {
   "settings.requestDeclaredActionsNone": "未宣告任何內容",
   "settings.requestRuleWarningsTitle": "警告",
   "settings.requestRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
-  "settings.requestBuilderConditionsHelp":
-    "每個條件檢查請求、作品、媒體庫或時間的一項事實。請選擇必須符合所有條件，或只要符合任一條件，決定才會套用。",
   "settings.requestBuilderOriginManual": "手動請求",
   "settings.requestBuilderOriginPublicList": "來自公開清單",
   "settings.requestBuilderOriginPersonalList": "來自個人清單",

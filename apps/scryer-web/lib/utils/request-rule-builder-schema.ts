@@ -95,6 +95,5 @@ export const REQUEST_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   labels: {
     outputs: "settings.requestBuilderOutputs",
     outputsHelp: "settings.requestBuilderOutputsHelp",
-    conditionsHelp: "settings.requestBuilderConditionsHelp",
   },
 };

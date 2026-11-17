@@ -55,7 +55,6 @@ export const SCORING_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   labels: {
     outputs: "settings.scoringBuilderOutputs",
     outputsHelp: "settings.scoringBuilderOutputsHelp",
-    conditionsHelp: "settings.scoringBuilderConditionsHelp",
   },
 };
 

@@ -157,14 +157,12 @@ export function RuleEditorSurface({
               </ToggleGroupPrimitive.Root>
             </>
           ) : null}
-          <InfoHelp
-            ariaLabel={t("settings.ruleBuilderModeLabel")}
-            text={
-              builderModel !== null
-                ? t("settings.ruleBuilderModeHelp")
-                : t("settings.ruleBuilderUnavailable")
-            }
-          />
+          {builderModel === null ? (
+            <InfoHelp
+              ariaLabel={t("settings.ruleBuilderModeLabel")}
+              text={t("settings.ruleBuilderUnavailable")}
+            />
+          ) : null}
         </div>
       </div>
       {builderStatus !== "ready" ? (

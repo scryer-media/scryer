@@ -212,7 +212,7 @@ function ConditionRow({
     >
       {/* Every column is a label over a control, top-aligned, so the
           controls line up whatever text sits under each one. */}
-      <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.4fr)_minmax(0,1fr)_auto] md:items-start">
+      <div className="grid gap-2 md:grid-cols-[minmax(0,0.72fr)_minmax(0,0.4fr)_minmax(0,1fr)_auto] md:items-start">
         <div className="min-w-0 space-y-1.5">
           <label
             htmlFor={factId}
@@ -703,20 +703,25 @@ function ConditionList({
   const t = useTranslate();
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-end justify-between gap-2">
+      {/* All or any decides something only once there are two conditions. */}
+      <div className="flex min-h-8 flex-wrap items-center gap-3">
         <Label className="block">{label}</Label>
-        <SingleSelectField
-          id={joinId}
-          size="sm"
-          className="w-56"
-          value={join}
-          disabled={readOnly}
-          onValueChange={(next) => onChange({ join: next as RuleBuilderJoin })}
-          options={[
-            { value: "ALL", label: t("settings.ruleBuilderJoinAll") },
-            { value: "ANY", label: t("settings.ruleBuilderJoinAny") },
-          ]}
-        />
+        {conditions.length > 1 ? (
+          <SingleSelectField
+            id={joinId}
+            size="sm"
+            className="w-56"
+            value={join}
+            disabled={readOnly}
+            onValueChange={(next) =>
+              onChange({ join: next as RuleBuilderJoin })
+            }
+            options={[
+              { value: "ALL", label: t("settings.ruleBuilderJoinAll") },
+              { value: "ANY", label: t("settings.ruleBuilderJoinAny") },
+            ]}
+          />
+        ) : null}
       </div>
       {conditions.map((condition, index) => (
         <ConditionRow
@@ -974,12 +979,7 @@ export function RuleBuilder({
         conditions={model.conditions}
         problems={sharedProblems}
         readOnly={readOnly}
-        label={
-          <HelpLabel
-            label={t("settings.ruleBuilderConditions")}
-            help={t(schema.labels.conditionsHelp)}
-          />
-        }
+        label={t("settings.ruleBuilderConditions")}
         onChange={(change) => onChange({ ...model, ...change })}
       />
 
