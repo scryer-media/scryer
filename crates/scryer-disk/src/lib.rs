@@ -2056,8 +2056,8 @@ pub mod test_support {
         }
     }
 
-    /// A configured root held as one that does not answer; see
-    /// [`silence_root`].
+    /// A configured root, or one path under it, held as one that does not
+    /// answer; see [`silence_root`] and [`silence_path`].
     pub struct SilencedRoot(Arc<volume::Ticket>);
 
     /// Holds the configured root `path` is under as one whose reads do not
@@ -2073,9 +2073,52 @@ pub mod test_support {
         Some(SilencedRoot(ticket))
     }
 
+    /// Holds `path` alone as a path whose read went out and has not
+    /// answered: until the guard drops, a bounded read of `path` itself is
+    /// refused at once, and reads of other paths under its root go out one
+    /// at a time. Nothing is read. `None` when `path` is under no configured
+    /// root.
+    pub fn silence_path(disk: &Disk, path: &Path) -> Option<SilencedRoot> {
+        let learned = read(&disk.inner.volumes).learned(path)?;
+        let ticket = volume::Ticket::new(learned, key_of(path), false);
+        ticket.timed_out();
+        Some(SilencedRoot(ticket))
+    }
+
     impl Drop for SilencedRoot {
         fn drop(&mut self) {
             self.0.answered();
+        }
+    }
+
+    /// The roots a test installed on a disk, in place of the ones it had;
+    /// see [`install_volumes`].
+    pub struct InstalledVolumes {
+        disk: Disk,
+        before: Option<Volumes>,
+    }
+
+    /// Installs `roots` on `disk` as [`Disk::set_volumes`] does, and puts
+    /// back the roots it had, with what was learned about them, when the
+    /// guard drops. For a test that configures the process's owner.
+    pub fn install_volumes(
+        disk: &Disk,
+        roots: impl IntoIterator<Item = (PathBuf, VolumeClass)>,
+    ) -> InstalledVolumes {
+        let mut volumes = write(&disk.inner.volumes);
+        let installed = volumes.replaced(roots.into_iter().collect());
+        let before = Some(std::mem::replace(&mut *volumes, installed));
+        InstalledVolumes {
+            disk: disk.clone(),
+            before,
+        }
+    }
+
+    impl Drop for InstalledVolumes {
+        fn drop(&mut self) {
+            if let Some(before) = self.before.take() {
+                *write(&self.disk.inner.volumes) = before;
+            }
         }
     }
 

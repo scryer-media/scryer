@@ -593,7 +593,7 @@ mod tests {
     }
 
     /// A single flipped bit must change both the CRC and the BLAKE3 — the whole
-    /// point of the streamed pair (FR-040, SC-006).
+    /// point of the streamed pair.
     #[test]
     fn streamed_hashes_detect_a_flipped_bit() {
         let clean: Vec<u8> = (0..1024 * 1024u32)
@@ -719,7 +719,7 @@ mod tests {
         assert_eq!(second.hashes.expect("hashes"), hashes);
     }
 
-    /// SC-006: a byte flipped after the write is caught before the source may be
+    /// A byte flipped after the write is caught before the source may be
     /// touched.
     #[tokio::test]
     async fn full_verification_detects_a_flipped_byte() {
@@ -803,7 +803,7 @@ mod tests {
     /// and last window only, so a same-size change between them is outside its
     /// guarantee (`fs_integrity` documents the same limit for scans). This is
     /// exactly why full is the default depth — the same file fails at full
-    /// depth. Quick's promise is "verified (quick)", and FR-043 makes that
+    /// depth. Quick's promise is "verified (quick)", and the record makes that
     /// visible so the reduced guarantee is auditable, never silent.
     #[tokio::test]
     async fn quick_verification_does_not_cover_the_unsampled_middle() {
@@ -843,7 +843,7 @@ mod tests {
         );
     }
 
-    /// FR-042 floor: when the full read-back cannot run, the file still gets the
+    /// The floor: when the full read-back cannot run, the file still gets the
     /// quick check, stamped as a fallback with the reason.
     #[tokio::test]
     async fn a_read_back_that_cannot_run_falls_back_to_the_quick_floor() {
@@ -973,7 +973,7 @@ mod tests {
         }
     }
 
-    /// FR-033's crash rule, from the writing side: while the copy is running,
+    /// The crash rule, from the writing side: while the copy is running,
     /// the destination's real name does not exist at all — the bytes are going
     /// to the partial. A crash at any point during the copy therefore leaves
     /// either nothing or a complete file under the destination name, never a
@@ -1097,7 +1097,7 @@ mod tests {
 
     /// The same window, with a file that is *not* this operation's finished
     /// work: it is reported as a mismatch, never removed and never assumed
-    /// good (C4).
+    /// good.
     #[tokio::test]
     async fn an_unrecorded_destination_that_does_not_match_is_a_mismatch() {
         let dir = tempfile::tempdir().unwrap();
@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), data);
     }
 
-    /// FR-032: a same-filesystem rename copies nothing, so its record carries no
+    /// A same-filesystem rename copies nothing, so its record carries no
     /// hashes — and still unblocks the executor's cleanup.
     #[test]
     fn a_same_filesystem_rename_records_no_hashes() {

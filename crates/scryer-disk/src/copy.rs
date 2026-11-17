@@ -293,21 +293,61 @@ impl HashRefusal {
 pub struct CopyAdmission {
     volumes: Arc<Mutex<HashMap<String, Weak<Semaphore>>>>,
     capacity: usize,
+    #[cfg(test)]
+    asking: Arc<Asking>,
 }
 
 /// One copy's turn on a volume, given back when dropped.
 pub struct CopyPermit(#[allow(dead_code)] OwnedSemaphorePermit);
+
+/// How many callers are inside [`CopyAdmission::acquire_keyed`] right now,
+/// for a test to wait on.
+#[cfg(test)]
+#[derive(Default)]
+struct Asking {
+    count: std::sync::atomic::AtomicUsize,
+    changed: tokio::sync::Notify,
+}
+
+/// One caller asking for a turn, counted until its ask ends or is dropped.
+#[cfg(test)]
+struct AskingOne(Arc<Asking>);
+
+#[cfg(test)]
+impl Drop for AskingOne {
+    fn drop(&mut self) {
+        let count = &self.0.count;
+        count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.changed.notify_waiters();
+    }
+}
 
 impl CopyAdmission {
     pub fn new(capacity: usize) -> Self {
         Self {
             volumes: Arc::new(Mutex::new(HashMap::new())),
             capacity: capacity.clamp(1, 8),
+            #[cfg(test)]
+            asking: Arc::default(),
         }
     }
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Waits until exactly `count` callers are asking for a turn. The caller
+    /// bounds the wait.
+    #[cfg(test)]
+    pub(crate) async fn asking_is(&self, count: usize) {
+        loop {
+            let mut changed = std::pin::pin!(self.asking.changed.notified());
+            changed.as_mut().enable();
+            if self.asking.count.load(std::sync::atomic::Ordering::SeqCst) == count {
+                return;
+            }
+            changed.await;
+        }
     }
 
     /// A turn on the volume a mark names, without a probe. A mark that
@@ -319,6 +359,13 @@ impl CopyAdmission {
 
     /// A turn in a named lane.
     pub(crate) async fn acquire_keyed(&self, key: &str) -> CopyPermit {
+        #[cfg(test)]
+        let _asking = {
+            let count = &self.asking.count;
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.asking.changed.notify_waiters();
+            AskingOne(self.asking.clone())
+        };
         let semaphore = {
             let mut volumes = self.volumes.lock().unwrap_or_else(|e| e.into_inner());
             volumes.retain(|_, value| value.strong_count() > 0);

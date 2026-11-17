@@ -4,14 +4,15 @@
 //! as text so the rule also holds where clippy has not run.
 //!
 //! It sees the `std::fs` and `tokio::fs` modules however they are imported,
-//! under whatever name, the functions imported from them and the calls made
-//! through either, the platform extension traits, `fs_err`, the `File` and `OpenOptions`
+//! under whatever name, the functions imported from them, by name or by `*`,
+//! and the calls made through either, the platform extension traits, `fs_err`, the `File` and `OpenOptions`
 //! constructors, and the path methods `try_exists`, `canonicalize`,
 //! `read_link`, `symlink_metadata` and `read_dir`. Four entries of the clippy
 //! list stay clippy-only: the path methods `exists`, `is_file`, `is_dir` and
 //! `metadata`. The service's reading type has methods of the same names, and
 //! text cannot tell the two receivers apart.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -99,34 +100,78 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The lines of `text`, with each line that starts inside a string literal
-/// emptied: what a string holds is not code, and its indentation says
-/// nothing about what encloses the code after it.
-fn code(text: &str) -> Vec<&str> {
+/// What a line of source starts inside.
+#[derive(Clone, Copy)]
+enum Within {
+    Code,
+    /// A string literal; a raw one closes with a quote and its `#`s and has
+    /// no escapes.
+    Text {
+        raw: bool,
+        hashes: usize,
+    },
+    /// Block comments, this many deep.
+    Comment(usize),
+}
+
+/// Where the string `rest` starts inside closes: the offset just past it.
+fn text_end(rest: &str, raw: bool, hashes: usize) -> Option<usize> {
+    let close = format!("\"{}", "#".repeat(hashes));
+    let escaped = |at: usize| {
+        let before = &rest[..at];
+        !raw && (before.len() - before.trim_end_matches('\\').len()) % 2 == 1
+    };
+    let mut from = 0;
+    loop {
+        match rest[from..].find(&close) {
+            Some(at) if escaped(from + at) => from += at + 1,
+            Some(at) => return Some(from + at + close.len()),
+            None => return None,
+        }
+    }
+}
+
+/// The lines of `text` as code. What a string literal or a block comment
+/// holds is not code: a line that starts inside one is emptied up to where
+/// it closes, and code after that point is kept at the indentation of the
+/// line the string or comment opened on, which is what encloses it.
+fn code(text: &str) -> Vec<Cow<'_, str>> {
     let mut lines = Vec::new();
-    // The `#`s that close the raw string a line starts in; zero for a plain
-    // string.
-    let mut within: Option<usize> = None;
+    let (mut within, mut opened_at) = (Within::Code, 0);
     for line in text.lines() {
-        lines.push(if within.is_some() { "" } else { line });
-        let mut rest = line;
+        let inside = !matches!(within, Within::Code);
+        if !inside {
+            opened_at = indent(line);
+        }
+        let (mut rest, mut tail) = (line, None);
         loop {
-            if let Some(hashes) = within {
-                let close = format!("\"{}", "#".repeat(hashes));
-                let escaped = |at: usize| {
-                    let before = &rest[..at];
-                    hashes == 0 && (before.len() - before.trim_end_matches('\\').len()) % 2 == 1
-                };
-                let mut from = 0;
-                let closed = loop {
-                    match rest[from..].find(&close) {
-                        Some(at) if escaped(from + at) => from += at + 1,
-                        Some(at) => break Some(from + at + close.len()),
-                        None => break None,
-                    }
-                };
-                let Some(closed) = closed else { break };
-                (within, rest) = (None, &rest[closed..]);
+            match within {
+                Within::Code => {}
+                Within::Text { raw, hashes } => {
+                    let Some(end) = text_end(rest, raw, hashes) else {
+                        break;
+                    };
+                    (within, rest) = (Within::Code, &rest[end..]);
+                }
+                Within::Comment(depth) => {
+                    let (open, close) = (rest.find("/*"), rest.find("*/"));
+                    let (deeper, at) = match (open, close) {
+                        (Some(open), Some(close)) if open < close => (true, open),
+                        (_, Some(close)) => (false, close),
+                        (Some(open), None) => (true, open),
+                        (None, None) => break,
+                    };
+                    within = match (deeper, depth) {
+                        (true, depth) => Within::Comment(depth + 1),
+                        (false, 1) => Within::Code,
+                        (false, depth) => Within::Comment(depth - 1),
+                    };
+                    rest = &rest[at + 2..];
+                    continue;
+                }
+            }
+            if inside && tail.is_none() {
+                tail = Some(rest);
             }
             let Some(at) = rest.find(['"', '\'', '/']) else {
                 break;
@@ -135,11 +180,13 @@ fn code(text: &str) -> Vec<&str> {
             if opened.starts_with("//") {
                 break;
             }
-            if opened.starts_with('"') {
+            if opened.starts_with("/*") {
+                (within, rest) = (Within::Comment(1), &opened[2..]);
+            } else if opened.starts_with('"') {
                 let hashes = before.len() - before.trim_end_matches('#').len();
                 let raw = before[..before.len() - hashes].ends_with('r');
-                within = Some(if raw { hashes } else { 0 });
-                rest = &opened[1..];
+                let hashes = if raw { hashes } else { 0 };
+                (within, rest) = (Within::Text { raw, hashes }, &opened[1..]);
             } else if opened.starts_with("'\\") {
                 // An escaped character: past the escape, then its quote.
                 let end = opened[3..].find('\'').map_or(opened.len(), |end| end + 4);
@@ -152,8 +199,20 @@ fn code(text: &str) -> Vec<&str> {
                 rest = &opened[1..];
             }
         }
+        lines.push(match tail.map(str::trim) {
+            _ if !inside => Cow::Borrowed(line),
+            Some(tail) if !tail.is_empty() => {
+                Cow::Owned(format!("{}{tail}", " ".repeat(opened_at)))
+            }
+            _ => Cow::Borrowed(""),
+        });
     }
     lines
+}
+
+/// The lines of [`code`], borrowed for the functions that read them.
+fn borrowed<'a>(lines: &'a [Cow<'_, str>]) -> Vec<&'a str> {
+    lines.iter().map(|line| line.as_ref()).collect()
 }
 
 fn indent(line: &str) -> usize {
@@ -165,27 +224,37 @@ fn annotation(line: &str) -> bool {
     line.starts_with("//") || line.starts_with("#[") || line.starts_with("#![")
 }
 
-/// An attribute that compiles its item for tests only. A comment naming one
-/// is not one, and `cfg(any(test, ..))` also builds for production.
+/// An attribute that compiles its item for tests only: `cfg(test)` or
+/// `cfg(all(test, ..))`. A comment naming one is not one, `cfg(any(test, ..))`
+/// also builds for production, and a longer name such as `cfg(testing)` is
+/// another gate.
 fn test_only(line: &str) -> bool {
     let line = line.trim_start();
     let gated = || {
-        ["cfg(test", "cfg(all(test"]
-            .iter()
-            .any(|gate| line.contains(gate))
+        ["cfg(test", "cfg(all(test"].iter().any(|gate| {
+            line.match_indices(gate)
+                .any(|(at, _)| line[at + gate.len()..].starts_with([')', ',']))
+        })
     };
     let attribute = line.starts_with("#[") || line.starts_with("#![");
     line == "#[test]" || line.starts_with("#[tokio::test") || attribute && gated()
 }
 
+fn attribute_body(line: &str) -> &str {
+    line.trim_start()
+        .trim_start_matches("#!")
+        .trim_start_matches('#')
+}
+
 /// An attribute that allows the direct calls for tests only. Any other
 /// `cfg_attr(test, ..)` says nothing about what the item under it is for.
 fn allows_for_tests(line: &str) -> bool {
-    let line = line
-        .trim_start()
-        .trim_start_matches("#!")
-        .trim_start_matches('#');
-    line.starts_with("[cfg_attr(test, allow(clippy::disallowed_")
+    attribute_body(line).starts_with("[cfg_attr(test, allow(clippy::disallowed_")
+}
+
+/// An attribute that allows the direct calls in every build.
+fn allows_always(line: &str) -> bool {
+    attribute_body(line).starts_with("[allow(clippy::disallowed_")
 }
 
 /// The line carries on a construct opened further up.
@@ -194,44 +263,57 @@ fn continues(line: &str) -> bool {
     line.starts_with([')', '}', ']', '{', '.']) || line.starts_with("where")
 }
 
-/// Whether line `at`, or anything enclosing it, has a marker or a test gate
-/// in the comments and attributes directly above it.
-fn covered(lines: &[&str], at: usize) -> bool {
-    under(lines, at, |line| {
-        line.contains("disk-guard:") || test_only(line)
-    })
+/// Whether line `at`, or anything enclosing it, is gated for tests.
+fn gated(lines: &[&str], at: usize) -> bool {
+    under(lines, at, |line| test_only(lines[line]))
+}
+
+/// The lines holding a marker that stands on production code.
+fn counted(lines: &[&str]) -> HashSet<usize> {
+    let marked = |at: &usize| lines[*at].contains("disk-guard:") && !test_marker(lines, *at);
+    (0..lines.len()).filter(marked).collect()
+}
+
+/// Whether line `at` is test code, or it or anything enclosing it has one of
+/// the `counted` markers in the comments and attributes directly above it. A
+/// marker that stands on test-only code covers no production line.
+fn covered(lines: &[&str], at: usize, counted: &HashSet<usize>) -> bool {
+    gated(lines, at) || under(lines, at, |line| counted.contains(&line))
 }
 
 /// Whether the marker on line `at` stands on test-only code: the attribute
-/// it explains allows the direct calls for tests only, or the item it
-/// annotates, or anything enclosing that item, is gated for tests.
+/// it explains allows the direct calls for tests only and no attribute of
+/// the same item allows them in every build, or the item it annotates, or
+/// anything enclosing that item, is gated for tests.
 fn test_marker(lines: &[&str], at: usize) -> bool {
-    let explained = (at..lines.len()).find(|at| !lines[*at].trim_start().starts_with("//"));
     let item = (at..lines.len()).find(|at| !annotation(lines[*at]));
-    explained.is_some_and(|at| allows_for_tests(lines[at]))
-        || under(lines, item.unwrap_or(at), test_only)
+    let above = &lines[at..item.unwrap_or(lines.len())];
+    let explained = above
+        .iter()
+        .find(|line| !line.trim_start().starts_with("//"));
+    let for_tests = explained.is_some_and(|line| allows_for_tests(line))
+        && !above.iter().any(|line| allows_always(line));
+    for_tests || gated(lines, item.unwrap_or(at))
 }
 
 /// Whether line `at`, or anything enclosing it, has a line `wanted` accepts
 /// in the comments and attributes directly above it.
-fn under(lines: &[&str], at: usize, wanted: impl Fn(&str) -> bool) -> bool {
+fn under(lines: &[&str], at: usize, wanted: impl Fn(usize) -> bool) -> bool {
     let (mut at, mut depth) = (at, indent(lines[at]));
     loop {
-        let above = lines[..at].iter().rev();
-        if above
-            .take_while(|line| !line.trim().is_empty() && annotation(line))
-            .any(|line| wanted(line))
-        {
+        let annotates =
+            |above: &usize| !lines[*above].trim().is_empty() && annotation(lines[*above]);
+        if (0..at).rev().take_while(annotates).any(&wanted) {
             return true;
         }
         if depth == 0 {
-            return inner(lines).any(&wanted);
+            return inner(lines, 0).any(&wanted);
         }
         let encloses = |line: &&str, depth: usize| !line.trim().is_empty() && indent(line) < depth;
         let Some(outer) = lines[..at].iter().rposition(|line| encloses(line, depth)) else {
-            return inner(lines).any(&wanted);
+            return inner(lines, 0).any(&wanted);
         };
-        if inner(&lines[outer + 1..]).any(&wanted) {
+        if inner(lines, outer + 1).any(&wanted) {
             return true;
         }
         (at, depth) = (outer, indent(lines[outer]));
@@ -245,15 +327,15 @@ fn under(lines: &[&str], at: usize, wanted: impl Fn(&str) -> bool) -> bool {
     }
 }
 
-/// The inner attributes that open `body`: `#![..]` lines, and the comments
-/// among them, before its first item.
-fn inner<'a>(body: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
-    let heads = |line: &&str| {
-        let line = line.trim_start();
+/// The inner attributes that open the body starting at line `from`: `#![..]`
+/// lines, and the comments among them, before its first item.
+fn inner<'a>(lines: &'a [&'a str], from: usize) -> impl Iterator<Item = usize> + 'a {
+    let heads = |at: &usize| {
+        let line = lines[*at].trim_start();
         line.is_empty() || line.starts_with("//") || line.starts_with("#![")
     };
-    let attribute = |line: &&str| line.trim_start().starts_with("#![");
-    body.iter().copied().take_while(heads).filter(attribute)
+    let attribute = |at: &usize| lines[*at].trim_start().starts_with("#![");
+    (from..lines.len()).take_while(heads).filter(attribute)
 }
 
 /// A line that names a filesystem call, or brings the means to make one into
@@ -340,6 +422,33 @@ fn named(before: char) -> bool {
     before == ':' || before == '_' || before.is_alphanumeric()
 }
 
+/// The functions of `std::fs` and `tokio::fs`, which a `*` import brings in.
+const FS_FUNCTIONS: [&str; 23] = [
+    "canonicalize",
+    "copy",
+    "create_dir",
+    "create_dir_all",
+    "exists",
+    "hard_link",
+    "metadata",
+    "read",
+    "read_dir",
+    "read_link",
+    "read_to_string",
+    "remove_dir",
+    "remove_dir_all",
+    "remove_file",
+    "rename",
+    "set_permissions",
+    "soft_link",
+    "symlink",
+    "symlink_dir",
+    "symlink_file",
+    "symlink_metadata",
+    "try_exists",
+    "write",
+];
+
 /// What a file's `use` statements let it call without naming `std::fs` or
 /// `tokio::fs` in full.
 #[derive(Debug, Default, PartialEq)]
@@ -388,11 +497,19 @@ impl Imported {
         };
         let path = path.trim_start_matches("::");
         let path = path.strip_suffix("::self").unwrap_or(path);
+        // Everything of the crate, its `fs` module included.
+        if path == "std::*" || path == "tokio::*" {
+            return self.modules.push("fs".to_owned());
+        }
         for module in ["std::fs", "tokio::fs"] {
             let name = |own: &str| alias.unwrap_or(own).to_owned();
             match path.strip_prefix(module) {
                 Some("") => self.modules.push(name("fs")),
                 Some(rest) => match rest.strip_prefix("::") {
+                    Some("*") => {
+                        let functions = FS_FUNCTIONS.iter().map(|function| (*function).to_owned());
+                        self.functions.extend(functions);
+                    }
                     Some(function) if function.starts_with(lowercase) => {
                         self.functions.push(name(function));
                     }
@@ -404,9 +521,23 @@ impl Imported {
     }
 }
 
-/// Where a `use` statement starts on `line`: after any visibility.
+/// Where a `use` statement starts on `line`: after any attributes written
+/// on the same line and any visibility.
 fn use_tree(line: &str) -> Option<&str> {
-    let line = line.trim_start();
+    let mut line = line.trim_start();
+    while line.starts_with("#[") {
+        let mut depth = 0usize;
+        let closes = |(at, next): (usize, char)| {
+            match next {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0 && next == ']').then_some(at)
+        };
+        let end = line.char_indices().find_map(closes)?;
+        line = line[end + 1..].trim_start();
+    }
     let line = match line.strip_prefix("pub") {
         Some(rest) if rest.starts_with('(') => rest.split_once(')')?.1,
         Some(rest) => rest,
@@ -520,7 +651,7 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
     let (texts, files): (Vec<_>, Vec<_>) = files.into_iter().filter_map(read).unzip();
     let mut test_files = HashSet::new();
     for (path, text) in files.iter().zip(&texts) {
-        test_modules(path, &code(text), &mut test_files);
+        test_modules(path, &borrowed(&code(text)), &mut test_files);
     }
 
     let (mut markers, mut unmarked) = (0, BTreeMap::<String, Vec<usize>>::new());
@@ -529,13 +660,14 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
             continue;
         }
         let lines = code(text);
-        let marked = |at: &usize| lines[*at].contains("disk-guard:") && !test_marker(&lines, *at);
-        markers += (0..lines.len()).filter(marked).count();
+        let lines = borrowed(&lines);
+        let counted = counted(&lines);
+        markers += counted.len();
         let shown = path.strip_prefix(crates).unwrap_or(path);
         let shown = shown.to_string_lossy().replace('\\', "/");
         let raw = raw(&lines);
         for at in 0..lines.len() {
-            if raw[at] && !covered(&lines, at) {
+            if raw[at] && !covered(&lines, at, &counted) {
                 unmarked.entry(shown.clone()).or_default().push(at + 1);
             }
         }
@@ -596,7 +728,7 @@ fn the_guard_tells_marked_gated_and_bare_lines_apart() {
         "}",
     ];
     let unmarked = (0..source.len())
-        .filter(|at| direct(source[*at]) && !covered(&source, *at))
+        .filter(|at| direct(source[*at]) && !covered(&source, *at, &counted(&source)))
         .collect::<Vec<_>>();
     assert_eq!(unmarked, [10, 11]);
     assert!(direct("use std::fs as files;") && direct("    File::open(path)"));
@@ -694,10 +826,7 @@ fn only_a_test_gate_on_an_attribute_exempts_and_test_markers_are_not_counted() {
         "    fn fixture() {}",
         "}",
     ];
-    let counted = (0..source.len())
-        .filter(|at| source[*at].contains("disk-guard:") && !test_marker(&source, *at))
-        .collect::<Vec<_>>();
-    assert_eq!(counted, [3]);
+    assert_eq!(counted(&source), HashSet::from([3]));
 
     // What a string holds neither encloses the code after it nor is code.
     let text = [
@@ -715,9 +844,11 @@ fn only_a_test_gate_on_an_attribute_exempts_and_test_markers_are_not_counted() {
     ]
     .join("\n");
     let lines = code(&text);
-    assert_eq!(lines[3..5], ["", ""]);
-    assert_eq!(lines[6], "");
-    assert!(raw(&lines)[8] && covered(&lines, 8));
+    let lines = borrowed(&lines);
+    // Only what follows the closing quote is left, where its string opened.
+    assert_eq!(lines[3..5], ["", "    ;"]);
+    assert_eq!(lines[6], "    ;");
+    assert!(raw(&lines)[8] && covered(&lines, 8, &counted(&lines)));
 
     // A test-only derive says nothing about the item, so its marker counts.
     let derived = [
@@ -729,12 +860,106 @@ fn only_a_test_gate_on_an_attribute_exempts_and_test_markers_are_not_counted() {
     assert!(!test_marker(&derived, 0));
     // A file or a module gated from the inside is test code throughout.
     let file = ["#![cfg(test)]", "", "fn fixture() {", "    read();", "}"];
-    assert!(under(&file, 3, test_only) && under(&file, 2, test_only));
+    assert!(gated(&file, 3) && gated(&file, 2));
     let module = [
         "mod fixtures {",
         "    #![cfg(all(test, unix))]",
         "    fn fixture() {}",
         "}",
     ];
-    assert!(under(&module, 2, test_only) && !under(&module[..1], 0, test_only));
+    assert!(gated(&module, 2) && !gated(&module[..1], 0));
+}
+
+#[test]
+fn a_marker_for_tests_covers_no_production_line_and_an_unconditional_allow_is_counted() {
+    assert!(test_only("#[cfg(test)]") && test_only("#[cfg(test,)]"));
+    assert!(test_only("#[cfg(all(test, unix))]") && test_only("#![cfg(all(test))]"));
+    assert!(!test_only("#[cfg(testing)]") && !test_only("#[cfg(all(tested, unix))]"));
+
+    // The item is allowed the direct calls in every build, so the marker
+    // stands on production code whatever else it says about tests.
+    let both = [
+        "// disk-guard: an invented reason.",
+        "#[cfg_attr(test, allow(clippy::disallowed_types))]",
+        "#[allow(clippy::disallowed_methods)]",
+        "fn marked() {",
+        "    std::fs::read(path);",
+        "}",
+    ];
+    assert!(!test_marker(&both, 0));
+    assert_eq!(counted(&both), HashSet::from([0]));
+    assert!(covered(&both, 4, &counted(&both)));
+
+    // A marker that explains a tests-only allow covers the tests alone.
+    let for_tests = [
+        "// disk-guard: test code may call the filesystem directly.",
+        "#[cfg_attr(test, allow(clippy::disallowed_methods))]",
+        "mod both {",
+        "    fn production(path: &Path) {",
+        "        std::fs::read(path);",
+        "    }",
+        "    #[cfg(test)]",
+        "    fn fixture(path: &Path) {",
+        "        std::fs::read(path);",
+        "    }",
+        "}",
+    ];
+    let marks = counted(&for_tests);
+    assert!(test_marker(&for_tests, 0) && marks.is_empty());
+    assert!(!covered(&for_tests, 4, &marks) && covered(&for_tests, 8, &marks));
+}
+
+#[test]
+fn the_guard_sees_glob_imports_and_imports_under_an_attribute() {
+    let source = [
+        "use std::fs::*;",
+        "fn bare(path: &Path) {",
+        "    let _ = read(path);",
+        "    let _ = self.read(path);",
+        "    remove_file(path).ok();",
+        "}",
+    ];
+    assert_eq!(raw(&source), [true, false, true, false, true, false]);
+    let grouped = ["use tokio::{fs::*, io};", "    rename(from, to).await"];
+    assert_eq!(raw(&grouped), [true; 2]);
+    let whole = ["use std::*;", "    fs::read(path)", "    io::stdin()"];
+    assert_eq!(raw(&whole), [true, true, false]);
+    assert_eq!(raw(&["use std::io::*;", "    read(path)"]), [false; 2]);
+
+    let attributed = [
+        "#[cfg(unix)] use std::fs::remove_file;",
+        "#[cfg(any(unix, target_os = \"invented\"))] pub(crate) use tokio::fs::read as slurp;",
+        "    remove_file(path).ok();",
+        "    slurp(path).await",
+    ];
+    assert_eq!(raw(&attributed), [true; 4]);
+}
+
+#[test]
+fn strings_and_block_comments_are_not_code_and_what_follows_them_is() {
+    let lines = |text: &str| {
+        code(text)
+            .into_iter()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>()
+    };
+    // A raw string with no `#` has no escapes: the backslash ends nothing.
+    let raw_text = ["let sep = r\"\\\";", "std::fs::read(path);"].join("\n");
+    assert_eq!(lines(&raw_text)[1], "std::fs::read(path);");
+    // A quote inside a block comment opens no string.
+    let commented = ["let a = 1; /* \" */", "std::fs::read(path);"].join("\n");
+    assert_eq!(lines(&commented)[1], "std::fs::read(path);");
+    // A block comment's own lines are not code, nested or not.
+    let block = [
+        "    /* outer /* inner",
+        "std::fs::read(path)",
+        "*/ still */ live();",
+    ]
+    .join("\n");
+    assert_eq!(lines(&block)[1..], ["", "    live();"]);
+    // Code after the quote that closes a string is still code.
+    let tailed = ["    let text = \"first", "second\"; std::fs::read(path);"].join("\n");
+    let tailed = lines(&tailed);
+    assert_eq!(tailed[1], "    ; std::fs::read(path);");
+    assert!(direct(&tailed[1]));
 }

@@ -4304,7 +4304,12 @@ mod tests {
         std::fs::write(&recycled, b"recycled bytes").unwrap();
         std::fs::write(&original, b"the occupant, which is longer").unwrap();
         let disk = Disk::process();
-        disk.set_volumes([(root.clone(), crate::disk::VolumeClass::LibraryRoot)]);
+        // Declared first, so it drops last: the process's own roots come back
+        // after the root is released, however the test ends.
+        let _roots = crate::disk::test_support::install_volumes(
+            &disk,
+            [(root.clone(), crate::disk::VolumeClass::LibraryRoot)],
+        );
         let silent = crate::disk::test_support::silence_root(&disk, &original)
             .expect("the destination is under a configured root");
         assert_eq!(

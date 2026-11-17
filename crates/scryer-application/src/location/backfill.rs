@@ -17,7 +17,7 @@
 //! - **Skips** unavailable mounts, files an active location operation owns, and
 //!   files that already carry a current full hash.
 //!
-//! # The cursor (SC-007: interrupt and re-run without rework)
+//! # The cursor: interrupt and re-run without rework
 //!
 //! The queue is `full_blake3 IS NULL` ordered by `id` — literally migration
 //! 0205's `idx_media_files_full_hash_missing` partial index. Every file the job

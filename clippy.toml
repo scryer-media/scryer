@@ -22,13 +22,16 @@
 # The only standing exemptions are: the disk service crate itself; test,
 # example, bench and build-script code; the plugin WASI sandbox, which manages
 # its own preopened directories; and exactly three crates:
-#   - scryer-launcher, the container entrypoint. It prepares the config
-#     directory and replaces itself with the server before any service exists,
-#     and it depends on libc alone.
+#   - scryer-launcher, the container entrypoint. Before any service exists it
+#     creates the config directory, re-owns it and, when the database
+#     directory is another one, that directory too, and then replaces itself
+#     with the server. It depends on libc alone.
 #   - scryer-mediainfo, the media parser. It opens the one file it is asked to
-#     describe and reads it through its own handle.
+#     describe and reads it through its own handle; to tell that the file is
+#     still the one it opened, it also stats that path by name.
 #   - scryer-mock-apis, fixture tooling that is not part of a Scryer install.
-# No other crate is exempt, whatever it depends on. Each exemption
+# A crate is exempt because it is named here, not because of what it depends
+# on, and no other crate is exempt. Each exemption
 # carries `allow(clippy::disallowed_methods)` with a `// disk-guard:` comment
 # saying which exemption it is. Until a crate is converted it carries one
 # crate-level allow marked `// disk-guard: this crate still calls the

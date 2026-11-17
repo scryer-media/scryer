@@ -816,11 +816,19 @@ async fn a_direct_copy_whose_volume_is_slow_to_answer_waits_and_is_not_refused()
                 .await
         }
     });
-    // The volume read is out off the runtime, held in the backend.
-    tokio::task::spawn_blocking(move || reading.recv_timeout(BOUND))
-        .await
-        .expect("joined")
-        .expect("the volume is read");
+    // The volume read is out off the runtime, held in the backend. A copy
+    // that ends before that read was refused, and fails the test at once.
+    let mut copy = copy;
+    let read = tokio::task::spawn_blocking(move || reading.recv_timeout(BOUND));
+    tokio::select! {
+        read = read => read.expect("joined").expect("the volume is read"),
+        ended = &mut copy => {
+            // Lets the waiting thread go.
+            backend.entered.lock().unwrap().take();
+            let ended = ended.expect("joined").map(|placed| placed.done);
+            panic!("the copy ended before its volume was read: {ended:?}");
+        }
+    }
     assert_eq!(backend.calls_of("open"), 0, "nothing is written yet");
     drop(open);
     let placed = tokio::time::timeout(BOUND, copy)
@@ -877,10 +885,12 @@ fn a_direct_copy_waiting_for_its_turn_holds_no_blocking_thread() {
         // This thread is not one of the runtime's workers, so it may block
         // until the copy has started reading.
         reading.recv_timeout(BOUND).expect("the volume is read");
-        // The read holds the one blocking thread, so this work is behind it
-        // and runs only if the copy gives the thread back before its turn.
-        let other = tokio::task::spawn_blocking(|| ());
         drop(open);
+        // The copy is now asking for the turn this test holds. Work given to
+        // the one blocking thread at this point runs only if the copy is not
+        // parked on that thread while it asks.
+        bounded(disk.copy_admission().asking_is(1)).await;
+        let other = tokio::task::spawn_blocking(|| ());
         bounded(other)
             .await
             .expect("the one blocking thread is free");
@@ -904,28 +914,27 @@ async fn a_staged_copy_whose_volume_does_not_answer_is_refused_before_its_turn()
     let (disk, backend, _) = scripted();
     disk.install_copy_workers(1);
     backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
-    disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
-    let (open, gate) = mpsc::channel::<()>();
-    // The staged name's own reading passes; the volume read after it is held.
-    open.send(()).unwrap();
-    *backend.gate.lock().unwrap() = Some(gate);
-    *backend.gate_under.lock().unwrap() = Some(p(folder));
+    // Only a read of the destination itself is out and unanswered, so the
+    // staged name's own reading answers and the volume read, which asks by
+    // the destination, is refused at once.
+    let silent = crate::test_support::silence_path(&disk, &p(DEST)).expect("a configured root");
     let staged = recorded_staged(Method::Copy, Fallback::None);
-    let silent = bounded(disk.place_watched(SOURCE, DEST, staged, Watch::nobody()))
+    let refusal = bounded(disk.place_watched(SOURCE, DEST, staged, Watch::nobody()))
         .await
         .expect_err("refused");
-    assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
+    drop(silent);
+    assert_eq!(refusal.refused, Refused::Unreachable(Side::Destination));
+    // The staged name was read and answered; the volume was never asked for.
     assert_eq!(
-        silent.to_string(),
-        format!("failed to inspect the volume of {DEST}: the disk did not answer in time")
+        backend.paths_of("lstat"),
+        [resumable_staging_path(&p(DEST))]
     );
+    assert_eq!(backend.calls_of("stat"), 0);
     // Nothing was opened, and no thread ran a placement that would have read
     // the source.
     assert_eq!(backend.calls_of("open"), 0);
-    assert!(!backend.paths_of("stat").contains(&p(SOURCE)));
     let free = |lane| turn_is_free(&disk.copy_admission(), lane);
     assert!(free("unknown-volume") && free("unix-dev:7"));
-    drop(open);
 }
 
 /// The early reading of the staged name is only a fast path: a file that

@@ -21,7 +21,7 @@ use super::copy::{
     Cause, Copied, CopyPermit, Evidence, Landing, Opening, Phase, Step, Watch, WriteFail, Writing,
     resumable_staging_path, staged_name_is_free, write_copy,
 };
-use super::mark::Mark;
+use super::mark::{Mark, UNKNOWN_LANE};
 use super::sample::{ContentSample, sample_reader};
 use super::{
     Disk, DiskError, DiskVerb, EntryKind, Link, LinkOutcome, Offloaded, Open, Parents, PathReading,
@@ -506,7 +506,8 @@ impl Disk {
     ///
     /// A link that falls back to a recorded copy is already on its thread
     /// and waits there. Every way the turn is given back before the copy is
-    /// proven.
+    /// proven. `watch`'s cancel is not observed while the volume is read or
+    /// the turn is waited for.
     pub async fn place_watched(
         &self,
         source: impl Into<PathBuf>,
@@ -553,12 +554,13 @@ impl Disk {
             } => {
                 watch.progress.report(Phase::Waiting, 0);
                 let (reader, landing) = (self.clone(), dest.clone());
-                match offload(None, move || reader.copy_lane(&landing)).await {
-                    Offloaded::Done(lane) => Some(self.copy_admission().acquire_keyed(&lane).await),
-                    // The copy reads its volume itself and waits on its
-                    // own thread.
-                    Offloaded::TimedOut | Offloaded::Failed(_) => None,
-                }
+                let lane = match offload(None, move || reader.copy_lane(&landing)).await {
+                    Offloaded::Done(lane) => lane,
+                    // A read that did not come back names no volume: the
+                    // copy shares the unknown lane, and still waits here.
+                    Offloaded::TimedOut | Offloaded::Failed(_) => UNKNOWN_LANE.to_owned(),
+                };
+                Some(self.copy_admission().acquire_keyed(&lane).await)
             }
             _ => None,
         };
