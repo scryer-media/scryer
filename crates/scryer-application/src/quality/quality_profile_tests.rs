@@ -948,7 +948,7 @@ fn size_scoring_scales_with_runtime() {
     score_size_with_pack(&mut d_long, &release, Some(size_12gb), None, Some(180), &w);
 
     // The long movie should score higher because 12 GB is more "expected" for 3 hours
-    assert_eq!(d_long.release_score, d_standard.release_score);
+    assert!(d_long.release_score > d_standard.release_score);
     assert!(d_long.size_fit_penalty < d_standard.size_fit_penalty);
 }
 
@@ -1088,10 +1088,17 @@ fn size_delta(release: &str, category: Option<&str>, runtime: i32, size_gib: f64
     (entry.code.clone(), entry.delta)
 }
 
-/// Normal archive overhead may change a size classification, but never the
-/// intrinsic score or the incumbent upgrade bar.
+/// The most a landed file `factor` times its announced size can move the
+/// bundled oversize penalty on Balanced: the penalty is logarithmic in size.
+fn oversize_drift_bound(factor: f64) -> i32 {
+    (1200.0 * (1.0 / factor).ln()).ceil() as i32 + 1
+}
+
+/// Normal archive overhead may change a size classification. It moves the
+/// score only through the oversize penalty: a smaller landed file never scores
+/// lower, and never by more than the penalty's logarithmic slope allows.
 #[test]
-fn realistic_landed_drift_never_changes_intrinsic_points() {
+fn realistic_landed_drift_moves_points_only_within_the_oversize_slope() {
     // A deterministic sweep rather than a random draw: a property test that
     // fails one run in fifty is worse than no test.
     let factors = [0.88_f64, 0.90, 0.93, 0.95, 0.97, 0.99, 1.0];
@@ -1110,10 +1117,10 @@ fn realistic_landed_drift_never_changes_intrinsic_points() {
         for factor in factors {
             let (landed_code, landed_delta) =
                 size_delta(release, *category, *runtime, announced_gib * factor);
-            let moved = (landed_delta - announced_delta).abs();
+            let moved = landed_delta - announced_delta;
             worst = worst.max(moved);
             assert!(
-                moved == 0,
+                (0..=oversize_drift_bound(factor)).contains(&moved),
                 "`{release}` at ×{factor} moved the size term by {moved} \
                  ({announced_code} {announced_delta} → {landed_code} {landed_delta})"
             );
@@ -1124,15 +1131,17 @@ fn realistic_landed_drift_never_changes_intrinsic_points() {
             );
         }
     }
-    assert_eq!(worst, 0, "size drift must never change intrinsic points");
+    assert!(worst <= oversize_drift_bound(0.88));
 }
 
-/// Sweep the full size range: even an outlier has no numeric size contribution.
+/// Sweep the full size range: drift moves the size term only through the
+/// oversize penalty, never down for a smaller file and never past its slope.
 #[test]
-fn no_size_anywhere_on_the_curve_changes_intrinsic_points() {
+fn size_drift_anywhere_on_the_curve_moves_points_only_within_the_oversize_slope() {
     let release = "Boundary.2024.1080p.WEB-DL.H.264-GRP";
     let mut bands_seen = std::collections::HashSet::new();
     let mut worst = 0;
+    let mut penalized = 0;
 
     // 0.9 GiB to 60 GiB against a ~7 GiB expectation covers tiny through
     // excessive. The sweep starts above the minimum-size veto (0.10 × expected
@@ -1142,13 +1151,18 @@ fn no_size_anywhere_on_the_curve_changes_intrinsic_points() {
         let (announced_code, announced_delta) = size_delta(release, None, 120, gib);
         let (landed_code, landed_delta) = size_delta(release, None, 120, gib * 0.88);
         bands_seen.insert(announced_code.clone());
-        let moved = (landed_delta - announced_delta).abs();
+        let moved = landed_delta - announced_delta;
         worst = worst.max(moved);
         assert!(
-            moved == 0,
+            (0..=oversize_drift_bound(0.88)).contains(&moved),
             "a 12% drift at {gib:.2} GiB moved the size term by {moved} \
              ({announced_code} {announced_delta} → {landed_code} {landed_delta})"
         );
+        if landed_delta < 0 || announced_delta < 0 {
+            penalized += 1;
+        } else {
+            assert_eq!(moved, 0, "{gib:.2} GiB");
+        }
         let bands = size_band_index(&landed_code).abs_diff(size_band_index(&announced_code));
         assert!(
             bands <= 1,
@@ -1161,7 +1175,10 @@ fn no_size_anywhere_on_the_curve_changes_intrinsic_points() {
         bands_seen.len() >= 7,
         "the sweep must cross most of the curve to be worth anything: {bands_seen:?}"
     );
-    assert_eq!(worst, 0, "even outlier sizes contribute no points");
+    assert!(
+        worst > 0 && penalized > 0,
+        "the sweep must reach the oversize penalty"
+    );
 }
 
 /// A small movie above the conservative lower bound remains eligible. Its
@@ -1687,8 +1704,11 @@ fn size_excessive_is_explanatory_for_oversized_anime() {
     );
 }
 
+/// The remux preference still scores, and the bundled size rule penalizes a
+/// 7 GiB 24-minute episode as oversized on Balanced; anime remuxes get no
+/// remux size allowance.
 #[test]
-fn large_balanced_anime_remux_keeps_remux_preference_without_size_points() {
+fn large_balanced_anime_remux_keeps_remux_preference_and_pays_the_oversize_penalty() {
     let profile = QualityProfile::parse(
         r#"{"id":"anime","name":"Anime","criteria":{"quality_tiers":["1080P","720P"],"prefer_remux":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
     ).unwrap();
@@ -1714,7 +1734,7 @@ fn large_balanced_anime_remux_keeps_remux_preference_without_size_points() {
     assert!(
         d.scoring_log
             .iter()
-            .any(|e| e.code == "size_excessive_for_quality" && e.delta == 0)
+            .any(|e| e.code == "size_excessive_for_quality" && e.delta < 0)
     );
 }
 

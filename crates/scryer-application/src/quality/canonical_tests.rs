@@ -805,6 +805,42 @@ fn a_row_without_analysis_still_yields_a_bar() {
     assert!(re_derived.truth_verdict.is_consistent());
 }
 
+/// An oversized file on disk is re-scored through the same size rule as a
+/// candidate, so its bar drops by the rule's penalty and a normal-sized
+/// release of the same quality can replace it.
+#[test]
+fn an_oversized_incumbent_rescores_below_a_normal_sized_one() {
+    let profile = movie_profile();
+    let tags: Vec<String> = Vec::new();
+    let context = ScoringContext {
+        size_basis: CoverageSizeBasis::single(Some(120)),
+        ..ctx(&profile, &tags)
+    };
+    let bar = |gib: f64| {
+        let evidence = announced(gib).with_analysis(analyzed(gib, None));
+        let scored = score_release(&evidence, &context);
+        let row = media_row_as_import_would_write(&evidence, &scored);
+        let entries = score_media_file(&row, &context)
+            .analyzed_decision
+            .expect("a stored row carries analysis")
+            .scoring_log
+            .iter()
+            .filter(|entry| entry.code.starts_with("size_"))
+            .map(|entry| entry.delta)
+            .collect::<Vec<_>>();
+        (score_media_file(&row, &context).total, entries)
+    };
+
+    // 1080p WEB-DL H.264, 120 minutes: about 7.04 GiB expected.
+    let (normal, normal_size) = bar(7.0);
+    let (oversized, oversized_size) = bar(20.0);
+    assert_eq!(normal_size, vec![0]);
+    assert_eq!(oversized_size.len(), 1);
+    let penalty = oversized_size[0];
+    assert!(penalty < 0, "{penalty}");
+    assert_eq!(oversized - normal, penalty);
+}
+
 /// The file-rule document survives the round trip.
 ///
 /// `file.*` rules contribute to the score import writes. If re-deriving from the
@@ -960,9 +996,9 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
         ),
     )
     .release_score;
-    assert_eq!(
-        grab_score, title_basis,
-        "runtime changes size fit, never intrinsic score"
+    assert!(
+        title_basis < grab_score,
+        "against the 25-minute average the premiere reads as oversized: {title_basis} vs {grab_score}"
     );
 }
 
