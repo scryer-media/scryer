@@ -226,7 +226,7 @@ fn a_removal_that_fails_is_the_refusal_and_still_says_what_did_not_prove() {
         LinkProof::NameAndLength,
     )
     .expect_err("the removal failed");
-    assert_eq!(refusal.refused, Refused::Denied);
+    assert_eq!(refusal.refused, Refused::Denied(Side::Destination));
     let unproven = refusal.unproven.as_ref().expect("says why");
     assert_eq!(unproven.after, LinkAfter::NotRemoved);
     let doubt = &unproven.doubt;
@@ -334,7 +334,7 @@ fn a_fallback_copy_that_fails_still_says_the_link_was_removed() {
         LinkProof::NameAndLength,
     )
     .expect_err("the copy failed");
-    assert_eq!(refusal.refused, Refused::Denied);
+    assert_eq!(refusal.refused, Refused::Denied(Side::Source));
     let unproven = refusal.unproven.as_ref().expect("says why");
     assert_eq!(unproven.after, LinkAfter::Removed);
     assert!(matches!(unproven.doubt, Doubt::OtherFile { .. }));

@@ -223,7 +223,8 @@ pub enum Refused {
     /// Whoever watches the copy stopped it.
     Cancelled,
     NoSpace,
-    Denied,
+    /// Permission was refused, on the side the failed call named.
+    Denied(Side),
     /// The source is not there. A rename names both paths in one call and
     /// does not say which is missing, so from a rename this is also the
     /// answer when the destination's folder is not there.
@@ -251,7 +252,7 @@ impl Refused {
             Self::StagingOccupied => reason::DISK_COPY_STAGING_OCCUPIED,
             Self::Cancelled => reason::DISK_COPY_CANCELLED,
             Self::NoSpace => reason::DISK_NO_SPACE,
-            Self::Denied => reason::DISK_PERMISSION_DENIED,
+            Self::Denied(_) => reason::DISK_PERMISSION_DENIED,
             Self::SourceMissing | Self::DestinationMissing => reason::DISK_PATH_MISSING,
             Self::Unreachable(_) => reason::DISK_PATH_UNREACHABLE,
             Self::Failed => reason::DISK_OPERATION_FAILED,
@@ -293,7 +294,7 @@ impl Fail {
                 Refused::DestinationExists
             }
             reason::DISK_NO_SPACE => Refused::NoSpace,
-            reason::DISK_PERMISSION_DENIED => Refused::Denied,
+            reason::DISK_PERMISSION_DENIED => Refused::Denied(side),
             reason::DISK_PATH_MISSING if side == Side::Destination => Refused::DestinationMissing,
             reason::DISK_PATH_MISSING => Refused::SourceMissing,
             reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT => Refused::Unreachable(side),
@@ -315,7 +316,7 @@ impl Fail {
     /// unreachable.
     pub(crate) fn unread(reading: PathReading, side: Side, detail: String) -> Self {
         let refused = match reading.unreachable_cause() {
-            Some(reason::DISK_PERMISSION_DENIED) => Refused::Denied,
+            Some(reason::DISK_PERMISSION_DENIED) => Refused::Denied(side),
             Some(reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT) => {
                 Refused::Unreachable(side)
             }

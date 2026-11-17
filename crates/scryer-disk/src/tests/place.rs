@@ -206,7 +206,10 @@ fn a_symlinked_source_is_linked_again_on_the_reserved_name_path_too() {
                 assert_eq!(removed[1..], [p(SOURCE)]);
             }
             false => {
-                assert_eq!(placed.expect_err("refused").refused, Refused::Denied);
+                assert_eq!(
+                    placed.expect_err("refused").refused,
+                    Refused::Denied(Side::Destination)
+                );
                 assert_eq!(removed.len(), 1, "the source stays: {removed:?}");
             }
         }
@@ -538,7 +541,10 @@ fn a_link_that_falls_back_to_a_recorded_copy_takes_a_turn() {
 fn a_link_refused_for_a_named_reason_is_not_copied() {
     let cases = [
         (io::ErrorKind::NotFound, Refused::SourceMissing),
-        (io::ErrorKind::PermissionDenied, Refused::Denied),
+        (
+            io::ErrorKind::PermissionDenied,
+            Refused::Denied(Side::Either),
+        ),
         (io::ErrorKind::StorageFull, Refused::NoSpace),
         (
             io::ErrorKind::NotConnected,
@@ -565,7 +571,10 @@ fn failures_are_classified_once_into_typed_refusals() {
         refusal(&disk, policy(Method::Move, Fallback::Copy))
     };
     assert_eq!(moved(io::ErrorKind::NotFound), Refused::SourceMissing);
-    assert_eq!(moved(io::ErrorKind::PermissionDenied), Refused::Denied);
+    assert_eq!(
+        moved(io::ErrorKind::PermissionDenied),
+        Refused::Denied(Side::Either)
+    );
     assert_eq!(moved(io::ErrorKind::StorageFull), Refused::NoSpace);
     assert_eq!(
         moved(io::ErrorKind::NotConnected),
@@ -610,7 +619,7 @@ fn failures_are_classified_once_into_typed_refusals() {
     // A lasting fault is not unreachable storage.
     assert_eq!(
         copied_from(Some(io::ErrorKind::PermissionDenied)),
-        Refused::Denied
+        Refused::Denied(Side::Source)
     );
     assert_eq!(
         copied_from(Some(io::ErrorKind::NotADirectory)),
@@ -725,11 +734,11 @@ fn a_source_that_cannot_be_unlinked_decides_by_whether_it_is_still_there() {
     // Still there: the new destination is taken back, so a retry is not
     // refused by a duplicate.
     let (done, removed, _) = run(Some(Ok(file(9))));
-    assert_eq!(done, Err(Refused::Denied));
+    assert_eq!(done, Err(Refused::Denied(Side::Source)));
     assert_eq!(removed, [p(SOURCE), p(DEST)]);
     // Unknown: both are left.
     let (done, removed, _) = run(Some(Err(io::ErrorKind::TimedOut)));
-    assert_eq!(done, Err(Refused::Denied));
+    assert_eq!(done, Err(Refused::Denied(Side::Source)));
     assert_eq!(removed, [p(SOURCE)]);
 }
 
@@ -985,7 +994,10 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
 
     // A staged name unread for a lasting reason is not unreachable storage.
     for (kind, refused) in [
-        (io::ErrorKind::PermissionDenied, Refused::Denied),
+        (
+            io::ErrorKind::PermissionDenied,
+            Refused::Denied(Side::Destination),
+        ),
         (io::ErrorKind::NotADirectory, Refused::Failed),
         (
             io::ErrorKind::NotConnected,

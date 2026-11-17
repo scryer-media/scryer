@@ -325,15 +325,18 @@ pub(super) fn copy_refusal(refused: Refused, sentence: String) -> AppError {
             crate::error_reasons::location::DESTINATION_NO_SPACE,
             sentence,
         ),
-        Refused::Denied => AppError::validation_refused(
+        // A source Scryer may not read, and one that is not there, do not
+        // come back on a retry either.
+        Refused::Denied(crate::disk::Side::Source) | Refused::SourceMissing => {
+            AppError::RepositoryFailed {
+                message: sentence,
+                reason: refused.reason(),
+            }
+        }
+        Refused::Denied(_) => AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_PERMISSION_DENIED,
             sentence,
         ),
-        // A source that is not there does not come back on a retry either.
-        Refused::SourceMissing => AppError::RepositoryFailed {
-            message: sentence,
-            reason: refused.reason(),
-        },
         // Storage that timed out or could not be reached carries its own
         // variant and reason; every other refusal is a repository failure.
         Refused::Unreachable(_) => AppError::temporary_unavailable_reason(
@@ -1351,7 +1354,14 @@ mod tests {
         let refused = |refused| copy_refusal(refused, "synthetic".to_owned());
         for (lasting, reason) in [
             (Refused::NoSpace, location::DESTINATION_NO_SPACE),
-            (Refused::Denied, location::DESTINATION_PERMISSION_DENIED),
+            (
+                Refused::Denied(crate::disk::Side::Destination),
+                location::DESTINATION_PERMISSION_DENIED,
+            ),
+            (
+                Refused::Denied(crate::disk::Side::Source),
+                crate::disk::reason::DISK_PERMISSION_DENIED,
+            ),
             (
                 Refused::SourceMissing,
                 crate::disk::reason::DISK_PATH_MISSING,
@@ -1371,42 +1381,80 @@ mod tests {
         }
     }
 
+    /// Sets a path's mode and puts the old one back when dropped, so a
+    /// failed assertion never leaves a fixture unreadable or read-only.
+    #[cfg(unix)]
+    struct ModeFor {
+        path: PathBuf,
+        restore: u32,
+    }
+
+    #[cfg(unix)]
+    impl ModeFor {
+        fn set(path: &Path, mode: u32) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let restore = std::fs::metadata(path).unwrap().permissions().mode();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+            Self {
+                path: path.to_path_buf(),
+                restore,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ModeFor {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.restore));
+        }
+    }
+
+    #[cfg(unix)]
+    async fn refused_copy(source: PathBuf, destination: PathBuf) -> AppError {
+        recorded_copy(
+            &Disk::process(),
+            &source,
+            &destination,
+            crate::disk::placement::verified_copy(
+                VerificationDepth::Quick,
+                DestinationClaim::ClaimHere,
+            ),
+            &CopyProgress::none(),
+        )
+        .await
+        .expect_err("refused")
+    }
+
     /// A copy into a folder Scryer may not write to, and one from a source
     /// that is not there, reach the caller with their reasons.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_denied_destination_and_a_missing_source_reach_the_caller_with_their_reasons() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.bin");
         write_pattern(&source, 16);
         let locked = dir.path().join("locked");
         std::fs::create_dir(&locked).unwrap();
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let copy = |source: PathBuf, destination: PathBuf| async move {
-            recorded_copy(
-                &Disk::process(),
-                &source,
-                &destination,
-                crate::disk::placement::verified_copy(
-                    VerificationDepth::Quick,
-                    DestinationClaim::ClaimHere,
-                ),
-                &CopyProgress::none(),
-            )
-            .await
-            .expect_err("refused")
-        };
-        let denied = copy(source.clone(), locked.join("destination.bin")).await;
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(
-            denied.reason(),
-            Some(crate::error_reasons::location::DESTINATION_PERMISSION_DENIED),
-            "{denied:?}"
-        );
+        {
+            let _mode = ModeFor::set(&locked, 0o555);
+            // A process that may write anyway (root) cannot be refused here.
+            let probe = locked.join("probe.bin");
+            if std::fs::File::create_new(&probe).is_ok() {
+                std::fs::remove_file(&probe).unwrap();
+            } else {
+                let denied = refused_copy(source.clone(), locked.join("destination.bin")).await;
+                assert_eq!(
+                    denied.reason(),
+                    Some(crate::error_reasons::location::DESTINATION_PERMISSION_DENIED),
+                    "{denied:?}"
+                );
+            }
+        }
         assert!(std::fs::read_dir(&locked).unwrap().next().is_none());
 
-        let missing = copy(
+        let missing = refused_copy(
             dir.path().join("missing.bin"),
             dir.path().join("destination.bin"),
         )
@@ -1417,6 +1465,33 @@ mod tests {
             "{missing:?}"
         );
         assert!(!dir.path().join("destination.bin").exists());
+        assert_eq!(std::fs::read(&source).unwrap().len(), 16);
+    }
+
+    /// A source Scryer may not read is the source's refusal, not the
+    /// destination's, and it is not retried.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_source_that_may_not_be_read_is_refused_as_the_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, 16);
+        let destination = dir.path().join("destination.bin");
+        {
+            let _mode = ModeFor::set(&source, 0o000);
+            // A process that may read anyway (root) cannot be refused here.
+            if std::fs::File::open(&source).is_ok() {
+                return;
+            }
+            let denied = refused_copy(source.clone(), destination.clone()).await;
+            assert_eq!(
+                denied.reason(),
+                Some(crate::disk::reason::DISK_PERMISSION_DENIED),
+                "{denied:?}"
+            );
+            assert!(!crate::location::executor::move_error_is_transient(&denied));
+        }
+        assert!(!destination.exists());
         assert_eq!(std::fs::read(&source).unwrap().len(), 16);
     }
 

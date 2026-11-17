@@ -530,12 +530,14 @@ impl FileMoveRetry {
 }
 
 /// Whether an error is the transient, I/O-shaped kind a retry can help with.
-/// A source that is not there is not: it does not come back on a retry.
+/// A source that is not there, or that Scryer may not read, is not: neither
+/// comes back on a retry.
 pub(super) fn move_error_is_transient(error: &AppError) -> bool {
     match error {
-        AppError::RepositoryFailed { reason, .. } => {
-            *reason != crate::disk::reason::DISK_PATH_MISSING
-        }
+        AppError::RepositoryFailed { reason, .. } => !matches!(
+            *reason,
+            crate::disk::reason::DISK_PATH_MISSING | crate::disk::reason::DISK_PERMISSION_DENIED
+        ),
         AppError::Repository(_)
         | AppError::TemporaryUnavailable { .. }
         | AppError::RepositoryFailure { .. } => true,
@@ -5241,7 +5243,8 @@ mod tests {
         let failing = "/destination/title-1/1.mkv";
         for (refused, retried) in [
             (Refused::NoSpace, false),
-            (Refused::Denied, false),
+            (Refused::Denied(Side::Destination), false),
+            (Refused::Denied(Side::Source), false),
             (Refused::SourceMissing, false),
             (Refused::Unreachable(Side::Destination), true),
         ] {
