@@ -137,13 +137,27 @@ async fn run_import(
             .as_ref()
             .is_ok_and(|result| result.decision == ImportDecision::Imported)
     {
-        match complete_deferred_import_source_cleanup(app, import_id, source_cleanups).await {
+        match complete_deferred_import_source_cleanup(app, import_id, source_cleanups, source_hold)
+            .await
+        {
             Ok(()) => {}
             Err(DeferredCleanupFailure::NeedsReconciliation(error)) => {
                 tracing::error!(
                     import_id,
                     error = %error,
                     "verified source cleanup was refused; sources retained for reconciliation"
+                );
+                subtitles_pending = true;
+                cleanup_refused = true;
+                result = Err(error);
+            }
+            // No sources are held, so nothing waits for a release: the import
+            // fails with the cleanup's own error and is retried.
+            Err(DeferredCleanupFailure::Failed(error)) => {
+                tracing::warn!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup could not finish; sources retained and the import retried"
                 );
                 subtitles_pending = true;
                 cleanup_refused = true;

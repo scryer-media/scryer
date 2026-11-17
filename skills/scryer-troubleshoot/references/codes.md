@@ -71,13 +71,16 @@ IMPORTED_SEEDING, IMPORT_BLOCKED, FAILED_PENDING, FAILED, IGNORED.
 (`trackedState` IMPORT_BLOCKED) carries the import's refusal instead:
 `IMPORT_DESTINATION_IS_SOURCE` (the existing destination is the source's own
 file, and Scryer could not record that the client must keep its data) or
-`IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it is, and
-the source it set aside to find out could not be put back at its name, for
-example because something holds that name again).
+`IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it is,
+either for an archive import that holds its sources, or because the source it
+set aside to find out could not be put back at its name; the `keptPath` fact
+then names where the source is).
 Nothing was removed in either case. When the destination is the source's own
 file and that is recorded, the import completes on that file and the client
-entry is later removed without its data. When Scryer only could not tell yet,
-the import retries. After a client refresh or a restart
+entry is later removed without its data. When Scryer could not tell for an
+import that holds no sources, the import fails and retries automatically; the
+download shows the failure and its retry time, not a block. After a client
+refresh or a restart
 the block may show only its sentence. `passwordFailureCode`:
 ARCHIVE_PASSWORD_REQUIRED, ARCHIVE_PASSWORD_OR_CORRUPTION.
 

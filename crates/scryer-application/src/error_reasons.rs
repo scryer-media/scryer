@@ -5856,7 +5856,7 @@ pub mod import {
     pub const SOURCE_JOB_FAILED: &str = "IMPORT_SOURCE_JOB_FAILED";
     /// The existing destination is the source's own entry, so removing the source would remove the only copy. Nothing was removed. An import of a download ends on that file, and the client may remove its entry but not its data; the import is held only when that could not be recorded.
     pub const DESTINATION_IS_SOURCE: &str = "IMPORT_DESTINATION_IS_SOURCE";
-    /// Could not tell whether the existing destination is the source's own entry: a read failed, or the source could not be set aside or put back. Nothing was removed. The import retries, and is held only when a set-aside source could not be put back at its name.
+    /// Could not tell whether the existing destination, or the library file a re-run found already imported, is the source's own entry: a read failed, the source could not be set aside or its set-aside name was taken, or it could not be put back. Nothing was removed. An import that holds no sources fails and is retried; it stops for reconciliation where it holds its sources, or where a set-aside source could not be put back at its name, which [`KEPT_PATH_FACT`] then names.
     pub const DESTINATION_ALIAS_UNKNOWN: &str = "IMPORT_DESTINATION_ALIAS_UNKNOWN";
     /// A copy that failed was kept at its destination, named by [`KEPT_PATH_FACT`], because the source no longer holds the file.
     pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";

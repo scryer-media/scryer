@@ -3015,30 +3015,49 @@ pub(crate) fn defer_import_source_cleanup(
 
 /// The failure of a deferred source cleanup that must reach the operator
 /// as an import needing reconciliation, with its reason, rather than as a
-/// hold an operator may release, such as a source set aside that could not
-/// be put back. A cleanup that could not yet tell whether the destination
-/// names the source is a hold that retries. `None` for any failure that
-/// stays a releasable hold.
-fn deferred_cleanup_needing_reconciliation(error: &AppError) -> Option<AppError> {
-    error.requires_manual_reconciliation().then(|| error.clone())
+/// hold an operator may release: a source set aside that could not be put
+/// back, or, where the import holds its sources (`holds_sources`), a cleanup
+/// that could not tell whether the destination names the source. Releasing
+/// such a hold would let the download client's removal take the library
+/// file with the download. `None` for any other failure.
+fn deferred_cleanup_needing_reconciliation(
+    error: &AppError,
+    holds_sources: bool,
+) -> Option<AppError> {
+    if error.requires_manual_reconciliation() {
+        return Some(error.clone());
+    }
+    let reason = error.reason()?;
+    (holds_sources && reason == crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN).then(
+        || AppError::ManualReconciliationRefused {
+            message: error.to_string(),
+            reason,
+            facts: error.refusal_facts().to_vec(),
+        },
+    )
 }
 
 /// The deferred source cleanups of one import, in order. A failure that
 /// needs reconciliation ([`deferred_cleanup_needing_reconciliation`]) comes
-/// back as [`DeferredCleanupFailure::NeedsReconciliation`], to be raised; any
-/// other as [`DeferredCleanupFailure::Held`], which leaves the import's
-/// sources held.
+/// back as [`DeferredCleanupFailure::NeedsReconciliation`], to be raised.
+/// Any other is [`DeferredCleanupFailure::Held`] where the import holds its
+/// sources (`holds_sources`), which leaves them held, and
+/// [`DeferredCleanupFailure::Failed`] where it does not.
 async fn complete_deferred_import_source_cleanup(
     app: &AppUseCase,
     import_id: &str,
     pending: Vec<DeferredImportSourceCleanup>,
+    holds_sources: bool,
 ) -> Result<(), DeferredCleanupFailure> {
     run_deferred_import_source_cleanups(app, import_id, pending)
         .await
-        .map_err(|error| match deferred_cleanup_needing_reconciliation(&error) {
-            Some(escalated) => DeferredCleanupFailure::NeedsReconciliation(escalated),
-            None => DeferredCleanupFailure::Held(error),
-        })
+        .map_err(
+            |error| match deferred_cleanup_needing_reconciliation(&error, holds_sources) {
+                Some(escalated) => DeferredCleanupFailure::NeedsReconciliation(escalated),
+                None if holds_sources => DeferredCleanupFailure::Held(error),
+                None => DeferredCleanupFailure::Failed(error),
+            },
+        )
 }
 
 /// How a deferred source cleanup failed.
@@ -3049,6 +3068,11 @@ enum DeferredCleanupFailure {
     NeedsReconciliation(AppError),
     /// The sources stay held, and the hold may be released.
     Held(AppError),
+    /// The import holds no sources, so nothing is held: the import fails
+    /// with this error and is retried as any failed import is. A re-run
+    /// finds the placed file already imported and, before the download may
+    /// be removed with its data, settles whether its file is that file.
+    Failed(AppError),
 }
 
 async fn run_deferred_import_source_cleanups(
@@ -3361,8 +3385,10 @@ mod move_import_source_cleanup_gate_tests {
 
     /// A deferred cleanup refusal that waits for an operator, such as a source
     /// left at its set-aside name, ends the import needing reconciliation
-    /// with its reason. One that could not yet tell whether the destination
-    /// names the source retries, as does any other cleanup failure.
+    /// with its reason. One that could not tell whether the destination
+    /// names the source does too where the import holds its sources, since
+    /// its hold could be released; where it holds none, the import fails and
+    /// is retried, as on any other cleanup failure.
     #[test]
     fn a_deferred_cleanup_refusal_needs_reconciliation_and_keeps_its_reason() {
         use crate::AppError;
@@ -3380,11 +3406,23 @@ mod move_import_source_cleanup_gate_tests {
                 facts: Vec::new(),
             },
         ] {
-            let raised = super::deferred_cleanup_needing_reconciliation(&refused)
-                .expect("raised, not held");
-            assert!(raised.requires_manual_reconciliation());
-            assert_eq!(raised.reason(), refused.reason());
+            for holds_sources in [true, false] {
+                let raised = super::deferred_cleanup_needing_reconciliation(&refused, holds_sources)
+                    .expect("raised, not held");
+                assert!(raised.requires_manual_reconciliation());
+                assert_eq!(raised.reason(), refused.reason());
+            }
         }
+
+        let unknown = AppError::RepositoryFailed {
+            message: "could not tell".into(),
+            reason: import::DESTINATION_ALIAS_UNKNOWN,
+        };
+        let raised = super::deferred_cleanup_needing_reconciliation(&unknown, true)
+            .expect("a hold that could be released is raised instead");
+        assert!(raised.requires_manual_reconciliation());
+        assert_eq!(raised.reason(), Some(import::DESTINATION_ALIAS_UNKNOWN));
+        assert!(super::deferred_cleanup_needing_reconciliation(&unknown, false).is_none());
 
         for held in [
             AppError::Repository("the source could not be removed".into()),
@@ -3392,15 +3430,13 @@ mod move_import_source_cleanup_gate_tests {
                 message: "the source could not be removed".into(),
                 reason: import::PERMISSION_DENIED,
             },
-            AppError::RepositoryFailed {
-                message: "could not tell".into(),
-                reason: import::DESTINATION_ALIAS_UNKNOWN,
-            },
         ] {
-            assert!(
-                super::deferred_cleanup_needing_reconciliation(&held).is_none(),
-                "{held:?}"
-            );
+            for holds_sources in [true, false] {
+                assert!(
+                    super::deferred_cleanup_needing_reconciliation(&held, holds_sources).is_none(),
+                    "{held:?}"
+                );
+            }
         }
     }
 
