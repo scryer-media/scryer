@@ -1561,7 +1561,10 @@ mod real {
         let source = dir.path().join("vanished").join("source.mkv");
         let failed = job(&disk, &source, &dest, moving());
         let said = failed.roll_back(&staged, StagedHolds::EmptyClaim);
-        assert!(said.is_some(), "the refusal says what became of the empty file");
+        assert!(
+            said.is_some(),
+            "the refusal says what became of the empty file"
+        );
         assert_eq!(
             failed.left.take(),
             vec![Leftover::PutBackFailed { at: staged.clone() }]
@@ -1583,7 +1586,10 @@ mod real {
         let unread = job(&disk, &source, &dest, moving());
         let said = unread.roll_back(&staged, StagedHolds::EmptyClaim);
         set(0o755).expect("unlock");
-        assert!(said.is_some(), "the refusal says what became of the empty file");
+        assert!(
+            said.is_some(),
+            "the refusal says what became of the empty file"
+        );
         assert_eq!(
             unread.left.take(),
             vec![Leftover::AtReservedName { at: staged.clone() }]
@@ -1981,7 +1987,11 @@ async fn a_folder_gone_since_it_was_read_is_made_again() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("one.mkv");
     std::fs::write(&source, b"payload").unwrap();
-    let dest = temp.path().join("Invented Show").join("Season 01").join("two.mkv");
+    let dest = temp
+        .path()
+        .join("Invented Show")
+        .join("Season 01")
+        .join("two.mkv");
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
     let source_read = disk.uncached(&source).await;
     // The folder is said to be made, and is not there.

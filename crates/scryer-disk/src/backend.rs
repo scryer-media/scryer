@@ -1376,14 +1376,24 @@ mod tests {
         let folder = dir.path().join("invented-folder");
         std::fs::create_dir(&folder).unwrap();
         let dest = dir.path().join("invented-present.bin");
-        assert!(!SystemBackend.rename_claimed(&folder, &dest).unwrap_err().reservation_left);
+        assert!(
+            !SystemBackend
+                .rename_claimed(&folder, &dest)
+                .unwrap_err()
+                .reservation_left
+        );
         assert!(std::fs::symlink_metadata(&dest).is_err(), "claim released");
         assert!(folder.is_dir());
 
         // Absent: nothing to rename.
         let missing = dir.path().join("invented-missing.bin");
         let dest = dir.path().join("invented-absent.bin");
-        assert!(SystemBackend.rename_claimed(&missing, &dest).unwrap_err().reservation_left);
+        assert!(
+            SystemBackend
+                .rename_claimed(&missing, &dest)
+                .unwrap_err()
+                .reservation_left
+        );
         assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
 
         // Unreadable: the source's folder cannot be searched.
@@ -1395,7 +1405,12 @@ mod tests {
         // A user the permissions do not bind reads it anyway; nothing to test.
         if std::fs::symlink_metadata(&hidden).is_err() {
             let dest = dir.path().join("invented-unread.bin");
-            assert!(SystemBackend.rename_claimed(&hidden, &dest).unwrap_err().reservation_left);
+            assert!(
+                SystemBackend
+                    .rename_claimed(&hidden, &dest)
+                    .unwrap_err()
+                    .reservation_left
+            );
             assert_eq!(std::fs::read(&dest).unwrap(), b"", "claim left in place");
         }
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();

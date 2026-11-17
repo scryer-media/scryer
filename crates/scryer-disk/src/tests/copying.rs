@@ -285,7 +285,12 @@ fn a_copy_never_writes_through_a_link_at_a_held_name() {
         .expect_err("a link is not a held file");
     assert_eq!(refusal.refused.reason(), reason::DISK_LINK_NOT_FOLLOWED);
     assert_eq!(std::fs::read(&elsewhere).unwrap(), b"someone else's file");
-    assert!(std::fs::symlink_metadata(&dest).unwrap().file_type().is_symlink());
+    assert!(
+        std::fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
     assert_eq!(std::fs::read(&source).unwrap(), b"incoming");
 }
 
@@ -833,12 +838,22 @@ fn a_cancelled_staged_copy_leaves_nothing_staged() {
 #[test]
 fn a_claimed_move_that_fails_says_what_it_left_at_the_reserved_name() {
     let temp = tempfile::tempdir().unwrap();
-    let (missing, dest) = (temp.path().join("missing.mkv"), temp.path().join("dest.mkv"));
+    let (missing, dest) = (
+        temp.path().join("missing.mkv"),
+        temp.path().join("dest.mkv"),
+    );
     let error = disk()
         .move_claimed_blocking(&missing, &dest)
         .expect_err("nothing to move");
-    assert_eq!(error.left(), Some(&Leftover::AtReservedName { at: dest.clone() }));
-    assert_eq!(std::fs::read(&dest).unwrap(), b"", "the reservation is kept");
+    assert_eq!(
+        error.left(),
+        Some(&Leftover::AtReservedName { at: dest.clone() })
+    );
+    assert_eq!(
+        std::fs::read(&dest).unwrap(),
+        b"",
+        "the reservation is kept"
+    );
 
     let folder = temp.path().join("folder");
     std::fs::create_dir(&folder).unwrap();

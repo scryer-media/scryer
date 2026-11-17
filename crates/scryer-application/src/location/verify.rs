@@ -330,12 +330,10 @@ pub(super) fn copy_refusal(refused: Refused, sentence: String) -> AppError {
         // write into a name it holds.
         Refused::Denied(crate::disk::Side::Source)
         | Refused::SourceMissing
-        | Refused::LinkNotFollowed => {
-            AppError::RepositoryFailed {
-                message: sentence,
-                reason: refused.reason(),
-            }
-        }
+        | Refused::LinkNotFollowed => AppError::RepositoryFailed {
+            message: sentence,
+            reason: refused.reason(),
+        },
         Refused::Denied(_) => AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_PERMISSION_DENIED,
             sentence,

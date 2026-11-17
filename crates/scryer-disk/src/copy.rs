@@ -1088,10 +1088,11 @@ impl Disk {
             (step, cause)
         })?;
         still(StagedStep::SourceAfter)?;
-        self.move_claimed_blocking(how.staged, dest).map_err(|error| {
-            *left = error.left().cloned();
-            (StagedStep::Promote, StagedCause::Io(error.into()))
-        })?;
+        self.move_claimed_blocking(how.staged, dest)
+            .map_err(|error| {
+                *left = error.left().cloned();
+                (StagedStep::Promote, StagedCause::Io(error.into()))
+            })?;
         Ok(StagedCopied {
             hashes: written.hashes.expect("a staged copy hashes"),
             sync: written.sync,

@@ -991,8 +991,8 @@ pub(crate) struct Job<'a> {
 
 impl Job<'_> {
     fn run(&self) -> Result<Done, Fail> {
-        let creates = self.policy.parents == Parents::Create
-            && self.policy.method != Method::HardLink;
+        let creates =
+            self.policy.parents == Parents::Create && self.policy.method != Method::HardLink;
         let parent = self
             .dest
             .parent()
@@ -1018,7 +1018,10 @@ impl Job<'_> {
             Err(fail)
                 if creates
                     && self.folder_is_dir
-                    && matches!(fail.refused, Refused::DestinationMissing | Refused::SourceMissing)
+                    && matches!(
+                        fail.refused,
+                        Refused::DestinationMissing | Refused::SourceMissing
+                    )
                     && let Some(parent) = parent
                     && self.disk.follow_blocking(parent).exists() == Some(false) =>
             {
@@ -1340,10 +1343,12 @@ impl Job<'_> {
     }
 
     fn promote(&self, staged: &Path, dest: &Path) -> Result<(), Fail> {
-        self.disk.promote_staged_blocking(staged, dest).map_err(|error| {
-            self.note_left(&error);
-            Fail::of(error, Side::Destination)
-        })
+        self.disk
+            .promote_staged_blocking(staged, dest)
+            .map_err(|error| {
+                self.note_left(&error);
+                Fail::of(error, Side::Destination)
+            })
     }
 
     /// Records what a failed disk call left at a name it reserved.
@@ -1464,7 +1469,9 @@ impl Job<'_> {
                     source = %source.display(),
                     "the source is gone and the staged copy of it was never proven; the copy is left at the staging path"
                 );
-                self.left.borrow_mut().push(Leftover::AtReservedName { at: staged.into() });
+                self.left
+                    .borrow_mut()
+                    .push(Leftover::AtReservedName { at: staged.into() });
             }
             None => {
                 tracing::error!(
@@ -1472,7 +1479,9 @@ impl Job<'_> {
                     source = %source.display(),
                     "could not tell whether the source survived a failed move; the staged file is left in place"
                 );
-                self.left.borrow_mut().push(Leftover::AtReservedName { at: staged.into() });
+                self.left
+                    .borrow_mut()
+                    .push(Leftover::AtReservedName { at: staged.into() });
             }
         }
         None
@@ -1490,7 +1499,9 @@ impl Job<'_> {
         if source_reads.exists() == Some(false) {
             return match disk.promote_staged_blocking(name, source) {
                 Ok(()) => {
-                    self.left.borrow_mut().push(Leftover::PutBack { at: source.into() });
+                    self.left
+                        .borrow_mut()
+                        .push(Leftover::PutBack { at: source.into() });
                     format!(
                         "the empty file at {} may be the source and was put back at {}",
                         name.display(),
@@ -1499,7 +1510,9 @@ impl Job<'_> {
                 }
                 Err(error) => {
                     self.note_left(&error);
-                    self.left.borrow_mut().push(Leftover::PutBackFailed { at: name.into() });
+                    self.left
+                        .borrow_mut()
+                        .push(Leftover::PutBackFailed { at: name.into() });
                     tracing::error!(
                         name = %name.display(),
                         source = %source.display(),
@@ -1521,7 +1534,9 @@ impl Job<'_> {
             state = source_reads.describe_absence(),
             "the source of a failed move cannot be read; the empty file at its reserved name is left in place"
         );
-        self.left.borrow_mut().push(Leftover::AtReservedName { at: name.into() });
+        self.left
+            .borrow_mut()
+            .push(Leftover::AtReservedName { at: name.into() });
         left_as_the_source(name, source, source_reads)
     }
 
@@ -1680,8 +1695,7 @@ impl Job<'_> {
                         Ok(()) => Ok(Done::Renamed),
                         Err(fail) => {
                             // Put the file back rather than stranding it.
-                            let left = match disk.promote_staged_blocking(&intermediate, source)
-                            {
+                            let left = match disk.promote_staged_blocking(&intermediate, source) {
                                 Ok(()) => Leftover::PutBack { at: source.into() },
                                 Err(error) => {
                                     self.note_left(&error);
@@ -1690,7 +1704,9 @@ impl Job<'_> {
                                         source = %source.display(),
                                         "failed to restore a file after a refused case-only rename; it is left at the intermediate name"
                                     );
-                                    Leftover::PutBackFailed { at: intermediate.clone() }
+                                    Leftover::PutBackFailed {
+                                        at: intermediate.clone(),
+                                    }
                                 }
                             };
                             self.left.borrow_mut().push(left);

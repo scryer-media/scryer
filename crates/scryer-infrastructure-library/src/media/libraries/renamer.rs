@@ -137,14 +137,14 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                     let read = match prepared {
                         Ok(read) => read,
                         Err((reason_code, message)) => {
-                        result.status = RenameApplyStatus::Failed;
-                        result.reason_code = reason_code;
-                        result.error_message = Some(message);
-                        if item.companion_of.is_none() {
-                            primary_outcomes.insert(&item.current_path, result.status.clone());
-                        }
-                        slots[index] = Some(result);
-                        continue;
+                            result.status = RenameApplyStatus::Failed;
+                            result.reason_code = reason_code;
+                            result.error_message = Some(message);
+                            if item.companion_of.is_none() {
+                                primary_outcomes.insert(&item.current_path, result.status.clone());
+                            }
+                            slots[index] = Some(result);
+                            continue;
                         }
                     };
 
