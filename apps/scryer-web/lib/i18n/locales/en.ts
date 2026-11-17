@@ -10211,7 +10211,6 @@ const en: LocaleDictionary = {
     "Whether this linked movie has a file on disk",
   "settings.refLifecycleSeriesMovieTags":
     "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
-  "settings.ruleBuilderTitle": "Rule",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Simple",
   "settings.ruleBuilderUnavailable":

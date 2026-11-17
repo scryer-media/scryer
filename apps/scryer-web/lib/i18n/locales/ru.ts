@@ -5140,7 +5140,6 @@ const ru: LocaleDictionary = {
     "Есть ли у этого привязанного фильма файл на диске",
   "settings.refLifecycleSeriesMovieTags":
     "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
-  "settings.ruleBuilderTitle": "Правило",
   "settings.ruleBuilderModeLabel": "Редактор",
   "settings.ruleBuilderModeSimple": "Простой",
   "settings.ruleBuilderUnavailable":

@@ -5546,7 +5546,6 @@ const cs: LocaleDictionary = {
     "Zda má tento propojený film soubor na disku",
   "settings.refLifecycleSeriesMovieTags":
     "Uživatelsky definované štítky tohoto propojeného filmu ze stejného registru jako štítky titulů. Propojený film nese vlastní štítky; nededí je od seriálu.",
-  "settings.ruleBuilderTitle": "Pravidlo",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Jednoduchý",
   "settings.ruleBuilderUnavailable":

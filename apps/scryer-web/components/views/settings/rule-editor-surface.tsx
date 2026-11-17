@@ -113,58 +113,58 @@ export function RuleEditorSurface({
     if (edits && !event.altKey) holdEdit(event);
   };
 
+  // The Simple / Advanced switch. In Simple it sits on the Conditions
+  // heading row, so the builder needs no title row of its own.
+  const modeToggle =
+    builderModel !== null ? (
+      <ToggleGroupPrimitive.Root
+        type="single"
+        aria-label={t("settings.ruleBuilderModeLabel")}
+        className="inline-flex rounded-md border border-border p-1"
+        value={showBuilder ? "simple" : "view"}
+        onValueChange={(value) => {
+          if (value === "simple" || value === "view") onModeChange(value);
+        }}
+      >
+        <ToggleGroupPrimitive.Item value="simple" asChild>
+          <Button
+            type="button"
+            size="sm"
+            id={selectorId(idPrefix, "editor-simple")}
+            variant={showBuilder ? "default" : "ghost"}
+          >
+            {t("settings.ruleBuilderModeSimple")}
+          </Button>
+        </ToggleGroupPrimitive.Item>
+        <ToggleGroupPrimitive.Item value="view" asChild>
+          <Button
+            type="button"
+            size="sm"
+            id={selectorId(idPrefix, "editor-advanced")}
+            variant={showBuilder ? "ghost" : "default"}
+          >
+            {t("label.advanced")}
+          </Button>
+        </ToggleGroupPrimitive.Item>
+      </ToggleGroupPrimitive.Root>
+    ) : null;
+
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <Label className="block">
-          {showBuilder
-            ? t("settings.ruleBuilderTitle")
-            : t("settings.ruleRegoSource")}
-        </Label>
-        <div className="flex items-center gap-1">
-          {builderModel !== null ? (
-            <>
-              <ToggleGroupPrimitive.Root
-                type="single"
-                aria-label={t("settings.ruleBuilderModeLabel")}
-                className="inline-flex rounded-md border border-border p-1"
-                value={showBuilder ? "simple" : "view"}
-                onValueChange={(value) => {
-                  if (value === "simple" || value === "view")
-                    onModeChange(value);
-                }}
-              >
-                <ToggleGroupPrimitive.Item value="simple" asChild>
-                  <Button
-                    type="button"
-                    size="sm"
-                    id={selectorId(idPrefix, "editor-simple")}
-                    variant={showBuilder ? "default" : "ghost"}
-                  >
-                    {t("settings.ruleBuilderModeSimple")}
-                  </Button>
-                </ToggleGroupPrimitive.Item>
-                <ToggleGroupPrimitive.Item value="view" asChild>
-                  <Button
-                    type="button"
-                    size="sm"
-                    id={selectorId(idPrefix, "editor-advanced")}
-                    variant={showBuilder ? "ghost" : "default"}
-                  >
-                    {t("label.advanced")}
-                  </Button>
-                </ToggleGroupPrimitive.Item>
-              </ToggleGroupPrimitive.Root>
-            </>
-          ) : null}
-          {builderModel === null ? (
-            <InfoHelp
-              ariaLabel={t("settings.ruleBuilderModeLabel")}
-              text={t("settings.ruleBuilderUnavailable")}
-            />
-          ) : null}
+      {showBuilder ? null : (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <Label className="block">{t("settings.ruleRegoSource")}</Label>
+          <div className="flex items-center gap-1">
+            {modeToggle}
+            {builderModel === null ? (
+              <InfoHelp
+                ariaLabel={t("settings.ruleBuilderModeLabel")}
+                text={t("settings.ruleBuilderUnavailable")}
+              />
+            ) : null}
+          </div>
         </div>
-      </div>
+      )}
       {builderStatus !== "ready" ? (
         <p
           id={selectorId(idPrefix, "editor-builder-status")}
@@ -185,6 +185,7 @@ export function RuleEditorSurface({
           options={options}
           onChange={onModelChange}
           feedback={feedback}
+          headerEnd={modeToggle}
         />
       ) : (
         // One wrapper for both cases, so confirming keeps the same editor.

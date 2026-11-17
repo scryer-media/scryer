@@ -4784,7 +4784,6 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleSeriesMovieHasFile": "此連結電影在硬碟上是否有檔案",
   "settings.refLifecycleSeriesMovieTags":
     "此連結電影上的使用者自訂標籤，來自與作品標籤相同的註冊表。系列電影自帶標籤；它不會繼承節目的標籤。",
-  "settings.ruleBuilderTitle": "規則",
   "settings.ruleBuilderModeLabel": "編輯器",
   "settings.ruleBuilderModeSimple": "簡易",
   "settings.ruleBuilderUnavailable":

@@ -681,6 +681,7 @@ function ConditionList({
   problems,
   readOnly,
   label,
+  trailing,
   options,
   onChange,
 }: {
@@ -695,6 +696,8 @@ function ConditionList({
   problems: RuleBuilderProblem[];
   readOnly: boolean;
   label: React.ReactNode;
+  /// Set at the end of the heading row.
+  trailing?: React.ReactNode;
   onChange: (change: {
     join?: RuleBuilderJoin;
     conditions?: RuleBuilderCondition[];
@@ -722,6 +725,7 @@ function ConditionList({
             ]}
           />
         ) : null}
+        {trailing ? <div className="ml-auto">{trailing}</div> : null}
       </div>
       {conditions.map((condition, index) => (
         <ConditionRow
@@ -942,6 +946,7 @@ export function RuleBuilder({
   readOnly = false,
   onChange,
   feedback,
+  headerEnd,
 }: {
   schema: RuleBuilderSchema;
   model: RuleBuilderModel;
@@ -952,6 +957,9 @@ export function RuleBuilder({
   onChange: (model: RuleBuilderModel) => void;
   /// Validation status of the generated source.
   feedback: React.ReactNode;
+  /// Set at the end of the Conditions heading, such as the editor's mode
+  /// toggle.
+  headerEnd?: React.ReactNode;
 }) {
   const t = useTranslate();
   const prefix = schema.idPrefix;
@@ -980,6 +988,7 @@ export function RuleBuilder({
         problems={sharedProblems}
         readOnly={readOnly}
         label={t("settings.ruleBuilderConditions")}
+        trailing={headerEnd}
         onChange={(change) => onChange({ ...model, ...change })}
       />
 
