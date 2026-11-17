@@ -86,8 +86,10 @@ fn bundled_size_curve_matches_frozen_byte_boundaries() {
             case.entries
         );
         let penalized_persona = match profile.criteria.scoring_persona {
-            ScoringPersona::Balanced | ScoringPersona::Efficient => true,
-            ScoringPersona::Audiophile | ScoringPersona::Compatible => false,
+            ScoringPersona::Balanced | ScoringPersona::Compatible | ScoringPersona::Efficient => {
+                true
+            }
+            ScoringPersona::Audiophile => false,
         };
         let may_penalize = penalized_persona
             && case.total_runtime.is_some_and(|minutes| minutes > 0)

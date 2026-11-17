@@ -723,7 +723,8 @@ const ru: LocaleDictionary = {
   "persona.trait.compatible.audio":
     "Аудио: DDP и AAC имеют приоритет для максимальной совместимости устройств",
   "persona.trait.compatible.x265": "x265: H.264 предпочтительнее H.265",
-  "persona.trait.compatible.size": "Размер файла: стандартные предпочтения",
+  "persona.trait.compatible.size":
+    "Размер файла: слишком большие файлы получают штраф",
   "persona.trait.compatible.remux": "Remux: не является приоритетом",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision получает штраф (риск несовместимости)",

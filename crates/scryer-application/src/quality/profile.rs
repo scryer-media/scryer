@@ -1385,7 +1385,7 @@ pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
 
 /// The host's part of size: an eligibility check and a search tie-breaker. It
 /// adds no points; the bundled size rule penalizes oversized releases on the
-/// Balanced and Efficient curves against its own, tighter bands.
+/// Balanced, Compatible and Efficient curves against its own, tighter bands.
 pub(crate) fn apply_size_requirement(
     decision: &mut QualityProfileDecision,
     profile: &QualityProfile,

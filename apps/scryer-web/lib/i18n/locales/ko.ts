@@ -584,7 +584,7 @@ const ko: LocaleDictionary = {
   "persona.trait.compatible.source": "소스: WEB-DL 선호",
   "persona.trait.compatible.audio": "오디오: 호환성을 위해 DDP 및 AAC 우선",
   "persona.trait.compatible.x265": "x265: H.264를 H.265보다 선호",
-  "persona.trait.compatible.size": "파일 크기: 표준 선호",
+  "persona.trait.compatible.size": "파일 크기: 지나치게 큰 파일은 감점",
   "persona.trait.compatible.remux": "Remux: 우선시하지 않음",
   "persona.trait.compatible.hdr": "HDR: Dolby Vision 감점 (호환성 위험)",
   "settings.moviesLibrarySettings": "영화 미디어 설정",

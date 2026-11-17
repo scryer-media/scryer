@@ -634,7 +634,8 @@ const nl: LocaleDictionary = {
   "persona.trait.compatible.audio":
     "Audio: DDP en AAC geprioriteerd voor brede apparaatondersteuning",
   "persona.trait.compatible.x265": "x265: H.264 geprefereerd boven H.265",
-  "persona.trait.compatible.size": "Bestandsgrootte: standaardvoorkeuren",
+  "persona.trait.compatible.size":
+    "Bestandsgrootte: te grote bestanden worden bestraft",
   "persona.trait.compatible.remux": "Remux: niet geprioriteerd",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision bestraft (compatibiliteitsrisico)",

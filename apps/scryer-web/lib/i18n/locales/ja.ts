@@ -592,7 +592,7 @@ const ja: LocaleDictionary = {
   "persona.trait.compatible.audio":
     "オーディオ: 幅広いデバイスサポートのためDDPとAACを優先",
   "persona.trait.compatible.x265": "x265: H.264をH.265より優先",
-  "persona.trait.compatible.size": "ファイルサイズ: 標準的な優先度",
+  "persona.trait.compatible.size": "ファイルサイズ: 大きすぎるファイルを減点",
   "persona.trait.compatible.remux": "Remux: 優先しない",
   "persona.trait.compatible.hdr": "HDR: Dolby Vision減点 (互換性リスク)",
   "settings.moviesLibrarySettings": "映画メディア設定",

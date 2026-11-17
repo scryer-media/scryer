@@ -381,9 +381,9 @@ fn expected_gib(raw: &str, category: &str, runtime: i32) -> f64 {
 /// floored at -1200.
 fn formula(ratio: f64, persona: &ScoringPersona) -> i32 {
     let (high, weight) = match persona {
-        ScoringPersona::Balanced => (1.25, 1200.0),
+        ScoringPersona::Balanced | ScoringPersona::Compatible => (1.25, 1200.0),
         ScoringPersona::Efficient => (1.1, 1400.0),
-        _ => return 0,
+        ScoringPersona::Audiophile => return 0,
     };
     if ratio <= high {
         0
@@ -490,7 +490,11 @@ fn oversized_anime_episode_sanity_targets_on_balanced() {
 
 #[test]
 fn the_oversize_penalty_is_floored() {
-    for persona in [ScoringPersona::Balanced, ScoringPersona::Efficient] {
+    for persona in [
+        ScoringPersona::Balanced,
+        ScoringPersona::Compatible,
+        ScoringPersona::Efficient,
+    ] {
         for gib in [8.0, 40.0, 400.0] {
             assert_eq!(
                 size_delta(
@@ -533,8 +537,15 @@ fn the_compact_curve_is_never_gentler_than_balanced() {
         if efficient < 0 {
             penalized += 1;
         }
-        // The override picks the curve: compact on Balanced, balanced on
-        // Efficient, and nothing on the personas without a penalty.
+        // Compatible rides the Balanced curve where their expected sizes agree,
+        // as they do for a 1080p non-remux release.
+        assert_eq!(compact(ScoringPersona::Compatible, None, gib), balanced);
+        assert_eq!(
+            compact(ScoringPersona::Compatible, Some(false), gib),
+            balanced
+        );
+        // The override picks the curve: compact on Balanced and Compatible,
+        // balanced on Efficient, and nothing on Audiophile.
         assert_eq!(
             compact(ScoringPersona::Balanced, Some(true), gib),
             efficient
@@ -547,15 +558,24 @@ fn the_compact_curve_is_never_gentler_than_balanced() {
             compact(ScoringPersona::Efficient, Some(true), gib),
             efficient
         );
+        assert_eq!(
+            compact(ScoringPersona::Compatible, Some(true), gib),
+            efficient
+        );
+        assert_eq!(compact(ScoringPersona::Audiophile, None, gib), 0);
         assert_eq!(compact(ScoringPersona::Audiophile, Some(true), gib), 0);
-        assert_eq!(compact(ScoringPersona::Compatible, Some(true), gib), 0);
+        assert_eq!(compact(ScoringPersona::Audiophile, Some(false), gib), 0);
     }
     assert!(penalized > 70);
 }
 
 #[test]
 fn for_equal_bytes_a_more_efficient_codec_is_penalized_at_least_as_hard() {
-    for persona in [ScoringPersona::Balanced, ScoringPersona::Efficient] {
+    for persona in [
+        ScoringPersona::Balanced,
+        ScoringPersona::Compatible,
+        ScoringPersona::Efficient,
+    ] {
         for (h264, h265, av1) in [
             (ANIME_WEB_H264, ANIME_WEB_H265, ANIME_WEB_AV1),
             (
