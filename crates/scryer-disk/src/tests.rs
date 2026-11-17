@@ -83,6 +83,11 @@ struct Scripted {
     list_read_gate: Mutex<Option<mpsc::Receiver<()>>>,
     list_read_entered: Mutex<Option<mpsc::Sender<()>>>,
     ambiguous_renames: Mutex<Vec<PathBuf>>,
+    /// Where a scripted link points; any other path reads as pointing at
+    /// itself.
+    link_targets: Mutex<HashMap<PathBuf, PathBuf>>,
+    /// What a scripted path resolves to; any other path resolves to itself.
+    resolved: Mutex<HashMap<PathBuf, PathBuf>>,
     /// A failing claimed rename says it left its reservation in place.
     claim_left: Mutex<bool>,
     /// A path whose open to read hands back a handle on a folder, as a name
@@ -122,6 +127,18 @@ impl Scripted {
                 })
                 .collect(),
         );
+    }
+    fn resolves_to(&self, path: &str, resolved: &str) {
+        self.resolved
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from(path), PathBuf::from(resolved));
+    }
+    fn links_to(&self, path: &str, target: &str) {
+        self.link_targets
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from(path), PathBuf::from(target));
     }
     fn holds(&self, path: &str, bytes: &[u8]) {
         self.contents
@@ -299,11 +316,14 @@ impl DiskBackend for Scripted {
         Ok(!listing.is_empty())
     }
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        self.record("canonicalize", path)
-            .map(|()| path.to_path_buf())
+        self.record("canonicalize", path)?;
+        let resolved = self.resolved.lock().unwrap().get(path).cloned();
+        Ok(resolved.unwrap_or_else(|| path.to_path_buf()))
     }
     fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
-        self.record("read_link", path).map(|()| path.to_path_buf())
+        self.record("read_link", path)?;
+        let target = self.link_targets.lock().unwrap().get(path).cloned();
+        Ok(target.unwrap_or_else(|| path.to_path_buf()))
     }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         self.record("remove_file", path)
