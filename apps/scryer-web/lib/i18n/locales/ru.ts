@@ -3590,6 +3590,11 @@ const ru: LocaleDictionary = {
   "status.autoSearchAllRejected":
     "Релиз для {{name}} не найден: автоматический поиск отклонил все {{count}} кандидатов. {{reasons}}",
   "status.queueFailed": "Операция с очередью завершилась ошибкой.",
+  "status.grabFailed": "Не удалось отправить релиз на загрузку.",
+  "status.grabResultUnavailable":
+    "Отправка релиза на загрузку завершена, но её результат больше недоступен. Проверьте очередь загрузок.",
+  "status.grabOutcomeUnknown":
+    "Не удалось дождаться окончания отправки релиза на загрузку. Проверьте очередь загрузок.",
   "status.apiError": "Ошибка запроса.",
   "status.permissionDenied": "У вас нет прав для выполнения этого действия.",
   "status.generic": "{{message}}",

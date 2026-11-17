@@ -30,11 +30,9 @@ import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { useAuth, type AuthUser } from "@/lib/hooks/use-auth";
 import { usePermissions } from "@/lib/hooks/use-permissions";
 import {
-  APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
   authorizationCacheSignature,
   hasAnyLibraryPermission,
-  hasAppPermission,
   hasLibraryPermission,
 } from "@/lib/utils/permissions";
 import { useSmgNotices } from "@/lib/hooks/use-smg-notices";
@@ -872,10 +870,6 @@ function AuthenticatedHomePage({
   const canSubscribeToLibraryEvents = hasAnyLibraryPermission(
     authenticatedUser,
     LIBRARY_PERMISSIONS.view,
-  );
-  const canSubscribeToJobEvents = hasAppPermission(
-    authenticatedUser,
-    APP_PERMISSIONS.manageSystemSettings,
   );
   const {
     smgVersionCompatibilityNotice,
@@ -1814,7 +1808,10 @@ function AuthenticatedHomePage({
             {serviceRestarting && <BackendRestartOverlay />}
             <Suspense fallback={<ViewLoadingFallback />}>
               <LibraryScanProgressProvider>
-                <JobRunProvider enabled={canSubscribeToJobEvents}>
+                {/* Every signed-in user receives job events: the server sends
+                    a system manager every run and anyone else only the runs
+                    they started and may still see. */}
+                <JobRunProvider>
                   <LocationMoveProgressProvider>
                     <ReactiveRefreshProvider
                       enabled={canSubscribeToLibraryEvents}

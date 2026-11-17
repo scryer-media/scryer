@@ -7,6 +7,8 @@
 
 use std::future::Future;
 
+use futures_util::FutureExt;
+
 use super::*;
 
 /// How a background grab ended.
@@ -17,6 +19,9 @@ pub enum GrabJobOutcome {
     /// Other downloads are in the way and the operator has to choose what
     /// happens to them. Nothing was queued and nothing failed.
     Conflict,
+    /// The grab finished without queueing anything, and nothing was in the
+    /// way: for example, a pending release that was no longer waiting.
+    NotQueued,
     /// The grab was refused or failed.
     Failed,
 }
@@ -26,6 +31,7 @@ impl GrabJobOutcome {
         match self {
             Self::Queued => "QUEUED",
             Self::Conflict => "CONFLICT",
+            Self::NotQueued => "NOT_QUEUED",
             Self::Failed => "FAILED",
         }
     }
@@ -100,10 +106,13 @@ impl AppUseCase {
             .await;
 
         let app = self.clone();
-        tokio::spawn(async move {
-            // The grab runs in a task of its own so that a panic inside it
-            // still ends the job run instead of leaving it running.
-            let report = tokio::spawn(work(run.id.clone()))
+        // Tracked by the restore coordinator, so a restore waits for a grab in
+        // flight as it waited for the request that once ran it.
+        self.restore_coordinator().spawn_task(async move {
+            // A panic inside the grab is caught here, so it still ends the job
+            // run instead of leaving it running.
+            let report = std::panic::AssertUnwindSafe(work(run.id.clone()))
+                .catch_unwind()
                 .await
                 .unwrap_or_else(|_| GrabJobReport {
                     outcome: GrabJobOutcome::Failed,

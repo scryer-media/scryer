@@ -1,12 +1,12 @@
 import * as React from "react";
 import { useClient } from "urql";
 
+import { useJobRunToasts } from "@/components/root/job-run-provider";
 import { useTranslate } from "@/lib/context/translate-context";
 import { startGrabMutation } from "@/lib/graphql/mutations";
 import { grabJobResultQuery } from "@/lib/graphql/queries";
-import { useTrackedJobRuns } from "@/lib/hooks/use-tracked-job-runs";
 import type { JobRun } from "@/lib/types";
-import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 
 export type GrabConflict = {
   titleId: string;
@@ -88,7 +88,7 @@ export type GrabRequest =
 export function useGrab(): (request: GrabRequest) => Promise<GrabOutcome> {
   const client = useClient();
   const t = useTranslate();
-  const trackJobRun = useTrackedJobRuns();
+  const { registerInteractiveJobRun } = useJobRunToasts();
 
   return React.useCallback(
     async (request: GrabRequest) => {
@@ -99,9 +99,17 @@ export function useGrab(): (request: GrabRequest) => Promise<GrabOutcome> {
       const run = normalizeJobRun(started.data?.startGrab?.jobRun);
       if (!run) throw new Error(t("status.queueFailed"));
 
-      const finished = await new Promise<JobRun>((resolve) =>
-        trackJobRun(run, resolve),
-      );
+      // Registered with the provider itself, not through the calling
+      // component, so the wait outlives a page change and the grab still
+      // reports how it ended. The provider always settles the wait: with the
+      // run once it ends, or with its last state when it can no longer be
+      // followed.
+      const finished = await new Promise<JobRun>((resolve) => {
+        registerInteractiveJobRun(run, resolve);
+      });
+      if (!isTerminalJobRunStatus(finished.status)) {
+        throw new Error(t("status.grabOutcomeUnknown"));
+      }
       const outcome = await client
         .query(
           grabJobResultQuery,
@@ -112,12 +120,18 @@ export function useGrab(): (request: GrabRequest) => Promise<GrabOutcome> {
       if (outcome.error) throw outcome.error;
       const result = outcome.data?.grabJobResult as GrabOutcome | null;
       if (!result) {
-        // The server no longer holds the outcome (it restarted); the job run
-        // still says how the grab ended.
-        throw new Error(finished.errorText ?? t("status.queueFailed"));
+        // The server no longer holds the outcome; the job run still says
+        // whether the grab ended well.
+        throw new Error(
+          t(
+            finished.status === "FAILED"
+              ? "status.grabFailed"
+              : "status.grabResultUnavailable",
+          ),
+        );
       }
       return result;
     },
-    [client, t, trackJobRun],
+    [client, registerInteractiveJobRun, t],
   );
 }

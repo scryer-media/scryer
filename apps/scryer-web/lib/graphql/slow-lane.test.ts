@@ -67,10 +67,44 @@ test("a request cancelled while waiting is never sent", async () => {
   assert.deepEqual(
     pending.map((request) => request.url),
     [
-      ...Array.from({ length: SLOW_LANE_WIDTH }, (_, index) => `running-${index}`),
+      ...Array.from(
+        { length: SLOW_LANE_WIDTH },
+        (_, index) => `running-${index}`,
+      ),
       "next",
     ],
   );
   pending.slice(1).forEach((request) => request.finish());
   await Promise.all([...running, next]);
+});
+
+test("a request cancelled while in flight frees its place", async () => {
+  const sent: string[] = [];
+  // Holds every request open until its signal aborts, as fetch does.
+  const send = ((input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(String(input));
+    return new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener("abort", () =>
+        reject(new DOMException("Request canceled", "AbortError")),
+      );
+    });
+  }) as typeof fetch;
+  const lane = slowLane(send);
+  const controllers = Array.from(
+    { length: SLOW_LANE_WIDTH + 1 },
+    () => new AbortController(),
+  );
+  const requests = controllers.map((controller, index) =>
+    lane(`request-${index}`, { signal: controller.signal }),
+  );
+  await settle();
+  assert.equal(sent.length, SLOW_LANE_WIDTH);
+
+  controllers[0].abort();
+  await assert.rejects(requests[0], { name: "AbortError" });
+  await settle();
+  assert.equal(sent.at(-1), `request-${SLOW_LANE_WIDTH}`);
+
+  for (const controller of controllers.slice(1)) controller.abort();
+  await Promise.allSettled(requests);
 });

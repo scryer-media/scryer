@@ -812,7 +812,10 @@ export const WantedContainer = memo(function WantedContainer({
             : `title:${item.titleId}`,
         });
       } finally {
-        setCutoffAutoSearchingId(null);
+        // Only this row's flag: a search started since keeps its own.
+        setCutoffAutoSearchingId((current) =>
+          current === itemKey ? null : current,
+        );
       }
     },
     [startAcquisitionSearch],
@@ -887,7 +890,9 @@ export const WantedContainer = memo(function WantedContainer({
           { level: "ERROR" },
         );
       } finally {
-        setCutoffInteractiveSearchingId(null);
+        setCutoffInteractiveSearchingId((current) =>
+          current === itemKey ? null : current,
+        );
       }
     },
     [client, setGlobalStatus, t],

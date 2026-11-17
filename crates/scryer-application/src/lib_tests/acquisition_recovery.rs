@@ -17771,6 +17771,73 @@ async fn single_item_searches_wait_in_line_behind_a_running_search() {
     );
 }
 
+/// Two requests for the same item that arrive together start one search.
+#[tokio::test]
+async fn concurrent_requests_for_one_item_start_one_search() {
+    let (app, title, _) = seed_grabbing_season_pack_fixture().await;
+    let actor = test_admin_user();
+    let mut episode_keys: Vec<String> = app
+        .derive_acquisition_targets_for_title(&Utc::now(), Some(&title.id))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|target| target.scope_key)
+        .filter(|key| key.starts_with("episode:"))
+        .collect();
+    episode_keys.sort();
+    let request = || AcquisitionSearchRequest {
+        wanted_item_id: Some(episode_keys[0].clone()),
+        ..Default::default()
+    };
+
+    // Hold the running-search slot so both requests have to wait in line and
+    // stay active while the test looks at them.
+    let admission = app
+        .runtime
+        .jobs
+        .acquisition_search_lock
+        .clone()
+        .lock_owned()
+        .await;
+    // Hold the start step closed too, so both requests pass the early
+    // same-item check before either records its run. `join!` polls the
+    // branches in order, so the step opens only once both wait at it.
+    let start_step = app
+        .runtime
+        .jobs
+        .acquisition_search_start_lock
+        .clone()
+        .lock_owned()
+        .await;
+    let (first, second, ()) = tokio::join!(
+        app.start_acquisition_search_job(&actor, request()),
+        app.start_acquisition_search_job(&actor, request()),
+        async move { drop(start_step) },
+    );
+    let first = first.expect("the first request is accepted");
+    let second = second.expect("the second request is accepted");
+    assert_eq!(first.id, second.id, "the item is not searched twice");
+    let active_searches = app
+        .runtime
+        .jobs
+        .job_run_tracker
+        .list_active()
+        .await
+        .into_iter()
+        .filter(|run| run.job_key == JobKey::AcquisitionSearch)
+        .count();
+    assert_eq!(active_searches, 1);
+
+    assert!(
+        app.cancel_acquisition_search(&actor, &first.id)
+            .await
+            .unwrap()
+    );
+    let cancelled = await_acquisition_search_job(&app, &actor, &first.id).await;
+    assert_eq!(cancelled.state, "cancelled", "{cancelled:?}");
+    drop(admission);
+}
+
 #[tokio::test]
 async fn an_operator_automatic_title_search_records_the_operator_on_its_grabs() {
     let (app, title, download_client) = seed_grabbing_season_pack_fixture().await;

@@ -170,10 +170,13 @@ impl AuthRuntimeStateHandle {
             if next_policy != previous_policy {
                 snapshot.epoch += 1;
             }
+            // Stored even when no connection is listening, and under the
+            // snapshot lock, so a later connection never reads an epoch the
+            // watch has not reached.
+            self.epoch_tx.send_replace(snapshot.epoch);
             snapshot.clone()
         };
 
-        let _ = self.epoch_tx.send(next_snapshot.epoch);
         next_snapshot
     }
 
@@ -188,9 +191,10 @@ impl AuthRuntimeStateHandle {
                 .write()
                 .expect("auth runtime snapshot lock poisoned");
             snapshot.epoch += 1;
+            // See `apply_saved_security_settings`.
+            self.epoch_tx.send_replace(snapshot.epoch);
             snapshot.epoch
         };
-        let _ = self.epoch_tx.send(next_epoch);
         next_epoch
     }
 }
@@ -1242,6 +1246,43 @@ pub fn mfa_verification_from_ctx(ctx: &Context<'_>) -> MfaVerification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn example_auth_runtime() -> AuthRuntimeStateHandle {
+        AuthRuntimeStateHandle::new(AuthRuntimeStateSnapshot {
+            form_login_enabled: true,
+            skip_login_for_local_ips: false,
+            effective_form_login_enabled: true,
+            webauthn_configured: false,
+            passkey_enabled: false,
+            env_override_active: false,
+            env_override_description: None,
+            epoch: 3,
+        })
+    }
+
+    #[test]
+    fn an_invalidation_with_no_connection_listening_still_reaches_later_connections() {
+        let auth = example_auth_runtime();
+
+        let epoch = auth.invalidate_connections();
+
+        assert_eq!(epoch, 4);
+        assert_eq!(auth.snapshot().epoch, epoch);
+        assert_eq!(*auth.subscribe_epoch().borrow(), auth.snapshot().epoch);
+    }
+
+    #[test]
+    fn a_policy_change_with_no_connection_listening_still_reaches_later_connections() {
+        let auth = example_auth_runtime();
+
+        let snapshot = auth.apply_saved_security_settings(false, false);
+
+        assert_eq!(
+            snapshot.epoch, 4,
+            "turning form login off changes the policy"
+        );
+        assert_eq!(*auth.subscribe_epoch().borrow(), auth.snapshot().epoch);
+    }
 
     #[test]
     fn save_validation_refusal_carries_structured_diagnostics() {
