@@ -639,17 +639,8 @@ pub(super) fn unproven_link_answer(
     match unproven {
         // No link was made: the ordinary verified copy takes over.
         None => Ok(false),
-        // The read that failed is the answer, whatever became of the name.
-        Some(Unproven {
-            doubt: Doubt::Unread(error),
-            ..
-        }) => Err(AppError::Repository(format!(
-            "cannot inspect {}: {}",
-            destination.display(),
-            error.words()
-        ))),
-        // A link that did not prove and is still at the name: the path it
-        // was left at travels as its own fact.
+        // A link that did not prove and is still at the name, whatever the
+        // doubt: the path it was left at travels as its own fact.
         Some(Unproven {
             after: LinkAfter::NotRemoved,
             ..
@@ -664,6 +655,15 @@ pub(super) fn unproven_link_answer(
                 path_to_stored_string(destination),
             )],
         )),
+        // The read that failed is the answer, when the name did not stay.
+        Some(Unproven {
+            doubt: Doubt::Unread(error),
+            ..
+        }) => Err(AppError::Repository(format!(
+            "cannot inspect {}: {}",
+            destination.display(),
+            error.words()
+        ))),
         // Another file at the name, removed, already gone or left alone.
         Some(_) => Err(AppError::validation_refused(
             crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,

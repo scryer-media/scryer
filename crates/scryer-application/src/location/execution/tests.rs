@@ -3517,6 +3517,50 @@ fn an_unproven_link_that_could_not_be_removed_names_where_it_was_left() {
     );
     assert!(!crate::location::executor::move_error_is_transient(&left));
 
+    // A link that could not be read back and could not be removed is still
+    // left at the name, and says so the same way.
+    let dir = tempfile::tempdir().unwrap();
+    let unread = || {
+        crate::disk::Disk::process()
+            .list_blocking(&dir.path().join("missing"))
+            .expect_err("a missing folder cannot be listed")
+    };
+    let left_unread = unproven_link_answer(
+        destination,
+        Some(Unproven {
+            doubt: Doubt::Unread(unread()),
+            after: LinkAfter::NotRemoved,
+        }),
+    )
+    .expect_err("refused");
+    assert_eq!(
+        left_unread.validation_reason(),
+        Some(location::UNPROVEN_LINK_NOT_REMOVED)
+    );
+    let AppError::ValidationRefused { facts, .. } = &left_unread else {
+        panic!("{left_unread:?}");
+    };
+    assert_eq!(
+        facts,
+        &[crate::RefusalFact::new(
+            location::LEFT_BEHIND_PATH_FACT,
+            path_to_stored_string(destination),
+        )]
+    );
+    // When the name did not stay, the failed read is still the answer.
+    let cannot_inspect = unproven_link_answer(
+        destination,
+        Some(Unproven {
+            doubt: Doubt::Unread(unread()),
+            after: LinkAfter::Removed,
+        }),
+    )
+    .expect_err("refused");
+    assert!(
+        matches!(cannot_inspect, AppError::Repository(_)),
+        "{cannot_inspect:?}"
+    );
+
     for after in [
         LinkAfter::Removed,
         LinkAfter::AlreadyGone,
