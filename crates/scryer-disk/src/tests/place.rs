@@ -783,6 +783,12 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
     assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
     assert_eq!(backend.calls_of("rename"), 1, "no second attempt");
     assert_eq!(backend.calls_of("remove_file"), 0);
+    let intermediate = backend.paths_of("open").pop().expect("claimed");
+    assert_eq!(
+        refused.left,
+        vec![Leftover::AtReservedName { at: intermediate }],
+        "the source's only copy may be at the intermediate name"
+    );
 
     // An empty intermediate name is released, and the rename tried again,
     // only while the source still reads as present: it may be an empty
@@ -2005,4 +2011,101 @@ async fn a_folder_gone_since_it_was_read_is_made_again() {
         .expect("moved into the folders made again");
     assert_eq!(std::fs::read(&dest).expect("moved"), b"payload");
     assert!(!source.exists());
+}
+
+/// A put-back that reports failure may still have applied. One look at the
+/// name it left says where the file is: gone means it is back under the
+/// source's name, and only then; present or unread means it stayed.
+#[cfg(unix)]
+#[test]
+fn a_failed_put_back_says_where_the_file_is() {
+    let staged = p(STAGED);
+    let unread = Err(io::ErrorKind::PermissionDenied);
+    for (after, expected) in [
+        (
+            Err(io::ErrorKind::NotFound),
+            Leftover::PutBack { at: p(SOURCE) },
+        ),
+        (Ok(file(9)), Leftover::PutBackFailed { at: staged.clone() }),
+        (unread, Leftover::PutBackFailed { at: staged.clone() }),
+    ] {
+        let (disk, backend, _) = scripted();
+        backend.stats_in_turn(&staged, &[Ok(file(9)), after]);
+        backend.fails("rename_no_replace", STAGED, io::ErrorKind::TimedOut);
+        let policy = policy(Method::Move, Fallback::Copy);
+        let (source, dest) = (p(SOURCE), p(DEST));
+        let failed = job(&disk, &source, &dest, policy);
+        let said = failed.roll_back(&staged, StagedHolds::Copy { proven: true });
+        assert_eq!(said, None);
+        assert_eq!(failed.left.take(), vec![expected]);
+        assert_eq!(backend.calls_of("remove_file"), 0, "nothing is removed");
+    }
+}
+
+/// A copy whose staged name cannot be read may still be there, and the
+/// refusal says so.
+#[test]
+fn an_unread_staged_copy_is_reported_where_it_may_be() {
+    let (disk, backend, _) = scripted();
+    *backend.staged_stat.lock().unwrap() = Some(Err(io::ErrorKind::PermissionDenied));
+    let policy = policy(Method::Move, Fallback::Copy);
+    let (source, dest) = (p(SOURCE), p(DEST));
+    let failed = job(&disk, &source, &dest, policy);
+    let _ = failed.roll_back(&p(STAGED), StagedHolds::Copy { proven: true });
+    assert_eq!(
+        failed.left.take(),
+        vec![Leftover::AtReservedName { at: p(STAGED) }]
+    );
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+/// A recorded copy whose staged file cannot be promoted, by a claimed rename
+/// that leaves its reservation, says what it left at the destination name.
+#[test]
+fn a_recorded_copy_whose_promotion_fails_says_what_it_left() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.always_fails("hard_link", io::ErrorKind::Unsupported);
+    backend.always_fails("rename_claimed", io::ErrorKind::TimedOut);
+    *backend.claim_left.lock().unwrap() = true;
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+    let refused = place(&disk, recorded_staged(Method::Copy, Fallback::None)).expect_err("refused");
+    assert_eq!(
+        refused.left,
+        vec![Leftover::AtReservedName { at: p(DEST) }],
+        "{refused:?}"
+    );
+}
+
+/// An exclusive rename or a staged write that fails on the claimed path and
+/// leaves its reservation says so in a typed field.
+#[test]
+fn a_claimed_rename_that_fails_says_what_it_left() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.always_fails("rename_claimed", io::ErrorKind::TimedOut);
+    *backend.claim_left.lock().unwrap() = true;
+    let left = Some(Leftover::AtReservedName { at: p(DEST) });
+    let moved = disk
+        .move_exclusive_blocking(&p(SOURCE), &p(DEST))
+        .expect_err("refused");
+    assert_eq!(moved.left(), left.as_ref());
+    let written = disk
+        .write_staged_blocking(
+            &p(DEST),
+            b"synthetic",
+            Replace::Never,
+            Access::Default,
+            Staging::Unique,
+            false,
+        )
+        .expect_err("refused");
+    assert_eq!(written.left(), left.as_ref());
+
+    // Without a reservation left, nothing is said.
+    *backend.claim_left.lock().unwrap() = false;
+    let moved = disk
+        .move_exclusive_blocking(&p(SOURCE), &p(DEST))
+        .expect_err("refused");
+    assert_eq!(moved.left(), None);
 }

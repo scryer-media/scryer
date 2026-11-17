@@ -61,6 +61,9 @@ struct Scripted {
     staged_stat: Mutex<Option<Result<RawStat, io::ErrorKind>>>,
     staged_contents: Mutex<Option<Vec<u8>>>,
     stats: Mutex<HashMap<PathBuf, Result<RawStat, io::ErrorKind>>>,
+    /// Answers a path gives once each, in order, before its `stats` answer.
+    stats_in_turn:
+        Mutex<HashMap<PathBuf, std::collections::VecDeque<Result<RawStat, io::ErrorKind>>>>,
     listings: Mutex<HashMap<PathBuf, Vec<RawEntry>>>,
     failures: Mutex<HashMap<(&'static str, PathBuf), io::ErrorKind>>,
     any_path_failures: Mutex<HashMap<&'static str, io::ErrorKind>>,
@@ -80,6 +83,8 @@ struct Scripted {
     list_read_gate: Mutex<Option<mpsc::Receiver<()>>>,
     list_read_entered: Mutex<Option<mpsc::Sender<()>>>,
     ambiguous_renames: Mutex<Vec<PathBuf>>,
+    /// A failing claimed rename says it left its reservation in place.
+    claim_left: Mutex<bool>,
     /// A path whose open to read hands back a handle on a folder, as a name
     /// swapped for one between its reading and its open would.
     opens_as_folder: Mutex<Option<PathBuf>>,
@@ -95,6 +100,14 @@ impl Scripted {
             .lock()
             .unwrap()
             .insert(PathBuf::from(path), answer);
+    }
+    /// `path` answers `answers` to its next stat calls, one each, before
+    /// falling back to its `stat_is` answer.
+    fn stats_in_turn(&self, path: &Path, answers: &[Result<RawStat, io::ErrorKind>]) {
+        self.stats_in_turn
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), answers.iter().copied().collect());
     }
     fn lists(&self, path: &str, entries: &[(&str, Option<EntryKind>)]) {
         self.listings.lock().unwrap().insert(
@@ -202,7 +215,13 @@ impl Scripted {
         if gated && let Some(gate) = self.gate.lock().unwrap().as_ref() {
             let _ = gate.recv();
         }
-        let scripted = self.stats.lock().unwrap().get(path).copied();
+        let in_turn = self
+            .stats_in_turn
+            .lock()
+            .unwrap()
+            .get_mut(path)
+            .and_then(|answers| answers.pop_front());
+        let scripted = in_turn.or_else(|| self.stats.lock().unwrap().get(path).copied());
         let staged = || match is_staging_name(path) {
             true => *self.staged_stat.lock().unwrap(),
             false => None,
@@ -314,7 +333,11 @@ impl DiskBackend for Scripted {
         source: &Path,
         _dest: &Path,
     ) -> Result<(), super::backend::ClaimedRenameFailed> {
-        Ok(self.record("rename_claimed", source)?)
+        self.record("rename_claimed", source)
+            .map_err(|error| super::backend::ClaimedRenameFailed {
+                error,
+                reservation_left: *self.claim_left.lock().unwrap(),
+            })
     }
     fn hard_link(&self, _source: &Path, dest: &Path) -> io::Result<()> {
         self.record("hard_link", dest)

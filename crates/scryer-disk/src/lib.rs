@@ -559,6 +559,9 @@ pub(crate) enum CopyFault {
     SourceOwner,
     Write,
     Sync,
+    /// The promotion of a staged copy, which leaves an empty reservation at
+    /// the destination name and says so.
+    Promote,
 }
 
 /// The filesystem owner. Cheap to clone; clones share one cache.
@@ -1007,9 +1010,9 @@ impl Disk {
         let result = self.rename_exclusive(source, dest);
         self.inner.cache.evict_subtree(&key_of(source));
         self.inner.cache.evict_subtree(&key_of(dest));
-        result
-            .map(|()| MoveOutcome::Renamed)
-            .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
+        result.map(|()| MoveOutcome::Renamed).map_err(|unmoved| {
+            DiskError::new(DiskVerb::Move, source, unmoved.error).leaving(unmoved.left)
+        })
     }
 
     pub async fn move_exclusive(
@@ -1261,13 +1264,17 @@ impl Disk {
                 })
                 .map_err(backend::WriteFailure::not_created),
         };
+        let mut left = None;
         let placed = written.and_then(|synced| {
             if durable {
                 synced.required().map_err(backend::WriteFailure::created)?;
             }
             self.land(&staged, path, replace)
                 .map(|()| synced)
-                .map_err(backend::WriteFailure::created)
+                .map_err(|unmoved| {
+                    left = unmoved.left;
+                    backend::WriteFailure::created(unmoved.error)
+                })
         });
         let result = placed.map_err(|failure| {
             if failure.created && staging == Staging::Unique {
@@ -1275,7 +1282,7 @@ impl Disk {
                 // leaves the caller's error as it is.
                 let _ = self.call("remove_file", || self.inner.backend.remove_file(&staged));
             }
-            DiskError::new(DiskVerb::Write, path, failure.error)
+            DiskError::new(DiskVerb::Write, path, failure.error).leaving(left)
         });
         self.inner.cache.evict(&key_of(path));
         self.inner.cache.evict(&key_of(&staged));
@@ -1679,9 +1686,11 @@ impl Disk {
 
     /// Rename a staging file this owner created onto `dest`, as `replace`
     /// says.
-    fn land(&self, staged: &Path, dest: &Path, replace: Replace) -> io::Result<()> {
+    fn land(&self, staged: &Path, dest: &Path, replace: Replace) -> Result<(), Unmoved> {
         match replace {
-            Replace::Allowed => self.call("rename", || self.inner.backend.rename(staged, dest)),
+            Replace::Allowed => {
+                Ok(self.call("rename", || self.inner.backend.rename(staged, dest))?)
+            }
             Replace::Never => self.rename_exclusive(staged, dest),
         }
     }
@@ -1700,13 +1709,20 @@ impl Disk {
 
     /// An exclusive rename where the filesystem offers one, else a claim of
     /// the destination and a rename over it.
-    fn rename_exclusive(&self, source: &Path, dest: &Path) -> io::Result<()> {
-        self.try_rename_no_replace(source, dest).unwrap_or_else(|| {
-            self.call("rename_claimed", || {
-                self.inner.backend.rename_claimed(source, dest)
-            })
-            .map_err(|failed| failed.error)
-        })
+    fn rename_exclusive(&self, source: &Path, dest: &Path) -> Result<(), Unmoved> {
+        match self.try_rename_no_replace(source, dest) {
+            Some(result) => Ok(result?),
+            None => self
+                .call("rename_claimed", || {
+                    self.inner.backend.rename_claimed(source, dest)
+                })
+                .map_err(|failed| Unmoved {
+                    error: failed.error,
+                    left: failed
+                        .reservation_left
+                        .then(|| Leftover::AtReservedName { at: dest.into() }),
+                }),
+        }
     }
 
     /// The exclusive rename, or `None` where the filesystem has none. A root
@@ -1957,12 +1973,17 @@ impl Staged {
             .expect("a staged write holds its file until it is committed");
         let synced = disk.call("sync_handle", || disk.inner.backend.sync_handle(&file));
         drop(file);
+        let mut left = None;
         let result = synced.and_then(|outcome| {
             if durable {
                 outcome.required()?;
             }
             disk.land(&self.staged, &self.dest, replace)
                 .map(|()| outcome)
+                .map_err(|unmoved| {
+                    left = unmoved.left;
+                    unmoved.error
+                })
         });
         disk.inner.cache.evict(&key_of(&self.dest));
         disk.inner.cache.evict(&key_of(&self.staged));
@@ -1971,7 +1992,7 @@ impl Staged {
                 self.committed = true;
                 Ok(outcome)
             }
-            Err(error) => Err(DiskError::new(DiskVerb::Write, &self.dest, error)),
+            Err(error) => Err(DiskError::new(DiskVerb::Write, &self.dest, error).leaving(left)),
         }
     }
 
@@ -2168,3 +2189,15 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests;
+
+/// A rename that did not happen, and what it left at the destination name.
+struct Unmoved {
+    error: io::Error,
+    left: Option<Leftover>,
+}
+
+impl From<io::Error> for Unmoved {
+    fn from(error: io::Error) -> Self {
+        Self { error, left: None }
+    }
+}

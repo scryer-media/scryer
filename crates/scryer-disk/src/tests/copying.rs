@@ -893,3 +893,25 @@ fn a_claimed_move_that_fails_says_what_it_left_at_the_reserved_name() {
     assert_eq!(error.left(), None, "the reservation is released");
     assert!(!free.exists());
 }
+
+/// What an earlier attempt of a staged copy left at the destination name is
+/// still said when a later attempt fails for another reason.
+#[test]
+fn a_staged_copy_keeps_saying_what_an_earlier_attempt_left() {
+    let fixture = StagedFixture::new();
+    fixture.fails_at(&[(CopyFault::Promote, DROPPED)]);
+
+    let refusal = fixture
+        .copy(&Watch::nobody())
+        .expect_err("the second promotion meets the first one's reservation");
+
+    assert_eq!(refusal.attempts, 2);
+    assert_eq!(refusal.step, StagedStep::Promote);
+    assert_eq!(
+        refusal.left,
+        Some(Leftover::AtReservedName {
+            at: fixture.dest.clone()
+        })
+    );
+    assert_eq!(std::fs::read(&fixture.dest).unwrap(), b"", "kept");
+}

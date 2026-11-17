@@ -892,6 +892,9 @@ impl Job<'_> {
                 false => disk.promote_staged_blocking(staged, dest),
             };
             if let Err(error) = promoted {
+                // What the promotion left at the destination name is said
+                // before the staged name is cleared.
+                self.note_left(&error);
                 remove_staged_best_effort(disk, staged);
                 return Err(worded(error, Side::Destination, |said| {
                     format!(
@@ -1019,8 +1022,9 @@ impl Disk {
         watch: &Watch,
     ) -> Result<StagedCopied, StagedCopyRefusal> {
         let mut attempts = 1;
+        // What an earlier attempt left stays said when a later one fails.
+        let mut left = None;
         loop {
-            let mut left = None;
             let refused = |step, cause, left| StagedCopyRefusal {
                 step,
                 cause,
@@ -1031,7 +1035,7 @@ impl Disk {
                 return Err(refused(
                     StagedStep::ClearStaged,
                     StagedCause::Io(error.into()),
-                    None,
+                    left,
                 ));
             }
             let (step, cause) = match self.copy_staged_once(source, dest, how, watch, &mut left) {
@@ -1115,11 +1119,24 @@ impl Disk {
             (step, cause)
         })?;
         still(StagedStep::SourceAfter)?;
-        self.move_claimed_blocking(how.staged, dest)
-            .map_err(|error| {
-                *left = error.left().cloned();
-                (StagedStep::Promote, StagedCause::Io(error.into()))
-            })?;
+        #[cfg(test)]
+        let faulted = self.fault(crate::CopyFault::Promote).map(|error| {
+            let _ = self.inner.backend.open(dest, crate::Open::create_new());
+            let left = Leftover::AtReservedName { at: dest.into() };
+            DiskError::new(crate::DiskVerb::Move, how.staged, error).leaving(Some(left))
+        });
+        #[cfg(not(test))]
+        let faulted = None;
+        let promoted = match faulted {
+            Some(error) => Err(error),
+            None => self.move_claimed_blocking(how.staged, dest),
+        };
+        promoted.map_err(|error| {
+            if let Some(at) = error.left() {
+                *left = Some(at.clone());
+            }
+            (StagedStep::Promote, StagedCause::Io(error.into()))
+        })?;
         Ok(StagedCopied {
             hashes: written.hashes.expect("a staged copy hashes"),
             sync: written.sync,

@@ -506,6 +506,8 @@ impl DiskBackend for SystemBackend {
                     );
                     true
                 }
+                // Nothing is at the name, so nothing was left there.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
                 Err(error) => {
                     tracing::warn!(
                         path = %dest.display(),
