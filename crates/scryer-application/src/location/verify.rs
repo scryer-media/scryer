@@ -1509,8 +1509,11 @@ mod tests {
         write_pattern(&source, 16);
         let destination = dir.path().join("nested/not-created-yet/destination.bin");
 
-        // Only unix moves without copying, so only unix answers yes.
-        assert_eq!(same_filesystem(&source, &destination).await, cfg!(unix));
+        // Unix and Windows move without copying, so both answer yes.
+        assert_eq!(
+            same_filesystem(&source, &destination).await,
+            cfg!(any(unix, windows))
+        );
 
         assert!(
             !same_filesystem(&dir.path().join("missing.bin"), &destination).await,

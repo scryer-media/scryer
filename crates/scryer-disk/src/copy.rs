@@ -1524,10 +1524,11 @@ impl Disk {
     /// costs a copy. The destination usually does not exist yet, so its
     /// nearest existing ancestor is what is compared.
     ///
-    /// Only unix answers: a move on any other platform copies, so it reads
-    /// nothing here.
+    /// Unix and Windows answer; a move on any other platform copies, so it
+    /// reads nothing here. On Windows both must name one drive or share and
+    /// read as one known volume serial.
     pub async fn renames_between(&self, source: &Path, destination: &Path) -> bool {
-        if !cfg!(unix) {
+        if !cfg!(any(unix, windows)) {
             return false;
         }
         let (disk, source, destination) = (
@@ -1542,9 +1543,9 @@ impl Disk {
 
     /// Whether `source` and the volume `destination` lands on are one
     /// volume, read within the destination root's bound; unknown is `false`.
-    /// On Windows both must name the same drive or share and answer the same
-    /// non-zero volume serial. Nothing asks this on the way to a move: see
-    /// [`Self::renames_between`].
+    /// On Windows both must name the same drive or share and read as the same
+    /// known volume serial. A move asks [`Self::renames_between`], which
+    /// answers the same, unbounded.
     pub async fn shares_volume(&self, source: &Path, destination: &Path) -> bool {
         let (disk, source_path, landing) = (
             self.clone(),

@@ -812,30 +812,34 @@ pub trait VolumeProbe: Send + Sync {
     fn available_bytes(&self, path: &Path) -> Option<u64>;
 }
 
-/// The real probe: the owner's volume on unix, path prefix on Windows, and the
+/// The real probe: the disk service's volume, with the drive or share on
+/// Windows, and the
 /// canonical [`crate::disk::capacity::StorageCapacity`] for free space.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemVolumeProbe;
 
 impl VolumeProbe for SystemVolumeProbe {
     fn volume_id(&self, path: &Path) -> Option<VolumeId> {
-        #[cfg(unix)]
+        // The volume a move's execution reads to choose a rename: one that
+        // names no volume is no answer, so the preview counts a copy, as the
+        // move makes one.
+        let volume = crate::disk::Disk::process()
+            .landing_volume_blocking(path)
+            .filter(crate::disk::Mark::names_volume)?;
+        #[cfg(windows)]
         {
-            let volume = crate::disk::Disk::process().landing_volume_blocking(path)?;
-            Some(VolumeId(volume.to_stored()))
-        }
-        #[cfg(not(unix))]
-        {
-            // Windows has no cheap device id through `std`; the path prefix
-            // (drive letter or UNC share) is the volume for the purposes of
-            // "will this move be a rename or a copy".
+            // Two drives or shares are two volumes whatever serials they
+            // read as, as the move's own answer has it.
             let existing = crate::disk::Disk::process().nearest_existing_blocking(path)?;
             let prefix = existing.components().next()?;
             Some(VolumeId(format!(
-                "prefix:{}",
-                prefix.as_os_str().to_string_lossy().to_uppercase()
+                "prefix:{}|{}",
+                prefix.as_os_str().to_string_lossy().to_uppercase(),
+                volume.to_stored()
             )))
         }
+        #[cfg(not(windows))]
+        Some(VolumeId(volume.to_stored()))
     }
 
     fn available_bytes(&self, path: &Path) -> Option<u64> {

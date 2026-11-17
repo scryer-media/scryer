@@ -392,11 +392,16 @@ async fn windows_volumes_are_shared_only_with_one_prefix_and_one_known_serial() 
     assert_eq!(backend.paths_of("stat"), [p(folder)]);
     assert_eq!(backend.paths_of("lstat")[0], p(B));
 
+    // A move asks the same, and gets the same answer.
+    assert!(equal.renames_between(&p(B), &p(A)).await);
+
     let (different, _) = setup(Some(7), Some(8));
     assert!(!different.shares_volume(&p(B), &p(A)).await);
+    assert!(!different.renames_between(&p(B), &p(A)).await);
 
     let (source_unread, _) = setup(None, Some(7));
     assert!(!source_unread.shares_volume(&p(B), &p(A)).await);
+    assert!(!source_unread.renames_between(&p(B), &p(A)).await);
 
     let (landing_unread, _) = setup(Some(7), None);
     assert!(!landing_unread.shares_volume(&p(B), &p(A)).await);
@@ -454,20 +459,23 @@ async fn windows_volumes_are_shared_only_with_one_prefix_and_one_known_serial() 
 }
 
 /// Two names on one drive, the destination's folder not made yet, are on one
-/// volume; a source that is not there answers no.
+/// volume, and a move between them renames; a source that is not there
+/// answers no.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_two_names_on_one_drive_share_a_volume() {
+async fn windows_two_names_on_one_drive_share_a_volume_and_a_move_renames() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.mkv");
     std::fs::write(&source, b"synthetic").unwrap();
     let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
     let beside = temp.path().join("beside.mkv");
     assert!(disk.shares_volume(&source, &beside).await);
+    assert!(disk.renames_between(&source, &beside).await);
     let nested = temp.path().join("not-created/yet/destination.mkv");
     assert!(disk.shares_volume(&source, &nested).await);
     let missing = temp.path().join("missing.mkv");
     assert!(!disk.shares_volume(&missing, &nested).await);
+    assert!(!disk.renames_between(&missing, &nested).await);
 }
 
 /// A file with `links` names, numbered on its volume.

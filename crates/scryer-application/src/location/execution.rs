@@ -558,7 +558,9 @@ impl TitleFileMover for RootMoveFileMover {
 /// Place a second name for the same regular file without copying bytes. The
 /// source survives a crash before the verification journal is durable; cleanup
 /// removes that name only after the catalog has moved. Unsupported filesystems
-/// and platforms take the ordinary verified-copy path.
+/// and platforms take the ordinary verified-copy path. On Windows a linked
+/// source is not staged, and an existing destination goes to the content
+/// comparison.
 #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
 async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppResult<bool> {
     let source_metadata = tokio::fs::symlink_metadata(source).await.map_err(|error| {
@@ -582,7 +584,7 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             })?;
         return Ok(true);
     }
-    if !source_metadata.is_file() || !cfg!(unix) {
+    if !source_metadata.is_file() || !cfg!(any(unix, windows)) {
         return Ok(false);
     }
     if let Ok(destination_metadata) = tokio::fs::symlink_metadata(destination).await {
@@ -602,6 +604,15 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             SharedInode::Distinct => Ok(false),
         };
     }
+    // std's own metadata names no volume or file number on Windows, so the
+    // source is read there once more through the disk service, which does.
+    #[cfg(windows)]
+    let seen = match Disk::process().fingerprint(source).await {
+        Ok(seen) if seen.kind() == Some(crate::disk::EntryKind::File) => seen,
+        _ => return Ok(false),
+    };
+    #[cfg(not(windows))]
+    let seen = Mark::of(&source_metadata);
     // The new name is read once and must be the file read above. A link that
     // does not prove is removed by the disk service before it answers.
     let linked = Disk::process()
@@ -609,7 +620,7 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             source,
             destination,
             crate::disk::placement::proven_link(),
-            Mark::of(&source_metadata),
+            seen,
             LinkProof::Name,
         )
         .await;

@@ -300,14 +300,14 @@ mod tests {
         let detected = hardlink_fact(&path).expect("fact");
         assert!(!detected.is_hardlinked());
         assert_eq!(detected.size_bytes, 4);
-        if cfg!(unix) {
+        if cfg!(any(unix, windows)) {
             assert_eq!(detected.link_count, LinkCount::Known(1));
         } else {
             assert_eq!(detected.link_count, LinkCount::Unsupported);
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn a_hardlinked_file_is_detected() {
         let dir = tempfile::tempdir().expect("tempdir");
