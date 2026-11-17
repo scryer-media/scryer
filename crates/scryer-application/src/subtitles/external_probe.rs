@@ -6,12 +6,9 @@ use tokio::{fs, io::AsyncReadExt};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use whatlang::{Lang, detect};
 
-use crate::disk::{Disk, Open};
+use crate::disk::{Disk, EntryKind, Mark, Open};
 use crate::stored_paths::path_to_stored_string;
 use crate::{AppError, AppResult};
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 const MAX_TEXT_PROBE_SIZE_BYTES: i64 = 1024 * 1024;
 const MAX_LANGUAGE_SAMPLE_BYTES: usize = 16 * 1024;
@@ -376,27 +373,6 @@ fn validate_regular_subtitle_sidecar(metadata: &std::fs::Metadata) -> AppResult<
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SubtitleFileFingerprint {
-    len: u64,
-    modified_at: Option<std::time::SystemTime>,
-    #[cfg(unix)]
-    dev: u64,
-    #[cfg(unix)]
-    ino: u64,
-}
-
-fn subtitle_file_fingerprint(metadata: &std::fs::Metadata) -> SubtitleFileFingerprint {
-    SubtitleFileFingerprint {
-        len: metadata.len(),
-        modified_at: metadata.modified().ok(),
-        #[cfg(unix)]
-        dev: metadata.dev(),
-        #[cfg(unix)]
-        ino: metadata.ino(),
-    }
-}
-
 async fn open_subtitle_sidecar(path: &Path) -> AppResult<fs::File> {
     Disk::process()
         .open(path, Open::read().without_following_links())
@@ -413,17 +389,31 @@ fn cache_matches_fingerprint(
         && cache_entry.probe_version == fingerprint.probe_version
 }
 
-// disk-guard: the lstat is compared with the opened handle's own metadata to
-// catch a swap between them, so it must be current; the owner's readings may
-// be reused for up to a second.
-#[allow(clippy::disallowed_methods)]
+/// The path's own mark, never a cached reading, is compared with the opened
+/// handle's metadata to catch a swap between the two.
 async fn read_subtitle_to_string(path: &Path) -> AppResult<DecodedSubtitleText> {
-    let metadata = fs::symlink_metadata(path)
-        .await
-        .map_err(|error| AppError::Repository(format!("cannot stat subtitle file: {error}")))?;
-    validate_regular_subtitle_sidecar(&metadata)?;
-    let fingerprint = subtitle_file_fingerprint(&metadata);
-    if metadata.len() > MAX_TEXT_PROBE_SIZE_BYTES as u64 {
+    let fingerprint = Disk::process().fingerprint(path).await.map_err(|reading| {
+        AppError::Repository(format!(
+            "cannot stat subtitle file: {}",
+            reading.describe_absence()
+        ))
+    })?;
+    match fingerprint.kind() {
+        Some(EntryKind::File) => {}
+        Some(EntryKind::Symlink) => {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SIDECAR_SYMLINK_FORBIDDEN,
+                "subtitle sidecar must not be a symlink",
+            ));
+        }
+        _ => {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_SIDECAR_INVALID,
+                "subtitle sidecar must be a regular file",
+            ));
+        }
+    }
+    if fingerprint.exceeds(MAX_TEXT_PROBE_SIZE_BYTES as u64) {
         return Err(AppError::validation_refused(
             crate::error_reasons::subtitles::SUBTITLE_SIDECAR_EXCEEDS_CONTENT_PROBE_SIZE_LIMIT,
             "subtitle sidecar exceeds content probe size limit",
@@ -436,7 +426,10 @@ async fn read_subtitle_to_string(path: &Path) -> AppResult<DecodedSubtitleText> 
         .await
         .map_err(|error| AppError::Repository(format!("cannot stat subtitle file: {error}")))?;
     validate_regular_subtitle_sidecar(&opened_metadata)?;
-    if subtitle_file_fingerprint(&opened_metadata) != fingerprint {
+    if !fingerprint
+        .compare(&Mark::of(&opened_metadata))
+        .is_unwritten()
+    {
         return Err(AppError::validation_refused(
             crate::error_reasons::subtitles::SUBTITLE_SIDECAR_CHANGED_DURING_CONTENT_PROBE,
             "subtitle sidecar changed during content probe",

@@ -171,7 +171,6 @@ fn a_recorded_move_is_refused_on_the_reserved_name_path_too() {
     let (disk, backend, _) = scripted();
     backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
     backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
-    *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
     copies(&backend, b"synthetic payload", b"synthetic payload");
     *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
     let refused = place(&disk, recorded_staged(Method::Move, Fallback::Copy)).expect_err("refused");
@@ -385,11 +384,18 @@ fn a_link_that_falls_back_to_a_recorded_copy_takes_a_turn() {
     let (disk, backend, _) = scripted();
     backend.fails("hard_link", DEST, io::ErrorKind::CrossesDevices);
     copies(&backend, b"synthetic payload", b"synthetic payload");
+    disk.install_copy_workers(1);
+    let lane = crate::copy::volume_key(&p(DEST));
+    let held = Arc::new(Mutex::new(None));
     let phases = Arc::new(Mutex::new(Vec::new()));
     let watch = Watch {
         progress: Progress::to({
-            let phases = phases.clone();
+            let (phases, held, disk) = (phases.clone(), held.clone(), disk.clone());
             move |phase, _| {
+                if phase == Phase::Copying {
+                    let free = super::copying::turn_is_free(&disk.copy_admission(), &lane);
+                    held.lock().unwrap().get_or_insert(!free);
+                }
                 let mut phases = phases.lock().unwrap();
                 if phases.last() != Some(&phase) {
                     phases.push(phase);
@@ -411,6 +417,11 @@ fn a_link_that_falls_back_to_a_recorded_copy_takes_a_turn() {
     assert_eq!(placed.done, Done::Copied);
     assert!(placed.copied.is_some());
     assert_eq!(*phases.lock().unwrap(), [Phase::Waiting, Phase::Copying]);
+    assert_eq!(
+        *held.lock().unwrap(),
+        Some(true),
+        "the turn is held while copying"
+    );
 }
 
 /// A link refused for a reason that says something about the source, the
@@ -714,6 +725,68 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
         "no turn was waited for"
     );
     open.send(()).unwrap();
+}
+
+/// The early reading of the staged name is only a fast path: a file that
+/// takes the name while the copy waits for its turn is met by the exclusive
+/// create, refused in the same words, and left alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_staged_name_taken_after_it_read_free_is_refused_and_kept() {
+    let staged = resumable_staging_path(&p(DEST));
+    let (disk, backend, _) = scripted();
+    backend.stat_is(SOURCE, Ok(file(17)));
+    backend.holds(SOURCE, b"synthetic payload");
+    backend.fails(
+        "open",
+        staged.to_str().unwrap(),
+        io::ErrorKind::AlreadyExists,
+    );
+    let refused = disk
+        .place_watched(
+            SOURCE,
+            DEST,
+            recorded_staged(Method::Copy, Fallback::None),
+            Watch::nobody(),
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(refused.refused, Refused::StagingOccupied);
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
+            staged.display()
+        )
+    );
+    assert_eq!(backend.calls_of("remove_file"), 0, "the occupant is left");
+    assert_eq!(backend.calls_of("rename_no_replace"), 0);
+}
+
+/// A staged copy that was admitted off the thread reads its staged name
+/// once, before its turn, and not again on the thread that copies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_admitted_staged_copy_reads_its_staged_name_once() {
+    let staged = resumable_staging_path(&p(DEST));
+    let (disk, backend, _) = scripted();
+    backend.stat_is(SOURCE, Ok(file(17)));
+    backend.holds(SOURCE, b"synthetic payload");
+    *backend.staged_contents.lock().unwrap() = Some(b"synthetic payload".to_vec());
+    let placed = disk
+        .place_watched(
+            SOURCE,
+            DEST,
+            recorded_staged(Method::Copy, Fallback::None),
+            Watch::nobody(),
+        )
+        .await
+        .expect("copied");
+    assert_eq!(placed.done, Done::Copied);
+    let read = backend.paths_of("lstat");
+    assert_eq!(
+        read.iter().filter(|path| **path == staged).count(),
+        1,
+        "{read:?}"
+    );
 }
 
 /// A move onto a free name says whether it moved, was not offered, or was

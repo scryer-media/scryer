@@ -19,6 +19,11 @@ fn file(len: u64) -> RawStat {
         modified: None,
         identity: FileIdentity::from_raw(1, len + 100),
         links: Some(1),
+        extra: super::backend::Extra {
+            device: Some(1),
+            inode: Some(len + 100),
+            ..Default::default()
+        },
     }
 }
 
@@ -29,6 +34,7 @@ fn dir() -> RawStat {
         modified: None,
         identity: None,
         links: None,
+        extra: Default::default(),
     }
 }
 
@@ -405,6 +411,7 @@ fn p(path: &str) -> PathBuf {
 }
 
 mod copying;
+mod mark;
 mod place;
 
 #[test]

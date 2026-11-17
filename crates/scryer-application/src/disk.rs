@@ -12,11 +12,11 @@ pub mod placement;
 #[cfg(test)]
 pub(crate) use scryer_disk::open_cache_bypassed;
 pub use scryer_disk::{
-    Access, CannotLink, DISK_STAT_REUSE, Disk, DiskError, DiskPass, DiskVerb, Done, EntryKind,
-    Fallback, FileIdentity, FreeNameMove, IfPresent, KeptPermissions, Link, LinkOutcome, Listed,
-    Method, MoveOutcome, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed, Placement,
-    Refused, Removal, Remove, Replace, ScratchDir, Side, Staged, Staging, SyncOutcome, Verify,
-    Visited, VolumeClass, is_cross_device_error, reason,
+    Access, CannotLink, DISK_STAT_REUSE, Disk, DiskError, DiskPass, DiskVerb, Done, Drift,
+    EntryKind, Fallback, FileIdentity, FreeNameMove, IfPresent, KeptPermissions, Link, LinkOutcome,
+    Links, Listed, Mark, Method, MoveOutcome, Open, OwnerOnly, Parents, PathReading, PlaceRefusal,
+    Placed, Placement, Refused, Removal, Remove, Replace, Sameness, ScratchDir, Side, Staged,
+    Staging, SyncOutcome, Verify, Visited, VolumeClass, is_cross_device_error, reason,
 };
 pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
 #[doc(hidden)]

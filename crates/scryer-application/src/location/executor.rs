@@ -532,6 +532,7 @@ pub(super) fn move_error_is_transient(error: &AppError) -> bool {
     matches!(
         error,
         AppError::Repository(_)
+            | AppError::TemporaryUnavailable { .. }
             | AppError::RepositoryFailure { .. }
             | AppError::RepositoryFailed { .. }
     )

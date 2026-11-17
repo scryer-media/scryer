@@ -28,6 +28,19 @@ pub(crate) struct RawStat {
     pub modified: Option<SystemTime>,
     pub identity: Option<FileIdentity>,
     pub links: Option<u64>,
+    pub extra: Extra,
+}
+
+/// The rest of what the same stat call said, which only a
+/// [`super::mark::Mark`] keeps. The inode is carried as given, zero included.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Extra {
+    pub device: Option<u64>,
+    pub inode: Option<u64>,
+    /// The inode change time, as seconds and nanoseconds.
+    pub changed: Option<(i64, i64)>,
+    pub created: Option<SystemTime>,
+    pub owner: Option<u32>,
 }
 
 impl RawStat {
@@ -42,7 +55,7 @@ impl RawStat {
         }
     }
 
-    fn of(metadata: &std::fs::Metadata) -> Self {
+    pub(crate) fn of(metadata: &std::fs::Metadata) -> Self {
         let file_type = metadata.file_type();
         let kind = if file_type.is_symlink() {
             EntryKind::Symlink
@@ -53,9 +66,18 @@ impl RawStat {
         } else {
             EntryKind::Other
         };
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut extra = Extra {
+            created: metadata.created().ok(),
+            ..Extra::default()
+        };
         #[cfg(unix)]
         let (identity, links) = {
             use std::os::unix::fs::MetadataExt;
+            extra.device = Some(metadata.dev());
+            extra.inode = Some(metadata.ino());
+            extra.changed = Some((metadata.ctime(), metadata.ctime_nsec()));
+            extra.owner = Some(metadata.uid());
             (
                 FileIdentity::from_raw(metadata.dev(), metadata.ino()),
                 Some(metadata.nlink()),
@@ -69,6 +91,7 @@ impl RawStat {
             modified: metadata.modified().ok(),
             identity,
             links,
+            extra,
         }
     }
 }
@@ -220,6 +243,12 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn stat(&self, path: &Path) -> io::Result<RawStat>;
     /// Does not follow links.
     fn lstat(&self, path: &Path) -> io::Result<RawStat>;
+    /// The volume serial and file index of the entry at `path` itself, where
+    /// the platform keeps them apart from a stat: one more call on Windows,
+    /// none elsewhere. `None` when there is none to give.
+    fn file_id(&self, _path: &Path) -> Option<(u64, u64)> {
+        None
+    }
     /// Opens a directory for a listing; its entries are read as the
     /// iterator is driven.
     fn list(&self, path: &Path) -> io::Result<Listing>;
@@ -336,6 +365,11 @@ impl DiskBackend for SystemBackend {
 
     fn lstat(&self, path: &Path) -> io::Result<RawStat> {
         std::fs::symlink_metadata(path).map(|metadata| RawStat::of(&metadata))
+    }
+
+    #[cfg(windows)]
+    fn file_id(&self, path: &Path) -> Option<(u64, u64)> {
+        windows_file_id(path)
     }
 
     fn has_entries(&self, path: &Path) -> io::Result<bool> {
@@ -933,6 +967,33 @@ fn long_path_form(
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn exclusive_rename(_source: &Path, _dest: &Path) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
+}
+
+/// The volume serial and file index of the entry at `path`, not followed.
+#[cfg(windows)]
+pub(crate) fn windows_file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        GetFileInformationByHandle,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: the metadata handle stays alive throughout the call.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) } == 0 {
+        return None;
+    }
+    // SAFETY: the call above filled the structure.
+    let information = unsafe { information.assume_init() };
+    Some((
+        u64::from(information.dwVolumeSerialNumber),
+        u64::from(information.nFileIndexHigh) << 32 | u64::from(information.nFileIndexLow),
+    ))
 }
 
 #[cfg(test)]

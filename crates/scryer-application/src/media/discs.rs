@@ -3,12 +3,18 @@ use std::path::PathBuf;
 use crate::{AppError, AppResult, AppUseCase, MediaAnalysisOutcome, TitleMediaFile};
 use scryer_domain::User;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MediaSourceVersion {
-    length: u64,
-    modified: Option<std::time::SystemTime>,
-    identity: Option<crate::disk::FileIdentity>,
+#[derive(Clone, Debug)]
+pub(crate) struct MediaSourceVersion(crate::disk::Mark);
+
+/// Equal while the source was not shown to be another file and its length
+/// and modification time held.
+impl PartialEq for MediaSourceVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.compare(&other.0).is_unwritten()
+    }
 }
+
+impl Eq for MediaSourceVersion {}
 
 impl MediaSourceVersion {
     /// Read the identity a file had at this moment.
@@ -18,22 +24,16 @@ impl MediaSourceVersion {
     /// transient metadata failure would then read as "the source changed"
     /// and blame the file for a fault of the mount.
     pub(crate) async fn read(path: &std::path::Path) -> AppResult<Self> {
-        match crate::disk::Disk::process().follow(path).await {
-            crate::disk::PathReading::Known {
-                len,
-                modified,
-                identity,
-                ..
-            } => Ok(Self {
-                length: len.unwrap_or(0),
-                modified,
-                identity,
-            }),
-            _ => Err(AppError::Repository(format!(
-                "failed to read media source metadata for {}",
-                path.display()
-            ))),
-        }
+        let disk = crate::disk::Disk::process();
+        disk.fingerprint_followed(path)
+            .await
+            .map(Self)
+            .map_err(|_| {
+                AppError::Repository(format!(
+                    "failed to read media source metadata for {}",
+                    path.display()
+                ))
+            })
     }
 }
 
@@ -594,5 +594,9 @@ mod media_source_version_tests {
         let second = MediaSourceVersion::read(&path).await.expect("second read");
 
         assert_eq!(first, second);
+
+        std::fs::write(&path, b"video, rewritten").expect("rewrite file");
+        let rewritten = MediaSourceVersion::read(&path).await.expect("third read");
+        assert_ne!(first, rewritten);
     }
 }

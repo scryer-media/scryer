@@ -570,7 +570,6 @@ impl AppUseCase {
 
     /// One file: check the skips, hash it, persist it. `Ok(Some(bytes))` when
     /// the file was hashed.
-    #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
     async fn backfill_one_media_file(
         &self,
         candidate: &MediaFileHashCandidate,
@@ -593,7 +592,9 @@ impl AppUseCase {
         {
             return Err(BackfillOutcome::Skipped(BackfillSkip::UnavailableMount));
         }
-        let before = tokio::fs::metadata(&path)
+        let disk = crate::disk::Disk::process();
+        let before = disk
+            .fingerprint_followed(&path)
             .await
             .map_err(|_| BackfillOutcome::Skipped(BackfillSkip::UnavailableMount))?;
 
@@ -625,10 +626,14 @@ impl AppUseCase {
                 .await
                 .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
-        let after = tokio::fs::metadata(&path)
-            .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
-        if !same_file_version(&before, &after) || bytes != after.len() {
+        let after = disk.fingerprint_followed(&path).await.map_err(|reading| {
+            BackfillOutcome::Failed(format!(
+                "cannot read {}: {}",
+                path.display(),
+                reading.describe_absence()
+            ))
+        })?;
+        if !before.compare(&after).is_untouched() || !after.is_len(bytes) {
             return Err(BackfillOutcome::Failed("file changed while hashing".into()));
         }
         // The file held still, but it is not the size the catalog recorded:
@@ -758,7 +763,7 @@ fn duration_ms(value: Duration) -> u64 {
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
 /// means a later move can compare a destination read-back against a stored
 /// value instead of re-reading the source.
-#[allow(clippy::disallowed_methods)] // disk-guard: hinted handle, raw file versions
+#[allow(clippy::disallowed_methods)] // disk-guard: hinted handle
 async fn hash_file_cancellable(
     path: PathBuf,
     io: std::sync::Arc<HashIoStats>,
@@ -792,9 +797,11 @@ async fn hash_file_cancellable(
                         path.display()
                     ))
                 })?;
-                let before = file
-                    .metadata()
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let before = crate::disk::Mark::of(
+                    &file
+                        .metadata()
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                );
                 let mut hasher = StreamedContentHasher::new();
                 let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
                 loop {
@@ -830,15 +837,22 @@ async fn hash_file_cancellable(
                         std::sync::atomic::Ordering::Relaxed,
                     );
                 }
-                let after = std::fs::metadata(&path)
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let after = crate::disk::Disk::process()
+                    .fingerprint_followed_blocking(&path)
+                    .map_err(|reading| {
+                        AppError::Repository(format!(
+                            "cannot read {}: {}",
+                            path.display(),
+                            reading.describe_absence()
+                        ))
+                    })?;
                 if cancellation.is_cancelled() {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FULL_HASH_BACKFILL_CANCELLED,
                         "Full-hash backfill cancelled",
                     ));
                 }
-                if !same_file_version(&before, &after) {
+                if !before.compare(&after).is_untouched() {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FILE_CHANGED_WHILE_HASHING,
                         "file changed while hashing",
@@ -910,27 +924,6 @@ fn hash_reader_priority() -> std::io::Result<()> {
     ));
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     Ok(())
-}
-
-pub(super) fn same_file_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
-    if before.len() != after.len()
-        || before.modified().ok() != after.modified().ok()
-        || before.created().ok() != after.created().ok()
-    {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev()
-            || before.ino() != after.ino()
-            || before.ctime() != after.ctime()
-            || before.ctime_nsec() != after.ctime_nsec()
-        {
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]

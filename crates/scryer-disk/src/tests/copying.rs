@@ -39,7 +39,7 @@ fn payload() -> Vec<u8> {
 }
 
 /// Whether a turn in `lane` is free right now, asked without waiting.
-fn turn_is_free(admission: &CopyAdmission, lane: &str) -> bool {
+pub(super) fn turn_is_free(admission: &CopyAdmission, lane: &str) -> bool {
     let turn = std::pin::pin!(admission.acquire_keyed(lane));
     matches!(
         turn.poll(&mut Context::from_waker(Waker::noop())),
@@ -87,11 +87,30 @@ async fn copies_share_a_volume_budget() {
     let a = admission.acquire_keyed("a").await;
     let b = admission.acquire_keyed("a").await;
     assert!(!turn_is_free(&admission, "a"));
-    let other = admission.acquire_keyed("b").await;
+    assert!(turn_is_free(&admission, "b"), "another volume is not held");
     drop(a);
     let next = admission.acquire_keyed("a").await;
-    drop((b, next, other));
+    drop((b, next));
     assert!(turn_is_free(&admission, "a"));
+
+    // A mark of a folder names the lane a path in it is given, and so does
+    // the mark read back from its stored volume.
+    let folder = tempfile::tempdir().unwrap();
+    let mark = disk()
+        .fingerprint_identified_blocking(folder.path())
+        .expect("folder");
+    let stored = crate::Mark::from_stored(&mark.volume().to_stored()).expect("stored volume");
+    assert_eq!(
+        mark.lane(),
+        crate::copy::volume_key(&folder.path().join("a.mkv"))
+    );
+    assert_eq!(stored.lane(), mark.lane());
+    let (c, d) = (
+        admission.acquire_on(&mark).await,
+        admission.acquire_for(&folder.path().join("a.mkv")).await,
+    );
+    assert!(!turn_is_free(&admission, &stored.lane()));
+    drop((c, d));
 
     // Asked for by path, two names in one folder are one volume.
     let temp = tempfile::tempdir().unwrap();
@@ -327,15 +346,15 @@ fn a_blocking_recorded_copy_takes_its_own_turn() {
 }
 
 /// The async form waits for the turn before it takes a thread and hands it
-/// to the copy, which does not ask for a second: with one turn on the
-/// volume the copy still runs to its end.
+/// to the copy, which does not ask for a second. The volume has two turns,
+/// so a second ask would be granted and counted rather than wait forever.
 #[tokio::test]
 async fn an_admitted_copy_does_not_ask_for_a_second_turn() {
     let temp = tempfile::tempdir().unwrap();
     let (source, dest) = (temp.path().join("source.mkv"), temp.path().join("dest.mkv"));
     std::fs::write(&source, b"incoming").unwrap();
     let disk = disk();
-    disk.install_copy_workers(1);
+    disk.install_copy_workers(2);
     let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let watch = Watch {
         progress: Progress::to({
@@ -349,12 +368,7 @@ async fn an_admitted_copy_does_not_ask_for_a_second_turn() {
         cancel: Cancel::never(),
     };
     let policy = recorded(Depth::Quick, Landing::Staged, Replace::Never);
-    let placed = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
-        disk.place_watched(&source, &dest, policy, watch),
-    )
-    .await
-    .expect("a copy holding its turn does not wait for another");
+    let placed = disk.place_watched(&source, &dest, policy, watch).await;
     assert_eq!(placed.expect("copied").done, Done::Copied);
     assert_eq!(waits.load(Ordering::SeqCst), 1);
 }

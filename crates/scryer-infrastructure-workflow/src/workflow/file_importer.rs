@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
     ImportFileTransferProgress, ImportFileTransferProgressSender,
-    disk::{Disk, EntryKind, Link, LinkOutcome, Open, Parents, Removal, Remove},
+    disk::{Disk, EntryKind, Link, LinkOutcome, Mark, Open, Parents, Removal, Remove},
     fs_integrity::import_content_proof,
     location::verify::StreamedContentHasher,
 };
@@ -2025,6 +2025,15 @@ fn prepare_import_placement_blocking(
     })
 }
 
+/// The destination volume as the disk service names it, from the key the
+/// prepared placement already carries: no probe. A key the service did not
+/// write shares the unknown lane.
+fn copy_lane(volume_key: &str) -> Mark {
+    Mark::from_stored(volume_key)
+        .or_else(|| Mark::from_stored("unknown-volume"))
+        .expect("the unknown lane is always readable")
+}
+
 #[cfg(unix)]
 fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
     format!("unix-dev:{}", guard.approved_parent_fingerprint.dev)
@@ -3755,7 +3764,7 @@ impl FsFileImporter {
                         copy_permit = Some(
                             wait_for_import_operation_or_cancel(
                                 cancellation.as_ref(),
-                                self.placement.copy.acquire_for(dest),
+                                self.placement.copy.acquire_on(&copy_lane(&volume_key)),
                             )
                             .await?,
                         );
@@ -3860,7 +3869,7 @@ impl FsFileImporter {
                 let mut copy_permit = Some(
                     wait_for_import_operation_or_cancel(
                         cancellation.as_ref(),
-                        self.placement.copy.acquire_for(&prepared.dest),
+                        self.placement.copy.acquire_on(&copy_lane(&volume_key)),
                     )
                     .await?,
                 );
@@ -4144,6 +4153,18 @@ mod tests {
         )
         .expect("prepare second destination");
         assert_eq!(first.volume_key, second.volume_key);
+        // The key in hand is the one the disk service gives the same folder,
+        // so admission needs no probe of its own.
+        let parent = Disk::process()
+            .fingerprint_identified_blocking(&temp.path().join("library-a"))
+            .expect("destination parent");
+        assert_eq!(first.volume_key, parent.volume().to_stored());
+        assert_eq!(
+            copy_lane(&first.volume_key).to_stored(),
+            first.volume_key,
+            "the key reads back as the same lane"
+        );
+        assert_eq!(copy_lane("fixture-nonsense").to_stored(), "unknown-volume");
     }
 
     #[test]

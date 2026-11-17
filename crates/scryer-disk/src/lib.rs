@@ -58,6 +58,7 @@ pub(crate) mod backend;
 pub(crate) mod cache;
 pub mod capacity;
 mod copy;
+mod mark;
 mod pass;
 mod place;
 mod reading;
@@ -86,6 +87,7 @@ pub use copy::{
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
     RESUMABLE_STAGING_SUFFIX, Verdict, Watch, resumable_staging_path,
 };
+pub use mark::{Drift, Links, Mark, Sameness};
 pub use pass::DiskPass;
 pub use place::{
     CannotLink, Done, Fallback, FreeNameMove, Method, PlaceRefusal, Placed, Placement, Refused,
@@ -689,6 +691,17 @@ impl Disk {
     }
 
     async fn probe_now(&self, path: PathBuf, read: fn(&Self, &Path) -> PathReading) -> PathReading {
+        self.probe_with(path, read, |unreachable| unreachable).await
+    }
+
+    /// One bounded read off the runtime; a read that did not answer is
+    /// `unanswered` of an unreachable reading.
+    async fn probe_with<T: Send + 'static>(
+        &self,
+        path: PathBuf,
+        read: fn(&Self, &Path) -> T,
+        unanswered: fn(PathReading) -> T,
+    ) -> T {
         let timeout = self.traits(&path).probe_timeout;
         let owner = self.clone();
         let probed = path.clone();
@@ -696,14 +709,101 @@ impl Disk {
             .bounded(&path, timeout, move || read(&owner, &probed))
             .await
         {
-            Bounded::Done(reading) => reading,
-            outcome => PathReading::Unreachable {
+            Bounded::Done(read) => read,
+            outcome => unanswered(PathReading::Unreachable {
                 observed_at: self.inner.clock.now(),
                 cause: match outcome {
                     Bounded::TimedOut => reason::DISK_TIMED_OUT,
                     _ => reason::DISK_PATH_UNREACHABLE,
                 },
-            },
+            }),
+        }
+    }
+
+    /// A [`Mark`] of what is at `path` itself, a link not followed: one
+    /// probe, never cached. `Err` is the reading that says why there is no
+    /// mark: missing or unreachable, never the two confused.
+    pub fn fingerprint_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
+        let result = self.call("lstat", || self.inner.backend.lstat(path));
+        self.mark_of(result, None)
+    }
+
+    /// [`Self::fingerprint_blocking`] of what `path` resolves to through any
+    /// links: one probe.
+    pub fn fingerprint_followed_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
+        let result = self.call("stat", || self.inner.backend.stat(path));
+        self.mark_of(result, None)
+    }
+
+    /// [`Self::fingerprint_blocking`] that also carries the Windows volume
+    /// serial and file index, so two such marks can be told apart there: one
+    /// probe on unix, two on Windows.
+    pub fn fingerprint_identified_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
+        let result = self.call("lstat", || self.inner.backend.lstat(path));
+        let id = result
+            .is_ok()
+            .then(|| self.call("file_id", || self.inner.backend.file_id(path)))
+            .flatten();
+        self.mark_of(result, id)
+    }
+
+    fn mark_of(
+        &self,
+        result: io::Result<backend::RawStat>,
+        windows_id: Option<(u64, u64)>,
+    ) -> Result<Mark, PathReading> {
+        match &result {
+            Ok(stat) => Ok(Mark::of_stat(stat, windows_id)),
+            Err(_) => Err(PathReading::from_result(&result, self.inner.clock.now())),
+        }
+    }
+
+    /// [`Self::fingerprint_blocking`] off the runtime, bounded as
+    /// [`Self::uncached`] is.
+    pub async fn fingerprint(&self, path: impl Into<PathBuf>) -> Result<Mark, PathReading> {
+        self.probe_with(path.into(), Self::fingerprint_blocking, Err)
+            .await
+    }
+
+    /// [`Self::fingerprint_followed_blocking`] off the runtime, bounded.
+    pub async fn fingerprint_followed(
+        &self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Mark, PathReading> {
+        self.probe_with(path.into(), Self::fingerprint_followed_blocking, Err)
+            .await
+    }
+
+    /// Whether `path` is still the file `mark` was taken of: one probe, a
+    /// link not followed.
+    pub fn still_matches_blocking(&self, mark: &Mark, path: &Path) -> Drift {
+        Self::drift_from(mark, self.fingerprint_blocking(path))
+    }
+
+    /// [`Self::still_matches_blocking`] off the runtime, bounded.
+    pub async fn still_matches(&self, mark: &Mark, path: impl Into<PathBuf>) -> Drift {
+        Self::drift_from(mark, self.fingerprint(path).await)
+    }
+
+    fn drift_from(mark: &Mark, now: Result<Mark, PathReading>) -> Drift {
+        match now {
+            Ok(now) => mark.compare(&now),
+            Err(PathReading::Missing { .. }) => Drift::Gone,
+            Err(_) => Drift::CannotTell,
+        }
+    }
+
+    /// Whether two paths name one file: one probe each on unix and two on
+    /// Windows, links not followed, the second path left unread when the
+    /// first gave no mark. A path that is
+    /// missing or unreadable answers [`Sameness::CannotTell`].
+    pub fn same_file_blocking(&self, left: &Path, right: &Path) -> Sameness {
+        let Ok(left) = self.fingerprint_identified_blocking(left) else {
+            return Sameness::CannotTell;
+        };
+        match self.fingerprint_identified_blocking(right) {
+            Ok(right) => left.same_file(&right),
+            Err(_) => Sameness::CannotTell,
         }
     }
 
@@ -994,7 +1094,7 @@ impl Disk {
     /// Move `source` to `dest` with a rename that refuses an existing
     /// destination in the same call. `Ok(false)`, with nothing changed, where
     /// the filesystem has no such rename, for a caller with its own way on.
-    pub fn rename_no_replace_blocking(
+    pub(crate) fn rename_no_replace_blocking(
         &self,
         source: &Path,
         dest: &Path,
@@ -1006,18 +1106,6 @@ impl Disk {
             .transpose()
             .map(|renamed| renamed.is_some())
             .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
-    }
-
-    pub async fn rename_no_replace(
-        &self,
-        source: impl Into<PathBuf>,
-        dest: impl Into<PathBuf>,
-    ) -> Result<bool, DiskError> {
-        let dest = dest.into();
-        self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
-            disk.rename_no_replace_blocking(source, &dest)
-        })
-        .await
     }
 
     /// Move `source` to `dest` by reserving `dest` with an exclusive create

@@ -28,7 +28,6 @@ use crate::location::model::{
 use crate::{AppError, AppResult};
 
 #[doc(hidden)]
-#[doc(hidden)]
 pub use crate::disk::ReadBackHandle;
 #[cfg(test)]
 pub(crate) use crate::disk::{CacheBypass, ReadBackOpener, open_cache_bypassed};
@@ -337,6 +336,9 @@ pub async fn recorded_copy(
                 crate::error_reasons::location::DESTINATION_OCCUPIED,
                 refusal.to_string(),
             ),
+            // Coded for the client, and still the transient kind the runner
+            // retries and waits out.
+            Refused::Unreachable(_) => AppError::temporary_unavailable(refusal.to_string(), None),
             _ => AppError::Repository(refusal.to_string()),
         })?;
     let copied = placed.copied.ok_or_else(|| {
@@ -1232,6 +1234,37 @@ mod tests {
     /// The FR-032 pre-flight: two paths under one temp directory are on one
     /// filesystem, and a source that is not there answers "no" rather than
     /// guessing.
+    /// A copy whose destination could not be read is reported as temporarily
+    /// unavailable, which the runner still retries, not as a bare sentence.
+    #[tokio::test]
+    async fn an_unreadable_destination_is_reported_as_temporarily_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, 16);
+        // The staged name sits under a file, so reading it fails without
+        // saying it is missing.
+        let blocker = dir.path().join("not-a-folder");
+        write_pattern(&blocker, 1);
+        let error = recorded_copy(
+            &Disk::process(),
+            &source,
+            &blocker.join("destination.bin"),
+            crate::disk::placement::verified_copy(
+                VerificationDepth::Quick,
+                DestinationClaim::ClaimHere,
+            ),
+            &CopyProgress::none(),
+        )
+        .await
+        .expect_err("refused");
+        assert!(
+            matches!(error, AppError::TemporaryUnavailable { .. }),
+            "{error:?}"
+        );
+        assert!(crate::location::executor::move_error_is_transient(&error));
+        assert_eq!(std::fs::read(&blocker).unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn same_filesystem_probe_answers_for_a_destination_that_does_not_exist_yet() {
         let dir = tempfile::tempdir().unwrap();

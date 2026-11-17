@@ -12,7 +12,7 @@
 //! path here that may not replace either refuses in the same call that would
 //! have written, or reserves the name first.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -292,6 +292,9 @@ impl Disk {
     /// the source. A symlink is re-created rather than having the file it
     /// points at copied. When a step fails, the file is put back or left
     /// where it is; a stray file is always preferred to a lost one.
+    ///
+    /// Never call it on a runtime worker thread; see
+    /// [`Self::place_watched_blocking`].
     pub fn place_blocking(
         &self,
         source: &Path,
@@ -304,7 +307,9 @@ impl Disk {
     /// [`Self::place_blocking`], reporting a copy's progress to `watch` and
     /// stopping it when `watch` says so. A cancelled copy removes only a
     /// staged file this call created. A recorded copy waits on this thread
-    /// for its turn on the destination's volume.
+    /// for its turn on the destination's volume, and that wait does not
+    /// observe `watch`'s cancel. Never call it on a runtime worker thread:
+    /// it would hold the worker for the wait and the copy.
     pub fn place_watched_blocking(
         &self,
         source: &Path,
@@ -312,7 +317,7 @@ impl Disk {
         policy: Placement,
         watch: &Watch,
     ) -> Result<Placed, PlaceRefusal> {
-        self.place_admitted(source, dest, policy, watch, None)
+        self.place_admitted(source, dest, policy, watch, None, false)
     }
 
     fn place_admitted(
@@ -321,11 +326,9 @@ impl Disk {
         dest: &Path,
         policy: Placement,
         watch: &Watch,
-        admitted: Option<CopyPermit>,
+        permit: Option<CopyPermit>,
+        staged_free: bool,
     ) -> Result<Placed, PlaceRefusal> {
-        // A turn handed in was waited for after the staged name read free.
-        let staged_free = admitted.is_some();
-        let permit = admitted;
         let job = Job {
             disk: self,
             source,
@@ -333,7 +336,7 @@ impl Disk {
             policy,
             watch,
             permit: RefCell::new(permit),
-            staged_free: Cell::new(staged_free),
+            staged_free,
             copied: RefCell::new(None),
         };
         match job.run() {
@@ -377,6 +380,7 @@ impl Disk {
     ) -> Result<Placed, PlaceRefusal> {
         let (disk, source, dest) = (self.clone(), source.into(), dest.into());
         let recorded = matches!(policy.verify, Verify::Recorded(_));
+        let mut staged_free = false;
         let permit = match policy {
             Placement {
                 method: Method::Copy,
@@ -395,13 +399,14 @@ impl Disk {
                             detail: fail.detail,
                         });
                     }
+                    staged_free = true;
                 }
                 watch.progress.report(Phase::Waiting, 0);
                 Some(self.copy_admission().acquire_for(&dest).await)
             }
             _ => None,
         };
-        let job = move || disk.place_admitted(&source, &dest, policy, &watch, permit);
+        let job = move || disk.place_admitted(&source, &dest, policy, &watch, permit, staged_free);
         match offload(None, job).await {
             Offloaded::Done(result) => result,
             Offloaded::TimedOut => Err(PlaceRefusal {
@@ -525,7 +530,7 @@ pub(crate) struct Job<'a> {
     /// The copy's turn on the destination's volume, when it waited for one.
     pub(crate) permit: RefCell<Option<CopyPermit>>,
     /// Whether the staged name of a recorded copy was already read as free.
-    pub(crate) staged_free: Cell<bool>,
+    pub(crate) staged_free: bool,
     pub(crate) copied: RefCell<Option<Copied>>,
 }
 

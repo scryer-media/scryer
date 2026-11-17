@@ -62,6 +62,7 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::place::{Fail, Job, Refused, Side};
+use super::reading::reason;
 use super::sample::{ContentSample, SampleStep, sample_reader};
 use super::{Disk, DiskError, DiskVerb, Open, PathReading, Remove, Replace, SyncOutcome};
 
@@ -315,6 +316,14 @@ impl CopyAdmission {
         self.acquire_keyed(&key).await
     }
 
+    /// A turn on the volume a mark in hand names: the lane
+    /// [`Self::acquire_for`] gives a path on that volume, without a probe. A
+    /// mark that carries no volume, as a plain Windows read does not, shares
+    /// the unknown lane.
+    pub async fn acquire_on(&self, volume: &super::Mark) -> CopyPermit {
+        self.acquire_keyed(&volume.lane()).await
+    }
+
     /// [`Self::acquire_for`] for a copy already on a blocking thread, which
     /// waits there for its turn.
     pub(crate) fn acquire_for_blocking(&self, destination: &Path) -> CopyPermit {
@@ -379,36 +388,12 @@ pub(crate) fn volume_key(path: &Path) -> String {
     #[cfg(windows)]
     {
         for ancestor in path.ancestors() {
-            if let Some(volume) = windows_volume_serial(ancestor) {
+            if let Some((volume, _)) = super::backend::windows_file_id(ancestor) {
                 return format!("windows-volume:{volume}");
             }
         }
     }
     "unknown-volume".to_owned()
-}
-
-#[cfg(windows)]
-fn windows_volume_serial(path: &Path) -> Option<u64> {
-    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        GetFileInformationByHandle,
-    };
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .access_mode(0)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .ok()?;
-    let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
-    // SAFETY: the metadata handle stays alive throughout the call.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) } == 0 {
-        return None;
-    }
-    // SAFETY: the call above filled the structure.
-    Some(u64::from(
-        unsafe { information.assume_init() }.dwVolumeSerialNumber,
-    ))
 }
 
 // ── The read-back seam ───────────────────────────────────────────────────────
@@ -707,6 +692,17 @@ fn sync_folder_best_effort(disk: &Disk, destination: &Path) {
 }
 
 impl WriteFail {
+    /// The target's exclusive create found something there, so this attempt
+    /// wrote nothing.
+    fn found_the_target_taken(&self) -> bool {
+        self.step == Step::OpenTarget
+            && !self.claimed
+            && match &self.cause {
+                Cause::Disk(error) => error.reason() == reason::DISK_DESTINATION_EXISTS,
+                Cause::Io(error) => error.kind() == io::ErrorKind::AlreadyExists,
+            }
+    }
+
     /// The failure as a recorded copy reports it: classified from what the
     /// disk said, worded for a person.
     fn recorded(self, source: &Path, target: &Path) -> Fail {
@@ -752,7 +748,7 @@ impl Job<'_> {
         let target = staged.as_deref().unwrap_or(dest);
         let replaces = self.policy.replace == Replace::Allowed;
         if let Some(staged) = &staged
-            && !self.staged_free.get()
+            && !self.staged_free
         {
             staged_name_is_free(staged, disk.uncached_blocking(staged))?;
         }
@@ -782,6 +778,12 @@ impl Job<'_> {
                 // opened belongs to someone else and stays.
                 if staged.is_some() && fail.claimed {
                     remove_staged_best_effort(disk, target);
+                }
+                // The claim, not the earlier read, decides whether the
+                // staged name was free: something can take it while the copy
+                // waits for its turn.
+                if staged.is_some() && fail.found_the_target_taken() {
+                    return Err(staging_occupied(target));
                 }
                 return Err(fail.recorded(source, target));
             }
@@ -829,15 +831,19 @@ pub(crate) fn staged_name_is_free(staged: &Path, reading: PathReading) -> Result
                 reading.describe_absence()
             ),
         )),
-        Some(true) => Err(Fail::new(
-            Refused::StagingOccupied,
-            io::ErrorKind::AlreadyExists,
-            format!(
-                "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
-                staged.display()
-            ),
-        )),
+        Some(true) => Err(staging_occupied(staged)),
     }
+}
+
+fn staging_occupied(staged: &Path) -> Fail {
+    Fail::new(
+        Refused::StagingOccupied,
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
+            staged.display()
+        ),
+    )
 }
 
 /// Drops an incomplete staged file after a failed attempt. A stray one costs
