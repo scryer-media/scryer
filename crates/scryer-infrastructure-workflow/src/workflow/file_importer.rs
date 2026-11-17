@@ -2818,6 +2818,12 @@ fn beside_adopted_destination(
 fn aside_removal_result(source: &Path, dest: &Path, answer: AsideRemoval) -> AppResult<()> {
     match answer {
         AsideRemoval::Removed => Ok(()),
+        // Only a check that never removes answers this; nothing was removed.
+        AsideRemoval::Apart => Err(AppError::Repository(format!(
+            "import source {} was not removed beside {}; nothing was removed",
+            source.display(),
+            dest.display()
+        ))),
         AsideRemoval::SameEntry => Err(import_destination_is_source(source, dest)),
         AsideRemoval::DestinationChanged => Err(AppError::Repository(format!(
             "import source cleanup failed because destination changed: {}; nothing was removed",
@@ -3349,9 +3355,8 @@ fn reconcile_existing_destination(
     // download client may later remove its entry but never its data. One
     // cheap look settles the plain cases here in every mode; a destination
     // with another name, such as a link an earlier import made, reads as
-    // distinct without it. The rest is settled when a move removes the
-    // source: it is set aside first, and removed only while the destination
-    // still holds the file adopted here.
+    // distinct without it. Where that look cannot rely on file numbers, the
+    // source is set aside once the content matched, below, in every mode.
     match Disk::process().entry_alias_blocking(source, dest, &existing) {
         EntryAlias::Distinct => {}
         EntryAlias::Same => {
@@ -3397,6 +3402,41 @@ fn reconcile_existing_destination(
             )));
         }
         disk::Check::Unread(said) => return Err(adoption_unread(source, dest, &said)),
+    }
+    // A destination of the same content that the cheap look called distinct
+    // without file numbers to rely on, a link, or a path on a share, may
+    // still be the source's own entry, and adopting it as a separate file
+    // would let the download client remove the only copy. The filesystem
+    // settles it: the source is set aside, the destination read, and the
+    // source put back. A destination gone with it is the source's own entry;
+    // one still there is separate. Adoption only, and only there: one read of
+    // the source, two renames, one read of the destination, a second when it
+    // is a link, and one listing of its folder unless both carry numbers on
+    // one volume off a share.
+    let source_mark = Disk::process()
+        .fingerprint_blocking(source)
+        .map_err(|_| import_destination_alias_unknown(source, dest, "the source did not read"))?;
+    if Disk::process().adoption_needs_set_aside(source, &source_mark, dest, &existing) {
+        match Disk::process().tell_apart_by_set_aside_blocking(
+            source,
+            &source_mark,
+            dest,
+            &existing,
+        ) {
+            AsideRemoval::Apart => {}
+            AsideRemoval::SameEntry => {
+                return library_file_result(
+                    source,
+                    dest,
+                    source_fingerprint,
+                    size,
+                    destination_guard,
+                    source_cleanup_required,
+                )
+                .map(Some);
+            }
+            other => aside_removal_result(source, dest, other)?,
+        }
     }
 
     let source_cleanup = if source_cleanup_required {
@@ -6552,7 +6592,9 @@ mod tests {
     /// another spelling ends on that file, marked so the client may remove
     /// its entry but never its data. A destination that is a second link of
     /// the source, which an earlier link import made, is still that import,
-    /// as it was before. Nothing is removed in either case.
+    /// as it was before. A symlink is told by setting the source aside: one
+    /// to the source is the library file, one to another equal file is
+    /// adopted. Nothing is removed in any case, and the source is back.
     #[cfg(unix)]
     #[test]
     fn a_link_import_onto_the_sources_own_entry_is_the_library_file_and_a_second_link_is_kept() {
@@ -6603,6 +6645,34 @@ mod tests {
         assert!(result.source_cleanup.is_none(), "{result:?}");
         assert_eq!(std::fs::read(&source).ok(), bytes);
         assert_eq!(std::fs::read(&linked).ok(), bytes);
+
+        // A symlink to the source: the set-aside test finds it is the
+        // source's entry, and the source is put back.
+        let pointer = shelf.join("Pointer.mkv");
+        std::os::unix::fs::symlink(&source, &pointer).expect("symlink");
+        let result = link_import(&pointer).expect("a link to the source");
+        assert_eq!(
+            result.source_disposition,
+            ImportSourceDisposition::IsLibraryFile
+        );
+        assert!(result.source_cleanup.is_none(), "{result:?}");
+        assert_eq!(std::fs::read(&source).ok(), bytes);
+        assert!(!disk::aside_path_for(&source).exists());
+
+        // A symlink to another file of the same content: separate, adopted,
+        // and the source put back where it was.
+        let elsewhere = dir.path().join("elsewhere.mkv");
+        std::fs::write(&elsewhere, b"only video bytes").expect("elsewhere");
+        let other = shelf.join("Other.mkv");
+        std::os::unix::fs::symlink(&elsewhere, &other).expect("symlink");
+        let result = link_import(&other).expect("a link to another equal file");
+        assert_eq!(
+            result.destination_disposition,
+            ImportDestinationDisposition::AlreadyPresent
+        );
+        assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
+        assert_eq!(std::fs::read(&source).ok(), bytes);
+        assert!(!disk::aside_path_for(&source).exists());
     }
 
     /// An existing destination that differs from the source only between the

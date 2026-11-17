@@ -247,6 +247,73 @@ fn off_the_sources_volume_the_destination_must_be_listed_in_its_folder() {
     }
 }
 
+/// Telling an adopted destination apart from the source runs the set-aside
+/// test and always puts the source back: a destination that reads missing
+/// while the source is aside is its entry; one listed in its folder off the
+/// source's volume is separate. Two renames either way, never a removal.
+#[test]
+fn telling_a_destination_apart_puts_the_source_back_and_removes_nothing() {
+    let dest = "/srv/fixture-media/mount-b/library/sample.mkv";
+    let (disk, backend) = scripted();
+    let answer = disk.tell_apart_by_set_aside_blocking(
+        &p(SOURCE),
+        &source_mark(),
+        &p(dest),
+        &mark(on_volume(2, 7, Some(1))),
+    );
+    assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
+    assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE), aside()]);
+    assert_eq!(backend.paths_of("lstat"), [p(dest)]);
+    assert_eq!(
+        backend.calls_of("list") + backend.calls_of("remove_file"),
+        0
+    );
+
+    let kept = on_volume(2, 8, Some(1));
+    let (disk, backend) = scripted();
+    backend.stat_is(dest, Ok(kept));
+    backend.lists(
+        "/srv/fixture-media/mount-b/library",
+        &[("sample.mkv", None)],
+    );
+    let answer =
+        disk.tell_apart_by_set_aside_blocking(&p(SOURCE), &source_mark(), &p(dest), &mark(kept));
+    assert!(matches!(answer, AsideRemoval::Apart), "{answer:?}");
+    assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE), aside()]);
+    assert_eq!(
+        backend.paths_of("list"),
+        [p("/srv/fixture-media/mount-b/library")]
+    );
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+/// Adoption needs the set-aside test unless both reads carry nonzero file
+/// numbers on one known volume and the destination is no link. Reads nothing.
+#[test]
+fn adoption_needs_the_set_aside_test_unless_numbers_tell_on_one_volume() {
+    let dest = p("/srv/fixture-media/library/sample.mkv");
+    let symlink = RawStat {
+        kind: EntryKind::Symlink,
+        ..named(9, 1)
+    };
+    let cases = [
+        (named(8, 1), false),
+        (on_volume(2, 8, Some(1)), true),
+        (numbered(Some(1), None), true),
+        (numbered(None, None), true),
+        (symlink, true),
+    ];
+    for (kept, needed) in cases {
+        let (disk, backend) = scripted();
+        assert_eq!(
+            disk.adoption_needs_set_aside(&p(SOURCE), &source_mark(), &dest, &mark(kept)),
+            needed,
+            "{kept:?}"
+        );
+        assert_eq!(backend.calls_of("lstat") + backend.calls_of("list"), 0);
+    }
+}
+
 /// A link at the destination that reached the source dangles once the source
 /// is aside; it is the source's entry, and the source goes back. A link that
 /// still reaches something lets the source go. A link adds one followed read.

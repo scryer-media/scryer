@@ -78,6 +78,20 @@ pub enum AsideRemoval {
     /// source's own name hold it: something else moved it. Nothing more was
     /// done; where the file is was not found.
     SetAsideMoved { at: PathBuf, error: DiskError },
+    /// Only from [`super::Disk::tell_apart_by_set_aside_blocking`]: the
+    /// destination checked out as a separate entry, and the source was put
+    /// back. Nothing was removed.
+    Apart,
+}
+
+/// What a set-aside source becomes once the destination checked out as a
+/// separate entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Settle {
+    /// It is removed: the move's source goes.
+    Remove,
+    /// It is put back: only whether the two are one entry was asked.
+    PutBack,
 }
 
 /// A put-back of a set-aside source that failed, with what the removal
@@ -266,10 +280,62 @@ impl super::Disk {
         kept: &Path,
         kept_mark: &Mark,
     ) -> AsideRemoval {
-        let mut stuck = match self.remove_source_beside_once(source, source_mark, kept, kept_mark) {
-            Ok(answer) => return answer,
-            Err(stuck) => *stuck,
-        };
+        self.beside_blocking(source, source_mark, kept, kept_mark, Settle::Remove)
+    }
+
+    /// Whether `kept`, a destination that already holds the source's content
+    /// and is about to be adopted, is a separate entry from `source`, told by
+    /// steps 1 to 4 of [`Self::remove_source_beside_blocking`], after which
+    /// the source is always put back instead of removed: [`AsideRemoval::Apart`]
+    /// when it is separate, [`AsideRemoval::SameEntry`] when setting the
+    /// source aside took the destination with it, and the same answers as a
+    /// removal for everything else. Nothing is removed.
+    ///
+    /// Probes: two renames and one read of `kept`, a second read when `kept`
+    /// is a link, and one listing of `kept`'s folder unless both carry
+    /// numbers on one known volume off a named share. A put-back that fails
+    /// is retried as a removal's is, pausing on the calling thread.
+    pub fn tell_apart_by_set_aside_blocking(
+        &self,
+        source: &Path,
+        source_mark: &Mark,
+        kept: &Path,
+        kept_mark: &Mark,
+    ) -> AsideRemoval {
+        self.beside_blocking(source, source_mark, kept, kept_mark, Settle::PutBack)
+    }
+
+    /// Whether the read of `kept` and of `source` leave it open that the two
+    /// are one entry, so that [`Self::tell_apart_by_set_aside_blocking`] is
+    /// needed before `kept` is adopted as a separate file: `kept` is a link,
+    /// the two do not both carry nonzero file numbers on one known volume,
+    /// or either path names a network share. Reads nothing.
+    pub fn adoption_needs_set_aside(
+        &self,
+        source: &Path,
+        source_mark: &Mark,
+        kept: &Path,
+        kept_mark: &Mark,
+    ) -> bool {
+        kept_mark.kind() == Some(EntryKind::Symlink)
+            || !kept_mark.numbered_on_one_volume(source_mark)
+            || on_a_share(kept)
+            || on_a_share(source)
+    }
+
+    fn beside_blocking(
+        &self,
+        source: &Path,
+        source_mark: &Mark,
+        kept: &Path,
+        kept_mark: &Mark,
+        settle: Settle,
+    ) -> AsideRemoval {
+        let mut stuck =
+            match self.remove_source_beside_once(source, source_mark, kept, kept_mark, settle) {
+                Ok(answer) => return answer,
+                Err(stuck) => *stuck,
+            };
         for pause in PUT_BACK_RETRY_PAUSES {
             self.inner.clock.pause(pause);
             let attempt = self.put_back_attempt(source, source_mark, &stuck.at);
@@ -300,7 +366,13 @@ impl super::Disk {
                 kept_mark.clone(),
             );
             blocking(move || {
-                disk.remove_source_beside_once(&source, &source_mark, &kept, &kept_mark)
+                disk.remove_source_beside_once(
+                    &source,
+                    &source_mark,
+                    &kept,
+                    &kept_mark,
+                    Settle::Remove,
+                )
             })
             .await
         };
@@ -370,6 +442,7 @@ impl super::Disk {
         source_mark: &Mark,
         kept: &Path,
         kept_mark: &Mark,
+        settle: Settle,
     ) -> Result<AsideRemoval, Box<Stuck>> {
         let aside = aside_path_for(source);
         if let Err(error) = self.move_exclusive_blocking(source, &aside) {
@@ -418,6 +491,9 @@ impl super::Disk {
             && let Some(answer) = self.unlisted(kept)
         {
             return self.put_back(source, aside, answer);
+        }
+        if settle == Settle::PutBack {
+            return self.put_back(source, aside, AsideRemoval::Apart);
         }
 
         match self.remove_blocking(&aside, Remove::File) {
