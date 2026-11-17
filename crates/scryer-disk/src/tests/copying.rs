@@ -595,7 +595,11 @@ fn a_staged_copy_names_the_file_it_promoted() {
 
     let copied = fixture.copy(&Watch::nobody()).expect("the copy lands");
 
-    assert_eq!(fixture.disk.calls("handle_stat"), 1);
+    assert_eq!(
+        fixture.disk.calls_in_order(&["sync_handle", "handle_stat"]),
+        ["sync_handle", "handle_stat"],
+        "the promoted file is marked once it is synced"
+    );
     assert_eq!(
         fixture.disk.calls("lstat") - lstats_before,
         2,

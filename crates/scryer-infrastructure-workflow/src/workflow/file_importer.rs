@@ -1890,7 +1890,9 @@ fn copy_regular_source_to_destination(
     // Where that mark tells no file apart from another, only its length and
     // times can, and a platform that sets the write time at the close would
     // make the import's own copy read as rewritten; there the read of the
-    // name made next, right after the promotion, marks it instead.
+    // name made next, right after the promotion, marks it instead, but only
+    // when that read is a regular file of the copied length: anything else
+    // under the name is not the copy, and the handle's mark is kept.
     let promoted = copied.promoted;
     #[cfg(test)]
     if let Some(after_promoted) = options.after_copy_promoted {
@@ -1899,7 +1901,13 @@ fn copy_regular_source_to_destination(
     let (dest_fingerprint, landed) = match read_import_source(dest) {
         Ok((fingerprint, named)) => {
             let landed = match promoted {
-                Some(mark) if mark.same_file(&mark) == Sameness::CannotTell => Some(named),
+                Some(mark)
+                    if mark.same_file(&mark) == Sameness::CannotTell
+                        && named.kind() == Some(EntryKind::File)
+                        && named.is_len(size) =>
+                {
+                    Some(named)
+                }
                 promoted => promoted,
             };
             (fingerprint.file, landed)

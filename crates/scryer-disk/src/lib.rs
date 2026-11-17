@@ -540,6 +540,9 @@ struct Inner {
     whole_reads: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, usize>>>,
     #[cfg(test)]
     calls: Mutex<std::collections::HashMap<&'static str, u64>>,
+    /// Every call by name, in the order made.
+    #[cfg(test)]
+    call_order: Mutex<Vec<&'static str>>,
     #[cfg(test)]
     probe_timeout: Mutex<Option<std::time::Duration>>,
     /// Where the next steps of a copy fail, in order, and the raw error code
@@ -598,6 +601,8 @@ impl Disk {
                 whole_reads: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 calls: Mutex::default(),
+                #[cfg(test)]
+                call_order: Mutex::default(),
                 #[cfg(test)]
                 probe_timeout: Mutex::default(),
                 #[cfg(test)]
@@ -1799,6 +1804,11 @@ impl Disk {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *calls.entry(operation).or_default() += 1;
+            self.inner
+                .call_order
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(operation);
         }
         #[cfg(not(test))]
         let _ = operation;
@@ -1881,6 +1891,17 @@ impl Disk {
             .get(operation)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// The calls this owner made of `operations`, in order, for tests.
+    #[cfg(test)]
+    pub(crate) fn calls_in_order(&self, operations: &[&str]) -> Vec<&'static str> {
+        let order = self.inner.call_order.lock().unwrap();
+        order
+            .iter()
+            .copied()
+            .filter(|operation| operations.contains(operation))
+            .collect()
     }
 
     /// Every backend call this owner has made, for tests.
