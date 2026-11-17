@@ -380,13 +380,21 @@ impl Disk {
             .await
     }
 
-    /// [`Self::place_watched_blocking`] off the async runtime. A recorded
-    /// copy first reads its staged name and its destination's volume within
-    /// the root's bound, and is refused before it takes a thread when either
-    /// does not answer. It then waits for its turn on that volume, takes a
-    /// thread, and gives the turn back before the copy is proven. A link
-    /// that falls back to a recorded copy waits for its turn on the thread
-    /// it has.
+    /// [`Self::place_watched_blocking`] off the async runtime.
+    ///
+    /// A recorded copy that lands [`Landing::Staged`] first reads its staged
+    /// name and its destination's volume within the root's bound, and is
+    /// refused before it takes a thread when either does not answer. It then
+    /// waits for its turn on that volume and only then takes a thread.
+    ///
+    /// A recorded copy that lands [`Landing::Direct`] is never refused
+    /// before it runs: its destination can be a name the caller holds, and a
+    /// caller that cleans up a refused copy would remove a file nothing
+    /// wrote to. It takes a thread at once, reads its volume there with no
+    /// bound, and waits there for its turn, as a link that falls back to a
+    /// recorded copy does.
+    ///
+    /// Either way the turn is given back before the copy is proven.
     pub async fn place_watched(
         &self,
         source: impl Into<PathBuf>,
@@ -405,17 +413,19 @@ impl Disk {
         let permit = match policy {
             Placement {
                 method: Method::Copy,
-                verify: Verify::Recorded(evidence),
+                verify:
+                    Verify::Recorded(Evidence {
+                        landing: Landing::Staged,
+                        ..
+                    }),
                 ..
             } => {
                 // The staged name is read within the root's bound, before a
                 // turn is waited for and before a thread is taken.
-                if evidence.landing == Landing::Staged {
-                    let staged = resumable_staging_path(&dest);
-                    let reading = self.uncached(staged.clone()).await;
-                    staged_name_is_free(&staged, reading).map_err(refuse)?;
-                    staged_free = true;
-                }
+                let staged = resumable_staging_path(&dest);
+                let reading = self.uncached(staged.clone()).await;
+                staged_name_is_free(&staged, reading).map_err(refuse)?;
+                staged_free = true;
                 watch.progress.report(Phase::Waiting, 0);
                 Some(self.copy_turn(&dest).await.map_err(refuse)?)
             }

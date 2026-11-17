@@ -4289,6 +4289,48 @@ mod tests {
         assert!(!original.exists(), "the unproven restore is removed");
     }
 
+    /// A restore onto a name the caller holds is not refused, and so cleans
+    /// nothing up, when the root's reads do not answer: the copy runs on its
+    /// own thread and the name holds the proven restore. The file under that
+    /// name is never removed for a copy that wrote nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_restore_onto_a_held_name_is_not_refused_when_its_root_does_not_answer() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("library");
+        let recycled = tmp.path().join("recycle").join("sample-feature.recycled");
+        let original = root.join("sample-feature.mkv");
+        std::fs::create_dir_all(recycled.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&recycled, b"recycled bytes").unwrap();
+        std::fs::write(&original, b"the occupant, which is longer").unwrap();
+        let disk = Disk::process();
+        disk.set_volumes([(root.clone(), crate::disk::VolumeClass::LibraryRoot)]);
+        let silent = crate::disk::test_support::silence_root(&disk, &original)
+            .expect("the destination is under a configured root");
+        assert_eq!(
+            disk.uncached(&original).await.exists(),
+            None,
+            "the root's bounded reads are refused"
+        );
+
+        let restored = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            quick_verified_copy(
+                &recycled,
+                &original,
+                DestinationClaim::AlreadyHeld,
+                CopyProgress::none(),
+            ),
+        )
+        .await
+        .expect("the restore ends");
+        drop(silent);
+
+        restored.expect("the restore is not refused");
+        assert_eq!(std::fs::read(&original).unwrap(), b"recycled bytes");
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"recycled bytes");
+    }
+
     #[tokio::test]
     async fn test_restore_overwrite_replaces_existing() {
         let tmp = TempDir::new().unwrap();

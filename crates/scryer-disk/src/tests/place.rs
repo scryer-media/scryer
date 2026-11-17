@@ -760,27 +760,45 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
     open.send(()).unwrap();
 }
 
-/// A recorded copy whose destination volume does not answer within the bound
-/// is refused before it takes a thread or a turn; one whose volume
-/// answers takes its turn on that volume's own lane, once.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_copy_whose_volume_does_not_answer_is_refused_before_its_turn() {
-    use super::copying::{turn_is_free, turns_held};
-    use super::mark::numbered;
-    let folder = "/srv/fixture-media/Fixture Show";
-    let direct = Placement {
+/// How long a test waits for something that must happen. Only a regression
+/// reaches it.
+const BOUND: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn direct_recorded() -> Placement {
+    Placement {
         verify: Verify::Recorded(Evidence {
             depth: Depth::Full,
             landing: Landing::Direct,
         }),
         ..policy(Method::Copy, Fallback::None)
-    };
+    }
+}
+
+/// A recorded copy that lands directly is never refused before it runs: its
+/// destination can be a name the caller holds and cleans up on a refusal.
+/// While its volume does not answer it waits on its thread, with nothing
+/// opened, and once the volume answers it takes one turn on that volume's own
+/// lane and copies.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_direct_copy_whose_volume_is_slow_to_answer_waits_and_is_not_refused() {
+    use super::copying::turns_held;
+    use super::mark::numbered;
+    let folder = "/srv/fixture-media/Fixture Show";
     let (disk, backend, _) = scripted();
     // Two workers, so a second turn would be counted instead of parking.
     disk.install_copy_workers(2);
     backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
     copies(&backend, b"synthetic payload", b"synthetic payload");
+    // Every bounded read under the root is refused at once, so a copy that
+    // asked for one before it ran would be refused whatever the timing.
+    let silent = crate::test_support::silence_root(&disk, &p(DEST)).expect("a configured root");
+    assert_eq!(disk.uncached(p(DEST)).await.exists(), None);
+    let (open, gate) = mpsc::channel::<()>();
+    *backend.gate.lock().unwrap() = Some(gate);
+    *backend.gate_under.lock().unwrap() = Some(p(folder));
+    let (entered, reading) = mpsc::channel();
+    *backend.entered.lock().unwrap() = Some(entered);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let watch = Watch {
         progress: Progress::to({
@@ -792,35 +810,72 @@ async fn a_copy_whose_volume_does_not_answer_is_refused_before_its_turn() {
         }),
         cancel: Cancel::never(),
     };
-    let placed = disk.place_watched(SOURCE, DEST, direct, watch).await;
-    assert_eq!(placed.expect("copied").done, Done::Copied);
+    let copy = tokio::spawn({
+        let disk = disk.clone();
+        async move {
+            disk.place_watched(SOURCE, DEST, direct_recorded(), watch)
+                .await
+        }
+    });
+    // The volume read is out on the copy's own thread, held in the backend.
+    tokio::task::spawn_blocking(move || reading.recv_timeout(BOUND))
+        .await
+        .expect("joined")
+        .expect("the volume is read");
+    assert_eq!(backend.calls_of("open"), 0, "nothing is written yet");
+    drop(open);
+    let placed = tokio::time::timeout(BOUND, copy)
+        .await
+        .expect("the copy ends")
+        .expect("joined");
+    drop(silent);
+    assert_eq!(placed.expect("copied, not refused").done, Done::Copied);
     let seen = seen.lock().unwrap();
     let waits = seen.iter().filter(|(phase, _)| *phase == Phase::Waiting);
     assert_eq!(waits.count(), 1, "one wait: {seen:?}");
     assert!(
         seen.contains(&(Phase::Copying, 1)),
-        "its own lane: {seen:?}"
+        "one turn, on its own lane: {seen:?}"
     );
-    drop(seen);
+    assert!(
+        seen.iter().all(|(_, held)| *held <= 1),
+        "never a second turn: {seen:?}"
+    );
+}
 
+/// A recorded copy that lands under a staged name is refused before it takes
+/// a thread or a turn when its destination volume does not answer within the
+/// bound. Nothing of its own exists yet for a caller to clean up.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_staged_copy_whose_volume_does_not_answer_is_refused_before_its_turn() {
+    use super::copying::turn_is_free;
+    use super::mark::numbered;
+    let folder = "/srv/fixture-media/Fixture Show";
     let (disk, backend, _) = scripted();
     disk.install_copy_workers(1);
     backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
     disk.set_probe_timeout_for_test(std::time::Duration::from_millis(1));
     let (open, gate) = mpsc::channel::<()>();
+    // The staged name's own reading passes; the volume read after it is held.
+    open.send(()).unwrap();
     *backend.gate.lock().unwrap() = Some(gate);
     *backend.gate_under.lock().unwrap() = Some(p(folder));
-    let silent = disk
-        .place_watched(SOURCE, DEST, direct, Watch::nobody())
-        .await
-        .expect_err("refused");
+    let staged = recorded_staged(Method::Copy, Fallback::None);
+    let silent = tokio::time::timeout(
+        BOUND,
+        disk.place_watched(SOURCE, DEST, staged, Watch::nobody()),
+    )
+    .await
+    .expect("refused within the bound")
+    .expect_err("refused");
     assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
     assert_eq!(
         silent.to_string(),
         format!("failed to inspect the volume of {DEST}: the disk did not answer in time")
     );
-    // The one call made is the held volume read: nothing was opened,
-    // and no thread ran a placement that would have read the source.
+    // Nothing was opened, and no thread ran a placement that would have read
+    // the source.
     assert_eq!(backend.calls_of("open"), 0);
     assert!(!backend.paths_of("stat").contains(&p(SOURCE)));
     let free = |lane| turn_is_free(&disk.copy_admission(), lane);

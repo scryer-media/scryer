@@ -2056,6 +2056,29 @@ pub mod test_support {
         }
     }
 
+    /// A configured root held as one that does not answer; see
+    /// [`silence_root`].
+    pub struct SilencedRoot(Arc<volume::Ticket>);
+
+    /// Holds the configured root `path` is under as one whose reads do not
+    /// answer, the state a read that outlived its bound leaves: until the
+    /// guard drops, every bounded read under that root is refused at once.
+    /// Nothing is read. `None` when `path` is under no configured root.
+    pub fn silence_root(disk: &Disk, path: &Path) -> Option<SilencedRoot> {
+        let learned = read(&disk.inner.volumes).learned(path)?;
+        let ticket = volume::Ticket::new(learned.clone(), key_of(path), true);
+        ticket.timed_out();
+        // The root's one trial read is taken as well, and never sent.
+        learned.admit();
+        Some(SilencedRoot(ticket))
+    }
+
+    impl Drop for SilencedRoot {
+        fn drop(&mut self) {
+            self.0.answered();
+        }
+    }
+
     impl DiskClock for ManualClock {
         fn now(&self) -> DateTime<Utc> {
             self.0.lock().unwrap().expect("clock set")
