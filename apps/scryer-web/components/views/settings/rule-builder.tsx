@@ -801,7 +801,7 @@ function ActionRow({
       id={selectorId(`${prefix}-action-row`, index)}
       className="space-y-2 rounded border border-border p-2"
     >
-      <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] md:items-end">
+      <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] md:items-start">
         <SingleSelectField
           id={selectorId(`${prefix}-action-subject`, index)}
           label={t("settings.ruleBuilderActionSubject")}
@@ -829,15 +829,17 @@ function ActionRow({
             label: ruleBuilderActionLabel(t, entry),
           }))}
         />
-        <IconButton
-          id={selectorId(`${prefix}-action-remove`, index)}
-          label={t("label.remove")}
-          tone="delete"
-          disabled={readOnly}
-          onClick={() => onChange(removeRuleBuilderAction(model, index))}
-        >
-          <Trash2 className="h-4 w-4" />
-        </IconButton>
+        <div className="flex h-10 items-center md:mt-[calc(1.25rem+0.375rem)]">
+          <IconButton
+            id={selectorId(`${prefix}-action-remove`, index)}
+            label={t("label.remove")}
+            tone="delete"
+            disabled={readOnly}
+            onClick={() => onChange(removeRuleBuilderAction(model, index))}
+          >
+            <Trash2 className="h-4 w-4" />
+          </IconButton>
+        </div>
       </div>
       {help ? <p className="text-xs text-muted-foreground">{help}</p> : null}
       {output && output.value.kind !== "flag" ? (
