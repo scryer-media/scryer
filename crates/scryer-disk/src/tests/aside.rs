@@ -554,14 +554,12 @@ fn a_failed_put_back_or_removal_says_where_the_file_is() {
     }
 }
 
-/// An import that finds its source missing puts back a regular file an
-/// interrupted cleanup left at the set-aside name, empty or not, by a rename
-/// that never replaces anything: with the source's name missing, an empty
-/// file there is an empty source, since a reservation is only ever left
-/// while the source is at its own name. Nothing at that name or a folder
-/// there moves nothing. A source name taken again keeps both: a nonempty
-/// file at the set-aside name is named for the operator, an empty one is
-/// not. Nothing is removed.
+/// A nonempty file an interrupted cleanup left at the set-aside name, with
+/// the source's name missing, is put back by a rename that replaces nothing.
+/// An empty file there is a reservation, never a source: it is removed, on a
+/// fresh read just before, whether the source's name is missing or taken.
+/// Nothing at that name or a folder there moves nothing. A source name taken
+/// again keeps both, and the nonempty file is named for the operator.
 #[test]
 fn a_set_aside_source_left_by_an_interruption_is_put_back() {
     let aside = aside();
@@ -570,14 +568,13 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
         ..named(7, 1)
     };
 
-    for at_aside in [named(7, 1), empty] {
-        let (disk, backend) = scripted();
-        backend.stat_is(aside.to_str().unwrap(), Ok(at_aside));
-        let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
-        assert!(matches!(answer, PutBackAside::PutBack), "{answer:?}");
-        assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
-        assert_eq!(backend.paths_of("rename_no_replace"), [aside.clone()]);
-    }
+    let (disk, backend) = scripted();
+    backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
+    let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
+    assert!(matches!(answer, PutBackAside::PutBack), "{answer:?}");
+    assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+    assert_eq!(backend.paths_of("rename_no_replace"), [aside.clone()]);
+    assert_eq!(backend.calls_of("remove_file"), 0);
 
     let folder = RawStat {
         kind: EntryKind::Directory,
@@ -592,27 +589,36 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
         assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}");
         assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
         assert_eq!(backend.calls_of("rename_no_replace"), 0);
+        assert_eq!(backend.calls_of("remove_file"), 0);
     }
 
-    for (at_aside, named_for_operator) in [(named(7, 1), true), (empty, false)] {
+    for source_taken in [false, true] {
         let (disk, backend) = scripted();
-        backend.stat_is(aside.to_str().unwrap(), Ok(at_aside));
-        backend.fails(
-            "rename_no_replace",
-            aside.to_str().unwrap(),
-            io::ErrorKind::AlreadyExists,
-        );
+        backend.stat_is(aside.to_str().unwrap(), Ok(empty));
+        if source_taken {
+            backend.stat_is(SOURCE, Ok(named(8, 1)));
+        }
         let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
-        match named_for_operator {
-            true => match answer {
-                PutBackAside::SourceNameTaken { at } => assert_eq!(at, aside),
-                other => panic!("{other:?}"),
-            },
-            false => assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}"),
-        }
-        for operation in ["remove_file", "rename_claimed", "rename"] {
-            assert_eq!(backend.calls_of(operation), 0, "{operation}");
-        }
+        assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}");
+        assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+        assert_eq!(backend.paths_of("remove_file"), [aside.clone()]);
+        assert_eq!(backend.calls_of("rename_no_replace"), 0);
+    }
+
+    let (disk, backend) = scripted();
+    backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
+    backend.fails(
+        "rename_no_replace",
+        aside.to_str().unwrap(),
+        io::ErrorKind::AlreadyExists,
+    );
+    let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
+    match answer {
+        PutBackAside::SourceNameTaken { at } => assert_eq!(at, aside),
+        other => panic!("{other:?}"),
+    }
+    for operation in ["remove_file", "rename_claimed", "rename"] {
+        assert_eq!(backend.calls_of(operation), 0, "{operation}");
     }
 }
 
@@ -803,6 +809,71 @@ async fn a_put_back_stops_once_the_set_aside_name_no_longer_holds_the_file() {
         assert_eq!(backend.paths_of("lstat").last(), Some(&p(SOURCE)));
         assert_eq!(backend.calls_of("remove_file"), 0);
     }
+}
+
+/// A volume that makes up a file number per name reads the set-aside file as
+/// another file. A regular file of the source's length there, with the
+/// source's name missing, is still renamed back on a retry: it never replaces
+/// anything. While the rename keeps failing, the file is reported left at its
+/// set-aside name, never as moved elsewhere.
+#[tokio::test(start_paused = true)]
+async fn a_put_back_retries_a_set_aside_file_its_volume_renumbered() {
+    let renumbered = named(977, 1);
+    for put_back_on_retry in [true, false] {
+        let (disk, backend) = put_back_failing(put_back_on_retry.then_some(1));
+        backend.stat_is(aside().to_str().unwrap(), Ok(renumbered));
+        let answer = disk
+            .remove_source_beside(
+                &p(SOURCE),
+                &source_mark(),
+                &p(SAME_ENTRY),
+                &mark(named(7, 1)),
+            )
+            .await;
+        match put_back_on_retry {
+            true => {
+                assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
+                assert_eq!(
+                    backend.paths_of("rename_no_replace"),
+                    [p(SOURCE), aside(), aside()]
+                );
+            }
+            false => {
+                match answer {
+                    AsideRemoval::PutBackFailed { at, .. } => assert_eq!(at, aside()),
+                    other => panic!("{other:?}"),
+                }
+                assert_eq!(backend.calls_of("rename_no_replace"), 1 + 12);
+            }
+        }
+        assert_eq!(backend.calls_of("remove_file"), 0);
+    }
+
+    // Something of another length at the set-aside name is not the file.
+    let (disk, backend) = put_back_failing(None);
+    backend.stats_in_turn(
+        &aside(),
+        &[
+            Ok(named(7, 1)),
+            Ok(RawStat {
+                len: 3,
+                ..renumbered
+            }),
+        ],
+    );
+    let answer = disk
+        .remove_source_beside(
+            &p(SOURCE),
+            &source_mark(),
+            &p(SAME_ENTRY),
+            &mark(named(7, 1)),
+        )
+        .await;
+    assert!(
+        matches!(answer, AsideRemoval::SetAsideMoved { .. }),
+        "{answer:?}"
+    );
+    assert_eq!(backend.calls_of("remove_file"), 0);
 }
 
 /// On a real volume: a destination reached through a symlinked folder, or a

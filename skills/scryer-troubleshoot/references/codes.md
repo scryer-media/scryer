@@ -72,7 +72,8 @@ IMPORTED_SEEDING, IMPORT_BLOCKED, FAILED_PENDING, FAILED, IGNORED.
 `IMPORT_DESTINATION_IS_SOURCE` (the existing destination is the source's own
 file, and Scryer could not record that the client must keep its data) or
 `IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it is, and
-the source it set aside to find out could not be put back at its name).
+the source it set aside to find out could not be put back at its name, for
+example because something holds that name again).
 Nothing was removed in either case. When the destination is the source's own
 file and that is recorded, the import completes on that file and the client
 entry is later removed without its data. When Scryer only could not tell yet,

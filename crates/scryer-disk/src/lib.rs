@@ -85,7 +85,7 @@ pub use cache::DISK_STAT_REUSE;
 #[doc(hidden)]
 pub use copy::{CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed};
 pub use copy::{
-    Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
+    Cancel, Check, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
     RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep,
     Verdict, Watch, resumable_staging_path,

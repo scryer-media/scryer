@@ -1207,6 +1207,8 @@ pub enum AppError {
     ManualReconciliationRefused {
         message: String,
         reason: &'static str,
+        /// Values the client needs, each its own extension beside `reason`.
+        facts: Vec<RefusalFact>,
     },
 
     #[error("import evidence unavailable: {0}")]
@@ -1355,6 +1357,7 @@ impl AppError {
     pub fn refusal_facts(&self) -> &[RefusalFact] {
         match self {
             Self::ValidationRefused { facts, .. }
+            | Self::ManualReconciliationRefused { facts, .. }
             | Self::RepositoryFailedWithFacts { facts, .. } => facts,
             _ => &[],
         }

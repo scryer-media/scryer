@@ -934,7 +934,11 @@ fn unresolved_reconciliation(record: &ImportRecord, current_import_id: &str) -> 
             .find(|known| *known == code)
     });
     Some(match reason {
-        Some(reason) => AppError::ManualReconciliationRefused { message, reason },
+        Some(reason) => AppError::ManualReconciliationRefused {
+            message,
+            reason,
+            facts: Vec::new(),
+        },
         None => AppError::ManualReconciliationRequired(message),
     })
 }

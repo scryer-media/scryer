@@ -831,13 +831,16 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::ManualReconciliationRequired(message) => {
             coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED")
         }
-        AppError::ManualReconciliationRefused { message, reason } => {
-            coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED").extend_with(
-                |_, extensions| {
-                    extensions.set("reason", reason);
-                },
-            )
-        }
+        AppError::ManualReconciliationRefused {
+            message,
+            reason,
+            facts,
+        } => coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED").extend_with(
+            |_, extensions| {
+                extensions.set("reason", reason);
+                set_refusal_facts(extensions, &facts);
+            },
+        ),
         // A plugin's failure is the plugin's, not Scryer's, so it is not
         // masked: the sentence is the host's own, the reason names the
         // condition for clients that translate it, and the plugin's own public
@@ -877,17 +880,25 @@ pub fn to_gql_error(err: AppError) -> Error {
             facts,
         } => repository_gql_error(message).extend_with(|_, extensions| {
             extensions.set("reason", reason);
-            for fact in &facts {
-                match &fact.value {
-                    scryer_application::RefusalFactValue::Text(value) => {
-                        extensions.set(fact.key, value.as_str());
-                    }
-                    scryer_application::RefusalFactValue::List(values) => {
-                        extensions.set(fact.key, values.clone());
-                    }
-                }
-            }
+            set_refusal_facts(extensions, &facts);
         }),
+    }
+}
+
+/// Each fact as its own extension, keyed by its name.
+fn set_refusal_facts(
+    extensions: &mut async_graphql::ErrorExtensionValues,
+    facts: &[scryer_application::RefusalFact],
+) {
+    for fact in facts {
+        match &fact.value {
+            scryer_application::RefusalFactValue::Text(value) => {
+                extensions.set(fact.key, value.as_str());
+            }
+            scryer_application::RefusalFactValue::List(values) => {
+                extensions.set(fact.key, values.clone());
+            }
+        }
     }
 }
 
@@ -1870,6 +1881,7 @@ mod tests {
         let error = to_gql_error(AppError::ManualReconciliationRefused {
             message: "the destination is the source".into(),
             reason,
+            facts: Vec::new(),
         });
         assert_eq!(
             graphql_error_code(&error),

@@ -3362,10 +3362,12 @@ mod move_import_source_cleanup_gate_tests {
             AppError::ManualReconciliationRefused {
                 message: "the destination is the source".into(),
                 reason: import::DESTINATION_IS_SOURCE,
+                facts: Vec::new(),
             },
             AppError::ManualReconciliationRefused {
                 message: "the source was left at its set-aside name".into(),
                 reason: import::DESTINATION_ALIAS_UNKNOWN,
+                facts: Vec::new(),
             },
         ] {
             let raised = super::deferred_cleanup_needing_reconciliation(&refused)

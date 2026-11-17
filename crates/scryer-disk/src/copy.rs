@@ -181,6 +181,17 @@ pub enum Verdict {
     Unavailable,
 }
 
+/// What [`Disk::check_blocking`] found of two files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Check {
+    /// The same content at the depth asked.
+    Same,
+    /// Different content.
+    Changed,
+    /// One of them could not be read; the words say why. Nothing is told.
+    Unread(String),
+}
+
 /// One destination's proof against the hashes streamed while it was written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Proof {
@@ -1359,6 +1370,55 @@ impl Disk {
         })
         .await
         .map_err(|error| error.to_string())
+    }
+
+    /// Whether `left` and `right` hold the same content, at `depth`: at
+    /// [`Depth::Full`] both are read end to end and their hashes compared; at
+    /// any other depth, their lengths and sampled head and tail. Nothing is
+    /// changed. Probes: one open of each file, its length read through the
+    /// handle; at full depth the whole of each.
+    pub fn check_blocking(&self, left: &Path, right: &Path, depth: Depth) -> Check {
+        if depth == Depth::Full {
+            let hashed = |path: &Path| {
+                self.hash_file_blocking(path, &Progress::none())
+                    .map_err(|refusal| refusal.to_string())
+            };
+            return match (hashed(left), hashed(right)) {
+                (Ok(left), Ok(right)) if left == right => Check::Same,
+                (Ok(_), Ok(_)) => Check::Changed,
+                (Err(said), _) | (_, Err(said)) => Check::Unread(said),
+            };
+        }
+        match (self.sample_of(left), self.sample_of(right)) {
+            (Ok(left), Ok(right)) if left == right => Check::Same,
+            (Ok(_), Ok(_)) => Check::Changed,
+            (Err(said), _) | (_, Err(said)) => Check::Unread(said),
+        }
+    }
+
+    /// Whether `source` still holds what a copy of it streamed, `copied`, at
+    /// `depth`, so that `copy` is not the only place those bytes are: at
+    /// [`Depth::Full`] the source is read end to end and held to `copied`,
+    /// whatever `copy` now holds; at any other depth the source is held to
+    /// `copy` by [`Self::check_blocking`], since a sample of the source is
+    /// all that depth reads, and only the copy has one to compare with.
+    /// Nothing is changed. Probes: at full depth one open of the source,
+    /// read whole; otherwise those of [`Self::check_blocking`].
+    pub fn check_copy_source_blocking(
+        &self,
+        source: &Path,
+        copy: &Path,
+        copied: &ContentHashes,
+        depth: Depth,
+    ) -> Check {
+        if depth != Depth::Full {
+            return self.check_blocking(source, copy, depth);
+        }
+        match self.hash_file_blocking(source, &Progress::none()) {
+            Ok(now) if now == *copied => Check::Same,
+            Ok(_) => Check::Changed,
+            Err(refusal) => Check::Unread(refusal.to_string()),
+        }
     }
 
     /// Whatever stopped the full read-back, the file still gets the quick

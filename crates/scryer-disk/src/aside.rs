@@ -57,9 +57,10 @@ pub enum AsideRemoval {
     /// The source was put back.
     NotRemoved(DiskError),
     /// The destination checked out, removing the set-aside name answered a
-    /// failure, the name then read missing, and the source's own name holds
-    /// a file again: something put the source back meanwhile. Nothing more
-    /// was done; the source is where it was, for a later cleanup to retry.
+    /// failure, and the name then read missing, while the source's own name
+    /// did not read missing: it holds a file again, as when something put the
+    /// source back meanwhile, or it did not read. Nothing more was done, for a
+    /// later cleanup to retry.
     RemovalUnconfirmed(DiskError),
     /// The source could not be renamed aside. The source is where it was.
     NotSetAside(DiskError),
@@ -160,8 +161,8 @@ pub enum PutBackAside {
     /// The set-aside name held a regular file and it was renamed back to
     /// the source's name.
     PutBack,
-    /// There was nothing to put back: no regular file at the set-aside name,
-    /// or the source's name is taken. Nothing was moved.
+    /// There was nothing to put back: no nonempty regular file at the
+    /// set-aside name. An empty one there was removed. Nothing was moved.
     Nothing,
     /// Renaming it back failed; it is still at `at`.
     Failed { at: PathBuf, error: DiskError },
@@ -252,7 +253,7 @@ impl super::Disk {
     /// of `kept`'s folder besides. A put-back adds one rename. A put-back that
     /// fails is retried, each retry one read of the set-aside name and one
     /// rename, plus one read of the source's name when the set-aside name no
-    /// longer holds the file; see [`PUT_BACK_RETRY_PAUSES`].
+    /// longer marks the file; see [`PUT_BACK_RETRY_PAUSES`].
     ///
     /// This twin pauses between retries on the calling thread, for up to
     /// thirty seconds: for a thread of its own, such as a worker process.
@@ -327,20 +328,38 @@ impl super::Disk {
     /// Renames the set-aside file back while the set-aside name still holds
     /// what `source_mark` marks. Where it does not, the source's name is read:
     /// a rename that took effect though it answered a failure left the file
-    /// there. One read of the set-aside name and one rename, or two reads.
+    /// there. A regular file of the source's length at the set-aside name,
+    /// with the source's name missing, is renamed back too: a volume that
+    /// makes up a file number per name reads the set-aside file as another,
+    /// and the rename never replaces anything. The file has moved only when
+    /// the set-aside name is missing or holds something of another kind or
+    /// length, and the source's name does not hold it. One read of the
+    /// set-aside name and one rename, or two reads, or two reads and one
+    /// rename.
     fn put_back_attempt(&self, source: &Path, source_mark: &Mark, aside: &Path) -> Attempt {
-        match self.fingerprint_blocking(aside) {
-            Ok(read) if source_mark.still_marks(&read) => {
-                match self.move_exclusive_blocking(aside, source) {
-                    Ok(_) => Attempt::PutBack,
-                    Err(error) => Attempt::Failed(Some(error)),
-                }
+        let still_aside = match self.fingerprint_blocking(aside) {
+            Ok(read) if source_mark.still_marks(&read) => return self.rename_back(aside, source),
+            Ok(read) => {
+                read.kind() == Some(EntryKind::File)
+                    && source_mark.len().is_some_and(|len| read.is_len(len))
             }
-            Ok(_) | Err(PathReading::Missing { .. }) => match self.fingerprint_blocking(source) {
-                Ok(read) if source_mark.still_marks(&read) => Attempt::PutBack,
-                _ => Attempt::Moved,
-            },
-            Err(_) => Attempt::Failed(None),
+            Err(PathReading::Missing { .. }) => false,
+            Err(_) => return Attempt::Failed(None),
+        };
+        match self.fingerprint_blocking(source) {
+            Ok(read) if source_mark.still_marks(&read) => Attempt::PutBack,
+            Err(PathReading::Missing { .. }) if still_aside => self.rename_back(aside, source),
+            _ if still_aside => Attempt::Failed(None),
+            _ => Attempt::Moved,
+        }
+    }
+
+    /// One rename of the set-aside file back to the source's name, never
+    /// replacing anything.
+    fn rename_back(&self, aside: &Path, source: &Path) -> Attempt {
+        match self.move_exclusive_blocking(aside, source) {
+            Ok(_) => Attempt::PutBack,
+            Err(error) => Attempt::Failed(Some(error)),
         }
     }
 
@@ -519,31 +538,43 @@ impl super::Disk {
     }
 
     /// Puts back a source an interrupted removal left at its set-aside name,
-    /// for an import that finds the source missing. Only a regular file at
-    /// the set-aside name is moved, and only by a rename that never replaces
-    /// anything. Nothing is removed. The caller keeps this from running while
-    /// a removal of the same source is in flight.
+    /// for an import that finds the source missing. Only a nonempty regular
+    /// file at the set-aside name is moved, and only by a rename that never
+    /// replaces anything. The caller keeps this from running while a removal
+    /// of the same source is in flight.
     ///
-    /// An empty file there is put back too. A set-aside rename that reserves
-    /// its name first leaves an empty reservation behind only while the
-    /// source is still at its own name: its failure path releases the
-    /// reservation while the source reads present, and an interruption
-    /// between the reservation and the rename leaves the source where it
-    /// was. So with the source's name missing, an empty file at the
-    /// set-aside name is an empty source that was set aside.
+    /// An empty file there is a reservation a set-aside left, never a source:
+    /// a rename that reserves its name first can leave it behind when the
+    /// source vanished before the rename. It holds no data, so it is removed,
+    /// on a fresh read that says it is a regular empty file immediately
+    /// before the removal, whether the source's name is missing or taken.
     ///
-    /// A source name that is taken again keeps what is there, and the file
-    /// at the set-aside name is left as it is: an empty one (no data) or a
-    /// nonempty one, which is never removed and is logged for the operator.
+    /// A source name that is taken again keeps what is there, and a nonempty
+    /// file at the set-aside name is never removed and is named for the
+    /// operator.
     ///
-    /// Probes: one read of the set-aside name, and one rename when it holds
-    /// a regular file.
+    /// Probes: one read of the set-aside name, then one rename when it holds
+    /// a nonempty regular file, or one removal when it holds an empty one.
     pub fn put_back_set_aside_source_blocking(&self, source: &Path) -> PutBackAside {
         let aside = aside_path_for(source);
-        let empty = match self.fingerprint_blocking(&aside) {
-            Ok(read) if read.kind() == Some(EntryKind::File) => read.is_len(0),
+        match self.fingerprint_blocking(&aside) {
+            Ok(read) if read.kind() == Some(EntryKind::File) && read.is_len(0) => {
+                match self.remove_blocking(&aside, Remove::File) {
+                    Ok(_) => tracing::info!(
+                        at = %aside.display(),
+                        "an empty file left at a move's set-aside name was removed"
+                    ),
+                    Err(error) => tracing::warn!(
+                        at = %aside.display(),
+                        error = %error,
+                        "an empty file left at a move's set-aside name could not be removed"
+                    ),
+                }
+                return PutBackAside::Nothing;
+            }
+            Ok(read) if read.kind() == Some(EntryKind::File) => {}
             _ => return PutBackAside::Nothing,
-        };
+        }
         match self.move_exclusive_blocking(&aside, source) {
             Ok(_) => {
                 tracing::warn!(
@@ -552,9 +583,6 @@ impl super::Disk {
                     "an import source an interrupted cleanup set aside was put back"
                 );
                 PutBackAside::PutBack
-            }
-            Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS && empty => {
-                PutBackAside::Nothing
             }
             Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
                 tracing::warn!(

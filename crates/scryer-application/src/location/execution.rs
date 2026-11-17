@@ -1431,6 +1431,43 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 }
                 Some(true) => {}
             }
+            // A link is read once more, followed: one more probe, for a link
+            // source only.
+            let linked = reading.is(EntryKind::Symlink);
+            if linked {
+                let named = Disk::process().follow(&source).await;
+                match named.exists() {
+                    // The link names nothing, so its name holds no data: after
+                    // the verified copy it goes, whatever it pointed at.
+                    Some(false) => {
+                        match Disk::process().remove(&source, Remove::File).await {
+                            Ok(Removal::Removed) => tracing::info!(
+                                operation_id = %operation.id,
+                                title_id = %title.title_id,
+                                source = %file.source_path,
+                                destination = %file.destination_path,
+                                "removed a source link that names nothing, beside its verified copy"
+                            ),
+                            Ok(Removal::AlreadyAbsent) => {}
+                            Err(error) => {
+                                return Err(AppError::Repository(format!(
+                                    "failed to remove the source link {}: {error}",
+                                    file.source_path
+                                )));
+                            }
+                        }
+                        continue;
+                    }
+                    None => return Err(AppError::Repository(named.absence().into())),
+                    Some(true) if !named.is(EntryKind::File) => {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                            "Source changed before cleanup; preserved it.",
+                        ));
+                    }
+                    Some(true) => {}
+                }
+            }
             let source_version = super::resolution::file_version(&source).await?;
             let destination = file.destination();
             let destination_version = super::resolution::file_version(&destination).await?;
@@ -1439,7 +1476,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // after it. While both files still carry those versions the proof
             // stands, so only the quick check is repeated. Without a row holding
             // both versions there is nothing tying the proof to these files, and
-            // the source is re-read and the destination proven again.
+            // the source is re-read and the destination proven again. A link's
+            // version is the link's own, so it ties nothing to the file the
+            // link names: at full depth that file is read whole and held to
+            // the copy's hashes.
             let recorded_proof = resolution
                 .and_then(|row| {
                     row.source_version
@@ -1454,6 +1494,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                         && super::verify::quick_recheck(&source, &destination, recorded_hashes)
                             .await?
                             .permits_source_removal()
+                        && (!linked
+                            || record.depth.applied
+                                != crate::location::model::VerificationDepth::Full
+                            || super::verify::hash_existing_file(&source).await?
+                                == *recorded_hashes)
                 }
                 None => {
                     let source_hashes = super::verify::hash_existing_file(&source).await?;

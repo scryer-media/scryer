@@ -3463,13 +3463,32 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
     }
 }
 
-/// A linked source that took a verified copy is proven by the file it names:
-/// unchanged, only the link's own name goes and the file it names is kept;
-/// rewritten behind the link where the check reads, the copy is no longer
-/// proven and the link is kept.
+/// A linked source that took a verified copy is proven by the file it names,
+/// at the operation's depth: unchanged, only the link's own name goes and the
+/// file it names is kept. A change the depth reads keeps the link: a first
+/// byte at either depth, a rewrite in the middle at full depth. A link that
+/// names nothing holds no data, so its name goes beside the verified copy; a
+/// link that now names a folder is refused as a changed source.
 #[tokio::test]
 async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
-    for rewritten in [false, true] {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Behind {
+        Unchanged,
+        FirstByte,
+        Middle,
+        Nothing,
+        Folder,
+    }
+    for (depth, behind) in [
+        (VerificationDepth::Full, Behind::Unchanged),
+        (VerificationDepth::Quick, Behind::Unchanged),
+        (VerificationDepth::Full, Behind::FirstByte),
+        (VerificationDepth::Quick, Behind::FirstByte),
+        (VerificationDepth::Full, Behind::Middle),
+        (VerificationDepth::Full, Behind::Nothing),
+        (VerificationDepth::Full, Behind::Folder),
+    ] {
+        let case = format!("{depth:?}/{behind:?}");
         let temp = tempfile::tempdir().unwrap();
         let plan = single_title_plan(
             &temp.path().join("a"),
@@ -3493,7 +3512,7 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
             "op-1",
             LocationOperationType::RootMove,
             LocationExecutionMode::MoveWithScryer,
-            VerificationDepth::Full,
+            depth,
         );
         store.insert_operation(operation.clone());
         let mover = RootMoveFileMover::without_permissions()
@@ -3510,12 +3529,15 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
                 operation_id: "op-1",
                 title: &work.titles[0],
                 file: &work.titles[0].files[0],
-                depth: VerificationDepth::Full,
+                depth,
                 progress: &crate::location::verify::CopyProgress::none(),
             })
             .await
             .expect("copy");
-        assert!(verified.hashes.is_some(), "the linked source took a copy");
+        assert!(
+            verified.hashes.is_some(),
+            "{case}: the linked source took a copy"
+        );
         record_copy(
             &store,
             &verified,
@@ -3523,12 +3545,23 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
             crate::location::model::FileVerificationOutcome::Verified,
         )
         .await;
-        if rewritten {
+        match behind {
+            Behind::Unchanged => {}
             // The first byte lies in a sampled window, so the check made at
             // cleanup reads the change through the link at either depth.
-            let mut bytes = std::fs::read(&named).unwrap();
-            bytes[0] ^= 0xff;
-            std::fs::write(&named, bytes).unwrap();
+            Behind::FirstByte => {
+                let mut bytes = std::fs::read(&named).unwrap();
+                bytes[0] ^= 0xff;
+                std::fs::write(&named, bytes).unwrap();
+            }
+            // Outside every sampled window, the same length: only a read of
+            // the whole file sees it.
+            Behind::Middle => rewrite_middle(&named),
+            Behind::Nothing => std::fs::remove_file(&named).unwrap(),
+            Behind::Folder => {
+                std::fs::remove_file(&named).unwrap();
+                std::fs::create_dir(&named).unwrap();
+            }
         }
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
@@ -3539,28 +3572,37 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
             .await;
 
         let link = std::fs::symlink_metadata(file.source());
-        if rewritten {
-            let error = result.expect_err("a copy no longer proven keeps the link");
-            assert_eq!(
-                error.validation_reason(),
-                Some(crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP)
-            );
-            assert!(
-                link.unwrap().file_type().is_symlink(),
-                "the link is preserved"
-            );
-        } else {
-            result.expect("cleanup");
-            assert!(link.is_err(), "the link's own name is removed");
+        match behind {
+            Behind::Unchanged | Behind::Nothing => {
+                result.unwrap_or_else(|error| panic!("{case}: cleanup: {error:?}"));
+                assert!(link.is_err(), "{case}: the link's own name is removed");
+            }
+            Behind::FirstByte | Behind::Middle | Behind::Folder => {
+                let error = result.expect_err(&format!("{case}: the link is kept"));
+                let expected = match behind {
+                    Behind::Folder => crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                    _ => crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+                };
+                assert_eq!(error.validation_reason(), Some(expected), "{case}");
+                assert!(
+                    link.unwrap().file_type().is_symlink(),
+                    "{case}: the link is preserved"
+                );
+            }
+        }
+        match behind {
+            Behind::Nothing => assert!(std::fs::symlink_metadata(&named).is_err()),
+            Behind::Folder => assert!(named.is_dir(), "{case}: the folder is kept"),
+            _ => assert_eq!(
+                std::fs::read(&named).unwrap().len(),
+                THREE_SAMPLE_WINDOWS,
+                "{case}: the file the link names is never removed"
+            ),
         }
         assert_eq!(
-            std::fs::read(&named).unwrap().len(),
-            THREE_SAMPLE_WINDOWS,
-            "the file the link names is never removed"
-        );
-        assert_eq!(
             std::fs::read(file.destination()).unwrap().len(),
-            THREE_SAMPLE_WINDOWS
+            THREE_SAMPLE_WINDOWS,
+            "{case}: the copy is kept"
         );
         assert!(recycler.recycled().is_empty());
     }

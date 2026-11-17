@@ -15603,11 +15603,13 @@ impl FileImporter for CleanupRefusingImporter {
             AppError::ManualReconciliationRefused {
                 message: "the library file is the import source's own entry".into(),
                 reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
+                facts: Vec::new(),
             }
         } else {
             AppError::ManualReconciliationRefused {
                 message: "the import source was left at its set-aside name".into(),
                 reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+                facts: Vec::new(),
             }
         })
     }

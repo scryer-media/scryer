@@ -367,6 +367,7 @@ pub(crate) async fn record_library_file_for_download(
                     source.display()
                 ),
                 reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
+                facts: Vec::new(),
             })
         }
     }
