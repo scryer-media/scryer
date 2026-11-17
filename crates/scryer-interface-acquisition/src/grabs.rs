@@ -181,7 +181,7 @@ fn grab_job_report(result: &GqlResult<GrabJobResultPayload>) -> GrabJobReport {
         || payload
             .standby
             .as_ref()
-            .is_some_and(|standby| !standby.grabbed);
+            .is_some_and(|standby| !standby.grabbed && !standby.conflicts.is_empty());
     if conflict {
         return GrabJobReport {
             outcome: GrabJobOutcome::Conflict,
@@ -189,6 +189,22 @@ fn grab_job_report(result: &GqlResult<GrabJobResultPayload>) -> GrabJobReport {
             summary_text: Some(
                 "Not queued: other downloads of this title are running.".to_string(),
             ),
+            error_text: None,
+        };
+    }
+    let not_queued = payload
+        .standby
+        .as_ref()
+        .is_some_and(|standby| !standby.grabbed)
+        || payload
+            .pending
+            .as_ref()
+            .is_some_and(|pending| !pending.grabbed);
+    if not_queued {
+        return GrabJobReport {
+            outcome: GrabJobOutcome::NotQueued,
+            reason: None,
+            summary_text: Some("Nothing was sent to the download client.".to_string()),
             error_text: None,
         };
     }
@@ -269,8 +285,39 @@ mod tests {
         );
     }
 
+    fn example_conflict() -> QueueDownloadConflictPayload {
+        QueueDownloadConflictPayload {
+            title_id: ID::from("title-1"),
+            title_name: "Example Title".to_string(),
+            download_client_id: None,
+            download_client_type: "example".to_string(),
+            download_client_item_id: "item-1".to_string(),
+            source_title: None,
+            source_kind: None,
+            scope: QueueDownloadScopePayload::episode(ID::from("episode-1")),
+            state: None,
+            replaceable: true,
+        }
+    }
+
     #[test]
     fn a_standby_grab_that_lists_conflicts_is_not_reported_as_queued() {
+        let report = grab_job_report(&Ok(GrabJobResultPayload {
+            standby: Some(QueueStandbyReleasePayload {
+                grabbed: false,
+                conflicts: vec![example_conflict()],
+                cancelled: Vec::new(),
+                cancel_failed: Vec::new(),
+            }),
+            ..Default::default()
+        }));
+
+        assert_eq!(report.outcome, GrabJobOutcome::Conflict);
+        assert_eq!(report.error_text, None);
+    }
+
+    #[test]
+    fn a_standby_grab_with_nothing_queued_and_no_conflicts_is_not_a_conflict() {
         let report = grab_job_report(&Ok(GrabJobResultPayload {
             standby: Some(QueueStandbyReleasePayload {
                 grabbed: false,
@@ -281,8 +328,35 @@ mod tests {
             ..Default::default()
         }));
 
-        assert_eq!(report.outcome, GrabJobOutcome::Conflict);
+        assert_eq!(report.outcome, GrabJobOutcome::NotQueued);
         assert_eq!(report.error_text, None);
+    }
+
+    #[test]
+    fn a_pending_release_that_was_not_grabbed_is_not_reported_as_queued() {
+        let report = grab_job_report(&Ok(GrabJobResultPayload {
+            pending: Some(ForceGrabPendingReleasePayload {
+                id: ID::from("pending-1"),
+                grabbed: false,
+            }),
+            ..Default::default()
+        }));
+
+        assert_eq!(report.outcome, GrabJobOutcome::NotQueued);
+        assert_eq!(report.error_text, None);
+    }
+
+    #[test]
+    fn a_pending_release_that_was_grabbed_is_reported_as_queued() {
+        let report = grab_job_report(&Ok(GrabJobResultPayload {
+            pending: Some(ForceGrabPendingReleasePayload {
+                id: ID::from("pending-1"),
+                grabbed: true,
+            }),
+            ..Default::default()
+        }));
+
+        assert_eq!(report.outcome, GrabJobOutcome::Queued);
     }
 
     #[test]

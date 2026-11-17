@@ -8370,6 +8370,9 @@ const en: LocaleDictionary = {
   "status.autoSearchAllRejected":
     "No release found for {{name}}: automatic search rejected all {{count}} candidates. {{reasons}}",
   "status.queueFailed": "Queue operation failed.",
+  "status.grabFailed": "The grab failed.",
+  "status.grabResultUnavailable":
+    "The grab finished, but its result is no longer available. Check the download queue.",
   "status.apiError": "Request failed",
   "status.permissionDenied": "You do not have permission for this action.",
 

@@ -1028,6 +1028,22 @@ fn acquisition_search_run_scope_key(run: &JobRun) -> Option<String> {
     let progress: serde_json::Value = serde_json::from_str(run.progress_json.as_deref()?).ok()?;
     progress["search"]["scopeKey"].as_str().map(str::to_string)
 }
+impl AppUseCase {
+    /// The waiting or running search of the single item `scope_key`, if any.
+    async fn active_acquisition_search_for_scope(&self, scope_key: Option<&str>) -> Option<JobRun> {
+        let scope_key = scope_key?;
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .list_active()
+            .await
+            .into_iter()
+            .find(|run| {
+                run.job_key == JobKey::AcquisitionSearch
+                    && acquisition_search_run_scope_key(run).as_deref() == Some(scope_key)
+            })
+    }
+}
 fn progress_with_search_context(
     progress: &AcquisitionSearchProgress,
     previous: Option<&str>,
@@ -1276,18 +1292,9 @@ impl AppUseCase {
         };
         // Asking again for an item whose search is waiting or running returns
         // that search; it is not searched twice.
-        if let Some(scope_key) = queued_scope_key.as_deref()
-            && let Some(existing) = self
-                .runtime
-                .jobs
-                .job_run_tracker
-                .list_active()
-                .await
-                .into_iter()
-                .find(|run| {
-                    run.job_key == JobKey::AcquisitionSearch
-                        && acquisition_search_run_scope_key(run).as_deref() == Some(scope_key)
-                })
+        if let Some(existing) = self
+            .active_acquisition_search_for_scope(queued_scope_key.as_deref())
+            .await
         {
             return Ok(existing);
         }
@@ -1336,6 +1343,26 @@ impl AppUseCase {
             "scopeKey": queued_scope_key,
         });
         run.progress_json = Some(progress.to_string());
+        // The same-item check and the new run's entry among the active runs
+        // are one step, so two requests for one item cannot both start a
+        // search of it. The step holds only the check and the row insert.
+        let start_guard = match queued_scope_key {
+            Some(_) => Some(
+                self.runtime
+                    .jobs
+                    .acquisition_search_start_lock
+                    .clone()
+                    .lock_owned()
+                    .await,
+            ),
+            None => None,
+        };
+        if let Some(existing) = self
+            .active_acquisition_search_for_scope(queued_scope_key.as_deref())
+            .await
+        {
+            return Ok(existing);
+        }
         run = self.services.events.job_runs.create_job_run(&run).await?;
         let run_payload = JobRun::from_record(&run, None);
         self.runtime
@@ -1343,6 +1370,7 @@ impl AppUseCase {
             .job_run_tracker
             .upsert_active_run(run_payload.clone())
             .await;
+        drop(start_guard);
 
         let cancellation = tokio_util::sync::CancellationToken::new();
         self.runtime
@@ -1368,7 +1396,9 @@ impl AppUseCase {
 
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        // Tracked by the restore coordinator so a restore waits for the
+        // search instead of replacing the database under it.
+        self.restore_coordinator().spawn_task(async move {
             let mut run = run;
             let search_guard = match search_guard {
                 Some(guard) => guard,
