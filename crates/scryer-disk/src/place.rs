@@ -415,9 +415,9 @@ impl Disk {
     /// removed the policy's fallback copy runs, or the answer is
     /// [`CannotLink::Unverifiable`].
     ///
-    /// What remains: on a filesystem that makes up its file numbers, a
-    /// regular file another writer put at the name in that instant cannot be
-    /// told from the link, and is removed as the link would be.
+    /// What remains: a regular file another writer put at the name in that
+    /// instant is removed as the unproven link would be, on any filesystem.
+    /// Where file numbers are made up it cannot even be told from the link.
     ///
     /// Nothing is remembered about the volume. A policy that asks for
     /// another method is placed as [`Self::place_blocking`] places it.

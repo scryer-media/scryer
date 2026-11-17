@@ -35,8 +35,7 @@ use scryer_domain::MediaFacet;
 
 use crate::disk::reason::DISK_PATH_MISSING;
 use crate::disk::{
-    Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, Placed, Removal, Remove,
-    Unproven,
+    Disk, Done, Doubt, EntryKind, LinkProof, Mark, Parents, Placed, Removal, Remove, Unproven,
 };
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
@@ -618,16 +617,14 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             done: Done::HardLinked,
             ..
         }) => return Ok(true),
-        Ok(placed) => {
+        Ok(_) => {
             return Err(AppError::Repository(format!(
-                "the link to {} was placed as {:?}, which was not asked for",
-                destination.display(),
-                placed.done
+                "the link to {} was not made as a hard link",
+                destination.display()
             )));
         }
         Err(refusal) => refusal,
     };
-    let words = refusal.to_string();
     match refusal.unproven {
         // No link was made: the ordinary verified copy takes over.
         None => Ok(false),
@@ -639,13 +636,6 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             "cannot inspect {}: {}",
             destination.display(),
             error.words()
-        ))),
-        Some(Unproven {
-            doubt: Doubt::OtherLength(_),
-            after: LinkAfter::NotRemoved | LinkAfter::AlreadyGone,
-        }) => Err(AppError::Repository(format!(
-            "cannot remove the unproven link {}: {words}",
-            destination.display()
         ))),
         // Another file at the name, removed or not.
         Some(_) => Err(AppError::validation_refused(

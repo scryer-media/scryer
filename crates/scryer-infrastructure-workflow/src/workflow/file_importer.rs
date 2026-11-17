@@ -725,6 +725,9 @@ enum ImportLink {
     Failed(String),
     /// Linked but not proven. The disk service removed the link again.
     Unproven(LinkDoubt),
+    /// Linked but not proven, and the new name was already gone when the
+    /// disk service went to remove it. Carries the service's words.
+    UnprovenGone(String),
 }
 
 /// Why a hard link that was made is not trusted.
@@ -860,6 +863,7 @@ thread_local! {
 fn hard_link_import_source(
     source: &Path,
     dest: &Path,
+    fingerprint: &ImportSourceFingerprint,
     seen: &Mark,
     options: &ImportFileOptions,
 ) -> AppResult<ImportLink> {
@@ -879,11 +883,10 @@ fn hard_link_import_source(
             done: Done::HardLinked,
             ..
         }) => return Ok(ImportLink::Proven),
-        Ok(placed) => {
+        Ok(_) => {
             return Err(AppError::Repository(format!(
-                "hard link to {} was placed as {:?}, which was not asked for",
-                dest.display(),
-                placed.done
+                "the link to {} was not made as a hard link",
+                dest.display()
             )));
         }
         Err(refusal) => refusal,
@@ -907,19 +910,21 @@ fn hard_link_import_source(
             ..
         }) => return Err(unread(error.into())),
         Some(Unproven {
-            after: LinkAfter::NotRemoved | LinkAfter::AlreadyGone,
+            after: LinkAfter::NotRemoved,
             ..
-        }) => {
-            return Err(AppError::Repository(format!(
-                "failed to remove partial hardlink destination {} before copy: {words}",
-                dest.display()
-            )));
-        }
+        }) => return Err(link_not_removed(dest, &words)),
+        Some(Unproven {
+            after: LinkAfter::AlreadyGone,
+            ..
+        }) => return Ok(ImportLink::UnprovenGone(words)),
         Some(Unproven { doubt, .. }) => doubt,
     };
     match doubt {
         Doubt::Unread(error) => Err(unread(error.into())),
         Doubt::OtherFile { linked } if linked.kind() != Some(EntryKind::File) => {
+            // A source swapped for something else before the link call is a
+            // source that changed. The name is left as it is either way.
+            ensure_same_source(source, fingerprint)?;
             Err(AppError::Repository(format!(
                 "import path is not a regular file: {}",
                 dest.display()
@@ -933,6 +938,14 @@ fn hard_link_import_source(
         ))),
         Doubt::OtherLength(resolved) => Ok(ImportLink::Unproven(LinkDoubt::Length(resolved))),
     }
+}
+
+/// An unproven link the disk service did not remove, as an import says it.
+fn link_not_removed(dest: &Path, words: &str) -> AppError {
+    AppError::Repository(format!(
+        "failed to remove partial hardlink destination {} before copy: {words}",
+        dest.display()
+    ))
 }
 
 /// Renames over the empty reservation the rename lane made at `dest`.
@@ -1654,6 +1667,12 @@ fn import_copy_refusal(
             "source validation",
             io_other("import source changed before copy"),
         ),
+        (_, StagedCause::SourceNotAFile) => (
+            "source validation",
+            io_other(AppError::Repository(
+                "import path is not a regular file".into(),
+            )),
+        ),
         (StagedStep::OpenSource, StagedCause::Io(error)) => ("source open", error),
         (StagedStep::OpenStaged, StagedCause::Io(error)) => ("temp create", error),
         (StagedStep::Flush, StagedCause::Io(error)) => ("flush", error),
@@ -2082,9 +2101,13 @@ fn try_fast_import_placement_blocking(
         let linked = hard_link_import_source(
             &prepared.source,
             &prepared.dest,
+            &prepared.source_fingerprint,
             &source_mark,
             &prepared.options,
         )?;
+        if let ImportLink::UnprovenGone(words) = &linked {
+            return Err(link_not_removed(&prepared.dest, words));
+        }
         // The source is read again whether or not the link proved. A link
         // that did not prove is already gone.
         let proven = matches!(linked, ImportLink::Proven);
@@ -2124,7 +2147,7 @@ fn try_fast_import_placement_blocking(
                     "hard link destination stat failed; handing import to copy lane"
                 ),
             },
-            ImportLink::NotPossible => {
+            ImportLink::NotPossible | ImportLink::UnprovenGone(_) => {
                 tracing::debug!("hard link is ineligible; handing import to copy lane");
             }
             ImportLink::Failed(error) => {
@@ -2428,11 +2451,12 @@ fn import_hardlink_or_copy_blocking(
     }
 
     if !force_cross_device_move(&options) && hardlink_uid_safe {
-        let linked = hard_link_import_source(&source, &dest, &source_mark, &options)?;
+        let linked =
+            hard_link_import_source(&source, &dest, &source_fingerprint, &source_mark, &options)?;
         // The source is read again whether or not the link proved. A link
         // that did not prove is already gone.
         let proven = matches!(linked, ImportLink::Proven);
-        if matches!(linked, ImportLink::Proven | ImportLink::Unproven(_))
+        if !matches!(linked, ImportLink::NotPossible | ImportLink::Failed(_))
             && let Err(error) = ensure_same_source(&source, &source_fingerprint)
         {
             if proven {
@@ -2486,6 +2510,12 @@ fn import_hardlink_or_copy_blocking(
                     linked.describe_absence()
                 ),
             },
+            ImportLink::UnprovenGone(words) => tracing::warn!(
+                "hard link did not prove and was already gone: {}, falling back to copy: {} -> {}",
+                words,
+                source.display(),
+                dest.display()
+            ),
             ImportLink::NotPossible => {
                 tracing::info!(
                     "hard link is not possible here, falling back to copy: {} -> {}",
@@ -5881,6 +5911,23 @@ mod tests {
         assert_eq!(uncleared.reason(), Some(import::PERMISSION_DENIED));
 
         assert!(refused(StagedStep::Transfer, StagedCause::Cancelled, 1).is_canceled());
+
+        // The source changed and changed back: the import's own read passes,
+        // and the copy is still refused.
+        let restored = refused(StagedStep::SourceAfter, StagedCause::SourceChanged, 1);
+        let said = restored.to_string();
+        assert!(
+            said.contains("source verification: repository: import source changed during import"),
+            "{said}"
+        );
+        assert_eq!(restored.reason(), Some(import::IO_FAILED));
+
+        let not_a_file = refused(StagedStep::SourceHandle, StagedCause::SourceNotAFile, 1);
+        let said = not_a_file.to_string();
+        assert!(
+            said.contains("source validation: repository: import path is not a regular file"),
+            "{said}"
+        );
     }
 
     #[test]

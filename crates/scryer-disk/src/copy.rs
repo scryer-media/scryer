@@ -576,6 +576,8 @@ pub(crate) enum Step {
     SourceHandle,
     /// The open source is not the file the caller read.
     SourceChanged,
+    /// The open source is not a regular file at all.
+    SourceNotFile,
     OpenTarget,
     Read,
     Write,
@@ -644,7 +646,11 @@ pub(crate) fn write_copy(
             .map_err(|error| fail(Step::SourceHandle, Cause::Io(error), false))?;
         if !is_still(seen, &Mark::of(&opened)) {
             let changed = io::Error::other("the source changed before the copy");
-            return Err(fail(Step::SourceChanged, Cause::Io(changed), false));
+            let step = match opened.is_file() {
+                true => Step::SourceChanged,
+                false => Step::SourceNotFile,
+            };
+            return Err(fail(step, Cause::Io(changed), false));
         }
     }
     let mut output = match writing.opening {
@@ -939,6 +945,8 @@ pub enum StagedCause {
     Io(io::Error),
     /// The source is not the regular file the caller read.
     SourceChanged,
+    /// The source, opened, is not a regular file at all.
+    SourceNotAFile,
     Cancelled,
 }
 
@@ -1051,7 +1059,9 @@ impl Disk {
         let written = write_copy(self, source, how.staged, writing).map_err(|fail| {
             let step = match fail.step {
                 Step::OpenSource => StagedStep::OpenSource,
-                Step::SourceHandle | Step::SourceChanged => StagedStep::SourceHandle,
+                Step::SourceHandle | Step::SourceChanged | Step::SourceNotFile => {
+                    StagedStep::SourceHandle
+                }
                 Step::OpenTarget => StagedStep::OpenStaged,
                 Step::Flush => StagedStep::Flush,
                 Step::Sync => StagedStep::Sync,
@@ -1060,6 +1070,7 @@ impl Disk {
             let cause = match (fail.step, fail.cause) {
                 (Step::Cancelled, _) => StagedCause::Cancelled,
                 (Step::SourceChanged, _) => StagedCause::SourceChanged,
+                (Step::SourceNotFile, _) => StagedCause::SourceNotAFile,
                 (_, Cause::Disk(error)) => StagedCause::Io(error.into()),
                 (_, Cause::Io(error)) => StagedCause::Io(error),
             };

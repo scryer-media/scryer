@@ -263,8 +263,11 @@ impl Mark {
         match (self.volume, self.file, self.facts) {
             (Volume::Unix(device), Some(file), _) => format!("dev={device} ino={file}"),
             (_, _, Some(facts)) => {
-                let modified = facts.modified.map(since_epoch);
-                format!("len={} modified={modified:?}", facts.len)
+                let modified = facts.modified.map(since_epoch).map_or_else(
+                    || "unknown".to_owned(),
+                    |(seconds, nanos)| format!("{seconds}.{nanos:09}"),
+                );
+                format!("len={} modified={modified}", facts.len)
             }
             _ => self.lane(),
         }
