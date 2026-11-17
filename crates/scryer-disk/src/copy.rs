@@ -604,6 +604,9 @@ pub(crate) struct WriteFail {
 pub(crate) struct Written {
     pub(crate) hashes: Option<ContentHashes>,
     pub(crate) sync: SyncOutcome,
+    /// The target as its own handle read it once the last byte was written,
+    /// when the copy was asked for it and the read answered.
+    pub(crate) target: Option<Mark>,
 }
 
 /// What a copy does beyond moving the bytes.
@@ -622,6 +625,9 @@ pub(crate) struct Writing<'a> {
     /// Report [`Phase::Copying`] at nothing once the target is open, and
     /// [`Phase::Finishing`] once the last byte is written.
     pub(crate) phases: bool,
+    /// Read the target through its own handle once it is written: one call
+    /// on the handle, none on the path.
+    pub(crate) mark_target: bool,
     pub(crate) watch: &'a Watch,
 }
 
@@ -716,6 +722,16 @@ pub(crate) fn write_copy(
     output
         .flush()
         .map_err(|error| fail(Step::Flush, Cause::Io(error), true))?;
+    // A rename on one volume keeps the file this mark names, so a caller can
+    // tell the file it promoted from whatever holds the name later. A handle
+    // that cannot say leaves the caller unable to tell, not the copy failed.
+    let target_mark = match writing.mark_target {
+        true => disk
+            .call("handle_stat", || output.metadata())
+            .ok()
+            .map(|metadata| Mark::of(&metadata)),
+        false => None,
+    };
     let sync = disk
         .finish_blocking(target, output)
         .map_err(|error| fail(Step::Sync, Cause::Disk(error), true))?;
@@ -733,7 +749,11 @@ pub(crate) fn write_copy(
     if writing.carry_permissions {
         let _ = disk.copy_permissions_blocking(source, target);
     }
-    Ok(Written { hashes, sync })
+    Ok(Written {
+        hashes,
+        sync,
+        target: target_mark,
+    })
 }
 
 /// Whether `now` is still the regular file `seen` was read as: not shown to
@@ -842,6 +862,7 @@ impl Job<'_> {
             chunk_bytes: CHUNK_BYTES,
             seen: None,
             phases: false,
+            mark_target: false,
             watch: self.watch,
         };
         let hashes = match write_copy(disk, source, target, writing) {
@@ -962,6 +983,11 @@ pub struct StagedCopied {
     /// Whether the fsync of the copy was confirmed. A caller that relies on
     /// it reads this; the copy lands either way.
     pub sync: SyncOutcome,
+    /// The staged file as its own handle read it once it was written. The
+    /// rename that gave it the destination name keeps the file, so this tells
+    /// the file this copy promoted from whatever holds that name later.
+    /// `None` when the handle could not say; that is not the same file.
+    pub promoted: Option<Mark>,
 }
 
 /// A staged copy that did not land. The staged name holds nothing of it
@@ -1065,6 +1091,7 @@ impl Disk {
             chunk_bytes: how.chunk_bytes,
             seen: Some(how.seen),
             phases: true,
+            mark_target: true,
             watch,
         };
         let written = write_copy(self, source, how.staged, writing).map_err(|fail| {
@@ -1096,6 +1123,7 @@ impl Disk {
         Ok(StagedCopied {
             hashes: written.hashes.expect("a staged copy hashes"),
             sync: written.sync,
+            promoted: written.target,
         })
     }
 }

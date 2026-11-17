@@ -33,6 +33,7 @@ fn claiming(watch: &Watch) -> Writing<'_> {
         chunk_bytes: 1024 * 1024,
         seen: None,
         phases: false,
+        mark_target: false,
         watch,
     }
 }
@@ -581,6 +582,34 @@ fn a_staged_copy_clears_its_own_name_and_lands_whole() {
     let starts = reports.iter().filter(|report| report.1 == 0).count();
     assert_eq!(starts, 1, "{reports:?}");
     assert_eq!(fixture.paused(), chrono::Duration::zero());
+}
+
+/// A landed staged copy names the file it promoted, read once through the
+/// staged file's own handle and never by path: that file is the one under
+/// the destination name, and a file put there afterwards is not.
+#[cfg(unix)]
+#[test]
+fn a_staged_copy_names_the_file_it_promoted() {
+    let fixture = StagedFixture::new();
+    let lstats_before = fixture.disk.calls("lstat");
+
+    let copied = fixture.copy(&Watch::nobody()).expect("the copy lands");
+
+    assert_eq!(fixture.disk.calls("handle_stat"), 1);
+    assert_eq!(
+        fixture.disk.calls("lstat") - lstats_before,
+        2,
+        "the source before and after, as before"
+    );
+    let promoted = copied.promoted.expect("the handle answered");
+    let landed = Mark::of(&std::fs::symlink_metadata(&fixture.dest).unwrap());
+    assert_eq!(promoted.same_file(&landed), Sameness::Same);
+
+    let other = fixture.dest.with_file_name("sample-other.mkv");
+    std::fs::write(&other, payload()).unwrap();
+    std::fs::rename(&other, &fixture.dest).unwrap();
+    let replaced = Mark::of(&std::fs::symlink_metadata(&fixture.dest).unwrap());
+    assert_eq!(promoted.same_file(&replaced), Sameness::Different);
 }
 
 /// Nothing is said to have started until the staged file is open.

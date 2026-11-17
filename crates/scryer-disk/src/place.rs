@@ -1574,6 +1574,7 @@ impl Job<'_> {
             chunk_bytes: crate::copy::CHUNK_BYTES,
             seen: None,
             phases: false,
+            mark_target: false,
             watch: self.watch,
         };
         let sync = write_copy(self.disk, self.source, target, writing)
