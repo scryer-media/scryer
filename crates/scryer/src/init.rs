@@ -3,7 +3,9 @@ use scryer_infrastructure_datastore::keystore;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-use scryer_application::disk::{Access, Disk, OwnerOnly, Replace};
+#[cfg(unix)]
+use scryer_application::disk::OwnerOnly;
+use scryer_application::disk::{Access, Disk, Replace};
 
 const KEY_FILE: &str = "scryer_encryption_key.txt";
 

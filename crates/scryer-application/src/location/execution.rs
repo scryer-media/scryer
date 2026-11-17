@@ -48,7 +48,7 @@ use crate::ports::LocationOperationRepository;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult};
 
-// ── Seam: configured destination permissions (FR-031) ───────────────────────
+// ── Seam: configured destination permissions ────────────────────────────────
 
 /// Applies the operator's configured file and folder permissions to content a
 /// location operation just placed.
@@ -118,7 +118,7 @@ impl PlacedContentPermissions for ImportFilePermissionsApplier {
 // ── Seam: catalog writes and reads ───────────────────────────────────────────
 
 /// Where a title's content sits according to the catalog, as the admission
-/// check compares it against the confirmed plan (FR-089).
+/// check compares it against the confirmed plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TitlePlacementSnapshot {
     pub root_folder_id: String,
@@ -201,7 +201,7 @@ pub trait RootMoveCatalog: Send + Sync {
     }
 
     /// Drop the catalog row for a source copy the collision engine proved
-    /// redundant (FR-073).
+    /// redundant.
     ///
     /// The destination's row is the survivor and keeps every association; this
     /// removes the duplicate that would otherwise point at a dropped file.
@@ -216,11 +216,11 @@ pub trait RootMoveCatalog: Send + Sync {
     /// moves.
     async fn check_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()>;
 
-    /// Update the title's root reference (FR-078 synthetic id).
+    /// Update the title's root reference (the synthetic id).
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()>;
 
     /// Transfer the title into another library, together with the root it lands
-    /// on, in **one** transaction (FR-056).
+    /// on, in **one** transaction.
     ///
     /// The two halves cannot be written separately: a title whose `library_id`
     /// says library B while its `root_folder_id` names a root of library A is a
@@ -231,7 +231,7 @@ pub trait RootMoveCatalog: Send + Sync {
     ///
     /// Implementations must also carry the title's library projections across —
     /// `title_external_ids.library_id` above all, since that column is what
-    /// destination-title detection reads (FR-055). A title transferred without
+    /// destination-title detection reads. A title transferred without
     /// it would keep answering identity lookups from the library it left.
     ///
     /// `converted_facet` is the third half of the same indivisible write
@@ -500,7 +500,7 @@ impl TitleFileMover for RootMoveFileMover {
                     ))
                 })?;
             // The directory is destination content too, so the operator's
-            // configured folder modes apply to it (FR-031).
+            // configured folder modes apply to it.
             self.permissions.apply_to_directory(parent).await?;
         }
 
@@ -515,7 +515,7 @@ impl TitleFileMover for RootMoveFileMover {
             // between a completed copy's promotion and the record that should
             // have followed it — or a file that appeared from outside. Either
             // way it is proven against the source rather than replaced or
-            // trusted (FR-033, C4).
+            // trusted.
             super::resolution::compare_existing(
                 source,
                 destination,

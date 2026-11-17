@@ -232,7 +232,7 @@ enum BackfillSkip {
     /// The file, or the directory it should live in, is not readable — an
     /// unmounted share, a removed disk, a deleted file.
     UnavailableMount,
-    /// A live location operation owns the title or the root (FR-084/SC-007).
+    /// A live location operation owns the title or the root.
     OwnedByOperation,
     /// Something else hashed it between the queue page and this file's turn.
     AlreadyHashed,
@@ -376,7 +376,7 @@ impl OwnedScope {
 }
 
 impl AppUseCase {
-    /// One bounded pass over the full-hash backfill queue (FR-047).
+    /// One bounded pass over the full-hash backfill queue.
     ///
     /// Never returns an error for a file it could not read: an unreachable
     /// mount is a normal state for this job, not a job failure. Only a store or

@@ -2203,7 +2203,7 @@ async fn import_movie_download(
         .await;
     }
 
-    // **The one import decision** (design §3): subject, landed score, truth
+    // **The one import decision**: subject, landed score, truth
     // verdict and admission in one call, over the same incumbents and the same
     // comparator the grab path consulted. This used to be a bare
     // `new_score > old_score` against a stored `acquisition_score`, and — until
@@ -3021,7 +3021,7 @@ async fn import_series_movie_download(
     )
     .await?;
 
-    // **The one import decision** (design §3). A linked movie is a scope like
+    // **The one import decision**. A linked movie is a scope like
     // any other; hand-rolling its comparison is what let it disagree with the
     // grab that fetched the file.
     let decision_input = crate::import_decide::ImportDecisionInput {

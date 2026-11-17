@@ -667,11 +667,11 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
 async fn the_async_form_reports_like_the_blocking_one() {
     let (disk, backend, _) = scripted();
     let placed = disk.place(SOURCE, DEST, policy(Method::Move, Fallback::None));
-    assert_eq!(placed.await.expect("placed").done, Done::Renamed);
+    assert_eq!(bounded(placed).await.expect("placed").done, Done::Renamed);
     backend.fails("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists);
     let refused = disk.place(SOURCE, DEST, policy(Method::Move, Fallback::None));
     assert_eq!(
-        refused.await.expect_err("refused").refused,
+        bounded(refused).await.expect_err("refused").refused,
         Refused::DestinationExists
     );
     assert!(disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
@@ -698,13 +698,8 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
 
     let (disk, backend, _) = scripted();
     backend.stat_is(staged.to_str().unwrap(), Ok(file(1)));
-    let held = disk
-        .place_watched(
-            SOURCE,
-            DEST,
-            recorded_staged(Method::Copy, Fallback::None),
-            watch(),
-        )
+    let policy = recorded_staged(Method::Copy, Fallback::None);
+    let held = bounded(disk.place_watched(SOURCE, DEST, policy, watch()))
         .await
         .expect_err("refused");
     assert_eq!(held.refused, Refused::StagingOccupied);
@@ -723,7 +718,7 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
         let (disk, backend, _) = scripted();
         backend.stat_is(staged.to_str().unwrap(), Err(kind));
         let policy = recorded_staged(Method::Copy, Fallback::None);
-        let unread = disk.place_watched(SOURCE, DEST, policy, watch()).await;
+        let unread = bounded(disk.place_watched(SOURCE, DEST, policy, watch())).await;
         assert_eq!(unread.expect_err("refused").refused, refused, "{kind:?}");
         assert_eq!(backend.calls_of("open"), 0);
     }
@@ -734,13 +729,7 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
     *backend.gate.lock().unwrap() = Some(gate);
     // The reading is held in the backend until the gate opens, so the bound
     // always elapses first.
-    let silent = disk
-        .place_watched(
-            SOURCE,
-            DEST,
-            recorded_staged(Method::Copy, Fallback::None),
-            watch(),
-        )
+    let silent = bounded(disk.place_watched(SOURCE, DEST, policy, watch()))
         .await
         .expect_err("refused");
     assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
@@ -764,6 +753,14 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
 /// reaches it.
 const BOUND: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// `placing`, failing the test when it has not ended within [`BOUND`].
+pub(super) async fn bounded<T>(placing: impl Future<Output = T>) -> T {
+    tokio::time::timeout(BOUND, placing)
+        .await
+        .expect("the placement ends within the bound")
+}
+
+#[cfg(unix)]
 fn direct_recorded() -> Placement {
     Placement {
         verify: Verify::Recorded(Evidence {
@@ -776,9 +773,9 @@ fn direct_recorded() -> Placement {
 
 /// A recorded copy that lands directly is never refused before it runs: its
 /// destination can be a name the caller holds and cleans up on a refusal.
-/// While its volume does not answer it waits on its thread, with nothing
-/// opened, and once the volume answers it takes one turn on that volume's own
-/// lane and copies.
+/// While its volume does not answer it waits, the read out on a blocking
+/// thread and nothing opened, and once the volume answers it takes one turn
+/// on that volume's own lane and copies.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_direct_copy_whose_volume_is_slow_to_answer_waits_and_is_not_refused() {
@@ -817,7 +814,7 @@ async fn a_direct_copy_whose_volume_is_slow_to_answer_waits_and_is_not_refused()
                 .await
         }
     });
-    // The volume read is out on the copy's own thread, held in the backend.
+    // The volume read is out off the runtime, held in the backend.
     tokio::task::spawn_blocking(move || reading.recv_timeout(BOUND))
         .await
         .expect("joined")
@@ -843,6 +840,56 @@ async fn a_direct_copy_whose_volume_is_slow_to_answer_waits_and_is_not_refused()
     );
 }
 
+/// A recorded copy that lands directly waits for its turn without holding a
+/// blocking thread: with one such thread and the volume's only turn taken,
+/// other blocking work still runs, and the copy runs once the turn is free.
+#[cfg(unix)]
+#[test]
+fn a_direct_copy_waiting_for_its_turn_holds_no_blocking_thread() {
+    use super::mark::numbered;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let (disk, backend, _) = scripted();
+        disk.install_copy_workers(1);
+        let folder = "/srv/fixture-media/Fixture Show";
+        backend.stat_is(folder, Ok(numbered(Some(7), Some(3))));
+        copies(&backend, b"synthetic payload", b"synthetic payload");
+        let held = disk.copy_admission().acquire_keyed("unix-dev:7").await;
+        let (open, gate) = mpsc::channel::<()>();
+        *backend.gate.lock().unwrap() = Some(gate);
+        *backend.gate_under.lock().unwrap() = Some(p(folder));
+        let (entered, reading) = mpsc::channel();
+        *backend.entered.lock().unwrap() = Some(entered);
+        let copy = tokio::spawn({
+            let disk = disk.clone();
+            async move {
+                disk.place_watched(SOURCE, DEST, direct_recorded(), Watch::nobody())
+                    .await
+            }
+        });
+        // This thread is not one of the runtime's workers, so it may block
+        // until the copy has started reading.
+        reading.recv_timeout(BOUND).expect("the volume is read");
+        // The read holds the one blocking thread, so this work is behind it
+        // and runs only if the copy gives the thread back before its turn.
+        let other = tokio::task::spawn_blocking(|| ());
+        drop(open);
+        bounded(other)
+            .await
+            .expect("the one blocking thread is free");
+        assert_eq!(backend.calls_of("open"), 0, "nothing is written yet");
+        assert!(!copy.is_finished());
+        drop(held);
+        let placed = bounded(copy).await.expect("joined");
+        assert_eq!(placed.expect("copied").done, Done::Copied);
+    });
+}
+
 /// A recorded copy that lands under a staged name is refused before it takes
 /// a thread or a turn when its destination volume does not answer within the
 /// bound. Nothing of its own exists yet for a caller to clean up.
@@ -862,13 +909,9 @@ async fn a_staged_copy_whose_volume_does_not_answer_is_refused_before_its_turn()
     *backend.gate.lock().unwrap() = Some(gate);
     *backend.gate_under.lock().unwrap() = Some(p(folder));
     let staged = recorded_staged(Method::Copy, Fallback::None);
-    let silent = tokio::time::timeout(
-        BOUND,
-        disk.place_watched(SOURCE, DEST, staged, Watch::nobody()),
-    )
-    .await
-    .expect("refused within the bound")
-    .expect_err("refused");
+    let silent = bounded(disk.place_watched(SOURCE, DEST, staged, Watch::nobody()))
+        .await
+        .expect_err("refused");
     assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
     assert_eq!(
         silent.to_string(),
@@ -897,13 +940,8 @@ async fn a_staged_name_taken_after_it_read_free_is_refused_and_kept() {
         staged.to_str().unwrap(),
         io::ErrorKind::AlreadyExists,
     );
-    let refused = disk
-        .place_watched(
-            SOURCE,
-            DEST,
-            recorded_staged(Method::Copy, Fallback::None),
-            Watch::nobody(),
-        )
+    let policy = recorded_staged(Method::Copy, Fallback::None);
+    let refused = bounded(disk.place_watched(SOURCE, DEST, policy, Watch::nobody()))
         .await
         .expect_err("refused");
     assert_eq!(refused.refused, Refused::StagingOccupied);
@@ -927,13 +965,8 @@ async fn an_admitted_staged_copy_reads_its_staged_name_once() {
     backend.stat_is(SOURCE, Ok(file(17)));
     backend.holds(SOURCE, b"synthetic payload");
     *backend.staged_contents.lock().unwrap() = Some(b"synthetic payload".to_vec());
-    let placed = disk
-        .place_watched(
-            SOURCE,
-            DEST,
-            recorded_staged(Method::Copy, Fallback::None),
-            Watch::nobody(),
-        )
+    let policy = recorded_staged(Method::Copy, Fallback::None);
+    let placed = bounded(disk.place_watched(SOURCE, DEST, policy, Watch::nobody()))
         .await
         .expect("copied");
     assert_eq!(placed.done, Done::Copied);

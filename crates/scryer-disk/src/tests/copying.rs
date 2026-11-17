@@ -379,7 +379,8 @@ async fn an_admitted_copy_does_not_ask_for_a_second_turn() {
         cancel: Cancel::never(),
     };
     let policy = recorded(Depth::Quick, Landing::Staged, Replace::Never);
-    let placed = disk.place_watched(&source, &dest, policy, watch).await;
+    let placing = disk.place_watched(&source, &dest, policy, watch);
+    let placed = super::place::bounded(placing).await;
     assert_eq!(placed.expect("copied").done, Done::Copied);
     assert_eq!(waits.load(Ordering::SeqCst), 1);
 }

@@ -4,7 +4,8 @@
 //! as text so the rule also holds where clippy has not run.
 //!
 //! It sees the `std::fs` and `tokio::fs` modules however they are imported,
-//! the platform extension traits, `fs_err`, the `File` and `OpenOptions`
+//! under whatever name, the functions imported from them and the calls made
+//! through either, the platform extension traits, `fs_err`, the `File` and `OpenOptions`
 //! constructors, and the path methods `try_exists`, `canonicalize`,
 //! `read_link`, `symlink_metadata` and `read_dir`. Four entries of the clippy
 //! list stay clippy-only: the path methods `exists`, `is_file`, `is_dir` and
@@ -14,8 +15,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// The disk service itself, and the crates clippy.toml names as not depending
-/// on `scryer-application`.
+/// The disk service itself, and the three crates clippy.toml names as exempt.
 const EXEMPT_CRATES: [&str; 4] = [
     "scryer-disk",
     "scryer-launcher",
@@ -25,8 +25,9 @@ const EXEMPT_CRATES: [&str; 4] = [
 /// Directories that hold only test, bench or example code.
 const EXEMPT_DIRS: [&str; 5] = ["tests", "lib_tests", "benches", "examples", "target"];
 /// `disk-guard:` comments on production code in the guarded sources today. A
-/// marker on a test-gated item or allowance is not counted. Lower it when one
-/// is removed; it never goes up.
+/// marker on a test-gated item, or one whose own attribute allows the direct
+/// calls for tests only, is not counted. Lower it when one is removed; it
+/// never goes up.
 const MARKERS: usize = 80;
 /// Files holding direct filesystem lines that carry no marker yet, with how
 /// many. An entry may shrink or go; none is added and none grows.
@@ -64,13 +65,23 @@ fn exempt_file(path: &Path) -> bool {
         || name.ends_with("_tests.rs")
 }
 
+/// `read`, or `None` when the thing read went away after it was listed:
+/// another session may remove a directory or a file mid-walk. Anything else
+/// that cannot be read fails the test rather than going unchecked.
+fn unless_gone<T>(path: &Path, read: std::io::Result<T>) -> Option<T> {
+    match read {
+        Ok(read) => Some(read),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("{} should be readable: {error}", path.display()),
+    }
+}
+
 fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
-    // Another session may remove a directory or an entry mid-walk.
-    let Ok(listing) = std::fs::read_dir(dir) else {
+    let Some(listing) = unless_gone(dir, std::fs::read_dir(dir)) else {
         return;
     };
     let mut entries = listing
-        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter_map(|entry| Some(unless_gone(dir, entry)?.path()))
         .collect::<Vec<_>>();
     entries.sort();
     for path in entries {
@@ -86,6 +97,63 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
             found.push(path);
         }
     }
+}
+
+/// The lines of `text`, with each line that starts inside a string literal
+/// emptied: what a string holds is not code, and its indentation says
+/// nothing about what encloses the code after it.
+fn code(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    // The `#`s that close the raw string a line starts in; zero for a plain
+    // string.
+    let mut within: Option<usize> = None;
+    for line in text.lines() {
+        lines.push(if within.is_some() { "" } else { line });
+        let mut rest = line;
+        loop {
+            if let Some(hashes) = within {
+                let close = format!("\"{}", "#".repeat(hashes));
+                let escaped = |at: usize| {
+                    let before = &rest[..at];
+                    hashes == 0 && (before.len() - before.trim_end_matches('\\').len()) % 2 == 1
+                };
+                let mut from = 0;
+                let closed = loop {
+                    match rest[from..].find(&close) {
+                        Some(at) if escaped(from + at) => from += at + 1,
+                        Some(at) => break Some(from + at + close.len()),
+                        None => break None,
+                    }
+                };
+                let Some(closed) = closed else { break };
+                (within, rest) = (None, &rest[closed..]);
+            }
+            let Some(at) = rest.find(['"', '\'', '/']) else {
+                break;
+            };
+            let (before, opened) = (&rest[..at], &rest[at..]);
+            if opened.starts_with("//") {
+                break;
+            }
+            if opened.starts_with('"') {
+                let hashes = before.len() - before.trim_end_matches('#').len();
+                let raw = before[..before.len() - hashes].ends_with('r');
+                within = Some(if raw { hashes } else { 0 });
+                rest = &opened[1..];
+            } else if opened.starts_with("'\\") {
+                // An escaped character: past the escape, then its quote.
+                let end = opened[3..].find('\'').map_or(opened.len(), |end| end + 4);
+                rest = &opened[end..];
+            } else if opened.starts_with('\'') && opened[1..].chars().nth(1) == Some('\'') {
+                let quoted = opened[1..].chars().next().map_or(0, char::len_utf8);
+                rest = &opened[quoted + 2..];
+            } else {
+                // A lifetime, or a division.
+                rest = &opened[1..];
+            }
+        }
+    }
+    lines
 }
 
 fn indent(line: &str) -> usize {
@@ -106,13 +174,18 @@ fn test_only(line: &str) -> bool {
             .iter()
             .any(|gate| line.contains(gate))
     };
-    line == "#[test]" || line.starts_with("#[tokio::test") || line.starts_with("#[") && gated()
+    let attribute = line.starts_with("#[") || line.starts_with("#![");
+    line == "#[test]" || line.starts_with("#[tokio::test") || attribute && gated()
 }
 
-/// An attribute that is test-only, or allows something for tests only.
-fn for_tests(line: &str) -> bool {
-    let line = line.trim_start();
-    test_only(line) || line.starts_with("#[cfg_attr(test,") || line.starts_with("#![cfg_attr(test,")
+/// An attribute that allows the direct calls for tests only. Any other
+/// `cfg_attr(test, ..)` says nothing about what the item under it is for.
+fn allows_for_tests(line: &str) -> bool {
+    let line = line
+        .trim_start()
+        .trim_start_matches("#!")
+        .trim_start_matches('#');
+    line.starts_with("[cfg_attr(test, allow(clippy::disallowed_")
 }
 
 /// The line carries on a construct opened further up.
@@ -129,11 +202,14 @@ fn covered(lines: &[&str], at: usize) -> bool {
     })
 }
 
-/// Whether the marker on line `at` stands on test-only code: the item it
-/// annotates, or anything enclosing that item, is gated or allowed for tests.
+/// Whether the marker on line `at` stands on test-only code: the attribute
+/// it explains allows the direct calls for tests only, or the item it
+/// annotates, or anything enclosing that item, is gated for tests.
 fn test_marker(lines: &[&str], at: usize) -> bool {
+    let explained = (at..lines.len()).find(|at| !lines[*at].trim_start().starts_with("//"));
     let item = (at..lines.len()).find(|at| !annotation(lines[*at]));
-    under(lines, item.unwrap_or(at), for_tests)
+    explained.is_some_and(|at| allows_for_tests(lines[at]))
+        || under(lines, item.unwrap_or(at), test_only)
 }
 
 /// Whether line `at`, or anything enclosing it, has a line `wanted` accepts
@@ -149,12 +225,15 @@ fn under(lines: &[&str], at: usize, wanted: impl Fn(&str) -> bool) -> bool {
             return true;
         }
         if depth == 0 {
-            return false;
+            return inner(lines).any(&wanted);
         }
         let encloses = |line: &&str, depth: usize| !line.trim().is_empty() && indent(line) < depth;
         let Some(outer) = lines[..at].iter().rposition(|line| encloses(line, depth)) else {
-            return false;
+            return inner(lines).any(&wanted);
         };
+        if inner(&lines[outer + 1..]).any(&wanted) {
+            return true;
+        }
         (at, depth) = (outer, indent(lines[outer]));
         while continues(lines[at]) {
             let opens = |line: &&str| !line.trim().is_empty() && indent(line) <= depth;
@@ -164,6 +243,17 @@ fn under(lines: &[&str], at: usize, wanted: impl Fn(&str) -> bool) -> bool {
             (at, depth) = (opener, indent(lines[opener]));
         }
     }
+}
+
+/// The inner attributes that open `body`: `#![..]` lines, and the comments
+/// among them, before its first item.
+fn inner<'a>(body: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
+    let heads = |line: &&str| {
+        let line = line.trim_start();
+        line.is_empty() || line.starts_with("//") || line.starts_with("#![")
+    };
+    let attribute = |line: &&str| line.trim_start().starts_with("#![");
+    body.iter().copied().take_while(heads).filter(attribute)
 }
 
 /// A line that names a filesystem call, or brings the means to make one into
@@ -226,19 +316,108 @@ fn groups_fs(group: &str) -> bool {
     })
 }
 
-/// A call through a module imported as plain `fs`: `fs::read(..)`.
-fn bare_call(line: &str) -> bool {
-    !line.trim_start().starts_with("//")
-        && line.match_indices("fs::").any(|(found, _)| {
-            let before = line[..found].chars().next_back();
-            let named = |before: char| before == ':' || before == '_' || before.is_alphanumeric();
-            !before.is_some_and(named) && line[found + 4..].starts_with(lowercase)
-        })
+/// A call through `module`, a name the file gave an `fs` module:
+/// `fs::read(..)`.
+fn module_call(line: &str, module: &str) -> bool {
+    let path = format!("{module}::");
+    line.match_indices(&path).any(|(found, _)| {
+        !line[..found].ends_with(named) && line[found + path.len()..].starts_with(lowercase)
+    })
 }
 
-/// For each line, whether it reaches the filesystem directly: [`direct`], a
-/// grouped import of the `fs` module, or a bare `fs::` call in a file that
-/// imports that module.
+/// A call of `function`, a name the file imported from an `fs` module:
+/// `remove_file(..)`. A method, a path to another function of that name and
+/// a definition are not one.
+fn function_call(line: &str, function: &str) -> bool {
+    let call = format!("{function}(");
+    line.match_indices(&call).any(|(found, _)| {
+        let before = &line[..found];
+        !before.ends_with(named) && !before.ends_with(['.', ':']) && !before.ends_with("fn ")
+    })
+}
+
+fn named(before: char) -> bool {
+    before == ':' || before == '_' || before.is_alphanumeric()
+}
+
+/// What a file's `use` statements let it call without naming `std::fs` or
+/// `tokio::fs` in full.
+#[derive(Debug, Default, PartialEq)]
+struct Imported {
+    /// Names the `fs` modules go by.
+    modules: Vec<String>,
+    /// Functions of those modules, by the names they go by.
+    functions: Vec<String>,
+}
+
+impl Imported {
+    fn any(&self) -> bool {
+        !(self.modules.is_empty() && self.functions.is_empty())
+    }
+
+    fn calls(&self, line: &str) -> bool {
+        !line.trim_start().starts_with("//")
+            && (self.modules.iter().any(|name| module_call(line, name))
+                || self.functions.iter().any(|name| function_call(line, name)))
+    }
+
+    /// Takes what one `use` tree brings in. `tree` is what follows `use `, up
+    /// to its `;`.
+    fn take(&mut self, prefix: &str, tree: &str) {
+        let tree = tree.trim();
+        if let Some((head, rest)) = tree.split_once('{') {
+            let group = rest.rsplit_once('}').map_or(rest, |(group, _)| group);
+            let (mut depth, mut from) = (0usize, 0);
+            for (at, next) in group.char_indices() {
+                match next {
+                    '{' => depth += 1,
+                    '}' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => {
+                        self.take(&format!("{prefix}{head}"), &group[from..at]);
+                        from = at + 1;
+                    }
+                    _ => {}
+                }
+            }
+            return self.take(&format!("{prefix}{head}"), &group[from..]);
+        }
+        let path = format!("{prefix}{tree}");
+        let (path, alias) = match path.split_once(" as ") {
+            Some((path, alias)) => (path.trim(), Some(alias.trim())),
+            None => (path.trim(), None),
+        };
+        let path = path.trim_start_matches("::");
+        let path = path.strip_suffix("::self").unwrap_or(path);
+        for module in ["std::fs", "tokio::fs"] {
+            let name = |own: &str| alias.unwrap_or(own).to_owned();
+            match path.strip_prefix(module) {
+                Some("") => self.modules.push(name("fs")),
+                Some(rest) => match rest.strip_prefix("::") {
+                    Some(function) if function.starts_with(lowercase) => {
+                        self.functions.push(name(function));
+                    }
+                    _ => {}
+                },
+                None => {}
+            }
+        }
+    }
+}
+
+/// Where a `use` statement starts on `line`: after any visibility.
+fn use_tree(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let line = match line.strip_prefix("pub") {
+        Some(rest) if rest.starts_with('(') => rest.split_once(')')?.1,
+        Some(rest) => rest,
+        None => line,
+    };
+    line.trim_start().strip_prefix("use ")
+}
+
+/// For each line, whether it reaches the filesystem directly: [`direct`], an
+/// import of an `fs` module or of a function of one, in a group or under
+/// another name, or a call through such an import.
 fn raw(lines: &[&str]) -> Vec<bool> {
     let mut grouped = false;
     let mut found = Vec::with_capacity(lines.len());
@@ -254,10 +433,34 @@ fn raw(lines: &[&str]) -> Vec<bool> {
         grouped = (opens || grouped) && !text.contains(';');
         found.push(direct(line) || group.is_some_and(groups_fs));
     }
-    if (0..lines.len()).any(|at| found[at] && lines[at].trim_start().starts_with("use ")) {
-        for (at, line) in lines.iter().enumerate() {
-            found[at] = found[at] || bare_call(line);
+
+    let mut imported = Imported::default();
+    let mut at = 0;
+    while at < lines.len() {
+        let Some(tree) = use_tree(lines[at]) else {
+            at += 1;
+            continue;
+        };
+        let end = (at..lines.len())
+            .find(|end| lines[*end].contains(';'))
+            .unwrap_or(lines.len() - 1);
+        let mut statement = tree.to_owned();
+        for line in &lines[at + 1..=end] {
+            statement.push_str(line.split("//").next().unwrap_or("").trim());
         }
+        let statement = statement.split(';').next().unwrap_or("");
+        let mut brought = Imported::default();
+        brought.take("", statement);
+        // An import no line of which reads as direct still is one.
+        if brought.any() && !found[at..=end].contains(&true) {
+            found[at] = true;
+        }
+        imported.modules.append(&mut brought.modules);
+        imported.functions.append(&mut brought.functions);
+        at = end + 1;
+    }
+    for (at, line) in lines.iter().enumerate() {
+        found[at] = found[at] || imported.calls(line);
     }
     found
 }
@@ -310,12 +513,14 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
             sources(&root, &mut files);
         }
     }
-    // A file that vanished, or a link to nothing, is not a source.
-    let read = |path: PathBuf| Some((std::fs::read_to_string(&path).ok()?, path));
+    let read = |path: PathBuf| {
+        let text = unless_gone(&path, std::fs::read_to_string(&path))?;
+        Some((text, path))
+    };
     let (texts, files): (Vec<_>, Vec<_>) = files.into_iter().filter_map(read).unzip();
     let mut test_files = HashSet::new();
     for (path, text) in files.iter().zip(&texts) {
-        test_modules(path, &text.lines().collect::<Vec<_>>(), &mut test_files);
+        test_modules(path, &code(text), &mut test_files);
     }
 
     let (mut markers, mut unmarked) = (0, BTreeMap::<String, Vec<usize>>::new());
@@ -323,7 +528,7 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
         if path.ancestors().any(|at| test_files.contains(at)) {
             continue;
         }
-        let lines = text.lines().collect::<Vec<_>>();
+        let lines = code(text);
         let marked = |at: &usize| lines[*at].contains("disk-guard:") && !test_marker(&lines, *at);
         markers += (0..lines.len()).filter(marked).count();
         let shown = path.strip_prefix(crates).unwrap_or(path);
@@ -425,6 +630,50 @@ fn the_guard_sees_a_grouped_import_and_the_bare_calls_it_allows() {
 }
 
 #[test]
+fn the_guard_follows_imported_functions_other_names_and_visible_imports() {
+    let source = [
+        "use std::fs::{File, remove_file};",
+        "use tokio::fs::{",
+        "    File as Handle,",
+        "    read as slurp,",
+        "};",
+        "use std::fs as stdfs;",
+        "use std::{",
+        "    fs,",
+        "    path::Path,",
+        "};",
+        "fn bare(path: &Path) {",
+        "    remove_file(path).ok();",
+        "    self.remove_file(path);",
+        "    other::remove_file(path);",
+        "    let _ = slurp(path);",
+        "    let _ = stdfs::metadata(path);",
+        "    let _ = fs::read(path);",
+        "    let _: stdfs::File = made();",
+        "}",
+        "fn remove_file(path: &Path) {}",
+    ];
+    let expected = [0, 1, 5, 7, 11, 14, 15, 16];
+    let found = raw(&source);
+    let found = (0..source.len()).filter(|at| found[*at]);
+    assert_eq!(found.collect::<Vec<_>>(), expected);
+    assert_eq!(
+        raw(&["pub(crate) use std::fs;", "fs::read(path)"]),
+        [true; 2]
+    );
+    assert_eq!(raw(&["use std::fs::File;", "read(path)"]), [false; 2]);
+
+    let mut imported = Imported::default();
+    imported.take("", "std::{fs::{self as files, read, File}, io}");
+    imported.take("", "::tokio::fs::write as put");
+    let expected = Imported {
+        modules: vec!["files".to_owned()],
+        functions: vec!["read".to_owned(), "put".to_owned()],
+    };
+    assert_eq!(imported, expected);
+}
+
+#[test]
 fn only_a_test_gate_on_an_attribute_exempts_and_test_markers_are_not_counted() {
     assert!(test_only("#[cfg(test)]") && test_only("    #[cfg(all(test, unix))]"));
     assert!(!test_only("// built under #[cfg(test)] only") && !test_only("#[cfg(not(test))]"));
@@ -449,4 +698,43 @@ fn only_a_test_gate_on_an_attribute_exempts_and_test_markers_are_not_counted() {
         .filter(|at| source[*at].contains("disk-guard:") && !test_marker(&source, *at))
         .collect::<Vec<_>>();
     assert_eq!(counted, [3]);
+
+    // What a string holds neither encloses the code after it nor is code.
+    let text = [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    const INVENTED: &str = r#\"",
+        "<invented quote=\"one\">",
+        "\"#;",
+        "    const PLAIN: &str = \"a \\\" quote and a '\\\\' then",
+        "std::fs::read(path)\";",
+        "    fn helper<'a>(mark: char) -> bool {",
+        "        mark == '\"' || std::fs::read(\"invented\").is_ok()",
+        "    }",
+        "}",
+    ]
+    .join("\n");
+    let lines = code(&text);
+    assert_eq!(lines[3..5], ["", ""]);
+    assert_eq!(lines[6], "");
+    assert!(raw(&lines)[8] && covered(&lines, 8));
+
+    // A test-only derive says nothing about the item, so its marker counts.
+    let derived = [
+        "// disk-guard: an invented production reason.",
+        "#[cfg_attr(test, derive(Debug))]",
+        "#[allow(clippy::disallowed_methods)]",
+        "fn marked() {}",
+    ];
+    assert!(!test_marker(&derived, 0));
+    // A file or a module gated from the inside is test code throughout.
+    let file = ["#![cfg(test)]", "", "fn fixture() {", "    read();", "}"];
+    assert!(under(&file, 3, test_only) && under(&file, 2, test_only));
+    let module = [
+        "mod fixtures {",
+        "    #![cfg(all(test, unix))]",
+        "    fn fixture() {}",
+        "}",
+    ];
+    assert!(under(&module, 2, test_only) && !under(&module[..1], 0, test_only));
 }

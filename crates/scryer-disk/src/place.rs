@@ -308,7 +308,7 @@ impl Disk {
     /// where it is; a stray file is always preferred to a lost one.
     ///
     /// Never call it on a runtime worker thread; see
-    /// [`Self::place_watched_blocking`].
+    /// `Disk::place_watched_blocking`.
     pub fn place_blocking(
         &self,
         source: &Path,
@@ -380,7 +380,7 @@ impl Disk {
             .await
     }
 
-    /// [`Self::place_watched_blocking`] off the async runtime.
+    /// `Disk::place_watched_blocking` off the async runtime.
     ///
     /// A recorded copy that lands [`Landing::Staged`] first reads its staged
     /// name and its destination's volume within the root's bound, and is
@@ -390,11 +390,14 @@ impl Disk {
     /// A recorded copy that lands [`Landing::Direct`] is never refused
     /// before it runs: its destination can be a name the caller holds, and a
     /// caller that cleans up a refused copy would remove a file nothing
-    /// wrote to. It takes a thread at once, reads its volume there with no
-    /// bound, and waits there for its turn, as a link that falls back to a
-    /// recorded copy does.
+    /// wrote to. Its volume is read off the runtime with no bound, and a
+    /// volume that never answers there leaves the copy waiting. It then
+    /// waits for its turn without holding a thread, and takes one only for
+    /// the copy.
     ///
-    /// Either way the turn is given back before the copy is proven.
+    /// A link that falls back to a recorded copy is already on its thread
+    /// and waits there. Every way the turn is given back before the copy is
+    /// proven.
     pub async fn place_watched(
         &self,
         source: impl Into<PathBuf>,
@@ -428,6 +431,24 @@ impl Disk {
                 staged_free = true;
                 watch.progress.report(Phase::Waiting, 0);
                 Some(self.copy_turn(&dest).await.map_err(refuse)?)
+            }
+            Placement {
+                method: Method::Copy,
+                verify:
+                    Verify::Recorded(Evidence {
+                        landing: Landing::Direct,
+                        ..
+                    }),
+                ..
+            } => {
+                watch.progress.report(Phase::Waiting, 0);
+                let (reader, landing) = (self.clone(), dest.clone());
+                match offload(None, move || reader.copy_lane(&landing)).await {
+                    Offloaded::Done(lane) => Some(self.copy_admission().acquire_keyed(&lane).await),
+                    // The copy reads its volume itself and waits on its
+                    // own thread.
+                    Offloaded::TimedOut | Offloaded::Failed(_) => None,
+                }
             }
             _ => None,
         };

@@ -1,7 +1,7 @@
 //! The one owner of every filesystem operation Scryer performs.
 //!
 //! [`Disk`] holds the only calls to the operating system (behind
-//! [`backend::DiskBackend`]), the short-lived stat cache, single-flight per
+//! `DiskBackend`), the short-lived stat cache, single-flight per
 //! path, timeouts, and what each configured root's filesystem has shown it can
 //! and cannot do. Callers pass a path and a verb and get a generic, typed
 //! outcome; they never say or learn what kind of filesystem a path is on.
@@ -36,7 +36,7 @@
 //! for a directory removal or a move the whole subtree. No mutation here adds
 //! deletion of its own: each removes exactly what the caller named, once.
 //! The exceptions are files and directories the owner itself created for the
-//! caller and that nobody else holds: [`Disk::write_atomic_blocking`] removes
+//! caller and that nobody else holds: `Disk::write_atomic_blocking` removes
 //! its hidden staging file when it fails, a [`Staged`] write removes its
 //! staging file when it is dropped without being committed, and a
 //! [`ScratchDir`] removes itself, and everything in it, when it is dropped.
@@ -641,7 +641,7 @@ impl Disk {
     ///
     /// While a read of the same path, or of anything under the same root, is
     /// out past its bound, this answers unreachable at once without probing
-    /// (see [`Self::bounded`]); a reading still inside the reuse window is
+    /// (see `Disk::bounded`); a reading still inside the reuse window is
     /// answered as usual.
     pub async fn fresh(&self, path: impl Into<PathBuf>) -> PathReading {
         let path = path.into();
@@ -727,7 +727,7 @@ impl Disk {
         self.mark_of(result)
     }
 
-    /// [`Self::fingerprint_blocking`] of what `path` resolves to through any
+    /// `Disk::fingerprint_blocking` of what `path` resolves to through any
     /// links: one probe.
     pub fn fingerprint_followed_blocking(&self, path: &Path) -> Result<Mark, PathReading> {
         let result = self.call("stat", || self.inner.backend.stat(path));
@@ -741,7 +741,7 @@ impl Disk {
         }
     }
 
-    /// [`Self::fingerprint_blocking`] off the runtime, bounded as
+    /// `Disk::fingerprint_blocking` off the runtime, bounded as
     /// [`Self::uncached`] is.
     pub async fn fingerprint(&self, path: impl Into<PathBuf>) -> Result<Mark, PathReading> {
         self.probe_with(path.into(), Self::fingerprint_blocking, Err)
@@ -1194,7 +1194,7 @@ impl Disk {
         self.write_staged_blocking(path, bytes, replace, access, Staging::Unique, false)
     }
 
-    /// [`Self::write_atomic_blocking`] for contents that must be durable
+    /// `Disk::write_atomic_blocking` for contents that must be durable
     /// before they replace anything: when the sync is unconfirmed, `path` is
     /// left as it was and the write fails with [`io::ErrorKind::Unsupported`].
     pub fn write_durable_blocking(
@@ -1208,7 +1208,7 @@ impl Disk {
             .map(drop)
     }
 
-    /// [`Self::write_atomic_blocking`] staged as `staging` says, and, when
+    /// `Disk::write_atomic_blocking` staged as `staging` says, and, when
     /// `durable`, refused as [`Self::write_durable_blocking`] refuses an
     /// unconfirmed sync.
     pub fn write_staged_blocking(
@@ -1467,7 +1467,7 @@ impl Disk {
     /// when `replace` allows. Neither atomic nor synced, and parents are not
     /// created: for scratch files and files nobody reads while they are
     /// written. A failure can leave part of the bytes behind.
-    /// [`Self::write_atomic_blocking`] is the write for anything else.
+    /// `Disk::write_atomic_blocking` is the write for anything else.
     pub fn write_blocking(
         &self,
         path: &Path,

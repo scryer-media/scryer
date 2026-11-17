@@ -930,7 +930,7 @@ impl Disk {
         Ok(hasher.finalize())
     }
 
-    /// [`Self::hash_file_blocking`] off the async runtime. `None` when the
+    /// `Disk::hash_file_blocking` off the async runtime. `None` when the
     /// read did not run to its end; the words say why.
     pub async fn hash_file(
         &self,
