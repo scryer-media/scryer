@@ -656,7 +656,7 @@ impl AppUseCase {
         let rule_set_id = policy.id.clone();
         let engine = RequestRulesEngine::build(std::slice::from_ref(&policy)).map_err(|error| {
             AppError::validation_refused(
-                crate::error_reasons::request_rules::RULE_FAILED_COMPILE,
+                crate::error_reasons::request_rules::COMPILE_FAILED,
                 format!("rule failed to compile: {error}"),
             )
         })?;
@@ -1114,7 +1114,7 @@ fn preview_sample_title(facet: &MediaFacet) -> String {
 pub fn validate_tag_list(tags: Vec<String>) -> AppResult<Vec<String>> {
     if tags.len() > MAX_TAGS {
         return Err(AppError::validation_refused(
-            crate::error_reasons::request_rules::REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED,
+            crate::error_reasons::request_rules::TAG_LIMIT_EXCEEDED,
             format!(
                 "a request may carry at most {MAX_TAGS} tags, {} were supplied",
                 tags.len()
@@ -1128,7 +1128,7 @@ pub fn validate_tag_list(tags: Vec<String>) -> AppResult<Vec<String>> {
             use crate::error_reasons::request_rules as reasons;
             let reason = match problem {
                 TagProblem::Empty => reasons::TAG_REQUIRED,
-                TagProblem::TooLong => reasons::TAG_CHARACTERS_MOST_ALLOWED,
+                TagProblem::TooLong => reasons::TAG_TOO_LONG,
                 TagProblem::ReservedPrefix => reasons::TAG_USES_RESERVED_PREFIX,
                 TagProblem::UnsupportedCharacter(_) => reasons::TAG_CONTAINS_UNSUPPORTED_CHARACTER,
             };

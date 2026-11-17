@@ -9207,7 +9207,7 @@ const ru: LocaleDictionary = {
     "Объект предварительного просмотра отсутствует, находится вне библиотек правила или не относится к выбранным тайтлам и области действия.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Правило изменилось во время подтверждения; проверьте его ещё раз перед разрешением удаления.",
-  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
     "Перед разрешением удаления необходимо повторно проверить конфигурацию правила; откройте подтверждение заново.",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить оценку правила.",
@@ -10032,15 +10032,15 @@ const ru: LocaleDictionary = {
     "Срок действия результатов поиска истёк. Выполните поиск снова.",
   "error.reason.RELEASE_TOKEN_INVALID":
     "Не удалось проверить выбор релиза. Выполните поиск снова.",
-  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
     "Не удалось создать движок правил запросов.",
   "error.reason.REQUEST_RULE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "Срок действия должен быть от 1 до 3650 дней (десять лет) либо бессрочным.",
-  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
     "Тип библиотеки не соответствует типу запрошенных медиа.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
-  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
     "У вас нет права просматривать решение по этому запросу.",
   "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
     "Запросы медиа должны содержать внешние идентификаторы SMG.",
@@ -10050,11 +10050,11 @@ const ru: LocaleDictionary = {
     "Запрос медиа не найден.",
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения нужно право управления разрешениями. Попросите администратора сохранить его или перепишите правило без этих сведений.",
-  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
     "Запрос может содержать не более 16 тегов.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить правило.",
-  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE":
+  "error.reason.REQUEST_RULE_COMPILE_FAILED":
     "Не удалось скомпилировать правило.",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED":
     "Проверка правила не пройдена.",
@@ -10063,7 +10063,7 @@ const ru: LocaleDictionary = {
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND":
     "Автор запроса для примера не найден.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "Набор правил запросов не найден.",
-  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
     "Тег может быть длиной не более 64 символов.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "Тег содержит неподдерживаемый символ; используйте буквы, цифры, '.', '_', '-' или пробелы.",

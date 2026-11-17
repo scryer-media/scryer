@@ -1819,7 +1819,7 @@ async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_libr
         .await;
         assert_eq!(
             error_reason(&response),
-            "LIFECYCLE_RULE_CONFIGURATION_INVALID",
+            "LIFECYCLE_ARM_CONFIRMATION_STALE",
             "{response}"
         );
     }

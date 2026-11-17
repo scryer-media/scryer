@@ -1275,7 +1275,7 @@ async fn enabling_a_deleting_rule_without_a_confirmation_is_refused() {
             .expect_err("deletion is never enabled without a confirmation");
         assert_eq!(
             refused.validation_reason(),
-            Some(crate::error_reasons::lifecycle::RULE_CONFIGURATION_INVALID),
+            Some(crate::error_reasons::lifecycle::ARM_CONFIRMATION_STALE),
             "{refused:?}"
         );
     }

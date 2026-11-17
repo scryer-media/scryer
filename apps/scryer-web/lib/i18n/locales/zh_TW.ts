@@ -5128,15 +5128,15 @@ const zh_TW: LocaleDictionary = {
   "requests.fallbackShapingInvalid":
     "規則原本會核准，但其設定的數值無法套用到此請求，因此由人工決定。",
   "requests.fallbackLibraryPermission": "由請求者的「自動核准請求」權限核准。",
-  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
     "無法建立請求規則引擎。",
   "error.reason.REQUEST_RULE_FIELD_REQUIRED": "必填欄位為空。",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "租期必須為 1 至 3650 天（十年），或為永久。",
-  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
     "媒體庫類型與請求的媒體類型不符。",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "找不到媒體庫。",
-  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
     "您無法讀取此請求的決策。",
   "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
     "媒體請求必須包含 SMG 外部識別碼。",
@@ -5145,15 +5145,15 @@ const zh_TW: LocaleDictionary = {
   "error.reason.REQUEST_RULE_MEDIA_REQUEST_NOT_FOUND": "找不到媒體請求。",
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
-  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
     "一個請求最多可帶 16 個標籤。",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "規則評估失敗。",
-  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE": "規則編譯失敗。",
+  "error.reason.REQUEST_RULE_COMPILE_FAILED": "規則編譯失敗。",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
   "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND": "找不到範例媒體庫。",
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND": "找不到範例請求者。",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "找不到請求規則集。",
-  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
     "標籤最多 64 個字元。",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "標籤含有不支援的字元；請使用字母、數字、'.'、'_'、'-' 或空格。",
@@ -6293,7 +6293,7 @@ const zh_TW: LocaleDictionary = {
     "預覽主體不存在、不在規則的媒體庫中，或不屬於所選的作品與範圍。",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "確認期間規則已變更；啟用刪除前請再次檢查。",
-  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
     "啟用刪除前必須再次檢查規則設定；請重新開啟確認。",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "規則評估失敗。",
   "error.reason.LIFECYCLE_RULE_COMPILE_FAILED": "生命週期規則編譯失敗。",
