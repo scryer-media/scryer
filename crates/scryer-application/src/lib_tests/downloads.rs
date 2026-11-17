@@ -17230,6 +17230,13 @@ impl crate::DownloadSubmissionRepository for DurableHistorySubmissionRepo {
         self.inner.list_for_title(title_id).await
     }
 
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        self.inner.list_for_client_item_ids(item_ids).await
+    }
+
     async fn find_by_title_and_request_signature(
         &self,
         title_id: &str,

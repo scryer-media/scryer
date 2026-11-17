@@ -3494,6 +3494,13 @@ mod tests {
             Ok(vec![])
         }
 
+        async fn list_for_client_item_ids(
+            &self,
+            _: &[String],
+        ) -> AppResult<Vec<crate::DownloadSubmission>> {
+            Ok(vec![])
+        }
+
         async fn find_by_title_and_request_signature(
             &self,
             _: &str,
@@ -6441,6 +6448,13 @@ mod tests {
             }
 
             async fn list_for_title(&self, _: &str) -> AppResult<Vec<crate::DownloadSubmission>> {
+                Ok(vec![])
+            }
+
+            async fn list_for_client_item_ids(
+                &self,
+                _: &[String],
+            ) -> AppResult<Vec<crate::DownloadSubmission>> {
                 Ok(vec![])
             }
 

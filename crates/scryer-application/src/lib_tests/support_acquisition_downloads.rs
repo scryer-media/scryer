@@ -363,6 +363,7 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     /// in call order.
     pub(super) deleted_identity_state_download_ids:
         Arc<Mutex<Vec<scryer_domain::download_identity::DownloadId>>>,
+    pub(super) list_for_client_item_ids_calls: Arc<Mutex<Vec<Vec<String>>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
     pub(super) active_unbound_title_calls: Arc<Mutex<Vec<String>>>,
     /// Make `list_for_title` skip submissions with no client item id, as the
@@ -417,6 +418,9 @@ pub(super) struct TrackingAcquisitionScopeStateRepo {
     /// next id here is updated, which moves it to the front of the list's
     /// `updated_at` order.
     pub(super) update_after_each_list: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// The title ids of every `list_grabbed_acquisition_scopes_for_titles`
+    /// call, in call order.
+    pub(super) grabbed_scopes_for_titles_calls: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 impl TrackingAcquisitionScopeStateRepo {
@@ -644,6 +648,38 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             .iter()
             .find(|item| item.id == id)
             .cloned())
+    }
+
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        self.grabbed_scopes_for_titles_calls
+            .lock()
+            .await
+            .push(title_ids.to_vec());
+        let mut states = self
+            .store
+            .lock()
+            .await
+            .iter()
+            .filter(|state| {
+                state.status == AcquisitionScopeStatus::Grabbed
+                    && title_ids.contains(&state.title_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        // The SQL store's order: newest update first, then by id.
+        states.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for state in &mut states {
+            state.latest_release_decision = None;
+        }
+        Ok(states)
     }
 
     async fn list_acquisition_scope_states(
@@ -1546,6 +1582,24 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
         Ok(result)
+    }
+
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        self.list_for_client_item_ids_calls
+            .lock()
+            .await
+            .push(item_ids.to_vec());
+        // Newest first, as the SQL store orders them.
+        let entries = self.store.lock().await;
+        Ok(entries
+            .iter()
+            .rev()
+            .filter(|entry| item_ids.contains(&entry.download_client_item_id))
+            .cloned()
+            .collect())
     }
 
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {

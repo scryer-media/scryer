@@ -33,7 +33,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
 };
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 // This facade keeps the previous module scope while the former junk drawer is
 // mechanically split into functional source files.

@@ -1747,6 +1747,21 @@ mod grab_time_release_title_tests {
                 .collect())
         }
 
+        async fn list_for_client_item_ids(
+            &self,
+            item_ids: &[String],
+        ) -> AppResult<Vec<DownloadSubmission>> {
+            Ok(self
+                .rows
+                .lock()
+                .await
+                .iter()
+                .rev()
+                .filter(|row| item_ids.contains(&row.download_client_item_id))
+                .cloned()
+                .collect())
+        }
+
         async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
             Ok(self
                 .rows
