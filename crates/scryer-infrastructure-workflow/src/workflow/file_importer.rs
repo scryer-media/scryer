@@ -5167,6 +5167,7 @@ mod tests {
     /// The shape the application layer accepts from a move: a source cleanup
     /// guard, beside a verification that permits removal when there is one,
     /// or a rename that needs neither.
+    #[cfg(unix)]
     fn application_accepts_move(result: &ImportFileResult) -> bool {
         match result.source_disposition {
             ImportSourceDisposition::RenamedIntoPlace => {
