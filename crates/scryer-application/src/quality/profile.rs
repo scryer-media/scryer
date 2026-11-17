@@ -358,7 +358,8 @@ pub struct QualityProfileDecision {
     /// guarantee fallback ordering against arbitrary custom-rule contributions.
     pub tier_index: Option<usize>,
     /// Codec/source/runtime-aware size distance used only to break search ties.
-    /// Zero means plausible or unknown; this never contributes to the score.
+    /// Zero means plausible or unknown. This distance never contributes to the
+    /// score; any size points come from the bundled size rule.
     pub size_fit_penalty: i32,
     /// Context-derived revision preference; zero without related incumbents.
     pub revision_preference: i32,
@@ -1382,7 +1383,9 @@ impl CoverageSizeBasis {
 #[cfg(test)]
 pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
 
-/// Size is an eligibility check and a search tie-breaker, never intrinsic points.
+/// The host's part of size: an eligibility check and a search tie-breaker. It
+/// adds no points; the bundled size rule penalizes oversized releases on the
+/// Balanced and Efficient curves against its own, tighter bands.
 pub(crate) fn apply_size_requirement(
     decision: &mut QualityProfileDecision,
     profile: &QualityProfile,
@@ -2238,7 +2241,8 @@ mod tests {
 
         assert!(short.allowed);
         assert!(long.allowed);
-        assert_eq!(long.preference_score, short.preference_score);
+        // The same bytes over twice the runtime are less oversized.
+        assert!(long.preference_score > short.preference_score);
         assert!(long.size_fit_penalty < short.size_fit_penalty);
     }
 

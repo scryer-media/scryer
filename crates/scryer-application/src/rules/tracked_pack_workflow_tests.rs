@@ -645,6 +645,62 @@ async fn builtin_size_correction_is_atomic_and_idempotent_on_restart() {
 }
 
 #[tokio::test]
+async fn builtin_size_band_correction_replaces_shipped_source_and_keeps_edits() {
+    let (app, repo) = build_test_app_with_rule_repo(vec![], vec![]);
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    let installed = repo.list_rule_pack_installations().await.unwrap().remove(0);
+    let member = installed
+        .members
+        .iter()
+        .find(|m| m.template_id == "trash-guides-size")
+        .unwrap();
+    let current = repo
+        .get_rule_set(&member.rule_set_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut old = current.clone();
+    old.rego_source = scryer_rules::rewrite_package_declaration(
+        include_str!("legacy_size_band_scoring.rego"),
+        &old.id,
+    );
+    old.priority = 29;
+    repo.update_rule_set(&old).await.unwrap();
+
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    let updated = repo.get_rule_set(&old.id).await.unwrap().unwrap();
+    assert_eq!(updated.rego_source, current.rego_source);
+    assert_eq!(updated.priority, 29);
+
+    let mut edited = old.clone();
+    edited.rego_source.push_str("\n# Operator note\n");
+    repo.update_rule_set(&edited).await.unwrap();
+    let revision = repo
+        .list_rule_pack_installations()
+        .await
+        .unwrap()
+        .remove(0)
+        .revision;
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    assert_eq!(
+        repo.get_rule_set(&old.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .rego_source,
+        edited.rego_source
+    );
+    assert_eq!(
+        repo.list_rule_pack_installations()
+            .await
+            .unwrap()
+            .remove(0)
+            .revision,
+        revision
+    );
+}
+
+#[tokio::test]
 async fn builtin_source_video_correction_replaces_shipped_source_and_keeps_edits() {
     let (app, repo) = build_test_app_with_rule_repo(vec![], vec![]);
     app.bootstrap_builtin_trash_rule_pack().await.unwrap();

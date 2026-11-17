@@ -665,7 +665,7 @@ const zh_HK: LocaleDictionary = {
   "persona.trait.balanced.source": "來源：標準偏好（BluRay > WEB-DL > WeRip）",
   "persona.trait.balanced.audio": "音訊：均衡編碼器權重",
   "persona.trait.balanced.x265": "x265：4K 以下扣分",
-  "persona.trait.balanced.size": "檔案大小：偏好較大檔案",
+  "persona.trait.balanced.size": "檔案大小：過大的檔案會被扣分",
   "persona.trait.balanced.remux": "Remux：預設不優先",
   "persona.trait.balanced.hdr": "HDR：Dolby Vision 和 HDR10 加分",
   "persona.trait.audiophile.source": "來源：強烈偏好 BluRay",
@@ -678,7 +678,8 @@ const zh_HK: LocaleDictionary = {
   "persona.trait.efficient.source": "來源：偏好 WEB-DL 和 WEB-Rip",
   "persona.trait.efficient.audio": "音訊：有損編碼器可接受（偏好 DDP）",
   "persona.trait.efficient.x265": "x265：所有解像度加分",
-  "persona.trait.efficient.size": "檔案大小：偏好緊湊編碼",
+  "persona.trait.efficient.size":
+    "檔案大小：偏好緊湊編碼，過大的檔案會被大幅扣分",
   "persona.trait.efficient.remux": "Remux：不優先",
   "persona.trait.efficient.hdr": "HDR：標準",
   "persona.trait.compatible.source": "來源：偏好 WEB-DL",

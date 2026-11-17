@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 
 pub(crate) const BUILTIN_TRASH_PACK_ID: &str = "trash-guides-scoring-pack";
 const BUILTIN_TRASH_SHA256: &str =
-    "75c0c8f49651d75c496d44b551c36ab752a74f5ba82bb4092c3d40f7b1d29e51";
+    "56810e8cb61c5cfe4b9d9ba4a8000375a4d1b99d22cbdf02789fe1d5a911a212";
 
 #[derive(Deserialize)]
 struct BuiltinPackManifest {
@@ -79,11 +79,16 @@ pub(crate) fn default_template_ids(pack: &VerifiedRulePack) -> Vec<String> {
 }
 
 /// Shipped template sources that later bundled revisions supersede, keyed by
-/// template id. Each historical source is an immutable matcher.
+/// template id. Each historical source is an immutable matcher; a template may
+/// list several, and an installed rule matches at most one of them.
 const SUPERSEDED_TEMPLATE_SOURCES: &[(&str, &str)] = &[
     (
         "trash-guides-size",
         include_str!("legacy_size_scoring.rego"),
+    ),
+    (
+        "trash-guides-size",
+        include_str!("legacy_size_band_scoring.rego"),
     ),
     (
         "trash-guides-source-video",
@@ -322,6 +327,53 @@ mod tests {
         );
         assert_ne!(edited.rego_source, original.rego_source);
         assert!(superseded_template_updates(&pack, &installation, &[edited]).is_empty());
+    }
+
+    #[test]
+    fn size_correction_replaces_both_earlier_shipped_sources_but_not_edits() {
+        let pack = verified_pack().unwrap();
+        let bundled = baseline_rule_sets()
+            .into_iter()
+            .find(|r| r.id == "trash_guides_size")
+            .unwrap();
+        assert!(bundled.rego_source.contains("native_size_oversize_delta"));
+        let installation = scryer_domain::RulePackInstallation {
+            pack_id: BUILTIN_TRASH_PACK_ID.into(),
+            name: pack.registry.name.clone(),
+            version: pack.registry.version.clone(),
+            digest: pack.registry.digest.clone(),
+            customizable: true,
+            auto_update: false,
+            revision: 1,
+            last_updated: Utc::now(),
+            last_error: None,
+            members: vec![scryer_domain::RulePackMember {
+                template_id: "trash-guides-size".into(),
+                rule_set_id: bundled.id.clone(),
+                removed: false,
+            }],
+        };
+
+        for shipped in [
+            include_str!("legacy_size_scoring.rego"),
+            include_str!("legacy_size_band_scoring.rego"),
+        ] {
+            let mut original = bundled.clone();
+            original.rego_source = scryer_rules::rewrite_package_declaration(shipped, &original.id);
+            assert_ne!(original.rego_source, bundled.rego_source);
+            original.priority = 41;
+
+            let changes = superseded_template_updates(&pack, &installation, &[original.clone()]);
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0].rego_source, bundled.rego_source);
+            assert_eq!(changes[0].priority, 41);
+            assert!(superseded_template_updates(&pack, &installation, &changes).is_empty());
+
+            let mut edited = original.clone();
+            edited.rego_source.push_str("\n# Operator note\n");
+            assert!(superseded_template_updates(&pack, &installation, &[edited]).is_empty());
+        }
+        assert!(superseded_template_updates(&pack, &installation, &[bundled]).is_empty());
     }
 
     #[cfg(feature = "runtime-plugin-trust")]

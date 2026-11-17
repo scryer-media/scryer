@@ -570,7 +570,7 @@ const ja: LocaleDictionary = {
   "persona.trait.balanced.audio":
     "オーディオ: バランスの取れたコーデック重み付け",
   "persona.trait.balanced.x265": "x265: 4K未満では減点",
-  "persona.trait.balanced.size": "ファイルサイズ: 大きいファイルを優先",
+  "persona.trait.balanced.size": "ファイルサイズ: 大きすぎるファイルを減点",
   "persona.trait.balanced.remux": "Remux: デフォルトでは優先しない",
   "persona.trait.balanced.hdr": "HDR: Dolby VisionとHDR10に加点",
   "persona.trait.audiophile.source": "ソース: BluRayを強く優先",
@@ -585,7 +585,7 @@ const ja: LocaleDictionary = {
     "オーディオ: ロッシーコーデック許容 (DDP優先)",
   "persona.trait.efficient.x265": "x265: 全解像度で加点",
   "persona.trait.efficient.size":
-    "ファイルサイズ: コンパクトなエンコードを優先",
+    "ファイルサイズ: コンパクトなエンコードを優先、大きすぎるファイルを大きく減点",
   "persona.trait.efficient.remux": "Remux: 優先しない",
   "persona.trait.efficient.hdr": "HDR: 標準",
   "persona.trait.compatible.source": "ソース: WEB-DLを優先",
