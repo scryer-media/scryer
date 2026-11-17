@@ -1854,25 +1854,23 @@ fn copy_regular_source_to_destination(
         )));
     }
 
+    // The copy has taken the destination name, which was free before it. What
+    // is under the name is read first, and a check that fails after this
+    // removes it only while it is still the file read here, as the size check
+    // below does. A name that does not read is left as it is.
+    let (dest_fingerprint, landed) = read_import_source(dest)?;
+    let dest_fingerprint = dest_fingerprint.file;
     #[cfg(test)]
     if let Some(after_promoted) = options.after_copy_promoted {
         after_promoted(source, dest);
     }
-    // The copy has taken the destination name, which was free before it: a
-    // check that fails here removes that copy, and only it, as the size check
-    // below does.
-    let checked = ensure_same_source(source, source_fingerprint)
-        .and_then(|()| fingerprint_import_source(dest));
-    let dest_fingerprint = match checked {
-        Ok(fingerprint) => fingerprint.file,
-        Err(error) => {
-            let _ = Disk::process().remove_blocking(dest, Remove::File);
-            return Err(error);
-        }
-    };
+    if let Err(error) = ensure_same_source(source, source_fingerprint) {
+        take_back_landed_copy(dest, &landed);
+        return Err(error);
+    }
 
     if dest_fingerprint.len != size {
-        let _ = Disk::process().remove_blocking(dest, Remove::File);
+        take_back_landed_copy(dest, &landed);
         return Err(AppError::Repository(format!(
             "copy size mismatch: source={} dest={}",
             size, dest_fingerprint.len
@@ -1921,7 +1919,7 @@ fn copy_regular_source_to_destination(
             .detail
             .clone()
             .unwrap_or_else(|| "no detail recorded".to_string());
-        let _ = Disk::process().remove_blocking(dest, Remove::File);
+        take_back_landed_copy(dest, &landed);
         return Err(AppError::Repository(format!(
             "copy verification failed at depth {} for {}: {} ({detail})",
             verification.depth.label(),
@@ -1931,6 +1929,32 @@ fn copy_regular_source_to_destination(
     }
 
     Ok(verification)
+}
+
+/// Removes the copy an import landed at `dest` after a check on it failed,
+/// only while the name still holds the file read as `landed` once the copy
+/// took it: the same file where the platform numbers files, and otherwise a
+/// regular file whose length, modification time and owner held. Anything else
+/// there, or a name that does not read, is kept. One read of the name.
+fn take_back_landed_copy(dest: &Path, landed: &Mark) {
+    let still_landed = Disk::process().fingerprint_blocking(dest).is_ok_and(|now| {
+        match now.same_file(landed) {
+            Sameness::Same => true,
+            Sameness::Different => false,
+            Sameness::CannotTell => {
+                now.kind() == Some(EntryKind::File)
+                    && landed.compare(&now).is_unwritten_by_its_owner()
+            }
+        }
+    });
+    if still_landed {
+        let _ = Disk::process().remove_blocking(dest, Remove::File);
+    } else {
+        tracing::warn!(
+            dest = %dest.display(),
+            "the import's landed copy is no longer what holds the destination name, or the name does not read; it is kept"
+        );
+    }
 }
 
 fn remove_import_source_after_verified_import_blocking(
@@ -6159,6 +6183,51 @@ mod tests {
         assert_eq!(
             std::fs::read(&source).expect("source"),
             b"synthetic bytes, rewritten and longer"
+        );
+    }
+
+    /// A file that took the destination name after the copy landed there is
+    /// not this import's copy, so a failing check after the promotion leaves
+    /// it where it is.
+    #[test]
+    fn a_failing_check_after_the_copy_landed_never_removes_a_file_that_replaced_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("sample-source.mkv");
+        let dest = temp.path().join("Sample.Title.mkv");
+        std::fs::write(&source, b"synthetic video bytes").expect("write source");
+        let (fingerprint, mark) = read_import_source(&source).expect("read source");
+        let size = std::fs::metadata(&source).expect("source metadata").len();
+        let options = ImportFileOptions {
+            after_copy_promoted: Some(|source, dest| {
+                let other = dest.with_file_name("Sample.Other.mkv");
+                std::fs::write(&other, b"someone else's file").expect("write other");
+                std::fs::rename(&other, dest).expect("replace the copy");
+                std::fs::write(source, b"synthetic bytes, rewritten and longer")
+                    .expect("rewrite source");
+            }),
+            ..Default::default()
+        };
+
+        let error = copy_regular_source_to_destination(
+            &source,
+            &dest,
+            &fingerprint,
+            &mark,
+            size,
+            options,
+            VerificationDepth::Quick,
+            None,
+            None,
+        )
+        .expect_err("the source changed");
+
+        assert!(
+            error.to_string().contains("import source changed during import"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("the replacing file is kept"),
+            b"someone else's file"
         );
     }
 
