@@ -12,6 +12,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { SingleSelectField } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -149,6 +150,7 @@ function ConditionRow({
   );
   const valueKind = operator?.value ?? "none";
   const valueId = selectorId(`${idBase}-value`, ...keys);
+  const factId = selectorId(`${idBase}-fact`, ...keys);
 
   return (
     <div
@@ -156,35 +158,56 @@ function ConditionRow({
       className="space-y-1 rounded border border-border p-2"
     >
       <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-        <SingleSelectField
-          id={selectorId(`${idBase}-fact`, ...keys)}
-          label={t("settings.ruleBuilderFact")}
-          placeholder={t("settings.ruleBuilderFactPlaceholder")}
-          valueKind="code"
-          value={condition.field}
-          disabled={readOnly}
-          onValueChange={(path) => {
-            const next = fields.find((candidate) => candidate.path === path);
-            onChange({
-              field: path,
-              operator: next
-                ? (ruleBuilderOperators(schema, next.kind)[0]?.id ?? "")
-                : "",
-              value: "",
-            });
-          }}
-          options={[
-            ...fields.map((candidate) => ({
-              value: candidate.path,
-              label: candidate.label,
-            })),
-            // A field this row cannot read stays visible, flagged below,
-            // rather than vanishing from the condition.
-            ...(condition.field && !field
-              ? [{ value: condition.field, label: condition.field.replace(/^input\./, "") }]
-              : []),
-          ]}
-        />
+        {/* pb-1.5 matches the trailing gap the sibling SingleSelectFields get
+            from their hidden native select, so the triggers line up. */}
+        <div className="min-w-0 space-y-1.5 pb-1.5">
+          <label
+            htmlFor={factId}
+            className={cn(
+              "block text-sm font-medium text-[var(--scry-ink2)]",
+              readOnly && "opacity-60",
+            )}
+          >
+            {t("settings.ruleBuilderFact")}
+          </label>
+          <FilterableSelect
+            id={factId}
+            placeholder={t("settings.ruleBuilderFactPlaceholder")}
+            optionIdPrefix={factId}
+            valueKind="code"
+            value={condition.field}
+            disabled={readOnly}
+            onValueChange={(path) => {
+              const next = fields.find((candidate) => candidate.path === path);
+              onChange({
+                field: path,
+                operator: next
+                  ? (ruleBuilderOperators(schema, next.kind)[0]?.id ?? "")
+                  : "",
+                value: "",
+              });
+            }}
+            options={[
+              ...fields
+                .map((candidate) => ({
+                  value: candidate.path,
+                  label: candidate.label,
+                  detail: t(candidate.descKey),
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label)),
+              // A field this row cannot read stays visible, flagged below,
+              // rather than vanishing from the condition.
+              ...(condition.field && !field
+                ? [
+                    {
+                      value: condition.field,
+                      label: condition.field.replace(/^input\./, ""),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
         <SingleSelectField
           id={selectorId(`${idBase}-operator`, ...keys)}
           label={t("settings.ruleBuilderOperator")}
@@ -484,11 +507,7 @@ function OutputRow({
           onCheckedChange={(value) => toggle(value === true)}
         />
         <span className="text-sm">
-          {help ? (
-            <HelpLabel label={label} help={help} />
-          ) : (
-            label
-          )}
+          {help ? <HelpLabel label={label} help={help} /> : label}
         </span>
       </label>
       {!inVariant ? (
@@ -596,7 +615,9 @@ function ConditionList({
           keys={[...keys, index]}
           condition={condition}
           readOnly={readOnly}
-          problems={problems.filter((problem) => problem.conditionIndex === index)}
+          problems={problems.filter(
+            (problem) => problem.conditionIndex === index,
+          )}
           onChange={(next) =>
             onChange({
               conditions: conditions.map((existing, at) =>
@@ -713,15 +734,22 @@ function ActionRow({
       </div>
       {help ? <p className="text-xs text-muted-foreground">{help}</p> : null}
       {output && output.value.kind !== "flag" ? (
-        <div className={cn(output.value.kind !== "structured" && "md:max-w-[50%]")}>
+        <div
+          className={cn(output.value.kind !== "structured" && "md:max-w-[50%]")}
+        >
           <OutputValuePicker
             schema={schema}
             output={output}
-            value={model.outputs[output.id] ?? initialRuleBuilderOutputValue(output)}
+            value={
+              model.outputs[output.id] ?? initialRuleBuilderOutputValue(output)
+            }
             options={options}
             readOnly={readOnly}
             onChange={(value) =>
-              onChange({ ...model, outputs: { ...model.outputs, [output.id]: value } })
+              onChange({
+                ...model,
+                outputs: { ...model.outputs, [output.id]: value },
+              })
             }
           />
         </div>
@@ -734,7 +762,9 @@ function ActionRow({
         joinId={selectorId(`${prefix}-action-join`, index)}
         join={row.join}
         conditions={row.conditions}
-        problems={problems.filter((problem) => problem.conditionIndex !== undefined)}
+        problems={problems.filter(
+          (problem) => problem.conditionIndex !== undefined,
+        )}
         readOnly={readOnly}
         label={t("settings.ruleBuilderActionConditions")}
         onChange={(change) =>
@@ -849,23 +879,23 @@ export function RuleBuilder({
             </Button>
           </div>
         ) : (
-        <div className="grid gap-2 md:grid-cols-2">
-          {schema.outputs.map((output) => (
-            <OutputRow
-              key={output.id}
-              schema={schema}
-              variant={variant}
-              output={output}
-              outputs={model.outputs}
-              options={options}
-              readOnly={readOnly}
-              problems={problems.filter(
-                (problem) => problem.output === output.id,
-              )}
-              onChange={(outputs) => onChange({ ...model, outputs })}
-            />
-          ))}
-        </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {schema.outputs.map((output) => (
+              <OutputRow
+                key={output.id}
+                schema={schema}
+                variant={variant}
+                output={output}
+                outputs={model.outputs}
+                options={options}
+                readOnly={readOnly}
+                problems={problems.filter(
+                  (problem) => problem.output === output.id,
+                )}
+                onChange={(outputs) => onChange({ ...model, outputs })}
+              />
+            ))}
+          </div>
         )}
       </div>
 
