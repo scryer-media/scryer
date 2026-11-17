@@ -1490,15 +1490,26 @@ impl Disk {
             .unwrap_or(false)
     }
 
-    fn same_filesystem(&self, source: &Path, destination: &Path) -> bool {
-        // Only unix names a volume from a plain read.
-        if !cfg!(unix) {
+    fn same_filesystem(&self, source_path: &Path, destination: &Path) -> bool {
+        // Only unix and Windows name a volume.
+        if !cfg!(any(unix, windows)) {
             return false;
         }
         // A symlinked source lives on the filesystem holding the link, not
         // the one holding its target.
-        let Ok(source) = self.fingerprint_blocking(source) else {
+        let Ok(source) = self.fingerprint_blocking(source_path) else {
             return false;
+        };
+        // A plain read names no volume on Windows. The volume comes from a
+        // handle, which follows a link, so a linked source is left to the
+        // copy rather than judged by its target's volume.
+        #[cfg(windows)]
+        let source = match source.kind() {
+            Some(super::EntryKind::Symlink) | None => return false,
+            Some(_) => match self.volume_at(source_path) {
+                Some(volume) => volume,
+                None => return false,
+            },
         };
         let mut candidate = Some(destination);
         while let Some(current) = candidate {

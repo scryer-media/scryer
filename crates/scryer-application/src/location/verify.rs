@@ -1338,7 +1338,7 @@ mod tests {
         write_pattern(&source, 16);
         let destination = dir.path().join("nested/not-created-yet/destination.bin");
 
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         assert!(same_filesystem(&source, &destination).await);
 
         assert!(

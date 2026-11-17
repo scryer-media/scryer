@@ -340,3 +340,71 @@ fn windows_names_a_volume_from_a_handle_and_tells_no_files_apart() {
     assert!(volume.to_stored().starts_with("windows-volume:"));
     assert_eq!(volume.to_stored(), disk.copy_lane(&missing));
 }
+
+/// On Windows a move is a rename only when the source's volume serial is the
+/// one its destination's nearest existing folder answers. A serial either
+/// side does not answer, or a linked source, leaves the move to the copy.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_a_move_renames_only_between_equal_volume_serials() {
+    let folder = "/srv/fixture-media/Fixture Show";
+    let setup = |source: Option<u64>, landing: Option<u64>| {
+        let (disk, backend) = scripted();
+        backend.stat_is(B, Ok(file(5)));
+        backend.stat_is(folder, Ok(dir()));
+        if let Some(serial) = source {
+            backend.serial_is(B, serial);
+        }
+        if let Some(serial) = landing {
+            backend.serial_is(folder, serial);
+        }
+        (disk, backend)
+    };
+
+    let (equal, backend) = setup(Some(7), Some(7));
+    assert!(equal.renames_between(&p(B), &p(A)).await);
+    assert_eq!(backend.paths_of("volume_serial"), [p(B), p(folder)]);
+
+    let (different, _) = setup(Some(7), Some(8));
+    assert!(!different.renames_between(&p(B), &p(A)).await);
+
+    let (source_unread, _) = setup(None, Some(7));
+    assert!(!source_unread.renames_between(&p(B), &p(A)).await);
+
+    let (landing_unread, _) = setup(Some(7), None);
+    assert!(!landing_unread.renames_between(&p(B), &p(A)).await);
+
+    let (linked, backend) = setup(Some(7), Some(7));
+    backend.stat_is(
+        B,
+        Ok(RawStat {
+            kind: EntryKind::Symlink,
+            ..file(5)
+        }),
+    );
+    assert!(!linked.renames_between(&p(B), &p(A)).await);
+    assert!(backend.paths_of("volume_serial").is_empty());
+
+    let (missing, _) = setup(Some(7), Some(7));
+    assert!(!missing.renames_between(&p(A), &p(B)).await);
+}
+
+/// Two names on one drive, the destination's folder not made yet, are on one
+/// volume, so a Windows move between them can be a rename; a source that is
+/// not there answers no.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_a_move_within_one_drive_can_be_a_rename() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.mkv");
+    std::fs::write(&source, b"synthetic").unwrap();
+    let disk = Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)));
+    assert!(
+        disk.renames_between(&source, &temp.path().join("beside.mkv"))
+            .await
+    );
+    let nested = temp.path().join("not-created/yet/destination.mkv");
+    assert!(disk.renames_between(&source, &nested).await);
+    let missing = temp.path().join("missing.mkv");
+    assert!(!disk.renames_between(&missing, &nested).await);
+}

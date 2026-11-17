@@ -83,6 +83,10 @@ struct Scripted {
     /// A path whose open to read hands back a handle on a folder, as a name
     /// swapped for one between its reading and its open would.
     opens_as_folder: Mutex<Option<PathBuf>>,
+    /// The Windows volume serial each path answers; a path with none
+    /// answers no serial.
+    #[cfg(windows)]
+    serials: Mutex<HashMap<PathBuf, u64>>,
 }
 
 impl Scripted {
@@ -119,6 +123,13 @@ impl Scripted {
             .lock()
             .unwrap()
             .insert((operation, PathBuf::from(path)), kind);
+    }
+    #[cfg(windows)]
+    fn serial_is(&self, path: &str, serial: u64) {
+        self.serials
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from(path), serial);
     }
     fn always_fails(&self, operation: &'static str, kind: io::ErrorKind) {
         self.any_path_failures
@@ -221,6 +232,11 @@ impl DiskBackend for Scripted {
     }
     fn lstat(&self, path: &Path) -> io::Result<RawStat> {
         self.stat_answer("lstat", path)
+    }
+    #[cfg(windows)]
+    fn volume_serial(&self, path: &Path) -> Option<u64> {
+        self.record("volume_serial", path).ok()?;
+        self.serials.lock().unwrap().get(path).copied()
     }
     fn list(&self, path: &Path) -> io::Result<super::backend::Listing> {
         self.record("list", path)?;
