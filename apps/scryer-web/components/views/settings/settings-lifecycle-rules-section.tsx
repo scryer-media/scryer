@@ -32,7 +32,6 @@ import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
 import {
   LifecycleDecidedActionsSummary,
-  LifecycleDeclaredActionsSummary,
   LifecycleRuleSourceFindings,
 } from "@/components/views/settings/lifecycle-action-summary";
 import { SingleSelectField } from "@/components/ui/select";
@@ -55,7 +54,6 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
-  LifecycleDeclaredActions,
   LifecyclePreviewResult,
   LifecyclePreviewSource,
   LifecyclePreviewTitle,
@@ -463,7 +461,6 @@ function PreviewOutcomeCell({ title }: { title: LifecyclePreviewTitle }) {
 function LifecyclePreviewPanel({
   isEditorOpen,
   draftName,
-  draftDeclaredActions,
   ruleSetRecords,
   libraries,
   previewSource,
@@ -480,8 +477,6 @@ function LifecyclePreviewPanel({
   previewError,
 }: {
   draftName: string;
-  /// What the draft declares, from its latest validation.
-  draftDeclaredActions: LifecycleDeclaredActions | null | undefined;
 } & Pick<
   SettingsLifecycleRulesSectionProps,
   | "isEditorOpen"
@@ -502,13 +497,6 @@ function LifecyclePreviewPanel({
 >) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const storedRule = ruleSetRecords.find(
-    (rule) => rule.id === previewRuleSetId,
-  );
-  const declared =
-    previewSource === "draft"
-      ? draftDeclaredActions
-      : storedRule?.declaredActions;
   const [selectedSubject, setSelectedSubject] = React.useState<
     LifecycleTestSubject | undefined
   >();
@@ -609,21 +597,6 @@ function LifecyclePreviewPanel({
             />
           </label>
         </div>
-
-        {declared ? (
-          <div
-            id="settings-lifecycle-preview-declared-actions"
-            className="rounded border border-border bg-muted/30 px-3 py-2"
-          >
-            <p className="mb-1 text-xs font-medium">
-              {t("settings.lifecycleDeclaredActionsTitle")}
-            </p>
-            <LifecycleDeclaredActionsSummary
-              declared={declared}
-              idPrefix="settings-lifecycle-preview-declared-action"
-            />
-          </div>
-        ) : null}
 
         <LifecycleSubjectPicker
           key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${draftName}`}
@@ -1367,7 +1340,6 @@ export function SettingsLifecycleRulesSection({
             <LifecyclePreviewPanel
               isEditorOpen={isEditorOpen}
               draftName={ruleSetDraft.name}
-              draftDeclaredActions={validationResult?.declaredActions}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               {...previewProps}

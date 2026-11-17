@@ -5262,7 +5262,6 @@ const ru: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "Запрошено вручную",
   "settings.requestBuilderOriginPublicList": "Из публичного списка",
   "settings.requestBuilderOriginPersonalList": "Из личного списка",
-  "settings.lifecycleDeclaredActionsTitle": "Объявленные действия",
   "settings.lifecycleDeclaredActionsNone": "Нет действий",
   "settings.lifecycleDecidedActionsNone": "Нет действий",
   "settings.lifecycleRuleWarningsTitle": "Предупреждения",

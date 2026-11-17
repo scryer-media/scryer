@@ -5668,7 +5668,6 @@ const cs: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "Zadáno ručně",
   "settings.requestBuilderOriginPublicList": "Z veřejného seznamu",
   "settings.requestBuilderOriginPersonalList": "Z osobního seznamu",
-  "settings.lifecycleDeclaredActionsTitle": "Deklarované akce",
   "settings.lifecycleDeclaredActionsNone": "Žádné akce",
   "settings.lifecycleDecidedActionsNone": "Žádné akce",
   "settings.lifecycleRuleWarningsTitle": "Upozornění",

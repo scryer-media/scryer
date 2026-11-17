@@ -4889,7 +4889,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "手動請求",
   "settings.requestBuilderOriginPublicList": "來自公開清單",
   "settings.requestBuilderOriginPersonalList": "來自個人清單",
-  "settings.lifecycleDeclaredActionsTitle": "宣告的操作",
   "settings.lifecycleDeclaredActionsNone": "沒有操作",
   "settings.lifecycleDecidedActionsNone": "沒有操作",
   "settings.lifecycleRuleWarningsTitle": "警告",

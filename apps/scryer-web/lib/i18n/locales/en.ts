@@ -10331,7 +10331,6 @@ const en: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "Requested by hand",
   "settings.requestBuilderOriginPublicList": "From a public list",
   "settings.requestBuilderOriginPersonalList": "From a personal list",
-  "settings.lifecycleDeclaredActionsTitle": "Declared actions",
   "settings.lifecycleDeclaredActionsNone": "No actions",
   "settings.lifecycleDecidedActionsNone": "No actions",
   "settings.lifecycleRuleWarningsTitle": "Warnings",
