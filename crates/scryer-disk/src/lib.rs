@@ -58,6 +58,7 @@ pub(crate) mod backend;
 pub(crate) mod cache;
 pub mod capacity;
 mod copy;
+mod hashed;
 mod mark;
 mod place;
 mod reading;
@@ -88,6 +89,9 @@ pub use copy::{
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
     RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopied, StagedCopy, StagedCopyRefusal, StagedStep,
     Verdict, Watch, resumable_staging_path,
+};
+pub use hashed::{
+    Fresh, FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture,
 };
 pub use mark::{Drift, EntryAlias, Mark, Sameness};
 pub use place::{
@@ -366,6 +370,7 @@ pub struct Open {
     pub(crate) follow_links: bool,
     pub(crate) access: Access,
     pub(crate) read_back: bool,
+    pub(crate) sequential: bool,
 }
 
 impl Open {
@@ -375,6 +380,7 @@ impl Open {
             follow_links: true,
             access: Access::Default,
             read_back: false,
+            sequential: false,
         }
     }
 
@@ -427,6 +433,13 @@ impl Open {
     /// what was written can be checked through that same handle.
     pub const fn with_read_back(mut self) -> Self {
         self.read_back = true;
+        self
+    }
+
+    /// Tell the platform the file is read once, start to end, where it
+    /// takes the hint. Advisory only.
+    pub const fn sequentially(mut self) -> Self {
+        self.sequential = true;
         self
     }
 
@@ -538,6 +551,8 @@ struct Inner {
     volumes: RwLock<Volumes>,
     cache: StatCache,
     copies: std::sync::OnceLock<CopyAdmission>,
+    /// The table of full hashes, once installed.
+    hash_store: std::sync::OnceLock<Arc<dyn HashStore>>,
     /// Whole-file reads by path, once a test asked for the count.
     whole_reads: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, usize>>>,
     #[cfg(test)]
@@ -600,6 +615,7 @@ impl Disk {
                 volumes: RwLock::new(Volumes::default()),
                 cache: StatCache::default(),
                 copies: std::sync::OnceLock::new(),
+                hash_store: std::sync::OnceLock::new(),
                 whole_reads: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 calls: Mutex::default(),

@@ -249,7 +249,7 @@ impl Cancel {
         Self(Some(Arc::new(asked)))
     }
 
-    fn is_cancelled(&self) -> bool {
+    pub(crate) fn is_cancelled(&self) -> bool {
         self.0.as_ref().is_some_and(|asked| asked())
     }
 }
@@ -279,8 +279,8 @@ impl Watch {
 #[derive(Debug, thiserror::Error)]
 #[error("{sentence}")]
 pub struct HashRefusal {
-    reason: &'static str,
-    sentence: String,
+    pub(crate) reason: &'static str,
+    pub(crate) sentence: String,
 }
 
 impl HashRefusal {
@@ -1229,7 +1229,7 @@ impl Disk {
             .unwrap_or(0)
     }
 
-    fn note_whole_read(&self, path: &Path) {
+    pub(crate) fn note_whole_read(&self, path: &Path) {
         if let Some(reads) = self.inner.whole_reads.get() {
             *reads
                 .lock()

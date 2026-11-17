@@ -637,11 +637,20 @@ impl DiskBackend for SystemBackend {
             }
         }
         #[cfg(windows)]
-        if !open.follow_links {
+        {
             use std::os::windows::fs::OpenOptionsExt;
+            // FILE_FLAG_SEQUENTIAL_SCAN.
+            let sequential = if open.sequential { 0x0800_0000 } else { 0 };
             // Open a link itself, not its target, and a folder too, so the
             // handle's own facts refuse it as one.
-            options.custom_flags(NO_FOLLOW_FLAGS);
+            let no_follow = if open.follow_links {
+                0
+            } else {
+                NO_FOLLOW_FLAGS
+            };
+            if sequential | no_follow != 0 {
+                options.custom_flags(sequential | no_follow);
+            }
         }
         let file = options.open(path).map_err(|error| {
             if !open.follow_links && is_link_loop(&error) {
@@ -650,6 +659,15 @@ impl DiskBackend for SystemBackend {
                 error
             }
         })?;
+        #[cfg(target_os = "linux")]
+        if open.sequential {
+            use std::os::fd::AsRawFd;
+            // Advisory only: a filesystem that does not take it is still read.
+            // SAFETY: the file owns this live descriptor; zero length covers
+            // the whole file.
+            let _ =
+                unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_SEQUENTIAL) };
+        }
         // On unix O_NOFOLLOW has already refused a link and a write open has
         // refused a folder, so only a read open, which opens a folder, needs
         // the handle's kind. Windows opens a reparse point itself, so every

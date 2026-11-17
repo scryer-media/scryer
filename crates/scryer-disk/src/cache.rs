@@ -56,6 +56,8 @@ pub(crate) struct StatCache {
     /// Advanced by every eviction. A probe stores only when it has not moved
     /// since the probe began.
     epoch: AtomicU64,
+    /// Whole-file hashes, forgotten by the same evictions.
+    pub(crate) hashes: super::hashed::HashCache,
 }
 
 /// The cache key: the path's components, so `a//b/` and `a/b` are one entry.
@@ -72,7 +74,7 @@ pub(crate) fn climbs(path: &Path) -> bool {
 
 /// The slot a key's readings live in: the key with its letter case folded,
 /// so a mutation through any case of a name evicts the others.
-fn slot_of(key: &Path) -> PathBuf {
+pub(crate) fn slot_of(key: &Path) -> PathBuf {
     key.components()
         .map(|component| {
             let part = component.as_os_str();
@@ -159,6 +161,7 @@ impl StatCache {
 
     /// Forget `key` and its parent.
     pub(crate) fn evict(&self, key: &Path) {
+        self.hashes.forget(key, false);
         self.forget(key, |entries, slot| {
             entries.remove(slot);
         });
@@ -166,6 +169,7 @@ impl StatCache {
 
     /// Forget `key`, everything under it, and its parent.
     pub(crate) fn evict_subtree(&self, key: &Path) {
+        self.hashes.forget(key, true);
         self.forget(key, |entries, slot| {
             let doomed: Vec<PathBuf> = subtree(entries, slot).collect();
             for path in doomed {
@@ -177,6 +181,7 @@ impl StatCache {
     /// Forget `key` and every ancestor, for a change that may have created
     /// any of them.
     pub(crate) fn evict_ancestors(&self, key: &Path) {
+        self.hashes.forget(key, false);
         self.forget(key, |entries, slot| {
             for ancestor in slot.ancestors() {
                 entries.remove(ancestor);
