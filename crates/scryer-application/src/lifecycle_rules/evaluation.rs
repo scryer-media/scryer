@@ -25,9 +25,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use scryer_domain::{
-    AppPermission, Id, LifecycleCandidate, LifecycleCandidateState, LifecycleEvaluationMode,
-    LifecycleEvaluationRun, LifecycleEvaluationRunStatus, LifecycleRuleExclusion, LifecycleRuleSet,
-    Title, User,
+    AppPermission, Id, LifecycleCandidate, LifecycleCandidateState, LifecycleEvaluationRun,
+    LifecycleEvaluationRunStatus, LifecycleRuleExclusion, LifecycleRuleSet, Title, User,
 };
 use scryer_rules::lifecycle::{
     LifecycleOutcome, LifecyclePolicy, LifecycleRulesEngine, LifecycleRulesEvaluator,
@@ -812,7 +811,7 @@ impl AppUseCase {
 
         if let Some(rule_set_id) = rule_set_id {
             let rule_set = self.require_lifecycle_rule_set(&rule_set_id).await?;
-            if rule_set.evaluation_mode == LifecycleEvaluationMode::Disabled {
+            if !rule_set.evaluates() {
                 return Ok(LifecycleEvaluationTrigger {
                     started: false,
                     message: Some(format!(
@@ -978,7 +977,7 @@ impl AppUseCase {
             // A disabled rule is skipped whole: its candidates are left exactly
             // as they are, so flipping a rule off and on again does not destroy
             // the membership and clocks it already established.
-            if rule_set.evaluation_mode == LifecycleEvaluationMode::Disabled {
+            if !rule_set.evaluates() {
                 continue;
             }
             // A rule never evaluates beside itself. Scoped, the caller holds

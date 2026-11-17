@@ -4163,7 +4163,6 @@ export const LIFECYCLE_RULE_SET_FIELDS = `
     name
     description
     state
-    enabledArming
     editedSinceEnabled
     systemOwned
     libraryIds

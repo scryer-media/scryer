@@ -1,6 +1,6 @@
 use super::*;
 use scryer_application::LifecycleRuleSetRepository;
-use scryer_domain::{LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet};
+use scryer_domain::{LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleState};
 
 pub(super) async fn seed_rule_libraries(
     datastore: &scryer_infrastructure_sql::runtime::StoreDatastore,
@@ -33,7 +33,7 @@ async fn lifecycle_rule_set_store(services: &SqliteServices) -> crate::Lifecycle
 
 #[tokio::test]
 async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
-    use scryer_domain::{LifecycleEffectArming, LifecycleRuleArmingConfirmation};
+    use scryer_domain::LifecycleRuleArmingConfirmation;
     let temp = tempfile::tempdir().unwrap();
     let services =
         SqliteServices::new(temp.path().join("arming.db").to_string_lossy().into_owned())
@@ -46,24 +46,22 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
         .await
         .unwrap();
     let reviewed = LifecycleRuleArmingConfirmation::from(&original);
+    // A state write without a confirmation stores none: the row is enabled
+    // but holds nothing that lets a deleting step run.
     assert!(
-        !store
-            .update_rule_set_state(
-                "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
-                None,
-                Utc::now()
-            )
+        store
+            .update_rule_set_state("reviewed", LifecycleRuleState::Enabled, None, Utc::now())
             .await
             .unwrap()
     );
+    let unconfirmed = store.get_rule_set("reviewed").await.unwrap().unwrap();
+    assert_eq!(unconfirmed.destructive_confirmed_revision, None);
+    assert!(!unconfirmed.destructive_confirmed());
     assert!(
         store
             .update_rule_set_state(
                 "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
+                LifecycleRuleState::Enabled,
                 Some(&reviewed),
                 Utc::now()
             )
@@ -75,7 +73,7 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
     // Hold the writer transaction across the arming attempt to exercise the
     // serialization boundary, then commit the new scope without a revision bump.
     let mut edit = services.pool().begin().await.unwrap();
-    sqlx::query("UPDATE lifecycle_rule_sets SET effect_arming = 'none' WHERE id = 'reviewed'")
+    sqlx::query("UPDATE lifecycle_rule_sets SET state = 'dry_run', destructive_confirmed_revision = NULL WHERE id = 'reviewed'")
         .execute(&mut *edit)
         .await
         .unwrap();
@@ -83,8 +81,7 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
         .execute(&mut *edit).await.unwrap();
     let arming = store.update_rule_set_state(
         "reviewed",
-        scryer_domain::LifecycleEvaluationMode::Observe,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(&reviewed),
         Utc::now(),
     );
@@ -100,15 +97,15 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
         "a stale acknowledgement must lose to the committed scope edit"
     );
     let current = store.get_rule_set("reviewed").await.unwrap().unwrap();
-    assert_eq!(current.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(current.state, LifecycleRuleState::DryRun);
+    assert_eq!(current.destructive_confirmed_revision, None);
     assert_eq!(current.library_ids, vec!["library-2"]);
     let reviewed = LifecycleRuleArmingConfirmation::from(&current);
     assert!(
         store
             .update_rule_set_state(
                 "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
+                LifecycleRuleState::Enabled,
                 Some(&reviewed),
                 Utc::now()
             )
@@ -124,32 +121,19 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
         !store
             .update_rule_set_state(
                 "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
+                LifecycleRuleState::Enabled,
                 Some(&reviewed),
                 Utc::now()
             )
             .await
             .unwrap()
     );
-    assert_eq!(
-        store
-            .get_rule_set("reviewed")
-            .await
-            .unwrap()
-            .unwrap()
-            .effect_arming,
-        LifecycleEffectArming::None
-    );
+    let after_revision = store.get_rule_set("reviewed").await.unwrap().unwrap();
+    assert_eq!(after_revision.state, LifecycleRuleState::DryRun);
+    assert_eq!(after_revision.destructive_confirmed_revision, None);
     assert!(
         store
-            .update_rule_set_state(
-                "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::None,
-                None,
-                Utc::now()
-            )
+            .update_rule_set_state("reviewed", LifecycleRuleState::DryRun, None, Utc::now())
             .await
             .unwrap()
     );
@@ -158,7 +142,7 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
 #[tokio::test]
 #[ignore = "requires SCRYER_TEST_POSTGRES_URL pointing to an isolated PostgreSQL fixture"]
 async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confirmation() {
-    use scryer_domain::{LifecycleEffectArming, LifecycleRuleArmingConfirmation};
+    use scryer_domain::LifecycleRuleArmingConfirmation;
     let raw_url =
         std::env::var("SCRYER_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture URL");
     let admin = sqlx::PgPool::connect(&raw_url).await.unwrap();
@@ -184,24 +168,22 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
         .await
         .unwrap();
     let reviewed = LifecycleRuleArmingConfirmation::from(&original);
+    // A state write without a confirmation stores none: the row is enabled
+    // but holds nothing that lets a deleting step run.
     assert!(
-        !store
-            .update_rule_set_state(
-                "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
-                None,
-                Utc::now()
-            )
+        store
+            .update_rule_set_state("reviewed", LifecycleRuleState::Enabled, None, Utc::now())
             .await
             .unwrap()
     );
+    let unconfirmed = store.get_rule_set("reviewed").await.unwrap().unwrap();
+    assert_eq!(unconfirmed.destructive_confirmed_revision, None);
+    assert!(!unconfirmed.destructive_confirmed());
     assert!(
         store
             .update_rule_set_state(
                 "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
+                LifecycleRuleState::Enabled,
                 Some(&reviewed),
                 Utc::now()
             )
@@ -210,7 +192,7 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
     );
 
     let mut edit = services.pool().begin().await.unwrap();
-    sqlx::query("UPDATE lifecycle_rule_sets SET effect_arming = 'none' WHERE id = 'reviewed'")
+    sqlx::query("UPDATE lifecycle_rule_sets SET state = 'dry_run', destructive_confirmed_revision = NULL WHERE id = 'reviewed'")
         .execute(&mut *edit)
         .await
         .unwrap();
@@ -218,8 +200,7 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
         .execute(&mut *edit).await.unwrap();
     let arming = store.update_rule_set_state(
         "reviewed",
-        scryer_domain::LifecycleEvaluationMode::Observe,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(&reviewed),
         Utc::now(),
     );
@@ -235,14 +216,14 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
         "the post-lock read must see the new PostgreSQL scope"
     );
     let current = store.get_rule_set("reviewed").await.unwrap().unwrap();
-    assert_eq!(current.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(current.state, LifecycleRuleState::DryRun);
+    assert_eq!(current.destructive_confirmed_revision, None);
     let reviewed = LifecycleRuleArmingConfirmation::from(&current);
     assert!(
         store
             .update_rule_set_state(
                 "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
+                LifecycleRuleState::Enabled,
                 Some(&reviewed),
                 Utc::now()
             )
@@ -257,8 +238,7 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
         !store
             .update_rule_set_state(
                 "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Destructive,
+                LifecycleRuleState::Enabled,
                 Some(&reviewed),
                 Utc::now()
             )
@@ -267,13 +247,7 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
     );
     assert!(
         store
-            .update_rule_set_state(
-                "reviewed",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::None,
-                None,
-                Utc::now()
-            )
+            .update_rule_set_state("reviewed", LifecycleRuleState::DryRun, None, Utc::now())
             .await
             .unwrap()
     );
@@ -365,8 +339,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     store
         .update_rule_set_state(
             "scoped",
-            scryer_domain::LifecycleEvaluationMode::Observe,
-            scryer_domain::LifecycleEffectArming::Destructive,
+            LifecycleRuleState::Enabled,
             Some(&scryer_domain::LifecycleRuleArmingConfirmation {
                 revision_number: 1,
                 library_ids: expected.clone(),
@@ -398,10 +371,8 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     );
     assert_eq!(unchanged.name, before.name);
     assert_eq!(unchanged.updated_at, before.updated_at);
-    assert_eq!(
-        unchanged.effect_arming,
-        scryer_domain::LifecycleEffectArming::Destructive
-    );
+    assert_eq!(unchanged.state, LifecycleRuleState::Enabled);
+    assert_eq!(unchanged.destructive_confirmed_revision, Some(1));
 
     store
         .update_rule_set_metadata(
@@ -417,11 +388,9 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
         .await
         .unwrap();
     let rescoped = store.get_rule_set("scoped").await.unwrap().unwrap();
-    assert_eq!(
-        rescoped.effect_arming,
-        scryer_domain::LifecycleEffectArming::None
-    );
-    assert!(rescoped.destructive_rearm_required);
+    assert_eq!(rescoped.state, LifecycleRuleState::DryRun);
+    assert_eq!(rescoped.destructive_confirmed_revision, None);
+    assert!(rescoped.edited_since_enabled);
     assert!(
         sqlx::query("DELETE FROM libraries WHERE id = 'library-1'")
             .execute(pool)
@@ -482,12 +451,12 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
 }
 
 #[tokio::test]
-async fn a_rule_maximum_round_trips_and_clears_without_touching_arming() {
+async fn a_rule_maximum_round_trips_and_clears_without_touching_state() {
     let (services, db) = temp_services("scryer_lifecycle_rule_maximum").await;
     let store = lifecycle_rule_set_store(&services).await;
     let mut seeded = rule_set("bounded", vec![]);
     seeded.max_titles_per_run = Some(7);
-    seeded.effect_arming = scryer_domain::LifecycleEffectArming::Reversible;
+    seeded.state = LifecycleRuleState::Enabled;
     store
         .create_rule_set(&seeded, &revision("bounded", 1))
         .await
@@ -501,10 +470,7 @@ async fn a_rule_maximum_round_trips_and_clears_without_touching_arming() {
         .unwrap();
     let raised = store.get_rule_set("bounded").await.unwrap().unwrap();
     assert_eq!(raised.max_titles_per_run, Some(100_000));
-    assert_eq!(
-        raised.effect_arming,
-        scryer_domain::LifecycleEffectArming::Reversible
-    );
+    assert_eq!(raised.state, LifecycleRuleState::Enabled);
 
     store
         .set_rule_set_max_titles_per_run("bounded", None, Utc::now())
@@ -536,12 +502,7 @@ async fn a_rule_maximum_rides_in_the_revision_and_metadata_writes() {
         .unwrap();
     assert_eq!(stored_maximum(&store).await, Some(3));
     store
-        .add_revision_keeping_arming(
-            &revision("bounded", 3),
-            scryer_domain::LifecycleEffectArming::None,
-            None,
-            Utc::now(),
-        )
+        .add_revision_keeping_state(&revision("bounded", 3), false, false, None, Utc::now())
         .await
         .unwrap();
     assert_eq!(
@@ -550,9 +511,10 @@ async fn a_rule_maximum_rides_in_the_revision_and_metadata_writes() {
         "omitted keeps the maximum"
     );
     store
-        .add_revision_keeping_arming(
+        .add_revision_keeping_state(
             &revision("bounded", 4),
-            scryer_domain::LifecycleEffectArming::None,
+            false,
+            false,
             Some(Some(9)),
             Utc::now(),
         )
@@ -622,14 +584,9 @@ async fn a_deleting_rule_is_never_stored_without_a_maximum() {
         .expect_err("a deleting revision without a stored maximum is refused");
     assert_eq!(refused.validation_reason(), Some(required));
     let refused = store
-        .add_revision_keeping_arming(
-            &deleting(2),
-            scryer_domain::LifecycleEffectArming::None,
-            None,
-            Utc::now(),
-        )
+        .add_revision_keeping_state(&deleting(2), false, false, None, Utc::now())
         .await
-        .expect_err("the arming-keeping write refuses it too");
+        .expect_err("the state-keeping write refuses it too");
     assert_eq!(refused.validation_reason(), Some(required));
     let unchanged = store.get_rule_set("bounded").await.unwrap().unwrap();
     assert_eq!(unchanged.current_revision_number, 1, "nothing was written");
@@ -681,10 +638,9 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> LifecycleRuleSet {
         id: id.to_string(),
         name: "Stale movies".to_string(),
         description: "Unwatched for a long time".to_string(),
-        enabled: false,
-        evaluation_mode: LifecycleEvaluationMode::Disabled,
-        effect_arming: scryer_domain::LifecycleEffectArming::None,
-        destructive_rearm_required: false,
+        state: LifecycleRuleState::Disabled,
+        edited_since_enabled: false,
+        destructive_confirmed_revision: None,
         library_ids,
         system_owned: false,
         current_revision_number: 1,
@@ -740,8 +696,9 @@ async fn rule_sets_and_revisions_round_trip() {
         .expect("read rule set")
         .expect("rule set exists");
     assert_eq!(loaded.name, created.name);
-    assert!(!loaded.enabled);
-    assert_eq!(loaded.evaluation_mode, LifecycleEvaluationMode::Disabled);
+    assert_eq!(loaded.state, LifecycleRuleState::Disabled);
+    assert!(!loaded.edited_since_enabled);
+    assert_eq!(loaded.destructive_confirmed_revision, None);
     assert_eq!(loaded.library_ids, vec!["library-1".to_string()]);
     assert_eq!(loaded.current_revision_number, 1);
     assert!(!loaded.system_owned);
@@ -876,8 +833,7 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
     store
         .update_rule_set_state(
             "rule-b",
-            scryer_domain::LifecycleEvaluationMode::Observe,
-            scryer_domain::LifecycleEffectArming::Destructive,
+            LifecycleRuleState::Enabled,
             Some(&scryer_domain::LifecycleRuleArmingConfirmation {
                 revision_number: 1,
                 library_ids: vec![],
@@ -902,23 +858,21 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
     // The pointer move and the disarm are one write: arming acknowledges one
     // matcher's blast radius, so it must not carry over to the next revision.
     assert_eq!(
-        loaded.effect_arming,
-        scryer_domain::LifecycleEffectArming::None,
+        loaded.state,
+        LifecycleRuleState::DryRun,
         "appending a revision must disarm the rule"
     );
+    assert_eq!(
+        loaded.destructive_confirmed_revision, None,
+        "appending a revision clears the deletion confirmation"
+    );
     assert!(
-        loaded.destructive_rearm_required,
-        "disarming an armed rule records that it was edited since it was enabled"
+        loaded.edited_since_enabled,
+        "disarming an enabled rule records that it was edited since it was enabled"
     );
     assert!(
         store
-            .update_rule_set_state(
-                "rule-b",
-                scryer_domain::LifecycleEvaluationMode::Observe,
-                scryer_domain::LifecycleEffectArming::None,
-                None,
-                Utc::now(),
-            )
+            .update_rule_set_state("rule-b", LifecycleRuleState::DryRun, None, Utc::now(),)
             .await
             .unwrap()
     );
@@ -928,9 +882,10 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
         .expect("add revision to an unarmed rule");
     let unarmed = store.get_rule_set("rule-b").await.unwrap().unwrap();
     assert!(
-        !unarmed.destructive_rearm_required,
-        "a state write clears the flag and editing an unarmed rule never sets it"
+        !unarmed.edited_since_enabled,
+        "a state write clears the flag and editing a rule that is not enabled never sets it"
     );
+    assert_eq!(unarmed.state, LifecycleRuleState::DryRun);
 
     let first = store
         .get_revision("rule-b", 1)
@@ -960,7 +915,7 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
     let store = lifecycle_rule_set_store(&services).await;
 
     let mut armed = rule_set("rule-c", Vec::new());
-    armed.effect_arming = scryer_domain::LifecycleEffectArming::Reversible;
+    armed.state = LifecycleRuleState::Enabled;
     store
         .create_rule_set(&armed, &revision("rule-c", 1))
         .await
@@ -991,10 +946,8 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
     assert_eq!(loaded.current_revision_number, 1);
     // The caller decides whether the edit invalidated the arming; the store must
     // not clear it on its own.
-    assert_eq!(
-        loaded.effect_arming,
-        scryer_domain::LifecycleEffectArming::Reversible
-    );
+    assert_eq!(loaded.state, LifecycleRuleState::Enabled);
+    assert!(!loaded.edited_since_enabled);
     assert_eq!(store.list_revisions("rule-c").await.unwrap().len(), 1);
     assert_eq!(
         loaded.schedule,
@@ -1027,9 +980,9 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
         .expect("rule set exists");
     assert_eq!(loaded.schedule, weekly);
     assert_eq!(
-        loaded.effect_arming,
-        scryer_domain::LifecycleEffectArming::Reversible,
-        "a schedule change leaves arming alone"
+        loaded.state,
+        LifecycleRuleState::Enabled,
+        "a schedule change leaves the state alone"
     );
     assert_eq!(
         store.list_rule_sets().await.unwrap()[0].schedule,
@@ -1049,7 +1002,8 @@ async fn a_scope_change_disarms_in_the_same_write() {
     let store = lifecycle_rule_set_store(&services).await;
 
     let mut armed = rule_set("rule-f", vec!["library-1".to_string()]);
-    armed.effect_arming = scryer_domain::LifecycleEffectArming::Destructive;
+    armed.state = LifecycleRuleState::Enabled;
+    armed.destructive_confirmed_revision = Some(1);
     store
         .create_rule_set(&armed, &revision("rule-f", 1))
         .await
@@ -1079,12 +1033,50 @@ async fn a_scope_change_disarms_in_the_same_write() {
         vec!["library-1".to_string(), "library-2".to_string()]
     );
     assert_eq!(
-        loaded.effect_arming,
-        scryer_domain::LifecycleEffectArming::None,
-        "a widened scope must never stay armed under the narrower acknowledgement"
+        loaded.state,
+        LifecycleRuleState::DryRun,
+        "a widened scope must never stay enabled under the narrower acknowledgement"
     );
+    assert_eq!(
+        loaded.destructive_confirmed_revision, None,
+        "the deletion confirmation is cleared in the same write"
+    );
+    assert!(loaded.edited_since_enabled);
     assert_eq!(loaded.current_revision_number, 1);
 
+    let _ = std::fs::remove_file(db);
+}
+
+/// A stored state this build does not know reads as disabled, and a
+/// confirmed revision it cannot read reads as no confirmation, so neither
+/// can make a rule act or delete.
+#[tokio::test]
+async fn an_unknown_stored_state_reads_disabled() {
+    let (services, db) = temp_services("scryer_lifecycle_unknown_state").await;
+    let store = lifecycle_rule_set_store(&services).await;
+    store
+        .create_rule_set(&rule_set("unknown", Vec::new()), &revision("unknown", 1))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE lifecycle_rule_sets
+            SET state = 'sweeping', destructive_confirmed_revision = 'not-a-revision'
+          WHERE id = 'unknown'",
+    )
+    .execute(services.pool())
+    .await
+    .unwrap();
+
+    let loaded = store.get_rule_set("unknown").await.unwrap().unwrap();
+    assert_eq!(loaded.state, LifecycleRuleState::Disabled);
+    assert!(!loaded.evaluates());
+    assert_eq!(loaded.destructive_confirmed_revision, None);
+    assert!(!loaded.destructive_confirmed());
+    assert_eq!(
+        store.list_rule_sets().await.unwrap()[0].state,
+        LifecycleRuleState::Disabled,
+        "the list read decodes the same way"
+    );
     let _ = std::fs::remove_file(db);
 }
 
@@ -1135,11 +1127,11 @@ async fn a_duplicate_revision_number_is_rejected() {
     let _ = std::fs::remove_file(db);
 }
 
-/// An edit prepared from a read taken before another admin disarmed and
-/// disabled the rule must not re-arm or re-enable it.
+/// An edit prepared from a read taken before another admin disabled the rule
+/// must not re-enable it, and a kept state never carries a deletion
+/// confirmation the caller did not ask to carry.
 #[tokio::test]
-async fn a_revision_keeping_arming_never_raises_a_concurrently_lowered_arming() {
-    use scryer_domain::LifecycleEffectArming;
+async fn a_revision_keeping_state_never_re_enables_a_concurrently_disabled_rule() {
     let temp = tempfile::tempdir().unwrap();
     let services = SqliteServices::new(
         temp.path()
@@ -1151,77 +1143,106 @@ async fn a_revision_keeping_arming_never_raises_a_concurrently_lowered_arming() 
     .unwrap();
     let store = lifecycle_rule_set_store(&services).await;
     let mut original = rule_set("lowered", vec!["library-1".into()]);
-    original.effect_arming = LifecycleEffectArming::Reversible;
-    original.evaluation_mode = LifecycleEvaluationMode::Observe;
-    original.enabled = true;
+    original.state = LifecycleRuleState::Enabled;
     store
         .create_rule_set(&original, &revision("lowered", 1))
         .await
         .unwrap();
-    // The editor reads here: Reversible, Observe.
+    // The editor reads here: Enabled.
     let read = store.get_rule_set("lowered").await.unwrap().unwrap();
-    assert_eq!(read.effect_arming, LifecycleEffectArming::Reversible);
+    assert_eq!(read.state, LifecycleRuleState::Enabled);
 
-    // Another admin disables and disarms in between.
+    // Another admin disables it in between.
     assert!(
         store
-            .update_rule_set_state(
-                "lowered",
-                LifecycleEvaluationMode::Disabled,
-                LifecycleEffectArming::None,
-                None,
-                Utc::now(),
-            )
+            .update_rule_set_state("lowered", LifecycleRuleState::Disabled, None, Utc::now())
             .await
             .unwrap()
     );
 
-    // The edit computed from its stale read still asks for Reversible.
+    // The edit computed from its stale read still asks to stay enabled.
     store
-        .add_revision_keeping_arming(
-            &revision("lowered", 2),
-            LifecycleEffectArming::Reversible,
-            None,
-            Utc::now(),
-        )
+        .add_revision_keeping_state(&revision("lowered", 2), true, false, None, Utc::now())
         .await
         .expect("the edit itself lands");
     let current = store.get_rule_set("lowered").await.unwrap().unwrap();
     assert_eq!(current.current_revision_number, 2);
-    assert_eq!(current.effect_arming, LifecycleEffectArming::None);
-    assert_eq!(current.evaluation_mode, LifecycleEvaluationMode::Disabled);
-    assert!(!current.enabled);
+    assert_eq!(current.state, LifecycleRuleState::Disabled);
+    assert_eq!(current.destructive_confirmed_revision, None);
 
-    // Lowering still works: Destructive stored, Reversible asked.
+    // An enabled rule confirmed for deletion keeps its state but not the
+    // confirmation unless asked to carry it.
     let mut armed = rule_set("armed", vec!["library-1".into()]);
-    armed.effect_arming = LifecycleEffectArming::Destructive;
+    armed.state = LifecycleRuleState::Enabled;
+    armed.destructive_confirmed_revision = Some(1);
     store
         .create_rule_set(&armed, &revision("armed", 1))
         .await
         .unwrap();
     store
-        .add_revision_keeping_arming(
-            &revision("armed", 2),
-            LifecycleEffectArming::Reversible,
-            None,
-            Utc::now(),
-        )
+        .add_revision_keeping_state(&revision("armed", 2), true, false, None, Utc::now())
         .await
         .unwrap();
+    let current = store.get_rule_set("armed").await.unwrap().unwrap();
+    assert_eq!(current.state, LifecycleRuleState::Enabled);
+    assert_eq!(current.destructive_confirmed_revision, None);
+
+    // Not keeping it enabled drops it to a dry run.
+    store
+        .add_revision_keeping_state(&revision("armed", 3), false, false, None, Utc::now())
+        .await
+        .unwrap();
+    let current = store.get_rule_set("armed").await.unwrap().unwrap();
+    assert_eq!(current.state, LifecycleRuleState::DryRun);
+    assert!(!current.edited_since_enabled);
+}
+
+/// A carried confirmation moves to the new revision only when it named
+/// exactly the revision being replaced; any other stored confirmation is
+/// cleared in the same write.
+#[tokio::test]
+async fn a_carried_confirmation_moves_only_from_the_replaced_revision() {
+    let (services, db) = temp_services("scryer_lifecycle_carry").await;
+    let store = lifecycle_rule_set_store(&services).await;
+    let mut confirmed = rule_set("confirmed", Vec::new());
+    confirmed.state = LifecycleRuleState::Enabled;
+    confirmed.destructive_confirmed_revision = Some(1);
+    store
+        .create_rule_set(&confirmed, &revision("confirmed", 1))
+        .await
+        .unwrap();
+    store
+        .add_revision_keeping_state(&revision("confirmed", 2), true, true, None, Utc::now())
+        .await
+        .unwrap();
+    let current = store.get_rule_set("confirmed").await.unwrap().unwrap();
+    assert_eq!(current.state, LifecycleRuleState::Enabled);
+    assert_eq!(current.destructive_confirmed_revision, Some(2));
+    assert!(current.destructive_confirmed());
+
+    let mut older = rule_set("older", Vec::new());
+    older.state = LifecycleRuleState::Enabled;
+    older.current_revision_number = 2;
+    older.destructive_confirmed_revision = Some(1);
+    store
+        .create_rule_set(&older, &revision("older", 2))
+        .await
+        .unwrap();
+    store
+        .add_revision_keeping_state(&revision("older", 3), true, true, None, Utc::now())
+        .await
+        .unwrap();
+    let current = store.get_rule_set("older").await.unwrap().unwrap();
+    assert_eq!(current.current_revision_number, 3);
     assert_eq!(
-        store
-            .get_rule_set("armed")
-            .await
-            .unwrap()
-            .unwrap()
-            .effect_arming,
-        LifecycleEffectArming::Reversible
+        current.destructive_confirmed_revision, None,
+        "a confirmation for an older revision is never carried forward"
     );
+    let _ = std::fs::remove_file(db);
 }
 
 #[tokio::test]
-async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
-    use scryer_domain::LifecycleEffectArming;
+async fn a_revision_keeping_state_moves_only_from_the_revision_it_follows() {
     let temp = tempfile::tempdir().unwrap();
     let services = SqliteServices::new(
         temp.path()
@@ -1233,30 +1254,26 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
     .unwrap();
     let store = lifecycle_rule_set_store(&services).await;
     let mut original = rule_set("kept", vec!["library-1".into()]);
-    original.effect_arming = LifecycleEffectArming::Destructive;
+    original.state = LifecycleRuleState::Enabled;
+    original.destructive_confirmed_revision = Some(1);
     store
         .create_rule_set(&original, &revision("kept", 1))
         .await
         .unwrap();
 
     store
-        .add_revision_keeping_arming(
-            &revision("kept", 2),
-            LifecycleEffectArming::Reversible,
-            None,
-            Utc::now(),
-        )
+        .add_revision_keeping_state(&revision("kept", 2), true, false, None, Utc::now())
         .await
         .expect("the save follows the current revision");
     let current = store.get_rule_set("kept").await.unwrap().unwrap();
     assert_eq!(current.current_revision_number, 2);
-    assert_eq!(current.effect_arming, LifecycleEffectArming::Reversible);
+    assert_eq!(current.state, LifecycleRuleState::Enabled);
 
     // A save prepared against revision 1 lost the race to the one above.
     let mut stale = revision("kept", 2);
     stale.id = "kept-stale-2".into();
     let refused = store
-        .add_revision_keeping_arming(&stale, LifecycleEffectArming::Reversible, None, Utc::now())
+        .add_revision_keeping_state(&stale, true, false, None, Utc::now())
         .await
         .expect_err("a stale save is refused");
     assert_eq!(
@@ -1265,12 +1282,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
         "{refused:?}"
     );
     let skipped = store
-        .add_revision_keeping_arming(
-            &revision("kept", 4),
-            LifecycleEffectArming::None,
-            None,
-            Utc::now(),
-        )
+        .add_revision_keeping_state(&revision("kept", 4), false, false, None, Utc::now())
         .await
         .expect_err("a save that skips a revision is refused");
     assert_eq!(
@@ -1279,7 +1291,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
     );
     let current = store.get_rule_set("kept").await.unwrap().unwrap();
     assert_eq!(current.current_revision_number, 2);
-    assert_eq!(current.effect_arming, LifecycleEffectArming::Reversible);
+    assert_eq!(current.state, LifecycleRuleState::Enabled);
     assert_eq!(store.list_revisions("kept").await.unwrap().len(), 2);
 
     // The disarming save follows the same rule, and a stale one disarms
@@ -1297,7 +1309,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
     );
     let current = store.get_rule_set("kept").await.unwrap().unwrap();
     assert_eq!(current.current_revision_number, 2);
-    assert_eq!(current.effect_arming, LifecycleEffectArming::Reversible);
+    assert_eq!(current.state, LifecycleRuleState::Enabled);
 
     store
         .add_revision(&revision("kept", 3), None, Utc::now())
@@ -1305,6 +1317,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
         .expect("a disarming save that follows the current revision");
     let current = store.get_rule_set("kept").await.unwrap().unwrap();
     assert_eq!(current.current_revision_number, 3);
-    assert_eq!(current.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(current.state, LifecycleRuleState::DryRun);
+    assert!(current.edited_since_enabled);
     assert_eq!(store.list_revisions("kept").await.unwrap().len(), 3);
 }

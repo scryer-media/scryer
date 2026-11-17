@@ -119,7 +119,6 @@ const DETAIL_FIELDS: &str = r#"
         name
         description
         state
-        enabledArming
         editedSinceEnabled
         libraryIds
         currentRevisionNumber
@@ -351,7 +350,7 @@ async fn lifecycle_rule_create_list_and_get_round_trip() {
     assert_eq!(rule_set["description"], "Movies nobody monitors");
     // Ships dark: nothing evaluates stored rules yet.
     assert_eq!(rule_set["state"], "DISABLED");
-    assert_eq!(rule_set["enabledArming"], "DESTRUCTIVE");
+    assert_eq!(rule_set["declaredActions"]["destructive"], true);
     assert_eq!(rule_set["editedSinceEnabled"], false);
     assert_eq!(rule_set["libraryIds"], json!([movie_library_id()]));
     assert_eq!(rule_set["currentRevisionNumber"], 1);
@@ -424,7 +423,7 @@ async fn lifecycle_rule_declares_several_actions_in_source_order() {
         json!(["UNMONITOR", "SEARCH"])
     );
     assert_eq!(detail["declaredActions"]["destructive"], false);
-    assert_eq!(detail["ruleSet"]["enabledArming"], "REVERSIBLE");
+    assert_eq!(detail["ruleSet"]["state"], "DISABLED");
 
     let id = detail["ruleSet"]["id"].as_str().expect("rule set id");
     let fetched = gql(&ctx, &get_query(), json!({ "id": id })).await;
@@ -1277,7 +1276,6 @@ const SET_STATE_MUTATION: &str = r#"mutation(
     setLifecycleRuleState(ruleSetId: $ruleSetId, state: $state, confirmation: $confirmation) {
         id
         state
-        enabledArming
         editedSinceEnabled
         currentRevisionNumber
     }
@@ -1833,7 +1831,7 @@ async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_libr
     )
     .await;
     assert_eq!(enabled["state"], "ENABLED");
-    assert_eq!(enabled["enabledArming"], "DESTRUCTIVE");
+    assert_eq!(enabled["editedSinceEnabled"], false);
     let dry_run = set_rule_state(&ctx, id, "DRY_RUN", Value::Null).await;
     assert_eq!(dry_run["state"], "DRY_RUN");
 
@@ -1991,7 +1989,7 @@ async fn a_reversible_unmonitor_journey_needs_no_confirmation() {
     observe_rule_with_gates(&ctx, &rule_set_id).await;
 
     let armed = set_rule_state(&ctx, &rule_set_id, "ENABLED", Value::Null).await;
-    assert_eq!(armed["enabledArming"], "REVERSIBLE");
+    assert_eq!(armed["state"], "ENABLED");
 
     let started = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
     assert_no_errors(&started);

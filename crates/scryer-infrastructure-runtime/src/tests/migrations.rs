@@ -6763,7 +6763,8 @@ async fn migration_0295_preserves_inherited_movie_availability() {
     );
 }
 
-/// Runs 0304 against a fully migrated schema holding one enabled destructive
+/// Runs 0304 against the schema as it stood before lifecycle rules stored one
+/// state (0360), holding one enabled destructive
 /// lifecycle rule, one shadow lifecycle rule and one enforcing request
 /// rule, with the experimental-features setting stored as `value_json`, or
 /// absent when `experimental` is `None`. Returns the rule rows afterwards as
@@ -6776,10 +6777,16 @@ async fn rules_after_0304(
     Vec<(String, i64, String)>,
 ) {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
-    let services = SqliteServices::new(directory.path().join("rules-0304.db").to_string_lossy())
+    let db = directory.path().join("rules-0304.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
         .await
-        .expect("migrations should apply");
-    let pool = services.pool().clone();
+        .expect("pre-0361 database should open");
+    // The four rule-state columns 0304 writes are replaced at 0361.
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(360), true)
+        .await
+        .expect("migrations through 0360 should apply");
     let mut conn = pool.acquire().await.expect("rule reset connection");
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *conn)

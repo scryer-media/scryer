@@ -467,12 +467,13 @@ export function ruleStateHelpKey(state: string): string | null {
   return RULE_STATE_KEYS[state as LifecycleRuleState]?.help ?? null;
 }
 
-/// A rule whose action never changes anything can only run as a dry run, so
-/// `ENABLED` is not offered for it.
+/// A rule whose source declares no action never changes anything, so it can
+/// only run as a dry run and `ENABLED` is not offered for it.
 export function ruleStateOptionsFor(
-  record: Pick<LifecycleRuleSetRecord, "enabledArming">,
+  record: Pick<LifecycleRuleSetRecord, "declaredActions">,
 ): LifecycleRuleState[] {
-  return record.enabledArming === "NONE"
+  const { heads, destructive } = record.declaredActions;
+  return heads.length === 0 && !destructive
     ? ["DISABLED", "DRY_RUN"]
     : ["DISABLED", "DRY_RUN", "ENABLED"];
 }

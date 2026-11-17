@@ -14,8 +14,8 @@ use crate::lifecycle_rules::{LifecycleCandidateFilter, LifecycleRuleDraft};
 use crate::ports::SubtitleDownloadRepository;
 use scryer_domain::{
     ExternalSubtitleSourceKind, LifecycleActionRunStatus, LifecycleActionStepState,
-    LifecycleCandidateState, LifecycleEffectArming, LifecycleRuleSubjectKind,
-    SubtitleBlocklistEntry, SubtitleDownload,
+    LifecycleCandidateState, LifecycleRuleState, LifecycleRuleSubjectKind, SubtitleBlocklistEntry,
+    SubtitleDownload,
 };
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -280,7 +280,7 @@ async fn arm_storage_title_deletion_with_source(fixture: &TitleFixture, matcher:
         &fixture.execution.app,
         &fixture.execution.user,
         &created.rule_set.id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(active_candidates as i64),
     )
     .await;
@@ -1488,7 +1488,7 @@ async fn a_storage_delete_title_rechecks_space_and_keeps_the_title_no_longer_nee
         app,
         &fixture.execution.user,
         &created.rule_set.id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(2),
     )
     .await;

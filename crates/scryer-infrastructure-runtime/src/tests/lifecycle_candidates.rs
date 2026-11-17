@@ -14,8 +14,8 @@ use scryer_application::{
 use scryer_domain::{
     LifecycleActionJobReceipt, LifecycleActionJobReceiptState, LifecycleActionStepKey,
     LifecycleActionStepRun, LifecycleActionStepState, LifecycleCandidate, LifecycleCandidateState,
-    LifecycleEvaluationMode, LifecycleEvaluationRun, LifecycleEvaluationRunStatus,
-    LifecycleRuleExclusion, LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleSubjectKind,
+    LifecycleEvaluationRun, LifecycleEvaluationRunStatus, LifecycleRuleExclusion,
+    LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleState, LifecycleRuleSubjectKind,
     LifecycleSequenceTerminalMembership, LifecycleSequenceTerminalOutcome,
 };
 
@@ -33,10 +33,9 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 id: id.to_string(),
                 name: format!("rule {id}"),
                 description: String::new(),
-                enabled: false,
-                evaluation_mode: LifecycleEvaluationMode::Disabled,
-                effect_arming: scryer_domain::LifecycleEffectArming::None,
-                destructive_rearm_required: false,
+                state: LifecycleRuleState::Disabled,
+                edited_since_enabled: false,
+                destructive_confirmed_revision: None,
                 library_ids: Vec::new(),
                 system_owned: false,
                 current_revision_number: 1,
@@ -1429,20 +1428,14 @@ async fn deleting_a_rule_set_takes_its_candidates_runs_and_exclusions_with_it() 
 }
 
 #[tokio::test]
-async fn a_state_write_moves_mode_enabled_and_arming_together() {
+async fn a_state_write_moves_state_and_confirmation_together() {
     let (services, db) = temp_services("scryer_lifecycle_rule_mode").await;
     seed_rule_set(&services, "rule-a").await;
     let rules = crate::LifecycleRuleSetStore::new(services.datastore());
 
     assert!(
         rules
-            .update_rule_set_state(
-                "rule-a",
-                LifecycleEvaluationMode::Observe,
-                scryer_domain::LifecycleEffectArming::Reversible,
-                None,
-                Utc::now(),
-            )
+            .update_rule_set_state("rule-a", LifecycleRuleState::Enabled, None, Utc::now())
             .await
             .expect("enable rule")
     );
@@ -1451,12 +1444,9 @@ async fn a_state_write_moves_mode_enabled_and_arming_together() {
         .await
         .expect("read")
         .expect("exists");
-    assert_eq!(armed.evaluation_mode, LifecycleEvaluationMode::Observe);
-    assert!(armed.enabled);
-    assert_eq!(
-        armed.effect_arming,
-        scryer_domain::LifecycleEffectArming::Reversible
-    );
+    assert_eq!(armed.state, LifecycleRuleState::Enabled);
+    assert_eq!(armed.destructive_confirmed_revision, None);
+    assert!(!armed.edited_since_enabled);
     assert_eq!(
         armed.current_revision_number, 1,
         "a state change never appends a revision"
@@ -1464,13 +1454,7 @@ async fn a_state_write_moves_mode_enabled_and_arming_together() {
 
     assert!(
         rules
-            .update_rule_set_state(
-                "rule-a",
-                LifecycleEvaluationMode::Disabled,
-                scryer_domain::LifecycleEffectArming::None,
-                None,
-                Utc::now(),
-            )
+            .update_rule_set_state("rule-a", LifecycleRuleState::Disabled, None, Utc::now())
             .await
             .expect("disable rule")
     );
@@ -1479,21 +1463,11 @@ async fn a_state_write_moves_mode_enabled_and_arming_together() {
         .await
         .expect("read")
         .expect("exists");
-    assert_eq!(disarmed.evaluation_mode, LifecycleEvaluationMode::Disabled);
-    assert!(!disarmed.enabled);
-    assert_eq!(
-        disarmed.effect_arming,
-        scryer_domain::LifecycleEffectArming::None
-    );
+    assert_eq!(disarmed.state, LifecycleRuleState::Disabled);
+    assert_eq!(disarmed.destructive_confirmed_revision, None);
     assert!(
         !rules
-            .update_rule_set_state(
-                "absent",
-                LifecycleEvaluationMode::Observe,
-                scryer_domain::LifecycleEffectArming::None,
-                None,
-                Utc::now(),
-            )
+            .update_rule_set_state("absent", LifecycleRuleState::DryRun, None, Utc::now())
             .await
             .expect("missing rule"),
         "a missing rule reports no write"
@@ -2309,7 +2283,7 @@ async fn held_action_run_retention_is_index_served_on_sqlite() {
 }
 
 #[tokio::test]
-async fn effect_arming_and_attempts_round_trip() {
+async fn deletion_confirmation_and_attempts_round_trip() {
     let (services, db) = temp_services("scryer_lifecycle_arming").await;
     seed_rule_set(&services, "rule-a").await;
     let rules = crate::LifecycleRuleSetStore::new(services.datastore());
@@ -2319,8 +2293,7 @@ async fn effect_arming_and_attempts_round_trip() {
     rules
         .update_rule_set_state(
             "rule-a",
-            scryer_domain::LifecycleEvaluationMode::Observe,
-            scryer_domain::LifecycleEffectArming::Destructive,
+            LifecycleRuleState::Enabled,
             Some(&scryer_domain::LifecycleRuleArmingConfirmation::from(
                 &rules.get_rule_set("rule-a").await.unwrap().unwrap(),
             )),
@@ -2333,10 +2306,9 @@ async fn effect_arming_and_attempts_round_trip() {
         .await
         .expect("read")
         .expect("exists");
-    assert_eq!(
-        armed.effect_arming,
-        scryer_domain::LifecycleEffectArming::Destructive
-    );
+    assert_eq!(armed.state, LifecycleRuleState::Enabled);
+    assert_eq!(armed.destructive_confirmed_revision, Some(1));
+    assert!(armed.destructive_confirmed());
     assert_eq!(
         armed.current_revision_number, 1,
         "arming never appends a revision"

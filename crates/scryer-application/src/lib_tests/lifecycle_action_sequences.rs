@@ -14,7 +14,7 @@ use crate::lifecycle_rules::{
     LifecycleActionStepParameters, LifecycleDeclaredActions, LifecycleRuleDraft,
     LifecycleSearchCondition, LifecycleSourceDraft,
 };
-use scryer_domain::{LifecycleEffectArming, LifecycleRuleState, User};
+use scryer_domain::{LifecycleRuleState, User};
 use scryer_rules::lifecycle_actions::LifecycleActionHead;
 use std::sync::Arc;
 
@@ -87,8 +87,12 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
         .await
         .expect("create declared rule");
 
-    assert!(!created.rule_set.enabled, "new rules ship disabled");
-    assert_eq!(created.rule_set.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(
+        created.rule_set.state,
+        LifecycleRuleState::Disabled,
+        "new rules ship disabled"
+    );
+    assert_eq!(created.rule_set.destructive_confirmed_revision, None);
     assert_eq!(created.revision.grace_days, 19);
     assert_eq!(created.load_refusal, None);
     assert_eq!(
@@ -140,7 +144,7 @@ async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
         &app,
         &user,
         &created.rule_set.id,
-        LifecycleEffectArming::Reversible,
+        LifecycleRuleState::Enabled,
         None,
     )
     .await;
@@ -154,11 +158,9 @@ async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
         LifecycleRuleState::Enabled,
         "an edit that cannot delete keeps the rule's state"
     );
-    assert_eq!(
-        kept.rule_set.effect_arming,
-        LifecycleEffectArming::Reversible
-    );
-    assert!(!kept.rule_set.destructive_rearm_required);
+    assert_eq!(kept.rule_set.state, LifecycleRuleState::Enabled);
+    assert_eq!(kept.rule_set.destructive_confirmed_revision, None);
+    assert!(!kept.rule_set.edited_since_enabled);
 
     let dropped = app
         .update_lifecycle_rule_source(&user, &created.rule_set.id, source_draft(DELETES_FILES, 3))
@@ -169,8 +171,9 @@ async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
         LifecycleRuleState::DryRun,
         "a source that can delete needs a fresh confirmation"
     );
-    assert_eq!(dropped.rule_set.effect_arming, LifecycleEffectArming::None);
-    assert!(dropped.rule_set.destructive_rearm_required);
+    assert_eq!(dropped.rule_set.state, LifecycleRuleState::DryRun);
+    assert_eq!(dropped.rule_set.destructive_confirmed_revision, None);
+    assert!(dropped.rule_set.edited_since_enabled);
 }
 
 /// An action document written before sources declared their actions does not
@@ -261,7 +264,7 @@ async fn an_edit_without_delete_heads_drops_destructive_arming() {
         &app,
         &user,
         &created.rule_set.id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(0),
     )
     .await;
@@ -270,19 +273,19 @@ async fn an_edit_without_delete_heads_drops_destructive_arming() {
         .update_lifecycle_rule_source(&user, &created.rule_set.id, source_draft(SEARCH_ONLY, 0))
         .await
         .expect("edit away the delete head");
+    assert_eq!(edited.rule_set.state, LifecycleRuleState::Enabled);
     assert_eq!(
-        edited.rule_set.effect_arming,
-        LifecycleEffectArming::Reversible
+        edited.rule_set.destructive_confirmed_revision, None,
+        "a source that cannot delete carries no deletion confirmation"
     );
     let stored = app
         .get_lifecycle_rule_set(&user, &created.rule_set.id)
         .await
         .expect("read rule")
         .expect("rule exists");
-    assert_eq!(
-        stored.rule_set.effect_arming,
-        LifecycleEffectArming::Reversible
-    );
+    assert_eq!(stored.rule_set.state, LifecycleRuleState::Enabled);
+    assert_eq!(stored.rule_set.destructive_confirmed_revision, None);
+    assert!(!stored.rule_set.destructive_confirmed());
 
     // The revision already in force, saved again as if prepared before it.
     let stale = stored.revision.clone();
@@ -290,12 +293,7 @@ async fn an_edit_without_delete_heads_drops_destructive_arming() {
         .services
         .customization
         .lifecycle_rule_sets
-        .add_revision_keeping_arming(
-            &stale,
-            LifecycleEffectArming::Reversible,
-            None,
-            chrono::Utc::now(),
-        )
+        .add_revision_keeping_state(&stale, true, false, None, chrono::Utc::now())
         .await
         .expect_err("a save that does not follow the current revision is refused");
     assert_eq!(

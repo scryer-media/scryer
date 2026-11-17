@@ -11099,16 +11099,15 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
         revision: &LifecycleRuleRevision,
     ) -> AppResult<()>;
 
-    /// Append `revision`, repoint the rule set at it, and reset its
-    /// `effect_arming` to [`scryer_domain::LifecycleEffectArming::None`] — all
-    /// three atomically, flagging a rule that was armed as edited since it was
-    /// enabled. Existing revisions are never rewritten.
+    /// Append `revision`, repoint the rule set at it, drop an enabled rule to
+    /// dry run flagged as edited since it was enabled, and clear its deletion
+    /// confirmation — all atomically. Existing revisions are never rewritten.
     ///
-    /// The disarm is part of the same write on purpose: arming acknowledges the
-    /// blast radius of one specific matcher and action, so it must never outlive
-    /// the revision it was granted against. A new revision that left the rule
-    /// armed would execute destructively under an acknowledgement given for a
-    /// matcher that no longer exists.
+    /// The disarm is part of the same write on purpose: the confirmation
+    /// acknowledges the blast radius of one specific source, so it must never
+    /// outlive the revision it was given for. A new revision that left the
+    /// rule enabled would execute destructively under an acknowledgement given
+    /// for a source that no longer exists.
     ///
     /// `max_titles_per_run` replaces the rule's per-fire maximum in the same
     /// write when `Some` (`Some(None)` clears it); `None` keeps the stored
@@ -11121,28 +11120,36 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
-    /// Append `revision` and repoint the rule set at it, setting its arming to
-    /// `effect_arming`, atomically. The caller passes the stored arming,
-    /// lowered to what the new revision's heads can arm: a revision without a
-    /// delete head never stays armed for deletes. The write only applies while
-    /// the rule's current revision is the one `revision` follows; otherwise it
-    /// writes nothing and refuses with `LIFECYCLE_RULE_REVISION_CONFLICT`.
+    /// Append `revision` and repoint the rule set at it, keeping its state,
+    /// atomically. The write only applies while the rule's current revision
+    /// is the one `revision` follows; otherwise it writes nothing and refuses
+    /// with `LIFECYCLE_RULE_REVISION_CONFLICT`.
+    ///
+    /// The state stored at write time is kept, never raised: a concurrent
+    /// disable stands. When `keep_enabled` is false an enabled rule drops to
+    /// dry run (the edit flag is left as it was), for a revision whose
+    /// actions change nothing or an edit that read the rule as not enabled.
+    ///
+    /// The deletion confirmation is cleared, except that
+    /// `carry_destructive_confirmation` moves a confirmation that named the
+    /// revision `revision` follows onto `revision` itself.
     ///
     /// Only for a revision that declares no delete action:
-    /// the destructive acknowledgement is bound to the delete heads a matcher
+    /// the destructive acknowledgement is bound to the delete heads a source
     /// declares, so a revision that cannot delete carries no new blast radius
     /// to acknowledge. A revision that declares a delete action must go
     /// through [`Self::add_revision`], with one exception: startup moving the
     /// shipped rule from its `match` form to the source that deletes exactly
     /// the same titles, so the acknowledgement already given still describes
-    /// it.
+    /// it. That is the only caller that carries the confirmation.
     ///
     /// `max_titles_per_run` is written in the same transaction, as in
     /// [`Self::add_revision`].
-    async fn add_revision_keeping_arming(
+    async fn add_revision_keeping_state(
         &self,
         revision: &LifecycleRuleRevision,
-        effect_arming: scryer_domain::LifecycleEffectArming,
+        keep_enabled: bool,
+        carry_destructive_confirmation: bool,
         max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -11172,14 +11179,13 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
     /// Update the fields that carry no evaluation semantics. Never creates a
     /// revision — the matcher, action, and grace period are untouched.
     ///
-    /// `disarm` resets `effect_arming` to
-    /// [`scryer_domain::LifecycleEffectArming::None`] in the *same* write,
-    /// with the same edited-since-enabled flag as `add_revision`. The
-    /// caller sets it when the library scope actually changed: scope is the
-    /// rule's blast radius, so a re-scoped rule is no longer the rule an
-    /// operator acknowledged, exactly as a new revision is not. Writing the two
-    /// separately would leave an instant in which the new scope is in force
-    /// under the old scope's arming.
+    /// `disarm` drops an enabled rule to dry run and clears its deletion
+    /// confirmation in the *same* write, with the same edited-since-enabled
+    /// flag as `add_revision`. The caller sets it when the library scope
+    /// actually changed: scope is the rule's blast radius, so a re-scoped rule
+    /// is no longer the rule an operator acknowledged, exactly as a new
+    /// revision is not. Writing the two separately would leave an instant in
+    /// which the new scope is in force under the old scope's confirmation.
     ///
     /// `schedule` replaces the rule's schedule in the same write; `None`
     /// keeps the stored one. `max_titles_per_run` does the same for the
@@ -11209,7 +11215,7 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
     }
 
     /// Replaces the most titles the rule may act on in one fire. `None`
-    /// clears it. Arming is untouched.
+    /// clears it. The state is untouched.
     async fn set_rule_set_max_titles_per_run(
         &self,
         _id: &str,
@@ -11221,16 +11227,19 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
         ))
     }
 
-    /// Atomically write a rule's mode and arming, derive `enabled` from the
-    /// mode, and clear the edited-since-enabled flag. Destructive arming first
-    /// checks the reviewed configuration under the row lock; a stale or missing
-    /// confirmation, or a missing row, returns false without changing the rule.
+    /// Atomically write a rule's state, clear the edited-since-enabled flag,
+    /// and set its deletion confirmation in the same statement.
+    ///
+    /// `destructive_confirmation` is `Some` exactly when enabling a rule whose
+    /// actions can delete. It is checked against the reviewed configuration
+    /// under the row lock and its revision is stored as the confirmed one; a
+    /// stale confirmation, or a missing row, returns false without changing
+    /// the rule. Every other write stores no confirmation.
     async fn update_rule_set_state(
         &self,
         id: &str,
-        mode: scryer_domain::LifecycleEvaluationMode,
-        arming: scryer_domain::LifecycleEffectArming,
-        confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
+        state: scryer_domain::LifecycleRuleState,
+        destructive_confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 }

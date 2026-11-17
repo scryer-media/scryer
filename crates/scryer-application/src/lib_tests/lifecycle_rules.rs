@@ -7,8 +7,7 @@ use crate::lifecycle_rules::{
 };
 use scryer_domain::{
     LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate, LifecycleCandidateState,
-    LifecycleEffectArming, LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet,
-    LifecycleRuleSubjectKind,
+    LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleState, LifecycleRuleSubjectKind,
 };
 use scryer_rules::lifecycle::LifecycleOutcome;
 
@@ -85,6 +84,24 @@ impl InMemoryLifecycleRuleRepo {
             .find(|rule_set| rule_set.id == id)
             .expect("rule set exists");
         rule_set.library_ids = library_ids;
+    }
+
+    /// Write a rule's stored state fields as a row could hold them, without
+    /// the checks the state control makes.
+    pub(super) async fn store_state_directly(
+        &self,
+        id: &str,
+        state: LifecycleRuleState,
+        destructive_confirmed_revision: Option<i64>,
+    ) {
+        let mut rule_sets = self.rule_sets.lock().await;
+        let rule_set = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.id == id)
+            .expect("rule set exists");
+        rule_set.state = state;
+        rule_set.edited_since_enabled = false;
+        rule_set.destructive_confirmed_revision = destructive_confirmed_revision;
     }
 
     /// Rewrite the revision currently in force without appending a new one.
@@ -167,10 +184,11 @@ impl LifecycleRuleSetRepository for InMemoryLifecycleRuleRepo {
         Ok(())
     }
 
-    async fn add_revision_keeping_arming(
+    async fn add_revision_keeping_state(
         &self,
         revision: &LifecycleRuleRevision,
-        effect_arming: scryer_domain::LifecycleEffectArming,
+        keep_enabled: bool,
+        carry_destructive_confirmation: bool,
         max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -187,16 +205,20 @@ impl LifecycleRuleSetRepository for InMemoryLifecycleRuleRepo {
                 "the rule was changed by another save; reload it and save again".to_string(),
             ));
         }
-        rule_set.current_revision_number = revision.revision_number;
-        // As the SQL store: never above what is stored now.
-        let rank = |arming: scryer_domain::LifecycleEffectArming| match arming {
-            scryer_domain::LifecycleEffectArming::None => 0,
-            scryer_domain::LifecycleEffectArming::Reversible => 1,
-            scryer_domain::LifecycleEffectArming::Destructive => 2,
-        };
-        if rank(effect_arming) < rank(rule_set.effect_arming) {
-            rule_set.effect_arming = effect_arming;
+        // As the SQL store: an enabled rule stays enabled only when asked,
+        // and a confirmation moves forward only when it named exactly the
+        // revision being replaced.
+        if rule_set.state == LifecycleRuleState::Enabled && !keep_enabled {
+            rule_set.state = LifecycleRuleState::DryRun;
         }
+        rule_set.destructive_confirmed_revision = if carry_destructive_confirmation
+            && rule_set.destructive_confirmed_revision == Some(rule_set.current_revision_number)
+        {
+            Some(revision.revision_number)
+        } else {
+            None
+        };
+        rule_set.current_revision_number = revision.revision_number;
         if let Some(max) = max_titles_per_run {
             rule_set.max_titles_per_run = max;
         }
@@ -305,8 +327,7 @@ impl LifecycleRuleSetRepository for InMemoryLifecycleRuleRepo {
     async fn update_rule_set_state(
         &self,
         id: &str,
-        mode: LifecycleEvaluationMode,
-        arming: scryer_domain::LifecycleEffectArming,
+        state: LifecycleRuleState,
         confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool> {
@@ -314,15 +335,13 @@ impl LifecycleRuleSetRepository for InMemoryLifecycleRuleRepo {
         let Some(rule_set) = rule_sets.iter_mut().find(|rule_set| rule_set.id == id) else {
             return Ok(false);
         };
-        if arming == scryer_domain::LifecycleEffectArming::Destructive
-            && !confirmation.is_some_and(|reviewed| reviewed.matches(rule_set))
-        {
+        if confirmation.is_some_and(|reviewed| !reviewed.matches(rule_set)) {
             return Ok(false);
         }
-        rule_set.evaluation_mode = mode;
-        rule_set.enabled = mode != LifecycleEvaluationMode::Disabled;
-        rule_set.effect_arming = arming;
-        rule_set.destructive_rearm_required = false;
+        rule_set.state = state;
+        rule_set.edited_since_enabled = false;
+        rule_set.destructive_confirmed_revision =
+            confirmation.map(|reviewed| reviewed.revision_number);
         rule_set.updated_at = updated_at;
         Ok(true)
     }
@@ -488,22 +507,27 @@ pub(super) async fn set_rule_state(
         .expect("set rule state")
 }
 
-/// Arms a rule through the state control and checks the arming it derived is
-/// the one the test meant to grant.
+/// Sets a rule's state through the state control and checks the rule reads
+/// back as the test meant: in that state, and confirmed for deletion exactly
+/// when a candidate count was acknowledged.
 pub(super) async fn arm_rule(
     app: &AppUseCase,
     user: &User,
     id: &str,
-    arming: LifecycleEffectArming,
+    state: LifecycleRuleState,
     ack: Option<i64>,
 ) {
-    let state = if arming == LifecycleEffectArming::None {
-        scryer_domain::LifecycleRuleState::DryRun
-    } else {
-        scryer_domain::LifecycleRuleState::Enabled
-    };
     let detail = set_rule_state(app, user, id, state, ack).await;
-    assert_eq!(detail.rule_set.effect_arming, arming, "derived arming");
+    assert_eq!(
+        crate::lifecycle_rules::lifecycle_rule_state(&detail),
+        state,
+        "rule state"
+    );
+    assert_eq!(
+        detail.rule_set.destructive_confirmed(),
+        state == LifecycleRuleState::Enabled && ack.is_some(),
+        "deletion confirmation"
+    );
 }
 
 /// Writes every stored gate directly. Operators move them in pairs through the
@@ -572,11 +596,13 @@ async fn create_persists_a_dormant_rule_set_and_its_first_revision() {
         .await
         .expect("create rule set");
 
-    assert!(!detail.rule_set.enabled, "rule sets ship dark");
     assert_eq!(
-        detail.rule_set.evaluation_mode,
-        LifecycleEvaluationMode::Disabled
+        detail.rule_set.state,
+        LifecycleRuleState::Disabled,
+        "rule sets ship dark"
     );
+    assert!(!detail.rule_set.edited_since_enabled);
+    assert_eq!(detail.rule_set.destructive_confirmed_revision, None);
     assert_eq!(detail.rule_set.current_revision_number, 1);
     assert_eq!(detail.revision.revision_number, 1);
     assert_eq!(detail.revision.grace_days, 7);
@@ -840,7 +866,7 @@ async fn changing_the_library_scope_disarms_the_rule() {
         &app,
         &user,
         &created.rule_set.id,
-        LifecycleEffectArming::Reversible,
+        LifecycleRuleState::Enabled,
         None,
     )
     .await;
@@ -857,17 +883,20 @@ async fn changing_the_library_scope_disarms_the_rule() {
         .expect("re-scope the rule");
 
     assert_eq!(
-        updated.effect_arming,
-        LifecycleEffectArming::None,
+        updated.state,
+        LifecycleRuleState::DryRun,
         "a scope change must disarm the rule it re-scoped"
     );
+    assert!(updated.edited_since_enabled);
     // The returned rule must not claim an arming the store no longer holds.
     let stored = rules
         .get_rule_set(&created.rule_set.id)
         .await
         .unwrap()
         .expect("rule set exists");
-    assert_eq!(stored.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(stored.state, LifecycleRuleState::DryRun);
+    assert!(stored.edited_since_enabled);
+    assert_eq!(stored.destructive_confirmed_revision, None);
     assert_eq!(stored.library_ids, vec!["library-a".to_string()]);
 }
 
@@ -894,7 +923,7 @@ async fn renaming_or_reordering_the_same_scope_leaves_arming_alone() {
         &app,
         &user,
         &created.rule_set.id,
-        LifecycleEffectArming::Reversible,
+        LifecycleRuleState::Enabled,
         None,
     )
     .await;
@@ -912,16 +941,17 @@ async fn renaming_or_reordering_the_same_scope_leaves_arming_alone() {
 
     assert_eq!(updated.name, "Renamed");
     assert_eq!(
-        updated.effect_arming,
-        LifecycleEffectArming::Reversible,
+        updated.state,
+        LifecycleRuleState::Enabled,
         "a rename is not a scope change and must not disarm"
     );
+    assert!(!updated.edited_since_enabled);
     let stored = rules
         .get_rule_set(&created.rule_set.id)
         .await
         .unwrap()
         .expect("rule set exists");
-    assert_eq!(stored.effect_arming, LifecycleEffectArming::Reversible);
+    assert_eq!(stored.state, LifecycleRuleState::Enabled);
 }
 
 /// The action runs are the only record that the rule ever deleted anything, and

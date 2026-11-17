@@ -18,10 +18,9 @@ use crate::ports::{LifecycleActionStepCandidateKey, LifecycleCandidateQuery};
 use scryer_domain::{
     Id, LifecycleActionJobReceipt, LifecycleActionJobReceiptState, LifecycleActionRun,
     LifecycleActionStepAttempt, LifecycleActionStepKey, LifecycleActionStepRun,
-    LifecycleActionStepState, LifecycleCandidate, LifecycleCandidateState, LifecycleEffectArming,
-    LifecycleEvaluationMode, LifecycleEvaluationRun, LifecycleEvaluationRunStatus,
-    LifecycleRuleExclusion, LifecycleRuleRevision, LifecycleRuleState,
-    LifecycleSequenceTerminalMembership, LifecycleSequenceTerminalOutcome,
+    LifecycleActionStepState, LifecycleCandidate, LifecycleCandidateState, LifecycleEvaluationRun,
+    LifecycleEvaluationRunStatus, LifecycleRuleExclusion, LifecycleRuleRevision,
+    LifecycleRuleState, LifecycleSequenceTerminalMembership, LifecycleSequenceTerminalOutcome,
 };
 
 /// Matches every monitored title.
@@ -1709,57 +1708,41 @@ async fn the_evaluation_gate_makes_a_run_a_no_op() {
 // ── Rule state ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn each_state_writes_its_mode_and_arming_and_creation_still_ships_dark() {
+async fn each_state_is_stored_as_written_and_creation_still_ships_dark() {
     let fixture = evaluation_app();
     let created = fixture
         .app
         .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_SOURCE, 7))
         .await
         .expect("create rule set");
-    assert!(!created.rule_set.enabled, "rules are created disabled");
+    assert_eq!(
+        created.rule_set.state,
+        LifecycleRuleState::Disabled,
+        "rules are created disabled"
+    );
     assert_eq!(
         crate::lifecycle_rules::lifecycle_rule_state(&created),
         LifecycleRuleState::Disabled
     );
 
-    for (state, mode, arming) in [
-        (
-            LifecycleRuleState::DryRun,
-            LifecycleEvaluationMode::Observe,
-            LifecycleEffectArming::None,
-        ),
-        (
-            LifecycleRuleState::Enabled,
-            LifecycleEvaluationMode::Observe,
-            LifecycleEffectArming::Reversible,
-        ),
-        (
-            LifecycleRuleState::DryRun,
-            LifecycleEvaluationMode::Observe,
-            LifecycleEffectArming::None,
-        ),
-        (
-            LifecycleRuleState::Enabled,
-            LifecycleEvaluationMode::Observe,
-            LifecycleEffectArming::Reversible,
-        ),
-        (
-            LifecycleRuleState::Disabled,
-            LifecycleEvaluationMode::Disabled,
-            LifecycleEffectArming::None,
-        ),
+    for state in [
+        LifecycleRuleState::DryRun,
+        LifecycleRuleState::Enabled,
+        LifecycleRuleState::DryRun,
+        LifecycleRuleState::Enabled,
+        LifecycleRuleState::Disabled,
     ] {
         let detail = fixture
             .app
             .set_lifecycle_rule_state(&fixture.user, &created.rule_set.id, state, None, None)
             .await
             .expect("set state");
-        assert_eq!(detail.rule_set.evaluation_mode, mode, "{state:?}");
-        assert_eq!(detail.rule_set.effect_arming, arming, "{state:?}");
+        assert_eq!(detail.rule_set.state, state, "{state:?}");
         assert_eq!(
-            detail.rule_set.enabled,
-            mode != LifecycleEvaluationMode::Disabled
+            detail.rule_set.destructive_confirmed_revision, None,
+            "{state:?}: a rule that cannot delete stores no confirmation"
         );
+        assert!(!detail.rule_set.edited_since_enabled, "{state:?}");
         assert_eq!(crate::lifecycle_rules::lifecycle_rule_state(&detail), state);
         let stored = fixture
             .app
@@ -1815,8 +1798,9 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
         )
         .await
         .expect("edit matcher");
-    assert_eq!(edited.rule_set.effect_arming, LifecycleEffectArming::None);
-    assert!(edited.rule_set.destructive_rearm_required);
+    assert_eq!(edited.rule_set.state, LifecycleRuleState::DryRun);
+    assert!(edited.rule_set.edited_since_enabled);
+    assert_eq!(edited.rule_set.destructive_confirmed_revision, None);
     assert_eq!(
         crate::lifecycle_rules::lifecycle_rule_state(&edited),
         LifecycleRuleState::DryRun
@@ -1852,7 +1836,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
         )
         .await
         .expect("edit matcher");
-    assert!(again.rule_set.destructive_rearm_required);
+    assert!(again.rule_set.edited_since_enabled);
 
     let reenabled = super::lifecycle_rules::set_rule_state(
         &fixture.app,
@@ -1862,7 +1846,11 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
         Some(0),
     )
     .await;
-    assert!(!reenabled.rule_set.destructive_rearm_required);
+    assert!(!reenabled.rule_set.edited_since_enabled);
+    assert_eq!(
+        reenabled.rule_set.destructive_confirmed_revision,
+        Some(reenabled.rule_set.current_revision_number)
+    );
     assert_eq!(
         crate::lifecycle_rules::lifecycle_rule_state(&reenabled),
         LifecycleRuleState::Enabled
@@ -1877,7 +1865,11 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
         None,
     )
     .await;
-    assert!(!dry.rule_set.destructive_rearm_required);
+    assert!(!dry.rule_set.edited_since_enabled);
+    assert_eq!(
+        dry.rule_set.destructive_confirmed_revision, None,
+        "leaving Enabled drops the deletion confirmation"
+    );
     let edited_dry = fixture
         .app
         .update_lifecycle_rule_source(
@@ -1894,7 +1886,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
         )
         .await
         .expect("edit matcher");
-    assert!(!edited_dry.rule_set.destructive_rearm_required);
+    assert!(!edited_dry.rule_set.edited_since_enabled);
 }
 
 // ── The state machine ───────────────────────────────────────────────────────

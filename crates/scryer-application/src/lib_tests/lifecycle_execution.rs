@@ -18,10 +18,7 @@ use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
     PlaybackProbeStatus,
 };
-use scryer_domain::{
-    LifecycleCandidateState, LifecycleEffectArming, LifecycleEvaluationMode, LifecycleRuleState,
-    MediaServerProvider,
-};
+use scryer_domain::{LifecycleCandidateState, LifecycleRuleState, MediaServerProvider};
 
 /// A playback probe whose answer the test chooses.
 struct FixedPlaybackProbe {
@@ -158,8 +155,8 @@ impl ExecutionFixture {
         super::lifecycle_rules::open_lifecycle_gates(&self.app, reversible, destructive).await;
     }
 
-    async fn arm(&self, rule_set_id: &str, arming: LifecycleEffectArming, ack: Option<i64>) {
-        super::lifecycle_rules::arm_rule(&self.app, &self.user, rule_set_id, arming, ack).await;
+    async fn arm(&self, rule_set_id: &str, state: LifecycleRuleState, ack: Option<i64>) {
+        super::lifecycle_rules::arm_rule(&self.app, &self.user, rule_set_id, state, ack).await;
     }
 
     async fn set_state(
@@ -206,7 +203,7 @@ async fn replacing_the_source_disarms_the_rule() {
     seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
 
     // The operator armed *this* matcher after acknowledging what it would
@@ -230,8 +227,8 @@ async fn replacing_the_source_disarms_the_rule() {
         .await
         .expect("replace the matcher");
     assert_eq!(
-        replaced.rule_set.effect_arming,
-        LifecycleEffectArming::None,
+        replaced.rule_set.state,
+        LifecycleRuleState::DryRun,
         "the returned detail must report the disarm the store just wrote"
     );
 
@@ -242,8 +239,8 @@ async fn replacing_the_source_disarms_the_rule() {
         .expect("read rule")
         .expect("rule exists");
     assert_eq!(
-        stored.rule_set.effect_arming,
-        LifecycleEffectArming::None,
+        stored.rule_set.state,
+        LifecycleRuleState::DryRun,
         "the disarm must be persisted, not just reported"
     );
 
@@ -264,7 +261,7 @@ async fn replacing_the_source_disarms_the_rule() {
         .await
         .expect("count candidates");
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(pending))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(pending))
         .await;
     let rearmed = fixture.handle().await;
     assert_eq!(rearmed.rules_eligible, 1, "{rearmed:?}");
@@ -278,7 +275,7 @@ async fn renaming_a_rule_leaves_its_arming_alone() {
     seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
 
     // A rename moves neither the matcher nor the action, so the operator's
@@ -303,9 +300,13 @@ async fn renaming_a_rule_leaves_its_arming_alone() {
         .expect("rule exists");
     assert_eq!(stored.rule_set.name, "Retire, renamed");
     assert_eq!(
-        stored.rule_set.effect_arming,
-        LifecycleEffectArming::Destructive,
+        stored.rule_set.state,
+        LifecycleRuleState::Enabled,
         "a rename must not disarm a rule"
+    );
+    assert!(
+        stored.rule_set.destructive_confirmed(),
+        "a rename keeps the deletion confirmation"
     );
     assert_eq!(
         stored.rule_set.current_revision_number, 1,
@@ -323,7 +324,7 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Interrupted", true).await;
     fixture.evaluate().await;
@@ -377,7 +378,7 @@ async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Vanished", true).await;
     fixture.evaluate().await;
@@ -415,7 +416,7 @@ async fn the_evaluator_leaves_a_candidate_under_an_execution_lease_alone() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Leased", true).await;
     fixture.evaluate().await;
@@ -463,7 +464,7 @@ async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Contested", true).await;
     fixture.evaluate().await;
@@ -523,7 +524,7 @@ async fn a_rule_that_is_actually_gone_cancels_its_candidate() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Orphaned", true).await;
     fixture.evaluate().await;
@@ -549,7 +550,7 @@ async fn an_unreadable_rule_store_holds_the_candidate_instead_of_cancelling_it()
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Unreadable", true).await;
     fixture.evaluate().await;
@@ -580,7 +581,7 @@ async fn both_effect_gates_off_executes_nothing() {
         .await;
     fixture.open_gates(false, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Watched Movie", true).await;
     fixture.evaluate().await;
@@ -599,7 +600,7 @@ async fn reversible_unmonitor_executes_and_records_the_evidence() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Watched Movie", true).await;
     fixture.evaluate().await;
@@ -646,7 +647,7 @@ async fn action_result_write_failures_still_consume_the_rule_execution_budget() 
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let mut titles = Vec::new();
     for index in 0..12 {
@@ -696,7 +697,7 @@ async fn an_already_met_postcondition_reports_already_satisfied() {
     let rule_id = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Already Done", false).await;
     fixture.evaluate().await;
@@ -739,7 +740,7 @@ async fn destructive_result_write_failures_trip_the_high_risk_breaker() {
     }
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(5))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(5))
         .await;
     fixture
         .evaluation
@@ -958,7 +959,7 @@ async fn a_subject_that_stopped_matching_cancels_instead_of_acting() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Changed Mind", true).await;
     fixture.evaluate().await;
@@ -997,7 +998,7 @@ async fn a_candidate_outside_the_fresh_rule_scope_cancels_instead_of_acting() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Out Of Scope", true).await;
     fixture.evaluate().await;
@@ -1032,7 +1033,7 @@ async fn an_empty_rule_scope_still_reaches_every_library() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "In Scope", true).await;
     fixture.evaluate().await;
@@ -1051,32 +1052,69 @@ async fn a_destructive_rule_needs_both_the_gate_and_destructive_arming() {
     seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
 
     let report = fixture.handle().await;
     assert_eq!(report.rules_eligible, 0, "{report:?}");
     assert!(fixture.evaluation.all_action_runs().await.is_empty());
 
-    // Both gates open, but a stored row armed only for library updates (no
-    // longer writable through the state control) still cannot delete.
+    // Both gates open, but a stored row that is enabled without a deletion
+    // confirmation (not writable through the state control) still cannot
+    // delete.
     fixture.open_gates(true, true).await;
-    assert!(
-        fixture
-            .rules
-            .update_rule_set_state(
-                &rule_id,
-                LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::Reversible,
-                None,
-                Utc::now(),
-            )
-            .await
-            .unwrap()
-    );
+    fixture
+        .rules
+        .store_state_directly(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
     let report = fixture.handle().await;
     assert_eq!(report.rules_eligible, 0, "{report:?}");
     assert!(fixture.evaluation.all_action_runs().await.is_empty());
+}
+
+/// A deletion confirmation is for one revision. An enabled row whose stored
+/// confirmation names an older revision of the source deletes nothing.
+#[tokio::test]
+async fn a_confirmation_for_an_older_revision_never_deletes() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    // A second revision of the same deleting source.
+    fixture
+        .app
+        .update_lifecycle_rule_source(
+            &fixture.user,
+            &rule_id,
+            LifecycleSourceDraft {
+                rego_source: delete_draft().rego_source,
+                grace_days: 0,
+                max_titles_per_run: None,
+            },
+        )
+        .await
+        .expect("save a second revision");
+    fixture.evaluate().await;
+    // The row claims Enabled under the first revision's confirmation.
+    fixture
+        .rules
+        .store_state_directly(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+    let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+    assert_eq!(rule.current_revision_number, 2);
+    assert!(!rule.destructive_confirmed());
+
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(
+        fixture.evaluation.all_action_runs().await.is_empty(),
+        "a confirmation for another revision must not reach an action run"
+    );
 }
 
 #[tokio::test]
@@ -1095,10 +1133,8 @@ async fn enabling_derives_arming_and_destructive_demands_the_current_count() {
         )
         .await
         .expect("enabling a reversible rule needs no confirmation");
-    assert_eq!(
-        enabled.rule_set.effect_arming,
-        LifecycleEffectArming::Reversible
-    );
+    assert_eq!(enabled.rule_set.state, LifecycleRuleState::Enabled);
+    assert_eq!(enabled.rule_set.destructive_confirmed_revision, None);
 
     let delete_rule = fixture.observed_rule(delete_draft()).await;
     fixture.open_gates(true, false).await;
@@ -1135,15 +1171,48 @@ async fn enabling_derives_arming_and_destructive_demands_the_current_count() {
         )
         .await
         .expect("correct acknowledgement arms");
+    assert_eq!(armed.rule_set.state, LifecycleRuleState::Enabled);
     assert_eq!(
-        armed.rule_set.effect_arming,
-        LifecycleEffectArming::Destructive
+        armed.rule_set.destructive_confirmed_revision,
+        Some(armed.rule_set.current_revision_number),
+        "the confirmation is stored with the state, for the revision reviewed"
     );
 
     // Falling back to dry run never needs an acknowledgement.
     fixture
-        .arm(&delete_rule, LifecycleEffectArming::None, None)
+        .arm(&delete_rule, LifecycleRuleState::DryRun, None)
         .await;
+}
+
+/// Enabling a rule that deletes without the configuration confirmation is
+/// refused with its reason code, whatever count comes with it, and the
+/// stored row keeps no state or confirmation from the attempt.
+#[tokio::test]
+async fn enabling_a_deleting_rule_without_a_confirmation_is_refused() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    for ack in [None, Some(0)] {
+        let refused = fixture
+            .set_state(
+                &fixture.user,
+                &rule_id,
+                LifecycleRuleState::Enabled,
+                ack,
+                None,
+            )
+            .await
+            .expect_err("deletion is never enabled without a confirmation");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::lifecycle::RULE_CONFIGURATION_INVALID),
+            "{refused:?}"
+        );
+    }
+    let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+    assert_eq!(rule.state, LifecycleRuleState::DryRun);
+    assert_eq!(rule.destructive_confirmed_revision, None);
+    assert_eq!(fixture.handle().await.rules_eligible, 0);
 }
 
 #[tokio::test]
@@ -1190,7 +1259,7 @@ async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same
     assert_eq!(fixture.handle().await.rules_eligible, 0);
     assert!(fixture.evaluation.all_action_runs().await.is_empty());
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(0))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(0))
         .await;
     // Disabling remains available without any confirmation.
     fixture
@@ -1236,7 +1305,7 @@ async fn destructive_arming_rejects_a_stale_scope_even_with_the_same_revision_an
     assert_eq!(fixture.handle().await.rules_eligible, 0);
     assert!(fixture.evaluation.all_action_runs().await.is_empty());
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(0))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(0))
         .await;
 }
 
@@ -1294,7 +1363,7 @@ async fn active_playback_blocks_every_due_action() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Being Watched", true).await;
     fixture.evaluate().await;
@@ -1337,7 +1406,7 @@ async fn an_unreachable_media_server_fails_closed() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Unknown Playback", true).await;
     fixture.evaluate().await;
@@ -1366,7 +1435,8 @@ async fn a_dry_run_rule_never_acts() {
     assert_eq!(report.rules_eligible, 0, "{report:?}");
     assert!(fixture.evaluation.all_action_runs().await.is_empty());
     let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
-    assert_eq!(rule.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(rule.state, LifecycleRuleState::DryRun);
+    assert_eq!(rule.destructive_confirmed_revision, None);
 }
 
 #[tokio::test]
@@ -1377,7 +1447,7 @@ async fn a_candidate_inside_its_grace_window_is_not_touched() {
     let rule_id = fixture.observed_rule(draft).await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Still Grace", true).await;
     fixture.evaluate().await;
@@ -1404,7 +1474,7 @@ async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
     let rule_id = fixture.observed_rule(draft).await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Graced Title", true).await;
     let untouched =
@@ -1480,7 +1550,7 @@ async fn an_undecidable_subject_blocks_at_execution() {
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     seed_title(&fixture.app, &fixture.user, "Undecidable", true).await;
     fixture.evaluate().await;
@@ -1519,7 +1589,7 @@ async fn a_held_candidate_waits_for_the_next_evaluation_then_is_examined_again()
         .await;
     fixture.open_gates(true, false).await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Later", true).await;
     fixture.evaluate().await;
@@ -1593,7 +1663,7 @@ async fn a_destructive_action_holds_while_a_location_operation_owns_the_title() 
     let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
     operations
         .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
@@ -1652,7 +1722,7 @@ async fn a_reversible_action_also_holds_while_a_location_operation_owns_the_titl
     let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     operations
         .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])

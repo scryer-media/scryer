@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use scryer_domain::{
-    AppPermission, Id, LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet,
+    AppPermission, Id, LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleState,
     LifecycleRuleSubjectKind, MediaFacet, ScriptSchedule, Title, User,
 };
 use scryer_rules::lifecycle::{
@@ -168,15 +168,14 @@ impl LifecycleRuleSetDetail {
     }
 }
 
-/// The action refusal for a rule armed to run a deleting action with no most
-/// titles per run. Saving and arming refuse that shape; a row that reached it
-/// anyway evaluates and previews as usual and acts on nothing.
+/// The action refusal for an enabled rule that runs a deleting action with no
+/// most titles per run. Saving and enabling refuse that shape; a row that
+/// reached it anyway evaluates and previews as usual and acts on nothing.
 pub(crate) fn action_refusal_for(
     rule_set: &LifecycleRuleSet,
     declared: &LifecycleDeclaredActions,
 ) -> Option<&'static str> {
-    (rule_set.evaluation_mode != LifecycleEvaluationMode::Disabled
-        && rule_set.effect_arming != scryer_domain::LifecycleEffectArming::None
+    (rule_set.state == LifecycleRuleState::Enabled
         && declared.destructive
         && rule_set.max_titles_per_run.is_none())
     .then_some(crate::error_reasons::lifecycle::RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN)
@@ -366,10 +365,9 @@ impl AppUseCase {
             // Ships dark: nothing evaluates stored rules yet, so a rule that
             // persisted as enabled would be advertising a capability that does
             // not exist.
-            enabled: false,
-            evaluation_mode: LifecycleEvaluationMode::Disabled,
-            effect_arming: scryer_domain::LifecycleEffectArming::None,
-            destructive_rearm_required: false,
+            state: LifecycleRuleState::Disabled,
+            edited_since_enabled: false,
+            destructive_confirmed_revision: None,
             library_ids: draft.library_ids,
             system_owned: false,
             current_revision_number: 1,
@@ -408,23 +406,24 @@ impl AppUseCase {
     /// Appends revision N+1. Revision N is left exactly as it was written, so a
     /// candidate recorded against it stays attributable.
     ///
-    /// When the new source defines a delete action, appending it also disarms
-    /// the rule ([`LifecycleEffectArming::None`]), atomically with the
-    /// append. The destructive acknowledgement is bound to the matcher it was
-    /// granted against, so a replacement matcher that can delete has to be
-    /// confirmed again on its own terms. Without this, catalog-settings
-    /// authority alone would be enough to swap an armed rule's matcher and have
-    /// the next handler pass delete under someone else's acknowledgement. A
-    /// rule that was armed is flagged as edited since it was enabled, so the
-    /// operator is told to review it and enable it again.
+    /// When the new source defines a delete action, appending it also drops an
+    /// enabled rule to dry run and clears its deletion confirmation,
+    /// atomically with the append. The destructive acknowledgement is bound to
+    /// the revision it was given for, so a replacement source that can delete
+    /// has to be confirmed again on its own terms. Without this,
+    /// catalog-settings authority alone would be enough to swap an enabled
+    /// rule's source and have the next handler pass delete under someone
+    /// else's acknowledgement. A rule that was enabled is flagged as edited
+    /// since it was enabled, so the operator is told to review it and enable
+    /// it again.
     ///
     /// A new source that defines no delete action keeps the rule's state: it
     /// cannot delete anything, so there is no destructive blast radius to
-    /// acknowledge again. A metadata rename
-    /// does *not* disarm: it changes neither what the rule matches nor what it
-    /// does, so the acknowledgement still describes the same blast radius.
-    ///
-    /// [`LifecycleEffectArming::None`]: scryer_domain::LifecycleEffectArming::None
+    /// acknowledge again. A source that declares no action at all leaves an
+    /// enabled rule in dry run, since enabled would do nothing. A metadata
+    /// rename does *not* disarm: it changes neither what the rule matches nor
+    /// what it does, so the acknowledgement still describes the same blast
+    /// radius.
     pub async fn update_lifecycle_rule_source(
         &self,
         actor: &User,
@@ -523,23 +522,28 @@ impl AppUseCase {
                 .add_revision(&revision, max_titles_per_run, now)
                 .await?;
         } else {
-            let arming = crate::lifecycle_rules::arming_kept_across_edit(
-                rule_set.effect_arming,
-                &prepared.declared,
-            );
+            // An enabled rule stays enabled only while the new source still
+            // declares an action; a rule this save read as not enabled is
+            // never raised to enabled by it.
+            let keep_enabled = rule_set.state == LifecycleRuleState::Enabled
+                && !prepared.declared.heads.is_empty();
             rules
-                .add_revision_keeping_arming(&revision, arming, max_titles_per_run, now)
+                .add_revision_keeping_state(&revision, keep_enabled, false, max_titles_per_run, now)
                 .await?;
-            // The store kept the lower of this arming and whatever another
+            // The store kept the lower of this state and whatever another
             // admin wrote since the read above; report what it holds.
             match rules.get_rule_set(&rule_set.id).await? {
                 Some(fresh) => {
-                    rule_set.effect_arming = fresh.effect_arming;
-                    rule_set.evaluation_mode = fresh.evaluation_mode;
-                    rule_set.enabled = fresh.enabled;
-                    rule_set.destructive_rearm_required = fresh.destructive_rearm_required;
+                    rule_set.state = fresh.state;
+                    rule_set.edited_since_enabled = fresh.edited_since_enabled;
+                    rule_set.destructive_confirmed_revision = fresh.destructive_confirmed_revision;
                 }
-                None => rule_set.effect_arming = arming,
+                None => {
+                    if !keep_enabled && rule_set.state == LifecycleRuleState::Enabled {
+                        rule_set.state = LifecycleRuleState::DryRun;
+                    }
+                    rule_set.destructive_confirmed_revision = None;
+                }
             }
         }
 
@@ -549,7 +553,7 @@ impl AppUseCase {
         }
         if destructive {
             // Mirrors what `add_revision` wrote in the same transaction, so the
-            // detail this returns can never claim an arming the store just
+            // detail this returns can never claim a state the store just
             // cleared.
             rule_set.disarm_after_edit();
         }
@@ -566,20 +570,19 @@ impl AppUseCase {
     /// Renames and re-scopes without touching the matcher, action, or grace
     /// period, so no revision is created.
     ///
-    /// A *scope* change disarms the rule ([`LifecycleEffectArming::None`]),
-    /// atomically with the metadata write. Library scope is the rule's blast
-    /// radius: an operator armed one matcher plus action over one set of
-    /// libraries after acknowledging what that would reach, so widening the
-    /// scope would put libraries nobody acknowledged inside an armed rule, and
-    /// narrowing it changes the acknowledged set just as materially. A scope
-    /// change therefore invalidates the acknowledgement exactly like a new
-    /// revision does, and arming has to be granted again on the new terms.
+    /// A *scope* change drops an enabled rule to dry run and clears its
+    /// deletion confirmation, atomically with the metadata write. Library
+    /// scope is the rule's blast radius: an operator enabled one source over
+    /// one set of libraries after acknowledging what that would reach, so
+    /// widening the scope would put libraries nobody acknowledged inside an
+    /// enabled rule, and narrowing it changes the acknowledged set just as
+    /// materially. A scope change therefore invalidates the acknowledgement
+    /// exactly like a new revision does, and the rule has to be enabled again
+    /// on the new terms.
     ///
     /// A name or description edit changes neither what the rule matches, what it
-    /// does, nor where it reaches, so it leaves arming alone. The comparison is
-    /// set-based: reordering the same libraries is not a scope change.
-    ///
-    /// [`LifecycleEffectArming::None`]: scryer_domain::LifecycleEffectArming::None
+    /// does, nor where it reaches, so it leaves the state alone. The comparison
+    /// is set-based: reordering the same libraries is not a scope change.
     pub async fn update_lifecycle_rule_metadata(
         &self,
         actor: &User,
@@ -604,7 +607,7 @@ impl AppUseCase {
     /// rule's schedule when `schedule` is `Some`, and its per-fire maximum
     /// when `max_titles_per_run` is `Some` (`Some(None)` clears it). Both are
     /// limits on when and how much the rule acts, not on what it matches or
-    /// does, so changing them leaves arming alone.
+    /// does, so changing them leaves the state alone.
     #[allow(clippy::too_many_arguments)]
     pub async fn update_lifecycle_rule_metadata_with_schedule(
         &self,
@@ -674,7 +677,7 @@ impl AppUseCase {
         }
         if scope_changed {
             // Mirrors what the store wrote in the same statement, so the rule
-            // this returns can never claim an arming the store just cleared.
+            // this returns can never claim a state the store just cleared.
             rule_set.disarm_after_edit();
         }
         rule_set.updated_at = now;
@@ -769,7 +772,7 @@ impl AppUseCase {
             .lifecycle_rule_sets
             .delete_rule_set_if_unused(rule_set_id)
             .await?;
-        if rule_set.evaluation_mode != LifecycleEvaluationMode::Disabled {
+        if rule_set.evaluates() {
             self.reload_lifecycle_rule_schedule().await;
         }
         Ok(())
@@ -799,10 +802,9 @@ impl AppUseCase {
             id,
             name: EXPIRED_REQUEST_LEASES_RULE_NAME.into(),
             description: EXPIRED_REQUEST_LEASES_DESCRIPTION.into(),
-            enabled: false,
-            evaluation_mode: LifecycleEvaluationMode::Disabled,
-            effect_arming: scryer_domain::LifecycleEffectArming::None,
-            destructive_rearm_required: false,
+            state: LifecycleRuleState::Disabled,
+            edited_since_enabled: false,
+            destructive_confirmed_revision: None,
             library_ids: Vec::new(),
             system_owned: true,
             current_revision_number: 1,
@@ -821,10 +823,12 @@ impl AppUseCase {
     ///
     /// - the current one: left alone;
     /// - the `match` form, whose separate action deleted the title and its
-    ///   files: replaced, keeping the rule's arming, because the new source
-    ///   deletes exactly the same titles the operator armed it for;
+    ///   files: replaced, keeping the rule's state and moving its deletion
+    ///   confirmation onto the new revision, because the new source deletes
+    ///   exactly the same titles the operator confirmed it for;
     /// - the keep-claim matcher: replaced and disarmed, because it also
-    ///   spared kept titles, so the operator re-arms it against the new one;
+    ///   spared kept titles, so the operator enables it again against the new
+    ///   one;
     /// - anything else: replaced and disarmed, the same conservative way.
     async fn upgrade_expired_request_leases_rule(
         &self,
@@ -868,12 +872,10 @@ impl AppUseCase {
             None,
         );
         if keeps_arming {
-            let arming = crate::lifecycle_rules::arming_kept_across_edit(
-                rule_set.effect_arming,
-                &prepared.declared,
-            );
+            let keep_enabled = rule_set.state == LifecycleRuleState::Enabled
+                && !prepared.declared.heads.is_empty();
             rules
-                .add_revision_keeping_arming(&revision, arming, None, now)
+                .add_revision_keeping_state(&revision, keep_enabled, keep_enabled, None, now)
                 .await?;
         } else {
             rules.add_revision(&revision, None, now).await?;

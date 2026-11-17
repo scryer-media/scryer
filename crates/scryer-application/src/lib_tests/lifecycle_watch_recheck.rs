@@ -23,10 +23,10 @@ use crate::ports::{
     SignalReadFailure,
 };
 use scryer_domain::{
-    ExternalAccountProvider, ExternalAccountStatus, LifecycleCandidateState, LifecycleEffectArming,
-    LifecycleRuleState, MediaServerConnection, MediaServerPlaybackEntityKind,
-    MediaServerPlaybackItem, MediaServerProvider, MediaServerSignalKind,
-    MediaServerSignalSyncState, NewUserMediaSignal, UserExternalAccount,
+    ExternalAccountProvider, ExternalAccountStatus, LifecycleCandidateState, LifecycleRuleState,
+    MediaServerConnection, MediaServerPlaybackEntityKind, MediaServerPlaybackItem,
+    MediaServerProvider, MediaServerSignalKind, MediaServerSignalSyncState, NewUserMediaSignal,
+    UserExternalAccount,
 };
 
 /// Matches a movie someone has played: a rule that rests on a watch fact.
@@ -611,7 +611,7 @@ impl RecheckFixture {
             &self.app,
             &self.user,
             &rule_id,
-            LifecycleEffectArming::Reversible,
+            LifecycleRuleState::Enabled,
             None,
         )
         .await;

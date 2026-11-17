@@ -15,7 +15,7 @@ use crate::lifecycle_rules::{
 };
 use scryer_domain::{
     LifecycleCandidateState, LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer,
-    LifecycleClaimState, LifecycleEffectArming, LifecycleRuleState,
+    LifecycleClaimState, LifecycleRuleState,
 };
 use scryer_rules::lifecycle::LifecycleOutcome;
 
@@ -80,8 +80,8 @@ impl ClaimFixture {
         super::lifecycle_rules::open_lifecycle_gates(&self.app, reversible, destructive).await;
     }
 
-    async fn arm(&self, rule_set_id: &str, arming: LifecycleEffectArming, ack: Option<i64>) {
-        super::lifecycle_rules::arm_rule(&self.app, &self.user, rule_set_id, arming, ack).await;
+    async fn arm(&self, rule_set_id: &str, state: LifecycleRuleState, ack: Option<i64>) {
+        super::lifecycle_rules::arm_rule(&self.app, &self.user, rule_set_id, state, ack).await;
     }
 
     async fn evaluate(&self) -> crate::lifecycle_rules::LifecycleEvaluationReport {
@@ -233,7 +233,7 @@ async fn assert_lease_does_not_hold(state: LifecycleClaimState) {
     .await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
     fixture
         .claims
@@ -272,7 +272,7 @@ async fn destructive_execution_reads_claims_under_the_approval_guard() {
     let title = seed_title(&fixture.app, &fixture.user, "Guarded lease").await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
     fixture
         .claims
@@ -328,7 +328,7 @@ async fn an_unreadable_claim_store_holds_a_destructive_action() {
     let title = seed_title(&fixture.app, &fixture.user, "Unknowable").await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Destructive, Some(1))
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
     fixture.claims.set_unreadable(true);
 
@@ -367,7 +367,7 @@ async fn a_live_lease_does_not_hold_a_reversible_action() {
     let title = seed_title(&fixture.app, &fixture.user, "Leased").await;
     fixture.evaluate().await;
     fixture
-        .arm(&rule_id, LifecycleEffectArming::Reversible, None)
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     fixture
         .claims
@@ -890,7 +890,7 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
     let rule = &detail.rule_set;
     assert_eq!(rule.name, "Expired request leases");
     assert!(
-        rule.system_owned && !rule.enabled,
+        rule.system_owned && rule.state == LifecycleRuleState::Disabled,
         "nothing is enabled by default"
     );
     assert!(rule.library_ids.is_empty(), "every library");
@@ -903,8 +903,8 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
         crate::lifecycle_rules::lifecycle_rule_state(&detail),
         LifecycleRuleState::Disabled
     );
-    assert_eq!(rule.effect_arming, LifecycleEffectArming::None);
-    assert!(!rule.destructive_rearm_required);
+    assert_eq!(rule.destructive_confirmed_revision, None);
+    assert!(!rule.edited_since_enabled);
     assert_eq!(detail.revision.grace_days, 7);
     assert_eq!(detail.revision.created_by, None);
     assert_eq!(
@@ -955,10 +955,8 @@ async fn the_shipped_rule_keeps_its_source_and_name_but_not_its_grace_or_scope()
     )
     .await;
     let detail = fixture.shipped_rule().await;
-    assert_eq!(
-        detail.rule_set.effect_arming,
-        LifecycleEffectArming::Destructive
-    );
+    assert_eq!(detail.rule_set.state, LifecycleRuleState::Enabled);
+    assert!(detail.rule_set.destructive_confirmed());
     let stored_source = scryer_rules::strip_editor_source(&detail.revision.rego_source);
     let matcher = |rego_source: &str, grace_days| crate::lifecycle_rules::LifecycleSourceDraft {
         rego_source: rego_source.to_string(),
@@ -1048,7 +1046,8 @@ async fn the_shipped_rule_keeps_its_source_and_name_but_not_its_grace_or_scope()
         crate::lifecycle_rules::lifecycle_rule_state(&edited),
         LifecycleRuleState::DryRun
     );
-    assert!(edited.rule_set.destructive_rearm_required);
+    assert!(edited.rule_set.edited_since_enabled);
+    assert_eq!(edited.rule_set.destructive_confirmed_revision, None);
 }
 
 #[tokio::test]
@@ -1154,7 +1153,8 @@ async fn startup_replaces_the_previously_shipped_source() {
         upgraded.rule_set.description,
         "Deletes a requested title and its files once its request lease has expired."
     );
-    assert_eq!(upgraded.rule_set.effect_arming, LifecycleEffectArming::None);
+    assert_eq!(upgraded.rule_set.state, LifecycleRuleState::Disabled);
+    assert_eq!(upgraded.rule_set.destructive_confirmed_revision, None);
 
     fixture
         .app
@@ -1205,7 +1205,7 @@ async fn startup_moves_the_match_form_rule_to_the_current_source_keeping_its_sta
         ..armed.revision.clone()
     };
     store
-        .add_revision_keeping_arming(&match_form, armed.rule_set.effect_arming, None, now)
+        .add_revision_keeping_state(&match_form, true, true, None, now)
         .await
         .expect("match-form revision");
 
@@ -1226,10 +1226,13 @@ async fn startup_moves_the_match_form_rule_to_the_current_source_keeping_its_sta
         crate::lifecycle_rules::lifecycle_rule_state(&upgraded),
         LifecycleRuleState::Enabled
     );
+    assert_eq!(upgraded.rule_set.state, LifecycleRuleState::Enabled);
     assert_eq!(
-        upgraded.rule_set.effect_arming,
-        LifecycleEffectArming::Destructive
+        upgraded.rule_set.destructive_confirmed_revision,
+        Some(3),
+        "the confirmation moves to the replacing revision with the pointer"
     );
-    assert!(!upgraded.rule_set.destructive_rearm_required);
+    assert!(upgraded.rule_set.destructive_confirmed());
+    assert!(!upgraded.rule_set.edited_since_enabled);
     assert_eq!(upgraded.rule_set.description, armed.rule_set.description);
 }

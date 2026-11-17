@@ -26,7 +26,7 @@ use crate::ports::{
 use chrono::{Duration, Utc};
 use scryer_domain::{
     LifecycleActionStepKey, LifecycleActionStepRun, LifecycleActionStepState,
-    LifecycleCandidateState, LifecycleEffectArming, MediaFacet,
+    LifecycleCandidateState, LifecycleRuleState, MediaFacet,
 };
 use std::collections::HashMap;
 
@@ -92,13 +92,13 @@ pub(super) async fn arm_and_evaluate_all(
         .expect("enable lifecycle and unpause actions");
     // Arm before the first evaluation: a delete rule confirms the empty
     // candidate list it has at that point.
-    let arming = crate::lifecycle_rules::derived_effect_arming(&created.declared_actions);
+    let state = enabled_state_for(&created.declared_actions);
     super::lifecycle_rules::arm_rule(
         &fixture.app,
         &fixture.user,
         &rule_set_id,
-        arming,
-        (arming == LifecycleEffectArming::Destructive).then_some(0),
+        state,
+        created.declared_actions.destructive.then_some(0),
     )
     .await;
     fixture
@@ -1518,7 +1518,7 @@ async fn high_risk_sequence_failures_trip_the_per_pass_breaker_before_a_fourth_d
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(4),
     )
     .await;
@@ -2124,7 +2124,7 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;
@@ -2720,9 +2720,21 @@ async fn create_and_arm(
         )
         .await
         .expect("enable lifecycle and unpause actions");
-    let arming = crate::lifecycle_rules::derived_effect_arming(&created.declared_actions);
-    super::lifecycle_rules::arm_rule(&fixture.app, &fixture.user, &rule_set_id, arming, None).await;
+    let state = enabled_state_for(&created.declared_actions);
+    super::lifecycle_rules::arm_rule(&fixture.app, &fixture.user, &rule_set_id, state, None).await;
     rule_set_id
+}
+
+/// The most a rule declaring these actions can be set to: a rule that
+/// declares none only runs as a dry run.
+fn enabled_state_for(
+    declared: &crate::lifecycle_rules::LifecycleDeclaredActions,
+) -> LifecycleRuleState {
+    if declared.heads.is_empty() {
+        LifecycleRuleState::DryRun
+    } else {
+        LifecycleRuleState::Enabled
+    }
 }
 
 #[tokio::test]

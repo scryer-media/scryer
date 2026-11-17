@@ -23,7 +23,7 @@ use crate::ports::{
 use chrono::{Duration, Utc};
 use scryer_domain::{
     LifecycleActionRunStatus, LifecycleActionStepKey, LifecycleActionStepRun,
-    LifecycleActionStepState, LifecycleEffectArming, LifecycleSequenceTerminalMembership,
+    LifecycleActionStepState, LifecycleRuleState, LifecycleSequenceTerminalMembership,
     LifecycleSequenceTerminalOutcome,
 };
 use std::path::{Path, PathBuf};
@@ -307,7 +307,7 @@ async fn sequence_unmonitor_then_delete_files_removes_only_the_matched_title_fil
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;
@@ -411,7 +411,7 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;
@@ -513,7 +513,7 @@ async fn a_fresh_re_monitor_cancels_the_sequence_delete_files_step_and_preserves
         &fixture.app,
         &fixture.user,
         &_rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;
@@ -560,7 +560,7 @@ async fn a_journal_with_an_unknown_key_still_reads_and_resumes() {
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;
@@ -639,7 +639,7 @@ async fn completed_storage_sequence_releases_its_exact_marker_after_root_filter_
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;
@@ -947,7 +947,7 @@ async fn deleting_rule_over_five(
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(5),
     )
     .await;
@@ -1185,7 +1185,8 @@ async fn an_armed_deleting_rule_without_a_maximum_shows_its_refusal_and_acts_on_
         .require_lifecycle_rule_set(&rule_set_id)
         .await
         .expect("rule");
-    assert_eq!(rule.effect_arming, LifecycleEffectArming::Destructive);
+    assert_eq!(rule.state, LifecycleRuleState::Enabled);
+    assert!(rule.destructive_confirmed());
     let detail = app.load_lifecycle_rule_detail(rule).await.expect("detail");
     assert_eq!(detail.load_refusal, None, "evaluation is not refused");
     assert_eq!(
@@ -1258,7 +1259,7 @@ async fn arm_destructive(fixture: &TitleFixture, rule_set_id: &str) {
         &fixture.execution.app,
         &fixture.execution.user,
         rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(i64::try_from(live).expect("candidate count")),
     )
     .await;
@@ -1708,7 +1709,7 @@ async fn a_manual_run_of_a_dry_run_rule_acts_on_nothing() {
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::None,
+        LifecycleRuleState::DryRun,
         None,
     )
     .await;
@@ -1789,7 +1790,7 @@ async fn add_rule_and_act(
         .require_lifecycle_rule_set(&rule_set_id)
         .await
         .expect("rule");
-    if rule.effect_arming == LifecycleEffectArming::Destructive {
+    if rule.destructive_confirmed() {
         let live = fixture
             .evaluation
             .all_candidates()
@@ -1803,7 +1804,7 @@ async fn add_rule_and_act(
             &fixture.app,
             &fixture.user,
             &rule_set_id,
-            LifecycleEffectArming::Destructive,
+            LifecycleRuleState::Enabled,
             Some(i64::try_from(live).expect("candidate count")),
         )
         .await;
@@ -2064,7 +2065,7 @@ async fn hold_movie_delete_after_one_file(name: &str, condition: &str) -> HeldDe
         &fixture.execution.app,
         &fixture.execution.user,
         &rule_set_id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(1),
     )
     .await;

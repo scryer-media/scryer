@@ -3074,14 +3074,12 @@ mod tests {
         SqlRuntime::execute(
             datastore.read_exec(),
             "INSERT INTO lifecycle_rule_sets (
-                 id, name, enabled, evaluation_mode, effect_arming, created_at, updated_at
-             ) VALUES ({}, {}, {}, {}, {}, {}, {})",
+                 id, name, state, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {})",
             &[
                 SqlArg::Text("backup-sequence-rule".to_string()),
                 SqlArg::Text("Backup sequence safety state".to_string()),
-                SqlArg::Bool(true),
-                SqlArg::Text("observe".to_string()),
-                SqlArg::Text("none".to_string()),
+                SqlArg::Text("dry_run".to_string()),
                 SqlArg::Timestamp(now),
                 SqlArg::Timestamp(now),
             ],

@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult, LifecycleRuleSetRepository};
-use scryer_domain::{
-    LifecycleEffectArming, LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet,
-};
+use scryer_domain::{LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleState};
 
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
@@ -72,10 +70,10 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
         // The disarm rides in the pointer update rather than in a second call:
-        // arming acknowledges one specific matcher's blast radius, so there must
-        // be no instant at which the new revision is in force under the old
-        // revision's arming. The pointer moves first and only from the
-        // revision this one follows, as in `add_revision_keeping_arming`.
+        // the confirmation acknowledges one specific source's blast radius, so
+        // there must be no instant at which the new revision is in force under
+        // the old revision's state. The pointer moves first and only from the
+        // revision this one follows, as in `add_revision_keeping_state`.
         // A new maximum rides in the same statement, so a source that gains a
         // delete head is never stored without the maximum it was saved with.
         let rule_set_id = revision.rule_set_id.clone();
@@ -111,10 +109,11 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
         .await
     }
 
-    async fn add_revision_keeping_arming(
+    async fn add_revision_keeping_state(
         &self,
         revision: &LifecycleRuleRevision,
-        effect_arming: LifecycleEffectArming,
+        keep_enabled: bool,
+        carry_destructive_confirmation: bool,
         max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -123,34 +122,33 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
         // follows, so a concurrent save that got there first makes this one
         // write nothing rather than collide on the revision number.
         //
-        // The arming written is the lower of the stored one and the caller's:
-        // the caller read the row earlier, and an edit must never raise an
-        // arming another admin lowered in between. Only `effect_arming` and
-        // the pointer move, so a concurrent state change (a disable) stands.
-        let below: Vec<LifecycleEffectArming> = [
-            LifecycleEffectArming::None,
-            LifecycleEffectArming::Reversible,
-            LifecycleEffectArming::Destructive,
-        ]
-        .into_iter()
-        .take_while(|level| *level != effect_arming)
-        .collect();
-        let rule_set_id = revision.rule_set_id.clone();
-        let mut pointer_args = vec![SqlArg::I64(revision.revision_number)];
-        let arming_set = if below.is_empty() {
-            pointer_args.push(SqlArg::Text(effect_arming.as_storage_str().to_string()));
-            "effect_arming = {}".to_string()
+        // The state written is the lower of the stored one and the caller's:
+        // the caller read the row earlier, and an edit must never raise a
+        // state another admin lowered in between. Only an enabled row can
+        // move, and only down to dry run, so a concurrent disable stands. The
+        // edited-since-enabled flag is left alone.
+        let enabled = LifecycleRuleState::Enabled.as_storage_str();
+        let kept = if keep_enabled {
+            LifecycleRuleState::Enabled
         } else {
-            pointer_args.extend(
-                below
-                    .iter()
-                    .map(|level| SqlArg::Text(level.as_storage_str().to_string())),
-            );
-            pointer_args.push(SqlArg::Text(effect_arming.as_storage_str().to_string()));
-            format!(
-                "effect_arming = CASE WHEN effect_arming IN ({}) THEN effect_arming ELSE {{}} END",
-                vec!["{}"; below.len()].join(", ")
-            )
+            LifecycleRuleState::DryRun
+        };
+        let rule_set_id = revision.rule_set_id.clone();
+        let mut pointer_args = vec![
+            SqlArg::I64(revision.revision_number),
+            SqlArg::Text(enabled.to_string()),
+            SqlArg::Text(kept.as_storage_str().to_string()),
+        ];
+        // A confirmation is cleared unless the caller carries one that named
+        // exactly the revision this one follows.
+        let confirmation_set = if carry_destructive_confirmation {
+            pointer_args.extend([
+                SqlArg::I64(revision.revision_number - 1),
+                SqlArg::I64(revision.revision_number),
+            ]);
+            "destructive_confirmed_revision = CASE WHEN destructive_confirmed_revision = {} THEN {} ELSE NULL END"
+        } else {
+            "destructive_confirmed_revision = NULL"
         };
         let max_set = max_titles_per_run_set(max_titles_per_run, &mut pointer_args);
         pointer_args.extend([
@@ -160,13 +158,15 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
         ]);
         let pointer_sql = format!(
             "UPDATE lifecycle_rule_sets
-                SET current_revision_number = {{}}, {arming_set}{max_set}, updated_at = {{}}
+                SET current_revision_number = {{}},
+                    state = CASE WHEN state = {{}} THEN {{}} ELSE state END,
+                    {confirmation_set}{max_set}, updated_at = {{}}
               WHERE id = {{}} AND current_revision_number = {{}}"
         );
 
         SqlRuntime::run_in_transaction(
             &self.datastore,
-            "add_lifecycle_rule_revision_keeping_arming",
+            "add_lifecycle_rule_revision_keeping_state",
             move |tx| {
                 let revision_args = revision_args.clone();
                 let pointer_args = pointer_args.clone();
@@ -285,7 +285,7 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
         set.push_str(&max_titles_per_run_set(max_titles_per_run, &mut args));
         // The disarm rides in the same transaction as the scope that invalidated it,
         // exactly as `add_revision` carries its own: there must be no instant at
-        // which a re-scoped rule is in force under the previous scope's arming.
+        // which a re-scoped rule is in force under the previous scope's state.
         if disarm {
             set.push_str(", ");
             set.push_str(DISARM_AFTER_EDIT_SET);
@@ -375,27 +375,26 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
     async fn update_rule_set_state(
         &self,
         id: &str,
-        mode: LifecycleEvaluationMode,
-        arming: LifecycleEffectArming,
-        confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
+        state: LifecycleRuleState,
+        destructive_confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool> {
-        // Every column moves in one statement: a row that is enabled while its
-        // mode says disabled has no reading the evaluator could act on.
+        // The state and the confirmation move in one statement: there is no
+        // instant at which the rule is enabled under a confirmation that is
+        // not the one just checked.
         let sql = "UPDATE lifecycle_rule_sets
-                SET evaluation_mode = {}, enabled = {}, effect_arming = {},
-                    destructive_rearm_required = {}, updated_at = {}
+                SET state = {}, edited_since_enabled = {},
+                    destructive_confirmed_revision = {}, updated_at = {}
               WHERE id = {}";
         let args = vec![
-            SqlArg::Text(mode.as_storage_str().to_string()),
-            SqlArg::Bool(mode != LifecycleEvaluationMode::Disabled),
-            SqlArg::Text(arming.as_storage_str().to_string()),
+            SqlArg::Text(state.as_storage_str().to_string()),
             SqlArg::Bool(false),
+            SqlArg::OptI64(destructive_confirmation.map(|reviewed| reviewed.revision_number)),
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(id.to_string()),
         ];
         let id = id.to_string();
-        let confirmation = confirmation.cloned();
+        let confirmation = destructive_confirmation.cloned();
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "update_lifecycle_rule_set_state",
@@ -418,7 +417,7 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
                     if locked != 1 {
                         return Ok(false);
                     }
-                    if arming == LifecycleEffectArming::Destructive {
+                    if confirmation.is_some() {
                         let rows = SqlRuntime::fetch_all(
                             SqlExec::Tx(tx),
                             &format!(
@@ -444,9 +443,10 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
     }
 }
 
-// Disarms a rule after an edit, flagging it for review when it was armed. SET
-// expressions read the row as it was before the update on both engines.
-const DISARM_AFTER_EDIT_SET: &str = "destructive_rearm_required = CASE WHEN effect_arming <> {} THEN {} ELSE destructive_rearm_required END, effect_arming = {}";
+// Drops an enabled rule to dry run after an edit, flagging it for review, and
+// clears any deletion confirmation. SET expressions read the row as it was
+// before the update on both engines, so the flag sees the old state.
+const DISARM_AFTER_EDIT_SET: &str = "edited_since_enabled = CASE WHEN state = {} THEN {} ELSE edited_since_enabled END, state = CASE WHEN state = {} THEN {} ELSE state END, destructive_confirmed_revision = NULL";
 
 /// A revision save that did not follow the revision in force.
 fn revision_conflict() -> AppError {
@@ -511,17 +511,18 @@ fn max_titles_per_run_set(
     }
 }
 
-fn disarm_args() -> [SqlArg; 3] {
-    let none = LifecycleEffectArming::None.as_storage_str();
+fn disarm_args() -> [SqlArg; 4] {
+    let enabled = LifecycleRuleState::Enabled.as_storage_str();
     [
-        SqlArg::Text(none.to_string()),
+        SqlArg::Text(enabled.to_string()),
         SqlArg::Bool(true),
-        SqlArg::Text(none.to_string()),
+        SqlArg::Text(enabled.to_string()),
+        SqlArg::Text(LifecycleRuleState::DryRun.as_storage_str().to_string()),
     ]
 }
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
-const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
+const RULE_SET_SELECT: &str = "SELECT id, name, description, state, edited_since_enabled, destructive_confirmed_revision,
     system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at, scope.library_id AS scope_library_id
     FROM lifecycle_rule_sets
     LEFT JOIN lifecycle_rule_set_libraries scope ON scope.rule_set_id = lifecycle_rule_sets.id";
@@ -533,9 +534,9 @@ const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, a
 const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO lifecycle_rule_sets
-        (id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
+        (id, name, description, state, edited_since_enabled, destructive_confirmed_revision,
          system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO lifecycle_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
@@ -564,10 +565,9 @@ fn rule_set_args(rule_set: &LifecycleRuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(rule_set.id.clone()),
         SqlArg::Text(rule_set.name.clone()),
         SqlArg::Text(rule_set.description.clone()),
-        SqlArg::Bool(rule_set.enabled),
-        SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
-        SqlArg::Text(rule_set.effect_arming.as_storage_str().to_string()),
-        SqlArg::Bool(rule_set.destructive_rearm_required),
+        SqlArg::Text(rule_set.state.as_storage_str().to_string()),
+        SqlArg::Bool(rule_set.edited_since_enabled),
+        SqlArg::OptI64(rule_set.destructive_confirmed_revision),
         SqlArg::Bool(rule_set.system_owned),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Text(schedule_json(&rule_set.schedule)?),
@@ -617,17 +617,22 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<LifecycleRuleSet> {
         id: row.text("id")?,
         name: row.text("name")?,
         description: row.text("description")?,
-        enabled: row.bool("enabled")?,
-        // An unrecognized stored mode is a rule written by a newer build. It
-        // reads back as disabled so this build never acts on semantics it does
-        // not implement.
-        evaluation_mode: LifecycleEvaluationMode::parse_storage(&row.text("evaluation_mode")?)
+        // An unrecognized stored state is a rule written by a newer build. It
+        // reads back as disabled so this build never evaluates or acts on
+        // semantics it does not implement.
+        state: row
+            .opt_text("state")
+            .ok()
+            .flatten()
+            .and_then(|value| LifecycleRuleState::parse_storage(&value))
             .unwrap_or_default(),
-        // Same newer-build rule as the mode: an unknown arming level reads as
-        // none, so this build never acts under an arming it cannot interpret.
-        effect_arming: LifecycleEffectArming::parse_storage(&row.text("effect_arming")?)
-            .unwrap_or_default(),
-        destructive_rearm_required: row.bool("destructive_rearm_required")?,
+        edited_since_enabled: row.bool("edited_since_enabled")?,
+        // A confirmation this build cannot read confirms nothing: it reads as
+        // none, so no step that deletes runs under it.
+        destructive_confirmed_revision: row
+            .opt_i64("destructive_confirmed_revision")
+            .ok()
+            .flatten(),
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         system_owned: row.bool("system_owned")?,
         current_revision_number: row.i64("current_revision_number")?,

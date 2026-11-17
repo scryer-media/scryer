@@ -19,7 +19,7 @@ use crate::lifecycle_rules::{
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
     ExternalAccountProvider, ExternalAccountStatus, LifecycleActionRunStatus,
-    LifecycleCandidateState, LifecycleEffectArming, LifecycleRuleSubjectKind, MediaServerProvider,
+    LifecycleCandidateState, LifecycleRuleState, LifecycleRuleSubjectKind, MediaServerProvider,
     MediaServerSignalKind, MediaServerSignalSyncState, NewUserMediaSignal, UserExternalAccount,
 };
 use scryer_rules::lifecycle::LifecycleOutcome;
@@ -241,7 +241,7 @@ async fn create_destructive_rule(
         &fixture.app,
         &fixture.user,
         &created.rule_set.id,
-        LifecycleEffectArming::Destructive,
+        LifecycleRuleState::Enabled,
         Some(candidates as i64),
     )
     .await;

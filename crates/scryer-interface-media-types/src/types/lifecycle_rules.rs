@@ -31,19 +31,6 @@ pub enum LifecycleRuleSubjectKind {
     Episode,
 }
 
-/// The class of effects a rule's action can have.
-#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum LifecycleEffectArming {
-    /// Evaluate and track candidates, never act.
-    None,
-    /// Low- and medium-risk actions may execute.
-    Reversible,
-    /// High-risk actions may additionally execute. Requires acknowledging the
-    /// rule's current candidate count when set.
-    Destructive,
-}
-
 /// How a lifecycle candidate or action run records its actions.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -59,14 +46,14 @@ pub enum LifecycleActionKind {
 /// opens and closes membership, writing only `OBSERVING`, `CANCELED`, and
 /// `EXCLUDED`. The action handler owns the rest: it leases a due candidate into
 /// `EXECUTING` and writes the outcome, and it only ever selects candidates of a
-/// rule that is in `OBSERVE` mode, is armed, and whose matching instance effect
-/// gate is on.
+/// rule that is enabled and whose matching instance effect gate is on.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum LifecycleCandidateState {
     /// Matching, with the grace clock running.
     Observing,
-    /// Grace elapsed and effect arming permits the action; awaiting the handler.
+    /// Grace elapsed and the rule's state permits the action; awaiting the
+    /// handler.
     PendingAction,
     /// Eligible to execute now.
     Due,
@@ -164,9 +151,6 @@ pub struct LifecycleRuleSet {
     pub description: String,
     /// Disabled, dry run, or enabled.
     pub state: LifecycleRuleState,
-    /// What enabling this rule arms. `DESTRUCTIVE` means enabling it requires
-    /// the candidate-count confirmation.
-    pub enabled_arming: LifecycleEffectArming,
     /// The rule can delete media and was enabled when its source or scope last
     /// changed, so it fell back to dry run. Review its candidates and enable it
     /// again.
@@ -785,12 +769,12 @@ pub struct UpdateLifecycleRuleMetadataInput {
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
     /// Replacement schedule. Omitted keeps the current one. Changing it
-    /// leaves the rule's state and arming alone.
+    /// leaves the rule's state alone.
     pub schedule: Option<ScriptScheduleInput>,
     /// Replacement most titles the rule may act on in one run. Omitted keeps
     /// the current value, null clears it, and a value of at least one
     /// replaces it. A rule that deletes files or titles cannot be cleared.
-    /// Changing it leaves the rule's state and arming alone.
+    /// Changing it leaves the rule's state alone.
     pub max_titles_per_run: MaybeUndefined<i32>,
 }
 

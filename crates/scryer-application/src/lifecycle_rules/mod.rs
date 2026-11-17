@@ -38,8 +38,7 @@ pub(crate) mod watch_recheck;
 pub use action_catalog::{LifecycleRiskClass, LifecycleSubjectKind};
 pub use action_execution::{
     LIFECYCLE_HIGH_RISK_FAILURE_BREAKER, LIFECYCLE_MAX_ACTION_ATTEMPTS,
-    LifecycleActionHandlingReport, LifecycleActionRunView, arming_kept_across_edit,
-    derived_effect_arming, execution_reason, lifecycle_rule_state,
+    LifecycleActionHandlingReport, LifecycleActionRunView, execution_reason, lifecycle_rule_state,
 };
 pub use action_sequence::{
     ACTION_SEQUENCE_KIND, LIFECYCLE_ACTION_SEQUENCE_SCHEMA_VERSION,

@@ -1706,10 +1706,11 @@ impl LifecycleRuleSetRepository for NullLifecycleRuleSetRepository {
             "lifecycle rule repository is not configured".to_string(),
         ))
     }
-    async fn add_revision_keeping_arming(
+    async fn add_revision_keeping_state(
         &self,
         _revision: &LifecycleRuleRevision,
-        _effect_arming: scryer_domain::LifecycleEffectArming,
+        _keep_enabled: bool,
+        _carry_destructive_confirmation: bool,
         _max_titles_per_run: Option<Option<u32>>,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -1750,9 +1751,8 @@ impl LifecycleRuleSetRepository for NullLifecycleRuleSetRepository {
     async fn update_rule_set_state(
         &self,
         _id: &str,
-        _mode: scryer_domain::LifecycleEvaluationMode,
-        _arming: scryer_domain::LifecycleEffectArming,
-        _confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
+        _state: scryer_domain::LifecycleRuleState,
+        _destructive_confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<bool> {
         Err(AppError::Repository(

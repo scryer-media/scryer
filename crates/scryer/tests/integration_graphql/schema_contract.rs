@@ -1533,9 +1533,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Request rules have no evaluation mode, so RequestRuleEvaluationModeValue
     // is gone: public types 1047->1046, ENUM 218->217.
     assert!(!public_type_names.contains(&"RequestRuleEvaluationModeValue"));
+    // A lifecycle rule's state says what enabling it allows, so
+    // LifecycleEffectArming is gone: public types 1046->1045, ENUM 217->216.
     assert_eq!(
         public_types.len(),
-        1046,
+        1045,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 570);
@@ -1546,7 +1548,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert_eq!(kind_count("INPUT_OBJECT"), 247);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 217);
+    assert_eq!(kind_count("ENUM"), 216);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
@@ -1733,7 +1735,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"LifecycleEvaluationMode"));
     assert!(mutation_field_names.contains(&"runLifecycleActionHandlerNow"));
     assert!(public_type_names.contains(&"LifecycleActionRun"));
-    assert!(public_type_names.contains(&"LifecycleEffectArming"));
+    assert!(!public_type_names.contains(&"LifecycleEffectArming"));
     assert!(!public_type_names.contains(&"SetMaintenanceRuleArmingInput"));
 
     // 0.17.0 API surface trim (root wave): dead root fields and their

@@ -7,10 +7,6 @@
 /// without changing anything.
 export type LifecycleRuleState = "DISABLED" | "DRY_RUN" | "ENABLED";
 
-/// The class of effects a rule's actions can have. `DESTRUCTIVE` rules delete
-/// files or titles, so enabling such a rule needs a confirmation.
-export type LifecycleEffectArming = "NONE" | "REVERSIBLE" | "DESTRUCTIVE";
-
 /// An action a rule declares by defining a rule of that name in its source,
 /// as the API names it (`DELETE_FILES`). Any other rule name in the source is
 /// the author's own helper. The heads a build knows come from the served
@@ -99,9 +95,6 @@ export type LifecycleRuleSetRecord = {
   name: string;
   description: string | null;
   state: LifecycleRuleState;
-  /// What `ENABLED` would allow for this rule's actions. `NONE` means the rule
-  /// can only run as a dry run.
-  enabledArming: LifecycleEffectArming;
   /// The rule was enabled, then its source or scope changed, so it
   /// dropped back to a dry run until it is enabled again.
   editedSinceEnabled: boolean;

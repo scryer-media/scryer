@@ -105,7 +105,6 @@ function lifecycleDetail(
       name: "Sample rule",
       description: null,
       state: "DISABLED",
-      enabledArming: "REVERSIBLE",
       editedSinceEnabled: false,
       systemOwned: false,
       libraryIds: [],

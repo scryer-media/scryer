@@ -12072,8 +12072,7 @@ Two writers move a candidate through these states. The scheduled evaluator
 opens and closes membership, writing only `OBSERVING`, `CANCELED`, and
 `EXCLUDED`. The action handler owns the rest: it leases a due candidate into
 `EXECUTING` and writes the outcome, and it only ever selects candidates of a
-rule that is in `OBSERVE` mode, is armed, and whose matching instance effect
-gate is on.
+rule that is enabled and whose matching instance effect gate is on.
 """
 enum LifecycleCandidateState {
 	"""
@@ -12081,7 +12080,8 @@ enum LifecycleCandidateState {
 	"""
 	OBSERVING
 	"""
-	Grace elapsed and effect arming permits the action; awaiting the handler.
+	Grace elapsed and the rule's state permits the action; awaiting the
+	handler.
 	"""
 	PENDING_ACTION
 	"""
@@ -12236,25 +12236,6 @@ type LifecycleDeclaredActions {
 	Every notification text written for `notify`.
 	"""
 	notifications: [String!]!
-}
-
-"""
-The class of effects a rule's action can have.
-"""
-enum LifecycleEffectArming {
-	"""
-	Evaluate and track candidates, never act.
-	"""
-	NONE
-	"""
-	Low- and medium-risk actions may execute.
-	"""
-	REVERSIBLE
-	"""
-	High-risk actions may additionally execute. Requires acknowledging the
-	rule's current candidate count when set.
-	"""
-	DESTRUCTIVE
 }
 
 """
@@ -12607,11 +12588,6 @@ type LifecycleRuleSet {
 	Disabled, dry run, or enabled.
 	"""
 	state: LifecycleRuleState!
-	"""
-	What enabling this rule arms. `DESTRUCTIVE` means enabling it requires
-	the candidate-count confirmation.
-	"""
-	enabledArming: LifecycleEffectArming!
 	"""
 	The rule can delete media and was enabled when its source or scope last
 	changed, so it fell back to dry run. Review its candidates and enable it
@@ -35455,14 +35431,14 @@ input UpdateLifecycleRuleMetadataInput {
 	libraryIds: [String!]
 	"""
 	Replacement schedule. Omitted keeps the current one. Changing it
-	leaves the rule's state and arming alone.
+	leaves the rule's state alone.
 	"""
 	schedule: ScriptScheduleInput
 	"""
 	Replacement most titles the rule may act on in one run. Omitted keeps
 	the current value, null clears it, and a value of at least one
 	replaces it. A rule that deletes files or titles cannot be cleared.
-	Changing it leaves the rule's state and arming alone.
+	Changing it leaves the rule's state alone.
 	"""
 	maxTitlesPerRun: Int
 }

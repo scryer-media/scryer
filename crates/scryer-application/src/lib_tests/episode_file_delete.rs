@@ -1539,11 +1539,11 @@ impl ScopedLifecycleFixture {
             )
             .await
             .expect("create scoped rule");
-        assert!(!rule.rule_set.enabled);
         assert_eq!(
-            rule.rule_set.effect_arming,
-            scryer_domain::LifecycleEffectArming::None
+            rule.rule_set.state,
+            scryer_domain::LifecycleRuleState::Disabled
         );
+        assert_eq!(rule.rule_set.destructive_confirmed_revision, None);
         super::lifecycle_rules::set_rule_state(
             app,
             actor,
@@ -1569,7 +1569,7 @@ impl ScopedLifecycleFixture {
             app,
             actor,
             &rule.rule_set.id,
-            scryer_domain::LifecycleEffectArming::Destructive,
+            scryer_domain::LifecycleRuleState::Enabled,
             Some(count as i64),
         )
         .await;

@@ -85,7 +85,6 @@ const detail: LifecycleRuleSetDetail = {
     name: "Stale unmonitored titles",
     description: "Unmonitored titles that still hold files.",
     state: "DISABLED",
-    enabledArming: "REVERSIBLE",
     editedSinceEnabled: false,
     systemOwned: false,
     libraryIds: ["lib-movies", "lib-series"],
@@ -654,12 +653,15 @@ const reviewedDeleteRule = {
 };
 
 test("enabled is offered only for a rule whose action changes something", () => {
-  assert.deepEqual(ruleStateOptionsFor({ enabledArming: "NONE" }), [
+  assert.deepEqual(ruleStateOptionsFor({ declaredActions: declared({}) }), [
     "DISABLED",
     "DRY_RUN",
   ]);
-  for (const enabledArming of ["REVERSIBLE", "DESTRUCTIVE"] as const) {
-    assert.deepEqual(ruleStateOptionsFor({ enabledArming }), [
+  for (const declaredActions of [
+    declared({ heads: ["UNMONITOR"] }),
+    declared({ heads: ["DELETE_TITLE"], destructive: true }),
+  ]) {
+    assert.deepEqual(ruleStateOptionsFor({ declaredActions }), [
       "DISABLED",
       "DRY_RUN",
       "ENABLED",

@@ -5906,44 +5906,42 @@ pub struct RulePackMember {
     pub removed: bool,
 }
 
-/// Whether a lifecycle rule set is evaluated at all. Whether an evaluated
-/// rule may act is its [`LifecycleEffectArming`].
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LifecycleEvaluationMode {
-    #[default]
-    Disabled,
-    /// Evaluate and record candidates.
-    Observe,
-}
-
-impl LifecycleEvaluationMode {
-    pub const fn as_storage_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Observe => "observe",
-        }
-    }
-
-    pub fn parse_storage(value: &str) -> Option<Self> {
-        match value {
-            "disabled" => Some(Self::Disabled),
-            "observe" => Some(Self::Observe),
-            _ => None,
-        }
-    }
-}
-
-/// The one operator-facing control of a lifecycle rule set.
+/// The one stored control of a lifecycle rule set.
 ///
 /// Disabled is never evaluated. Dry run is evaluated and records candidates
-/// but never acts. Enabled is evaluated and armed for the effects its own
-/// action can have.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// but never acts. Enabled is evaluated and may act with the effects its own
+/// actions can have; a step that deletes additionally needs the operator's
+/// confirmation of the rule's current revision
+/// ([`LifecycleRuleSet::destructive_confirmed_revision`]).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum LifecycleRuleState {
+    #[default]
     Disabled,
     DryRun,
     Enabled,
+}
+
+impl LifecycleRuleState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::DryRun => "dry_run",
+            Self::Enabled => "enabled",
+        }
+    }
+
+    /// An unknown stored value must read back as [`Self::Disabled`], never as
+    /// a state that evaluates or acts: a build that cannot interpret a state
+    /// must not run the rule under it.
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "dry_run" => Some(Self::DryRun),
+            "enabled" => Some(Self::Enabled),
+            _ => None,
+        }
+    }
 }
 
 /// Granularity a lifecycle rule set is scoped to.
@@ -5987,16 +5985,22 @@ pub struct LifecycleRuleSet {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub enabled: bool,
-    pub evaluation_mode: LifecycleEvaluationMode,
-    /// How far this rule's effects are armed, independent of its mode. The
-    /// action handler requires both this and the instance effect gates.
-    pub effect_arming: LifecycleEffectArming,
-    /// The rule was armed when its matcher, action, or scope last changed (or a
-    /// compatibility migration widened what it can match), so it must be
-    /// reviewed and enabled again. Any state change clears it.
+    /// Disabled, dry run, or enabled. Whether the rule evaluates, acts, or
+    /// may run a step that deletes is derived from this, never stored apart
+    /// from it.
     #[serde(default)]
-    pub destructive_rearm_required: bool,
+    pub state: LifecycleRuleState,
+    /// The rule was enabled when its source or libraries last changed (or a
+    /// compatibility migration widened what it can match), so it dropped to
+    /// dry run and must be reviewed and enabled again. Any state change
+    /// clears it.
+    #[serde(default)]
+    pub edited_since_enabled: bool,
+    /// The revision the operator confirmed the candidate count for when
+    /// enabling this rule while its actions could delete. A step that deletes
+    /// runs only while this names the revision in force. `None` otherwise.
+    #[serde(default)]
+    pub destructive_confirmed_revision: Option<i64>,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Shipped with Scryer: its name, matcher and action are fixed and it
@@ -6034,11 +6038,27 @@ pub fn default_lifecycle_rule_schedule() -> ScriptSchedule {
 }
 
 impl LifecycleRuleSet {
-    /// What a matcher or scope edit does to arming: an armed rule drops to dry
-    /// run and is flagged for review.
+    /// Whether the evaluator runs this rule at all.
+    pub fn evaluates(&self) -> bool {
+        self.state != LifecycleRuleState::Disabled
+    }
+
+    /// Whether this rule may run a step that deletes: it is enabled and the
+    /// operator confirmed the candidate count for the revision in force.
+    pub fn destructive_confirmed(&self) -> bool {
+        self.state == LifecycleRuleState::Enabled
+            && self.destructive_confirmed_revision == Some(self.current_revision_number)
+    }
+
+    /// What a source or scope edit does to the rule's state: an enabled rule
+    /// drops to dry run and is flagged for review, and any deletion
+    /// confirmation is cleared.
     pub fn disarm_after_edit(&mut self) {
-        self.destructive_rearm_required |= self.effect_arming != LifecycleEffectArming::None;
-        self.effect_arming = LifecycleEffectArming::None;
+        if self.state == LifecycleRuleState::Enabled {
+            self.state = LifecycleRuleState::DryRun;
+            self.edited_since_enabled = true;
+        }
+        self.destructive_confirmed_revision = None;
     }
 }
 
@@ -6317,42 +6337,6 @@ pub struct LifecycleEvaluationRun {
     pub superseded_candidates: i64,
     pub duration_ms: Option<i64>,
     pub error: Option<String>,
-}
-
-/// How far a lifecycle rule set's effects are armed. Arming is per rule and independent of the instance-wide effect
-/// gates: an action executes only when both permit it.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LifecycleEffectArming {
-    /// Evaluate and track candidates; never act.
-    #[default]
-    None,
-    /// Low- and medium-risk actions may execute.
-    Reversible,
-    /// High-risk actions may additionally execute.
-    Destructive,
-}
-
-impl LifecycleEffectArming {
-    pub const fn as_storage_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Reversible => "reversible",
-            Self::Destructive => "destructive",
-        }
-    }
-
-    /// An unknown stored value must read back as [`Self::None`], never as a
-    /// higher level: a build that cannot interpret an arming level must not act
-    /// on it.
-    pub fn parse_storage(value: &str) -> Option<Self> {
-        match value {
-            "none" => Some(Self::None),
-            "reversible" => Some(Self::Reversible),
-            "destructive" => Some(Self::Destructive),
-            _ => None,
-        }
-    }
 }
 
 /// Outcome of one action-handler attempt on one candidate.

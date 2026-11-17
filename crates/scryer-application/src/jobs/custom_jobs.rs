@@ -520,7 +520,7 @@ impl CustomJobSource for AppUseCase {
             .list_rule_sets()
             .await?
             .into_iter()
-            .filter(|rule| rule.evaluation_mode != scryer_domain::LifecycleEvaluationMode::Disabled)
+            .filter(|rule| rule.evaluates())
             .collect();
         if rules.is_empty() {
             return Ok(Vec::new());

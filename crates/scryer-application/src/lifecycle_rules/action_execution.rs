@@ -26,8 +26,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::{Duration, Utc};
 use scryer_domain::{
     AppPermission, LifecycleActionJobReceipt, LifecycleActionRun, LifecycleActionRunStatus,
-    LifecycleActionStepRun, LifecycleCandidate, LifecycleCandidateState, LifecycleEffectArming,
-    LifecycleEvaluationMode, LifecycleRuleState, Title, User,
+    LifecycleActionStepRun, LifecycleCandidate, LifecycleCandidateState, LifecycleRuleState, Title,
+    User,
 };
 use scryer_rules::lifecycle::{
     LifecycleOutcome, LifecyclePolicy, LifecycleRulesEngine, LifecycleRulesEvaluator,
@@ -577,74 +577,43 @@ pub(super) struct LifecycleExecutionContext<'a> {
 
 // ── Rule state ──────────────────────────────────────────────────────────────
 
-/// The arming an Enabled rule receives: file deletion when any part of its
-/// action is high-risk, library updates when it changes anything else, and
-/// nothing for an action that only tracks membership.
-pub fn derived_effect_arming(declared: &LifecycleDeclaredActions) -> LifecycleEffectArming {
-    if declared.destructive {
-        LifecycleEffectArming::Destructive
-    } else if declared.heads.is_empty() {
-        LifecycleEffectArming::None
-    } else {
-        LifecycleEffectArming::Reversible
-    }
-}
-
-/// The arming a rule keeps across a save that needs no new confirmation: what
-/// it held, lowered to what the new heads can arm. A save never raises arming,
-/// and a rule whose source no longer deletes is no longer armed for deletes.
-pub fn arming_kept_across_edit(
-    stored: LifecycleEffectArming,
-    declared: &LifecycleDeclaredActions,
-) -> LifecycleEffectArming {
-    fn rank(arming: LifecycleEffectArming) -> u8 {
-        match arming {
-            LifecycleEffectArming::None => 0,
-            LifecycleEffectArming::Reversible => 1,
-            LifecycleEffectArming::Destructive => 2,
-        }
-    }
-    let derived = derived_effect_arming(declared);
-    if rank(derived) < rank(stored) {
-        derived
-    } else {
-        stored
-    }
-}
-
-/// The state an operator sees. A rule reads as Enabled only while it holds
-/// exactly the arming enabling it would grant and has not been edited since,
-/// because any other arming lets nothing execute.
+/// The state an operator sees. A stored Enabled rule reads as Enabled only
+/// while it can act exactly as enabling it would allow: it declares an action,
+/// has not been edited since, and holds a deletion confirmation for the
+/// revision in force exactly when its actions can delete. Anything else lets
+/// nothing execute, so it reads as Dry run.
 pub fn lifecycle_rule_state(detail: &LifecycleRuleSetDetail) -> LifecycleRuleState {
     let rule = &detail.rule_set;
-    if rule.evaluation_mode == LifecycleEvaluationMode::Disabled {
-        LifecycleRuleState::Disabled
-    } else if rule.effect_arming != LifecycleEffectArming::None
-        && !rule.destructive_rearm_required
-        && rule.effect_arming == derived_effect_arming(&detail.declared_actions)
-    {
+    let declared = &detail.declared_actions;
+    match rule.state {
+        LifecycleRuleState::Disabled => LifecycleRuleState::Disabled,
         LifecycleRuleState::Enabled
-    } else {
-        LifecycleRuleState::DryRun
+            if !rule.edited_since_enabled
+                && !declared.heads.is_empty()
+                && declared.destructive == rule.destructive_confirmed() =>
+        {
+            LifecycleRuleState::Enabled
+        }
+        LifecycleRuleState::DryRun | LifecycleRuleState::Enabled => LifecycleRuleState::DryRun,
     }
 }
 
 impl AppUseCase {
     /// Move one rule to Disabled, Dry run, or Enabled.
     ///
-    /// Disabled is never evaluated; Dry run is evaluated but unarmed. Enabled
-    /// arms exactly the effects the rule's own action can have
-    /// ([`derived_effect_arming`]); execution still requires the matching
-    /// instance gate as well. Enabling a rule that can delete files is the
+    /// Disabled is never evaluated; Dry run is evaluated but never acts.
+    /// Enabled may act with exactly the effects the rule's own actions can
+    /// have; execution still requires the matching instance gate as well.
+    /// Enabling a rule that can delete files is the
     /// elevated, count-acknowledged step: it additionally requires
     /// system-settings authority, a confirmation of the reviewed revision and
     /// library scope, and the current number of non-terminal candidates.
     /// Enabling any other rule needs no confirmation.
     ///
-    /// Arming never outlives the revision it was granted against: what an
-    /// operator acknowledged is one matcher's blast radius under one action, so
-    /// appending a revision drops an Enabled rule back to Dry run and this call
-    /// has to be repeated against the new matcher (see
+    /// The confirmation never outlives the revision it was given for: what an
+    /// operator acknowledged is one source's blast radius, so appending a
+    /// revision that can delete drops an Enabled rule back to Dry run and this
+    /// call has to be repeated against the new source (see
     /// [`AppUseCase::update_lifecycle_rule_source`]).
     pub async fn set_lifecycle_rule_state(
         &self,
@@ -659,33 +628,20 @@ impl AppUseCase {
 
         let rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
         let mut detail = self.load_lifecycle_rule_detail(rule_set).await?;
-        let (mode, arming) = match state {
-            LifecycleRuleState::Disabled => (
-                LifecycleEvaluationMode::Disabled,
-                LifecycleEffectArming::None,
-            ),
-            LifecycleRuleState::DryRun => (
-                LifecycleEvaluationMode::Observe,
-                LifecycleEffectArming::None,
-            ),
-            LifecycleRuleState::Enabled => (
-                LifecycleEvaluationMode::Observe,
-                derived_effect_arming(&detail.declared_actions),
-            ),
-        };
-        if state == LifecycleRuleState::Enabled
-            && let Some(reason) = detail.load_refusal
-        {
+        let enabling = state == LifecycleRuleState::Enabled;
+        // Enabling a rule whose actions can delete is the confirmed step.
+        let destructive = enabling && detail.declared_actions.destructive;
+        if enabling && let Some(reason) = detail.load_refusal {
             return Err(super::service::stored_actions_refused(reason));
         }
-        if state == LifecycleRuleState::Enabled && arming == LifecycleEffectArming::None {
+        if enabling && !destructive && detail.declared_actions.heads.is_empty() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::lifecycle::RULE_HAS_NO_EFFECT,
                 "this rule's action never changes anything, so it can only run as a dry run",
             ));
         }
 
-        if arming == LifecycleEffectArming::Destructive {
+        if destructive {
             self.require_app_permission(actor, AppPermission::ManageSystemSettings)
                 .await?;
             super::service::require_max_titles_per_run(
@@ -716,18 +672,15 @@ impl AppUseCase {
             }
         }
 
+        // Only the destructive enable stores a confirmation; the store checks
+        // it again under the row lock and writes its revision with the state.
+        let destructive_confirmation = confirmation.as_ref().filter(|_| destructive);
         let now = Utc::now();
         let updated = self
             .services
             .customization
             .lifecycle_rule_sets
-            .update_rule_set_state(
-                &detail.rule_set.id,
-                mode,
-                arming,
-                confirmation.as_ref(),
-                now,
-            )
+            .update_rule_set_state(&detail.rule_set.id, state, destructive_confirmation, now)
             .await?;
         if !updated {
             return Err(AppError::validation_refused(
@@ -738,14 +691,13 @@ impl AppUseCase {
 
         // A rule is scheduled while it is not disabled, so only crossing that
         // line changes what the scheduler holds.
-        let schedule_changed = (detail.rule_set.evaluation_mode
-            == LifecycleEvaluationMode::Disabled)
-            != (mode == LifecycleEvaluationMode::Disabled);
+        let schedule_changed =
+            detail.rule_set.evaluates() != (state != LifecycleRuleState::Disabled);
         // Mirrors the single store write.
-        detail.rule_set.evaluation_mode = mode;
-        detail.rule_set.enabled = mode != LifecycleEvaluationMode::Disabled;
-        detail.rule_set.effect_arming = arming;
-        detail.rule_set.destructive_rearm_required = false;
+        detail.rule_set.state = state;
+        detail.rule_set.edited_since_enabled = false;
+        detail.rule_set.destructive_confirmed_revision =
+            destructive_confirmation.map(|reviewed| reviewed.revision_number);
         detail.rule_set.updated_at = now;
         if schedule_changed {
             self.reload_lifecycle_rule_schedule().await;
@@ -1148,10 +1100,7 @@ impl AppUseCase {
                     break;
                 }
             }
-            if !rule_set.enabled
-                || rule_set.evaluation_mode != LifecycleEvaluationMode::Observe
-                || rule_set.effect_arming == LifecycleEffectArming::None
-            {
+            if rule_set.state != LifecycleRuleState::Enabled {
                 continue;
             }
             let detail = match self.load_lifecycle_rule_detail(rule_set).await {
@@ -1697,17 +1646,19 @@ impl AppUseCase {
             .iter()
             .any(|step| step.descriptor().risk_class == LifecycleRiskClass::High);
         let sequence_requires_reversible = sequence.requires_reversible_gate();
-        let still_eligible = fresh.enabled
-            && fresh.evaluation_mode == LifecycleEvaluationMode::Observe
+        // A step that deletes runs only under the confirmation the operator
+        // gave for exactly this candidate's revision, which must still be the
+        // one in force.
+        let still_eligible = fresh.state == LifecycleRuleState::Enabled
             && fresh.current_revision_number == candidate.revision_number
             && if high_risk {
                 gates.destructive_effects_enabled
-                    && fresh.effect_arming == LifecycleEffectArming::Destructive
-                    && !fresh.destructive_rearm_required
+                    && fresh.destructive_confirmed()
+                    && fresh.destructive_confirmed_revision == Some(candidate.revision_number)
+                    && !fresh.edited_since_enabled
                     && (!sequence_requires_reversible || gates.reversible_effects_enabled)
             } else {
                 gates.reversible_effects_enabled
-                    && fresh.effect_arming != LifecycleEffectArming::None
             };
         if !still_eligible {
             return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);

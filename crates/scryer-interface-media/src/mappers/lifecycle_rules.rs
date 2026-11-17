@@ -10,8 +10,7 @@ use scryer_application::lifecycle_rules::{
     LifecycleActionSequence as AppActionSequence, LifecycleActionStepKind as AppActionStepKind,
     LifecycleActionStepParameters as AppActionStepParameters,
     LifecycleDeclaredActions as AppDeclaredActions, LifecycleSearchCondition as AppSearchCondition,
-    decided_actions_from_json, decided_heads_in_execution_order, derived_effect_arming,
-    lifecycle_rule_state,
+    decided_actions_from_json, decided_heads_in_execution_order, lifecycle_rule_state,
 };
 use scryer_application::lifecycle_rules::{
     LifecyclePreviewResult as AppPreviewResult, LifecycleRuleSetDetail as AppRuleSetDetail,
@@ -51,16 +50,6 @@ pub fn lifecycle_rule_subject_kind_into_application(
         LifecycleRuleSubjectKind::Title => scryer_domain::LifecycleRuleSubjectKind::Title,
         LifecycleRuleSubjectKind::Season => scryer_domain::LifecycleRuleSubjectKind::Season,
         LifecycleRuleSubjectKind::Episode => scryer_domain::LifecycleRuleSubjectKind::Episode,
-    }
-}
-
-pub fn lifecycle_effect_arming_value(
-    arming: scryer_domain::LifecycleEffectArming,
-) -> LifecycleEffectArming {
-    match arming {
-        scryer_domain::LifecycleEffectArming::None => LifecycleEffectArming::None,
-        scryer_domain::LifecycleEffectArming::Reversible => LifecycleEffectArming::Reversible,
-        scryer_domain::LifecycleEffectArming::Destructive => LifecycleEffectArming::Destructive,
     }
 }
 
@@ -165,10 +154,7 @@ pub fn from_lifecycle_rule_set(
         name: rule_set.name.clone(),
         description: rule_set.description.clone(),
         state: lifecycle_rule_state_value(lifecycle_rule_state(detail)),
-        enabled_arming: lifecycle_effect_arming_value(derived_effect_arming(
-            &detail.declared_actions,
-        )),
-        edited_since_enabled: rule_set.destructive_rearm_required,
+        edited_since_enabled: rule_set.edited_since_enabled,
         system_owned: rule_set.system_owned,
         library_ids: rule_set.library_ids.clone(),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
