@@ -373,6 +373,90 @@ pub(crate) async fn record_library_file_for_download(
     }
 }
 
+/// An import of the download's file `source` that ends on the library file
+/// at `library_path` without placing anything, as a re-run that finds the
+/// file already imported: whether the two are one entry is settled here, as
+/// an adoption settles it, before a client may remove the download with its
+/// data. A row with no library-holds mark has not been checked, so this runs
+/// whether or not one is recorded. One entry records the mark, so the client
+/// removes its entry only; separate entries, or a file that is gone, record
+/// nothing. A check that cannot tell refuses as an unknown alias, keeping
+/// everything, so the download is not removed with its data.
+///
+/// Probes: one read of each file; where file numbers on one volume off a
+/// share cannot tell, the set-aside test besides (two renames, one read of
+/// the library file, a second when it is a link, and one listing of its
+/// folder unless both carry numbers on one volume off a share).
+pub(crate) async fn settle_already_imported_source(
+    app: &AppUseCase,
+    import_id: &str,
+    source: &Path,
+    library_path: &Path,
+) -> AppResult<()> {
+    let (owned_source, owned_library) = (source.to_path_buf(), library_path.to_path_buf());
+    let same = tokio::task::spawn_blocking(move || {
+        already_imported_is_source_entry(&owned_source, &owned_library)
+    })
+    .await
+    .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))??;
+    if same {
+        record_library_file_for_download(app, import_id, source, library_path).await?;
+    }
+    Ok(())
+}
+
+fn already_imported_is_source_entry(source: &Path, library_path: &Path) -> AppResult<bool> {
+    use crate::disk::{AsideRemoval, Sameness};
+    let unknown = |why: &str| AppError::RepositoryFailed {
+        message: format!(
+            "could not tell whether library file {} is the download's file {} itself: {why}; nothing was removed",
+            library_path.display(),
+            source.display()
+        ),
+        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+    };
+    if source == library_path {
+        return Ok(true);
+    }
+    let disk = Disk::process();
+    let source_mark = match disk.fingerprint_blocking(source) {
+        Ok(mark) => mark,
+        Err(reading) if reading.exists() == Some(false) => return Ok(false),
+        Err(_) => return Err(unknown("the download's file did not read")),
+    };
+    let kept = match disk.fingerprint_blocking(library_path) {
+        Ok(mark) => mark,
+        Err(reading) if reading.exists() == Some(false) => return Ok(false),
+        Err(_) => return Err(unknown("the library file did not read")),
+    };
+    if !kept.has_other_names() && source_mark.same_file(&kept) == Sameness::Same {
+        return Ok(true);
+    }
+    if !disk.adoption_needs_set_aside(source, &source_mark, library_path, &kept) {
+        return Ok(false);
+    }
+    match disk.tell_apart_by_set_aside_blocking(source, &source_mark, library_path, &kept) {
+        AsideRemoval::Apart => Ok(false),
+        AsideRemoval::SameEntry => Ok(true),
+        AsideRemoval::PutBackFailed { at, .. } | AsideRemoval::SetAsideMoved { at, .. } => {
+            Err(AppError::ManualReconciliationRefused {
+                message: format!(
+                    "the download's file {} was set aside at {} while telling whether library file {} is it, and could not be put back; nothing was removed",
+                    source.display(),
+                    at.display(),
+                    library_path.display()
+                ),
+                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+                facts: vec![crate::RefusalFact {
+                    key: crate::error_reasons::import::KEPT_PATH_FACT,
+                    value: crate::RefusalFactValue::Text(at.display().to_string()),
+                }],
+            })
+        }
+        _ => Err(unknown("the set-aside test did not tell")),
+    }
+}
+
 impl AppUseCase {
     pub async fn list_active_import_streams(
         &self,

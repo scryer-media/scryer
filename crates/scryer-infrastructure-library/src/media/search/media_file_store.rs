@@ -2780,6 +2780,26 @@ impl MediaFileRepository for MediaFileStore {
         Ok(owners)
     }
 
+    async fn list_media_file_paths(&self, file_ids: &[String]) -> AppResult<Vec<(String, String)>> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Same id space and no liveness filter, as `get_media_file_by_id`.
+        let (file_ids, per_statement) = self.title_id_statements(file_ids);
+        let mut paths = Vec::with_capacity(file_ids.len());
+        for chunk in file_ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT mf.id, mf.file_path FROM media_files mf WHERE mf.id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                paths.push((row.text("id")?, row.text("file_path")?));
+            }
+        }
+        Ok(paths)
+    }
+
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
         let dialect = dialect_for_datastore(&self.datastore);
         let (where_clause, args) = media_file_path_predicate(file_path);
@@ -4153,6 +4173,46 @@ mod tests {
         Collection, CollectionType, Episode, MediaFacet, MovieEntity, SeriesMovieLink, Title,
     };
     use scryer_infrastructure_datastore::SqliteServices;
+
+    /// The stored path of each asked file that has a row, in one read; ids
+    /// with no row are left out.
+    #[tokio::test]
+    async fn media_file_paths_are_read_for_the_asked_ids_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("paths.db").to_string_lossy())
+            .await
+            .unwrap();
+        title_store(&services)
+            .create(make_test_series_title("selected"))
+            .await
+            .unwrap();
+        let files = media_file_store(&services);
+        let mut ids = Vec::new();
+        for name in ["first", "second", "unasked"] {
+            ids.push(
+                files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: "selected".into(),
+                        file_path: format!("/synthetic/{name}.mkv"),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let mut paths = files
+            .list_media_file_paths(&[ids[0].clone(), ids[1].clone(), "no-such-file".into()])
+            .await
+            .unwrap();
+        paths.sort();
+        let mut expected = vec![
+            (ids[0].clone(), "/synthetic/first.mkv".to_string()),
+            (ids[1].clone(), "/synthetic/second.mkv".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(paths, expected);
+        assert!(files.list_media_file_paths(&[]).await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn score_evaluation_episode_selection_deduplicates_shared_files() {

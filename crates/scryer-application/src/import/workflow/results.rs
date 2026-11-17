@@ -2890,9 +2890,16 @@ fn skip_reason_for_import_check_code(
     }
 }
 
+/// The skip reason for a refused check. A duplicate of a cataloged library
+/// file is already imported, and this run placed nothing: for a download, so
+/// whether its file is that library file itself is settled before anything
+/// records the skip, and before its client may remove it with its data.
 async fn skip_reason_for_import_check_rejection(
     app: &AppUseCase,
+    import_id: &str,
+    completed: Option<&CompletedDownload>,
     code: crate::import_checks::ImportCheckCode,
+    source_path: &Path,
     dest_path: &Path,
 ) -> AppResult<ImportSkipReason> {
     if code.is_duplicate_file() {
@@ -2906,6 +2913,9 @@ async fn skip_reason_for_import_check_rejection(
             .is_some();
         if !cataloged {
             return Ok(ImportSkipReason::DuplicateFile);
+        }
+        if completed.is_some() {
+            settle_already_imported_source(app, import_id, source_path, dest_path).await?;
         }
     }
     Ok(skip_reason_for_import_check_code(code))

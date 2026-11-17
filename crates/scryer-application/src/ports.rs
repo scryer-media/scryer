@@ -10427,6 +10427,19 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(owners)
     }
 
+    /// `(file id, stored path)` for each of `file_ids` that has a row, the
+    /// path `get_media_file_by_id` reports. Order is not guaranteed. SQL
+    /// stores read only the two columns; the default reads each row.
+    async fn list_media_file_paths(&self, file_ids: &[String]) -> AppResult<Vec<(String, String)>> {
+        let mut paths = Vec::with_capacity(file_ids.len());
+        for file_id in file_ids {
+            if let Some(file) = self.get_media_file_by_id(file_id).await? {
+                paths.push((file_id.clone(), file.file_path));
+            }
+        }
+        Ok(paths)
+    }
+
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>>;
 
     /// Batch-load media files by path, pairing each hit with the path that was

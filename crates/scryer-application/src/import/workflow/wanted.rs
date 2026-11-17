@@ -248,7 +248,15 @@ async fn execute_resolved_episode_import(
                 message: reason,
                 reason_code: Some(code.as_str().to_string()),
                 skip_reason: Some(
-                    skip_reason_for_import_check_rejection(app, code, &dest_path).await?,
+                    skip_reason_for_import_check_rejection(
+                        app,
+                        import_id,
+                        completed,
+                        code,
+                        source_video,
+                        &dest_path,
+                    )
+                    .await?,
                 ),
                 episode_ids: target_episode_ids.clone(),
                 already_present_destination: reused_episode_destination(
@@ -415,7 +423,15 @@ async fn execute_resolved_episode_import(
             message: reason,
             reason_code: Some(code.as_str().to_string()),
             skip_reason: Some(
-                skip_reason_for_import_check_rejection(app, code, &precheck_dest_path).await?,
+                skip_reason_for_import_check_rejection(
+                    app,
+                    import_id,
+                    completed,
+                    code,
+                    source_video,
+                    &precheck_dest_path,
+                )
+                .await?,
             ),
             episode_ids: target_episode_ids.clone(),
             already_present_destination: reused_episode_destination(

@@ -1660,6 +1660,18 @@ async fn import_additional_movie_download(
         } else {
             "rejected"
         };
+        // Settled before the artifact that lets a later run call it imported.
+        let skip_reason = Some(
+            skip_reason_for_import_check_rejection(
+                app,
+                import_id,
+                Some(completed),
+                code,
+                source_video,
+                &dest_path,
+            )
+            .await?,
+        );
         persist_file_import_artifact(
             app,
             import_id,
@@ -1673,8 +1685,6 @@ async fn import_additional_movie_download(
             linked_episode_artifacts,
         )
         .await?;
-        let skip_reason =
-            Some(skip_reason_for_import_check_rejection(app, code, &dest_path).await?);
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
@@ -2157,6 +2167,18 @@ async fn import_movie_download(
         } else {
             "rejected"
         };
+        // Settled before the artifact that lets a later run call it imported.
+        let skip_reason = Some(
+            skip_reason_for_import_check_rejection(
+                app,
+                import_id,
+                Some(completed),
+                code,
+                &source_video,
+                &dest_path,
+            )
+            .await?,
+        );
         persist_file_import_artifact(
             app,
             import_id,
@@ -2170,8 +2192,6 @@ async fn import_movie_download(
             &[],
         )
         .await?;
-        let skip_reason =
-            Some(skip_reason_for_import_check_rejection(app, code, &dest_path).await?);
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
