@@ -64,7 +64,8 @@ impl StreamedContentHasher {
     }
 }
 
-fn persisted_hashes(hashes: ContentHashes) -> StreamedContentHashes {
+/// The pair persisted with a media file, from what a copy streamed.
+pub fn persisted_hashes(hashes: ContentHashes) -> StreamedContentHashes {
     StreamedContentHashes {
         size_bytes: hashes.size_bytes,
         crc_algorithm: match hashes.crc_kind {

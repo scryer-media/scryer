@@ -85,7 +85,8 @@ pub use copy::{CacheBypass, ReadBackHandle, ReadBackOpener, open_cache_bypassed}
 pub use copy::{
     Cancel, ContentHasher, ContentHashes, Copied, CopyAdmission, CopyPermit, CrcKind, Depth,
     Evidence, FILE_NAME_MAX_BYTES, HashRefusal, Landing, Phase, Progress, Proof,
-    RESUMABLE_STAGING_SUFFIX, Verdict, Watch, resumable_staging_path,
+    RESUMABLE_STAGING_SUFFIX, StagedCause, StagedCopy, StagedCopyRefusal, StagedStep, Verdict,
+    Watch, resumable_staging_path,
 };
 pub use mark::{Drift, Mark, Sameness};
 pub use pass::DiskPass;
@@ -542,6 +543,9 @@ struct Inner {
     calls: Mutex<std::collections::HashMap<&'static str, u64>>,
     #[cfg(test)]
     probe_timeout: Mutex<Option<std::time::Duration>>,
+    /// Raw error codes the next syncs of a written file fail with, in order.
+    #[cfg(test)]
+    sync_faults: Mutex<std::collections::VecDeque<i32>>,
 }
 
 /// The filesystem owner. Cheap to clone; clones share one cache.
@@ -580,6 +584,8 @@ impl Disk {
                 calls: Mutex::default(),
                 #[cfg(test)]
                 probe_timeout: Mutex::default(),
+                #[cfg(test)]
+                sync_faults: Mutex::default(),
             }),
             read_back: None,
         }
@@ -1438,6 +1444,11 @@ impl Disk {
         file: std::fs::File,
     ) -> Result<SyncOutcome, DiskError> {
         let result = self.call("sync_handle", || self.inner.backend.sync_handle(&file));
+        #[cfg(test)]
+        let result = match self.inner.sync_faults.lock().unwrap().pop_front() {
+            Some(code) => Err(io::Error::from_raw_os_error(code)),
+            None => result,
+        };
         drop(file);
         self.inner.cache.evict(&key_of(path));
         result.map_err(|error| DiskError::new(DiskVerb::Sync, path, error))

@@ -1103,6 +1103,9 @@ impl Job<'_> {
             opening: Opening::Held,
             hash: false,
             sync_folder: false,
+            carry_permissions: true,
+            chunk_bytes: crate::copy::CHUNK_BYTES,
+            seen: None,
             watch: self.watch,
         };
         let sync = write_copy(self.disk, self.source, target, writing)

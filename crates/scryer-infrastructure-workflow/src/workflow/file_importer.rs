@@ -3,23 +3,23 @@ use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
     ImportFileTransferProgress, ImportFileTransferProgressSender,
     disk::{
-        self, Disk, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Open, Parents, PathReading,
-        Refused, Removal, Remove, Unproven,
+        self, Cancel, Disk, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Open, Parents,
+        PathReading, Phase, Progress, Refused, Removal, Remove, StagedCause, StagedCopy,
+        StagedCopyRefusal, StagedStep, Unproven, Watch,
     },
     fs_integrity::import_content_proof,
-    location::verify::StreamedContentHasher,
+    location::verify::persisted_hashes,
 };
 use scryer_domain::{
     ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportMode,
     ImportSourceCleanupGuard, ImportSourceDisposition, ImportSourceIdentity,
     ImportSourceIdentityKind, ImportSourceSnapshot, ImportStrategy, ImportTransferPhase,
-    ImportVerification, StreamedContentHashes, VerificationDepth,
+    ImportVerification, VerificationDepth,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, OnceLock, Weak,
@@ -81,8 +81,9 @@ fn import_error_context(error: &AppError, message: String) -> AppError {
     }
 }
 
-const TRANSIENT_BAD_FILE_DESCRIPTOR_ERRNO: i32 = 9;
-const IMPORT_COPY_MAX_ATTEMPTS: usize = 3;
+/// A copy that fails on a dropped file handle is made twice more, after these
+/// pauses.
+const IMPORT_COPY_RETRY_PAUSES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 const IMPORT_COPY_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const IMPORT_FILE_STALL_TIMEOUT_ENV: &str = "SCRYER_IMPORT_FILE_STALL_TIMEOUT_SECONDS";
 const DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS: u64 = 30 * 60;
@@ -809,10 +810,6 @@ struct ImportFileOptions {
     force_read_back_unsupported: bool,
     #[cfg(test)]
     force_delete_failure: bool,
-    #[cfg(test)]
-    force_transient_copy_failures: u8,
-    #[cfg(test)]
-    force_non_transient_copy_failure: bool,
     #[cfg(all(test, unix))]
     force_foreign_source_uid: bool,
     #[cfg(all(test, unix))]
@@ -1029,36 +1026,6 @@ fn force_delete_failure(options: &ImportFileOptions) -> bool {
 #[cfg(not(test))]
 fn force_delete_failure(_: &ImportFileOptions) -> bool {
     false
-}
-
-#[cfg(test)]
-fn force_copy_attempt_error(
-    temp_file: &mut std::fs::File,
-    options: &ImportFileOptions,
-    attempt: usize,
-) -> std::io::Result<()> {
-    if options.force_non_transient_copy_failure {
-        temp_file.write_all(b"partial non-transient copy failure")?;
-        temp_file.flush()?;
-        return Err(io_other("forced non-transient copy failure"));
-    }
-    if attempt <= usize::from(options.force_transient_copy_failures) {
-        temp_file.write_all(format!("partial transient copy failure {attempt}").as_bytes())?;
-        temp_file.flush()?;
-        return Err(std::io::Error::from_raw_os_error(
-            TRANSIENT_BAD_FILE_DESCRIPTOR_ERRNO,
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(test))]
-fn force_copy_attempt_error(
-    _temp_file: &mut std::fs::File,
-    _options: &ImportFileOptions,
-    _attempt: usize,
-) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -1594,37 +1561,6 @@ fn import_symlink_source(
     }
 }
 
-#[derive(Debug)]
-struct ImportCopyAttemptError {
-    stage: &'static str,
-    error: std::io::Error,
-}
-
-impl ImportCopyAttemptError {
-    fn new(stage: &'static str, error: std::io::Error) -> Self {
-        Self { stage, error }
-    }
-
-    fn is_transient_file_handle_error(&self) -> bool {
-        self.error.raw_os_error() == Some(TRANSIENT_BAD_FILE_DESCRIPTOR_ERRNO)
-    }
-
-    fn is_cancellation(&self) -> bool {
-        self.stage == "copy cancelled"
-    }
-}
-
-impl fmt::Display for ImportCopyAttemptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.stage, self.error)
-    }
-}
-
-fn remove_import_temp_file(temp_dest: &Path) -> std::io::Result<()> {
-    Disk::process().remove_blocking(temp_dest, Remove::File)?;
-    Ok(())
-}
-
 /// Removes a file whose presence this import has just proved, where a file
 /// already gone is a failure as well: something else changed the path.
 fn remove_placed_file(path: &Path) -> io::Result<()> {
@@ -1634,21 +1570,6 @@ fn remove_placed_file(path: &Path) -> io::Result<()> {
             io::ErrorKind::NotFound,
             format!("{} is already gone", path.display()),
         )),
-    }
-}
-
-#[cfg(test)]
-fn sleep_before_import_copy_retry(_delay: Duration) {}
-
-#[cfg(not(test))]
-fn sleep_before_import_copy_retry(delay: Duration) {
-    std::thread::sleep(delay);
-}
-
-fn import_copy_retry_delay(attempt: usize) -> Duration {
-    match attempt {
-        1 => Duration::from_secs(1),
-        _ => Duration::from_secs(3),
     }
 }
 
@@ -1667,122 +1588,64 @@ fn report_import_transfer_progress(
     }
 }
 
-struct ImportCopyAttempt<'a> {
-    source: &'a Path,
-    dest: &'a Path,
-    temp_dest: &'a Path,
-    source_fingerprint: &'a ImportSourceFingerprint,
-    size: u64,
-    progress: Option<&'a ImportFileTransferProgressSender>,
-    cancellation: Option<&'a scryer_application::ImportCancellation>,
-}
-
-fn copy_regular_source_to_destination_once(
-    attempt_context: ImportCopyAttempt<'_>,
-    options: ImportFileOptions,
-    attempt: usize,
-) -> Result<StreamedContentHashes, ImportCopyAttemptError> {
-    let ImportCopyAttempt {
-        source,
-        dest,
-        temp_dest,
-        source_fingerprint,
-        size,
-        progress,
-        cancellation,
-    } = attempt_context;
-
-    if cancellation.is_some_and(scryer_application::ImportCancellation::is_cancelled) {
-        return Err(ImportCopyAttemptError::new(
-            "copy cancelled",
-            io_other("import copy was cancelled before it started"),
-        ));
-    }
-
-    ensure_same_source(source, source_fingerprint)
-        .map_err(io_other)
-        .map_err(|error| ImportCopyAttemptError::new("source preflight", error))?;
-    let disk = Disk::process();
-    let mut source_file = disk
-        .open_blocking(source, Open::read())
-        .map_err(|error| ImportCopyAttemptError::new("source open", error.into()))?;
-    let source_open_fingerprint = fingerprint_from_metadata(
-        &source_file
-            .metadata()
-            .map_err(|error| ImportCopyAttemptError::new("source metadata", error))?,
-    )
-    .map_err(io_other)
-    .map_err(|error| ImportCopyAttemptError::new("source validation", error))?;
-    if source_open_fingerprint != source_fingerprint.file {
-        return Err(ImportCopyAttemptError::new(
-            "source validation",
-            io_other("import source changed before copy"),
-        ));
-    }
-
-    let mut temp_file = disk
-        .open_blocking(temp_dest, Open::create())
-        .map_err(|error| ImportCopyAttemptError::new("temp create", error.into()))?;
-    force_copy_attempt_error(&mut temp_file, &options, attempt)
-        .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
-    report_import_transfer_progress(progress, ImportTransferPhase::Copying, 0, size);
-    let mut copied = 0u64;
-    // FR-045: the same one-pass CRC + BLAKE3 a location operation's copy uses.
-    // The source is read exactly once, so the hashes cost nothing beyond the
-    // arithmetic; a second pass over multi-gigabyte media would not be
-    // affordable and is exactly what D2 exists to avoid.
-    let mut hasher = StreamedContentHasher::new();
-    let mut buffer = vec![0u8; IMPORT_COPY_BUFFER_BYTES];
-    loop {
-        if cancellation.is_some_and(scryer_application::ImportCancellation::is_cancelled) {
-            return Err(ImportCopyAttemptError::new(
-                "copy cancelled",
-                io_other("import copy was cancelled"),
+/// A staged copy the disk service refused, as an import reports it.
+fn import_copy_refusal(
+    source: &Path,
+    dest: &Path,
+    temp_dest: &Path,
+    refusal: StagedCopyRefusal,
+) -> AppError {
+    let (source, dest) = (source.display(), dest.display());
+    let attempts = refusal.attempts;
+    let changed = || io_other(format!("import source changed during import: {source}"));
+    let unread = |error: io::Error| {
+        let said = format!("import path not found or inaccessible: {source}: {error}");
+        io::Error::new(error.kind(), said)
+    };
+    let (stage, error) = match (refusal.step, refusal.cause) {
+        (_, StagedCause::Cancelled) => {
+            return AppError::canceled(format!(
+                "filesystem copy was cancelled: {source} -> {dest}"
             ));
         }
-        let read = source_file
-            .read(&mut buffer)
-            .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
-        if read == 0 {
-            break;
+        (StagedStep::ClearStaged, StagedCause::Io(error)) => {
+            return import_io_error(
+                &error,
+                format!(
+                    "import copy failed before attempt {attempts}: {source} -> {dest}: cleanup of temporary destination {} failed: {error}",
+                    temp_dest.display()
+                ),
+            );
         }
-        temp_file
-            .write_all(&buffer[..read])
-            .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
-        hasher.update(&buffer[..read]);
-        copied = copied.saturating_add(read as u64);
-        report_import_transfer_progress(progress, ImportTransferPhase::Copying, copied, size);
-    }
-    report_import_transfer_progress(progress, ImportTransferPhase::Finalizing, copied, size);
-    temp_file
-        .flush()
-        .map_err(|error| ImportCopyAttemptError::new("flush", error))?;
-    let sync = disk
-        .finish_blocking(temp_dest, temp_file)
-        .map_err(|error| ImportCopyAttemptError::new("sync", error.into()))?;
-    if sync == scryer_application::disk::SyncOutcome::Unconfirmed {
-        // Verification below, not the sync, guards the source before cleanup.
-        tracing::debug!(
-            dest = %dest.display(),
-            "import destination filesystem does not support fsync; relying on copy verification"
-        );
-    }
-
-    ensure_same_source(source, source_fingerprint)
-        .map_err(io_other)
-        .map_err(|error| ImportCopyAttemptError::new("source verification", error))?;
-
-    disk.move_claimed_blocking(temp_dest, dest)
-        .map_err(|error| ImportCopyAttemptError::new("final rename", error.into()))?;
-
-    Ok(hasher.finalize())
+        (StagedStep::SourceBefore, StagedCause::Io(error)) => ("source preflight", unread(error)),
+        (StagedStep::SourceBefore, _) => ("source preflight", changed()),
+        (StagedStep::SourceAfter, StagedCause::Io(error)) => ("source verification", unread(error)),
+        (StagedStep::SourceAfter, _) => ("source verification", changed()),
+        (StagedStep::SourceHandle, StagedCause::Io(error)) => ("source metadata", error),
+        (_, StagedCause::SourceChanged) => (
+            "source validation",
+            io_other("import source changed before copy"),
+        ),
+        (StagedStep::OpenSource, StagedCause::Io(error)) => ("source open", error),
+        (StagedStep::OpenStaged, StagedCause::Io(error)) => ("temp create", error),
+        (StagedStep::Flush, StagedCause::Io(error)) => ("flush", error),
+        (StagedStep::Sync, StagedCause::Io(error)) => ("sync", error),
+        (StagedStep::Promote, StagedCause::Io(error)) => ("final rename", error),
+        (StagedStep::Transfer, StagedCause::Io(error)) => ("copy", error),
+    };
+    import_io_error(
+        &error,
+        format!(
+            "import copy failed after {attempts} attempt(s): {source} -> {dest}: {stage}: {error}"
+        ),
+    )
 }
 
-/// Copies one regular file and proves the destination at `depth` (FR-045).
+/// Copies one regular file through the disk service and proves the
+/// destination at `depth`.
 ///
 /// Returns the streamed hashes and what verification concluded. A destination
-/// that cannot be proven is removed and the import fails: that is the FR-044
-/// gate expressed at the only place an import copies bytes — an import that
+/// that cannot be proven is removed and the import fails. An import that
 /// errors here never reaches source cleanup, so a corrupt copy can never cost
 /// the user the original.
 #[allow(clippy::too_many_arguments)]
@@ -1790,6 +1653,7 @@ fn copy_regular_source_to_destination(
     source: &Path,
     dest: &Path,
     source_fingerprint: &ImportSourceFingerprint,
+    source_mark: &Mark,
     size: u64,
     options: ImportFileOptions,
     depth: VerificationDepth,
@@ -1797,68 +1661,42 @@ fn copy_regular_source_to_destination(
     cancellation: Option<&scryer_application::ImportCancellation>,
 ) -> AppResult<ImportVerification> {
     let temp_dest = dest.with_extension("tmp_import");
-    let mut attempt = 1usize;
-
-    let hashes = loop {
-        if let Err(error) = remove_import_temp_file(&temp_dest) {
-            return Err(import_io_error(
-                &error,
-                format!(
-                    "import copy failed before attempt {}: {} -> {}: cleanup of temporary destination {} failed: {}",
-                    attempt,
-                    source.display(),
-                    dest.display(),
-                    temp_dest.display(),
-                    error
-                ),
-            ));
-        }
-
-        match copy_regular_source_to_destination_once(
-            ImportCopyAttempt {
-                source,
-                dest,
-                temp_dest: &temp_dest,
-                source_fingerprint,
-                size,
-                progress,
-                cancellation,
-            },
-            options,
-            attempt,
-        ) {
-            Ok(hashes) => break hashes,
-            Err(error) => {
-                let cancelled = error.is_cancellation();
-                let should_retry =
-                    error.is_transient_file_handle_error() && attempt < IMPORT_COPY_MAX_ATTEMPTS;
-                let _ = remove_import_temp_file(&temp_dest);
-                if cancelled {
-                    return Err(AppError::canceled(format!(
-                        "filesystem copy was cancelled: {} -> {}",
-                        source.display(),
-                        dest.display()
-                    )));
+    let sender = progress.cloned();
+    let watch = Watch {
+        // The last chunk is followed at once by the finalizing phase, which
+        // covers the flush, the sync and the rename.
+        progress: Progress::to(move |phase, bytes| {
+            if phase == Phase::Copying {
+                let copying = ImportTransferPhase::Copying;
+                report_import_transfer_progress(sender.as_ref(), copying, bytes, size);
+                if bytes >= size {
+                    let finalizing = ImportTransferPhase::Finalizing;
+                    report_import_transfer_progress(sender.as_ref(), finalizing, bytes, size);
                 }
-                if should_retry {
-                    sleep_before_import_copy_retry(import_copy_retry_delay(attempt));
-                    attempt += 1;
-                    continue;
-                }
-
-                return Err(import_io_error(
-                    &error.error,
-                    format!(
-                        "import copy failed after {} attempt(s): {} -> {}: {}",
-                        attempt,
-                        source.display(),
-                        dest.display(),
-                        error
-                    ),
-                ));
             }
-        }
+        }),
+        cancel: match cancellation.cloned() {
+            Some(cancellation) => Cancel::when(move || cancellation.is_cancelled()),
+            None => Cancel::never(),
+        },
     };
+    // The import's own landing, every part of it stated: the `.tmp_import`
+    // name is this import's and is cleared, the folder is not fsynced, the
+    // source's permissions are not carried, and the source is checked by
+    // name before and after and through the handle the copy reads.
+    let landing = StagedCopy {
+        staged: &temp_dest,
+        seen: source_mark,
+        clear_staged: true,
+        sync_folder: false,
+        carry_permissions: false,
+        bad_handle_pauses: &IMPORT_COPY_RETRY_PAUSES,
+        chunk_bytes: IMPORT_COPY_BUFFER_BYTES,
+    };
+    let hashes = Disk::process()
+        .copy_staged_blocking(source, dest, &landing, &watch)
+        .map(persisted_hashes)
+        .map_err(|refusal| import_copy_refusal(source, dest, &temp_dest, refusal))?;
 
     if force_copy_verification_failure(&options) {
         let _ = Disk::process().remove_blocking(dest, Remove::File);
@@ -2473,13 +2311,14 @@ fn reconcile_existing_destination(
 }
 
 fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult<ImportFileResult> {
-    ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
+    let source_mark = same_source_mark(&prepared.source, &prepared.source_fingerprint)?;
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
     ensure_import_destination_absent(&prepared.dest)?;
     let verification = copy_regular_source_to_destination(
         &prepared.source,
         &prepared.dest,
         &prepared.source_fingerprint,
+        &source_mark,
         prepared.size,
         prepared.options,
         prepared.verification_depth,
@@ -2636,6 +2475,7 @@ fn import_hardlink_or_copy_blocking(
         &source,
         &dest,
         &source_fingerprint,
+        &source_mark,
         size,
         options,
         verification_depth,
@@ -5130,7 +4970,7 @@ mod tests {
         // them (D2) — not a second read. Compared against the same hasher fed
         // directly, so a copy loop that dropped or double-fed a buffer would
         // show up here.
-        let mut expected = StreamedContentHasher::new();
+        let mut expected = scryer_application::location::verify::StreamedContentHasher::new();
         expected.update(b"fake video bytes");
         assert_eq!(verification.hashes, expected.finalize());
         assert_eq!(
@@ -5866,103 +5706,6 @@ mod tests {
         assert!(error.to_string().contains("import copy failed"));
         assert!(source.exists());
         assert!(!dest.exists());
-    }
-
-    #[test]
-    fn move_mode_copy_retries_transient_bad_file_descriptor() {
-        let source_dir = tempfile::tempdir().expect("source tempdir");
-        let dest_dir = tempfile::tempdir().expect("dest tempdir");
-        let source = source_dir.path().join("source.mkv");
-        std::fs::write(&source, b"fake video bytes").expect("write source");
-        let dest = dest_dir.path().join("Imported.Movie.mkv");
-        let temp_dest = dest.with_extension("tmp_import");
-
-        let result = import_file_blocking(
-            source.clone(),
-            dest.clone(),
-            ImportMode::Move,
-            ImportFileOptions {
-                force_cross_device_move: true,
-                force_transient_copy_failures: 1,
-                ..Default::default()
-            },
-            None,
-            None,
-            ImportFilePermissions::default(),
-        )
-        .expect("copy should retry and succeed");
-
-        assert_eq!(result.strategy, ImportStrategy::Copy);
-        assert!(source.exists());
-        assert_eq!(
-            std::fs::read(&dest).expect("read dest"),
-            b"fake video bytes"
-        );
-        assert!(!temp_dest.exists());
-    }
-
-    #[test]
-    fn move_mode_copy_exhausts_transient_bad_file_descriptor_retries() {
-        let source_dir = tempfile::tempdir().expect("source tempdir");
-        let dest_dir = tempfile::tempdir().expect("dest tempdir");
-        let source = source_dir.path().join("source.mkv");
-        std::fs::write(&source, b"fake video bytes").expect("write source");
-        let dest = dest_dir.path().join("Imported.Movie.mkv");
-        let temp_dest = dest.with_extension("tmp_import");
-
-        let error = import_file_blocking(
-            source.clone(),
-            dest.clone(),
-            ImportMode::Move,
-            ImportFileOptions {
-                force_cross_device_move: true,
-                force_transient_copy_failures: 3,
-                ..Default::default()
-            },
-            None,
-            None,
-            ImportFilePermissions::default(),
-        )
-        .expect_err("copy should fail after retry budget");
-
-        let message = error.to_string();
-        assert!(message.contains("import copy failed after 3 attempt(s)"));
-        assert!(message.contains("copy: Bad file descriptor"));
-        assert!(source.exists());
-        assert!(!dest.exists());
-        assert!(!temp_dest.exists());
-    }
-
-    #[test]
-    fn move_mode_copy_does_not_retry_non_transient_copy_error() {
-        let source_dir = tempfile::tempdir().expect("source tempdir");
-        let dest_dir = tempfile::tempdir().expect("dest tempdir");
-        let source = source_dir.path().join("source.mkv");
-        std::fs::write(&source, b"fake video bytes").expect("write source");
-        let dest = dest_dir.path().join("Imported.Movie.mkv");
-        let temp_dest = dest.with_extension("tmp_import");
-
-        let error = import_file_blocking(
-            source.clone(),
-            dest.clone(),
-            ImportMode::Move,
-            ImportFileOptions {
-                force_cross_device_move: true,
-                force_non_transient_copy_failure: true,
-                ..Default::default()
-            },
-            None,
-            None,
-            ImportFilePermissions::default(),
-        )
-        .expect_err("copy should fail without retry");
-
-        let message = error.to_string();
-        assert!(message.contains("import copy failed after 1 attempt(s)"));
-        assert!(message.contains("copy: forced non-transient copy failure"));
-        assert!(source.exists());
-        assert!(!dest.exists());
-        assert!(!temp_dest.exists());
     }
 
     #[test]

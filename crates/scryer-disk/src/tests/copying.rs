@@ -4,6 +4,7 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use super::*;
 use crate::copy::{Opening, Writing, write_copy};
@@ -28,6 +29,9 @@ fn claiming(watch: &Watch) -> Writing<'_> {
         opening: Opening::Claim,
         hash: true,
         sync_folder: false,
+        carry_permissions: true,
+        chunk_bytes: 1024 * 1024,
+        seen: None,
         watch,
     }
 }
@@ -420,4 +424,225 @@ fn a_move_that_would_need_a_recorded_copy_is_refused() {
     assert_eq!(refused, Err(Refused::NeedsCopy));
     assert!(!dest.exists());
     assert_eq!(std::fs::read(&source).unwrap(), b"incoming");
+}
+
+// ── A copy staged under the caller's name ────────────────────────────────────
+
+const PAUSES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+
+/// A synthetic source, the names a staged copy of it uses, and a disk whose
+/// clock the test reads.
+struct StagedFixture {
+    _temp: tempfile::TempDir,
+    disk: Disk,
+    clock: Arc<ManualClock>,
+    source: PathBuf,
+    staged: PathBuf,
+    dest: PathBuf,
+    seen: Mark,
+}
+
+impl StagedFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("sample-source.mkv");
+        std::fs::write(&source, payload()).unwrap();
+        let clock = ManualClock::at(at(0));
+        Self {
+            disk: Disk::with_seams(Arc::new(SystemBackend), clock.clone()),
+            clock,
+            seen: Mark::of(&std::fs::symlink_metadata(&source).unwrap()),
+            staged: temp.path().join("sample-dest.staged"),
+            dest: temp.path().join("sample-dest.mkv"),
+            source,
+            _temp: temp,
+        }
+    }
+
+    fn copy(&self, clear_staged: bool, watch: &Watch) -> Result<ContentHashes, StagedCopyRefusal> {
+        let how = StagedCopy {
+            staged: &self.staged,
+            seen: &self.seen,
+            clear_staged,
+            sync_folder: false,
+            carry_permissions: false,
+            bad_handle_pauses: &PAUSES,
+            chunk_bytes: 1024 * 1024,
+        };
+        self.disk
+            .copy_staged_blocking(&self.source, &self.dest, &how, watch)
+    }
+
+    fn drop_handles(&self, codes: &[i32]) {
+        self.disk.inner.sync_faults.lock().unwrap().extend(codes);
+    }
+
+    fn paused(&self) -> chrono::Duration {
+        self.clock.now() - at(0)
+    }
+}
+
+/// The caller's staged name is cleared and reused, the copy takes the
+/// destination name, and the source's permissions are not carried.
+#[test]
+fn a_staged_copy_clears_its_own_name_and_lands_whole() {
+    let fixture = StagedFixture::new();
+    std::fs::write(&fixture.staged, b"left by an earlier attempt, and longer").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let read_only = std::fs::Permissions::from_mode(0o444);
+        std::fs::set_permissions(&fixture.source, read_only).unwrap();
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let watch = Watch {
+        progress: Progress::to(move |phase, bytes| sink.lock().unwrap().push((phase, bytes))),
+        cancel: Cancel::never(),
+    };
+
+    let hashes = fixture.copy(true, &watch).expect("the copy lands");
+
+    let mut expected = ContentHasher::new();
+    expected.update(&payload());
+    assert_eq!(hashes, expected.finalize());
+    assert_eq!(std::fs::read(&fixture.dest).unwrap(), payload());
+    assert!(!fixture.staged.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&fixture.dest)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_ne!(
+            mode & 0o200,
+            0,
+            "the copy is not read-only as its source is"
+        );
+    }
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.first(), Some(&(Phase::Copying, 0)));
+    assert_eq!(seen.last(), Some(&(Phase::Copying, payload().len() as u64)));
+    assert_eq!(fixture.paused(), chrono::Duration::zero());
+}
+
+/// A file handle dropped under the copy is tried again after the first
+/// pause, which passes on the disk's clock, and the partial file is cleared.
+#[test]
+fn a_staged_copy_tries_again_after_a_dropped_handle() {
+    let fixture = StagedFixture::new();
+    fixture.drop_handles(&[9]);
+
+    fixture
+        .copy(true, &Watch::nobody())
+        .expect("the second attempt lands");
+
+    assert_eq!(std::fs::read(&fixture.dest).unwrap(), payload());
+    assert!(!fixture.staged.exists());
+    assert_eq!(fixture.paused(), chrono::Duration::seconds(1));
+}
+
+/// Three attempts, a second and then three apart, and no more. Nothing is
+/// left at either name and the source is as it was.
+#[test]
+fn a_staged_copy_gives_up_after_its_pauses() {
+    let fixture = StagedFixture::new();
+    fixture.drop_handles(&[9, 9, 9, 9]);
+
+    let refusal = fixture
+        .copy(true, &Watch::nobody())
+        .expect_err("no attempt lands");
+
+    assert_eq!((refusal.step, refusal.attempts), (StagedStep::Sync, 3));
+    assert!(matches!(refusal.cause, StagedCause::Io(error) if error.raw_os_error() == Some(9)));
+    assert_eq!(fixture.paused(), chrono::Duration::seconds(4));
+    assert!(!fixture.dest.exists() && !fixture.staged.exists());
+    assert_eq!(std::fs::read(&fixture.source).unwrap(), payload());
+}
+
+/// Any other failure is not tried again.
+#[test]
+fn a_staged_copy_does_not_retry_another_failure() {
+    let fixture = StagedFixture::new();
+    fixture.drop_handles(&[5]);
+
+    let refusal = fixture
+        .copy(true, &Watch::nobody())
+        .expect_err("the copy fails");
+
+    assert_eq!((refusal.step, refusal.attempts), (StagedStep::Sync, 1));
+    assert_eq!(fixture.paused(), chrono::Duration::zero());
+    assert!(!fixture.dest.exists() && !fixture.staged.exists());
+}
+
+/// A source that is no longer the file the caller read stops the copy before
+/// anything is written, and one that stops being it is not given the name.
+#[test]
+fn a_staged_copy_stops_when_its_source_is_not_the_file_read() {
+    let fixture = StagedFixture::new();
+    std::fs::write(&fixture.source, b"rewritten, and shorter").unwrap();
+
+    let refusal = fixture
+        .copy(true, &Watch::nobody())
+        .expect_err("the source changed");
+
+    assert_eq!(
+        (refusal.step, refusal.attempts),
+        (StagedStep::SourceBefore, 1)
+    );
+    assert!(matches!(refusal.cause, StagedCause::SourceChanged));
+    assert!(!fixture.dest.exists() && !fixture.staged.exists());
+
+    // Rewritten while its last chunk is reported: caught by name afterwards.
+    let fixture = StagedFixture::new();
+    let (source, whole) = (fixture.source.clone(), payload().len() as u64);
+    let watch = Watch {
+        progress: Progress::to(move |_, bytes| {
+            if bytes == whole {
+                std::fs::write(&source, b"rewritten under the copy").unwrap();
+            }
+        }),
+        cancel: Cancel::never(),
+    };
+    let refusal = fixture.copy(true, &watch).expect_err("the source changed");
+    assert_eq!(refusal.step, StagedStep::SourceAfter);
+    assert!(matches!(refusal.cause, StagedCause::SourceChanged));
+    assert!(!fixture.dest.exists() && !fixture.staged.exists());
+}
+
+/// A cancelled copy says so and leaves nothing staged.
+#[test]
+fn a_cancelled_staged_copy_leaves_nothing_staged() {
+    let fixture = StagedFixture::new();
+    let copying = Arc::new(AtomicBool::new(false));
+    let (started, asked) = (copying.clone(), copying);
+    let watch = Watch {
+        progress: Progress::to(move |_, bytes| started.store(bytes > 0, Ordering::SeqCst)),
+        cancel: Cancel::when(move || asked.load(Ordering::SeqCst)),
+    };
+
+    let refusal = fixture
+        .copy(true, &watch)
+        .expect_err("the copy is cancelled");
+
+    assert!(matches!(refusal.cause, StagedCause::Cancelled));
+    assert_eq!(refusal.attempts, 1);
+    assert!(!fixture.dest.exists() && !fixture.staged.exists());
+}
+
+/// A staged name that is not the caller's to clear must be free, and a file
+/// found there is left as it is.
+#[test]
+fn a_staged_copy_told_not_to_clear_leaves_an_occupied_name() {
+    let fixture = StagedFixture::new();
+    std::fs::write(&fixture.staged, b"someone else's").unwrap();
+
+    let refusal = fixture
+        .copy(false, &Watch::nobody())
+        .expect_err("the name is held");
+
+    assert_eq!(refusal.step, StagedStep::OpenStaged);
+    assert_eq!(std::fs::read(&fixture.staged).unwrap(), b"someone else's");
+    assert!(!fixture.dest.exists());
 }

@@ -58,6 +58,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -70,7 +71,7 @@ use super::{
 };
 
 /// Bytes moved per copy iteration, and per read-back iteration.
-const CHUNK_BYTES: usize = 1024 * 1024;
+pub(crate) const CHUNK_BYTES: usize = 1024 * 1024;
 
 /// The CRC a stored value was computed with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -560,11 +561,18 @@ pub(crate) enum Opening {
     /// Already held by the caller. Opening without creating means the
     /// reservation, not this call, decided the file may be written.
     Held,
+    /// Created, or emptied when it is there: for a staged name the caller
+    /// chose and this copy has just cleared.
+    Fresh,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Step {
     OpenSource,
+    /// Reading the open source's own facts.
+    SourceHandle,
+    /// The open source is not the file the caller read.
+    SourceChanged,
     OpenTarget,
     Read,
     Write,
@@ -598,12 +606,18 @@ pub(crate) struct Writing<'a> {
     pub(crate) opening: Opening,
     pub(crate) hash: bool,
     pub(crate) sync_folder: bool,
+    /// Give the target the source's permissions, so a copy does not silently
+    /// change access; permissions the caller applies afterwards take
+    /// precedence.
+    pub(crate) carry_permissions: bool,
+    pub(crate) chunk_bytes: usize,
+    /// The source as the caller read it. The file this copy opens must still
+    /// be that one, or nothing is written.
+    pub(crate) seen: Option<&'a Mark>,
     pub(crate) watch: &'a Watch,
 }
 
-/// The one copy loop. The target is fsynced, and the source's permissions are
-/// carried so a copy does not silently change access; permissions the caller
-/// applies afterwards take precedence.
+/// The one copy loop. The target is fsynced.
 pub(crate) fn write_copy(
     disk: &Disk,
     source: &Path,
@@ -618,7 +632,19 @@ pub(crate) fn write_copy(
     let mut input = disk
         .open_blocking(source, Open::read())
         .map_err(|error| fail(Step::OpenSource, Cause::Disk(error), false))?;
+    if let Some(seen) = writing.seen {
+        let opened = input
+            .metadata()
+            .map_err(|error| fail(Step::SourceHandle, Cause::Io(error), false))?;
+        if !is_still(seen, &Mark::of(&opened)) {
+            let changed = io::Error::other("the source changed before the copy");
+            return Err(fail(Step::SourceChanged, Cause::Io(changed), false));
+        }
+    }
     let mut output = match writing.opening {
+        Opening::Fresh => disk
+            .open_blocking(target, Open::create())
+            .map_err(|error| fail(Step::OpenTarget, Cause::Disk(error), false))?,
         Opening::Claim => disk
             .open_blocking(target, Open::create_new())
             .map_err(|error| fail(Step::OpenTarget, Cause::Disk(error), false))?,
@@ -639,7 +665,7 @@ pub(crate) fn write_copy(
     } else {
         let mut hasher = writing.hash.then(ContentHasher::new);
         let mut written = 0u64;
-        let mut buffer = vec![0u8; CHUNK_BYTES];
+        let mut buffer = vec![0u8; writing.chunk_bytes];
         loop {
             if writing.watch.cancel.is_cancelled() {
                 let stopped = io::Error::new(io::ErrorKind::Interrupted, "the copy was cancelled");
@@ -680,8 +706,16 @@ pub(crate) fn write_copy(
         // a crash.
         sync_folder_best_effort(disk, target);
     }
-    let _ = disk.copy_permissions_blocking(source, target);
+    if writing.carry_permissions {
+        let _ = disk.copy_permissions_blocking(source, target);
+    }
     Ok(Written { hashes, sync })
+}
+
+/// Whether `now` is still the regular file `seen` was read as: not shown to
+/// be another file, and its length and modification time held.
+fn is_still(seen: &Mark, now: &Mark) -> bool {
+    now.kind() == Some(super::EntryKind::File) && seen.compare(now).is_unwritten()
 }
 
 /// Best effort: a filesystem that rejects a directory fsync is no reason to
@@ -780,6 +814,9 @@ impl Job<'_> {
             },
             hash: true,
             sync_folder: true,
+            carry_permissions: true,
+            chunk_bytes: CHUNK_BYTES,
+            seen: None,
             watch: self.watch,
         };
         let hashes = match write_copy(disk, source, target, writing) {
@@ -826,6 +863,187 @@ impl Job<'_> {
         });
         self.copied.replace(Some(Copied { hashes, proof }));
         Ok(())
+    }
+}
+
+// ── A copy staged under the caller's name ────────────────────────────────────
+
+/// The raw code a file handle the system dropped under a copy fails with.
+const BAD_HANDLE: i32 = 9;
+
+/// How [`Disk::copy_staged_blocking`] lands a copy. Every choice is the
+/// caller's; none has a default.
+#[derive(Clone, Copy, Debug)]
+pub struct StagedCopy<'a> {
+    /// The name the bytes are written under, in the destination's folder,
+    /// until the copy is whole.
+    pub staged: &'a Path,
+    /// The source as the caller read it. Its name is read again before each
+    /// attempt and before the staged file takes the destination name, and
+    /// the file each attempt opens is read through its handle; a source that
+    /// is no longer that regular file, at that length and modification time,
+    /// stops the copy.
+    pub seen: &'a Mark,
+    /// The staged name is the caller's own: a file there is removed before
+    /// each attempt and after a failed one, and the name is created or
+    /// emptied. Otherwise the name must be free, and only a file an attempt
+    /// created is removed.
+    pub clear_staged: bool,
+    /// Fsync the folder once the staged file is written.
+    pub sync_folder: bool,
+    /// Give the copy the source's permissions.
+    pub carry_permissions: bool,
+    /// An attempt that fails on a dropped file handle is made again after
+    /// each of these pauses in turn, and no more.
+    pub bad_handle_pauses: &'a [Duration],
+    pub chunk_bytes: usize,
+}
+
+/// Where a staged copy stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StagedStep {
+    ClearStaged,
+    /// The source's name, read before the attempt.
+    SourceBefore,
+    OpenSource,
+    /// The open source's own facts.
+    SourceHandle,
+    OpenStaged,
+    Transfer,
+    Flush,
+    Sync,
+    /// The source's name, read once the staged file was whole.
+    SourceAfter,
+    /// Taking the destination name.
+    Promote,
+}
+
+/// Why a staged copy stopped.
+#[derive(Debug)]
+pub enum StagedCause {
+    Io(io::Error),
+    /// The source is not the regular file the caller read.
+    SourceChanged,
+    Cancelled,
+}
+
+/// A staged copy that did not land. The staged name holds nothing of it
+/// unless the cleanup itself failed, and the destination name was not taken.
+#[derive(Debug)]
+pub struct StagedCopyRefusal {
+    pub step: StagedStep,
+    pub cause: StagedCause,
+    /// Attempts made, this one included.
+    pub attempts: usize,
+}
+
+impl Disk {
+    /// Copies `source` to `dest` through `how.staged`, as `how` says, and
+    /// returns what it streamed. The staged file takes the destination name
+    /// with [`Self::move_claimed_blocking`]. Takes no turn on the volume and
+    /// proves nothing: both are the caller's. Blocks on the disk.
+    pub fn copy_staged_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+        how: &StagedCopy<'_>,
+        watch: &Watch,
+    ) -> Result<ContentHashes, StagedCopyRefusal> {
+        let mut attempts = 1;
+        loop {
+            let refused = |step, cause| StagedCopyRefusal {
+                step,
+                cause,
+                attempts,
+            };
+            if how.clear_staged
+                && let Err(error) = self.remove_blocking(how.staged, Remove::File)
+            {
+                return Err(refused(
+                    StagedStep::ClearStaged,
+                    StagedCause::Io(error.into()),
+                ));
+            }
+            let (step, cause, created) = match self.copy_staged_once(source, dest, how, watch) {
+                Ok(hashes) => return Ok(hashes),
+                Err(failed) => failed,
+            };
+            if how.clear_staged || created {
+                let _ = self.remove_blocking(how.staged, Remove::File);
+            }
+            let dropped_handle = matches!(
+                &cause,
+                StagedCause::Io(error) if error.raw_os_error() == Some(BAD_HANDLE)
+            );
+            match how.bad_handle_pauses.get(attempts - 1) {
+                Some(pause) if dropped_handle => self.inner.clock.pause(*pause),
+                _ => return Err(refused(step, cause)),
+            }
+            attempts += 1;
+        }
+    }
+
+    /// One attempt. The failure says whether this attempt created the staged
+    /// file.
+    fn copy_staged_once(
+        &self,
+        source: &Path,
+        dest: &Path,
+        how: &StagedCopy<'_>,
+        watch: &Watch,
+    ) -> Result<ContentHashes, (StagedStep, StagedCause, bool)> {
+        if watch.cancel.is_cancelled() {
+            return Err((StagedStep::SourceBefore, StagedCause::Cancelled, false));
+        }
+        let still = |step, created| {
+            let read = self.call("lstat", || self.inner.backend.lstat(source));
+            match read.map(|stat| is_still(how.seen, &Mark::of_stat(&stat))) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err((step, StagedCause::SourceChanged, created)),
+                Err(error) => Err((step, StagedCause::Io(error), created)),
+            }
+        };
+        still(StagedStep::SourceBefore, false)?;
+        watch.progress.report(Phase::Copying, 0);
+        let writing = Writing {
+            opening: match how.clear_staged {
+                true => Opening::Fresh,
+                false => Opening::Claim,
+            },
+            hash: true,
+            sync_folder: how.sync_folder,
+            carry_permissions: how.carry_permissions,
+            chunk_bytes: how.chunk_bytes,
+            seen: Some(how.seen),
+            watch,
+        };
+        let written = write_copy(self, source, how.staged, writing).map_err(|fail| {
+            let step = match fail.step {
+                Step::OpenSource => StagedStep::OpenSource,
+                Step::SourceHandle | Step::SourceChanged => StagedStep::SourceHandle,
+                Step::OpenTarget => StagedStep::OpenStaged,
+                Step::Flush => StagedStep::Flush,
+                Step::Sync => StagedStep::Sync,
+                Step::Read | Step::Write | Step::Transfer | Step::Cancelled => StagedStep::Transfer,
+            };
+            let cause = match (fail.step, fail.cause) {
+                (Step::Cancelled, _) => StagedCause::Cancelled,
+                (Step::SourceChanged, _) => StagedCause::SourceChanged,
+                (_, Cause::Disk(error)) => StagedCause::Io(error.into()),
+                (_, Cause::Io(error)) => StagedCause::Io(error),
+            };
+            (step, cause, fail.claimed)
+        })?;
+        if written.sync == SyncOutcome::Unconfirmed && !how.sync_folder {
+            tracing::debug!(
+                destination = %dest.display(),
+                "copy destination filesystem does not support fsync; relying on copy verification"
+            );
+        }
+        still(StagedStep::SourceAfter, true)?;
+        self.move_claimed_blocking(how.staged, dest)
+            .map_err(|error| (StagedStep::Promote, StagedCause::Io(error.into()), true))?;
+        Ok(written.hashes.expect("a staged copy hashes"))
     }
 }
 
