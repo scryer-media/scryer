@@ -774,30 +774,29 @@ pub async fn compare_existing(
     let (_, source_metadata) = file_version_and_metadata(source).await?;
     let (_, destination_metadata) = file_version_and_metadata(destination).await?;
     // A source that is a symbolic link was copied as the file it names, so
-    // it is compared as that file: one read of the link followed, for a
-    // linked source alone. The destination is held to its own name.
-    let source_metadata = match source_metadata.file_type().is_symlink() {
-        true => tokio::fs::metadata(source)
-            .await
-            .map_err(|error| file_error(source, error))?,
-        false => source_metadata,
-    };
-    if !source_metadata.is_file() || !destination_metadata.is_file() {
+    // it is compared as that file: the disk service reads it through the
+    // link, on every platform alike, so that every later read of the source
+    // is held to the same file. The destination is held to its own name.
+    // std's metadata names no file on Windows, so there the disk service
+    // reads each unlinked name once more; on unix the metadata's own mark is
+    // used.
+    let source_read = match source_metadata.file_type().is_symlink() {
+        true => Disk::process().fingerprint_followed(source).await,
+        false => super::execution::mark_beside(source, &source_metadata).await,
+    }
+    .map_err(|reading| unread(source, reading))?;
+    let destination_read = super::execution::mark_beside(destination, &destination_metadata)
+        .await
+        .map_err(|reading| unread(destination, reading))?;
+    if source_read.kind() != Some(EntryKind::File) || !destination_metadata.is_file() {
         return Err(AppError::validation_refused(
             crate::error_reasons::location::EXISTING_PATH_NOT_REGULAR_FILE,
             "An existing path is not a regular file. Resolve the conflicting path and try again; the source was preserved.",
         ));
     }
+    let source_len = source_read.len().unwrap_or_default();
     // A pair that cannot be told apart is checked as one file would be: the
     // same path or one entry is refused, and two entries are compared below.
-    // std's metadata names no file on Windows, so there the disk service
-    // reads each name once more; on unix the metadata's own mark is used.
-    let source_read = super::execution::mark_beside(source, &source_metadata)
-        .await
-        .map_err(|reading| unread(source, reading))?;
-    let destination_read = super::execution::mark_beside(destination, &destination_metadata)
-        .await
-        .map_err(|reading| unread(destination, reading))?;
     if super::execution::regular_file_sameness(&source_read, &destination_read)
         != crate::disk::Sameness::Different
     {
@@ -829,7 +828,7 @@ pub async fn compare_existing(
     // head/tail sample proves different content without reading either file
     // end to end, and the transfer copies straight away. Only a pair the quick
     // check cannot tell apart earns the full comparison.
-    if source_metadata.len() != destination_metadata.len()
+    if source_len != destination_metadata.len()
         || !sampled_proofs_agree(source, destination).await?
     {
         return Ok(different_content(source, destination));
@@ -848,7 +847,7 @@ pub async fn compare_existing(
     };
     let source_size = match recorded {
         Some(_) => 0,
-        None => source_metadata.len(),
+        None => source_len,
     };
     let total = source_size.saturating_add(destination_metadata.len());
     progress.comparison(0, total);

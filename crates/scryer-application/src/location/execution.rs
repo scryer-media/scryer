@@ -1464,6 +1464,25 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                         }
                         continue;
                     }
+                    // A link that cannot be followed for a reason that is not
+                    // the volume going quiet names something that is no
+                    // longer the file it was: Windows refuses to open a
+                    // folder through a link made for a file rather than
+                    // reading it as a folder. A timeout or an unreachable
+                    // volume is retried.
+                    None if !matches!(
+                        named.unreachable_cause(),
+                        Some(
+                            crate::disk::reason::DISK_TIMED_OUT
+                                | crate::disk::reason::DISK_PATH_UNREACHABLE
+                        )
+                    ) =>
+                    {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                            "Source changed before cleanup; preserved it.",
+                        ));
+                    }
                     None => return Err(AppError::Repository(named.absence().into())),
                     Some(true) if !named.is(EntryKind::File) => {
                         return Err(AppError::validation_refused(
