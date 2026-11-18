@@ -16064,6 +16064,81 @@ async fn manual_movie_upgrade_sends_one_import_completed_marked_as_upgrade() {
     }
 }
 
+/// A manual move import whose files are placed and cataloged, but whose
+/// source cleanup could not finish while it holds no sources, comes back with
+/// its file results and the cleanup's error as a retry, not as a failed
+/// import. The source is still there.
+#[tokio::test]
+async fn a_manual_import_whose_cleanup_could_not_finish_keeps_its_results_for_a_retry() {
+    let release_title = "Manual Cleanup Retry Movie.2026.1080p.WEB-DL-GRP";
+    let mut fixture = disposition_fixture("Manual Cleanup Retry Movie", release_title).await;
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(SETTINGS_SCOPE_SYSTEM, IMPORT_MODE_KEY, "\"move\"")
+        .await;
+    fixture.app.services.config.settings = settings;
+    fixture.app.services.workflow.file_importer = Arc::new(CleanupRefusingImporter {
+        folder_settled: std::sync::atomic::AtomicBool::new(true),
+        could_not_finish: true,
+        ..Default::default()
+    });
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let source_bytes = std::fs::read(&source_file).unwrap();
+    let import_id = fixture
+        .app
+        .services
+        .workflow
+        .imports
+        .queue_import_request(
+            ClientJobLocator::for_import_artifact(
+                Some(&fixture.completed.client_id),
+                &fixture.completed.client_type,
+                &fixture.completed.download_client_item_id,
+            ),
+            ImportType::ManualImport.as_str().to_string(),
+            "{}".to_string(),
+        )
+        .await
+        .expect("queue manual import record");
+    let release_evidence = crate::import_workflow::resolve_release_evidence_for_completed_download(
+        &fixture.app,
+        &fixture.completed,
+        None,
+    )
+    .await
+    .expect("release evidence");
+
+    let run = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import_workflow::run_manual_import_with_release_evidence(
+            &fixture.app,
+            &fixture.user,
+            &import_id,
+            &fixture.title.id,
+            Some(&fixture.completed),
+            &release_evidence,
+            vec![ManualImportFileMapping {
+                disc_selection: None,
+                file_path: source_file.to_string_lossy().into_owned(),
+                episode_id: None,
+                episode_ids: Vec::new(),
+                series_movie_link_id: None,
+            }],
+            Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+        )
+        .await
+        .expect("the pass ends with its results")
+    };
+
+    assert_eq!(run.results.len(), 1, "{:?}", run.results);
+    assert!(run.results[0].success, "{:?}", run.results);
+    let error = run.cleanup_retry.expect("the cleanup waits for a retry");
+    assert!(!error.requires_manual_reconciliation(), "{error:?}");
+    assert_eq!(std::fs::read(&source_file).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
+}
+
 #[tokio::test]
 async fn manual_blocklist_missing_key_holds_sources_without_automatic_retry() {
     for missing_title in [false, true] {

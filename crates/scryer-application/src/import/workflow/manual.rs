@@ -242,7 +242,15 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
 
     let outcome = match execute_queued_manual_import_with_outcome(&app, &record.id, &payload).await
     {
-        Ok(result) => result,
+        Ok(mut result) => {
+            if let Some(retry) = result.cleanup_retry.as_ref() {
+                let retry_attempts = previous_result
+                    .as_ref()
+                    .map_or(1, |result| result.retry_attempts.saturating_add(1));
+                result.result_json = retry.pending_result_json(&record.id, &payload, retry_attempts);
+            }
+            result
+        }
         Err(
             AppError::ManualReconciliationRequired(message)
             | AppError::ManualReconciliationRefused { message, .. },
@@ -262,6 +270,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
             title_id: payload.title_id.clone(),
             expected_mapping_count: Some(payload.files.len()),
             prior_import_proven: false,
+            cleanup_retry: None,
         },
         Err(AppError::ImportEvidenceUnavailable(message)) => {
             let retry_attempts = previous_result
@@ -284,6 +293,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
                 title_id: payload.title_id.clone(),
                 expected_mapping_count: Some(payload.files.len()),
                 prior_import_proven: false,
+                cleanup_retry: None,
             }
         }
         Err(error) => QueuedManualImportOutcome {
@@ -301,6 +311,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
             title_id: payload.title_id.clone(),
             expected_mapping_count: None,
             prior_import_proven: false,
+            cleanup_retry: None,
         },
     };
 
@@ -3423,6 +3434,46 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     files: Vec<ManualImportFileMapping>,
     trusted_source_root: Option<PathBuf>,
 ) -> AppResult<Vec<ManualImportFileResult>> {
+    let run = run_manual_import_with_release_evidence(
+        app,
+        actor,
+        import_id,
+        title_id,
+        completed,
+        release_evidence,
+        files,
+        trusted_source_root,
+    )
+    .await?;
+    match run.cleanup_retry {
+        Some(error) => Err(error),
+        None => Ok(run.results),
+    }
+}
+
+/// One pass of a manual import: its file results and, when its files were
+/// placed and cataloged but a source cleanup that holds no sources could not
+/// finish, that cleanup's error. Such a pass waits for a retry; it is not a
+/// failed import.
+pub(crate) struct ManualImportRun {
+    pub(crate) results: Vec<ManualImportFileResult>,
+    pub(crate) cleanup_retry: Option<AppError>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "manual execution carries explicit user mappings, trusted root, and durable release evidence"
+)]
+pub(crate) async fn run_manual_import_with_release_evidence(
+    app: &AppUseCase,
+    actor: &User,
+    import_id: &str,
+    title_id: &str,
+    completed: Option<&CompletedDownload>,
+    release_evidence: &ReleaseEvidence,
+    files: Vec<ManualImportFileMapping>,
+    trusted_source_root: Option<PathBuf>,
+) -> AppResult<ManualImportRun> {
     let archive_source = trusted_source_root
         .as_deref()
         .is_some_and(crate::archive_extractor::is_owned_archive_workspace);
@@ -3453,9 +3504,17 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         {
             Ok(()) => true,
             // Ends the import needing reconciliation, with no hold recorded
-            // that an operator could release; or, with no sources held,
-            // fails it with the cleanup's own error.
-            Err(DeferredCleanupFailure::NeedsReconciliation(error) | DeferredCleanupFailure::Failed(error)) => return Err(error),
+            // that an operator could release.
+            Err(DeferredCleanupFailure::NeedsReconciliation(error)) => return Err(error),
+            // No sources are held, so nothing waits for a release: the files
+            // are placed and cataloged, so the pass waits for a retry rather
+            // than failing the import.
+            Err(DeferredCleanupFailure::Failed(error)) => {
+                return Ok(ManualImportRun {
+                    results,
+                    cleanup_retry: Some(error),
+                });
+            }
             Err(DeferredCleanupFailure::Held(_)) => false,
         };
         let hold_released = cleanup_succeeded
@@ -3493,7 +3552,10 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         .await;
     }
     // Any other hold keeps no recorded reason and is reported as unknown.
-    Ok(results)
+    Ok(ManualImportRun {
+        results,
+        cleanup_retry: None,
+    })
 }
 
 async fn record_manual_hold_reason(
@@ -4586,6 +4648,37 @@ struct QueuedManualImportOutcome {
     title_id: Option<String>,
     expected_mapping_count: Option<usize>,
     prior_import_proven: bool,
+    /// Set when the pass placed and cataloged its files but a source cleanup
+    /// holding no sources could not finish: the import waits pending for a
+    /// retry, counted from the previous attempt.
+    cleanup_retry: Option<ManualCleanupRetry>,
+}
+
+/// A manual import pass whose files are placed and cataloged but whose source
+/// cleanup could not finish, kept so the retry state can be written with the
+/// attempt count the previous result carries.
+struct ManualCleanupRetry {
+    message: String,
+    file_results: Vec<ManualImportFileResult>,
+}
+
+impl ManualCleanupRetry {
+    fn pending_result_json(
+        &self,
+        import_id: &str,
+        payload: &ManualImportRequestPayload,
+        retry_attempts: u32,
+    ) -> Option<String> {
+        manual_import_pending_result_json(
+            import_id,
+            payload,
+            self.message.clone(),
+            false,
+            retry_attempts,
+            Some(Utc::now() + manual_import_recovery_retry_delay(retry_attempts)),
+            self.file_results.clone(),
+        )
+    }
 }
 
 impl QueuedManualImportOutcome {
@@ -4602,6 +4695,7 @@ impl QueuedManualImportOutcome {
             title_id: payload.title_id.clone(),
             expected_mapping_count: None,
             prior_import_proven: false,
+            cleanup_retry: None,
         }
     }
 
@@ -4638,6 +4732,7 @@ impl QueuedManualImportOutcome {
             title_id: payload.title_id.clone(),
             expected_mapping_count: None,
             prior_import_proven: true,
+            cleanup_retry: None,
         }
     }
 }
@@ -4790,6 +4885,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
             title_id: Some(title_id.to_string()),
             expected_mapping_count: None,
             prior_import_proven: false,
+            cleanup_retry: None,
         });
     }
 
@@ -4797,7 +4893,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
     app.update_import_status_and_notify(import_id, ImportStatus::Processing, None)
         .await?;
 
-    let results = execute_manual_import_with_release_evidence(
+    let run = run_manual_import_with_release_evidence(
         app,
         &actor,
         import_id,
@@ -4808,6 +4904,29 @@ async fn execute_queued_manual_import_with_outcome_inner(
         Some(trusted_source_root),
     )
     .await?;
+    let results = run.results;
+    if let Some(error) = run.cleanup_retry {
+        tracing::warn!(
+            import_id,
+            title_id,
+            error = %error,
+            "manual import source cleanup could not finish; the import waits for a retry"
+        );
+        let retry = ManualCleanupRetry {
+            message: format!("Source cleanup could not finish: {error}"),
+            file_results: results,
+        };
+        return Ok(QueuedManualImportOutcome {
+            status: ImportStatus::Pending,
+            result_json: retry.pending_result_json(import_id, payload, 1),
+            files_imported_this_pass: 0,
+            completed: None,
+            title_id: Some(title_id.to_string()),
+            expected_mapping_count: Some(payload.files.len()),
+            prior_import_proven: false,
+            cleanup_retry: Some(retry),
+        });
+    }
     let files_imported_this_pass = results.iter().filter(|result| result.success).count();
     // Verification compares imported files against what the import attempted;
     // skipped mappings (movie samples/extras) were never expected to land.
@@ -4855,6 +4974,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
         title_id: Some(title_id.to_string()),
         expected_mapping_count,
         prior_import_proven: false,
+        cleanup_retry: None,
     })
 }
 
