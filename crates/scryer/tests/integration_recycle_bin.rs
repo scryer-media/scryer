@@ -347,6 +347,7 @@ async fn seed_recycled_file_in_bin(
             replacement_path: None,
             media_row: None,
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("recycle file")
@@ -1901,6 +1902,7 @@ async fn restoring_conflict_scans_title_and_tracks_restored_file_as_additional()
             replacement_path: None,
             media_row: None,
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("recycle original file")
@@ -2057,6 +2059,7 @@ async fn restoring_recreates_row_with_snapshotted_score_and_emits_one_restore_ev
                 ..Default::default()
             }),
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("recycle original file")
@@ -2195,6 +2198,7 @@ async fn failed_restore_job_keeps_recycle_entry_available() {
             replacement_path: None,
             media_row: None,
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("recycle source file")
@@ -2272,6 +2276,7 @@ async fn restoring_out_of_root_manifest_is_refused_and_entry_remains() {
             replacement_path: None,
             media_row: None,
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("recycle source file")
@@ -2339,6 +2344,7 @@ async fn restoring_root_equal_manifest_is_refused_and_entry_remains() {
             replacement_path: None,
             media_row: None,
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("recycle source file")
@@ -2438,6 +2444,7 @@ async fn disabled_recycle_bin_paths_are_inert_and_direct_delete_new_files() {
             replacement_path: None,
             media_row: None,
         },
+        scryer_domain::VerificationDepth::Quick,
     )
     .await
     .expect("direct delete succeeds");
@@ -2936,10 +2943,15 @@ async fn recycle_from_root_and_expect_success(ctx: &TestContext, root: &Path, na
     assert_eq!(config.validation_error, None);
     assert_eq!(config.source_roots, vec![root.to_path_buf()]);
 
-    let result = recycle_file(&config, &media, removal_manifest(&media))
-        .await
-        .expect("recycle should succeed")
-        .expect("file should be recycled");
+    let result = recycle_file(
+        &config,
+        &media,
+        removal_manifest(&media),
+        scryer_domain::VerificationDepth::Quick,
+    )
+    .await
+    .expect("recycle should succeed")
+    .expect("file should be recycled");
 
     assert!(!media.exists(), "the recycled file leaves its folder");
     assert!(result.recycled_path.starts_with(&config.base_path));
@@ -2993,9 +3005,14 @@ async fn custom_recycle_bin_inside_another_library_root_refuses_and_keeps_the_fi
             "the source root stays the one the file is removed from"
         );
 
-        let error = recycle_file(&config, &media, removal_manifest(&media))
-            .await
-            .expect_err("recycling into a bin inside a library root is refused");
+        let error = recycle_file(
+            &config,
+            &media,
+            removal_manifest(&media),
+            scryer_domain::VerificationDepth::Quick,
+        )
+        .await
+        .expect_err("recycling into a bin inside a library root is refused");
         assert!(
             error.to_string().contains("recycle bin path is unsafe"),
             "unexpected error: {error}"
