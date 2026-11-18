@@ -119,7 +119,7 @@ fn unreadable(reading: PathReading) -> AppError {
         .unreachable_cause()
         .or_else(|| reading.unknown_reason())
     {
-        Some(reason) => AppError::validation_refused(reason, reading.absence()),
+        Some(reason) => AppError::validation_refused(reason, reading.describe_absence()),
         None => relay_failure(reading.absence().to_owned()),
     }
 }
