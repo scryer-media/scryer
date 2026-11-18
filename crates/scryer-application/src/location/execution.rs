@@ -1474,58 +1474,41 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     Some(true) => {}
                 }
             }
-            let source_version = super::resolution::file_version(&source).await?;
             let destination = file.destination();
-            let destination_version = super::resolution::file_version(&destination).await?;
-            // The content proof was made once, at copy time, at the chosen
-            // depth, and the resolution row recorded both files' versions right
-            // after it. While both files still carry those versions the proof
-            // stands, so only the quick check is repeated. Without a row holding
-            // both versions there is nothing tying the proof to these files, and
-            // the source is re-read and the destination proven again. A link's
-            // version is the link's own, so it ties nothing to the file the
-            // link names: at full depth that file is read whole and held to
-            // the copy's hashes.
-            let recorded_proof = resolution
-                .and_then(|row| {
-                    row.source_version
-                        .as_deref()
-                        .zip(row.destination_version.as_deref())
-                })
-                .zip(record.hashes.as_ref());
-            let content_proven = match recorded_proof {
-                Some(((row_source_version, row_destination_version), recorded_hashes)) => {
-                    row_source_version == source_version
-                        && row_destination_version == destination_version
-                        && super::verify::quick_recheck(&source, &destination, recorded_hashes)
-                            .await?
-                            .permits_source_removal()
-                        && (!linked
-                            || record.depth.applied
-                                != crate::location::model::VerificationDepth::Full
-                            || super::verify::hash_existing_file(&source).await?
-                                == *recorded_hashes)
+            // The resolution row recorded both files' versions right after the
+            // copy was proven; a file that no longer carries its version has
+            // changed since, and the source is kept. A link's version is the
+            // link's own.
+            let versions_held = match resolution.and_then(|row| {
+                row.source_version
+                    .as_deref()
+                    .zip(row.destination_version.as_deref())
+            }) {
+                Some((row_source_version, row_destination_version)) => {
+                    super::resolution::file_version(&source).await? == row_source_version
+                        && super::resolution::file_version(&destination).await?
+                            == row_destination_version
                 }
-                None => {
-                    let source_hashes = super::verify::hash_existing_file(&source).await?;
-                    let destination_proof = super::verify::verify(
-                        &Disk::process(),
-                        &source,
-                        &destination,
-                        &source_hashes,
-                        record.depth.applied,
-                    )
-                    .await?;
-                    record.hashes.as_ref() == Some(&source_hashes)
-                        && destination_proof.outcome.permits_source_removal()
-                        && destination_proof.depth.applied == record.depth.applied
-                }
+                None => true,
             };
-            if record.source_path != file.source_path
-                || !content_proven
-                || super::resolution::file_version(&source).await? != source_version
-                || super::resolution::file_version(&destination).await? != destination_version
-            {
+            // The source and the destination are then compared now, at the
+            // depth the copy was proven at: the quick check samples both
+            // live, and the full check holds their full hashes to each other.
+            // A link is compared as the file it names. A file that changed
+            // while it was read, or one that cannot be read, keeps the source.
+            let check = match versions_held {
+                true => {
+                    Disk::process()
+                        .check(
+                            source.as_path(),
+                            destination.as_path(),
+                            super::verify::disk_depth(record.depth.applied),
+                        )
+                        .await
+                }
+                false => crate::disk::Check::Changed,
+            };
+            if record.source_path != file.source_path || check != crate::disk::Check::Same {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
                     "Source or destination changed before cleanup; preserved the source.",

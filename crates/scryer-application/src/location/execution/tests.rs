@@ -3262,11 +3262,12 @@ fn rewrite_middle(path: &Path) {
 }
 
 /// A copy proven at copy time, with a resolution row recording both files'
-/// versions, is cleaned up on the version check and the quick check alone:
-/// neither file is read end to end at cleanup, at either depth, and the source
-/// is still removed.
+/// versions, is cleaned up on the version check and a comparison of the two
+/// files at the operation's depth: at quick depth neither file is read end to
+/// end, at full depth the source is, and the destination is read again unless
+/// the read-back already answers for it. The source is removed.
 #[tokio::test]
-async fn cleanup_after_a_recorded_copy_reads_no_file_whole_at_either_depth() {
+async fn cleanup_after_a_recorded_copy_compares_both_files_at_the_operations_depth() {
     for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
         let temp = tempfile::tempdir().unwrap();
         let (plan, store, operation, copies) =
@@ -3296,15 +3297,15 @@ async fn cleanup_after_a_recorded_copy_reads_no_file_whole_at_either_depth() {
             .await
             .expect("cleanup");
 
+        let whole = usize::from(depth == VerificationDepth::Full);
         assert_eq!(
             whole_reads(&file.source()) - source_reads,
-            0,
-            "{depth:?}: the source is not re-hashed at cleanup"
+            whole,
+            "{depth:?}: the source is read whole only at full depth"
         );
-        assert_eq!(
-            whole_reads(&file.destination()) - destination_reads,
-            0,
-            "{depth:?}: the destination is not read back again at cleanup"
+        assert!(
+            whole_reads(&file.destination()) - destination_reads <= whole,
+            "{depth:?}: the destination is read whole at most once, and only at full depth"
         );
         assert!(!file.source().exists(), "{depth:?}: the source is removed");
         assert_eq!(
@@ -3315,11 +3316,13 @@ async fn cleanup_after_a_recorded_copy_reads_no_file_whole_at_either_depth() {
     }
 }
 
-/// Without a resolution row, cleanup keeps re-reading the source and proving
-/// the destination again at the recorded depth, and that re-read is what
-/// decides: a change in the unsampled middle of the source keeps it.
+/// Without a resolution row, cleanup compares the two files at the recorded
+/// depth, and that comparison is what decides. At full depth both are read
+/// whole and a change in the unsampled middle of the source keeps it. At
+/// quick depth neither is read whole, and such a change is beyond the quick
+/// check: the cleanup goes ahead, as a quick copy proof would have.
 #[tokio::test]
-async fn cleanup_without_a_resolution_row_still_rereads_and_decides() {
+async fn cleanup_without_a_resolution_row_compares_both_files_at_the_recorded_depth() {
     for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
         for changed in [false, true] {
             let temp = tempfile::tempdir().unwrap();
@@ -3355,18 +3358,17 @@ async fn cleanup_without_a_resolution_row_still_rereads_and_decides() {
                 .clean_up_title(&operation, &plan.titles[0].to_planned_title())
                 .await;
 
+            let whole = usize::from(depth == VerificationDepth::Full);
             assert_eq!(
                 whole_reads(&file.source()) - source_reads,
-                1,
-                "{depth:?}: the source is re-hashed"
+                whole,
+                "{depth:?}: the source is read whole only at full depth"
             );
-            let expected_destination_reads = usize::from(depth == VerificationDepth::Full);
-            assert_eq!(
-                whole_reads(&file.destination()) - destination_reads,
-                expected_destination_reads,
-                "{depth:?}: the destination is proven again at the recorded depth"
+            assert!(
+                whole_reads(&file.destination()) - destination_reads <= whole,
+                "{depth:?}: the destination is read whole only at full depth"
             );
-            if changed {
+            if changed && depth == VerificationDepth::Full {
                 let error = result.expect_err("a changed source is kept");
                 assert_eq!(
                     error.validation_reason(),
@@ -3385,7 +3387,8 @@ async fn cleanup_without_a_resolution_row_still_rereads_and_decides() {
 /// With a recorded proof, a source or destination that changed after the copy
 /// keeps the source, through the version check, without reading either file
 /// whole. A change the versions cannot see (a row re-stamped to the changed
-/// file's version) still meets the quick check, which keeps the source too.
+/// file's version) still meets the comparison at the operation's depth, which
+/// keeps the source too.
 #[tokio::test]
 async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
     for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
@@ -3458,8 +3461,12 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
             if changed != "source" {
                 assert_eq!(std::fs::read(file.source()).unwrap(), original);
             }
-            assert_eq!(whole_reads(&file.source()), source_reads);
-            assert_eq!(whole_reads(&file.destination()), destination_reads);
+            // A version that moved refuses before anything is read; a
+            // rewrite the versions cannot see is read whole at full depth.
+            if depth == VerificationDepth::Quick || changed != "destination_restamped" {
+                assert_eq!(whole_reads(&file.source()), source_reads);
+                assert_eq!(whole_reads(&file.destination()), destination_reads);
+            }
             assert!(recycler.recycled().is_empty());
         }
     }
