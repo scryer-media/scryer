@@ -386,7 +386,15 @@ pub(crate) async fn record_library_file_for_download(
 /// The check runs through the file importer, in the source's turn, since
 /// the set-aside test moves the source for a moment.
 ///
-/// Probes: one read of each file; where file numbers on one volume off a
+/// A source that reads missing may be the download's file an earlier check
+/// set aside and could not put back: a nonempty regular file at its
+/// set-aside name is renamed back, never replacing anything, and the check
+/// goes on with it; an empty one there is removed. One that cannot go back
+/// refuses with the name it is kept at.
+///
+/// Probes: one read of each file; where the source reads missing, one read of
+/// its set-aside name, and, when a file is put back, its rename and the
+/// source's read again; where file numbers on one volume off a
 /// share cannot tell, the set-aside test besides (two renames, one read of
 /// the library file, a second when it is a link, and one listing of its
 /// folder unless both carry numbers on one volume off a share).
@@ -416,7 +424,7 @@ pub fn library_file_is_import_source_blocking(
     source: &Path,
     library_path: &Path,
 ) -> AppResult<bool> {
-    use crate::disk::{AsideRemoval, Sameness};
+    use crate::disk::{AsideRemoval, PutBackAside, Sameness};
     let unknown = |why: &str| AppError::RepositoryFailed {
         message: format!(
             "could not tell whether library file {} is the download's file {} itself: {why}; nothing was removed",
@@ -425,14 +433,55 @@ pub fn library_file_is_import_source_blocking(
         ),
         reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
     };
+    // The download's file waits at `at` for an operator; nothing was removed.
+    let kept_aside = |at: &Path, why: String| AppError::ManualReconciliationRefused {
+        message: format!(
+            "the download's file {} was set aside at {} while telling whether library file {} is it, and could not be put back{why}; nothing was removed",
+            source.display(),
+            at.display(),
+            library_path.display()
+        ),
+        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+        facts: vec![crate::RefusalFact {
+            key: crate::error_reasons::import::KEPT_PATH_FACT,
+            value: crate::RefusalFactValue::Text(at.display().to_string()),
+        }],
+    };
     if source == library_path {
         return Ok(true);
     }
     let disk = Disk::process();
-    let source_mark = match disk.fingerprint_blocking(source) {
-        Ok(mark) => mark,
-        Err(reading) if reading.exists() == Some(false) => return Ok(false),
-        Err(_) => return Err(unknown("the download's file did not read")),
+    let read_source = || match disk.fingerprint_blocking(source) {
+        Ok(mark) => Ok(Some(mark)),
+        Err(reading) if reading.exists() == Some(false) => Ok(None),
+        Err(_) => Err(unknown("the download's file did not read")),
+    };
+    let source_mark = match read_source()? {
+        Some(mark) => mark,
+        // An earlier check may have left the download's file at its
+        // set-aside name: it goes back first, as an import's start does.
+        None => match disk.put_back_set_aside_source_blocking(source) {
+            PutBackAside::PutBack => match read_source()? {
+                Some(mark) => mark,
+                None => return Ok(false),
+            },
+            PutBackAside::Nothing => return Ok(false),
+            PutBackAside::SourceNameTaken { at } => {
+                return Err(kept_aside(
+                    &at,
+                    ", because the source's name holds something again".into(),
+                ));
+            }
+            PutBackAside::Failed { at, error } => {
+                tracing::error!(
+                    source = %source.display(),
+                    at = %at.display(),
+                    error = %error,
+                    "a download's file left at its set-aside name could not be put back"
+                );
+                return Err(kept_aside(&at, format!(": {error}")));
+            }
+        },
     };
     let kept = match disk.fingerprint_blocking(library_path) {
         Ok(mark) => mark,
@@ -449,19 +498,7 @@ pub fn library_file_is_import_source_blocking(
         AsideRemoval::Apart => Ok(false),
         AsideRemoval::SameEntry => Ok(true),
         AsideRemoval::PutBackFailed { at, .. } | AsideRemoval::SetAsideMoved { at, .. } => {
-            Err(AppError::ManualReconciliationRefused {
-                message: format!(
-                    "the download's file {} was set aside at {} while telling whether library file {} is it, and could not be put back; nothing was removed",
-                    source.display(),
-                    at.display(),
-                    library_path.display()
-                ),
-                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
-                facts: vec![crate::RefusalFact {
-                    key: crate::error_reasons::import::KEPT_PATH_FACT,
-                    value: crate::RefusalFactValue::Text(at.display().to_string()),
-                }],
-            })
+            Err(kept_aside(&at, String::new()))
         }
         _ => Err(unknown("the set-aside test did not tell")),
     }

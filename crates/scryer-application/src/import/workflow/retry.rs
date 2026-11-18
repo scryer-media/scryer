@@ -472,4 +472,68 @@ mod already_imported_entry_tests {
         let gone = source.with_file_name("gone.mkv");
         assert!(!already_imported_is_source_entry(&gone, &library.join("Separate.mkv")).unwrap());
     }
+
+    /// A download's file an earlier check left at its set-aside name goes back
+    /// to its name first, and the check then settles as it would have: a
+    /// separate library file is not it, its own folder reached through a link
+    /// is.
+    #[test]
+    fn a_source_left_set_aside_is_put_back_before_the_check_settles() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = download(dir.path());
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(source.parent().unwrap(), &alias).expect("folder link");
+        let library = dir.path().join("library");
+        std::fs::create_dir_all(&library).expect("library");
+        let separate = library.join("Separate.mkv");
+        std::fs::write(&separate, b"only video bytes").expect("separate");
+        let aside = crate::disk::aside_path_for(&source);
+        for (library_path, same) in [(separate.clone(), false), (alias.join("sample.mkv"), true)] {
+            std::fs::rename(&source, &aside).expect("left set aside");
+            assert_eq!(
+                already_imported_is_source_entry(&source, &library_path).expect("told"),
+                same,
+                "{}",
+                library_path.display()
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), b"only video bytes");
+            assert!(!aside.exists(), "nothing is left at the set-aside name");
+        }
+        assert_eq!(std::fs::read(&separate).unwrap(), b"only video bytes");
+    }
+
+    /// A set-aside file that cannot go back is kept where it is and named in
+    /// the refusal; nothing is removed.
+    #[test]
+    fn a_source_that_cannot_be_put_back_is_kept_and_named() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = download(dir.path());
+        let folder = source.parent().unwrap().to_path_buf();
+        let library = dir.path().join("library");
+        std::fs::create_dir_all(&library).expect("library");
+        let separate = library.join("Separate.mkv");
+        std::fs::write(&separate, b"only video bytes").expect("separate");
+        let aside = crate::disk::aside_path_for(&source);
+        std::fs::rename(&source, &aside).expect("left set aside");
+        // The folder can be read but not renamed in, so the put-back fails.
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = already_imported_is_source_entry(&source, &separate);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if std::fs::metadata(&source).is_ok() {
+            // A process that may rename in any folder put it back anyway.
+            eprintln!("skipped: this process may rename in a read-only folder");
+            return;
+        }
+        let Err(crate::AppError::ManualReconciliationRefused { reason, facts, .. }) = result else {
+            panic!("refused with the kept path: {result:?}");
+        };
+        assert_eq!(reason, crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN);
+        assert!(facts.iter().any(|fact| {
+            fact.key == crate::error_reasons::import::KEPT_PATH_FACT
+                && fact.value == crate::RefusalFactValue::Text(aside.display().to_string())
+        }));
+        assert_eq!(std::fs::read(&aside).unwrap(), b"only video bytes");
+        assert_eq!(std::fs::read(&separate).unwrap(), b"only video bytes");
+    }
 }
