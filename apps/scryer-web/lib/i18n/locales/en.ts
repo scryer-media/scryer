@@ -19,7 +19,7 @@ const en: LocaleDictionary = {
   "pendingImports.conflict.sampledFiles":
     "Only a sample of paths is shown; the counts include all files.",
   "pendingImports.conflict.ownershipHelp":
-    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders.",
+    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders, or use Fix Match if this folder belongs to a different title.",
   "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
     "Select pending folder conflicts to resolve.",
   "error.reason.LOCATION_CONFLICT_NOT_FOUND":

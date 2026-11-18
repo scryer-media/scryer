@@ -1298,7 +1298,9 @@ impl TitleRepository for MockTitleRepo {
                 item.id == pending_import_id
                     && item.library_id == title.library_id
                     && item.facet == title.facet
-                    && item.title_id.is_none()
+                    && (item.title_id.is_none()
+                        || (title.facet == MediaFacet::Movie
+                            && item.reason_code == crate::location::conflicts::PENDING_REASON))
             })
             .ok_or_else(|| {
                 AppError::Validation(format!(

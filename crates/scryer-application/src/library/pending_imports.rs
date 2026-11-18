@@ -383,6 +383,14 @@ pub fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> b
         || !(item.facet == MediaFacet::Movie && item.title_id.is_some())
 }
 
+/// Whether a person may match this item to a different title: a movie the
+/// scan bound to a title that already owns another folder.
+fn pending_import_item_allows_fix_match(item: &LibraryScanUnmatchedItem) -> bool {
+    item.facet == MediaFacet::Movie
+        && item.reason_code
+            == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
+}
+
 fn reject_folder_ownership_conflict_resolution(item: &LibraryScanUnmatchedItem) -> AppResult<()> {
     if item.reason_code == crate::library_scan_unmatched::LIBRARY_SCAN_INVALID_TITLE_BOUNDARY {
         return Err(AppError::validation_refused(
@@ -917,7 +925,21 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
-        reject_folder_ownership_conflict_resolution(&item)?;
+        // A movie whose scan bound it to a title that already owns another
+        // folder may simply have been matched to the wrong film. Matching it
+        // again replaces that binding: the chosen title takes the folder the
+        // way any pending movie bind does, and the previously bound title and
+        // its own folder stay as they are.
+        let fix_match = pending_import_item_allows_fix_match(&item);
+        let item = if fix_match {
+            LibraryScanUnmatchedItem {
+                title_id: None,
+                ..item
+            }
+        } else {
+            reject_folder_ownership_conflict_resolution(&item)?;
+            item
+        };
         if item.title_id.is_some() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::library::PENDING_IMPORT_REQUIRES_EXPLICIT_EPISODE_BINDING,

@@ -7262,17 +7262,21 @@ async fn resolve_pending_import_for_created_title_tx(
     title: &Title,
 ) -> AppResult<()> {
     if title.facet == MediaFacet::Movie {
+        // A folder ownership conflict row is bound to the title that already
+        // owns another folder; matching it to a new title replaces that
+        // binding, and the other title is not touched.
         let rows = SqlRuntime::execute(
             SqlExec::Tx(tx),
             "DELETE FROM library_scan_unmatched_items
               WHERE id = {}
                 AND library_id = {}
                 AND facet = {}
-                AND title_id IS NULL",
+                AND (title_id IS NULL OR reason_code = {})",
             &[
                 SqlArg::Text(pending_import_id.to_string()),
                 SqlArg::Text(title.library_id.clone()),
                 SqlArg::Text(title.facet.as_str().to_string()),
+                SqlArg::Text(scryer_application::location::conflicts::PENDING_REASON.to_string()),
             ],
         )
         .await?;
