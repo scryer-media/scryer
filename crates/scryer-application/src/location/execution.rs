@@ -1311,7 +1311,12 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .find(|row| row.source_path == file.source_path);
             let mut resolved = file.clone();
             if let Some(row) = resolution {
-                if Disk::process().uncached(file.source()).await.exists() == Some(false) {
+                // A source missing at its name may be one an interrupted
+                // cleanup set aside: it is put back and checked like any
+                // other, and only a source that is really gone is skipped.
+                if Disk::process().uncached(file.source()).await.exists() == Some(false)
+                    && read_copied_source(&file.source()).await?.is_none()
+                {
                     continue;
                 }
                 if !row.proof_is_current().await {

@@ -3327,16 +3327,25 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
 /// (the destination's folder a link to the source's) has its destination's
 /// name filled again and is done with nothing removed. A set-aside file that
 /// cannot go back is kept where it is, and the cleanup is blocked naming it.
+/// With a resolution row the file is put back the same way, and the row's
+/// version check then stops the cleanup with the source at its own name.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
     use std::os::unix::fs::PermissionsExt;
-    for case in ["separate", "one_entry", "cannot_go_back"] {
+    for (case, with_row) in [
+        ("separate", false),
+        ("one_entry", false),
+        ("cannot_go_back", false),
+        ("separate", true),
+        ("one_entry", true),
+        ("cannot_go_back", true),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let (plan, store, operation, copies) = copied_files_awaiting_cleanup(
             temp.path(),
             VerificationDepth::Full,
-            false,
+            with_row,
             &["Larkspire.mkv"],
         )
         .await;
@@ -3372,9 +3381,30 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
         }
 
         match case {
+            "separate" | "one_entry" if with_row => {
+                // The rename out and back moved the source's change time, so
+                // the row's recorded version no longer fits it: the cleanup
+                // stops, with the file back at its own name.
+                let error = result.expect_err("a put-back source no longer fits its row");
+                assert_eq!(
+                    error.reason(),
+                    Some(crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP),
+                    "{case} {with_row}: {error:?}"
+                );
+                assert_eq!(
+                    std::fs::read(&source).unwrap(),
+                    source_bytes,
+                    "{case} {with_row}: the source is back at its name"
+                );
+                assert!(!aside.exists(), "{case} {with_row}");
+                assert_eq!(std::fs::read(&destination).unwrap(), source_bytes);
+            }
             "separate" => {
                 result.expect("cleanup");
-                assert!(!source.exists(), "{case}: the put-back source is removed");
+                assert!(
+                    !source.exists(),
+                    "{case} {with_row}: the put-back source is removed"
+                );
                 assert!(!aside.exists(), "{case}");
                 assert_eq!(std::fs::read(&destination).unwrap(), source_bytes);
             }
