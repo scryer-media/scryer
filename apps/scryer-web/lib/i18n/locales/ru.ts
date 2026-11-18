@@ -7888,6 +7888,8 @@ const ru: LocaleDictionary = {
     "Диск или том, на котором находится папка тайтла, отсутствует.",
   "error.missingDriveNamed":
     "Папка тайтла {{titleFolder}} недоступна: диск или том {{missingDrive}} отсутствует.",
+  "error.unprovenLinkLeftBehindNamed":
+    "Ссылку, созданную в месте назначения, не удалось подтвердить как источник и не удалось удалить, поэтому она осталась по пути {{leftBehindPath}}. Источник сохранён; проверьте этот путь перед повторной попыткой.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Требуется путь к папке тайтла.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":
@@ -9169,6 +9171,10 @@ const ru: LocaleDictionary = {
     "Выбранная папка пересекается с папкой другого тайтла; принадлежность файлов не изменена.",
   "error.reason.LOCATION_SELECTION_NOTHING_MOVE":
     "В выбранных элементах нечего переносить.",
+  "error.reason.LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK":
+    "При очистке источник был отложен в сторону, чтобы отличить его от копии, и его не удалось вернуть под собственное имя. Он сохранён там, куда был отложен; ничего не удалено.",
+  "error.setAsideSourceKeptNamed":
+    "При очистке источник был отложен в сторону, чтобы отличить его от копии, и его не удалось вернуть под собственное имя. Он сохранён по пути {{leftBehindPath}}; ничего не удалено.",
   "error.reason.LOCATION_SOURCE_CHANGED_BEFORE_CLEANUP":
     "Источник изменился перед очисткой и был сохранён.",
   "error.reason.LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT":

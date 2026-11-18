@@ -2060,10 +2060,16 @@ impl AppUseCase {
                     return Err(error);
                 }
                 Err(error) => {
-                    if error.reason().is_none() {
+                    // A disk reading's own code says why a path did not read,
+                    // not which conflict condition the row is in: the row
+                    // keeps the planning failure and the log keeps the cause.
+                    let coded = error
+                        .reason()
+                        .filter(|reason| !crate::disk::reason::ALL.contains(reason));
+                    if coded.is_none() {
                         tracing::warn!(pending_import_id = %id, error = %error, "Conflict preview planning failed");
                     }
-                    let reason = error.reason().unwrap_or(refusal::PLAN_FAILED).to_owned();
+                    let reason = coded.unwrap_or(refusal::PLAN_FAILED).to_owned();
                     fingerprints.push((id.clone(), reason.clone()));
                     let (title_id, title_name) = authorized_title.unwrap_or_default();
                     rows.push(ConflictRow {

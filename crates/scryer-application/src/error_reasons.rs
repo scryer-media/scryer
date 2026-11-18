@@ -2305,6 +2305,8 @@ pub mod location {
         "LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT";
     /// A hard link made at the destination could not be proven to be the source and could not be removed. It is left at the path named by [`LEFT_BEHIND_PATH_FACT`]; the source was kept.
     pub const UNPROVEN_LINK_NOT_REMOVED: &str = "LOCATION_UNPROVEN_LINK_NOT_REMOVED";
+    /// A cleanup set the move's source aside to tell it from its copy, and it could not be put back at its own name. It is kept at the path named by [`LEFT_BEHIND_PATH_FACT`]; nothing was removed.
+    pub const SET_ASIDE_SOURCE_NOT_PUT_BACK: &str = "LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK";
     /// The destination has no room for the file. The source was kept.
     pub const DESTINATION_NO_SPACE: &str = "LOCATION_DESTINATION_NO_SPACE";
     /// Scryer is not allowed to write the file there. The source was kept.
@@ -2558,6 +2560,7 @@ pub mod location {
         SOURCE_DESTINATION_SAME_PATH,
         SOURCE_CHANGED_DURING_FILE_PLACEMENT,
         UNPROVEN_LINK_NOT_REMOVED,
+        SET_ASIDE_SOURCE_NOT_PUT_BACK,
         DESTINATION_NO_SPACE,
         DESTINATION_PERMISSION_DENIED,
         CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE,
@@ -2643,7 +2646,8 @@ pub mod location {
         RECOVERY_TITLE_CHANGED,
     ];
 
-    /// The path where an unproven link that could not be removed was left.
+    /// The path a file was left at: an unproven link that could not be
+    /// removed, or a source a cleanup set aside and could not put back.
     pub const LEFT_BEHIND_PATH_FACT: &str = "leftBehindPath";
 
     /// Every refusal fact key this area publishes.

@@ -16510,6 +16510,28 @@ type LocationTransferSnapshotPayload {
 }
 
 """
+Why one title in a location transfer did not simply finish: the sentence,
+and beside it the stable reason code and facts of the error that failed it.
+"""
+type LocationTransferTitleOutcomePayload {
+	"""
+	The title's detail sentence, as `locationTransferTitleDetail` gives it.
+	"""
+	detail: String
+	"""
+	Stable reason code of the error that failed the title, when it carried
+	one. Clients translate known codes and fall back to `detail`.
+	"""
+	refusalReason: String
+	"""
+	Facts that error carried, as one object keyed by fact name whose values
+	are a string or a list of strings, in the shape a GraphQL error
+	extension gives them. Null when the error carried none.
+	"""
+	refusalFacts: JSON
+}
+
+"""
 One title's live progress inside a location transfer, as Activity shows it.
 """
 type LocationTransferTitlePayload {
@@ -25858,6 +25880,21 @@ type QueryRoot {
 		"""
 		titleId: ID!
 	): String
+	"""
+	Why a title did not simply finish: its detail sentence, and the stable
+	reason code and facts of the error that failed it. Null when the
+	operation has no row for the title.
+	"""
+	locationTransferTitleOutcome(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!,
+		"""
+		Identity of the title whose outcome to read.
+		"""
+		titleId: ID!
+	): LocationTransferTitleOutcomePayload
 	"""
 	Read progress while a background task settles a selected set of folder conflicts.
 	"""

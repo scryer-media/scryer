@@ -1011,6 +1011,8 @@ const en: LocaleDictionary = {
     "The drive or volume of the title folder is missing.",
   "error.missingDriveNamed":
     "Title folder {{titleFolder}} cannot be reached: drive or volume {{missingDrive}} is missing.",
+  "error.unprovenLinkLeftBehindNamed":
+    "A link made at the destination could not be proven to be the source and could not be removed, so it is still at {{leftBehindPath}}. The source was preserved; check that path before trying again.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Title folder path is required.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":
@@ -2280,6 +2282,10 @@ const en: LocaleDictionary = {
     "Selected folder overlaps another title's folder; no ownership was changed.",
   "error.reason.LOCATION_SELECTION_NOTHING_MOVE":
     "This selection has nothing to move.",
+  "error.reason.LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK":
+    "A cleanup set the source aside to tell it from its copy, and it could not be put back at its own name. It is kept where it was set aside, and nothing was removed.",
+  "error.setAsideSourceKeptNamed":
+    "A cleanup set the source aside to tell it from its copy, and it could not be put back at its own name. It is kept at {{leftBehindPath}}, and nothing was removed.",
   "error.reason.LOCATION_SOURCE_CHANGED_BEFORE_CLEANUP":
     "Source changed before cleanup; preserved it.",
   "error.reason.LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT":

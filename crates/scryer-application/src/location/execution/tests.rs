@@ -3663,13 +3663,13 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
                 let error = result.expect_err("a set-aside file that cannot go back blocks");
                 assert_eq!(
                     error.reason(),
-                    Some(crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN),
+                    Some(crate::error_reasons::location::SET_ASIDE_SOURCE_NOT_PUT_BACK),
                     "{case}: {error:?}"
                 );
                 assert_eq!(
                     error.refusal_facts(),
                     &[crate::RefusalFact {
-                        key: crate::error_reasons::import::KEPT_PATH_FACT,
+                        key: crate::error_reasons::location::LEFT_BEHIND_PATH_FACT,
                         value: crate::RefusalFactValue::Text(aside.display().to_string()),
                     }]
                 );

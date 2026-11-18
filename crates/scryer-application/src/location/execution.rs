@@ -1591,13 +1591,13 @@ struct CopiedSource {
 /// read does, and read again; where the two names were one entry, that is
 /// also what fills the destination's name again. A nonempty file at the
 /// set-aside name that cannot go back is kept there and blocks the cleanup,
-/// named by [`import::KEPT_PATH_FACT`].
+/// named by [`location::LEFT_BEHIND_PATH_FACT`].
 ///
 /// Probes: one read of the source. Only when it reads missing, one read of
 /// the set-aside name, then one rename when it holds a nonempty file (and one
 /// more read of the source after it), or one removal of an empty one.
 ///
-/// [`import::KEPT_PATH_FACT`]: crate::error_reasons::import::KEPT_PATH_FACT
+/// [`location::LEFT_BEHIND_PATH_FACT`]: crate::error_reasons::location::LEFT_BEHIND_PATH_FACT
 async fn read_copied_source(source: &Path) -> AppResult<Option<CopiedSource>> {
     match Disk::process().fingerprint(source).await {
         Ok(mark) => {
@@ -1654,9 +1654,9 @@ fn set_aside_source_kept(source: &Path, at: &Path) -> AppError {
             source.display(),
             at.display()
         ),
-        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+        reason: crate::error_reasons::location::SET_ASIDE_SOURCE_NOT_PUT_BACK,
         facts: vec![crate::RefusalFact {
-            key: crate::error_reasons::import::KEPT_PATH_FACT,
+            key: crate::error_reasons::location::LEFT_BEHIND_PATH_FACT,
             value: crate::RefusalFactValue::Text(at.display().to_string()),
         }],
     }

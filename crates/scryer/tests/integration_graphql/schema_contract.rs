@@ -810,8 +810,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `ruleBuilderSchema`: 200->201.
     assert!(query_field_names.contains(&"ruleBuilderSchema"));
     // Background grabs add the grabJobResult query root: query 201->202.
+    // A failed transfer title's reason code and facts add
+    // `locationTransferTitleOutcome` beside its detail read: 202->203.
+    assert!(query_field_names.contains(&"locationTransferTitleOutcome"));
     assert_eq!(
-        query_field_count, 202,
+        query_field_count, 203,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -1546,12 +1549,16 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // StartGrabInput, GrabIndexerSearchAssignmentInput and
     // GrabStandbyReleaseInput inputs: OBJECT 570->572, INPUT_OBJECT 247->250,
     // public types 1045->1050. RELEASE_GRAB joins the existing job key enum.
+    // A failed transfer title's outcome adds
+    // LocationTransferTitleOutcomePayload: OBJECT 572->573, public types
+    // 1050->1051.
+    assert!(public_type_names.contains(&"LocationTransferTitleOutcomePayload"));
     assert_eq!(
         public_types.len(),
-        1050,
+        1051,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 572);
+    assert_eq!(kind_count("OBJECT"), 573);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).

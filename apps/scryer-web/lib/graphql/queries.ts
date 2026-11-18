@@ -5641,8 +5641,12 @@ export const locationTransferFilesQuery = `query LocationTransferFiles($id: ID!,
 export const locationTransferFilesSubscription = `subscription LocationTransferFilesLive($id: ID!, $titleId: ID!, $offset: Int!) {
   locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}
 }`;
-export const locationTransferTitleDetailQuery = `query LocationTransferTitleDetail($id: ID!, $titleId: ID!) {
-  locationTransferTitleDetail(id: $id, titleId: $titleId)
+export const locationTransferTitleOutcomeQuery = `query LocationTransferTitleOutcome($id: ID!, $titleId: ID!) {
+  locationTransferTitleOutcome(id: $id, titleId: $titleId) {
+    detail
+    refusalReason
+    refusalFacts
+  }
 }`;
 
 /**

@@ -69,6 +69,10 @@ const GROUPS: readonly {
   { codes: ["AUTHENTICATION_REQUIRED"], reasons: ["AUTHENTICATION_REQUIRED"] },
   { codes: ["INTERNAL_ERROR"], reasons: ["INTERNAL_ERROR"] },
   {
+    codes: ["MANUAL_RECONCILIATION_REQUIRED"],
+    reasons: ["LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK"],
+  },
+  {
     codes: ["INTERNAL_ERROR", "VALIDATION_ERROR"],
     reasons: [
       "TITLE_DELETE_CATALOG_CLEANUP_FAILED",

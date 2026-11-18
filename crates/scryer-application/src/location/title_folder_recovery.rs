@@ -105,9 +105,23 @@ fn relay_failure(message: String) -> AppError {
     AppError::Validation(message)
 }
 
-/// A reading that does not say what is at a path, relayed as its reason.
+/// A disk failure relayed in its own words, with the reason code the disk
+/// gave it.
+fn relay_disk_failure(error: &crate::disk::DiskError) -> AppError {
+    AppError::validation_refused(error.reason(), error.to_string())
+}
+
+/// A reading that does not say what is at a path, relayed as its reason, with
+/// the reason code the reading carries: why it could not be taken, when the
+/// disk said, else what it lacks.
 fn unreadable(reading: PathReading) -> AppError {
-    relay_failure(reading.absence().to_owned())
+    match reading
+        .unreachable_cause()
+        .or_else(|| reading.unknown_reason())
+    {
+        Some(reason) => AppError::validation_refused(reason, reading.absence()),
+        None => relay_failure(reading.absence().to_owned()),
+    }
 }
 
 /// Up to `budget` entries of `directory` in listing order, each with what

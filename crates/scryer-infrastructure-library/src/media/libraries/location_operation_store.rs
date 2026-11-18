@@ -2244,6 +2244,7 @@ mod tests {
             verifying: 0,
             recording: 0,
             detail: None,
+            refusal: None,
         };
         let mut seeds = Vec::new();
         for index in 0..2000 {

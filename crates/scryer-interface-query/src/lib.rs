@@ -2158,6 +2158,24 @@ impl CatalogQueries {
             })
     }
 
+    /// Why a title did not simply finish: its detail sentence, and the stable
+    /// reason code and facts of the error that failed it. Null when the
+    /// operation has no row for the title.
+    async fn location_transfer_title_outcome(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(desc = "Identity of the title whose outcome to read.")] title_id: ID,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferTitleOutcomePayload>> {
+        app_from_ctx(ctx)?
+            .location_transfer_title_outcome(&actor_from_ctx(ctx)?, id.as_str(), title_id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|outcome| {
+                outcome.map(scryer_interface_media::mappers::from_location_transfer_title_outcome)
+            })
+    }
+
     /// Read progress while a background task settles a selected set of folder conflicts.
     async fn pending_import_conflict_task(
         &self,

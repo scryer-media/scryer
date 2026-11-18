@@ -321,6 +321,7 @@ impl AppUseCase {
                     verifying: 0,
                     recording: 0,
                     detail: plan.unresolved.clone(),
+                    refusal: None,
                 }],
             )
             .await?;
@@ -623,7 +624,7 @@ async fn create_recovery_destination_directories(
                     ));
                 }
             }
-            Err(error) => return Err(relay_failure(error.to_string())),
+            Err(error) => return Err(relay_disk_failure(&error)),
         }
     }
     inspect_path(parent, false).await

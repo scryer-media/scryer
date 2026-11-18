@@ -83,6 +83,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::location::classify::TitleLocationClass;
+use crate::location::live::TitleRefusal;
 use crate::location::model::{
     FileVerificationRecord, KnownSourceContent, LocationOperation, LocationOperationCounters,
     LocationOperationState, LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement,
@@ -1021,6 +1022,7 @@ impl<'a> LocationOperationRunner<'a> {
                         &mut progress,
                         plan,
                         None,
+                        None,
                     )
                     .await?;
                     progress.warnings.push(reason);
@@ -1034,6 +1036,7 @@ impl<'a> LocationOperationRunner<'a> {
                         Some(reason),
                         &mut progress,
                         plan,
+                        None,
                         None,
                     )
                     .await?;
@@ -1060,8 +1063,17 @@ impl<'a> LocationOperationRunner<'a> {
                         TitleCheckpointState::CompletedWithWarnings
                     };
                     let detail = finished_title_detail(&notes, &warnings);
-                    self.settle_title(&operation, title, state, detail, &mut progress, plan, None)
-                        .await?;
+                    self.settle_title(
+                        &operation,
+                        title,
+                        state,
+                        detail,
+                        &mut progress,
+                        plan,
+                        None,
+                        None,
+                    )
+                    .await?;
                     progress.warnings.extend(warnings);
                 }
                 // A cancel landed between two of this title's files. The title
@@ -1085,6 +1097,7 @@ impl<'a> LocationOperationRunner<'a> {
                         .await;
                 }
                 Err(error) => {
+                    let refusal = TitleRefusal::from_error(&error);
                     let detail = error.to_string();
                     let reason_code = classify_title_failure(phase, &error);
                     tracing::warn!(
@@ -1102,6 +1115,7 @@ impl<'a> LocationOperationRunner<'a> {
                         &mut progress,
                         plan,
                         Some(reason_code),
+                        refusal,
                     )
                     .await?;
                     failures.push(TitleFailure {
@@ -1247,6 +1261,7 @@ impl<'a> LocationOperationRunner<'a> {
             None,
             progress,
             None,
+            None,
         )
         .await?;
         self.write_progress(
@@ -1334,6 +1349,7 @@ impl<'a> LocationOperationRunner<'a> {
                 None,
                 progress,
                 None,
+                None,
             )
             .await?;
         }
@@ -1348,6 +1364,7 @@ impl<'a> LocationOperationRunner<'a> {
                 TitleCheckpointState::Verifying,
                 None,
                 progress,
+                None,
                 None,
             )
             .await?;
@@ -1409,6 +1426,7 @@ impl<'a> LocationOperationRunner<'a> {
             None,
             progress,
             None,
+            None,
         )
         .await?;
         self.write_progress(
@@ -1434,6 +1452,7 @@ impl<'a> LocationOperationRunner<'a> {
             TitleCheckpointState::CleaningUp,
             None,
             progress,
+            None,
             None,
         )
         .await?;
@@ -1579,6 +1598,7 @@ impl<'a> LocationOperationRunner<'a> {
                 None,
                 progress,
                 None,
+                None,
             )
             .await
         {
@@ -1644,7 +1664,8 @@ impl<'a> LocationOperationRunner<'a> {
     }
 
     // The reason code rides next to the detail it explains; a wider row is
-    // the honest shape, not a bundle.
+    // the honest shape, not a bundle. The refusal's code and facts are one
+    // value, and ride beside the detail on the transfer row.
     #[expect(clippy::too_many_arguments)]
     async fn settle_title(
         &self,
@@ -1655,6 +1676,7 @@ impl<'a> LocationOperationRunner<'a> {
         progress: &mut RunProgress,
         plan: &OperationWorkPlan,
         reason_code: Option<LocationReasonCode>,
+        refusal: Option<TitleRefusal>,
     ) -> AppResult<()> {
         if matches!(
             state,
@@ -1680,8 +1702,16 @@ impl<'a> LocationOperationRunner<'a> {
             progress.record_resolved_outcomes(title, &resolutions);
         }
         progress.settle(title, state);
-        self.write_title_checkpoint(operation, title, state, detail, progress, reason_code)
-            .await?;
+        self.write_title_checkpoint(
+            operation,
+            title,
+            state,
+            detail,
+            progress,
+            reason_code,
+            refusal,
+        )
+        .await?;
         let operation_state = operation_state_for(state);
         self.write_progress(
             operation,
@@ -1700,6 +1730,7 @@ impl<'a> LocationOperationRunner<'a> {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     async fn write_title_checkpoint(
         &self,
         operation: &LocationOperation,
@@ -1708,6 +1739,7 @@ impl<'a> LocationOperationRunner<'a> {
         detail: Option<String>,
         progress: &RunProgress,
         reason_code: Option<LocationReasonCode>,
+        refusal: Option<TitleRefusal>,
     ) -> AppResult<()> {
         let now = Utc::now();
         let files_verified = progress.files_done(&title.title_id);
@@ -1739,6 +1771,7 @@ impl<'a> LocationOperationRunner<'a> {
             {
                 row.state = state;
                 row.detail = detail;
+                row.refusal = refusal;
                 row.files_done = files_verified;
                 row.copy_bytes = bytes_verified.max(0) as u64;
                 row.verification_bytes = row.copy_bytes;
@@ -2343,6 +2376,9 @@ mod tests {
         checkpoint_byte_writes: Vec<i64>,
         released_operations: Vec<String>,
         transfer_titles: BTreeMap<(String, String), crate::location::live::TransferTitle>,
+        /// Every transfer row write, in order, so a row's intermediate states
+        /// are observable rather than only the last one.
+        transfer_title_writes: Vec<crate::location::live::TransferTitle>,
     }
 
     impl FakeStore {
@@ -2387,6 +2423,20 @@ mod tests {
                 .transfer_titles
                 .get(&(operation_id.to_string(), title_id.to_string()))
                 .cloned()
+        }
+
+        fn transfer_title_writes_for(
+            &self,
+            title_id: &str,
+        ) -> Vec<crate::location::live::TransferTitle> {
+            self.inner
+                .lock()
+                .expect("lock")
+                .transfer_title_writes
+                .iter()
+                .filter(|row| row.title_id == title_id)
+                .cloned()
+                .collect()
         }
 
         fn cancel_observed(&self) -> bool {
@@ -2609,7 +2659,9 @@ mod tests {
             operation_id: &str,
             title: &crate::location::live::TransferTitle,
         ) -> AppResult<()> {
-            self.inner.lock().expect("lock").transfer_titles.insert(
+            let mut inner = self.inner.lock().expect("lock");
+            inner.transfer_title_writes.push(title.clone());
+            inner.transfer_titles.insert(
                 (operation_id.to_string(), title.title_id.clone()),
                 title.clone(),
             );
@@ -3251,6 +3303,240 @@ mod tests {
         }
     }
 
+    /// A mover that refuses every file with the error the test gives it.
+    struct AlwaysRefusingMover {
+        error: fn(&std::path::Path) -> AppError,
+    }
+
+    #[async_trait]
+    impl TitleFileMover for AlwaysRefusingMover {
+        async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            Err((self.error)(&request.file.destination_path))
+        }
+    }
+
+    fn unproven_link_left_behind(destination: &std::path::Path) -> AppError {
+        use crate::error_reasons::location;
+        AppError::validation_refused_with_facts(
+            location::UNPROVEN_LINK_NOT_REMOVED,
+            "synthetic link could not be proven",
+            vec![
+                crate::RefusalFact::new(
+                    location::LEFT_BEHIND_PATH_FACT,
+                    destination.display().to_string(),
+                ),
+                crate::RefusalFact::list("syntheticList", vec!["a".into(), "b".into()]),
+            ],
+        )
+    }
+
+    /// The transfer row the operation seeds for a title before it runs.
+    fn pending_transfer_row(title_id: &str) -> crate::location::live::TransferTitle {
+        crate::location::live::TransferTitle {
+            title_id: title_id.into(),
+            name: title_id.into(),
+            sequence: 0,
+            state: TitleCheckpointState::Pending,
+            files_total: 1,
+            files_done: 0,
+            bytes_total: 100,
+            copy_bytes: 0,
+            verification_bytes: 0,
+            current_file: None,
+            copying: 0,
+            verifying: 0,
+            recording: 0,
+            detail: None,
+            refusal: None,
+        }
+    }
+
+    fn uncoded_failure(_destination: &std::path::Path) -> AppError {
+        AppError::Validation("synthetic uncoded failure".into())
+    }
+
+    /// Runs one title through the pipeline against a destination folder that
+    /// is present, so a refusal fails the title at once.
+    async fn run_one_refused_title(
+        error: fn(&std::path::Path) -> AppError,
+    ) -> (FakeStore, tempfile::TempDir) {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let mut title = planned_title("first", 0, 1);
+        title.files[0].source_path = temp.path().join("source.mkv");
+        title.files[0].destination_path = destination.join("file.mkv");
+        let plan = OperationWorkPlan::new(vec![title]);
+        let store = FakeStore::with_operation(operation());
+        store.seed_transfer_title("op-1", pending_transfer_row("first"));
+        let mover = AlwaysRefusingMover { error };
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let result = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub)
+            .run("op-1", &plan)
+            .await
+            .unwrap();
+        assert_eq!(result.state, LocationOperationState::Failed);
+        (store, temp)
+    }
+
+    #[tokio::test]
+    async fn a_refused_file_puts_its_code_and_facts_on_the_title_row() {
+        let (store, temp) = run_one_refused_title(unproven_link_left_behind).await;
+        let left_behind = temp
+            .path()
+            .join("destination")
+            .join("file.mkv")
+            .display()
+            .to_string();
+        let row = store.transfer_title_row("op-1", "first").expect("row");
+        assert_eq!(row.state, TitleCheckpointState::Failed);
+        assert_eq!(
+            row.detail.as_deref(),
+            Some(
+                unproven_link_left_behind(std::path::Path::new(&left_behind))
+                    .to_string()
+                    .as_str()
+            ),
+            "the sentence stays the detail"
+        );
+        let refusal = row.refusal.expect("coded failure");
+        assert_eq!(
+            refusal.reason,
+            crate::error_reasons::location::UNPROVEN_LINK_NOT_REMOVED
+        );
+        assert_eq!(
+            refusal
+                .facts
+                .get(crate::error_reasons::location::LEFT_BEHIND_PATH_FACT),
+            Some(&crate::location::live::TitleRefusalFact::Text(left_behind))
+        );
+        assert_eq!(
+            refusal.facts.get("syntheticList"),
+            Some(&crate::location::live::TitleRefusalFact::List(vec![
+                "a".into(),
+                "b".into()
+            ]))
+        );
+        // The row shows the failure from the moment it is known, not only
+        // once the title settles.
+        let writes = store.transfer_title_writes_for("first");
+        let first_failed = writes
+            .iter()
+            .position(|row| row.state == TitleCheckpointState::Failed)
+            .expect("a failed write");
+        assert!(
+            writes[first_failed..].iter().all(|row| row
+                .refusal
+                .as_ref()
+                .map(|r| r.reason.as_str())
+                == Some(crate::error_reasons::location::UNPROVEN_LINK_NOT_REMOVED)),
+            "every write from the failure on carries the code: {writes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_uncoded_failure_leaves_the_title_row_without_a_refusal() {
+        let (store, _temp) = run_one_refused_title(uncoded_failure).await;
+        let row = store.transfer_title_row("op-1", "first").expect("row");
+        assert_eq!(row.state, TitleCheckpointState::Failed);
+        assert!(row.detail.is_some());
+        assert_eq!(row.refusal, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_reconcile_puts_its_code_on_the_title_row() {
+        struct RefusingReconciler;
+        #[async_trait]
+        impl TitleReconciler for RefusingReconciler {
+            async fn reconcile_title(
+                &self,
+                _operation: &LocationOperation,
+                _title: &PlannedTitle,
+            ) -> AppResult<TitleStepOutcome> {
+                Err(AppError::validation_refused(
+                    crate::error_reasons::location::MERGE_UNAVAILABLE,
+                    "synthetic merge refused",
+                ))
+            }
+
+            async fn clean_up_title(
+                &self,
+                _operation: &LocationOperation,
+                _title: &PlannedTitle,
+            ) -> AppResult<TitleStepOutcome> {
+                Ok(TitleStepOutcome::clean())
+            }
+        }
+        let plan = OperationWorkPlan::new(vec![planned_title("first", 0, 1)]);
+        let store = FakeStore::with_operation(operation());
+        store.seed_transfer_title("op-1", pending_transfer_row("first"));
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let hub = crate::location::live::TransferHub::default();
+        let result = LocationOperationRunner::new(&store, &mover, &admission, &RefusingReconciler)
+            .with_transfers(&hub)
+            .run("op-1", &plan)
+            .await
+            .unwrap();
+        assert_eq!(result.state, LocationOperationState::Failed);
+        let row = store.transfer_title_row("op-1", "first").expect("row");
+        assert_eq!(row.state, TitleCheckpointState::Failed);
+        assert_eq!(
+            row.refusal.map(|refusal| refusal.reason),
+            Some(crate::error_reasons::location::MERGE_UNAVAILABLE.to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_title_that_completes_ends_without_a_refusal() {
+        let plan = OperationWorkPlan::new(vec![planned_title("first", 0, 1)]);
+        let store = FakeStore::with_operation(operation());
+        // A row left by an earlier failed run of the same title.
+        store.seed_transfer_title(
+            "op-1",
+            crate::location::live::TransferTitle {
+                state: TitleCheckpointState::Failed,
+                detail: Some("synthetic earlier failure".into()),
+                refusal: crate::location::live::TitleRefusal::from_error(
+                    &unproven_link_left_behind(std::path::Path::new("/synthetic/left/behind.mkv")),
+                ),
+                ..pending_transfer_row("first")
+            },
+        );
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let result = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub)
+            .run("op-1", &plan)
+            .await
+            .unwrap();
+        // The earlier detail stays on the row, so the run may end with a
+        // warning; the refusal is gone either way.
+        assert!(
+            matches!(
+                result.state,
+                LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+            ),
+            "{:?}",
+            result.state
+        );
+        let row = store.transfer_title_row("op-1", "first").expect("row");
+        assert!(
+            matches!(
+                row.state,
+                TitleCheckpointState::Completed | TitleCheckpointState::CompletedWithWarnings
+            ),
+            "{:?}",
+            row.state
+        );
+        assert_eq!(row.refusal, None);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn pipeline_cancel_while_waiting_for_storage_stops_without_failing_title() {
         struct DisconnectForever {
@@ -3502,6 +3788,7 @@ mod tests {
                 verifying: 0,
                 recording: 0,
                 detail: None,
+                refusal: None,
             },
         );
         let admission = ScriptedAdmission::new(&[]);
@@ -3580,6 +3867,7 @@ mod tests {
                 verifying,
                 recording: 0,
                 detail: None,
+                refusal: None,
             };
         // More stale rows than one page, so the release pages through them.
         for index in 0..250 {
@@ -3845,6 +4133,7 @@ mod tests {
                 verifying: 0,
                 recording: 0,
                 detail: None,
+                refusal: None,
             },
         );
         let mover = PipelinedMover::new(u64::MAX);
