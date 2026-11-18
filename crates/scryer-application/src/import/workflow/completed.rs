@@ -919,6 +919,7 @@ async fn reconcile_unclaimed_terminal_cleanup(
         cache,
         record,
         record.is_some_and(|record| record.library_holds_payload),
+        record.map_or(&[], |record| record.library_file_unsettled.as_slice()),
     )
     .await
 }
@@ -940,6 +941,7 @@ pub(crate) async fn run_claimed_download_cleanup(
     let result = async {
         let sources = app.services.workflow.imports.download_import_sources(&record.download_id).await?;
         record.library_holds_payload = sources.library_holds_payload;
+        record.library_file_unsettled = sources.library_file_unsettled;
         if sources.held {
             finish_cleanup_attempt(app, &record, CleanupSettlement::CleanupDeferred, false, record.history_offset,
                 Some("archive or subtitle delivery is pending; sources preserved")).await;
@@ -1005,7 +1007,11 @@ pub(crate) async fn run_claimed_download_cleanup(
             Some(crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
                 | crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON)
         );
-        let remove = if state == TrackedDownloadState::Ignored || manual_cleanup {
+        // An ignored download keeps its client entry and its data: ignoring
+        // only stops Scryer tracking it, so its cleanup settles as retained.
+        let remove = if state == TrackedDownloadState::Ignored {
+            false
+        } else if manual_cleanup {
             true
         } else {
             let facet = facet.as_ref().ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::CLEANUP_ATTRIBUTION_MISSING, CLEANUP_UNATTRIBUTED))?;
@@ -1490,6 +1496,7 @@ mod settlement_tests {
             payload_checkpoint: None,
             previous_failure_retry_seconds,
             library_holds_payload: false,
+            library_file_unsettled: Vec::new(),
         }
     }
 

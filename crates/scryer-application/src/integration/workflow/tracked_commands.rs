@@ -501,6 +501,7 @@ impl AppUseCase {
         .await?;
         let source_identity =
             ClientJobLocator::new(client_id, client_type, download_client_item_id);
+        self.require_ignorable_source(&source_identity).await?;
         let tracked_id = crate::tracked_downloads::tracked_download_id(
             client_id,
             client_type,

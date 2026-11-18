@@ -4698,6 +4698,9 @@ pub mod integration {
     /// This tracked download is busy processing.
     pub const TRACKED_DOWNLOAD_BUSY_PROCESSING: &str =
         "INTEGRATION_TRACKED_DOWNLOAD_BUSY_PROCESSING";
+    /// The tracked download is not in a state that can be ignored: only a
+    /// download whose import is blocked or failed can be.
+    pub const TRACKED_DOWNLOAD_NOT_IGNORABLE: &str = "INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE";
     /// Max queries per minute must be at least 1, or empty for no budget.
     pub const MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE: &str =
         "INTEGRATION_MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE";
@@ -4897,6 +4900,7 @@ pub mod integration {
         DOWNLOAD_NOT_GRABBED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
+        TRACKED_DOWNLOAD_NOT_IGNORABLE,
         IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
         IMPORT_TRACKING_DOWNLOAD_CHANGED,
         IMPORT_TRACKING_ALREADY_RESOLVED,

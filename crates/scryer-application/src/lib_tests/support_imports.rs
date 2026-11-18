@@ -149,6 +149,7 @@ impl FileImporter for CopyingFileImporter {
             source_disposition: scryer_domain::ImportSourceDisposition::Retained,
             source_cleanup: None,
             verification: None,
+            library_file_unsettled: false,
         })
     }
 
@@ -1602,8 +1603,72 @@ impl ImportRepository for TrackingImportRepo {
                 serde_json::from_str::<serde_json::Value>(&record.payload_json).unwrap_or_default();
             answer.held |= payload["archive_processing_pending"] == true;
             answer.library_holds_payload |= payload[crate::LIBRARY_HOLDS_PAYLOAD_KEY] == true;
+            for file in crate::UnsettledLibraryFile::from_payload(&payload) {
+                if !answer.library_file_unsettled.contains(&file) {
+                    answer.library_file_unsettled.push(file);
+                }
+            }
         }
         Ok(answer)
+    }
+
+    async fn record_library_files_unsettled(
+        &self,
+        import_id: &str,
+        files: &[crate::UnsettledLibraryFile],
+    ) -> AppResult<bool> {
+        if !self.canonical_ids.lock().await.contains_key(import_id) {
+            return Ok(false);
+        }
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(false);
+        };
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        let mut recorded = crate::UnsettledLibraryFile::from_payload(&payload);
+        for file in files {
+            if !recorded.contains(file) {
+                recorded.push(file.clone());
+            }
+        }
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                crate::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY.into(),
+                serde_json::to_value(&recorded).unwrap(),
+            );
+        }
+        record.payload_json = payload.to_string();
+        Ok(true)
+    }
+
+    async fn settle_library_files_unsettled(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+        library_holds_payload: bool,
+    ) -> AppResult<()> {
+        let canonical_ids = self.canonical_ids.lock().await;
+        for record in self.records.lock().await.iter_mut() {
+            if canonical_ids.get(&record.id) != Some(download_id) {
+                continue;
+            }
+            let mut payload: serde_json::Value =
+                serde_json::from_str(&record.payload_json).unwrap_or_default();
+            let Some(object) = payload.as_object_mut() else {
+                continue;
+            };
+            if object
+                .remove(crate::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY)
+                .is_none()
+            {
+                continue;
+            }
+            if library_holds_payload {
+                object.insert(crate::LIBRARY_HOLDS_PAYLOAD_KEY.into(), true.into());
+            }
+            record.payload_json = payload.to_string();
+        }
+        Ok(())
     }
 
     async fn record_library_holds_download_payload(&self, import_id: &str) -> AppResult<bool> {

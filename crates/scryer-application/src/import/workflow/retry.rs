@@ -207,9 +207,11 @@ async fn reconcile_claimed_history_retry(
 /// not the client's. One read of the library rows' paths for all of them.
 /// The mark that keeps the client from removing the download's data is the
 /// download's, so it is written once, for the first file found to be the
-/// library file, and the files after it are not checked. A check that cannot
-/// tell fails the recovery, which keeps the claim and tries again on its
-/// next pass.
+/// library file, and the files after it are not checked. Files the reads
+/// could not tell apart without setting the download's file aside are
+/// recorded once, together, for the download's cleanup to settle. A check
+/// that fails fails the recovery, which keeps the claim and tries again on
+/// its next pass.
 async fn settle_interrupted_retry_library_files(
     app: &AppUseCase,
     import_id: &str,
@@ -240,23 +242,24 @@ async fn settle_interrupted_retry_library_files(
         .into_iter()
         .collect();
     let download_folder = stored_path_to_path_buf(&completed.dest_dir);
+    let mut unsettled = Vec::new();
     for (file_id, relative_path) in placed {
         let Some(library_path) = library_paths.get(file_id) else {
             continue;
         };
         let source = download_folder.join(relative_path);
-        if settle_already_imported_source(
-            app,
-            import_id,
-            &source,
-            &stored_path_to_path_buf(library_path),
-        )
-        .await?
-        {
-            break;
+        let library_path = stored_path_to_path_buf(library_path);
+        match settle_already_imported_source(app, import_id, &source, &library_path).await? {
+            // The download's data is kept from its client: nothing is left
+            // for a cleanup to settle.
+            crate::LibraryFileSameness::Same => return Ok(()),
+            crate::LibraryFileSameness::Apart => {}
+            crate::LibraryFileSameness::Unsettled => {
+                unsettled.push(crate::UnsettledLibraryFile::new(&source, &library_path));
+            }
         }
     }
-    Ok(())
+    record_library_files_unsettled(app, import_id, &unsettled).await
 }
 
 pub(crate) fn schedule_import_retry_recovery(app: &AppUseCase) {
@@ -429,6 +432,20 @@ mod already_imported_entry_tests {
         let source = folder.join("sample.mkv");
         std::fs::write(&source, b"only video bytes").expect("source");
         source
+    }
+
+    /// An unsettled library file's paths round-trip through their stored
+    /// form, a download file whose name is not UTF-8 included, so a cleanup
+    /// tests the very files the import found.
+    #[test]
+    fn unsettled_library_file_paths_round_trip_when_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let source = Path::new("/downloads").join(std::ffi::OsStr::from_bytes(b"sample-\xff.mkv"));
+        let library = Path::new("/library/Sample.Fixture.mkv");
+        let file = crate::UnsettledLibraryFile::new(&source, library);
+        assert_eq!(crate::stored_paths::stored_path_to_path_buf(&file.source_path), source);
+        assert_eq!(file.source(), source);
+        assert_eq!(file.library(), library);
     }
 
     /// The download's own file under another name is the library file: its

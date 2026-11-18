@@ -3750,6 +3750,14 @@ pub struct ImportFileResult {
     /// persist.
     #[serde(default)]
     pub verification: Option<ImportVerification>,
+    /// The destination was already there with the source's content, and the
+    /// cheap reads could not tell whether it is the source's own entry. An
+    /// import that keeps its source leaves the question open rather than set
+    /// the download's file aside to answer it, so a seeding download is never
+    /// renamed; a cleanup about to remove the download's data settles it
+    /// first. `false` on every other result and on results stored before.
+    #[serde(default)]
+    pub library_file_unsettled: bool,
 }
 
 // ── Content verification value types (FR-040–047) ───────────────────────────

@@ -3022,6 +3022,7 @@ fn finish_prepared_import(
         // A rename, hardlink, or symlink placement copies no bytes:
         // there is nothing to verify and nothing to hash.
         verification: None,
+        library_file_unsettled: false,
     })
 }
 
@@ -3037,6 +3038,7 @@ fn finish_renamed_archive_output(prepared: PreparedImportPlacement) -> ImportFil
         source_disposition: ImportSourceDisposition::RenamedIntoPlace,
         source_cleanup: None,
         verification: None,
+        library_file_unsettled: false,
     }
 }
 
@@ -3356,8 +3358,9 @@ fn reconcile_existing_destination(
     // download client may later remove its entry but never its data. One
     // cheap look settles the plain cases here in every mode; a destination
     // with another name, such as a link an earlier import made, reads as
-    // distinct without it. Where that look cannot rely on file numbers, the
-    // source is set aside once the content matched, below, in every mode.
+    // distinct without it. Where that look cannot rely on file numbers, a
+    // move's source is set aside once the content matched, below; any other
+    // import leaves the question open for its download's cleanup.
     match Disk::process().entry_alias_blocking(source, dest, &existing) {
         EntryAlias::Distinct => {}
         EntryAlias::Same => {
@@ -3421,10 +3424,18 @@ fn reconcile_existing_destination(
     // the source, two renames, one read of the destination, a second when it
     // is a link, and one listing of its folder unless both carry numbers on
     // one volume off a share.
+    //
+    // An import that keeps its source never sets it aside: the download may
+    // be seeding, and its client must never see the file's name go. The
+    // question is left open on the result instead, and a cleanup about to
+    // remove the download's data settles it first.
     let source_mark = Disk::process()
         .fingerprint_blocking(source)
         .map_err(|_| import_destination_alias_unknown(source, dest, "the source did not read"))?;
-    if Disk::process().adoption_needs_set_aside(source, &source_mark, dest, &existing) {
+    let needs_set_aside =
+        Disk::process().adoption_needs_set_aside(source, &source_mark, dest, &existing);
+    let library_file_unsettled = needs_set_aside && !source_cleanup_required;
+    if needs_set_aside && source_cleanup_required {
         match Disk::process().tell_apart_by_set_aside_blocking(
             source,
             &source_mark,
@@ -3470,6 +3481,7 @@ fn reconcile_existing_destination(
         // This call copied nothing: the destination was already there and was
         // proved equal to the source by the sampled proof above.
         verification: None,
+        library_file_unsettled,
     }))
 }
 
@@ -3524,6 +3536,7 @@ fn library_file_result(
         // Nothing was copied, and the file is compared with nothing: it is
         // the one file both names reach.
         verification: None,
+        library_file_unsettled: false,
     })
 }
 
@@ -3646,6 +3659,7 @@ fn import_hardlink_or_copy_blocking(
                 source_disposition: ImportSourceDisposition::Retained,
                 source_cleanup,
                 verification: None,
+                library_file_unsettled: false,
             });
         }
 
@@ -3724,6 +3738,7 @@ fn import_hardlink_or_copy_blocking(
                         source_disposition: ImportSourceDisposition::Retained,
                         source_cleanup,
                         verification: None,
+                        library_file_unsettled: false,
                     });
                 }
                 ImportLink::Unproven(LinkDoubt::Identity(mismatch)) => tracing::warn!(
@@ -3820,6 +3835,7 @@ fn import_hardlink_or_copy_blocking(
             source_disposition: ImportSourceDisposition::Retained,
             source_cleanup,
             verification: Some(verification),
+            library_file_unsettled: false,
         })
     })();
     pruned_on_failure(&created, placed)
@@ -4810,6 +4826,25 @@ impl FileImporter for FsFileImporter {
         let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
         tokio::task::spawn_blocking(move || {
             scryer_application::library_file_is_import_source_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
+
+    async fn library_file_sameness_without_set_aside(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<scryer_application::LibraryFileSameness> {
+        // Reads only, but a source an earlier check set aside is put back
+        // first, so no placement, snapshot or cleanup of it runs meanwhile.
+        let _turn = SourceTurns::shared().take(source).await;
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            scryer_application::library_file_sameness_without_set_aside_blocking(
+                &source,
+                &library_path,
+            )
         })
         .await
         .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
@@ -6684,9 +6719,11 @@ mod tests {
     /// another spelling ends on that file, marked so the client may remove
     /// its entry but never its data. A destination that is a second link of
     /// the source, which an earlier link import made, is still that import,
-    /// as it was before. A symlink is told by setting the source aside: one
-    /// to the source is the library file, one to another equal file is
-    /// adopted. Nothing is removed in any case, and the source is back.
+    /// as it was before. A symlink the cheap reads cannot tell apart is
+    /// adopted with the question left open, since a link import keeps its
+    /// source and never sets it aside: one to the source and one to another
+    /// equal file alike. Nothing is removed in any case, and the source never
+    /// leaves its name.
     #[cfg(unix)]
     #[test]
     fn a_link_import_onto_the_sources_own_entry_is_the_library_file_and_a_second_link_is_kept() {
@@ -6738,32 +6775,99 @@ mod tests {
         assert_eq!(std::fs::read(&source).ok(), bytes);
         assert_eq!(std::fs::read(&linked).ok(), bytes);
 
-        // A symlink to the source: the set-aside test finds it is the
-        // source's entry, and the source is put back.
+        assert!(!result.library_file_unsettled, "{result:?}");
+
+        // A symlink to the source, and one to another file of the same
+        // content: neither is told apart by setting the source aside. Both
+        // are adopted with the question left open, and the source stays at
+        // its name: its folder takes no rename, so a set-aside would fail.
         let pointer = shelf.join("Pointer.mkv");
         std::os::unix::fs::symlink(&source, &pointer).expect("symlink");
-        let result = link_import(&pointer).expect("a link to the source");
+        let elsewhere = dir.path().join("elsewhere.mkv");
+        std::fs::write(&elsewhere, b"only video bytes").expect("elsewhere");
+        let other = shelf.join("Other.mkv");
+        std::os::unix::fs::symlink(&elsewhere, &other).expect("symlink");
+        let downloads = source.parent().expect("parent").to_path_buf();
+        let _writable = ReadOnlyFolder::new(&downloads);
+        for dest in [&pointer, &other] {
+            let result = link_import(dest).expect("a link the reads cannot tell apart");
+            assert_eq!(
+                result.destination_disposition,
+                ImportDestinationDisposition::AlreadyPresent
+            );
+            assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
+            assert!(result.source_cleanup.is_none(), "{result:?}");
+            assert!(result.library_file_unsettled, "{result:?}");
+            assert_eq!(std::fs::read(&source).ok(), bytes);
+            assert!(!disk::aside_path_for(&source).exists());
+        }
+    }
+
+    /// A folder that takes no rename or new name until dropped, so a test can
+    /// tell a step never set a file in it aside.
+    #[cfg(unix)]
+    struct ReadOnlyFolder(std::path::PathBuf);
+
+    #[cfg(unix)]
+    impl ReadOnlyFolder {
+        fn new(folder: &Path) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o555))
+                .expect("read-only folder");
+            Self(folder.to_path_buf())
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadOnlyFolder {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    /// A move import still sets its source aside where the cheap reads cannot
+    /// tell: a symlink to the source is the library file, and the source is
+    /// back at its name. A move import whose source folder takes no rename
+    /// cannot run that test and refuses, keeping everything.
+    #[cfg(unix)]
+    #[test]
+    fn a_move_import_still_tells_a_link_to_its_source_by_setting_it_aside() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("downloads").join("source.mkv");
+        std::fs::create_dir_all(source.parent().expect("parent")).expect("downloads");
+        std::fs::write(&source, b"only video bytes").expect("write source");
+        let shelf = dir.path().join("shelf");
+        std::fs::create_dir_all(&shelf).expect("shelf");
+        let pointer = shelf.join("Pointer.mkv");
+        std::os::unix::fs::symlink(&source, &pointer).expect("symlink");
+        let move_import = || {
+            import_file_blocking(
+                source.clone(),
+                pointer.clone(),
+                ImportMode::Move,
+                ImportFileOptions::default(),
+                None,
+                None,
+                ImportFilePermissions::default(),
+            )
+        };
+
+        {
+            let downloads = source.parent().expect("parent").to_path_buf();
+            let _read_only = ReadOnlyFolder::new(&downloads);
+            move_import().expect_err("the set-aside test cannot run");
+            assert_eq!(std::fs::read(&source).unwrap(), b"only video bytes");
+        }
+
+        let result = move_import().expect("a link to the source");
         assert_eq!(
             result.source_disposition,
             ImportSourceDisposition::IsLibraryFile
         );
         assert!(result.source_cleanup.is_none(), "{result:?}");
-        assert_eq!(std::fs::read(&source).ok(), bytes);
-        assert!(!disk::aside_path_for(&source).exists());
-
-        // A symlink to another file of the same content: separate, adopted,
-        // and the source put back where it was.
-        let elsewhere = dir.path().join("elsewhere.mkv");
-        std::fs::write(&elsewhere, b"only video bytes").expect("elsewhere");
-        let other = shelf.join("Other.mkv");
-        std::os::unix::fs::symlink(&elsewhere, &other).expect("symlink");
-        let result = link_import(&other).expect("a link to another equal file");
-        assert_eq!(
-            result.destination_disposition,
-            ImportDestinationDisposition::AlreadyPresent
-        );
-        assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
-        assert_eq!(std::fs::read(&source).ok(), bytes);
+        assert!(!result.library_file_unsettled, "{result:?}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"only video bytes");
         assert!(!disk::aside_path_for(&source).exists());
     }
 

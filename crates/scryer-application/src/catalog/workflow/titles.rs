@@ -1915,6 +1915,22 @@ impl AppUseCase {
                 continue;
             }
 
+            // A torrent stays in its client when its title is removed, so it
+            // keeps seeding; it stays available for unmatched import as the
+            // explicit path above leaves it. An unknown client counts as a
+            // torrent client here.
+            if !explicit && crate::seeding_gate::client_type_is_torrent(self, &identity.client_type)
+            {
+                live_download_ids.insert(submission.download_id);
+                debug!(
+                    title_id = %title_id,
+                    client_type = %identity.client_type,
+                    download_item_id = %identity.item_id,
+                    "leaving active torrent in its client after title deletion"
+                );
+                continue;
+            }
+
             match self
                 .services
                 .workflow

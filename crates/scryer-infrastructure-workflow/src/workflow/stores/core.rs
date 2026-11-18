@@ -979,8 +979,9 @@ pub async fn queue_import_request_with_identity_for_download(
     .await
 }
 
-/// The new payload with the library-holds mark carried over, when the import
-/// the upsert replaces carries it; `None` when there is nothing to carry.
+/// The new payload with the library-holds mark and any unsettled library
+/// files carried over, when the import the upsert replaces carries them;
+/// `None` when there is nothing to carry.
 async fn payload_keeping_library_holds_mark_tx(
     tx: &mut SqlTx<'_>,
     source_client_id: &str,
@@ -1011,21 +1012,41 @@ async fn payload_keeping_library_holds_mark_tx(
     };
     let previous = json_text_from_row(&row, "payload_json")?
         .and_then(|json| serde_json::from_str::<JsonValue>(&json).ok());
-    let holds = previous.is_some_and(|previous| {
+    let holds = previous.as_ref().is_some_and(|previous| {
         previous[scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY].as_bool() == Some(true)
     });
-    if !holds {
+    // Library files an import left unsettled travel the same way: a cleanup
+    // must still settle them before it removes any data.
+    let unsettled = previous.as_ref().and_then(|previous| {
+        previous
+            .get(scryer_application::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY)
+            .filter(|entries| {
+                entries
+                    .as_array()
+                    .is_some_and(|entries| !entries.is_empty())
+            })
+            .cloned()
+    });
+    if !holds && unsettled.is_none() {
         return Ok(None);
     }
     let mut payload: JsonValue = serde_json::from_str(payload_json)
         .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
-    payload
+    let object = payload
         .as_object_mut()
-        .ok_or_else(|| AppError::Repository("invalid import payload".into()))?
-        .insert(
+        .ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+    if holds {
+        object.insert(
             scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY.into(),
             JsonValue::Bool(true),
         );
+    }
+    if let Some(unsettled) = unsettled {
+        object.insert(
+            scryer_application::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY.into(),
+            unsettled,
+        );
+    }
     serde_json::to_string(&payload)
         .map(Some)
         .map_err(|error| AppError::Repository(error.to_string()))

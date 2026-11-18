@@ -22,6 +22,7 @@ fn cleanup_record(row: &SqlRow) -> AppResult<DownloadCleanupRecord> {
         source_title: blank_to_none(row.opt_text("source_title")?),
         previous_failure_retry_seconds: None,
         library_holds_payload: false,
+        library_file_unsettled: Vec::new(),
     })
 }
 

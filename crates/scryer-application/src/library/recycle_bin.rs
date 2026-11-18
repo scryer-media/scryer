@@ -1287,8 +1287,6 @@ enum CopyTarget {
     Unclaimed,
     /// An empty file this operation made to reserve the name.
     OwnClaim,
-    /// A file that was there before this operation, which the copy replaces.
-    Occupied,
 }
 
 /// Copy one file through the verified copier and prove it at `depth`, the
@@ -1304,7 +1302,7 @@ async fn proven_copy(
 ) -> AppResult<()> {
     let claim = match target {
         CopyTarget::Unclaimed => DestinationClaim::ClaimHere,
-        CopyTarget::OwnClaim | CopyTarget::Occupied => DestinationClaim::AlreadyHeld,
+        CopyTarget::OwnClaim => DestinationClaim::AlreadyHeld,
     };
     let copied = copy_and_verify_reporting(
         &Disk::process(),
@@ -1319,15 +1317,8 @@ async fn proven_copy(
         Err(failure) => {
             // A copy that claims its own name never leaves anything under it
             // on failure, and whatever holds that name is not this copy's. A
-            // name this operation reserved is its own to clean up. A file
-            // that was there before is removed only once the copy wrote over
-            // it; a copy that failed before then left it as it was.
-            let remove = match target {
-                CopyTarget::Unclaimed => false,
-                CopyTarget::OwnClaim => true,
-                CopyTarget::Occupied => failure.destination_written,
-            };
-            if remove {
+            // name this operation reserved is its own to clean up.
+            if target == CopyTarget::OwnClaim {
                 let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
             }
             return Err(failure.error);
@@ -1716,14 +1707,90 @@ async fn restore_over_by_verified_copy(
     depth: VerificationDepth,
 ) -> AppResult<()> {
     let reading = Disk::process().uncached(original_path).await;
-    let target = match reading.exists() {
-        Some(true) => CopyTarget::Occupied,
-        Some(false) => CopyTarget::Unclaimed,
+    match reading.exists() {
+        Some(true) => {
+            proven_replacement(recycled_path, original_path, progress, depth).await?;
+        }
+        Some(false) => {
+            proven_copy(
+                recycled_path,
+                original_path,
+                CopyTarget::Unclaimed,
+                progress,
+                depth,
+            )
+            .await?;
+        }
         None => return Err(unreadable(original_path, reading)),
-    };
-    proven_copy(recycled_path, original_path, target, progress, depth).await?;
+    }
     let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
     Ok(())
+}
+
+/// Replace the file at `destination` with a proven copy of `source`, never
+/// writing into the file that is there.
+///
+/// The copy is written under the staging name beside `destination` and proven
+/// at `depth`; only then does a rename give it the destination name. The
+/// rename replaces the directory entry alone, so a file the old name shared
+/// with other names (a hard link to a seeding download, say) keeps its bytes
+/// under those names. Anything short of that rename leaves `destination`
+/// untouched and removes what the copy wrote under the staging name; a
+/// staging name some other file already holds refuses the copy and is left
+/// alone. `source` is never touched.
+async fn proven_replacement(
+    source: &Path,
+    destination: &Path,
+    progress: CopyProgress,
+    depth: VerificationDepth,
+) -> AppResult<()> {
+    let staged = crate::disk::resumable_staging_path(destination);
+    let copied = copy_and_verify_reporting(
+        &Disk::process(),
+        source,
+        &staged,
+        placement::staged_replacement_copy(depth),
+        &progress,
+    )
+    .await;
+    let verified = match copied {
+        Ok(verified) => verified,
+        Err(failure) => {
+            // The copy created the staging name only if it wrote there; a
+            // name it could not create is some other file's.
+            if failure.destination_written {
+                let _ = crate::fs_safety::remove_file_safely_if_exists(&staged).await;
+            }
+            return Err(failure.error);
+        }
+    };
+    if !verified.permits_source_removal() {
+        let _ = crate::fs_safety::remove_file_safely_if_exists(&staged).await;
+        let detail = verified
+            .detail
+            .map(|detail| format!(": {detail}"))
+            .unwrap_or_default();
+        return Err(AppError::Repository(format!(
+            "copy verification failed for {} -> {}{detail}",
+            source.display(),
+            staged.display()
+        )));
+    }
+    match Disk::process()
+        .place(&staged, destination, placement::rename_onto_held_name())
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let _ = crate::fs_safety::remove_file_safely_if_exists(&staged).await;
+            Err(AppError::Repository(format!(
+                "failed to replace {} with its proven restore {}: {}",
+                destination.display(),
+                staged.display(),
+                error
+            )))
+        }
+    }
 }
 
 async fn restore_from_recycle_inner(
@@ -4484,10 +4551,9 @@ mod tests {
         std::fs::write(&original, b"the occupant").unwrap();
         std::fs::write(&bystander, b"unrelated").unwrap();
 
-        proven_copy(
+        proven_replacement(
             &recycled,
             &original,
-            CopyTarget::Occupied,
             CopyProgress::none(),
             VerificationDepth::Quick,
         )
@@ -4496,6 +4562,77 @@ mod tests {
 
         assert_eq!(std::fs::read(&original).unwrap(), b"the occupant");
         assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+        assert!(
+            !crate::disk::resumable_staging_path(&original).exists(),
+            "nothing is left under the staging name"
+        );
+    }
+
+    /// An overwrite restore replaces the name, never the file behind it: a
+    /// second name the occupant shared (a hard link to a seeding download,
+    /// say) keeps the occupant's bytes, and the restored name holds the
+    /// recycled bytes.
+    #[tokio::test]
+    async fn an_overwrite_restore_leaves_the_occupants_other_names_their_bytes() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("bin").join("sample-feature.recycled");
+        let original = tmp.path().join("library").join("sample-feature.mkv");
+        let seeding = tmp.path().join("downloads").join("sample-feature.mkv");
+        std::fs::create_dir_all(recycled.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(seeding.parent().unwrap()).unwrap();
+        std::fs::write(&recycled, b"the recycled bytes").unwrap();
+        std::fs::write(&seeding, b"the seeding payload").unwrap();
+        if std::fs::hard_link(&seeding, &original).is_err() {
+            eprintln!("skipping: hard links are unavailable here");
+            return;
+        }
+
+        proven_replacement(
+            &recycled,
+            &original,
+            CopyProgress::none(),
+            VerificationDepth::Full,
+        )
+        .await
+        .expect("the overwrite restore lands");
+
+        assert_eq!(std::fs::read(&original).unwrap(), b"the recycled bytes");
+        assert_eq!(
+            std::fs::read(&seeding).unwrap(),
+            b"the seeding payload",
+            "the occupant's other name keeps its bytes"
+        );
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"the recycled bytes");
+        assert!(!crate::disk::resumable_staging_path(&original).exists());
+    }
+
+    /// A staging name some other file already holds refuses the replacement
+    /// and is left exactly as it was, and so is the occupant.
+    #[tokio::test]
+    async fn an_overwrite_restore_refuses_a_held_staging_name_and_keeps_it() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("bin").join("sample-feature.recycled");
+        let original = tmp.path().join("library").join("sample-feature.mkv");
+        let staged = crate::disk::resumable_staging_path(&original);
+        std::fs::create_dir_all(recycled.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&recycled, b"the recycled bytes").unwrap();
+        std::fs::write(&original, b"the occupant").unwrap();
+        std::fs::write(&staged, b"someone else's partial").unwrap();
+
+        proven_replacement(
+            &recycled,
+            &original,
+            CopyProgress::none(),
+            VerificationDepth::Quick,
+        )
+        .await
+        .expect_err("a held staging name refuses the restore");
+
+        assert_eq!(std::fs::read(&original).unwrap(), b"the occupant");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"someone else's partial");
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"the recycled bytes");
     }
 
     #[tokio::test]
@@ -4763,10 +4900,38 @@ mod tests {
         assert!(!original.exists(), "the unproven restore is removed");
     }
 
+    #[tokio::test]
+    async fn an_unproven_overwrite_restore_leaves_the_occupant_and_keeps_the_recycled_copy() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("sample-feature.recycled");
+        let original = tmp.path().join("sample-feature.mkv");
+        let staged = crate::disk::resumable_staging_path(&original);
+        tokio::fs::write(&recycled, b"recycled bytes")
+            .await
+            .unwrap();
+        tokio::fs::write(&original, b"the occupant").await.unwrap();
+
+        let error = restore_over_by_verified_copy(
+            &recycled,
+            &original,
+            damage_when_verification_starts(&staged, b"damaged"),
+            VerificationDepth::Full,
+        )
+        .await
+        .expect_err("an unproven restore must fail");
+
+        assert!(
+            error.to_string().contains("copy verification failed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&original).unwrap(), b"the occupant");
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"recycled bytes");
+        assert!(!staged.exists(), "the unproven staged copy is removed");
+    }
+
     /// A restore onto a name the caller holds is not refused, and so cleans
     /// nothing up, when the root's reads do not answer: the copy runs on its
-    /// own thread and the name holds the proven restore. The file under that
-    /// name is never removed for a copy that wrote nothing.
+    /// own thread and the name holds the proven restore.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_restore_onto_a_held_name_is_not_refused_when_its_root_does_not_answer() {
         let tmp = TempDir::new().unwrap();
@@ -4776,7 +4941,8 @@ mod tests {
         std::fs::create_dir_all(recycled.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(&recycled, b"recycled bytes").unwrap();
-        std::fs::write(&original, b"the occupant, which is longer").unwrap();
+        // The empty file this restore made to reserve the name.
+        std::fs::write(&original, b"").unwrap();
         let disk = Disk::process();
         // Declared first, so it drops last: the process's own roots come back
         // after the root is released, however the test ends.
@@ -4797,7 +4963,7 @@ mod tests {
             proven_copy(
                 &recycled,
                 &original,
-                CopyTarget::Occupied,
+                CopyTarget::OwnClaim,
                 CopyProgress::none(),
                 VerificationDepth::Quick,
             ),

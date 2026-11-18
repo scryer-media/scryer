@@ -210,7 +210,10 @@ pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
-pub use import::import::library_file_is_import_source_blocking;
+pub use import::import::{
+    LibraryFileSameness, library_file_is_import_source_blocking,
+    library_file_sameness_without_set_aside_blocking,
+};
 pub(crate) use import::parameters as import_parameters;
 pub(crate) use import::post_download_gate;
 pub(crate) use import::seeding_gate;
@@ -1579,4 +1582,5 @@ pub(crate) mod test_wait;
 pub use ports::TitleCounts;
 pub use ports::TitleEpisodeShape;
 pub use ports::TitleRecyclePurge;
+pub use ports::{LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY, UnsettledLibraryFile};
 pub use types::{DashboardImportEvidence, DashboardImportKind, DashboardRecentImport};

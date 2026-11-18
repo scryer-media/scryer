@@ -1660,6 +1660,36 @@ impl AppUseCase {
         ))
     }
 
+    /// Refuse to ignore a download the queue says is not in a state to be
+    /// ignored, using the same rule that decides the button.
+    ///
+    /// A download the queue does not know about is allowed through to the
+    /// durable ignore, which keeps its own refusal for a download that already
+    /// reached a terminal outcome.
+    pub(crate) async fn require_ignorable_source(
+        &self,
+        identity: &ClientJobLocator,
+    ) -> AppResult<()> {
+        let Ok((_, model)) = self.current_download_queue_read_model().await else {
+            return Ok(());
+        };
+        let Some(item) = model
+            .items
+            .iter()
+            .find(|item| download_queue_item_source_identity(item) == *identity)
+        else {
+            return Ok(());
+        };
+        if download_queue_item_allows_ignore(item) {
+            return Ok(());
+        }
+
+        Err(AppError::validation_refused(
+            crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_IGNORABLE,
+            "only a download whose import is blocked or failed can be ignored".to_string(),
+        ))
+    }
+
     /// Resolve a local password retry only when the latest attempt still belongs
     /// to the same canonical download. The retry mutation rechecks eligibility.
     pub async fn password_retry_import_id_for_download(

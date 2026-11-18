@@ -520,6 +520,7 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
     // parks it in `ImportedSeeding`. While an archive or subtitle delivery of
     // the same download still holds its sources, nothing is removed yet.
     let mut library_holds_payload = false;
+    let mut library_file_unsettled = Vec::new();
     if let Some(download_id) = completed
         .download_id
         .as_deref()
@@ -533,7 +534,10 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
             .await
         {
             Ok(sources) if sources.held => return,
-            Ok(sources) => library_holds_payload = sources.library_holds_payload,
+            Ok(sources) => {
+                library_holds_payload = sources.library_holds_payload;
+                library_file_unsettled = sources.library_file_unsettled;
+            }
             Err(error) => {
                 tracing::warn!(%download_id, error = %error,
                     "could not tell whether the download's sources are still held; cleanup deferred");
@@ -559,6 +563,7 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
         None,
         None,
         library_holds_payload,
+        &library_file_unsettled,
     )
     .await;
 }

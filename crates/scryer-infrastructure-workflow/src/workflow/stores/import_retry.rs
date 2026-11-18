@@ -105,14 +105,16 @@ impl ImportStore {
                     .map_err(|_| AppError::Repository("retry payload is unavailable".into()))?;
                 // That the download's file is the library file is preservation
                 // evidence too: the client must still never remove its data.
-                let library_holds_payload = previous
+                // So are library files an import left unsettled: a cleanup
+                // must still settle them before it removes any data.
+                let previous_payload = previous
                     .as_ref()
                     .map(import_payload_json)
                     .transpose()?
-                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
-                    .is_some_and(|previous| {
-                        previous[scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY].as_bool() == Some(true)
-                    });
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok());
+                let library_holds_payload = previous_payload.as_ref().is_some_and(|previous| {
+                    previous[scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY].as_bool() == Some(true)
+                });
                 if library_holds_payload {
                     payload
                         .as_object_mut()
@@ -120,6 +122,19 @@ impl ImportStore {
                         .insert(
                             scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY.into(),
                             serde_json::Value::Bool(true),
+                        );
+                }
+                if let Some(unsettled) = previous_payload.as_ref().and_then(|previous| {
+                    previous
+                        .get(scryer_application::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY)
+                        .filter(|entries| entries.as_array().is_some_and(|entries| !entries.is_empty()))
+                }) {
+                    payload
+                        .as_object_mut()
+                        .ok_or_else(|| AppError::Repository("invalid retry payload".into()))?
+                        .insert(
+                            scryer_application::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY.into(),
+                            unsettled.clone(),
                         );
                 }
                 if previous.as_ref().map(archive_import_has_pending_sources).transpose()?.unwrap_or(false) {

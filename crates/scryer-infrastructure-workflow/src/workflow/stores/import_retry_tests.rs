@@ -325,6 +325,7 @@ async fn library_file_mark_is_read_with_the_holds_and_survives_a_retry() {
     let marked = scryer_application::DownloadImportSources {
         held: false,
         library_holds_payload: true,
+        library_file_unsettled: Vec::new(),
     };
     assert_eq!(
         store.download_import_sources(&claim.download_id).await.unwrap(),
@@ -395,6 +396,118 @@ async fn library_file_mark_is_read_with_the_holds_and_survives_a_retry() {
         store.download_import_sources(&claim.download_id).await.unwrap(),
         scryer_application::DownloadImportSources::default(),
         "a requeue adds no mark the import did not carry"
+    );
+}
+
+/// Library files an import left unsettled are read back with its holds,
+/// recorded once each, survive a retry or a requeue replacing the import's
+/// payload, are refused while a cleanup owns the download, and are cleared by
+/// the cleanup's settlement, which leaves the library-holds mark when one was
+/// the download's file. An import without the key reads as settled.
+#[tokio::test]
+async fn unsettled_library_files_are_read_kept_and_settled_once() {
+    let (store, cleanup, claim, expected) = retry_fixture().await;
+    let first = scryer_application::UnsettledLibraryFile {
+        source_path: "/downloads/job-1/sample.mkv".into(),
+        library_path: "/library/Sample.Fixture.mkv".into(),
+    };
+    let second = scryer_application::UnsettledLibraryFile {
+        source_path: "/downloads/job-1/other.mkv".into(),
+        library_path: "/library/Other.Fixture.mkv".into(),
+    };
+    for files in [vec![first.clone()], vec![first.clone(), second.clone()]] {
+        assert!(
+            store
+                .record_library_files_unsettled(&claim.import_id, &files)
+                .await
+                .unwrap()
+        );
+    }
+    let unsettled = scryer_application::DownloadImportSources {
+        held: false,
+        library_holds_payload: false,
+        library_file_unsettled: vec![first.clone(), second.clone()],
+    };
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        unsettled
+    );
+    assert!(
+        !store
+            .record_library_files_unsettled("missing-import", &[first.clone()])
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_import_retry(&claim, expected, "{\"replacement\":true}")
+            .await
+            .unwrap()
+            .is_claimed()
+    );
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        unsettled
+    );
+    store
+        .queue_import_request_with_identity_for_download(
+            source_identity("job-1"),
+            "movie_download".into(),
+            "{\"requeued\":true}".into(),
+            None,
+            Some(&claim.download_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        unsettled,
+        "a requeue replacing the payload keeps the open question"
+    );
+    store
+        .settle_library_files_unsettled(&claim.download_id, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        scryer_application::DownloadImportSources {
+            held: false,
+            library_holds_payload: true,
+            library_file_unsettled: Vec::new(),
+        }
+    );
+    drop(cleanup);
+
+    let (store, cleanup, claim, _) = retry_fixture().await;
+    assert!(
+        store
+            .record_library_files_unsettled(&claim.import_id, &[first.clone()])
+            .await
+            .unwrap()
+    );
+    store
+        .settle_library_files_unsettled(&claim.download_id, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.download_import_sources(&claim.download_id).await.unwrap(),
+        scryer_application::DownloadImportSources::default(),
+        "separate files leave no mark and no question"
+    );
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Claimed(_)
+    ));
+    let refused = store
+        .record_library_files_unsettled(&claim.import_id, &[first])
+        .await
+        .expect_err("a cleanup owns the download");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::WORKFLOW_SOURCE_CLEANUP_ALREADY_CLAIMED)
     );
 }
 

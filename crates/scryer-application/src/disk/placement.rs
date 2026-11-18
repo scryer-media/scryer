@@ -88,6 +88,23 @@ pub(crate) fn journaled_staging_copy() -> Placement {
     }
 }
 
+/// Copying into a staging name beside a file the copy will replace, proven at
+/// the operation's configured verification depth. The name is created by the
+/// copy, which fails if it is held; whatever is written stays there on
+/// failure for the caller to remove. The caller then renames the proven copy
+/// onto the file it replaces with [`rename_onto_held_name`].
+pub(crate) fn staged_replacement_copy(depth: VerificationDepth) -> Placement {
+    crate::location::transfer::install_copy_workers();
+    let depth = crate::location::verify::disk_depth(depth);
+    Placement {
+        verify: Verify::Recorded(Evidence {
+            depth,
+            landing: Landing::Direct,
+        }),
+        ..recorded(depth, DestinationClaim::ClaimHere)
+    }
+}
+
 /// A recorded copy the test proves for itself.
 #[cfg(test)]
 pub(crate) fn unproven_copy(claim: DestinationClaim) -> Placement {

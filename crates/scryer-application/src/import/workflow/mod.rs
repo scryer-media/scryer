@@ -320,6 +320,14 @@ pub(crate) async fn import_file_with_record_progress(
     {
         record_library_file_for_download(app, import_id, source, dest).await?;
     }
+    if result.library_file_unsettled && completed.is_some() {
+        record_library_files_unsettled(
+            app,
+            import_id,
+            &[crate::UnsettledLibraryFile::new(source, dest)],
+        )
+        .await?;
+    }
     let finalization_permit = app
         .runtime
         .imports
@@ -372,19 +380,62 @@ pub(crate) async fn record_library_file_for_download(
     }
 }
 
+/// The import left the download's files `files` on library files without
+/// telling whether each is the library file itself, and a download client
+/// still holds an entry for them. The import's row records them, so a
+/// cleanup about to remove the download's data settles them first. With no
+/// download identity to record them under, or a record that does not land,
+/// the import refuses as an unknown alias, so nothing is left for a client to
+/// remove with its data.
+pub(crate) async fn record_library_files_unsettled(
+    app: &AppUseCase,
+    import_id: &str,
+    files: &[crate::UnsettledLibraryFile],
+) -> AppResult<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let recorded = app
+        .services
+        .workflow
+        .imports
+        .record_library_files_unsettled(import_id, files)
+        .await;
+    match recorded {
+        Ok(true) => Ok(()),
+        outcome => {
+            if let Err(error) = &outcome {
+                tracing::warn!(import_id, error = %error,
+                    "could not record that a library file may be the download's file");
+            }
+            let file = &files[0];
+            Err(AppError::RepositoryFailed {
+                message: format!(
+                    "could not tell whether library file {} is the download's file {} itself, and the question could not be kept for the download's cleanup; nothing was removed",
+                    file.library().display(),
+                    file.source().display()
+                ),
+                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+            })
+        }
+    }
+}
+
 /// An import of the download's file `source` that ends on the library file
 /// at `library_path` without placing anything, as a re-run that finds the
-/// file already imported: whether the two are one entry is settled here, as
-/// an adoption settles it, before a client may remove the download with its
-/// data. A row with no library-holds mark has not been checked, so this runs
-/// whether or not one is recorded. One entry records the mark, so the client
-/// removes its entry only; separate entries, or a file that is gone, record
-/// nothing. A check that cannot tell refuses as an unknown alias, keeping
-/// everything, so the download is not removed with its data. True when the
-/// mark was recorded.
+/// file already imported: whether the two are one entry is asked here before
+/// a client may remove the download with its data. A row with no
+/// library-holds mark has not been checked, so this runs whether or not one
+/// is recorded. One entry records the mark, so the client removes its entry
+/// only; separate entries, or a file that is gone, record nothing. Where the
+/// cheap reads cannot tell, the download's file is never set aside, since
+/// the import keeps it and it may be seeding: the answer is
+/// [`LibraryFileSameness::Unsettled`], which the caller records for the
+/// download's cleanup. A check that fails refuses as an unknown alias,
+/// keeping everything.
 ///
-/// The check runs through the file importer, in the source's turn, since
-/// the set-aside test moves the source for a moment.
+/// The check runs through the file importer, in the source's turn, since it
+/// may put back a source an earlier check set aside.
 ///
 /// A source that reads missing may be the download's file an earlier check
 /// set aside and could not put back: a nonempty regular file at its
@@ -394,26 +445,35 @@ pub(crate) async fn record_library_file_for_download(
 ///
 /// Probes: one read of each file; where the source reads missing, one read of
 /// its set-aside name, and, when a file is put back, its rename and the
-/// source's read again; where file numbers on one volume off a
-/// share cannot tell, the set-aside test besides (two renames, one read of
-/// the library file, a second when it is a link, and one listing of its
-/// folder unless both carry numbers on one volume off a share).
+/// source's read again.
 pub(crate) async fn settle_already_imported_source(
     app: &AppUseCase,
     import_id: &str,
     source: &Path,
     library_path: &Path,
-) -> AppResult<bool> {
-    let same = app
+) -> AppResult<LibraryFileSameness> {
+    let sameness = app
         .services
         .workflow
         .file_importer
-        .library_file_is_import_source(source, library_path)
+        .library_file_sameness_without_set_aside(source, library_path)
         .await?;
-    if same {
+    if sameness == LibraryFileSameness::Same {
         record_library_file_for_download(app, import_id, source, library_path).await?;
     }
-    Ok(same)
+    Ok(sameness)
+}
+
+/// Whether a library file is the download's file itself, as far as reads
+/// that never move the download's file can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryFileSameness {
+    /// One entry: the library file is the download's file.
+    Same,
+    /// Separate entries, or one of the two is gone.
+    Apart,
+    /// The reads could not tell; only setting the download's file aside can.
+    Unsettled,
 }
 
 /// Whether the library file at `library_path` is the download's file
@@ -424,7 +484,30 @@ pub fn library_file_is_import_source_blocking(
     source: &Path,
     library_path: &Path,
 ) -> AppResult<bool> {
+    library_file_sameness_blocking(source, library_path, true)
+        .map(|sameness| sameness == LibraryFileSameness::Same)
+}
+
+/// Whether the library file at `library_path` is the download's file
+/// `source` itself, as far as reads that never set the download's file aside
+/// can tell; [`LibraryFileSameness::Unsettled`] where only the set-aside test
+/// of [`library_file_is_import_source_blocking`] could. The caller keeps any
+/// other work on `source` in this process from running meanwhile: a source an
+/// earlier check set aside is put back first.
+pub fn library_file_sameness_without_set_aside_blocking(
+    source: &Path,
+    library_path: &Path,
+) -> AppResult<LibraryFileSameness> {
+    library_file_sameness_blocking(source, library_path, false)
+}
+
+fn library_file_sameness_blocking(
+    source: &Path,
+    library_path: &Path,
+    set_aside: bool,
+) -> AppResult<LibraryFileSameness> {
     use crate::disk::{AsideRemoval, PutBackAside, Sameness};
+    use LibraryFileSameness::{Apart, Same, Unsettled};
     let unknown = |why: &str| AppError::RepositoryFailed {
         message: format!(
             "could not tell whether library file {} is the download's file {} itself: {why}; nothing was removed",
@@ -448,7 +531,7 @@ pub fn library_file_is_import_source_blocking(
         }],
     };
     if source == library_path {
-        return Ok(true);
+        return Ok(Same);
     }
     let disk = Disk::process();
     let read_source = || match disk.fingerprint_blocking(source) {
@@ -463,9 +546,9 @@ pub fn library_file_is_import_source_blocking(
         None => match disk.put_back_set_aside_source_blocking(source) {
             PutBackAside::PutBack => match read_source()? {
                 Some(mark) => mark,
-                None => return Ok(false),
+                None => return Ok(Apart),
             },
-            PutBackAside::Nothing => return Ok(false),
+            PutBackAside::Nothing => return Ok(Apart),
             PutBackAside::SourceNameTaken { at } => {
                 return Err(kept_aside(
                     &at,
@@ -485,18 +568,21 @@ pub fn library_file_is_import_source_blocking(
     };
     let kept = match disk.fingerprint_blocking(library_path) {
         Ok(mark) => mark,
-        Err(reading) if reading.exists() == Some(false) => return Ok(false),
+        Err(reading) if reading.exists() == Some(false) => return Ok(Apart),
         Err(_) => return Err(unknown("the library file did not read")),
     };
     if !kept.has_other_names() && source_mark.same_file(&kept) == Sameness::Same {
-        return Ok(true);
+        return Ok(Same);
     }
     if !disk.adoption_needs_set_aside(source, &source_mark, library_path, &kept) {
-        return Ok(false);
+        return Ok(Apart);
+    }
+    if !set_aside {
+        return Ok(Unsettled);
     }
     match disk.tell_apart_by_set_aside_blocking(source, &source_mark, library_path, &kept) {
-        AsideRemoval::Apart => Ok(false),
-        AsideRemoval::SameEntry => Ok(true),
+        AsideRemoval::Apart => Ok(Apart),
+        AsideRemoval::SameEntry => Ok(Same),
         AsideRemoval::PutBackFailed { at, .. } | AsideRemoval::SetAsideMoved { at, .. } => {
             Err(kept_aside(&at, String::new()))
         }

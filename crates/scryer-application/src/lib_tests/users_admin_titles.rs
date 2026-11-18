@@ -2433,6 +2433,68 @@ async fn policy_title_cleanup_retires_password_retry_binding() {
 }
 
 #[tokio::test]
+async fn library_title_cleanup_leaves_an_active_torrent_in_its_client_and_cancels_usenet() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+        download_queue_commands.clone(),
+    );
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+
+    let title = app
+        .add_title(&user, synthetic_movie("Synthetic Root Removal Movie"))
+        .await
+        .expect("create title");
+    let torrent_id = scryer_domain::download_identity::DownloadId::new();
+    let usenet_id = scryer_domain::download_identity::DownloadId::new();
+    let torrent = deleted_title_submission(&title.id, torrent_id, "qbittorrent", "hash-active");
+    let usenet = deleted_title_submission(&title.id, usenet_id, "sabnzbd", "job-active");
+    for submission in [&torrent, &usenet] {
+        let locator = ClientJobLocator::from_submission(submission);
+        download_submissions
+            .record_submission(submission.clone())
+            .await
+            .expect("record submission");
+        download_submissions
+            .update_tracked_state(&locator, "downloading")
+            .await
+            .expect("record tracked state");
+        registry.bind(locator, submission.download_id).await;
+    }
+
+    app.purge_title_dependent_records(&title.id, (&user).into())
+        .await
+        .expect("purge title records");
+
+    let queued = download_queue_commands.queued.lock().await.clone();
+    assert_eq!(
+        queued.len(),
+        1,
+        "only the usenet job is cancelled: {queued:?}"
+    );
+    assert_eq!(queued[0].canonical_download_id, Some(usenet_id));
+    assert!(
+        queued
+            .iter()
+            .all(|command| command.canonical_download_id != Some(torrent_id)),
+        "no delete is queued for the torrent"
+    );
+    assert!(
+        !registry.is_ended(&torrent_id).await,
+        "the torrent's binding stays live so it can be adopted as unmatched"
+    );
+    assert!(registry.is_ended(&usenet_id).await);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn password_retry_claim_and_title_delete_exclude_each_other() {
     within_deadline(
         "password_retry_claim_and_title_delete_exclude_each_other",

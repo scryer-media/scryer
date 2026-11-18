@@ -226,6 +226,20 @@ pub fn download_queue_item_allows_manual_import(item: &DownloadQueueItem) -> boo
     ) || finished_never_imported
 }
 
+/// Whether the operator may ignore this download right now: its import is
+/// blocked or failed, and nothing is running against it.
+///
+/// The ignore mutation enforces exactly this, so the button and the rule the
+/// server applies are the same rule.
+pub fn download_queue_item_allows_ignore(item: &DownloadQueueItem) -> bool {
+    let display_state = derive_download_queue_display_state(item);
+    !matches!(
+        display_state,
+        DownloadDisplayState::Importing | DownloadDisplayState::Removing
+    ) && (item.tracked_state == Some(TrackedDownloadState::ImportBlocked)
+        || display_state == DownloadDisplayState::ImportFailed)
+}
+
 /// Which import actions this download offers right now.
 ///
 /// The server decides, so the button an operator sees and the rule the mutation
@@ -250,9 +264,7 @@ pub fn derive_download_queue_import_actions(item: &DownloadQueueItem) -> Downloa
         manual_import_interactive: manual_import && matches!(facet.as_str(), "series" | "anime"),
         manual_import_direct: manual_import && facet == "movie",
         assign_title: !busy && item.tracked_state == Some(TrackedDownloadState::ImportBlocked),
-        ignore: !busy
-            && (item.tracked_state == Some(TrackedDownloadState::ImportBlocked)
-                || display_state == DownloadDisplayState::ImportFailed),
+        ignore: download_queue_item_allows_ignore(item),
         // Failure cleanup blocklists, deletes and searches again, so it is
         // offered only for a download Scryer's own grab is joined onto; the
         // mutation refuses the rest.

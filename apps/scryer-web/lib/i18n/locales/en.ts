@@ -1760,6 +1760,8 @@ const en: LocaleDictionary = {
     "This tracked download is busy processing.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND":
     "Tracked download was not found.",
+  "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE":
+    "Only a download whose import is blocked or failed can be ignored.",
   "error.reason.INTEGRATION_TUNNEL_MTU_OUT_OF_RANGE":
     "The tunnel MTU is outside the allowed range.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_INVALID":

@@ -300,8 +300,115 @@ impl ImportRepository for ImportStore {
             answer.held |= payload["archive_processing_pending"].as_bool() == Some(true);
             answer.library_holds_payload |=
                 payload[scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY].as_bool() == Some(true);
+            for file in scryer_application::UnsettledLibraryFile::from_payload(&payload) {
+                if !answer.library_file_unsettled.contains(&file) {
+                    answer.library_file_unsettled.push(file);
+                }
+            }
         }
         Ok(answer)
+    }
+
+    async fn record_library_files_unsettled(
+        &self,
+        import_id: &str,
+        files: &[scryer_application::UnsettledLibraryFile],
+    ) -> AppResult<bool> {
+        let import_id = import_id.to_string();
+        let files = files.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "import_library_files_unsettled", move |tx| {
+            let import_id = import_id.clone();
+            let files = files.clone();
+            Box::pin(async move {
+                let Some(row) = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT canonical_download_id, payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(import_id.clone())]).await?
+                else {
+                    return Ok(false);
+                };
+                let Some(download_id) = row.opt_text("canonical_download_id")? else {
+                    return Ok(false);
+                };
+                lock_retry_download(tx, &download_id).await?;
+                // A cleanup that already owns the download may be removing its
+                // data, so the question could come too late to settle.
+                if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT download_id FROM download_cleanup WHERE download_id = {} AND (lease_until IS NOT NULL OR payload_checkpoint IS NOT NULL)",
+                    &[SqlArg::Text(download_id)]).await?.is_some() {
+                    return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_SOURCE_CLEANUP_ALREADY_CLAIMED, "source cleanup already owns this download"));
+                }
+                let mut payload: serde_json::Value = serde_json::from_str(&import_payload_json(&row)?)
+                    .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+                let mut recorded = scryer_application::UnsettledLibraryFile::from_payload(&payload);
+                for file in files {
+                    if !recorded.contains(&file) {
+                        recorded.push(file);
+                    }
+                }
+                let entries = serde_json::to_value(&recorded).map_err(|error| AppError::Repository(error.to_string()))?;
+                let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                object.insert(scryer_application::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY.into(), entries);
+                let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+                let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
+                    &[payload, SqlArg::Text(import_id)]).await?;
+                Ok(true)
+            })
+        }).await
+    }
+
+    async fn settle_library_files_unsettled(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+        library_holds_payload: bool,
+    ) -> AppResult<()> {
+        let download_id = download_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "import_library_files_settled", move |tx| {
+            let download_id = download_id.clone();
+            Box::pin(async move {
+                lock_retry_download(tx, &download_id).await?;
+                let rows = SqlRuntime::fetch_all(
+                    SqlExec::Tx(tx),
+                    "SELECT id, payload_json FROM imports WHERE canonical_download_id = {}",
+                    &[SqlArg::Text(download_id.clone())],
+                )
+                .await?;
+                // Only the imports of this one download that left the
+                // question open are rewritten, in this one transaction.
+                for row in rows {
+                    let mut payload: serde_json::Value =
+                        serde_json::from_str(&import_payload_json(&row)?).map_err(|_| {
+                            AppError::Repository("import payload is unavailable".into())
+                        })?;
+                    let Some(object) = payload.as_object_mut() else {
+                        continue;
+                    };
+                    if object
+                        .remove(scryer_application::LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY)
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    if library_holds_payload {
+                        object.insert(
+                            scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY.into(),
+                            serde_json::Value::Bool(true),
+                        );
+                    }
+                    let encoded = serde_json::to_string(&payload)
+                        .map_err(|error| AppError::Repository(error.to_string()))?;
+                    let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE imports SET payload_json = {} WHERE id = {}",
+                        &[payload, SqlArg::Text(row.text("id")?)],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
     }
 
     async fn record_library_holds_download_payload(&self, import_id: &str) -> AppResult<bool> {

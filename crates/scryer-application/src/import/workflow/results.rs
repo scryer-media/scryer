@@ -571,7 +571,8 @@ pub(crate) async fn should_remove_terminal_download(
             }
             None => false,
         },
-        TrackedDownloadState::Ignored => true,
+        // Ignoring a download only stops Scryer tracking it: its client entry
+        // and its data stay exactly as the client has them.
         _ => false,
     }
 }
@@ -583,8 +584,8 @@ pub(crate) async fn should_remove_terminal_download(
 /// so for torrent-protocol items an `Imported` state is no longer sufficient
 /// on its own — the gate has to agree that the seeding obligation is
 /// discharged. Automatic failed-torrent cleanup also honors frozen profile
-/// obligations and requires the client's removal verdict. Operator Ignore is
-/// an explicit entry-only override; blocklisting remains independent.
+/// obligations and requires the client's removal verdict. An ignored download
+/// is never removed; blocklisting remains independent.
 ///
 /// Once a removal is agreed, the payload goes with the entry (`remove_data`,
 /// Sonarr's `deleteData: true`) the same way for completed and failed
@@ -615,6 +616,10 @@ async fn reconcile_terminal_download_cleanup(
     // An import of the download found its file is the library file, so the
     // entry may go but never its data. The hold read below adds to it.
     library_holds_payload: bool,
+    // Download files an import left on library files without telling
+    // whether each is the library file itself. The hold read below adds to
+    // them; they are settled before any data is removed.
+    library_file_unsettled: &[crate::UnsettledLibraryFile],
 ) -> TerminalDownloadCleanup {
     let client_id = client_id.trim();
     let manual_cleanup = state == TrackedDownloadState::Failed
@@ -787,8 +792,8 @@ async fn reconcile_terminal_download_cleanup(
     //   the client's `can_remove` verdict and the seeding gate above: failure
     //   cannot erase a frozen profile obligation, private rail, or
     //   `never_remove` policy.
-    // - `Ignored` removes only the entry: the operator told Scryer to stop
-    //   tracking the download, not to delete what it downloaded.
+    // - `Ignored` never reaches here: ignoring stops tracking and leaves the
+    //   client entry and its data alone.
     //
     // `torrent-blackhole` never removes data. Its "remove" is a
     // `remove_dir_all` on a watch folder some *other* client is seeding from.
@@ -829,6 +834,7 @@ async fn reconcile_terminal_download_cleanup(
     // The read writes nothing, so a tick that finds every download held does
     // no write.
     let mut library_holds_payload = library_holds_payload;
+    let mut library_file_unsettled = library_file_unsettled.to_vec();
     if record.is_none()
         && let Some(download_id) = canonical_download_id
     {
@@ -838,10 +844,32 @@ async fn reconcile_terminal_download_cleanup(
                     TerminalDownloadCleanupOutcome::RetryableFailure,
                 );
             }
-            Ok(sources) => library_holds_payload |= sources.library_holds_payload,
+            Ok(sources) => {
+                library_holds_payload |= sources.library_holds_payload;
+                library_file_unsettled.extend(sources.library_file_unsettled);
+            }
             Err(error) => {
                 tracing::warn!(%download_id, error = %error,
                     "could not tell whether the download's sources are still held; cleanup deferred until they read");
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
+            }
+        }
+    }
+
+    // An import that kept the download's file left open whether a library
+    // file is that file itself, rather than set it aside while it seeded.
+    // Only now, with the seeding gate agreed and the data about to go, and
+    // before the client or the host removes anything, is the question
+    // settled: one entry removes the client entry only, separate entries go
+    // on as before, and a test that cannot tell keeps everything and retries.
+    if remove_data_by_state && !library_holds_payload && !library_file_unsettled.is_empty() {
+        match settle_unsettled_library_files(app, canonical_download_id, &library_file_unsettled)
+            .await
+        {
+            Some(same) => library_holds_payload = same,
+            None => {
                 return TerminalDownloadCleanup::bare(
                     TerminalDownloadCleanupOutcome::RetryableFailure,
                 );
@@ -2898,6 +2926,60 @@ fn skip_reason_for_import_check_code(
     }
 }
 
+/// Whether any of the download files an import left unsettled is the
+/// library file itself, told by the file importer's set-aside test in each
+/// source's turn, stopping at the first that is. With the download's id, the
+/// answer is written once for all of its imports. `None` when a test or the
+/// write fails, so the cleanup keeps everything and tries again.
+///
+/// Probes: per file, those of the set-aside test (two renames of the
+/// download's file, reads of each file, and a listing of the library file's
+/// folder where file numbers cannot tell), and only on the cleanup that is
+/// about to remove the download's data.
+async fn settle_unsettled_library_files(
+    app: &AppUseCase,
+    download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    files: &[crate::UnsettledLibraryFile],
+) -> Option<bool> {
+    let mut same = false;
+    for file in files {
+        let source = file.source();
+        let library_path = file.library();
+        match app
+            .services
+            .workflow
+            .file_importer
+            .library_file_is_import_source(&source, &library_path)
+            .await
+        {
+            Ok(true) => {
+                same = true;
+                break;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(source = %source.display(), library_path = %library_path.display(),
+                    error = %error,
+                    "could not tell whether a library file is the download's file; cleanup deferred and nothing removed");
+                return None;
+            }
+        }
+    }
+    if let Some(download_id) = download_id
+        && let Err(error) = app
+            .services
+            .workflow
+            .imports
+            .settle_library_files_unsettled(download_id, same)
+            .await
+    {
+        tracing::warn!(%download_id, error = %error,
+            "could not record whether the download's file is the library file; cleanup deferred and nothing removed");
+        return None;
+    }
+    Some(same)
+}
+
 /// The skip reason for a refused check. A duplicate of a cataloged library
 /// file is already imported, and this run placed nothing: for a download, so
 /// whether its file is that library file itself is settled before anything
@@ -2922,8 +3004,16 @@ async fn skip_reason_for_import_check_rejection(
         if !cataloged {
             return Ok(ImportSkipReason::DuplicateFile);
         }
-        if completed.is_some() {
-            settle_already_imported_source(app, import_id, source_path, dest_path).await?;
+        if completed.is_some()
+            && settle_already_imported_source(app, import_id, source_path, dest_path).await?
+                == crate::LibraryFileSameness::Unsettled
+        {
+            record_library_files_unsettled(
+                app,
+                import_id,
+                &[crate::UnsettledLibraryFile::new(source_path, dest_path)],
+            )
+            .await?;
         }
     }
     Ok(skip_reason_for_import_check_code(code))
@@ -3498,6 +3588,7 @@ mod move_import_source_cleanup_gate_tests {
             source_disposition,
             source_cleanup,
             verification: None,
+            library_file_unsettled: false,
         }
     }
 

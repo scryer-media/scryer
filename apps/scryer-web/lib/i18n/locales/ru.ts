@@ -8643,6 +8643,8 @@ const ru: LocaleDictionary = {
     "Эта отслеживаемая загрузка сейчас обрабатывается.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND":
     "Отслеживаемая загрузка не найдена.",
+  "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE":
+    "Игнорировать можно только загрузку, импорт которой заблокирован или завершился ошибкой.",
   "error.reason.INTEGRATION_TUNNEL_MTU_OUT_OF_RANGE":
     "MTU туннеля вне допустимого диапазона.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_INVALID":

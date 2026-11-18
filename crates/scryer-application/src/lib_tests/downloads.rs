@@ -14543,6 +14543,51 @@ async fn ignore_of_a_settled_download_requires_its_titles_library() {
         .expect("an admin may ignore it");
 }
 
+/// Ignore follows the same rule as its button: a download whose import has
+/// settled (here, imported and seeding) is not ignorable, and the refusal
+/// carries its reason code. Nothing is written or sent to the client.
+#[tokio::test]
+async fn ignoring_a_download_whose_import_settled_is_refused_with_its_reason() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let mut seeding =
+        queue_history_fixture_item("seeding-hash-1", DownloadQueueState::Completed, 40);
+    seeding.title_id = None;
+    seeding.client_type = "qbittorrent".to_string();
+    seeding.tracked_state = Some(TrackedDownloadState::ImportedSeeding);
+    seeding.import_status = Some(ImportStatus::Completed);
+    let mut blocked =
+        queue_history_fixture_item("blocked-job-1", DownloadQueueState::Completed, 40);
+    blocked.title_id = None;
+    blocked.tracked_state = Some(TrackedDownloadState::ImportBlocked);
+    publish_test_download_queue_snapshot(&app, vec![seeding.clone(), blocked.clone()]).await;
+    assert!(!crate::integration::workflow::derive_download_queue_import_actions(&seeding).ignore);
+    assert!(crate::integration::workflow::derive_download_queue_import_actions(&blocked).ignore);
+
+    let error = app
+        .ignore_tracked_download(
+            &user,
+            Some(&seeding.client_id),
+            &seeding.client_type,
+            &seeding.download_client_item_id,
+        )
+        .await
+        .expect_err("an imported, seeding download is not ignorable");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_IGNORABLE),
+        "{error:?}"
+    );
+    assert!(download_submissions.store.lock().await.is_empty());
+    assert!(download_client.deleted_requests.lock().await.is_empty());
+}
+
 /// A settled download keeps a terminal outcome it already reached; the ignore
 /// reports it rather than overwriting it.
 #[tokio::test]

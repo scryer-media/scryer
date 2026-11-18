@@ -9015,14 +9015,67 @@ pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released
 /// download's client entry is removed without its data.
 pub const LIBRARY_HOLDS_PAYLOAD_KEY: &str = "library_holds_download_payload";
 
+/// Import payload key listing the download files an import left on a library
+/// file without telling whether the two are one entry: the cheap reads could
+/// not tell, and the test that can renames the download's file for a moment,
+/// which an import that keeps its source never does. Each entry is an
+/// [`UnsettledLibraryFile`]. A cleanup about to remove the download's data
+/// settles them first; an import without the key has nothing to settle.
+pub const LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY: &str = "library_file_unsettled";
+
+/// A download file an import found on a library file without telling whether
+/// the two are one entry, as [`LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY`] records it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct UnsettledLibraryFile {
+    /// The download's file.
+    pub source_path: String,
+    /// The library file found at the import's destination.
+    pub library_path: String,
+}
+
+impl UnsettledLibraryFile {
+    pub fn new(source: &std::path::Path, library_path: &std::path::Path) -> Self {
+        Self {
+            source_path: crate::stored_paths::path_to_stored_string(source),
+            library_path: crate::stored_paths::path_to_stored_string(library_path),
+        }
+    }
+
+    /// The download's file, decoded from its stored form.
+    pub fn source(&self) -> std::path::PathBuf {
+        crate::stored_paths::stored_path_to_path_buf(&self.source_path)
+    }
+
+    /// The library file, decoded from its stored form.
+    pub fn library(&self) -> std::path::PathBuf {
+        crate::stored_paths::stored_path_to_path_buf(&self.library_path)
+    }
+
+    /// The entries an import payload records, skipping any that do not read.
+    pub fn from_payload(payload: &serde_json::Value) -> Vec<Self> {
+        payload[LIBRARY_FILE_UNSETTLED_PAYLOAD_KEY]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// What the imports of one download say about its sources.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DownloadImportSources {
     /// An import still holds the download's sources, so nothing is removed.
     pub held: bool,
     /// An import found that the download's file is the library file, so the
     /// client entry may go but never its data.
     pub library_holds_payload: bool,
+    /// Download files an import left on library files without telling
+    /// whether each is the library file itself.
+    pub library_file_unsettled: Vec<UnsettledLibraryFile>,
 }
 
 #[async_trait]
@@ -9088,6 +9141,7 @@ pub trait ImportRepository: Send + Sync {
                 .archive_processing_pending_for_download(download_id)
                 .await?,
             library_holds_payload: false,
+            library_file_unsettled: Vec::new(),
         })
     }
 
@@ -9095,6 +9149,35 @@ pub trait ImportRepository: Send + Sync {
     /// library file. Answers `false`, changing nothing, when the import has
     /// no download identity that a later cleanup could read the mark by.
     async fn record_library_holds_download_payload(&self, _import_id: &str) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
+    }
+
+    /// Record on the import `import_id` the download files it left on library
+    /// files without telling whether each is the library file itself, beside
+    /// any it recorded before. Answers `false`, changing nothing, when the
+    /// import has no download identity that a later cleanup could read them
+    /// by.
+    async fn record_library_files_unsettled(
+        &self,
+        _import_id: &str,
+        _files: &[UnsettledLibraryFile],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
+    }
+
+    /// A cleanup settled the unsettled library files of the download's
+    /// imports: every import of it drops them, and when one was the library
+    /// file itself (`library_holds_payload`), carries the library-holds mark
+    /// instead. One write.
+    async fn settle_library_files_unsettled(
+        &self,
+        _download_id: &DownloadId,
+        _library_holds_payload: bool,
+    ) -> AppResult<()> {
         Err(AppError::Repository(
             "import source records are unavailable".into(),
         ))
@@ -9840,6 +9923,25 @@ pub trait FileImporter: Send + Sync {
         let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
         tokio::task::spawn_blocking(move || {
             crate::library_file_is_import_source_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
+
+    /// Whether the library file an import found is the download's file
+    /// itself, as far as reads that never set the download's file aside can
+    /// tell; see [`crate::library_file_sameness_without_set_aside_blocking`].
+    /// An importer that gives each source a turn runs it in that turn, since
+    /// it may put back a source an earlier check set aside. The default has
+    /// no turns to take.
+    async fn library_file_sameness_without_set_aside(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<crate::LibraryFileSameness> {
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            crate::library_file_sameness_without_set_aside_blocking(&source, &library_path)
         })
         .await
         .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
@@ -13743,6 +13845,10 @@ pub struct DownloadCleanupRecord {
     /// An import found the download's file is the library file, so the
     /// client entry may go but never its data.
     pub library_holds_payload: bool,
+    /// Not stored: read with the import holds right before the cleanup runs.
+    /// Download files an import left on library files without telling
+    /// whether each is the library file itself.
+    pub library_file_unsettled: Vec<UnsettledLibraryFile>,
 }
 
 /// The catalog references one download submission holds, exactly as stored.
