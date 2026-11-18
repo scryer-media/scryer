@@ -3317,10 +3317,7 @@ impl AppUseCase {
                                     .source_version
                                     .as_deref()
                                     .expect("disposal version"),
-                                resolutions[index]
-                                    .identity_hash
-                                    .as_deref()
-                                    .expect("disposal hash"),
+                                operation.verification_depth,
                             )
                             .await
                             .map_err(|error| {

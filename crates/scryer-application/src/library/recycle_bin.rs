@@ -1,7 +1,7 @@
 use crate::disk::reason::{DISK_DESTINATION_EXISTS, DISK_PATH_MISSING};
 use crate::disk::{
-    Access, Disk, DiskError, Done, EntryKind, FreeNameMove, Open, Parents, PathReading, Placed,
-    Refused, Removal, Remove, Replace, Visited, placement,
+    Access, Check, Disk, DiskError, Done, EntryKind, FreeNameMove, Open, Parents, PathReading,
+    Placed, Refused, Removal, Remove, Replace, Visited, placement,
 };
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
@@ -751,7 +751,7 @@ pub(crate) async fn execute_conflict_recycle(
     source: &Path,
     prepared: &PreparedRecycleFile,
     expected_source_version: &str,
-    expected_hash: &str,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     let (_, payload, _) = pending_conflict_recycle(config, source, prepared).await?;
     let invalid = || {
@@ -780,13 +780,16 @@ pub(crate) async fn execute_conflict_recycle(
                 return Err(invalid());
             }
             crate::location::title_folder_recovery::inspect_path(&payload, false).await?;
-            let payload_version = crate::location::resolution::file_version(&payload).await?;
-            let hashes = hash_existing_file(&payload).await?;
-            if hashes.full_blake3 != expected_hash
-                || crate::location::resolution::file_version(&payload).await? != payload_version
-                || crate::location::resolution::file_version(source).await?
-                    != expected_source_version
-            {
+            // The payload must hold what the source holds, at the user's
+            // depth, and neither may change while they are compared.
+            let check = Disk::process()
+                .check(
+                    payload.as_path(),
+                    source,
+                    crate::location::verify::disk_depth(depth),
+                )
+                .await;
+            if check != Check::Same {
                 return Err(invalid());
             }
             let removal = Disk::process().remove(source, Remove::File).await;
@@ -807,7 +810,12 @@ mod conflict_recycle_tests {
 
     #[tokio::test]
     async fn prepared_conflict_recycle_recovers_published_copy_and_preserves_invalid_payloads() {
-        for valid in [false, true] {
+        for (valid, depth) in [
+            (false, VerificationDepth::Quick),
+            (false, VerificationDepth::Full),
+            (true, VerificationDepth::Quick),
+            (true, VerificationDepth::Full),
+        ] {
             let temp = tempfile::tempdir().unwrap();
             let root = std::fs::canonicalize(temp.path()).unwrap();
             let source = root.join("selected.mkv");
@@ -841,7 +849,6 @@ mod conflict_recycle_tests {
             let version = crate::location::resolution::file_version(&source)
                 .await
                 .unwrap();
-            let hash = hash_existing_file(&source).await.unwrap().full_blake3;
             let payload = crate::stored_paths::stored_path_to_path_buf(&prepared.recycled_path);
             // Exact cross-volume crash window: a new inode was published, but
             // its original pathname has not yet been unlinked.
@@ -851,7 +858,7 @@ mod conflict_recycle_tests {
                 std::fs::write(&payload, b"partial").unwrap();
             }
             let outcome =
-                execute_conflict_recycle(&config, &source, &prepared, &version, &hash).await;
+                execute_conflict_recycle(&config, &source, &prepared, &version, depth).await;
             assert_eq!(outcome.is_ok(), valid, "{outcome:?}");
             assert_eq!(source.exists(), !valid);
             assert_eq!(std::fs::read(&external).unwrap(), b"historical movie");
@@ -947,7 +954,6 @@ mod conflict_recycle_tests {
             let version = crate::location::resolution::file_version(&source)
                 .await
                 .unwrap();
-            let hash = hash_existing_file(&source).await.unwrap().full_blake3;
             let renewed = renew_conflict_recycle(&config, &source, &abandoned)
                 .await
                 .unwrap();
@@ -955,9 +961,15 @@ mod conflict_recycle_tests {
             // The caller persists `renewed` in the existing operation's intent
             // before executing. No ownership is inferred for the old partial,
             // even when its bytes happen to be a complete historical copy.
-            execute_conflict_recycle(&config, &source, &renewed, &version, &hash)
-                .await
-                .unwrap();
+            execute_conflict_recycle(
+                &config,
+                &source,
+                &renewed,
+                &version,
+                VerificationDepth::Full,
+            )
+            .await
+            .unwrap();
             assert!(!source.exists());
             assert_eq!(std::fs::read(&partial).unwrap(), partial_contents);
             assert_eq!(std::fs::read(&external).unwrap(), b"historical movie");
@@ -3282,10 +3294,15 @@ mod tests {
                     let version = crate::location::resolution::file_version(&source)
                         .await
                         .unwrap();
-                    let hash = hash_existing_file(&source).await.unwrap().full_blake3;
-                    execute_conflict_recycle(&config, &source, &receipt, &version, &hash)
-                        .await
-                        .unwrap();
+                    execute_conflict_recycle(
+                        &config,
+                        &source,
+                        &receipt,
+                        &version,
+                        VerificationDepth::Full,
+                    )
+                    .await
+                    .unwrap();
                     (
                         config.base_path.join(&receipt.entry_id),
                         crate::stored_paths::stored_path_to_path_buf(&receipt.recycled_path),
@@ -3349,12 +3366,17 @@ mod tests {
             let version = crate::location::resolution::file_version(&source)
                 .await
                 .unwrap();
-            let hash = hash_existing_file(&source).await.unwrap().full_blake3;
             if aliases_metadata {
                 assert!(
-                    execute_conflict_recycle(&config, &source, &legacy, &version, &hash)
-                        .await
-                        .is_err()
+                    execute_conflict_recycle(
+                        &config,
+                        &source,
+                        &legacy,
+                        &version,
+                        VerificationDepth::Full
+                    )
+                    .await
+                    .is_err()
                 );
                 assert_eq!(std::fs::read(&source).unwrap(), bytes);
             }
@@ -3366,9 +3388,15 @@ mod tests {
                 std::fs::read(manifest_path(&old_entry)).unwrap(),
                 metadata_bytes
             );
-            execute_conflict_recycle(&config, &source, &receipt, &version, &hash)
-                .await
-                .unwrap();
+            execute_conflict_recycle(
+                &config,
+                &source,
+                &receipt,
+                &version,
+                VerificationDepth::Full,
+            )
+            .await
+            .unwrap();
             let entry = config.base_path.join(&receipt.entry_id);
             let manifest = read_manifest(&entry).await.unwrap().unwrap();
             let payload = recycled_payload_path(&entry, &manifest).await.unwrap();
@@ -3454,16 +3482,21 @@ mod tests {
         let version = crate::location::resolution::file_version(&source)
             .await
             .unwrap();
-        let hash = hash_existing_file(&source).await.unwrap().full_blake3;
         assert!(
             renew_conflict_recycle(&config, &source, &receipt)
                 .await
                 .is_err()
         );
         assert!(
-            execute_conflict_recycle(&config, &source, &receipt, &version, &hash)
-                .await
-                .is_err()
+            execute_conflict_recycle(
+                &config,
+                &source,
+                &receipt,
+                &version,
+                VerificationDepth::Full
+            )
+            .await
+            .is_err()
         );
         assert_eq!(std::fs::read(&source).unwrap(), b"selected original");
         assert!(!external.join("manifest.json").exists());
