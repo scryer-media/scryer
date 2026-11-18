@@ -173,43 +173,6 @@ impl RootMoveCatalog for FakeCatalog {
     }
 }
 
-/// A recycler that records what it was handed instead of touching a bin.
-#[derive(Default)]
-struct RecordingRecycler {
-    recycled: Mutex<Vec<String>>,
-}
-
-impl RecordingRecycler {
-    fn recycled(&self) -> Vec<String> {
-        self.recycled.lock().expect("lock").clone()
-    }
-}
-
-#[async_trait]
-impl SourceRecycler for RecordingRecycler {
-    async fn recycle_source(
-        &self,
-        _operation_id: &str,
-        _title: &RootMoveTitleExecution,
-        source: &Path,
-        _media_file_id: Option<&str>,
-        _size_bytes: u64,
-        _depth: VerificationDepth,
-    ) -> AppResult<SourceDisposal> {
-        if tokio::fs::symlink_metadata(source).await.is_err() {
-            return Ok(SourceDisposal::AlreadyAbsent);
-        }
-        self.recycled
-            .lock()
-            .expect("lock")
-            .push(path_to_stored_string(source));
-        tokio::fs::remove_file(source)
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?;
-        Ok(SourceDisposal::Recycled)
-    }
-}
-
 /// Records every path whose permissions were applied, so FR-031's
 /// "apply configured permissions at the destination" is observable.
 #[derive(Default)]
@@ -470,7 +433,6 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
         );
         store.insert_operation(operation.clone());
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
         let mover = RootMoveFileMover::without_permissions();
         let work = plan.to_work_plan();
         mover
@@ -493,7 +455,7 @@ async fn same_filesystem_placement_resumes_after_crash_before_verification_journ
         );
 
         let admission = RootMoveAdmission::new(&plan, &catalog);
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
         let result = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
             .run("op-1", &work)
             .await
@@ -584,8 +546,7 @@ async fn no_copy_cleanup_preserves_source_if_survivor_was_replaced() {
     assert_eq!(store.verifications().len(), 1);
     std::fs::remove_file(file.destination()).unwrap();
     write_file(&file.destination(), b"other bytes");
-    let recycler = RecordingRecycler::default();
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
     reconciler
         .clean_up_title(&operation, &plan.titles[0].to_planned_title())
         .await
@@ -636,9 +597,8 @@ async fn an_identical_source_is_dropped_outright_once_the_transfer_proves_it() {
     );
     store.insert_operation(operation.clone());
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
 
     let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -660,10 +620,6 @@ async fn an_identical_source_is_dropped_outright_once_the_transfer_proves_it() {
     );
     assert!(!file.source().exists(), "the redundant source copy is gone");
     assert_eq!(std::fs::read(file.destination()).unwrap(), b"same");
-    assert!(
-        recycler.recycled().is_empty(),
-        "an identical copy is dropped, not recycled"
-    );
     assert!(
         catalog
             .writes()
@@ -732,8 +688,7 @@ async fn copied_source_cleanup_revalidates_both_copies_after_interruption() {
             _ => {}
         }
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
         let result = reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await;
@@ -744,7 +699,6 @@ async fn copied_source_cleanup_revalidates_both_copies_after_interruption() {
         } else {
             result.expect_err("changed copies must preserve the source");
             assert!(file.source().exists());
-            assert!(recycler.recycled().is_empty());
         }
         assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep");
     }
@@ -770,8 +724,7 @@ async fn an_identical_proof_whose_destination_no_longer_holds_those_bytes_keeps_
     );
     store.insert_operation(operation.clone());
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
     let work = plan.to_work_plan();
     let verified = mover
         .move_file(FileMoveRequest {
@@ -839,10 +792,6 @@ async fn an_identical_proof_whose_destination_no_longer_holds_those_bytes_keeps_
         b"same",
         "the source is preserved"
     );
-    assert!(
-        recycler.recycled().is_empty(),
-        "and nothing was recycled either"
-    );
 }
 
 #[tokio::test]
@@ -860,8 +809,7 @@ async fn changed_identical_copies_keep_the_source_and_catalog_intact() {
         );
         store.insert_operation(operation.clone());
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
         let work = plan.to_work_plan();
         let verified = mover
             .move_file(FileMoveRequest {
@@ -907,10 +855,6 @@ async fn changed_identical_copies_keep_the_source_and_catalog_intact() {
             .await
             .expect_err("stale before source disposal");
         assert!(file.source().exists(), "{changed_copy}: the source stays");
-        assert!(
-            recycler.recycled().is_empty(),
-            "{changed_copy}: nothing was recycled"
-        );
     }
 }
 
@@ -932,10 +876,9 @@ async fn same_filesystem_moves_keep_the_no_copy_fast_path() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -958,7 +901,6 @@ async fn same_filesystem_moves_keep_the_no_copy_fast_path() {
     );
     assert!(records[0].outcome.permits_source_removal());
     // Nothing was recycled: cleanup only unlinks the redundant name.
-    assert!(recycler.recycled().is_empty());
     // The empty source folder was removed (FR-031).
     assert!(!source_root.join("Movie").exists());
 }
@@ -983,10 +925,9 @@ async fn a_cross_library_transfer_flips_library_and_root_in_one_write() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-transfer", &plan.to_work_plan())
@@ -1035,10 +976,9 @@ async fn a_refused_destination_folder_stops_the_move_before_any_file_moves() {
             .clone()
             .expect("destination folder"),
     );
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let error = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-refused", &plan.to_work_plan())
@@ -1215,14 +1155,13 @@ async fn cross_filesystem_moves_copy_verify_then_flip_the_catalog() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let permissions = Arc::new(RecordingPermissions::default());
     let mover = AlwaysCopy {
         copier: VerifiedCopier::new(),
         permissions: permissions.clone(),
     };
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1257,7 +1196,6 @@ async fn cross_filesystem_moves_copy_verify_then_flip_the_catalog() {
     // The verified-redundant source copy is removed, not recycled: the bin
     // would only hold a second copy of what the destination already has.
     assert!(!plan.titles[0].files[0].source().exists());
-    assert!(recycler.recycled().is_empty());
     assert!(
         !source_root.join("Movie").exists(),
         "empty source dir pruned"
@@ -1336,12 +1274,11 @@ async fn corruption_at_full_depth_blocks_source_removal() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = CorruptingMover {
         copier: VerifiedCopier::new(),
     };
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1355,7 +1292,6 @@ async fn corruption_at_full_depth_blocks_source_removal() {
 
     // The source is intact and the catalog never moved.
     assert!(plan.titles[0].files[0].source().exists());
-    assert!(recycler.recycled().is_empty());
     assert!(catalog.writes().is_empty());
     assert_eq!(
         catalog
@@ -1410,7 +1346,6 @@ async fn resume_never_recopies_a_verified_file() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
 
     // First run: a reconciler that fails, so the title never settles even
     // though its file was moved and its verification recorded.
@@ -1463,7 +1398,7 @@ async fn resume_never_recopies_a_verified_file() {
         moved: Mutex::new(Vec::new()),
         fail_after: false,
     };
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
     let second = LocationOperationRunner::new(&store, &second_mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
         .await
@@ -1551,9 +1486,8 @@ async fn a_partial_left_by_a_crashed_copy_does_not_block_the_resumed_run() {
     let (plan, mover, partial) = crashed_copy_fixture(&temp, &store, b"hell").await;
     let destination = plan.titles[0].files[0].destination();
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
 
     let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1611,9 +1545,8 @@ async fn a_staging_path_this_move_never_claimed_is_preserved_rather_than_cleared
         .forcing_copies()
         .with_resolver(Arc::new(resolver));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
 
     let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1648,9 +1581,8 @@ async fn a_staging_occupant_larger_than_the_source_is_preserved() {
         crashed_copy_fixture(&temp, &store, b"a much longer file than the source is").await;
     let file = plan.titles[0].files[0].clone();
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
 
     let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1692,10 +1624,9 @@ async fn a_destination_left_unrecorded_by_a_crash_is_proven_and_the_move_continu
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions().forcing_copies();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1723,7 +1654,6 @@ async fn a_destination_left_unrecorded_by_a_crash_is_proven_and_the_move_continu
         !plan.titles[0].files[0].source().exists(),
         "the source is redundant once the destination is proven"
     );
-    assert!(recycler.recycled().is_empty());
 }
 
 /// The same window with a file that is not this operation's work: it does not
@@ -1747,10 +1677,9 @@ async fn a_destination_that_does_not_prove_fails_its_title_and_names_the_path() 
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions().forcing_copies();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1776,7 +1705,6 @@ async fn a_destination_that_does_not_prove_fails_its_title_and_names_the_path() 
         "the source is never touched for an unproven destination (FR-044)"
     );
     assert!(catalog.writes().is_empty());
-    assert!(recycler.recycled().is_empty());
 }
 
 #[tokio::test]
@@ -1806,9 +1734,8 @@ async fn trusted_manual_completion_updates_missing_paths_without_file_work() {
         LocationExecutionMode::UserMovedFiles,
         VerificationDepth::Full,
     ));
-    let recycler = RecordingRecycler::default();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
     let result = LocationOperationRunner::new(&store, &NoFileWork, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
         .await
@@ -1822,7 +1749,6 @@ async fn trusted_manual_completion_updates_missing_paths_without_file_work() {
             .unwrap()
             .is_empty()
     );
-    assert!(recycler.recycled().is_empty());
     assert!(
         catalog
             .writes()
@@ -1881,10 +1807,9 @@ async fn catalog_only_titles_complete_without_touching_the_filesystem() {
             media_file_paths: BTreeSet::new(),
         },
     );
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1893,7 +1818,6 @@ async fn catalog_only_titles_complete_without_touching_the_filesystem() {
 
     assert_eq!(outcome.state, LocationOperationState::Completed);
     assert!(store.verifications().is_empty());
-    assert!(recycler.recycled().is_empty());
     assert_eq!(catalog.writes(), vec!["root:title-1=root-b".to_string()]);
     assert_eq!(
         catalog.placement("title-1").expect("known").root_folder_id,
@@ -1921,10 +1845,9 @@ async fn cleanup_leaves_a_non_empty_source_directory_alone() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -1965,10 +1888,9 @@ async fn a_changed_catalog_input_stops_the_operation_as_stale() {
     // Someone moved the title to a third root between preview and start.
     placement.root_folder_id = "root-c".to_string();
     let catalog = FakeCatalog::with_title("title-1", placement);
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -2147,14 +2069,13 @@ async fn a_quick_floor_fallback_is_counted_on_the_operation() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = CopyWithoutReadBack {
         copier: VerifiedCopier::with_read_back_opener(Arc::new(|_path: &Path| {
             ReadBackHandle::Unsupported("this filesystem cannot be read back".to_string())
         })),
     };
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
@@ -2175,7 +2096,6 @@ async fn a_quick_floor_fallback_is_counted_on_the_operation() {
     // Even at the quick floor, the source is still removed: the floor is a
     // pass, just a weaker one (FR-042/044).
     assert!(!plan.titles[0].files[0].source().exists());
-    assert!(recycler.recycled().is_empty());
 }
 
 /// The cache-bypass note travels with a full verification rather than
@@ -2218,49 +2138,6 @@ async fn a_rejected_cache_bypass_stays_a_full_verification() {
             .expect("detail")
             .contains("not cache-bypassed")
     );
-}
-
-/// `RemoveVerifiedSource` is the explicit no-recycle-bin fallback: it removes,
-/// and it always says so.
-#[tokio::test]
-async fn removing_a_verified_source_is_always_reported() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let source = temp.path().join("movie.mkv");
-    write_file(&source, b"bytes");
-    let plan = single_title_plan(&temp.path().join("a"), &temp.path().join("b"), "m.mkv", 5);
-
-    let disposal = RemoveVerifiedSource
-        .recycle_source(
-            "op-1",
-            &plan.titles[0],
-            &source,
-            Some("mf-1"),
-            5,
-            VerificationDepth::Full,
-        )
-        .await
-        .expect("dispose");
-
-    assert!(matches!(
-        disposal,
-        SourceDisposal::RemovedRecycleUnavailable(_)
-    ));
-    assert!(!source.exists());
-
-    // Running it again on the now-missing source is a no-op, so a resumed
-    // cleanup cannot fail.
-    let disposal = RemoveVerifiedSource
-        .recycle_source(
-            "op-1",
-            &plan.titles[0],
-            &source,
-            Some("mf-1"),
-            5,
-            VerificationDepth::Full,
-        )
-        .await
-        .expect("dispose");
-    assert_eq!(disposal, SourceDisposal::AlreadyAbsent);
 }
 
 // ── US9 depth, through the runner with the real copier ──────────────────────
@@ -2339,7 +2216,6 @@ async fn run_copy_at_depth(
     RootMoveExecutionPlan,
     InMemoryLocationOperationStore,
     FakeCatalog,
-    RecordingRecycler,
 ) {
     let source_root = temp.join("a");
     let destination_root = temp.join("b");
@@ -2360,20 +2236,19 @@ async fn run_copy_at_depth(
         depth,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = CopyThenCorrupt {
         copier: VerifiedCopier::new(),
         corrupt_at,
     };
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
         .await
         .expect("run");
 
-    (outcome, plan, store, catalog, recycler)
+    (outcome, plan, store, catalog)
 }
 
 /// US9.2 through the runner: the operator's quick preference reaches the copy,
@@ -2382,7 +2257,7 @@ async fn run_copy_at_depth(
 #[tokio::test]
 async fn a_quick_depth_copy_records_the_reduced_guarantee_and_still_settles() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let (outcome, plan, store, catalog, recycler) =
+    let (outcome, plan, store, catalog) =
         run_copy_at_depth(temp.path(), VerificationDepth::Quick, None).await;
 
     assert_eq!(outcome.state, LocationOperationState::Completed);
@@ -2409,7 +2284,6 @@ async fn a_quick_depth_copy_records_the_reduced_guarantee_and_still_settles() {
 
     assert!(records[0].outcome.permits_source_removal());
     assert!(!plan.titles[0].files[0].source().exists());
-    assert!(recycler.recycled().is_empty());
     assert_eq!(
         catalog.writes().len(),
         3,
@@ -2424,7 +2298,7 @@ async fn a_quick_depth_copy_records_the_reduced_guarantee_and_still_settles() {
 #[tokio::test]
 async fn corruption_inside_the_sampled_window_blocks_source_removal_at_quick_depth() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let (outcome, plan, store, catalog, recycler) =
+    let (outcome, plan, store, catalog) =
         run_copy_at_depth(temp.path(), VerificationDepth::Quick, Some(7)).await;
 
     assert_eq!(outcome.state, LocationOperationState::Failed);
@@ -2434,7 +2308,6 @@ async fn corruption_inside_the_sampled_window_blocks_source_removal_at_quick_dep
     assert!(!records[0].outcome.permits_source_removal());
 
     assert!(plan.titles[0].files[0].source().exists());
-    assert!(recycler.recycled().is_empty());
     assert!(catalog.writes().is_empty());
     assert_eq!(
         catalog
@@ -2453,7 +2326,7 @@ async fn corruption_in_the_unsampled_middle_needs_full_depth() {
     let middle = crate::fs_integrity::IMPORT_CONTENT_PROOF_SAMPLE_BYTES + 17;
 
     let quick_temp = tempfile::tempdir().expect("temp dir");
-    let (quick, quick_plan, quick_store, _, quick_recycler) =
+    let (quick, quick_plan, quick_store, _) =
         run_copy_at_depth(quick_temp.path(), VerificationDepth::Quick, Some(middle)).await;
     assert_eq!(
         quick.state,
@@ -2466,10 +2339,9 @@ async fn corruption_in_the_unsampled_middle_needs_full_depth() {
             .permits_source_removal()
     );
     assert!(!quick_plan.titles[0].files[0].source().exists());
-    assert!(quick_recycler.recycled().is_empty());
 
     let full_temp = tempfile::tempdir().expect("temp dir");
-    let (full, full_plan, full_store, _, full_recycler) =
+    let (full, full_plan, full_store, _) =
         run_copy_at_depth(full_temp.path(), VerificationDepth::Full, Some(middle)).await;
     assert_eq!(full.state, LocationOperationState::Failed);
     assert!(
@@ -2477,7 +2349,6 @@ async fn corruption_in_the_unsampled_middle_needs_full_depth() {
             .outcome
             .permits_source_removal()
     );
-    assert!(full_recycler.recycled().is_empty());
     assert!(full_plan.titles[0].files[0].source().exists());
 }
 
@@ -2535,10 +2406,9 @@ async fn a_completed_move_asks_media_servers_to_re_read_the_destination_folder()
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-refresh", &plan.to_work_plan())
@@ -2593,10 +2463,9 @@ async fn a_canceled_move_that_placed_nothing_notifies_no_media_server() {
         .expect("cancel recorded");
 
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
 
     let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-canceled", &plan.to_work_plan())
@@ -2632,10 +2501,9 @@ async fn a_run_that_has_not_reached_a_terminal_state_notifies_nothing() {
         VerificationDepth::Full,
     ));
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
     LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
         .run("op-running", &plan.to_work_plan())
         .await
@@ -3107,8 +2975,7 @@ async fn reconcile_writes_the_same_rows_from_one_listing_as_from_per_file_reads(
             )
             .collect();
         let catalog = RowCatalog::new(lists_rows, &initial);
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
         let operation = queued_operation(
             "op-1",
             LocationOperationType::RootMove,
@@ -3305,8 +3172,7 @@ async fn cleanup_after_a_recorded_copy_compares_both_files_at_the_operations_dep
         );
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
         reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await
@@ -3327,7 +3193,6 @@ async fn cleanup_after_a_recorded_copy_compares_both_files_at_the_operations_dep
             std::fs::read(file.destination()).unwrap().len(),
             THREE_SAMPLE_WINDOWS
         );
-        assert!(recycler.recycled().is_empty());
     }
 }
 
@@ -3367,8 +3232,7 @@ async fn cleanup_without_a_resolution_row_compares_both_files_at_the_recorded_de
             );
 
             let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-            let recycler = RecordingRecycler::default();
-            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
             let result = reconciler
                 .clean_up_title(&operation, &plan.titles[0].to_planned_title())
                 .await;
@@ -3394,7 +3258,6 @@ async fn cleanup_without_a_resolution_row_compares_both_files_at_the_recorded_de
                 result.expect("cleanup");
                 assert!(!file.source().exists(), "{depth:?}: the source is removed");
             }
-            assert!(recycler.recycled().is_empty());
         }
     }
 }
@@ -3440,8 +3303,7 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
         }
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
         let error = reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await
@@ -3461,7 +3323,6 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
             source_bytes,
             "{alias}"
         );
-        assert!(recycler.recycled().is_empty());
     }
 }
 
@@ -3507,8 +3368,7 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
         }
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
         let result = reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await;
@@ -3559,7 +3419,6 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
                 );
             }
         }
-        assert!(recycler.recycled().is_empty());
     }
 }
 
@@ -3621,8 +3480,7 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
             );
 
             let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-            let recycler = RecordingRecycler::default();
-            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
             let error = reconciler
                 .clean_up_title(&operation, &plan.titles[0].to_planned_title())
                 .await
@@ -3646,7 +3504,6 @@ async fn a_changed_copy_keeps_the_source_at_cleanup_with_a_recorded_proof() {
                 assert_eq!(whole_reads(&file.source()), source_reads);
                 assert_eq!(whole_reads(&file.destination()), destination_reads);
             }
-            assert!(recycler.recycled().is_empty());
         }
     }
 }
@@ -3753,8 +3610,7 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
         }
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
         let result = reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await;
@@ -3792,7 +3648,6 @@ async fn a_linked_source_with_a_copy_is_cleaned_up_by_the_file_it_names() {
             THREE_SAMPLE_WINDOWS,
             "{case}: the copy is kept"
         );
-        assert!(recycler.recycled().is_empty());
     }
 }
 
@@ -3834,7 +3689,6 @@ async fn a_link_and_its_target_in_one_title_move_as_links_and_complete() {
     );
     store.insert_operation(operation.clone());
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-    let recycler = RecordingRecycler::default();
     let mover = RootMoveFileMover::without_permissions().with_resolver(Arc::new(
         crate::location::resolution::ConflictResolver::new(
             store.clone(),
@@ -3843,7 +3697,7 @@ async fn a_link_and_its_target_in_one_title_move_as_links_and_complete() {
     ));
     let work = plan.to_work_plan();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
     let result = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
         .run("op-1", &work)
         .await
@@ -3894,13 +3748,11 @@ async fn cleanup_removes_and_keeps_the_same_sources_with_or_without_a_recorded_p
         )
         .await;
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
         let ok = reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await
             .is_ok();
-        assert!(recycler.recycled().is_empty());
         let files = plan.titles[0]
             .files
             .iter()

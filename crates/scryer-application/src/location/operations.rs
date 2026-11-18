@@ -67,9 +67,8 @@ use crate::location::classify::{
 };
 use crate::location::collisions::{CollisionNaming, ContentFacts, DestinationItem, PathCaseRule};
 use crate::location::execution::{
-    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer,
-    RecycleBinSourceRecycler, RootMoveAdmission, RootMoveCatalog, RootMoveFileMover,
-    RootMoveReconciler, TitlePlacementSnapshot,
+    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer, RootMoveAdmission,
+    RootMoveCatalog, RootMoveFileMover, RootMoveReconciler, TitlePlacementSnapshot,
 };
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
 use crate::location::hardlinks::{HardlinkFact, detect_hardlinks};
@@ -1325,11 +1324,6 @@ impl AppUseCase {
     ) -> AppResult<OperationRunOutcome> {
         let catalog = AppUseCaseRootMoveCatalog { app: self.clone() };
         let manual = mode == LocationExecutionMode::UserMovedFiles;
-        let recycler = if manual {
-            RecycleBinSourceRecycler::new(BTreeMap::new())
-        } else {
-            self.root_move_recycler(plan).await
-        };
         let permissions: Arc<dyn crate::location::execution::PlacedContentPermissions> = if manual {
             Arc::new(crate::location::execution::NoPlacedContentPermissions)
         } else {
@@ -1365,7 +1359,6 @@ impl AppUseCase {
             plan,
             &catalog,
             self.services.library.location_operations.as_ref(),
-            &recycler,
         )
         .with_permissions(permissions)
         // US7: the merge engine, and the delete path the retired source title is
@@ -1768,37 +1761,6 @@ impl AppUseCase {
                 payload,
             ))
             .await;
-    }
-
-    /// Recycle-bin configuration per source root, so a redundant source copy
-    /// goes to the bin rather than being deleted (FR-073, C4).
-    async fn root_move_recycler(&self, plan: &RootMoveExecutionPlan) -> RecycleBinSourceRecycler {
-        let mut configs = BTreeMap::new();
-        for title in &plan.titles {
-            let Some(root_path) = title.source_root_path.as_deref() else {
-                continue;
-            };
-            if configs.contains_key(root_path) {
-                continue;
-            }
-            configs.insert(
-                root_path.to_string(),
-                self.recycle_bin_config_for_media_root(Some(root_path))
-                    .await,
-            );
-        }
-        if let Some(conflict) = &plan.conflict {
-            for root in &conflict.roots {
-                if !configs.contains_key(&root.path) {
-                    configs.insert(
-                        root.path.clone(),
-                        self.recycle_bin_config_for_media_root(Some(&root.path))
-                            .await,
-                    );
-                }
-            }
-        }
-        RecycleBinSourceRecycler::new(configs)
     }
 
     /// The operator's configured modes for the destination library, applied to
@@ -3832,11 +3794,8 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
         &self,
         operation: &LocationOperation,
         plan: &RootMoveExecutionPlan,
-        recycler: &dyn crate::location::execution::SourceRecycler,
     ) -> AppResult<()> {
-        self.app
-            .clean_up_folder_conflict(operation, plan, recycler)
-            .await
+        self.app.clean_up_folder_conflict(operation, plan).await
     }
     async fn admit_conflict(
         &self,

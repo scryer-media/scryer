@@ -2757,8 +2757,7 @@ mod change_path_tests {
             planned.retirement.recycle_allowlist_paths,
             vec![SOURCE_ROOT.to_string()]
         );
-        // The per-title instruction set carries the same path, which is the key
-        // `RecycleBinSourceRecycler` resolves its per-root config by.
+        // The per-title instruction set carries the same path.
         assert_eq!(
             planned.execution.titles[0].source_root_path.as_deref(),
             Some(SOURCE_ROOT)

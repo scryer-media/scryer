@@ -7,7 +7,7 @@
 //! | Seam | Implementation here | What it guarantees |
 //! |---|---|---|
 //! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem link placement without copying bytes; otherwise a verified streaming copy at the operation's depth, or a proof of a destination an interrupted run already placed. The source survives until the journal and catalog are durable. Configured permissions land on the destination straight after verification. |
-//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order. For a title that merges into an existing destination title, the flip is replaced by the merge engine's single catalog transaction. |
+//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are removed, then *empty* source directories. For a title that merges into an existing destination title, the flip is replaced by the merge engine's single catalog transaction. |
 //! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
 //!
 //! # Why the source is never touched by the mover
@@ -43,7 +43,7 @@ use crate::location::executor::{
     TitleFileMover, TitleReconciler, TitleStepOutcome,
 };
 use crate::location::merge::engine::{TitleMergeRepository, execute_merge, plan_merge};
-use crate::location::model::{LocationOperation, VerificationDepth};
+use crate::location::model::LocationOperation;
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
 use crate::location::verify::{DestinationClaim, VerifiedFile, same_filesystem};
@@ -160,7 +160,6 @@ pub trait RootMoveCatalog: Send + Sync {
         &self,
         _operation: &LocationOperation,
         _plan: &RootMoveExecutionPlan,
-        _recycler: &dyn SourceRecycler,
     ) -> AppResult<()> {
         Err(AppError::Repository(
             "Folder conflict cleanup is unavailable".into(),
@@ -313,44 +312,6 @@ impl MergedSourceRetirer for NoMergedSourceRetirement {
     async fn retire_merged_source(&self, _request: MergedSourceRetirement) -> AppResult<()> {
         Ok(())
     }
-}
-
-// ── Seam: recycling ──────────────────────────────────────────────────────────
-
-/// What happened to a source file the operation no longer needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceDisposal {
-    /// The source went to the recycle bin.
-    Recycled,
-    /// The source was already gone (a rename moved it, or a previous run
-    /// removed it).
-    AlreadyAbsent,
-    /// Recycling was not available, so the verified-redundant source was
-    /// removed. Always warned about, never silent.
-    RemovedRecycleUnavailable(&'static str),
-    /// The recycle bin refused the file; the extra source copy remains.
-    PreservedRecycleUnavailable,
-}
-
-/// Recycles source copies a verified destination has made redundant.
-///
-/// Recycling is a seam because the recycle bin's configuration is per media
-/// root and lives in settings, and because the executor path has to be
-/// testable without a configured bin.
-#[async_trait]
-pub trait SourceRecycler: Send + Sync {
-    /// Recycle `source`, attributing the entry to `operation_id` and `title_id`
-    /// so the recycle manifest links back to the operation. `depth` is the
-    /// operation's verification depth, which a copy into the bin is proven at.
-    async fn recycle_source(
-        &self,
-        operation_id: &str,
-        title: &RootMoveTitleExecution,
-        source: &Path,
-        media_file_id: Option<&str>,
-        size_bytes: u64,
-        depth: VerificationDepth,
-    ) -> AppResult<SourceDisposal>;
 }
 
 // ── TitleFileMover ───────────────────────────────────────────────────────────
@@ -908,7 +869,6 @@ pub struct RootMoveReconciler<'a> {
     plan: &'a RootMoveExecutionPlan,
     catalog: &'a dyn RootMoveCatalog,
     store: &'a dyn LocationOperationRepository,
-    recycler: &'a dyn SourceRecycler,
     permissions: Arc<dyn PlacedContentPermissions>,
     merges: Option<&'a dyn TitleMergeRepository>,
     retirer: Arc<dyn MergedSourceRetirer>,
@@ -919,13 +879,11 @@ impl<'a> RootMoveReconciler<'a> {
         plan: &'a RootMoveExecutionPlan,
         catalog: &'a dyn RootMoveCatalog,
         store: &'a dyn LocationOperationRepository,
-        recycler: &'a dyn SourceRecycler,
     ) -> Self {
         Self {
             plan,
             catalog,
             store,
-            recycler,
             permissions: Arc::new(NoPlacedContentPermissions),
             merges: None,
             retirer: Arc::new(NoMergedSourceRetirement),
@@ -1559,9 +1517,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         if self.plan.conflict.is_some() {
             // Historical hardlink content proofs remain usable after retiring
             // transfer sources. Inferior-file disposal rechecks the survivors.
-            self.catalog
-                .clean_up_conflict(operation, self.plan, self.recycler)
-                .await?;
+            self.catalog.clean_up_conflict(operation, self.plan).await?;
         }
 
         // 2. Only *empty* source directories, deepest first. A
@@ -2074,130 +2030,6 @@ fn stale(change: PlanInputChange, detail: String) -> TitleAdmission {
         TitleAdmission::Stale(detail)
     } else {
         TitleAdmission::Proceed
-    }
-}
-
-// ── Recyclers ────────────────────────────────────────────────────────────────
-
-/// A recycler that removes verified-redundant sources outright, warning every
-/// time, for deployments with no recycle bin configured.
-///
-/// This is only ever reached for a file whose destination copy is *proven*
-/// present and correct, which is the difference between this and a deletion
-/// (destruction requires proof). A source proven identical to content the
-/// destination already held never reaches any recycler: cleanup drops it
-/// directly.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RemoveVerifiedSource;
-
-#[async_trait]
-impl SourceRecycler for RemoveVerifiedSource {
-    async fn recycle_source(
-        &self,
-        _operation_id: &str,
-        _title: &RootMoveTitleExecution,
-        source: &Path,
-        _media_file_id: Option<&str>,
-        _size_bytes: u64,
-        _depth: VerificationDepth,
-    ) -> AppResult<SourceDisposal> {
-        match Disk::process().remove(source, Remove::File).await {
-            Ok(Removal::Removed) => Ok(SourceDisposal::RemovedRecycleUnavailable(
-                "no recycle bin is configured for this root",
-            )),
-            Ok(Removal::AlreadyAbsent) => Ok(SourceDisposal::AlreadyAbsent),
-            Err(error) => Err(AppError::Repository(format!(
-                "failed to remove the verified source {}: {error}",
-                source.display()
-            ))),
-        }
-    }
-}
-
-/// The production recycler retains an extra copy when the configured bin fails.
-/// A disabled bin permits cleanup of fresh placements, with a warning.
-pub struct RecycleBinSourceRecycler {
-    configs: BTreeMap<String, crate::recycle_bin::RecycleBinConfig>,
-}
-
-impl RecycleBinSourceRecycler {
-    /// `configs` is keyed by the stored source-root path each title moves out
-    /// of, because the recycle bin is configured per media root.
-    pub fn new(configs: BTreeMap<String, crate::recycle_bin::RecycleBinConfig>) -> Self {
-        Self { configs }
-    }
-
-    fn config_for(
-        &self,
-        title: &RootMoveTitleExecution,
-    ) -> Option<&crate::recycle_bin::RecycleBinConfig> {
-        self.configs.get(title.source_root_path.as_deref()?)
-    }
-}
-
-#[async_trait]
-impl SourceRecycler for RecycleBinSourceRecycler {
-    async fn recycle_source(
-        &self,
-        operation_id: &str,
-        title: &RootMoveTitleExecution,
-        source: &Path,
-        media_file_id: Option<&str>,
-        size_bytes: u64,
-        depth: VerificationDepth,
-    ) -> AppResult<SourceDisposal> {
-        let reading = Disk::process().uncached(source).await;
-        match reading.exists() {
-            Some(false) => return Ok(SourceDisposal::AlreadyAbsent),
-            // The source may still be there, so the disposal is not done.
-            None => {
-                return Err(AppError::Repository(format!(
-                    "{}: {}",
-                    source.display(),
-                    reading.describe_absence()
-                )));
-            }
-            Some(true) => {}
-        }
-
-        let Some(config) = self.config_for(title).filter(|config| config.enabled) else {
-            return RemoveVerifiedSource
-                .recycle_source(
-                    operation_id,
-                    title,
-                    source,
-                    media_file_id,
-                    size_bytes,
-                    depth,
-                )
-                .await;
-        };
-
-        let manifest = crate::recycle_bin::RecycleManifest {
-            schema: None,
-            entry_id: None,
-            source_operation_id: Some(operation_id.to_string()),
-            recycled_at: chrono::Utc::now().to_rfc3339(),
-            original_path: path_to_stored_string(source),
-            original_file_id: media_file_id.map(str::to_string),
-            size_bytes,
-            title_id: Some(title.title_id.clone()),
-            media_root: title.source_root_path.clone(),
-            reason: "location_operation_source".to_string(),
-            status: None,
-            replacement_file_id: None,
-            replacement_path: None,
-            media_row: None,
-        };
-
-        match crate::recycle_bin::recycle_file(config, source, manifest, depth).await {
-            Ok(Some(_)) => Ok(SourceDisposal::Recycled),
-            Ok(None) => Ok(SourceDisposal::AlreadyAbsent),
-            Err(error) => {
-                tracing::warn!(%operation_id, source = %source.display(), %error, "source recycling failed; retaining the source");
-                Ok(SourceDisposal::PreservedRecycleUnavailable)
-            }
-        }
     }
 }
 

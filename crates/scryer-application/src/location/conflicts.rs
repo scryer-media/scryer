@@ -10,7 +10,6 @@ use super::collisions::{
     CollisionNaming, CollisionPlanRequest, DestinationItem, IncomingItem, PathCaseRule,
     plan_collisions,
 };
-use super::execution::SourceRecycler;
 use super::model::{LocationExecutionMode, LocationOperation, LocationOperationType};
 use super::operations::{LocationJobRunActor, LocationOperationAdmission};
 use super::preview::{
@@ -3079,7 +3078,6 @@ impl AppUseCase {
         &self,
         operation: &LocationOperation,
         plan: &RootMoveExecutionPlan,
-        recycler: &dyn SourceRecycler,
     ) -> AppResult<()> {
         let conflict = plan.conflict.as_ref().expect("conflict plan");
         let planned = &plan.titles[0];
@@ -3444,7 +3442,6 @@ impl AppUseCase {
                     .await?;
             }
         }
-        let _ = recycler;
         Ok(())
     }
 }
