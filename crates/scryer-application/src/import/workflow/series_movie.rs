@@ -174,6 +174,7 @@ async fn run_import(
                     error_message: Some(error.to_string()),
                     reason_code: error.reason().map(str::to_string),
                     needs_reconciliation: false,
+                    source_cleanup_failed: true,
                     release_burned: false,
                     title_id,
                     ..base_completed_import_result(
@@ -393,6 +394,7 @@ async fn carry_out_import_rejection(
         upgrade_previous_path: None,
         reason_code: None,
         needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -1487,6 +1489,7 @@ async fn hold_replacement_for_manual_resolution(
         upgrade_previous_path: None,
         reason_code: None,
         needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1749,6 +1752,7 @@ async fn import_additional_movie_download(
             upgrade_previous_path: None,
             reason_code: None,
             needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1873,6 +1877,7 @@ async fn import_additional_movie_download(
         upgrade_previous_path: None,
         reason_code: None,
         needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2156,6 +2161,7 @@ async fn import_movie_download(
                 upgrade_previous_path: None,
                 reason_code: None,
                 needs_reconciliation: false,
+                source_cleanup_failed: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2256,6 +2262,7 @@ async fn import_movie_download(
             upgrade_previous_path: None,
             reason_code: None,
             needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2433,6 +2440,7 @@ async fn import_movie_download(
                     upgrade_previous_path: outcome.previous_path.clone(),
                     reason_code: None,
                     needs_reconciliation: false,
+                    source_cleanup_failed: false,
                 };
                 tracing::info!(
                     title = %title.name,
@@ -2714,6 +2722,7 @@ async fn import_movie_download(
         upgrade_previous_path: None,
         reason_code: None,
         needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -3071,6 +3080,7 @@ async fn import_series_movie_download(
                 upgrade_previous_path: None,
                 reason_code: None,
                 needs_reconciliation: false,
+                source_cleanup_failed: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -3291,6 +3301,7 @@ async fn import_series_movie_download(
                         upgrade_previous_path: outcome.previous_path.clone(),
                         reason_code: None,
                         needs_reconciliation: false,
+                        source_cleanup_failed: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     app.update_import_status_and_notify(
@@ -3362,6 +3373,7 @@ async fn import_series_movie_download(
                         upgrade_previous_path: None,
                         reason_code: None,
                         needs_reconciliation: false,
+                        source_cleanup_failed: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -3597,6 +3609,7 @@ async fn import_series_movie_download(
         upgrade_previous_path: None,
         reason_code: None,
         needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)

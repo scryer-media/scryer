@@ -1175,6 +1175,7 @@ mod tests {
             upgrade_previous_path: None,
             reason_code: None,
             needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         assert_eq!(
@@ -1347,6 +1348,7 @@ mod tests {
             upgrade_previous_path: None,
             reason_code: None,
             needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         assert_eq!(
@@ -1384,6 +1386,7 @@ mod tests {
             upgrade_previous_path: None,
             reason_code: None,
             needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         for message in [

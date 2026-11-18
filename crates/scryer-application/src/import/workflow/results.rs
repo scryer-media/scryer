@@ -418,6 +418,23 @@ async fn compute_history_retry_state(
         td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(message)];
         return Ok(());
     }
+    // Placed and cataloged, with the removal of its sources unfinished: never
+    // a success, since nothing has settled whether the download's file is the
+    // library file and an imported download may be removed with its data. It
+    // waits as the retry the automatic import schedules for the same result,
+    // and that pass settles it.
+    if result.source_cleanup_failed {
+        crate::completed_download_handler::apply_import_result_with_completed(
+            app,
+            td,
+            result.clone(),
+            count,
+            Some(completed),
+            Some(release_evidence),
+        )
+        .await;
+        return Ok(());
+    }
     let success = result.decision == ImportDecision::Imported
         || (result.decision == ImportDecision::Skipped
             && result.skip_reason == Some(ImportSkipReason::AlreadyImported))
@@ -3196,6 +3213,11 @@ async fn finalize_deferred_import_source_cleanup(
 /// disk-full / permission-denied skips are environmental and clear on their own.
 /// Source-change races carry their own skip reasons, regardless of wording.
 pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> bool {
+    // Its files are placed; only the removal of their sources is left, and
+    // that is retried whatever else the attempt says.
+    if result.source_cleanup_failed {
+        return true;
+    }
     match result.decision {
         ImportDecision::Failed => !matches!(
             result.skip_reason,

@@ -4723,6 +4723,7 @@ impl QueuedManualImportOutcome {
             upgrade_previous_path: None,
             reason_code: None,
             needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         Self {
             status: ImportStatus::Skipped,

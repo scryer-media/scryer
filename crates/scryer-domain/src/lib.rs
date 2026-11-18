@@ -3664,6 +3664,12 @@ pub struct ImportResult {
     /// whatever the attempt recorded before it stopped.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub needs_reconciliation: bool,
+    /// The attempt placed and cataloged its files, and then the removal of
+    /// their sources could not finish. It is never taken as imported: until
+    /// a later pass settles whether the download's file is the library file,
+    /// the download may not be removed with its data. It waits as a retry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_cleanup_failed: bool,
     #[serde(default)]
     pub release_burned: bool,
     pub started_at: DateTime<Utc>,

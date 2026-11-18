@@ -1356,6 +1356,7 @@ async fn local_password_retry_action_requires_current_identity_failure_and_libra
         upgrade_previous_path: None,
         reason_code: None,
         needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let record = ImportRecord {
         id: result.import_id.clone(),
@@ -2658,6 +2659,7 @@ async fn a_manual_import_beside_an_unresolved_reconciliation_is_not_taken_as_imp
         error_message: Some("the library file is the import source's own entry".to_string()),
         reason_code: Some(crate::error_reasons::import::DESTINATION_IS_SOURCE.to_string()),
         needs_reconciliation: true,
+        source_cleanup_failed: false,
         release_burned: false,
         started_at: now,
         completed_at: now,
@@ -15458,6 +15460,9 @@ struct CleanupRefusingImporter {
     is_source: bool,
     /// Fail as a removal that could not finish, which is retried.
     could_not_finish: bool,
+    /// Fail as a cleanup that could not tell whether the library file is
+    /// the source's own entry.
+    cannot_tell: bool,
 }
 
 #[async_trait]
@@ -15516,6 +15521,11 @@ impl FileImporter for CleanupRefusingImporter {
     ) -> AppResult<()> {
         Err(if self.could_not_finish {
             AppError::Repository("the import source could not be removed".into())
+        } else if self.cannot_tell {
+            AppError::RepositoryFailed {
+                message: "could not tell whether the library file is the import source".into(),
+                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+            }
         } else if self.is_source {
             AppError::ManualReconciliationRefused {
                 message: "the library file is the import source's own entry".into(),
@@ -15641,6 +15651,69 @@ async fn a_history_retry_whose_cleanup_could_not_finish_adds_no_failed_entry() {
         rejected.len(),
         1,
         "only the first attempt's refusal is in the history: {rejected:?}"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
+}
+
+/// A history retry whose source cleanup could not tell whether the library
+/// file is the download's file is never taken as imported, although it
+/// placed and cataloged the file: an imported download may be removed from
+/// its client with its data. It waits as the automatic import's retry, and
+/// that pass, finding the moved file already in the library, stops blocked
+/// rather than imported. Nothing is removed.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_cannot_tell_is_never_imported() {
+    let (fixture, source, source_bytes, retried) =
+        history_retry_with_refusing_cleanup(CleanupRefusingImporter {
+            cannot_tell: true,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{retried:?}"
+    );
+    assert!(retried.source_cleanup_failed, "{retried:?}");
+    assert!(!retried.needs_reconciliation, "{retried:?}");
+    assert_eq!(
+        fixture
+            .import_repo
+            .retry_finished_states
+            .lock()
+            .await
+            .as_slice(),
+        &[TrackedDownloadState::ImportPending],
+        "the retried download waits for its retry, never imported"
+    );
+    assert!(
+        !crate::import_workflow::should_remove_terminal_download(
+            &fixture.app,
+            "",
+            "sabnzbd",
+            None,
+            Some(&scryer_domain::MediaFacet::Movie),
+            TrackedDownloadState::ImportPending,
+            None,
+        )
+        .await,
+        "a download waiting for its retry is not removed from its client"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
+
+    // The next automatic pass finds the moved file already in the library
+    // and stops blocked, never imported.
+    let mut tracked = fixture.tracked_import_pending();
+    {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::completed_download_handler::import(&fixture.app, &fixture.user, &mut tracked).await;
+    }
+    assert_eq!(
+        tracked.state,
+        TrackedDownloadState::ImportBlocked,
+        "{tracked:?}"
     );
     assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
     assert_eq!(primary_movie_files(&fixture).await.len(), 1);
