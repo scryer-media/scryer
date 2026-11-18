@@ -807,12 +807,12 @@ pub(crate) async fn execute_conflict_recycle(
             }
             crate::location::title_folder_recovery::inspect_path(&payload, false).await?;
             // The payload must hold what the source holds, at the user's
-            // depth, and neither may change while they are compared. The
-            // source goes on this answer, so at full depth both are read now.
+            // depth, and neither may change while they are compared. At full
+            // depth a hash kept of a file that still fits it answers.
             let check = Disk::process()
                 .check(
-                    crate::disk::CheckSide::new(payload.as_path()).fresh(),
-                    crate::disk::CheckSide::new(source).fresh(),
+                    crate::disk::CheckSide::new(payload.as_path()),
+                    crate::disk::CheckSide::new(source),
                     crate::location::verify::disk_depth(depth),
                 )
                 .await;
@@ -2899,15 +2899,17 @@ async fn copy_entry_tree(
             ));
         }
         // The entry's file must still hold what was copied, at the same
-        // depth: at full depth its fresh full hash is the copy's, at quick
+        // depth: at full depth its full hash is the copy's, at quick
         // depth it and the copy are sampled now.
         let held = match ops.depth {
             VerificationDepth::Full => {
                 match Disk::process()
-                    .full_hash(crate::disk::HashAsk::new(source.as_path()).fresh())
+                    .full_hash(crate::disk::HashAsk::new(source.as_path()))
                     .await
                 {
-                    crate::disk::FullHashAnswer::Read(known) => {
+                    crate::disk::FullHashAnswer::Read(known)
+                    | crate::disk::FullHashAnswer::Stored(known)
+                    | crate::disk::FullHashAnswer::Cached(known) => {
                         verified.hashes.as_ref().is_some_and(|copied| {
                             copied.full_blake3 == known.blake3
                                 && copied.size_bytes == known.size_bytes

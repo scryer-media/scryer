@@ -99,22 +99,22 @@ impl FileResolution {
         if !self.proof_is_current().await {
             return Ok(false);
         }
-        // Disposal is irreversible, so each file is read now, never answered
-        // from a hash kept while it fit.
         let destination = stored_path_to_path_buf(&self.destination_path);
-        let fresh = |path: &Path| crate::disk::CheckSide::new(path).fresh();
         let check = match self.identity_hash.as_deref() {
             Some(identity_hash) => {
                 Disk::process()
-                    .check_against(fresh(&destination), Some(identity_hash))
+                    .check_against(
+                        crate::disk::CheckSide::new(destination.as_path()),
+                        Some(identity_hash),
+                    )
                     .await
             }
             None => {
                 let source = stored_path_to_path_buf(&self.source_path);
                 Disk::process()
                     .check(
-                        fresh(&source),
-                        fresh(&destination),
+                        crate::disk::CheckSide::new(source.as_path()),
+                        crate::disk::CheckSide::new(destination.as_path()),
                         crate::disk::Depth::Full,
                     )
                     .await

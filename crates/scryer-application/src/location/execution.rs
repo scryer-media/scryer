@@ -1479,11 +1479,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 true => {
                     Disk::process()
                         .check(
-                            // The source goes on this answer, so at full
-                            // depth both are read now, never answered from a
-                            // hash kept while it fit.
-                            crate::disk::CheckSide::new(source.as_path()).fresh(),
-                            crate::disk::CheckSide::new(destination.as_path()).fresh(),
+                            // At full depth the hashes the copy streamed and
+                            // read back answer while both files still fit
+                            // them; a file that moved is read again.
+                            crate::disk::CheckSide::new(source.as_path()),
+                            crate::disk::CheckSide::new(destination.as_path()),
                             super::verify::disk_depth(record.depth.applied),
                         )
                         .await

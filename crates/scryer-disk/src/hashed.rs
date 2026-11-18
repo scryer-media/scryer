@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::cache::{climbs, key_of, slot_of};
-use super::copy::{CHUNK_BYTES, Check, ContentHasher, Depth, HashRefusal, judged};
+use super::copy::{CHUNK_BYTES, Check, ContentHasher, ContentHashes, Depth, HashRefusal, judged};
 use super::reading::DiskVerb;
 use super::{Cancel, Disk, DiskError, EntryKind, Mark, Open, Phase, Progress, reason};
 
@@ -137,7 +137,6 @@ pub struct HashAsk {
     row: Option<HashRow>,
     recorded: Option<StoredHash>,
     recorded_only: bool,
-    fresh: bool,
     cancel: Cancel,
     progress: Progress,
     times: Option<Arc<ReadTimes>>,
@@ -151,7 +150,6 @@ impl HashAsk {
             row: None,
             recorded: None,
             recorded_only: false,
-            fresh: false,
             cancel: Cancel::never(),
             progress: Progress::none(),
             times: None,
@@ -176,15 +174,6 @@ impl HashAsk {
     /// nothing otherwise: [`FullHashAnswer::Unrecorded`].
     pub fn recorded_only(mut self) -> Self {
         self.recorded_only = true;
-        self
-    }
-
-    /// Read the file now, whatever is recorded or cached of it: for a proof
-    /// a removal rests on, where a rewrite that kept the length and the
-    /// modification time must still be seen. What is read is recorded as
-    /// any read is.
-    pub fn fresh(mut self) -> Self {
-        self.fresh = true;
         self
     }
 
@@ -419,7 +408,6 @@ impl Short {
 pub struct CheckSide {
     path: PathBuf,
     row: Option<HashRow>,
-    fresh: bool,
 }
 
 impl CheckSide {
@@ -427,14 +415,7 @@ impl CheckSide {
         Self {
             path: path.into(),
             row: None,
-            fresh: false,
         }
-    }
-
-    /// At full depth, read the file now: [`HashAsk::fresh`].
-    pub fn fresh(mut self) -> Self {
-        self.fresh = true;
-        self
     }
 
     /// The catalog row the file's hash is stored on.
@@ -452,7 +433,6 @@ impl CheckSide {
     fn ask(self) -> HashAsk {
         HashAsk {
             row: self.row,
-            fresh: self.fresh,
             ..HashAsk::new(self.path)
         }
     }
@@ -540,6 +520,24 @@ impl Disk {
         }
     }
 
+    /// Keep `hashes`, streamed through one handle that read the file `opened`
+    /// marks at its start and its end, as `path`'s full hash in this
+    /// process. It answers a later ask only while the path still fits
+    /// `opened`, as any kept hash does.
+    pub(crate) fn keep_streamed_hash(&self, path: &Path, hashes: &ContentHashes, opened: &Mark) {
+        if !opened.is_len(hashes.size_bytes) {
+            return;
+        }
+        let known = KnownHash {
+            size_bytes: hashes.size_bytes,
+            blake3: hashes.blake3.clone(),
+            crc: Some(hashes.crc),
+            mark: opened.clone(),
+        };
+        let epoch = self.inner.cache.epoch();
+        self.inner.cache.record_hash(path, known, epoch);
+    }
+
     /// The full hash of `ask`'s path. See the module text. The caller must
     /// not hold the database's writer while it awaits this.
     pub async fn full_hash(&self, ask: HashAsk) -> FullHashAnswer {
@@ -556,7 +554,6 @@ impl Disk {
             }))
         };
         let recorded = match (&ask.recorded, &store) {
-            _ if ask.fresh => None,
             (Some(stored), _) => as_stored(stored.clone()),
             (None, Some((row, store))) => store.stored(row).await.and_then(as_stored),
             (None, None) => self

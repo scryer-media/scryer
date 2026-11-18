@@ -114,53 +114,6 @@ fn expected_blake3() -> String {
     blake3::hash(BYTES).to_hex().to_string()
 }
 
-/// A fresh ask reads the file whatever is cached or stored of it, so a
-/// rewrite that kept the length and the modification time is seen; and it
-/// records what it read as any read does.
-#[tokio::test]
-async fn a_fresh_ask_reads_past_a_cached_and_a_stored_hash_that_still_fit() {
-    let fixture = fixture();
-    fixture.set_modified(1_700_000_000);
-    let cached = fixture.disk.full_hash(fixture.rowless()).await;
-    assert!(matches!(cached, FullHashAnswer::Read(_)), "{cached:?}");
-    fixture.store.holds(
-        &Fixture::row(),
-        fixture.stored(&expected_blake3(), Some(fixture.mark())),
-    );
-    let rewritten = b"synthetic fixture media BYTES";
-    assert_eq!(rewritten.len(), BYTES.len());
-    std::fs::write(&fixture.path, rewritten).unwrap();
-    fixture.set_modified(1_700_000_000);
-    let new_blake3 = blake3::hash(rewritten).to_hex().to_string();
-
-    for ask in [fixture.rowless(), fixture.of_row()] {
-        let held = fixture.disk.full_hash(ask.clone()).await;
-        assert_eq!(
-            held.known().map(|known| known.blake3.clone()),
-            Some(expected_blake3()),
-            "without fresh, what still fits answers"
-        );
-        let answer = fixture.disk.full_hash(ask.fresh()).await;
-        let FullHashAnswer::Read(read) = answer else {
-            panic!("a fresh ask reads: {answer:?}");
-        };
-        assert_eq!(read.blake3, new_blake3);
-    }
-    assert_eq!(fixture.reads(), 3, "one read before, one per fresh ask");
-    assert_eq!(
-        fixture
-            .disk
-            .check(
-                CheckSide::new(&fixture.path).fresh(),
-                CheckSide::new(&fixture.path).of_row(Fixture::row()),
-                Depth::Full,
-            )
-            .await,
-        Check::Same,
-        "the fresh read was recorded on the row"
-    );
-}
-
 #[tokio::test]
 async fn a_file_with_no_row_is_answered_from_the_cache_while_it_fits() {
     let fixture = fixture();

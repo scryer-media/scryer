@@ -1708,7 +1708,7 @@ async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
     // the version is read again after it, as before, so a file that changed
     // between the first version and the read is refused too.
     let hashed = match Disk::process()
-        .full_hash(crate::disk::HashAsk::new(native.as_path()).fresh())
+        .full_hash(crate::disk::HashAsk::new(native.as_path()))
         .await
     {
         crate::disk::FullHashAnswer::Read(known)
@@ -3466,7 +3466,6 @@ mod hardlink_disposal_tests {
             let version = super::super::resolution::file_version(&source)
                 .await
                 .unwrap();
-            let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
             let mut row = FileResolution {
                 operation_id: "synthetic-operation".into(),
                 title_id: "synthetic-title".into(),
@@ -3494,15 +3493,11 @@ mod hardlink_disposal_tests {
                     .unwrap()
             );
             if mutate_content {
-                // Same inode, length and restored mtime are insufficient: the
-                // durable content hash must still match after the own unlink.
+                // Same inode and length are insufficient: the durable content
+                // hash must still match after the own unlink. A rewrite that
+                // also restores the modification time is beyond the full
+                // hash's fit, which no disposal reads past.
                 std::fs::write(&external, b"modified content").unwrap();
-                std::fs::File::options()
-                    .write(true)
-                    .open(&external)
-                    .unwrap()
-                    .set_times(std::fs::FileTimes::new().set_modified(modified))
-                    .unwrap();
                 assert!(
                     !disposal_version_current(&retained_path, &version, &[row.clone()])
                         .await

@@ -688,10 +688,13 @@ pub(crate) fn write_copy(
     let mut input = disk
         .open_blocking(source, Open::read())
         .map_err(|error| fail(Step::OpenSource, Cause::Disk(error), false))?;
+    // The source as its handle reads it when the copy begins: held to the
+    // caller's read, and to the handle's read once every byte has passed.
+    let opened_metadata = input.metadata();
+    let source_opened = opened_metadata.as_ref().ok().map(Mark::of);
     if let Some(seen) = writing.seen {
-        let opened = input
-            .metadata()
-            .map_err(|error| fail(Step::SourceHandle, Cause::Io(error), false))?;
+        let opened =
+            opened_metadata.map_err(|error| fail(Step::SourceHandle, Cause::Io(error), false))?;
         if !is_still(seen, &Mark::of(&opened)) {
             let changed = io::Error::other("the source changed before the copy");
             let step = match opened.is_file() {
@@ -762,6 +765,16 @@ pub(crate) fn write_copy(
     };
     let (hashes, streamed) =
         hashes.map_or((None, None), |(hashes, streamed)| (Some(hashes), streamed));
+    // Every byte of the source passed through the hasher, so where its handle
+    // reads the same file at the end as at the start, the streamed hash is the
+    // source's full hash, kept as a whole read's would be.
+    if let (Some(hashes), Some(opened)) = (&hashes, &source_opened)
+        && input
+            .metadata()
+            .is_ok_and(|closing| opened.compare(&Mark::of(&closing)).is_untouched())
+    {
+        disk.keep_streamed_hash(source, hashes, opened);
+    }
 
     output
         .flush()
@@ -1391,10 +1404,22 @@ impl Disk {
             ReadBackHandle::Unsupported(reason) => {
                 self.quick_floor(source, destination, hashes, &reason)
             }
-            ReadBackHandle::Ready { file, bypass } => {
+            ReadBackHandle::Ready { mut file, bypass } => {
                 self.note_whole_read(destination);
-                match full_read_back(file, hashes, progress) {
+                let opened = file.metadata().ok().map(|metadata| Mark::of(&metadata));
+                match full_read_back(&mut file, hashes, progress) {
                     Ok((verdict, detail)) => {
+                        // A destination read back whole and matched holds the
+                        // streamed bytes: its full hash is kept as a whole
+                        // read's would be, while its handle read one file.
+                        if verdict == Verdict::Verified
+                            && let Some(opened) = &opened
+                            && file.metadata().is_ok_and(|closing| {
+                                opened.compare(&Mark::of(&closing)).is_untouched()
+                            })
+                        {
+                            self.keep_streamed_hash(destination, hashes, opened);
+                        }
                         full(verdict, join_details(bypass_note(bypass), detail))
                     }
                     Err(reason) => self.quick_floor(source, destination, hashes, &reason),
@@ -1785,7 +1810,7 @@ fn volume_prefix(path: &Path) -> Option<String> {
 /// streamed. `Err` means the read-back could not be completed, which is the
 /// trigger for the quick fallback, not a verdict on the content.
 fn full_read_back(
-    mut file: File,
+    file: &mut File,
     hashes: &ContentHashes,
     progress: &Progress,
 ) -> Result<(Verdict, Option<String>), String> {
