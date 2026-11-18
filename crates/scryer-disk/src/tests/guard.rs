@@ -29,7 +29,7 @@ const EXEMPT_DIRS: [&str; 5] = ["tests", "lib_tests", "benches", "examples", "ta
 /// marker on a test-gated item, or one whose own attribute allows the direct
 /// calls for tests only, is not counted. Lower it when one is removed; it
 /// never goes up.
-const MARKERS: usize = 79;
+const MARKERS: usize = 78;
 /// Files holding direct filesystem lines that carry no marker yet, with how
 /// many. An entry may shrink or go; none is added and none grows.
 const UNMARKED: [(&str, usize); 10] = [
@@ -623,11 +623,10 @@ fn test_modules(path: &Path, lines: &[&str], exempt: &mut HashSet<PathBuf>) {
     }
 }
 
-#[test]
-fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("the disk crate lives below the crates directory");
+/// The guarded production sources: every file outside the exempt crates and
+/// directories, read, with the files a test-gated `mod` declares left out.
+/// Each comes with its path as shown under the crates directory.
+fn guarded_sources(crates: &Path) -> Vec<(String, String)> {
     let mut files = Vec::new();
     let mut roots = std::fs::read_dir(crates)
         .expect("crates directory should be readable")
@@ -652,18 +651,31 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
     for (path, text) in files.iter().zip(&texts) {
         test_modules(path, &borrowed(&code(text)), &mut test_files);
     }
+    files
+        .into_iter()
+        .zip(texts)
+        .filter(|(path, _)| !path.ancestors().any(|at| test_files.contains(at)))
+        .map(|(path, text)| {
+            let shown = path.strip_prefix(crates).unwrap_or(&path);
+            (shown.to_string_lossy().replace('\\', "/"), text)
+        })
+        .collect()
+}
 
+fn crates_dir() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the disk crate lives below the crates directory")
+}
+
+#[test]
+fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
     let (mut markers, mut unmarked) = (0, BTreeMap::<String, Vec<usize>>::new());
-    for (path, text) in files.iter().zip(&texts) {
-        if path.ancestors().any(|at| test_files.contains(at)) {
-            continue;
-        }
-        let lines = code(text);
+    for (shown, text) in guarded_sources(crates_dir()) {
+        let lines = code(&text);
         let lines = borrowed(&lines);
         let counted = counted(&lines);
         markers += counted.len();
-        let shown = path.strip_prefix(crates).unwrap_or(path);
-        let shown = shown.to_string_lossy().replace('\\', "/");
         let raw = raw(&lines);
         for at in 0..lines.len() {
             if raw[at] && !covered(&lines, at, &counted) {
@@ -700,6 +712,117 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
         markers, MARKERS,
         "a marker was removed: lower MARKERS to {markers}"
     );
+}
+
+/// The calls by which code outside the disk service compares two reads of a
+/// file by hand: two marks, a mark's file number, or two stored version
+/// strings. The disk service's verbs answer these questions; a caller that
+/// asks one of them itself is a standalone guard.
+const HAND_COMPARISONS: [&str; 7] = [
+    "still_marks",
+    "numbered_as",
+    "is_untouched",
+    "same_file",
+    "file_version",
+    "same_content_version",
+    "same_inode_version",
+];
+/// Production files that still make hand comparisons, with how many calls.
+/// An entry may shrink or go; none is added and none grows. A length
+/// compared with `==` is not seen here: text cannot tell a file's length from
+/// any other number.
+const COMPARED_BY_HAND: [(&str, usize); 8] = [
+    ("scryer-application/src/import/workflow/mod.rs", 1),
+    ("scryer-application/src/library/recycle_bin.rs", 1),
+    ("scryer-application/src/location/backfill.rs", 2),
+    ("scryer-application/src/location/conflicts.rs", 36),
+    ("scryer-application/src/location/execution.rs", 6),
+    ("scryer-application/src/location/resolution.rs", 12),
+    (
+        "scryer-application/src/location/title_folder_recovery.rs",
+        1,
+    ),
+    (
+        "scryer-infrastructure-workflow/src/workflow/file_importer.rs",
+        5,
+    ),
+];
+
+/// How many of [`HAND_COMPARISONS`] `line` calls, as a method or a function;
+/// a definition is not a call.
+fn hand_comparisons(line: &str) -> usize {
+    HAND_COMPARISONS
+        .iter()
+        .map(|name| {
+            let call = format!("{name}(");
+            line.match_indices(&call)
+                .filter(|(found, _)| {
+                    let before = &line[..*found];
+                    let joined = before
+                        .chars()
+                        .next_back()
+                        .is_some_and(|last| last == '_' || last.is_alphanumeric());
+                    !joined && !before.ends_with("fn ")
+                })
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn hand_comparisons_of_file_reads_only_shrink() {
+    let mut found = BTreeMap::<String, usize>::new();
+    for (shown, text) in guarded_sources(crates_dir()) {
+        let lines = code(&text);
+        let lines = borrowed(&lines);
+        let calls: usize = (0..lines.len())
+            .map(|at| (at, hand_comparisons(lines[at])))
+            .filter(|(at, calls)| *calls > 0 && !gated(&lines, *at))
+            .map(|(_, calls)| calls)
+            .sum();
+        if calls > 0 {
+            found.insert(shown, calls);
+        }
+    }
+    let allowed = |file: &str| {
+        COMPARED_BY_HAND
+            .iter()
+            .find(|(known, _)| *known == file)
+            .map_or(0, |(_, allowed)| *allowed)
+    };
+    let grown = found
+        .iter()
+        .filter(|(file, calls)| **calls > allowed(file))
+        .map(|(file, calls)| format!("crates/{file}: {calls}, allowed {}", allowed(file)))
+        .collect::<Vec<_>>();
+    assert!(
+        grown.is_empty(),
+        "these files compare file reads by hand more than before; ask the disk service \
+         (check, check_against, full_hash, entry_alias_of) instead:\n{}",
+        grown.join("\n")
+    );
+    for (file, allowed) in COMPARED_BY_HAND {
+        let calls = found.get(file).copied().unwrap_or(0);
+        assert_eq!(
+            calls, allowed,
+            "lower the COMPARED_BY_HAND entry for {file} to {calls}"
+        );
+    }
+}
+
+#[test]
+fn a_hand_comparison_is_a_call_and_not_a_definition_or_a_longer_name() {
+    assert_eq!(hand_comparisons("    if !seen.still_marks(&now) {"), 1);
+    assert_eq!(
+        hand_comparisons("file_version(&a).await? == super::resolution::file_version(&b)"),
+        2
+    );
+    assert_eq!(
+        hand_comparisons("pub(super) async fn file_version(path: &Path)"),
+        0
+    );
+    assert_eq!(hand_comparisons("    regular_file_same_file(a, b)"), 0);
+    assert_eq!(hand_comparisons("    let same_file = true;"), 0);
 }
 
 #[test]
