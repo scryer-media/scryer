@@ -203,12 +203,15 @@ pub enum Verdict {
     Unavailable,
 }
 
-/// What [`Disk::check_blocking`] found of two files.
+/// What a content check found: [`Disk::check`], [`Disk::check_against`],
+/// [`Disk::check_blocking`], [`Disk::check_copy_source_blocking`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Check {
     /// The same content at the depth asked.
     Same,
     /// Different content.
+    Differs,
+    /// A file changed while it was read, so nothing is told.
     Changed,
     /// One of them could not be read; the words say why. Nothing is told.
     Unread(String),
@@ -1419,25 +1422,38 @@ impl Disk {
 
     /// Whether `left` and `right` hold the same content, at `depth`: at
     /// [`Depth::Full`] both are read end to end and their hashes compared; at
-    /// any other depth, their lengths and sampled head and tail. Nothing is
-    /// changed. Probes: one open of each file, its length read through the
-    /// handle; at full depth the whole of each.
+    /// any other depth, their lengths and sampled head and tail. Each file is
+    /// marked through its handle as it opens and again after it is read; a
+    /// file that moved between the two is [`Check::Changed`]. Nothing is
+    /// changed. This is the blocking form for a process with no hash table;
+    /// [`Self::check`] answers at full depth from recorded hashes.
+    ///
+    /// Probes: one open and two stats of the handle for each file; at full
+    /// depth the whole of each is read, otherwise its two sampled windows.
     pub fn check_blocking(&self, left: &Path, right: &Path, depth: Depth) -> Check {
         if depth == Depth::Full {
-            let hashed = |path: &Path| {
-                self.hash_file_blocking(path, &Progress::none())
-                    .map_err(|refusal| refusal.to_string())
-            };
-            return match (hashed(left), hashed(right)) {
-                (Ok(left), Ok(right)) if left == right => Check::Same,
-                (Ok(_), Ok(_)) => Check::Changed,
-                (Err(said), _) | (_, Err(said)) => Check::Unread(said),
+            return match (self.whole_of(left), self.whole_of(right)) {
+                (Ok(left), Ok(right)) => judged(left == right),
+                (Err(short), _) | (_, Err(short)) => short,
             };
         }
-        match (self.sample_of(left), self.sample_of(right)) {
-            (Ok(left), Ok(right)) if left == right => Check::Same,
-            (Ok(_), Ok(_)) => Check::Changed,
-            (Err(said), _) | (_, Err(said)) => Check::Unread(said),
+        self.samples_checked(left, right)
+    }
+
+    /// Both files' guarded samples held to each other.
+    pub(crate) fn samples_checked(&self, left: &Path, right: &Path) -> Check {
+        match (self.sample_guarded(left), self.sample_guarded(right)) {
+            (Ok(left), Ok(right)) => judged(left == right),
+            (Err(short), _) | (_, Err(short)) => short,
+        }
+    }
+
+    /// One file read whole under the read's own guard, as its length and
+    /// BLAKE3, or the [`Check`] that says why it could not be.
+    fn whole_of(&self, path: &Path) -> Result<(u64, String), Check> {
+        match self.read_whole_blocking(&super::hashed::HashAsk::new(path)) {
+            Ok(known) => Ok((known.size_bytes, known.blake3)),
+            Err(short) => Err(short.into_check()),
         }
     }
 
@@ -1458,16 +1474,16 @@ impl Disk {
         depth: Depth,
     ) -> Check {
         if depth != Depth::Full {
-            return match self.sample_of(source) {
-                Ok(now) if now == *streamed => Check::Same,
-                Ok(_) => Check::Changed,
-                Err(said) => Check::Unread(said),
+            return match self.sample_guarded(source) {
+                Ok(now) => judged(now == *streamed),
+                Err(short) => short,
             };
         }
-        match self.hash_file_blocking(source, &Progress::none()) {
-            Ok(now) if now == *copied => Check::Same,
-            Ok(_) => Check::Changed,
-            Err(refusal) => Check::Unread(refusal.to_string()),
+        match self.whole_of(source) {
+            Ok((size_bytes, blake3)) => {
+                judged(size_bytes == copied.size_bytes && blake3 == copied.blake3)
+            }
+            Err(short) => short,
         }
     }
 
@@ -1565,6 +1581,36 @@ impl Disk {
                 describe(destination, &copied)
             )),
         )
+    }
+
+    /// One file's sample, marked through its handle as it opens and again
+    /// once the sample is taken; a file that moved between the two is
+    /// [`Check::Changed`]. Probes: one open and two stats of the handle.
+    fn sample_guarded(&self, path: &Path) -> Result<ContentSample, Check> {
+        let failed = |step: &str, error: io::Error| {
+            Check::Unread(format!(
+                "repository: failed to {step} import content proof path: {}: {error}",
+                path.display()
+            ))
+        };
+        let mut file = self
+            .open_blocking(path, Open::read())
+            .map_err(|error| failed("open", error.into()))?;
+        let mark = |file: &std::fs::File| {
+            self.call("handle_stat", || file.metadata())
+                .map(|metadata| (metadata.len(), Mark::of(&metadata)))
+                .map_err(|error| failed("stat", error))
+        };
+        let (size_bytes, opened) = mark(&file)?;
+        let sample = sample_reader(&mut file, size_bytes).map_err(|(step, error)| match step {
+            SampleStep::Seek => failed("seek", error),
+            SampleStep::Read => failed("read", error),
+        })?;
+        let (_, closing) = mark(&file)?;
+        if !opened.compare(&closing).is_untouched() {
+            return Err(Check::Changed);
+        }
+        Ok(sample)
     }
 
     /// One file's sample, or the sentence for why it could not be taken. The
@@ -1795,6 +1841,11 @@ fn bypass_note(bypass: CacheBypass) -> Option<String> {
             "the destination read-back was not cache-bypassed: {reason}"
         )),
     }
+}
+
+/// Two contents compared: the same, or not.
+pub(crate) fn judged(same: bool) -> Check {
+    if same { Check::Same } else { Check::Differs }
 }
 
 fn join_details(first: Option<String>, second: Option<String>) -> Option<String> {

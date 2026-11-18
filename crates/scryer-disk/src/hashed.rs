@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::cache::{climbs, key_of, slot_of};
-use super::copy::{CHUNK_BYTES, ContentHasher, HashRefusal};
+use super::copy::{CHUNK_BYTES, Check, ContentHasher, Depth, HashRefusal, judged};
 use super::reading::DiskVerb;
 use super::{Cancel, Disk, DiskError, EntryKind, Mark, Open, Phase, Progress, reason};
 
@@ -363,10 +363,81 @@ impl Drop for Turn<'_> {
 // ── The read ─────────────────────────────────────────────────────────────────
 
 /// How a read ended short of a hash.
-enum Short {
+pub(crate) enum Short {
     Changed,
     Unreadable(HashRefusal),
     Cancelled,
+}
+
+impl Short {
+    /// What a content check says of a file that could not be hashed.
+    pub(crate) fn into_check(self) -> Check {
+        match self {
+            Self::Changed => Check::Changed,
+            Self::Unreadable(refusal) => Check::Unread(refusal.to_string()),
+            Self::Cancelled => Check::Unread("the read was cancelled".to_owned()),
+        }
+    }
+}
+
+/// One file a check reads: its path, and the catalog row its hash is stored
+/// on where it has one.
+#[derive(Clone, Debug)]
+pub struct CheckSide {
+    path: PathBuf,
+    row: Option<HashRow>,
+}
+
+impl CheckSide {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            row: None,
+        }
+    }
+
+    /// The catalog row the file's hash is stored on.
+    pub fn of_row(mut self, row: HashRow) -> Self {
+        self.row = Some(row);
+        self
+    }
+
+    /// [`Self::of_row`] where there is one.
+    pub fn of_row_if(mut self, row: Option<HashRow>) -> Self {
+        self.row = row;
+        self
+    }
+
+    fn ask(self) -> HashAsk {
+        HashAsk {
+            row: self.row,
+            ..HashAsk::new(self.path)
+        }
+    }
+}
+
+impl From<&Path> for CheckSide {
+    fn from(path: &Path) -> Self {
+        Self::new(path)
+    }
+}
+
+impl From<PathBuf> for CheckSide {
+    fn from(path: PathBuf) -> Self {
+        Self::new(path)
+    }
+}
+
+/// What a full-hash answer says to a content check.
+fn hashed_for_check(answer: FullHashAnswer) -> Result<KnownHash, Check> {
+    match answer {
+        FullHashAnswer::Cached(known)
+        | FullHashAnswer::Stored(known)
+        | FullHashAnswer::Read(known) => Ok(known),
+        FullHashAnswer::Changed => Err(Check::Changed),
+        FullHashAnswer::Unreadable(refusal) => Err(Check::Unread(refusal.to_string())),
+        FullHashAnswer::Cancelled => Err(Check::Unread("the read was cancelled".to_owned())),
+    }
 }
 
 impl Disk {
@@ -375,6 +446,55 @@ impl Disk {
     /// in the in-process cache.
     pub fn install_hash_store(&self, store: Arc<dyn HashStore>) {
         let _ = self.inner.hash_store.set(store);
+    }
+
+    /// Whether two files hold the same content, at `depth`, the user's
+    /// setting. At [`Depth::Full`] each file's [`Self::full_hash`] answers
+    /// and the two are compared; at any other depth both are sampled live,
+    /// length and head and tail, nothing stored taking part. A file that
+    /// changed while it was read is [`Check::Changed`]. Nothing is changed.
+    ///
+    /// Probes: at full depth, [`Self::full_hash`]'s for each file; otherwise
+    /// one open and two stats of the handle for each, and its two windows.
+    pub async fn check(
+        &self,
+        left: impl Into<CheckSide>,
+        right: impl Into<CheckSide>,
+        depth: Depth,
+    ) -> Check {
+        let (left, right) = (left.into(), right.into());
+        if depth != Depth::Full {
+            let disk = self.clone();
+            return tokio::task::spawn_blocking(move || {
+                disk.samples_checked(&left.path, &right.path)
+            })
+            .await
+            .unwrap_or_else(|error| Check::Unread(error.to_string()));
+        }
+        let left = match hashed_for_check(self.full_hash(left.ask()).await) {
+            Ok(known) => known,
+            Err(short) => return short,
+        };
+        let right = match hashed_for_check(self.full_hash(right.ask()).await) {
+            Ok(known) => known,
+            Err(short) => return short,
+        };
+        judged(left.size_bytes == right.size_bytes && left.blake3 == right.blake3)
+    }
+
+    /// Whether one file still holds the content its catalog recorded as
+    /// `recorded`, the whole-file BLAKE3: [`Self::full_hash`] answers and the
+    /// two are compared. With nothing recorded there is nothing to differ
+    /// from: the hash is recorded on the side's row and the file is
+    /// [`Check::Same`]. This is the full-depth check of one file; at quick
+    /// depth one file alone has nothing to be compared with.
+    ///
+    /// Probes: [`Self::full_hash`]'s.
+    pub async fn check_against(&self, side: impl Into<CheckSide>, recorded: Option<&str>) -> Check {
+        match hashed_for_check(self.full_hash(side.into().ask()).await) {
+            Ok(known) => judged(recorded.is_none_or(|recorded| recorded == known.blake3)),
+            Err(short) => short,
+        }
     }
 
     /// The full hash of `ask`'s path. See the module text. The caller must
@@ -438,7 +558,7 @@ impl Disk {
     /// against the first.
     ///
     /// Probes: one open and two stats of the handle.
-    fn read_whole_blocking(&self, ask: &HashAsk) -> Result<KnownHash, Short> {
+    pub(crate) fn read_whole_blocking(&self, ask: &HashAsk) -> Result<KnownHash, Short> {
         let path = ask.path.as_path();
         if ask.cancel.is_cancelled() {
             return Err(Short::Cancelled);

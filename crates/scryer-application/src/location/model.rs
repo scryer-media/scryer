@@ -351,6 +351,25 @@ impl PersistedContentHashes {
         }
     }
 
+    /// The hashes a verified copy streamed, stored for its destination. The
+    /// destination's `mark` is kept only when the destination itself was read
+    /// back whole; below that, its middle was never read, so the hash goes
+    /// without a mark and the disk owner reads the file whole before it
+    /// answers with one. The hash is still stored for the readers of the
+    /// column that do not judge content by it.
+    pub fn from_verified(
+        hashes: &StreamedContentHashes,
+        depth: &scryer_domain::AppliedVerificationDepth,
+        mark: Option<&crate::disk::Mark>,
+        computed_at: DateTime<Utc>,
+    ) -> Self {
+        Self::from_streamed(
+            hashes,
+            mark.filter(|_| depth.read_back_whole()),
+            computed_at,
+        )
+    }
+
     /// What the disk service read, stamped with when, and the mark it was
     /// read against.
     pub fn from_known(known: &crate::disk::KnownHash, computed_at: DateTime<Utc>) -> Self {

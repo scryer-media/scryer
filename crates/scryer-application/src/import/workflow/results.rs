@@ -3368,8 +3368,9 @@ mod move_import_source_cleanup_gate_tests {
                 },
                 kind: ImportSourceIdentityKind::Regular,
             },
-            source_proof: proof(),
-            dest_proof: proof(),
+            source_proof: Some(proof()),
+            dest_proof: Some(proof()),
+            depth: None,
             adopted_destination_mark: None,
         }
     }

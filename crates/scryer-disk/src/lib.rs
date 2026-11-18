@@ -91,7 +91,8 @@ pub use copy::{
     Verdict, Watch, resumable_staging_path,
 };
 pub use hashed::{
-    FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture, StoredHash,
+    CheckSide, FullHashAnswer, HashAsk, HashRow, HashStore, KnownHash, ReadTimes, StoreFuture,
+    StoredHash,
 };
 pub use mark::{Drift, EntryAlias, Mark, Sameness};
 pub use place::{
@@ -2174,6 +2175,12 @@ fn fixed_staging_path_for(dest: &Path) -> PathBuf {
 #[doc(hidden)]
 pub mod test_support {
     use super::*;
+
+    /// An owner of its own on the real filesystem and clock, for a test that
+    /// installs its own hash table or counts its own reads.
+    pub fn standalone() -> Disk {
+        Disk::with_seams(Arc::new(SystemBackend), Arc::new(SystemClock))
+    }
 
     /// A clock tests move by hand.
     #[derive(Default)]

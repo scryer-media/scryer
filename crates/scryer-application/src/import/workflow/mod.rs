@@ -381,7 +381,8 @@ pub(crate) async fn record_library_file_for_download(
 /// whether or not one is recorded. One entry records the mark, so the client
 /// removes its entry only; separate entries, or a file that is gone, record
 /// nothing. A check that cannot tell refuses as an unknown alias, keeping
-/// everything, so the download is not removed with its data.
+/// everything, so the download is not removed with its data. True when the
+/// mark was recorded.
 ///
 /// The check runs through the file importer, in the source's turn, since
 /// the set-aside test moves the source for a moment.
@@ -395,7 +396,7 @@ pub(crate) async fn settle_already_imported_source(
     import_id: &str,
     source: &Path,
     library_path: &Path,
-) -> AppResult<()> {
+) -> AppResult<bool> {
     let same = app
         .services
         .workflow
@@ -405,7 +406,7 @@ pub(crate) async fn settle_already_imported_source(
     if same {
         record_library_file_for_download(app, import_id, source, library_path).await?;
     }
-    Ok(())
+    Ok(same)
 }
 
 /// Whether the library file at `library_path` is the download's file
@@ -619,8 +620,9 @@ impl CoordinatedImportFileResult {
         input.source_signature_scheme = signature.as_ref().map(|s| s.scheme.clone());
         input.source_signature_value = signature.map(|s| s.value);
         let hashes = verification.permits_source_removal().then(|| {
-            crate::location::model::PersistedContentHashes::from_streamed(
+            crate::location::model::PersistedContentHashes::from_verified(
                 &verification.hashes,
+                &verification.depth,
                 mark.as_ref(),
                 Utc::now(),
             )

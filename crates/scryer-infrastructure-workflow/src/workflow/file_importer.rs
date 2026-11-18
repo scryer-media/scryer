@@ -433,53 +433,25 @@ struct ImportSourceFingerprint {
     kind: ImportSourceKind,
 }
 
+/// The guard a move's source is removed under later. It stores no sample
+/// of either file: what was placed was just proven at `depth` (a copy's
+/// proof, a link or hard link of the source itself, or the adoption check),
+/// and cleanup compares the two files as they are then, at `depth`. No probe.
 fn cleanup_guard(
     source: &Path,
     dest: &Path,
     source_fingerprint: &ImportSourceFingerprint,
     size: u64,
+    depth: VerificationDepth,
 ) -> AppResult<ImportSourceCleanupGuard> {
-    let source_proof = import_content_proof(source).map_err(|error| {
-        import_error_context(
-            &error,
-            format!(
-                "failed to build import source cleanup proof for source {}: {}",
-                source.display(),
-                error
-            ),
-        )
-    })?;
-    let dest_proof = import_content_proof(dest).map_err(|error| {
-        import_error_context(
-            &error,
-            format!(
-                "failed to build import source cleanup proof for destination {}: {}",
-                dest.display(),
-                error
-            ),
-        )
-    })?;
-    if source_proof.size_bytes != size || dest_proof.size_bytes != size {
-        return Err(AppError::Repository(format!(
-            "failed to build import source cleanup proof because source/destination sizes changed: source={} dest={} expected={}",
-            source_proof.size_bytes, dest_proof.size_bytes, size
-        )));
-    }
-    if source_proof != dest_proof {
-        return Err(AppError::Repository(format!(
-            "failed to build import source cleanup proof because source and destination content differ: source={} dest={}",
-            source.display(),
-            dest.display()
-        )));
-    }
-
     Ok(ImportSourceCleanupGuard {
         source_path: source.to_path_buf(),
         dest_path: dest.to_path_buf(),
         size_bytes: size,
         source_identity: source_identity_from_fingerprint(source_fingerprint),
-        source_proof,
-        dest_proof,
+        source_proof: None,
+        dest_proof: None,
+        depth: Some(depth),
         adopted_destination_mark: None,
     })
 }
@@ -493,13 +465,37 @@ fn cleanup_guard_after_placement(
     dest: &Path,
     source_fingerprint: &ImportSourceFingerprint,
     size: u64,
+    depth: VerificationDepth,
     landed: Landed<'_>,
 ) -> AppResult<Option<ImportSourceCleanupGuard>> {
     if !source_cleanup_required {
         return Ok(None);
     }
+    // What was placed was just proven; the source must still be the file it
+    // was placed from, and the destination name must still hold the entry
+    // placed. Otherwise the guard is refused and the take-back decides what
+    // is kept. Probes: the source's identity read, and one read of the
+    // destination name, links not followed, where the placement left a mark.
+    ensure_same_source(source, source_fingerprint)
+        .map_err(|error| took_back(error, source, dest, landed))?;
+    let still_placed = landed.mark().is_none_or(|placed| {
+        Disk::process()
+            .fingerprint_blocking(dest)
+            .is_ok_and(|now| placed.still_marks(&now))
+    });
+    if !still_placed {
+        return Err(took_back(
+            AppError::Repository(format!(
+                "failed to build import source cleanup proof because the destination is no longer the file this import placed: {}",
+                dest.display()
+            )),
+            source,
+            dest,
+            landed,
+        ));
+    }
 
-    cleanup_guard(source, dest, source_fingerprint, size)
+    cleanup_guard(source, dest, source_fingerprint, size, depth)
         .map(Some)
         .map_err(|error| took_back(error, source, dest, landed))
 }
@@ -2465,7 +2461,7 @@ fn take_back_placed(source: &Path, dest: &Path, landed: Landed<'_>) -> TakeBack 
         };
         match Disk::process().check_copy_source_blocking(source, copied, streamed, depth) {
             disk::Check::Same => {}
-            disk::Check::Changed => {
+            disk::Check::Differs | disk::Check::Changed => {
                 tracing::warn!(
                     source = %source.display(),
                     dest = %dest.display(),
@@ -2681,23 +2677,6 @@ fn prove_import_source_cleanup_blocking(
         ));
     }
 
-    let dest_proof = import_content_proof(&final_dest_path).map_err(|_| {
-        AppError::Repository(format!(
-            "import source cleanup failed because destination is missing or inaccessible: {}",
-            final_dest_path.display()
-        ))
-    })?;
-    if dest_proof != guard.dest_proof {
-        return Err(AppError::Repository(format!(
-            "import source cleanup failed because destination proof changed: {} expected_size={} actual_size={} expected_blake3={} actual_blake3={}",
-            final_dest_path.display(),
-            guard.dest_proof.size_bytes,
-            dest_proof.size_bytes,
-            guard.dest_proof.sample_blake3,
-            dest_proof.sample_blake3
-        )));
-    }
-
     // Only a source removed beside an adopted destination is held to its
     // mark, so only that cleanup reads one.
     let read_source = match guard.adopted_destination_mark {
@@ -2743,21 +2722,36 @@ fn prove_import_source_cleanup_blocking(
             guard.source_path.display()
         )));
     }
-    let source_proof = import_content_proof(&guard.source_path).map_err(|_| {
-        AppError::Repository(format!(
-            "import source cleanup failed because source is missing or inaccessible: {}",
-            guard.source_path.display()
-        ))
-    })?;
-    if source_proof != guard.source_proof {
-        return Err(AppError::Repository(format!(
-            "import source cleanup failed because source proof changed: {} expected_size={} actual_size={} expected_blake3={} actual_blake3={}",
-            guard.source_path.display(),
-            guard.source_proof.size_bytes,
-            source_proof.size_bytes,
-            guard.source_proof.sample_blake3,
-            source_proof.sample_blake3
-        )));
+    // The two files are compared as they are now, at the import's depth:
+    // their lengths and live head and tail at quick depth, both read whole at
+    // full depth. Samples an earlier build stored in the guard are not used.
+    // Probes: one open and two stats of the handle for each file, then its
+    // two sampled windows, or the whole of it at full depth.
+    let depth = match guard.depth.unwrap_or(VerificationDepth::Quick) {
+        VerificationDepth::Quick => disk::Depth::Quick,
+        VerificationDepth::Full => disk::Depth::Full,
+    };
+    match Disk::process().check_blocking(&guard.source_path, &final_dest_path, depth) {
+        disk::Check::Same => {}
+        disk::Check::Differs => {
+            return Err(AppError::Repository(format!(
+                "import source cleanup failed because the destination proof changed: {} no longer holds what the source {} holds",
+                final_dest_path.display(),
+                guard.source_path.display()
+            )));
+        }
+        disk::Check::Changed => {
+            return Err(AppError::Repository(format!(
+                "import source cleanup failed because the source {} or the destination {} changed while they were compared",
+                guard.source_path.display(),
+                final_dest_path.display()
+            )));
+        }
+        disk::Check::Unread(said) => {
+            return Err(AppError::Repository(format!(
+                "import source cleanup failed because the source or destination is missing or inaccessible: {said}"
+            )));
+        }
     }
 
     if let (Some(stored), Some(source_mark)) = (&guard.adopted_destination_mark, source_mark) {
@@ -3014,6 +3008,7 @@ fn finish_prepared_import(
         &prepared.dest,
         &prepared.source_fingerprint,
         prepared.size,
+        prepared.verification_depth,
         landed,
     )?;
     Ok(ImportFileResult {
@@ -3392,8 +3387,8 @@ fn reconcile_existing_destination(
     // depth: at quick depth their lengths and live head and tail, at full
     // depth both read whole. A copy an earlier run kept at this name after
     // it failed its full check is therefore never adopted at full depth.
-    // Probes: one open of each file and its length through the handle; at
-    // full depth each is read whole. The source's length is the one just
+    // Probes: one open of each file and two stats of its handle; at full
+    // depth each is read whole. The source's length is the one just
     // read, so a destination of the same content is of `size` bytes.
     let check_depth = match depth {
         VerificationDepth::Quick => disk::Depth::Quick,
@@ -3401,11 +3396,18 @@ fn reconcile_existing_destination(
     };
     match Disk::process().check_blocking(source, dest, check_depth) {
         disk::Check::Same => {}
-        disk::Check::Changed => {
+        disk::Check::Differs => {
             return Err(AppError::ManualReconciliationRequired(format!(
                 "import destination appeared with different content: {}",
                 dest.display()
             )));
+        }
+        disk::Check::Changed => {
+            return Err(adoption_unread(
+                source,
+                dest,
+                "a file changed while the two were compared",
+            ));
         }
         disk::Check::Unread(said) => return Err(adoption_unread(source, dest, &said)),
     }
@@ -3448,7 +3450,7 @@ fn reconcile_existing_destination(
     let source_cleanup = if source_cleanup_required {
         Some(ImportSourceCleanupGuard {
             adopted_destination_mark: Some(existing.to_stored()),
-            ..cleanup_guard(source, dest, source_fingerprint, size)?
+            ..cleanup_guard(source, dest, source_fingerprint, size, depth)?
         })
     } else {
         None
@@ -3632,6 +3634,7 @@ fn import_hardlink_or_copy_blocking(
                 &dest,
                 &source_fingerprint,
                 size,
+                verification_depth,
                 Landed::Link(&made),
             )?;
             return Ok(ImportFileResult {
@@ -3709,6 +3712,7 @@ fn import_hardlink_or_copy_blocking(
                         &dest,
                         &source_fingerprint,
                         size,
+                        verification_depth,
                         Landed::HardLink(&source_mark),
                     )?;
                     return Ok(ImportFileResult {
@@ -3798,6 +3802,7 @@ fn import_hardlink_or_copy_blocking(
             &dest,
             &source_fingerprint,
             size,
+            verification_depth,
             Landed::Copy {
                 placed: landed.as_ref(),
                 source: &source_mark,
@@ -3881,7 +3886,7 @@ fn import_file_blocking_at_depth(
     }
 }
 
-const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 4;
+const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 5;
 static IMPORT_FILE_WORKER_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3891,6 +3896,14 @@ enum ImportFileWorkerRequest {
         version: u16,
         nonce: u64,
         source: PathBuf,
+    },
+    /// Whether the library file a re-run found is the import source's own
+    /// entry: [`scryer_application::library_file_is_import_source_blocking`].
+    IsSource {
+        version: u16,
+        nonce: u64,
+        source: PathBuf,
+        library_path: PathBuf,
     },
     Prepare {
         version: u16,
@@ -3952,6 +3965,10 @@ enum ImportFileWorkerEvent {
     SnapshotFinished {
         nonce: u64,
         snapshot: ImportSourceSnapshot,
+    },
+    IsSourceFinished {
+        nonce: u64,
+        is_source: bool,
     },
     ImportFinished {
         nonce: u64,
@@ -4146,6 +4163,7 @@ fn read_import_worker_request(
 fn import_worker_request_nonce(request: &ImportFileWorkerRequest) -> (u16, u64) {
     match request {
         ImportFileWorkerRequest::Snapshot { version, nonce, .. }
+        | ImportFileWorkerRequest::IsSource { version, nonce, .. }
         | ImportFileWorkerRequest::Prepare { version, nonce, .. }
         | ImportFileWorkerRequest::FastPlacement { version, nonce, .. }
         | ImportFileWorkerRequest::Copy { version, nonce, .. }
@@ -4221,6 +4239,28 @@ pub fn run_import_file_worker() -> i32 {
                     write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::SnapshotFinished { nonce, snapshot },
+                    )
+                    .map_err(ImportFileWorkerError::from)
+                })
+        }
+        ImportFileWorkerRequest::IsSource {
+            source,
+            library_path,
+            ..
+        } => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Stage {
+                    nonce,
+                    stage: "is_source".to_string(),
+                },
+            );
+            scryer_application::library_file_is_import_source_blocking(&source, &library_path)
+                .map_err(ImportFileWorkerError::from)
+                .and_then(|is_source| {
+                    write_import_worker_event(
+                        &output,
+                        &ImportFileWorkerEvent::IsSourceFinished { nonce, is_source },
                     )
                     .map_err(ImportFileWorkerError::from)
                 })
@@ -4627,6 +4667,7 @@ async fn next_import_worker_event(
             | ImportFileWorkerEvent::CopyRequired { nonce, .. }
             | ImportFileWorkerEvent::Progress { nonce, .. }
             | ImportFileWorkerEvent::SnapshotFinished { nonce, .. }
+            | ImportFileWorkerEvent::IsSourceFinished { nonce, .. }
             | ImportFileWorkerEvent::ImportFinished { nonce, .. }
             | ImportFileWorkerEvent::CleanupProved { nonce }
             | ImportFileWorkerEvent::CleanupFinished { nonce }
@@ -4735,8 +4776,37 @@ impl FileImporter for FsFileImporter {
         library_path: &Path,
     ) -> AppResult<bool> {
         // The set-aside test moves the source for a moment: no placement,
-        // snapshot or cleanup of it runs meanwhile.
+        // snapshot or cleanup of it runs meanwhile. With a worker executable
+        // it runs in the worker process, as other import disk work does, so
+        // a filesystem call that blocks can be killed with it.
         let _turn = SourceTurns::shared().take(source).await;
+        if let Some(executable) = &self.worker_executable {
+            let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
+            let request = ImportFileWorkerRequest::IsSource {
+                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                nonce,
+                source: source.to_path_buf(),
+                library_path: library_path.to_path_buf(),
+            };
+            let mut session = spawn_import_file_worker(executable, &request).await?;
+            loop {
+                match next_import_worker_event(&mut session).await? {
+                    ImportFileWorkerEvent::Stage { .. } => {}
+                    ImportFileWorkerEvent::IsSourceFinished { is_source, .. } => {
+                        return Ok(is_source);
+                    }
+                    ImportFileWorkerEvent::Error { error, .. } => {
+                        return Err(error.into());
+                    }
+                    _ => {
+                        return Err(AppError::ManualReconciliationRequired(
+                            "filesystem worker returned an unexpected library file check response"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
         let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
         tokio::task::spawn_blocking(move || {
             scryer_application::library_file_is_import_source_blocking(&source, &library_path)
@@ -8917,11 +8987,12 @@ mod tests {
         assert!(dest.exists());
     }
 
-    /// A source already gone at cleanup, beside a destination that is proven,
-    /// leaves nothing to remove: the cleanup is done. Beside a destination
-    /// that no longer proves, it still refuses, and the destination is kept.
+    /// A source already gone at cleanup leaves nothing to remove and nothing
+    /// to compare the destination with: the cleanup is done, and the
+    /// destination is left as it is, whatever it now holds. The guard keeps
+    /// no sample of the destination to hold it to.
     #[test]
-    fn move_mode_cleanup_with_a_missing_source_is_done_only_beside_a_proven_destination() {
+    fn move_mode_cleanup_with_a_missing_source_removes_nothing_and_is_done() {
         let source_dir = tempfile::tempdir().expect("source tempdir");
         let dest_dir = tempfile::tempdir().expect("dest tempdir");
         let source = source_dir.path().join("source.mkv");
@@ -8957,13 +9028,13 @@ mod tests {
         assert!(!disk::aside_path_for(&source).exists());
 
         std::fs::write(&dest, b"other video bytes").expect("rewrite destination");
-        let error = remove_import_source_after_verified_import_blocking(
+        remove_import_source_after_verified_import_blocking(
             guard,
             dest.clone(),
             ImportFileOptions::default(),
         )
-        .expect_err("a destination that no longer proves refuses");
-        assert!(!error.requires_manual_reconciliation(), "{error:?}");
+        .expect("a source already gone leaves nothing to remove");
+        assert!(!source.exists());
         assert_eq!(
             std::fs::read(&dest).ok(),
             Some(b"other video bytes".to_vec())
@@ -9068,6 +9139,89 @@ mod tests {
         assert!(error.to_string().contains("destination proof changed"));
         assert!(source.exists());
         assert!(dest.exists());
+    }
+
+    #[test]
+    fn a_cleanup_guard_stores_no_sample_and_one_an_earlier_build_wrote_is_compared_live() {
+        let source_dir = tempfile::tempdir().expect("source tempdir");
+        let dest_dir = tempfile::tempdir().expect("dest tempdir");
+        let source = source_dir.path().join("source.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
+        let dest = dest_dir.path().join("Imported.Movie.mkv");
+        let result = import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                ..Default::default()
+            },
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("place file");
+        let guard = result.source_cleanup.expect("cleanup guard");
+        let mut stored = serde_json::to_value(&guard).expect("guard serializes");
+        assert!(stored.get("source_proof").is_none());
+        assert!(stored.get("dest_proof").is_none());
+        assert_eq!(stored["depth"], serde_json::json!("full"));
+
+        // A guard an earlier build wrote: samples that match neither file,
+        // and no depth. It still loads, and the samples are not proof of
+        // anything: the two files hold the same bytes, so the source goes.
+        let sample = serde_json::json!({
+            "size_bytes": 1,
+            "sample_bytes": 1,
+            "sample_blake3": "an-earlier-builds-sample",
+        });
+        let fields = stored.as_object_mut().expect("guard object");
+        fields.remove("depth");
+        fields.insert("source_proof".into(), sample.clone());
+        fields.insert("dest_proof".into(), sample);
+        let earlier: ImportSourceCleanupGuard =
+            serde_json::from_value(stored).expect("an earlier guard loads");
+        assert_eq!(earlier.depth, None);
+        remove_import_source_after_verified_import_blocking(
+            earlier,
+            dest.clone(),
+            ImportFileOptions::default(),
+        )
+        .expect("the files are compared as they are now");
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest kept"), SYNTHETIC_PAYLOAD);
+    }
+
+    #[test]
+    fn the_library_file_check_crosses_the_worker_protocol() {
+        let request = ImportFileWorkerRequest::IsSource {
+            version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+            nonce: 7,
+            source: PathBuf::from("/synthetic/downloads/Synthetic.Show.S01E01.mkv"),
+            library_path: PathBuf::from("/synthetic/library/Synthetic Show/S01E01.mkv"),
+        };
+        let line = serde_json::to_string(&request).expect("request serializes");
+        let read: ImportFileWorkerRequest =
+            serde_json::from_str(&line).expect("request deserializes");
+        assert_eq!(
+            import_worker_request_nonce(&read),
+            (IMPORT_FILE_WORKER_PROTOCOL_VERSION, 7)
+        );
+        let event: ImportFileWorkerEvent = serde_json::from_str(
+            &serde_json::to_string(&ImportFileWorkerEvent::IsSourceFinished {
+                nonce: 7,
+                is_source: true,
+            })
+            .expect("event serializes"),
+        )
+        .expect("event deserializes");
+        assert!(matches!(
+            event,
+            ImportFileWorkerEvent::IsSourceFinished {
+                nonce: 7,
+                is_source: true
+            }
+        ));
     }
 
     #[test]

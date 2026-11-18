@@ -451,8 +451,9 @@ impl RootMoveFileMover {
             .destination_mark
             .as_deref()
             .and_then(crate::disk::Mark::from_stored);
-        let persisted = crate::location::model::PersistedContentHashes::from_streamed(
+        let persisted = crate::location::model::PersistedContentHashes::from_verified(
             hashes,
+            &verified.depth,
             mark.as_ref(),
             chrono::Utc::now(),
         );

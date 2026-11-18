@@ -3817,6 +3817,12 @@ impl AppliedVerificationDepth {
         }
     }
 
+    /// Whether the destination itself was read back whole: only then is the
+    /// streamed full hash a hash of the destination's bytes.
+    pub fn read_back_whole(&self) -> bool {
+        self.applied == VerificationDepth::Full && !self.fell_back
+    }
+
     /// Full verification was requested but only the quick floor could run.
     pub fn quick_fallback() -> Self {
         Self {
@@ -3956,8 +3962,18 @@ pub struct ImportSourceCleanupGuard {
     pub dest_path: std::path::PathBuf,
     pub size_bytes: u64,
     pub source_identity: ImportSourceIdentity,
-    pub source_proof: ImportContentProof,
-    pub dest_proof: ImportContentProof,
+    /// Samples of both files that guards written by earlier builds carry.
+    /// They are read so such a guard still loads, and never used as proof:
+    /// cleanup compares the two files as they are then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_proof: Option<ImportContentProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_proof: Option<ImportContentProof>,
+    /// The operator's verification depth for the import, at which cleanup
+    /// compares the source with the destination. Absent from guards written
+    /// by earlier builds, which are compared at quick depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<VerificationDepth>,
     /// The stored mark of a destination that was already there and was
     /// adopted rather than placed, read with links not followed. Its source
     /// is removed only once the filesystem shows the two are separate

@@ -15498,8 +15498,9 @@ impl FileImporter for CleanupRefusingImporter {
                 dest_path: dest.to_path_buf(),
                 size_bytes: placed.size_bytes,
                 source_identity: snapshot.identity,
-                source_proof: snapshot.proof.clone(),
-                dest_proof: snapshot.proof,
+                source_proof: None,
+                dest_proof: None,
+                depth: Some(scryer_domain::VerificationDepth::Quick),
                 adopted_destination_mark: None,
             });
         }

@@ -399,3 +399,159 @@ fn a_hash_fits_a_file_by_length_and_modification_time_alone() {
     let stored = Mark::from_stored(&recorded.to_stored()).unwrap();
     assert!(fits(&stored, &stat(10, 5, 3, 9, 4)));
 }
+
+// ── Content checks ───────────────────────────────────────────────────────────
+
+impl Fixture {
+    /// A second file beside the fixture's, holding `bytes`.
+    fn beside(&self, bytes: &[u8]) -> PathBuf {
+        let other = self.path.with_file_name("Fixture Show - 01 copy.mkv");
+        std::fs::write(&other, bytes).unwrap();
+        other
+    }
+}
+
+#[tokio::test]
+async fn a_quick_check_samples_both_files_live_and_reads_neither_whole() {
+    let fixture = fixture();
+    let same = fixture.beside(BYTES);
+    assert_eq!(
+        fixture
+            .disk
+            .check(fixture.path.as_path(), same.as_path(), Depth::Quick)
+            .await,
+        Check::Same
+    );
+    let mut differing = BYTES.to_vec();
+    differing[0] ^= 1;
+    let other = fixture.beside(&differing);
+    assert_eq!(
+        fixture
+            .disk
+            .check(fixture.path.as_path(), other.as_path(), Depth::Quick)
+            .await,
+        Check::Differs
+    );
+    assert_eq!(fixture.reads(), 0);
+    assert_eq!(fixture.disk.whole_reads_of(&other), 0);
+    assert!(
+        fixture.store.recorded().is_empty(),
+        "a quick check stores nothing"
+    );
+    let missing = fixture.path.with_file_name("Fixture Show - 02.mkv");
+    assert!(matches!(
+        fixture
+            .disk
+            .check(fixture.path.as_path(), missing.as_path(), Depth::Quick)
+            .await,
+        Check::Unread(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_full_check_compares_full_hashes_and_answers_a_row_from_its_fitting_record() {
+    let fixture = fixture();
+    let copy = fixture.beside(BYTES);
+    let catalog = CheckSide::new(&fixture.path).of_row(Fixture::row());
+
+    assert_eq!(
+        fixture
+            .disk
+            .check(catalog.clone(), copy.as_path(), Depth::Full)
+            .await,
+        Check::Same
+    );
+    assert_eq!(fixture.reads(), 1);
+    assert_eq!(fixture.disk.whole_reads_of(&copy), 1);
+    assert_eq!(
+        fixture.store.recorded().len(),
+        1,
+        "the row's read is recorded"
+    );
+
+    // The row's record fits the file, so the catalog file is not read again;
+    // a rewrite of the copy that keeps its length is read and told apart.
+    let mut differing = BYTES.to_vec();
+    differing[3] ^= 1;
+    std::fs::write(&copy, &differing).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&copy)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(2_000_000))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .disk
+            .check(catalog, copy.as_path(), Depth::Full)
+            .await,
+        Check::Differs
+    );
+    assert_eq!(fixture.reads(), 1, "the fitting record answered");
+    assert_eq!(fixture.disk.whole_reads_of(&copy), 2);
+}
+
+#[tokio::test]
+async fn one_catalog_file_is_held_to_its_recorded_hash_and_with_none_the_read_is_recorded() {
+    let fixture = fixture();
+    let catalog = || CheckSide::new(&fixture.path).of_row(Fixture::row());
+
+    assert_eq!(
+        fixture.disk.check_against(catalog(), None).await,
+        Check::Same,
+        "nothing recorded contradicts the file"
+    );
+    assert_eq!(fixture.reads(), 1);
+    let recorded = fixture.store.recorded();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].1.blake3, expected_blake3());
+
+    assert_eq!(
+        fixture
+            .disk
+            .check_against(catalog(), Some(&expected_blake3()))
+            .await,
+        Check::Same
+    );
+    assert_eq!(
+        fixture
+            .disk
+            .check_against(catalog(), Some("another-files-hash"))
+            .await,
+        Check::Differs
+    );
+    assert_eq!(
+        fixture.reads(),
+        1,
+        "the record fits, so nothing is read again"
+    );
+    let missing = fixture.path.with_file_name("Fixture Show - 02.mkv");
+    assert!(matches!(
+        fixture
+            .disk
+            .check_against(missing.as_path(), Some(&expected_blake3()))
+            .await,
+        Check::Unread(_)
+    ));
+}
+
+#[test]
+fn a_blocking_check_tells_apart_a_rewrite_that_keeps_the_length() {
+    let fixture = fixture();
+    let copy = fixture.beside(BYTES);
+    for depth in [Depth::Quick, Depth::Full] {
+        assert_eq!(
+            fixture.disk.check_blocking(&fixture.path, &copy, depth),
+            Check::Same
+        );
+    }
+    let mut differing = BYTES.to_vec();
+    differing[BYTES.len() - 1] ^= 1;
+    std::fs::write(&copy, &differing).unwrap();
+    for depth in [Depth::Quick, Depth::Full] {
+        assert_eq!(
+            fixture.disk.check_blocking(&fixture.path, &copy, depth),
+            Check::Differs
+        );
+    }
+}

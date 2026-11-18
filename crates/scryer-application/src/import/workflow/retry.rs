@@ -205,8 +205,11 @@ async fn reconcile_claimed_history_retry(
 /// is settled now, before the download's client may remove it with its data.
 /// A file imported from an owned archive workspace is Scryer's own copy and
 /// not the client's. One read of the library rows' paths for all of them.
-/// A check that cannot tell fails the recovery, which keeps the claim and
-/// tries again on its next pass.
+/// The mark that keeps the client from removing the download's data is the
+/// download's, so it is written once, for the first file found to be the
+/// library file, and the files after it are not checked. A check that cannot
+/// tell fails the recovery, which keeps the claim and tries again on its
+/// next pass.
 async fn settle_interrupted_retry_library_files(
     app: &AppUseCase,
     import_id: &str,
@@ -242,13 +245,16 @@ async fn settle_interrupted_retry_library_files(
             continue;
         };
         let source = download_folder.join(relative_path);
-        settle_already_imported_source(
+        if settle_already_imported_source(
             app,
             import_id,
             &source,
             &stored_path_to_path_buf(library_path),
         )
-        .await?;
+        .await?
+        {
+            break;
+        }
     }
     Ok(())
 }

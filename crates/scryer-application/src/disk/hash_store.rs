@@ -109,4 +109,78 @@ mod tests {
                 .is_none()
         );
     }
+
+    /// A table of one row, as the media file rows would hold it.
+    struct OneRow(std::sync::Mutex<Option<PersistedContentHashes>>);
+
+    impl HashStore for OneRow {
+        fn stored<'a>(&'a self, _: &'a HashRow) -> StoreFuture<'a, Option<StoredHash>> {
+            let stored = self.0.lock().unwrap().as_ref().map(loaded);
+            Box::pin(async move { stored })
+        }
+        fn record<'a>(&'a self, _: &'a HashRow, hash: &'a KnownHash) -> StoreFuture<'a, ()> {
+            *self.0.lock().unwrap() = Some(PersistedContentHashes::from_known(hash, Utc::now()));
+            Box::pin(async {})
+        }
+    }
+
+    /// A quick copy damaged in its middle: the head and tail match, so the
+    /// quick proof passes, and the streamed hash is the source's. Stored
+    /// for the destination at quick depth, it carries no mark, so a later
+    /// full ask reads the destination whole and tells it apart; at full
+    /// depth the destination was read back, and its mark stands.
+    #[tokio::test]
+    async fn a_quick_copys_hash_is_stored_without_its_mark_and_read_before_it_answers() {
+        use crate::disk::{Check, CheckSide};
+        use scryer_domain::{AppliedVerificationDepth, VerificationDepth};
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source = temp.path().join("synthetic-source.mkv");
+        let dest = temp.path().join("Synthetic Title.mkv");
+        let bytes = vec![7u8; 3 * crate::disk::CONTENT_SAMPLE_BYTES];
+        std::fs::write(&source, &bytes).expect("write source");
+        let mut damaged = bytes.clone();
+        damaged[bytes.len() / 2] ^= 1;
+        std::fs::write(&dest, &damaged).expect("write damaged copy");
+        let streamed = crate::location::verify::hash_existing_file(&source)
+            .await
+            .expect("source hashes");
+        let row = HashRow::Id("synthetic-row".into());
+
+        let mark = Mark::of(&std::fs::metadata(&dest).expect("dest metadata"));
+        let quick = PersistedContentHashes::from_verified(
+            &streamed,
+            &AppliedVerificationDepth::exact(VerificationDepth::Quick),
+            Some(&mark),
+            Utc::now(),
+        );
+        assert!(quick.mark.is_none(), "nothing read the destination whole");
+        let disk = crate::disk::test_support::standalone();
+        disk.count_whole_reads();
+        disk.install_hash_store(Arc::new(OneRow(std::sync::Mutex::new(Some(quick)))));
+        assert_eq!(
+            disk.check_against(
+                CheckSide::new(&dest).of_row(row.clone()),
+                Some(&streamed.full_blake3)
+            )
+            .await,
+            Check::Differs
+        );
+        assert_eq!(disk.whole_reads_of(&dest), 1);
+
+        let full = PersistedContentHashes::from_verified(
+            &streamed,
+            &AppliedVerificationDepth::exact(VerificationDepth::Full),
+            Some(&mark),
+            Utc::now(),
+        );
+        assert_eq!(full.mark, Some(mark.to_stored()));
+        let fell_back = PersistedContentHashes::from_verified(
+            &streamed,
+            &AppliedVerificationDepth::quick_fallback(),
+            Some(&mark),
+            Utc::now(),
+        );
+        assert!(fell_back.mark.is_none());
+    }
 }
