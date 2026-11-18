@@ -3171,7 +3171,9 @@ impl AppUseCase {
             if !conflict_resolution_current(row, &resolutions).await?
                 || (disposal_remaining
                     && linked_proof.is_none()
-                    && !row.proof_supports_disposal().await?)
+                    && !row
+                        .proof_supports_disposal(operation.verification_depth)
+                        .await?)
             {
                 return Err(refused(
                     refusal::FILE_CHANGED,

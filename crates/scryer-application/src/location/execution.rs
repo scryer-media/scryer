@@ -1342,7 +1342,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 // still have to hash to the identity the transfer recorded
                 // before this source is dropped without a recycle bin behind
                 // it.
-                if !row.proof_supports_disposal().await? {
+                if !row
+                    .proof_supports_disposal(operation.verification_depth)
+                    .await?
+                {
                     return Err(AppError::validation_refused(crate::error_reasons::location::DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE, "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again."
                             ));
                 }
@@ -1617,12 +1620,11 @@ fn set_aside_source_kept(source: &Path, at: &Path) -> AppError {
 /// Remove a copied source once its destination was proven to hold its bytes,
 /// only when the two are separate entries. `source_mark` is the read of the
 /// source itself taken before the comparison. `Ok(false)` when the source was
-/// already gone.
+/// already gone, or when the two are one entry or one file: the library then
+/// holds the source's own file, so nothing is removed and the file is done.
 ///
 /// The destination is read once, a link not followed, and the disk service's
-/// entry alias answers from the two reads: one entry is refused, and so is a
-/// pair that reads as one file with another name, since a copy is never the
-/// source's own file and that pair is no longer the copy that was proven.
+/// entry alias answers from the two reads.
 /// Where the reads carry nonzero file numbers on one known volume, neither
 /// path is on a share and the destination is no link, distinct numbers are
 /// two entries and the source is removed. Anywhere else the filesystem
@@ -1645,15 +1647,19 @@ async fn remove_copied_source(
         .fingerprint(destination)
         .await
         .map_err(|reading| AppError::Repository(reading.absence().into()))?;
-    match Disk::entry_alias_of(source, source_mark, destination, &destination_mark) {
-        crate::disk::EntryAlias::Same => return Err(one_entry_refusal()),
-        crate::disk::EntryAlias::Distinct | crate::disk::EntryAlias::CannotTell => {}
-    }
-    if source_mark.same_file(&destination_mark) == Sameness::Same {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
-            "Source or destination changed before cleanup; preserved the source.",
-        ));
+    let one_entry = || {
+        tracing::info!(
+            source = %source.display(),
+            destination = %destination.display(),
+            "a moved file's source and destination are one file; nothing was removed"
+        );
+        Ok(false)
+    };
+    if Disk::entry_alias_of(source, source_mark, destination, &destination_mark)
+        == crate::disk::EntryAlias::Same
+        || source_mark.same_file(&destination_mark) == Sameness::Same
+    {
+        return one_entry();
     }
     if !disk.adoption_needs_set_aside(source, source_mark, destination, &destination_mark) {
         return match disk.remove(source, Remove::File).await {
@@ -1671,7 +1677,7 @@ async fn remove_copied_source(
         .await
     {
         AsideRemoval::Removed => Ok(true),
-        AsideRemoval::SameEntry => Err(one_entry_refusal()),
+        AsideRemoval::SameEntry => one_entry(),
         AsideRemoval::DestinationChanged => Err(AppError::validation_refused(
             crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
             "Source or destination changed before cleanup; preserved the source.",

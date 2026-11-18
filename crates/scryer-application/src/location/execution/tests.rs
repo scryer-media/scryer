@@ -3268,9 +3268,9 @@ async fn cleanup_without_a_resolution_row_compares_both_files_at_the_recorded_de
 /// Equal bytes are not two entries. After a recorded copy, a destination that
 /// has become the source's own entry under another spelling (its folder now a
 /// link to the source's folder) checks as the same content, and removing the
-/// source would remove the only copy: cleanup refuses it as one entry. A
-/// destination that has become a second name of the source's file is no
-/// longer the copy that was proven, and keeps the source too.
+/// source would remove the only copy. A destination that has become a second
+/// name of the source's file is one file too. Either way the file is done
+/// with nothing removed.
 #[cfg(unix)]
 #[tokio::test]
 async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another_spelling() {
@@ -3307,19 +3307,11 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
 
         let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
         let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
-        let error = reconciler
+        reconciler
             .clean_up_title(&operation, &plan.titles[0].to_planned_title())
             .await
-            .expect_err("the source is kept");
+            .unwrap_or_else(|error| panic!("{alias}: one file is done: {error:?}"));
 
-        assert_eq!(
-            error.validation_reason(),
-            Some(match alias {
-                "folder_link" => crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
-                _ => crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
-            }),
-            "{alias}: {error:?}"
-        );
         assert_eq!(std::fs::read(&source).unwrap(), source_bytes, "{alias}");
         assert_eq!(
             std::fs::read(&destination).unwrap(),
@@ -3333,7 +3325,7 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
 /// name empty. Resumed, it puts the file back before it reads the source:
 /// a separate copy is then cleaned up as usual; a pair that was one entry
 /// (the destination's folder a link to the source's) has its destination's
-/// name filled again and is refused as one entry. A set-aside file that
+/// name filled again and is done with nothing removed. A set-aside file that
 /// cannot go back is kept where it is, and the cleanup is blocked naming it.
 #[cfg(unix)]
 #[tokio::test]
@@ -3387,12 +3379,7 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
                 assert_eq!(std::fs::read(&destination).unwrap(), source_bytes);
             }
             "one_entry" => {
-                let error = result.expect_err("one entry is kept");
-                assert_eq!(
-                    error.validation_reason(),
-                    Some(crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH),
-                    "{case}: {error:?}"
-                );
+                result.expect("one entry is done with nothing removed");
                 assert!(!aside.exists(), "{case}");
                 assert_eq!(
                     std::fs::read(&destination).unwrap(),

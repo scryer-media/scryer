@@ -95,12 +95,25 @@ impl FileResolution {
     /// about content on its own, so the two copies' full hashes are compared
     /// to each other instead — never unlinked on the strength of a version
     /// alone. A file that changed while it was read proves nothing.
-    pub async fn proof_supports_disposal(&self) -> AppResult<bool> {
+    ///
+    /// All of that is at full `depth`, the user's setting. At quick depth the
+    /// two files are compared by their lengths and live head and tail.
+    pub async fn proof_supports_disposal(&self, depth: VerificationDepth) -> AppResult<bool> {
         if !self.proof_is_current().await {
             return Ok(false);
         }
         let destination = stored_path_to_path_buf(&self.destination_path);
         let check = match self.identity_hash.as_deref() {
+            _ if depth != VerificationDepth::Full => {
+                let source = stored_path_to_path_buf(&self.source_path);
+                Disk::process()
+                    .check(
+                        crate::disk::CheckSide::new(source.as_path()),
+                        crate::disk::CheckSide::new(destination.as_path()),
+                        crate::disk::Depth::Quick,
+                    )
+                    .await
+            }
             Some(identity_hash) => {
                 Disk::process()
                     .check_against(
