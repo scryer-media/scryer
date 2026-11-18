@@ -3399,6 +3399,72 @@ async fn cleanup_without_a_resolution_row_compares_both_files_at_the_recorded_de
     }
 }
 
+/// Equal bytes are not two entries. After a recorded copy, a destination that
+/// has become the source's own entry under another spelling (its folder now a
+/// link to the source's folder) checks as the same content, and removing the
+/// source would remove the only copy: cleanup refuses it as one entry. A
+/// destination that has become a second name of the source's file is no
+/// longer the copy that was proven, and keeps the source too.
+#[cfg(unix)]
+#[tokio::test]
+async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another_spelling() {
+    for alias in ["folder_link", "hard_link"] {
+        let temp = tempfile::tempdir().unwrap();
+        let (plan, store, operation, copies) = copied_files_awaiting_cleanup(
+            temp.path(),
+            VerificationDepth::Full,
+            false,
+            &["Hollowmere.mkv"],
+        )
+        .await;
+        record_copy(
+            &store,
+            &copies[0],
+            "mf-1",
+            crate::location::model::FileVerificationOutcome::Verified,
+        )
+        .await;
+        let file = plan.titles[0].files[0].clone();
+        let (source, destination) = (file.source(), file.destination());
+        let source_bytes = std::fs::read(&source).unwrap();
+        match alias {
+            "folder_link" => {
+                let folder = destination.parent().unwrap();
+                std::fs::remove_dir_all(folder).unwrap();
+                std::os::unix::fs::symlink(source.parent().unwrap(), folder).unwrap();
+            }
+            _ => {
+                std::fs::remove_file(&destination).unwrap();
+                std::fs::hard_link(&source, &destination).unwrap();
+            }
+        }
+
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let error = reconciler
+            .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+            .await
+            .expect_err("the source is kept");
+
+        assert_eq!(
+            error.validation_reason(),
+            Some(match alias {
+                "folder_link" => crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+                _ => crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+            }),
+            "{alias}: {error:?}"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes, "{alias}");
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            source_bytes,
+            "{alias}"
+        );
+        assert!(recycler.recycled().is_empty());
+    }
+}
+
 /// With a recorded proof, a source or destination that changed after the copy
 /// keeps the source, through the version check, without reading either file
 /// whole. A change the versions cannot see (a row re-stamped to the changed

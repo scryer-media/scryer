@@ -57,9 +57,29 @@ impl super::Disk {
             return EntryAlias::Distinct;
         }
         match self.fingerprint_blocking(source) {
-            Ok(read) if read.same_file(dest_read) == Sameness::Same => EntryAlias::Same,
-            Ok(_) => EntryAlias::Distinct,
+            Ok(read) => Self::entry_alias_of(source, &read, dest, dest_read),
             Err(_) => EntryAlias::CannotTell,
+        }
+    }
+
+    /// [`Self::entry_alias_blocking`] for a caller that already holds
+    /// `source_read`, its read of `source` itself, links not followed. Reads
+    /// nothing, so it never answers [`EntryAlias::CannotTell`].
+    pub fn entry_alias_of(
+        source: &Path,
+        source_read: &Mark,
+        dest: &Path,
+        dest_read: &Mark,
+    ) -> EntryAlias {
+        if source == dest {
+            return EntryAlias::Same;
+        }
+        if dest_read.has_other_names() {
+            return EntryAlias::Distinct;
+        }
+        match source_read.same_file(dest_read) {
+            Sameness::Same => EntryAlias::Same,
+            Sameness::Different | Sameness::CannotTell => EntryAlias::Distinct,
         }
     }
 }

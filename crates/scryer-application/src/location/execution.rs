@@ -1422,26 +1422,30 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // A durable copy receipt describes the bytes copied, not whatever
             // occupies the source name after an interruption. Recheck both
             // copies and their versions before handing this path to disposal.
-            let reading = Disk::process().uncached(&source).await;
-            match reading.exists() {
-                Some(false) => continue,
-                None => {
+            // The source's own read, a link not followed, is also the mark its
+            // removal below is settled against.
+            let source_mark = match Disk::process().fingerprint(&source).await {
+                Ok(mark) => mark,
+                Err(reading) if reading.exists() == Some(false) => continue,
+                Err(reading) => {
                     return Err(AppError::Repository(reading.absence().into()));
                 }
-                // A linked source that took a copy is proven by the file it
-                // names (the proofs below read through the link); once proven,
-                // only the link's own name is removed, never the file it names.
-                Some(true) if !reading.is(EntryKind::File) && !reading.is(EntryKind::Symlink) => {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
-                        "Source changed before cleanup; preserved it.",
-                    ));
-                }
-                Some(true) => {}
+            };
+            // A linked source that took a copy is proven by the file it
+            // names (the proofs below read through the link); once proven,
+            // only the link's own name is removed, never the file it names.
+            if !matches!(
+                source_mark.kind(),
+                Some(EntryKind::File | EntryKind::Symlink)
+            ) {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                    "Source changed before cleanup; preserved it.",
+                ));
             }
             // A link is read once more, followed: one more probe, for a link
             // source only.
-            let linked = reading.is(EntryKind::Symlink);
+            let linked = source_mark.kind() == Some(EntryKind::Symlink);
             if linked {
                 let named = Disk::process().follow(&source).await;
                 match named.exists() {
@@ -1541,22 +1545,18 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // The destination was just proven to hold the source's bytes, so the
             // source is the redundant half of a finished move and is removed,
             // not recycled: a recycle entry would only be a second copy of
-            // content the library already holds.
-            match Disk::process().remove(&source, Remove::File).await {
-                Ok(Removal::Removed) => tracing::info!(
+            // content the library already holds. Equal bytes do not show two
+            // entries, though: one entry reached under two spellings checks as
+            // the same content, and removing the source would remove the only
+            // copy. See [`remove_copied_source`].
+            if remove_copied_source(&source, &source_mark, &destination).await? {
+                tracing::info!(
                     operation_id = %operation.id,
                     title_id = %title.title_id,
                     source = %file.source_path,
                     destination = %file.destination_path,
                     "removed a source copy verified at its destination"
-                ),
-                Ok(Removal::AlreadyAbsent) => {}
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to remove the verified source {}: {error}",
-                        file.source_path
-                    )));
-                }
+                );
             }
         }
 
@@ -1587,6 +1587,102 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         }
 
         Ok(outcome)
+    }
+}
+
+/// Remove a copied source once its destination was proven to hold its bytes,
+/// only when the two are separate entries. `source_mark` is the read of the
+/// source itself taken before the comparison. `Ok(false)` when the source was
+/// already gone.
+///
+/// The destination is read once, a link not followed, and the disk service's
+/// entry alias answers from the two reads: one entry is refused, and so is a
+/// pair that reads as one file with another name, since a copy is never the
+/// source's own file and that pair is no longer the copy that was proven.
+/// Where the reads carry nonzero file numbers on one known volume, neither
+/// path is on a share and the destination is no link, distinct numbers are
+/// two entries and the source is removed. Anywhere else the filesystem
+/// settles it as an import's cleanup does: the source is set aside, the
+/// destination read again, and the set-aside name removed only while the
+/// destination still holds its file; otherwise the source is put back.
+///
+/// Probes, on this cleanup path only: one read of the destination; then
+/// either one removal, or one rename, one read of the destination (a second
+/// when it is a link), one listing of its folder unless both are numbered on
+/// one volume off a share, and one removal, with one more rename to put the
+/// source back when it is not removed.
+async fn remove_copied_source(
+    source: &Path,
+    source_mark: &Mark,
+    destination: &Path,
+) -> AppResult<bool> {
+    let disk = Disk::process();
+    let destination_mark = disk
+        .fingerprint(destination)
+        .await
+        .map_err(|reading| AppError::Repository(reading.absence().into()))?;
+    match Disk::entry_alias_of(source, source_mark, destination, &destination_mark) {
+        crate::disk::EntryAlias::Same => return Err(one_entry_refusal()),
+        crate::disk::EntryAlias::Distinct | crate::disk::EntryAlias::CannotTell => {}
+    }
+    if source_mark.same_file(&destination_mark) == Sameness::Same {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+            "Source or destination changed before cleanup; preserved the source.",
+        ));
+    }
+    if !disk.adoption_needs_set_aside(source, source_mark, destination, &destination_mark) {
+        return match disk.remove(source, Remove::File).await {
+            Ok(Removal::Removed) => Ok(true),
+            Ok(Removal::AlreadyAbsent) => Ok(false),
+            Err(error) => Err(AppError::Repository(format!(
+                "failed to remove the verified source {}: {error}",
+                source.display()
+            ))),
+        };
+    }
+    use crate::disk::AsideRemoval;
+    match disk
+        .remove_source_beside(source, source_mark, destination, &destination_mark)
+        .await
+    {
+        AsideRemoval::Removed => Ok(true),
+        AsideRemoval::SameEntry => Err(one_entry_refusal()),
+        AsideRemoval::DestinationChanged => Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+            "Source or destination changed before cleanup; preserved the source.",
+        )),
+        AsideRemoval::PutBackFailed { at, error } | AsideRemoval::SetAsideMoved { at, error } => {
+            Err(AppError::Repository(format!(
+                "the verified source {} was set aside at {} to tell it from {} and could not be put back: {error}",
+                source.display(),
+                at.display(),
+                destination.display()
+            )))
+        }
+        AsideRemoval::AsideNameTaken { at, error } => Err(AppError::Repository(format!(
+            "the verified source {} could not be set aside to tell it from {}: the name {} is taken: {error}; nothing was removed",
+            source.display(),
+            destination.display(),
+            at.display()
+        ))),
+        AsideRemoval::DestinationUnread(reading) => Err(AppError::Repository(format!(
+            "could not tell the verified source {} from {}: {}; nothing was removed",
+            source.display(),
+            destination.display(),
+            reading.describe_absence()
+        ))),
+        AsideRemoval::CannotTell | AsideRemoval::Apart => Err(AppError::Repository(format!(
+            "could not tell the verified source {} from {}; nothing was removed",
+            source.display(),
+            destination.display()
+        ))),
+        AsideRemoval::NotSetAside(error)
+        | AsideRemoval::NotRemoved(error)
+        | AsideRemoval::RemovalUnconfirmed(error) => Err(AppError::Repository(format!(
+            "failed to remove the verified source {}: {error}",
+            source.display()
+        ))),
     }
 }
 
