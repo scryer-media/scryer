@@ -367,13 +367,14 @@ jobs:
         with:
           version: v0.17.0
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-unknown-linux-musl/
 
       - name: Configure fork PR sccache
@@ -548,13 +549,14 @@ jobs:
         if: steps.scope.outputs.run == 'true'
         with:
           version: v0.17.0
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-pc-windows-msvc/
       - name: Configure compiler and linker
         if: steps.scope.outputs.run == 'true'
@@ -682,13 +684,14 @@ jobs:
       - name: Install sccache
         uses: ./.github/actions/install-ci-sccache
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-unknown-linux-gnu/
 
       - name: Configure fork PR sccache
@@ -947,13 +950,14 @@ jobs:
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -1185,13 +1189,14 @@ jobs:
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -1492,13 +1497,14 @@ jobs:
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -2004,13 +2010,14 @@ jobs:
           "RUSTC_WRAPPER=sccache" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "SCRYER_SCCACHE_ENABLED=true" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -2503,18 +2510,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  docker-publish-pr-rc:
-    name: docker-publish-pr-rc
-    if: ${{ always() && needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
+  docker-prepare-pr-rc:
+    name: docker-prepare-pr-rc
+    if: ${{ needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    needs: [changes, rust-clippy, rust-nextest, launcher-build, linux-build]
+    timeout-minutes: 10
+    needs: [changes, launcher-build, linux-build]
     permissions:
       contents: read
-      id-token: write
-      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Download linux amd64 portable artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -2542,6 +2549,36 @@ jobs:
 
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
+
+      - name: Upload prepared PR build context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: scryer-pr-docker-context-${{ github.run_id }}
+          path: docker-ctx/
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-publish-pr-rc:
+    name: docker-publish-pr-rc
+    if: ${{ always() && needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' && needs.docker-prepare-pr-rc.result == 'success' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    needs: [changes, rust-clippy, rust-nextest, launcher-build, linux-build, docker-prepare-pr-rc]
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Download prepared PR build context
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: scryer-pr-docker-context-${{ github.run_id }}
+          path: docker-ctx
 
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4

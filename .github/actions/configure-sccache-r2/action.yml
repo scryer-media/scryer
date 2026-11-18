@@ -2,6 +2,10 @@ name: Configure sccache R2
 description: Configure a trusted CI build to use S3-compatible Cloudflare R2 storage.
 
 inputs:
+  bucket:
+    description: R2 bucket for this cache.
+    required: false
+    default: release-sccache
   endpoint:
     description: S3-compatible R2 endpoint.
     required: true
@@ -21,6 +25,7 @@ runs:
     - name: Configure disk and R2 cache layers
       shell: bash
       env:
+        SCCACHE_R2_BUCKET_INPUT: ${{ inputs.bucket }}
         SCCACHE_R2_ENDPOINT_INPUT: ${{ inputs.endpoint }}
         SCCACHE_R2_ACCESS_KEY_ID_INPUT: ${{ inputs.access-key-id }}
         SCCACHE_R2_SECRET_ACCESS_KEY_INPUT: ${{ inputs.secret-access-key }}
@@ -28,6 +33,7 @@ runs:
       run: |
         set -euo pipefail
         for required in \
+          SCCACHE_R2_BUCKET_INPUT \
           SCCACHE_R2_ENDPOINT_INPUT \
           SCCACHE_R2_ACCESS_KEY_ID_INPUT \
           SCCACHE_R2_SECRET_ACCESS_KEY_INPUT \
@@ -48,7 +54,7 @@ runs:
           printf '%s\n' 'SCCACHE_MULTILEVEL_CHAIN=disk,s3'
           printf '%s\n' 'SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY=l0'
           printf '%s\n' 'SCCACHE_IGNORE_SERVER_IO_ERROR=1'
-          printf '%s\n' 'SCCACHE_BUCKET=release-sccache'
+          printf 'SCCACHE_BUCKET=%s\n' "$SCCACHE_R2_BUCKET_INPUT"
           printf 'SCCACHE_ENDPOINT=%s\n' "$SCCACHE_R2_ENDPOINT_INPUT"
           printf '%s\n' 'SCCACHE_REGION=auto'
           printf '%s\n' 'SCCACHE_S3_USE_SSL=true'
