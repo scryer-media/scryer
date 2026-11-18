@@ -1424,12 +1424,8 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // copies and their versions before handing this path to disposal.
             // The source's own read, a link not followed, is also the mark its
             // removal below is settled against.
-            let source_mark = match Disk::process().fingerprint(&source).await {
-                Ok(mark) => mark,
-                Err(reading) if reading.exists() == Some(false) => continue,
-                Err(reading) => {
-                    return Err(AppError::Repository(reading.absence().into()));
-                }
+            let Some(source_mark) = read_copied_source(&source).await? else {
+                continue;
             };
             // A linked source that took a copy is proven by the file it
             // names (the proofs below read through the link); once proven,
@@ -1590,6 +1586,78 @@ impl TitleReconciler for RootMoveReconciler<'_> {
     }
 }
 
+/// Read a copied source at the start of its cleanup, a link not followed.
+/// `None` when the source is gone, so there is nothing left to remove.
+///
+/// A cleanup interrupted after it set the source aside to tell it from its
+/// destination leaves the file at its set-aside name. A source name that
+/// reads missing is therefore put back first, as an import's start-of-run
+/// read does, and read again; where the two names were one entry, that is
+/// also what fills the destination's name again. A nonempty file at the
+/// set-aside name that cannot go back is kept there and blocks the cleanup,
+/// named by [`import::KEPT_PATH_FACT`].
+///
+/// Probes: one read of the source. Only when it reads missing, one read of
+/// the set-aside name, then one rename when it holds a nonempty file (and one
+/// more read of the source after it), or one removal of an empty one.
+///
+/// [`import::KEPT_PATH_FACT`]: crate::error_reasons::import::KEPT_PATH_FACT
+async fn read_copied_source(source: &Path) -> AppResult<Option<Mark>> {
+    match Disk::process().fingerprint(source).await {
+        Ok(mark) => return Ok(Some(mark)),
+        Err(reading) if reading.exists() == Some(false) => {}
+        Err(reading) => return Err(AppError::Repository(reading.absence().into())),
+    }
+    let owned = source.to_path_buf();
+    let answer = tokio::task::spawn_blocking(move || {
+        Disk::process().put_back_set_aside_source_blocking(&owned)
+    })
+    .await
+    .map_err(|error| {
+        AppError::Repository(format!(
+            "putting back the set-aside source {} stopped: {error}",
+            source.display()
+        ))
+    })?;
+    match answer {
+        crate::disk::PutBackAside::Nothing => Ok(None),
+        crate::disk::PutBackAside::PutBack => match Disk::process().fingerprint(source).await {
+            Ok(mark) => Ok(Some(mark)),
+            Err(reading) if reading.exists() == Some(false) => Ok(None),
+            Err(reading) => Err(AppError::Repository(reading.absence().into())),
+        },
+        crate::disk::PutBackAside::Failed { at, error } => {
+            tracing::error!(
+                source = %source.display(),
+                at = %at.display(),
+                error = %error,
+                "a move's source set aside by an interrupted cleanup could not be put back; it is kept at its set-aside name"
+            );
+            Err(set_aside_source_kept(source, &at))
+        }
+        crate::disk::PutBackAside::SourceNameTaken { at } => {
+            Err(set_aside_source_kept(source, &at))
+        }
+    }
+}
+
+/// The blocked cleanup of a source whose file is kept at its set-aside name
+/// `at`, which the refusal names for the operator. Nothing was removed.
+fn set_aside_source_kept(source: &Path, at: &Path) -> AppError {
+    AppError::ManualReconciliationRefused {
+        message: format!(
+            "the move's source {} is kept at {}, where a cleanup set it aside, and could not be put back; nothing was removed",
+            source.display(),
+            at.display()
+        ),
+        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+        facts: vec![crate::RefusalFact {
+            key: crate::error_reasons::import::KEPT_PATH_FACT,
+            value: crate::RefusalFactValue::Text(at.display().to_string()),
+        }],
+    }
+}
+
 /// Remove a copied source once its destination was proven to hold its bytes,
 /// only when the two are separate entries. `source_mark` is the read of the
 /// source itself taken before the comparison. `Ok(false)` when the source was
@@ -1653,12 +1721,14 @@ async fn remove_copied_source(
             "Source or destination changed before cleanup; preserved the source.",
         )),
         AsideRemoval::PutBackFailed { at, error } | AsideRemoval::SetAsideMoved { at, error } => {
-            Err(AppError::Repository(format!(
-                "the verified source {} was set aside at {} to tell it from {} and could not be put back: {error}",
-                source.display(),
-                at.display(),
-                destination.display()
-            )))
+            tracing::error!(
+                source = %source.display(),
+                destination = %destination.display(),
+                at = %at.display(),
+                error = %error,
+                "a move's verified source set aside to tell it from its copy could not be put back"
+            );
+            Err(set_aside_source_kept(source, &at))
         }
         AsideRemoval::AsideNameTaken { at, error } => Err(AppError::Repository(format!(
             "the verified source {} could not be set aside to tell it from {}: the name {} is taken: {error}; nothing was removed",

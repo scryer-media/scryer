@@ -3465,6 +3465,104 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
     }
 }
 
+/// A cleanup interrupted after it set the source aside leaves the source's
+/// name empty. Resumed, it puts the file back before it reads the source:
+/// a separate copy is then cleaned up as usual; a pair that was one entry
+/// (the destination's folder a link to the source's) has its destination's
+/// name filled again and is refused as one entry. A set-aside file that
+/// cannot go back is kept where it is, and the cleanup is blocked naming it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
+    use std::os::unix::fs::PermissionsExt;
+    for case in ["separate", "one_entry", "cannot_go_back"] {
+        let temp = tempfile::tempdir().unwrap();
+        let (plan, store, operation, copies) = copied_files_awaiting_cleanup(
+            temp.path(),
+            VerificationDepth::Full,
+            false,
+            &["Larkspire.mkv"],
+        )
+        .await;
+        record_copy(
+            &store,
+            &copies[0],
+            "mf-1",
+            crate::location::model::FileVerificationOutcome::Verified,
+        )
+        .await;
+        let file = plan.titles[0].files[0].clone();
+        let (source, destination) = (file.source(), file.destination());
+        let source_bytes = std::fs::read(&source).unwrap();
+        if case == "one_entry" {
+            let folder = destination.parent().unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+            std::os::unix::fs::symlink(source.parent().unwrap(), folder).unwrap();
+        }
+        let aside = crate::disk::aside_path_for(&source);
+        std::fs::rename(&source, &aside).unwrap();
+        let folder = source.parent().unwrap().to_path_buf();
+        if case == "cannot_go_back" {
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        }
+
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let result = reconciler
+            .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+            .await;
+        if case == "cannot_go_back" {
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        match case {
+            "separate" => {
+                result.expect("cleanup");
+                assert!(!source.exists(), "{case}: the put-back source is removed");
+                assert!(!aside.exists(), "{case}");
+                assert_eq!(std::fs::read(&destination).unwrap(), source_bytes);
+            }
+            "one_entry" => {
+                let error = result.expect_err("one entry is kept");
+                assert_eq!(
+                    error.validation_reason(),
+                    Some(crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH),
+                    "{case}: {error:?}"
+                );
+                assert!(!aside.exists(), "{case}");
+                assert_eq!(
+                    std::fs::read(&destination).unwrap(),
+                    source_bytes,
+                    "{case}: the destination's name holds the file again"
+                );
+            }
+            _ => {
+                let error = result.expect_err("a set-aside file that cannot go back blocks");
+                assert_eq!(
+                    error.reason(),
+                    Some(crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN),
+                    "{case}: {error:?}"
+                );
+                assert_eq!(
+                    error.refusal_facts(),
+                    &[crate::RefusalFact {
+                        key: crate::error_reasons::import::KEPT_PATH_FACT,
+                        value: crate::RefusalFactValue::Text(aside.display().to_string()),
+                    }]
+                );
+                assert!(!source.exists(), "{case}");
+                assert_eq!(
+                    std::fs::read(&aside).unwrap(),
+                    source_bytes,
+                    "{case}: the set-aside file is kept"
+                );
+            }
+        }
+        assert!(recycler.recycled().is_empty());
+    }
+}
+
 /// With a recorded proof, a source or destination that changed after the copy
 /// keeps the source, through the version check, without reading either file
 /// whole. A change the versions cannot see (a row re-stamped to the changed
