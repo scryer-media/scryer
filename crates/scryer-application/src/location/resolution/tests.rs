@@ -257,27 +257,27 @@ async fn a_quick_identical_pair_earns_the_full_comparison_of_both_sides() {
     assert!(source.exists() && destination.exists());
 }
 
-/// The catalog's attested hash and signature for a file, as the plan carries
-/// them.
+/// The catalog's attested hash for a file and the mark it was stored with, as
+/// the plan carries them.
 fn known_content_of(path: &Path) -> KnownSourceContent {
     let metadata = std::fs::metadata(path).unwrap();
-    let signature =
-        crate::file_source_signature::file_source_signature_from_metadata(&metadata).unwrap();
     KnownSourceContent {
         full_blake3: blake3::hash(&std::fs::read(path).unwrap())
             .to_hex()
             .to_string(),
         size_bytes: metadata.len(),
-        signature_scheme: signature.scheme,
-        signature_value: signature.value,
+        crc: None,
+        mark: Some(crate::disk::Mark::of(&metadata).to_stored()),
+        media_file_id: None,
     }
 }
 
 /// The source's bytes were hashed end to end when the catalog recorded them.
-/// While its signature still matches, that hash stands in for a second read:
+/// While the file still fits the mark that hash was stored with, it stands in
+/// for a second read:
 /// only the destination is read, and the proof carries the full BLAKE3.
 #[tokio::test]
-async fn a_stored_source_hash_with_a_matching_signature_reads_only_the_destination() {
+async fn a_stored_source_hash_whose_mark_still_fits_reads_only_the_destination() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("a");
     let destination = temp.path().join("b");
@@ -303,16 +303,22 @@ async fn a_stored_source_hash_with_a_matching_signature_reads_only_the_destinati
 }
 
 /// A source touched since the catalog hashed it is not the file the stored
-/// hash describes: the stored hash is set aside and both sides are read.
+/// hash describes: the stored hash is set aside and both sides are read. So is
+/// a hash stored without a mark.
 #[tokio::test]
-async fn a_stored_source_hash_with_a_stale_signature_falls_back_to_reading_both_sides() {
+async fn a_stored_source_hash_whose_mark_no_longer_fits_falls_back_to_reading_both_sides() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("a");
     let destination = temp.path().join("b");
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"incoming").unwrap();
-    let mut known = known_content_of(&source);
-    known.signature_value = format!("{}0", known.signature_value);
+    let known = known_content_of(&source);
+    std::fs::File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000))
+        .unwrap();
     let (progress, reads, _) = counting_progress();
     let proof = compare_existing(&source, &destination, &progress, Some(&known))
         .await
@@ -323,10 +329,26 @@ async fn a_stored_source_hash_with_a_stale_signature_falls_back_to_reading_both_
         16,
         "both sides are read in full"
     );
+
+    let unmarked = KnownSourceContent {
+        mark: None,
+        ..known_content_of(&source)
+    };
+    let destination = temp.path().join("c");
+    std::fs::write(&destination, b"incoming").unwrap();
+    let (progress, reads, _) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress, Some(&unmarked))
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::Relaxed),
+        16,
+        "a hash stored without its mark is read again"
+    );
 }
 
-/// A stored hash that no longer matches the bytes, with a signature that still
-/// does, calls an identical pair different: the file is renamed in rather than
+/// A stored hash that no longer matches the bytes, with a mark that still fits, calls an identical pair different: the file is renamed in rather than
 /// merged, and nothing is removed on the strength of a stale record.
 #[tokio::test]
 async fn a_stored_source_hash_that_disagrees_with_the_destination_is_a_mismatch() {

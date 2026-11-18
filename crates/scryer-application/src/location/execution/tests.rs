@@ -3777,10 +3777,8 @@ async fn a_full_copy_that_disagrees_with_the_stored_full_hash_keeps_the_source()
         let actual = crate::location::verify::hash_existing_file(&source)
             .await
             .unwrap();
-        let signature = crate::file_source_signature::file_source_signature_from_metadata(
-            &std::fs::symlink_metadata(&source).unwrap(),
-        )
-        .unwrap();
+        let stored_mark =
+            crate::disk::Mark::of(&std::fs::symlink_metadata(&source).unwrap()).to_stored();
         let stored_hash = if stored_matches {
             actual.full_blake3.clone()
         } else {
@@ -3816,8 +3814,9 @@ async fn a_full_copy_that_disagrees_with_the_stored_full_hash_keeps_the_source()
                 Some(crate::location::model::KnownSourceContent {
                     full_blake3: planned_hash,
                     size_bytes: THREE_SAMPLE_WINDOWS as u64,
-                    signature_scheme: signature.scheme.clone(),
-                    signature_value: signature.value.clone(),
+                    crc: None,
+                    mark: Some(stored_mark.clone()),
+                    media_file_id: None,
                 });
             let mover = RootMoveFileMover::without_permissions()
                 .forcing_copies()

@@ -84,6 +84,9 @@ pub enum FullHashAnswer {
     Unreadable(HashRefusal),
     /// The ask was cancelled before the read finished.
     Cancelled,
+    /// Asked with [`HashAsk::recorded_only`]: nothing recorded fits the file
+    /// now, and nothing was read.
+    Unrecorded,
 }
 
 impl FullHashAnswer {
@@ -91,7 +94,7 @@ impl FullHashAnswer {
     pub fn known(&self) -> Option<&KnownHash> {
         match self {
             Self::Cached(known) | Self::Stored(known) | Self::Read(known) => Some(known),
-            Self::Changed | Self::Unreadable(_) | Self::Cancelled => None,
+            Self::Changed | Self::Unreadable(_) | Self::Cancelled | Self::Unrecorded => None,
         }
     }
 
@@ -99,7 +102,7 @@ impl FullHashAnswer {
     pub fn into_known(self) -> Option<KnownHash> {
         match self {
             Self::Cached(known) | Self::Stored(known) | Self::Read(known) => Some(known),
-            Self::Changed | Self::Unreadable(_) | Self::Cancelled => None,
+            Self::Changed | Self::Unreadable(_) | Self::Cancelled | Self::Unrecorded => None,
         }
     }
 }
@@ -132,6 +135,8 @@ pub struct ReadTimes {
 pub struct HashAsk {
     path: PathBuf,
     row: Option<HashRow>,
+    recorded: Option<StoredHash>,
+    recorded_only: bool,
     cancel: Cancel,
     progress: Progress,
     times: Option<Arc<ReadTimes>>,
@@ -143,6 +148,8 @@ impl HashAsk {
         Self {
             path: path.into(),
             row: None,
+            recorded: None,
+            recorded_only: false,
             cancel: Cancel::never(),
             progress: Progress::none(),
             times: None,
@@ -152,6 +159,21 @@ impl HashAsk {
     /// The catalog row the file's hash is stored on.
     pub fn of_row(mut self, row: HashRow) -> Self {
         self.row = Some(row);
+        self
+    }
+
+    /// What the caller already holds of the file's recorded hash, as its
+    /// catalog row stored it, judged here as a stored row would be; the table
+    /// is not asked. A read is recorded on the row, where there is one.
+    pub fn recorded(mut self, stored: StoredHash) -> Self {
+        self.recorded = Some(stored);
+        self
+    }
+
+    /// Answer only from a recorded hash that fits the file now, and read
+    /// nothing otherwise: [`FullHashAnswer::Unrecorded`].
+    pub fn recorded_only(mut self) -> Self {
+        self.recorded_only = true;
         self
     }
 
@@ -437,6 +459,7 @@ fn hashed_for_check(answer: FullHashAnswer) -> Result<KnownHash, Check> {
         FullHashAnswer::Changed => Err(Check::Changed),
         FullHashAnswer::Unreadable(refusal) => Err(Check::Unread(refusal.to_string())),
         FullHashAnswer::Cancelled => Err(Check::Unread("the read was cancelled".to_owned())),
+        FullHashAnswer::Unrecorded => Err(Check::Unread("nothing recorded fits".to_owned())),
     }
 }
 
@@ -503,17 +526,19 @@ impl Disk {
         let _turn = self.inner.hash_turns.take(&ask.path).await;
         let store = ask.row.clone().zip(self.inner.hash_store.get().cloned());
 
-        let recorded = match &store {
-            Some((row, store)) => store.stored(row).await.and_then(|stored| {
-                let mark = stored.mark?;
-                Some(FullHashAnswer::Stored(KnownHash {
-                    size_bytes: mark.len()?,
-                    blake3: stored.blake3,
-                    crc: stored.crc,
-                    mark,
-                }))
-            }),
-            None => self
+        let as_stored = |stored: StoredHash| {
+            let mark = stored.mark?;
+            Some(FullHashAnswer::Stored(KnownHash {
+                size_bytes: mark.len()?,
+                blake3: stored.blake3,
+                crc: stored.crc,
+                mark,
+            }))
+        };
+        let recorded = match (&ask.recorded, &store) {
+            (Some(stored), _) => as_stored(stored.clone()),
+            (None, Some((row, store))) => store.stored(row).await.and_then(as_stored),
+            (None, None) => self
                 .inner
                 .cache
                 .hashes
@@ -527,6 +552,9 @@ impl Disk {
                 .is_some_and(|known| still_fits(&known.mark, &now))
         {
             return recorded;
+        }
+        if ask.recorded_only {
+            return FullHashAnswer::Unrecorded;
         }
 
         let Ok(_read) = self.inner.hash_turns.reads.acquire().await else {
