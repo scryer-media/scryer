@@ -54,9 +54,14 @@ async fn mode(path: &Path) -> u32 {
 #[tokio::test]
 async fn recovery_permissions_apply_to_independent_copies_and_preserve_original_modes() {
     let (_temp, file) = permissions_fixture().await;
-    prove_and_apply_recovery_permissions(&file, CopyProgress::none(), &ConfiguredPermissions)
-        .await
-        .unwrap();
+    prove_and_apply_recovery_permissions(
+        &file,
+        CopyProgress::none(),
+        VerificationDepth::Full,
+        &ConfiguredPermissions,
+    )
+    .await
+    .unwrap();
     assert_eq!(mode(Path::new(&file.destination)).await, 0o644);
     assert_eq!(mode(Path::new(&file.media.file_path)).await, 0o600);
     assert_eq!(
@@ -73,9 +78,14 @@ async fn recovery_permissions_apply_to_independent_copies_and_preserve_original_
 async fn recovery_permissions_leave_in_place_originals_unchanged() {
     let (_temp, mut file) = permissions_fixture().await;
     file.destination = file.media.file_path.clone();
-    prove_and_apply_recovery_permissions(&file, CopyProgress::none(), &ConfiguredPermissions)
-        .await
-        .unwrap();
+    prove_and_apply_recovery_permissions(
+        &file,
+        CopyProgress::none(),
+        VerificationDepth::Full,
+        &ConfiguredPermissions,
+    )
+    .await
+    .unwrap();
     assert_eq!(mode(Path::new(&file.media.file_path)).await, 0o600);
     assert_eq!(
         tokio::fs::read(&file.media.file_path).await.unwrap(),
@@ -97,9 +107,14 @@ async fn recovery_permissions_reject_hardlinks_before_changing_original_modes() 
             .unwrap(),
     );
     assert!(
-        prove_and_apply_recovery_permissions(&file, CopyProgress::none(), &ConfiguredPermissions)
-            .await
-            .is_err()
+        prove_and_apply_recovery_permissions(
+            &file,
+            CopyProgress::none(),
+            VerificationDepth::Full,
+            &ConfiguredPermissions,
+        )
+        .await
+        .is_err()
     );
     assert_eq!(mode(Path::new(&file.media.file_path)).await, 0o600);
     assert_eq!(mode(&link).await, 0o600);

@@ -470,7 +470,21 @@ pub struct FileVerificationRecord {
     pub outcome: FileVerificationOutcome,
     /// Human-readable explanation for a non-verified outcome or a fallback.
     pub detail: Option<String>,
+    /// The destination was already there and the quick check, which keeps no
+    /// hashes, proved it the source's copy. A record written before this was
+    /// kept reads as unset. See [`Self::is_link`].
+    #[serde(default)]
+    pub content_matched: bool,
     pub verified_at: DateTime<Utc>,
+}
+
+impl FileVerificationRecord {
+    /// Whether no bytes were copied because the destination is the source's
+    /// own file, a rename or a second link: no hashes, and no content check
+    /// stood in for them.
+    pub fn is_link(&self) -> bool {
+        self.hashes.is_none() && !self.content_matched
+    }
 }
 
 /// Progress of one title inside an operation. Titles are the safe-cancel and

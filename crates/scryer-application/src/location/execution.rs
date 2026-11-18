@@ -493,6 +493,7 @@ impl TitleFileMover for RootMoveFileMover {
                 destination,
                 &request.progress,
                 request.file.source_content.as_ref(),
+                request.depth,
             )
             .await?
         } else {
@@ -1373,7 +1374,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 }
                 continue;
             }
-            if record.hashes.is_none() {
+            // A record without hashes or a content match placed the source's
+            // own file; one the quick check matched is cleaned up below, as a
+            // copy is.
+            if record.is_link() {
                 let source = stored_path_to_path_buf(&file.source_path);
                 if source == file.destination() {
                     return Err(AppError::validation_refused(

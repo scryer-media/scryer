@@ -246,9 +246,19 @@ pub struct VerifiedFile {
     /// handle after the sync, which a hash of it is stored with. `None` when
     /// nothing was copied or the handle could not say.
     pub destination_mark: Option<String>,
+    /// The destination was already there and the quick check, which keeps no
+    /// hashes, proved it the source's copy. See [`Self::is_link`].
+    pub content_matched: bool,
 }
 
 impl VerifiedFile {
+    /// Whether no bytes were copied because the destination is the source's
+    /// own file, a rename or a second link: no hashes, and no content check
+    /// stood in for them.
+    pub fn is_link(&self) -> bool {
+        self.hashes.is_none() && !self.content_matched
+    }
+
     /// Only a verified destination unblocks touching the source. Every source
     /// recycle/removal decision must read this, never the absence of an error.
     pub fn permits_source_removal(&self) -> bool {
@@ -274,6 +284,7 @@ impl VerifiedFile {
                     .to_string(),
             ),
             destination_mark: None,
+            content_matched: false,
         }
     }
 
@@ -293,6 +304,7 @@ impl VerifiedFile {
             depth: self.depth,
             outcome: self.outcome,
             detail: self.detail,
+            content_matched: self.content_matched,
             verified_at,
         }
     }
@@ -456,6 +468,7 @@ pub async fn copy_and_verify_reporting(
         outcome: proof.outcome,
         detail: proof.detail,
         destination_mark: mark,
+        content_matched: false,
     })
 }
 
@@ -636,10 +649,17 @@ impl VerifiedCopier {
         &self,
         source: &Path,
         destination: &Path,
-        _requested: VerificationDepth,
+        requested: VerificationDepth,
         known: Option<&super::model::KnownSourceContent>,
     ) -> AppResult<VerifiedFile> {
-        super::resolution::compare_existing(source, destination, &CopyProgress::none(), known).await
+        super::resolution::compare_existing(
+            source,
+            destination,
+            &CopyProgress::none(),
+            known,
+            requested,
+        )
+        .await
     }
 }
 

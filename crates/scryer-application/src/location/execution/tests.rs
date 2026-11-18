@@ -366,6 +366,7 @@ async fn an_existing_destination_is_compared_with_the_file_a_linked_source_names
         &destination,
         &crate::location::verify::CopyProgress::none(),
         None,
+        crate::location::model::VerificationDepth::Full,
     )
     .await
     .expect("a linked source is compared by the file it names");
@@ -389,6 +390,7 @@ async fn an_existing_destination_is_compared_with_the_file_a_linked_source_names
         &destination,
         &crate::location::verify::CopyProgress::none(),
         None,
+        crate::location::model::VerificationDepth::Full,
     )
     .await
     .expect("compared");
@@ -635,6 +637,227 @@ async fn an_identical_source_is_dropped_outright_once_the_transfer_proves_it() {
     assert_eq!(std::fs::read(file.destination()).unwrap(), b"same");
 }
 
+/// Three sample windows of one byte, with `middle` in the unsampled middle: the
+/// quick check cannot tell two of these apart, a full comparison can.
+fn sampled_alike(middle: u8) -> Vec<u8> {
+    let window = crate::disk::CONTENT_SAMPLE_BYTES;
+    let mut bytes = vec![7u8; 3 * window];
+    bytes[window + window / 2] = middle;
+    bytes
+}
+
+/// The user's depth decides an occupied destination whose head and tail agree
+/// with the source's: at full depth the differing middle is found and both
+/// versions are kept; at quick depth the pair merges and the source is dropped
+/// at cleanup, with nothing read end to end.
+#[tokio::test]
+async fn an_occupied_destination_the_samples_cannot_tell_apart_follows_the_depth() {
+    for depth in [VerificationDepth::Full, VerificationDepth::Quick] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(InMemoryLocationOperationStore::new());
+        let source_bytes = sampled_alike(1);
+        let destination_bytes = sampled_alike(2);
+        let plan = single_title_plan(
+            &temp.path().join("a"),
+            &temp.path().join("b"),
+            "film.mkv",
+            source_bytes.len() as u64,
+        );
+        let file = plan.titles[0].files[0].clone();
+        write_file(&file.source(), &source_bytes);
+        write_file(&file.destination(), &destination_bytes);
+        let resolver = crate::location::resolution::ConflictResolver::new(
+            store.clone(),
+            BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+        );
+        // A copy, so the incoming version lands as its own file beside the
+        // destination's rather than as a link to the source.
+        let mover = RootMoveFileMover::without_permissions()
+            .forcing_copies()
+            .with_resolver(Arc::new(resolver));
+        let operation = queued_operation(
+            "op-1",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            depth,
+        );
+        store.insert_operation(operation.clone());
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let admission = RootMoveAdmission::new(&plan, &catalog);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
+        crate::disk::Disk::process().count_whole_reads();
+
+        let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
+            .run("op-1", &plan.to_work_plan())
+            .await
+            .expect("run");
+
+        let rows = store.file_resolutions("op-1", "title-1").await.unwrap();
+        assert_eq!(rows.len(), 1, "{depth:?}");
+        assert_eq!(
+            std::fs::read(file.destination()).unwrap(),
+            destination_bytes,
+            "{depth:?}: the destination's version is never replaced"
+        );
+        match depth {
+            VerificationDepth::Full => {
+                assert_eq!(
+                    rows[0].disposition,
+                    crate::location::resolution::ResolutionDisposition::Preserved
+                );
+                let preserved = stored_path_to_path_buf(&rows[0].destination_path);
+                assert_ne!(preserved, file.destination());
+                assert_eq!(
+                    std::fs::read(&preserved).unwrap(),
+                    source_bytes,
+                    "the incoming version is kept beside the destination's"
+                );
+            }
+            VerificationDepth::Quick => {
+                assert_eq!(
+                    outcome.state,
+                    LocationOperationState::Completed,
+                    "{:?}",
+                    outcome.warnings
+                );
+                assert_eq!(outcome.counters.dedups, 1);
+                assert_eq!(
+                    rows[0].disposition,
+                    crate::location::resolution::ResolutionDisposition::Identical
+                );
+                assert!(rows[0].identity_hash.is_none());
+                assert!(!file.source().exists(), "the merged source is dropped");
+                for path in [file.source(), file.destination()] {
+                    assert_eq!(
+                        crate::disk::Disk::process().whole_reads_of(&path),
+                        0,
+                        "{path:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Without a resolver, a destination already there that the quick check
+/// matches is recorded as a content match, not a link, and its cleanup
+/// compares the pair and removes the source as it does a copy's.
+#[tokio::test]
+async fn a_quick_matched_destination_without_a_resolver_finishes_cleanup() {
+    let temp = tempfile::tempdir().unwrap();
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        5,
+    );
+    let file = &plan.titles[0].files[0];
+    write_file(&file.source(), b"first");
+    write_file(&file.destination(), b"first");
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Quick,
+    );
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(operation.clone());
+    let work = plan.to_work_plan();
+    let verified = RootMoveFileMover::without_permissions()
+        .forcing_copies()
+        .move_file(FileMoveRequest {
+            operation_id: "op-1",
+            title: &work.titles[0],
+            file: &work.titles[0].files[0],
+            depth: VerificationDepth::Quick,
+            progress: &crate::location::verify::CopyProgress::none(),
+        })
+        .await
+        .expect("the existing destination is compared");
+    assert!(verified.permits_source_removal());
+    assert!(verified.hashes.is_none() && verified.content_matched);
+    store
+        .record_location_file_verification(&verified.into_record(
+            crate::location::verify::FileVerificationIdentity {
+                operation_id: "op-1",
+                title_id: "title-1",
+                media_file_id: Some("mf-1"),
+            },
+            chrono::Utc::now(),
+        ))
+        .await
+        .unwrap();
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
+    reconciler
+        .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+        .await
+        .expect("cleanup");
+    assert!(!file.source().exists());
+    assert_eq!(std::fs::read(file.destination()).unwrap(), b"first");
+}
+
+/// A record written before content matches were kept carries no hashes and no
+/// match: it is still a rename or a second link, so its cleanup retires the
+/// source as a link and never removes it on the strength of a content check.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_old_record_without_hashes_or_a_match_is_still_a_link() {
+    let temp = tempfile::tempdir().unwrap();
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        5,
+    );
+    let file = &plan.titles[0].files[0];
+    // Separate files with equal bytes: a content check would pass, so only
+    // the link branch's own guard keeps this source.
+    write_file(&file.source(), b"first");
+    write_file(&file.destination(), b"first");
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Quick,
+    );
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(operation.clone());
+    let record: crate::location::model::FileVerificationRecord =
+        serde_json::from_value(serde_json::json!({
+            "operation_id": "op-1",
+            "title_id": "title-1",
+            "media_file_id": "mf-1",
+            "source_path": file.source_path,
+            "destination_path": file.destination_path,
+            "hashes": null,
+            "depth": crate::location::model::AppliedVerificationDepth::exact(
+                VerificationDepth::Quick,
+            ),
+            "outcome": crate::location::model::FileVerificationOutcome::Verified,
+            "detail": null,
+            "verified_at": chrono::Utc::now(),
+        }))
+        .expect("an old record decodes");
+    assert!(!record.content_matched && record.is_link());
+    store
+        .record_location_file_verification(&record)
+        .await
+        .unwrap();
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store);
+    reconciler
+        .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+        .await
+        .expect_err("two separate files are not a link");
+    assert_eq!(
+        std::fs::read(file.source()).unwrap(),
+        b"first",
+        "a link record never removes a separate source file"
+    );
+    assert_eq!(std::fs::read(file.destination()).unwrap(), b"first");
+}
+
 /// C4: the identity proof authorizes dropping the source only while both
 /// files are still the files that were compared. Whichever side changes (or
 /// disappears) after the proof, the catalog is left alone and the source stays.
@@ -678,6 +901,7 @@ async fn copied_source_cleanup_revalidates_both_copies_after_interruption() {
                 outcome: crate::location::model::FileVerificationOutcome::Verified,
                 detail: None,
                 verified_at: chrono::Utc::now(),
+                content_matched: false,
             })
             .await
             .unwrap();
@@ -748,6 +972,7 @@ async fn an_identical_proof_whose_destination_no_longer_holds_those_bytes_keeps_
             outcome: verified.outcome,
             detail: None,
             verified_at: chrono::Utc::now(),
+            content_matched: false,
         })
         .await
         .unwrap();
@@ -834,6 +1059,7 @@ async fn changed_identical_copies_keep_the_source_and_catalog_intact() {
                 outcome: verified.outcome,
                 detail: None,
                 verified_at: chrono::Utc::now(),
+                content_matched: false,
             })
             .await
             .unwrap();
@@ -1262,6 +1488,7 @@ async fn corruption_at_full_depth_blocks_source_removal() {
                 outcome: assessment.outcome,
                 detail: assessment.detail,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -2194,6 +2421,7 @@ impl TitleFileMover for CopyThenCorrupt {
             outcome: assessment.outcome,
             detail: assessment.detail,
             destination_mark: None,
+            content_matched: false,
         })
     }
 }
@@ -3125,6 +3353,7 @@ async fn record_copy(
             outcome,
             detail: None,
             verified_at: chrono::Utc::now(),
+            content_matched: false,
         })
         .await
         .unwrap();

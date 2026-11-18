@@ -71,72 +71,146 @@ async fn file_fixture() -> (tempfile::TempDir, RecoveryFile) {
 
 #[tokio::test]
 async fn recovery_verifies_content_and_preserves_both_files_on_mismatch() {
-    let (_temp, file) = file_fixture().await;
-    execute::prove_file(&file, crate::location::verify::CopyProgress::none())
-        .await
-        .unwrap();
-    tokio::fs::write(&file.destination, b"different media")
-        .await
-        .unwrap();
-    assert!(
-        execute::prove_file(&file, crate::location::verify::CopyProgress::none())
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let (_temp, file) = file_fixture().await;
+        execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
             .await
-            .is_err()
-    );
-    assert_eq!(
-        tokio::fs::read(&file.media.file_path).await.unwrap(),
-        b"synthetic media"
-    );
-    assert_eq!(
-        tokio::fs::read(&file.destination).await.unwrap(),
-        b"different media"
-    );
+            .unwrap();
+        tokio::fs::write(&file.destination, b"different media")
+            .await
+            .unwrap();
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read(&file.media.file_path).await.unwrap(),
+            b"synthetic media"
+        );
+        assert_eq!(
+            tokio::fs::read(&file.destination).await.unwrap(),
+            b"different media"
+        );
+    }
 }
 
 #[tokio::test]
 async fn recovery_missing_source_requires_full_content_proof() {
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let (_temp, mut file) = file_fixture().await;
+        tokio::fs::remove_file(&file.media.file_path).await.unwrap();
+        file.source_version = None;
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+        file.expected_hash = Some(blake3::hash(b"synthetic media").to_hex().to_string());
+        execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+            .await
+            .unwrap();
+        file.expected_hash = Some(blake3::hash(b"different media").to_hex().to_string());
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read(&file.destination).await.unwrap(),
+            b"synthetic media"
+        );
+    }
+}
+
+/// With the source present, quick depth compares the two files without
+/// reading either whole and records no hashes; full depth hashes both. A
+/// missing source is proven by its stored full hash at either depth.
+#[tokio::test]
+async fn recovery_proof_follows_the_depth_while_the_source_is_present() {
+    crate::disk::Disk::process().count_whole_reads();
+    let reads = |path: &str| crate::disk::Disk::process().whole_reads_of(Path::new(path));
+    let (_temp, file) = file_fixture().await;
+    let proof = execute::prove_file(
+        &file,
+        crate::location::verify::CopyProgress::none(),
+        VerificationDepth::Quick,
+    )
+    .await
+    .unwrap();
+    assert!(proof.is_none());
+    assert_eq!(
+        (reads(&file.media.file_path), reads(&file.destination)),
+        (0, 0)
+    );
+    let proof = execute::prove_file(
+        &file,
+        crate::location::verify::CopyProgress::none(),
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        proof.map(|hashes| hashes.full_blake3),
+        Some(blake3::hash(b"synthetic media").to_hex().to_string())
+    );
+
     let (_temp, mut file) = file_fixture().await;
     tokio::fs::remove_file(&file.media.file_path).await.unwrap();
     file.source_version = None;
-    assert!(
-        execute::prove_file(&file, crate::location::verify::CopyProgress::none())
-            .await
-            .is_err()
-    );
     file.expected_hash = Some(blake3::hash(b"synthetic media").to_hex().to_string());
-    execute::prove_file(&file, crate::location::verify::CopyProgress::none())
-        .await
-        .unwrap();
-    file.expected_hash = Some(blake3::hash(b"different media").to_hex().to_string());
-    assert!(
-        execute::prove_file(&file, crate::location::verify::CopyProgress::none())
-            .await
-            .is_err()
-    );
+    let proof = execute::prove_file(
+        &file,
+        crate::location::verify::CopyProgress::none(),
+        VerificationDepth::Quick,
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        tokio::fs::read(&file.destination).await.unwrap(),
-        b"synthetic media"
+        proof.map(|hashes| hashes.full_blake3),
+        file.expected_hash.clone()
+    );
+}
+
+/// The catalog's length is held to the destination at quick depth as it is
+/// at full depth.
+#[tokio::test]
+async fn recovery_quick_proof_holds_the_catalog_length() {
+    let (_temp, mut file) = file_fixture().await;
+    file.media.size_bytes = 14;
+    let error = execute::prove_file(
+        &file,
+        crate::location::verify::CopyProgress::none(),
+        VerificationDepth::Quick,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.reason(),
+        Some(crate::error_reasons::location::RECOVERY_DESTINATION_CONTENT_MISMATCH)
     );
 }
 
 #[tokio::test]
 async fn recovery_detects_source_replacement_even_with_identical_content() {
-    let (_temp, file) = file_fixture().await;
-    let source = stored_path_to_path_buf(&file.media.file_path);
-    let replacement = source.with_extension("replacement");
-    tokio::fs::write(&replacement, b"synthetic media")
-        .await
-        .unwrap();
-    tokio::fs::rename(&source, source.with_extension("retained"))
-        .await
-        .unwrap();
-    tokio::fs::rename(&replacement, &source).await.unwrap();
-    assert!(
-        execute::prove_file(&file, crate::location::verify::CopyProgress::none())
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let (_temp, file) = file_fixture().await;
+        let source = stored_path_to_path_buf(&file.media.file_path);
+        let replacement = source.with_extension("replacement");
+        tokio::fs::write(&replacement, b"synthetic media")
             .await
-            .is_err()
-    );
-    assert!(source.with_extension("retained").exists());
+            .unwrap();
+        tokio::fs::rename(&source, source.with_extension("retained"))
+            .await
+            .unwrap();
+        tokio::fs::rename(&replacement, &source).await.unwrap();
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+        assert!(source.with_extension("retained").exists());
+    }
 }
 
 #[cfg(unix)]
@@ -318,29 +392,31 @@ async fn recovery_recognizes_both_external_id_spellings_and_rejects_conflicting_
 
 #[tokio::test]
 async fn recovery_rejects_hardlinked_destination() {
-    let (_temp, mut file) = file_fixture().await;
-    tokio::fs::remove_file(&file.destination).await.unwrap();
-    tokio::fs::hard_link(&file.media.file_path, &file.destination)
-        .await
-        .unwrap();
-    file.source_version = Some(
-        recovery_file_version(&stored_path_to_path_buf(&file.media.file_path))
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let (_temp, mut file) = file_fixture().await;
+        tokio::fs::remove_file(&file.destination).await.unwrap();
+        tokio::fs::hard_link(&file.media.file_path, &file.destination)
             .await
-            .unwrap(),
-    );
-    assert!(
-        execute::prove_file(&file, crate::location::verify::CopyProgress::none())
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        tokio::fs::read(&file.media.file_path).await.unwrap(),
-        b"synthetic media"
-    );
-    assert_eq!(
-        tokio::fs::read(&file.destination).await.unwrap(),
-        b"synthetic media"
-    );
+            .unwrap();
+        file.source_version = Some(
+            recovery_file_version(&stored_path_to_path_buf(&file.media.file_path))
+                .await
+                .unwrap(),
+        );
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read(&file.media.file_path).await.unwrap(),
+            b"synthetic media"
+        );
+        assert_eq!(
+            tokio::fs::read(&file.destination).await.unwrap(),
+            b"synthetic media"
+        );
+    }
 }
 
 #[tokio::test]

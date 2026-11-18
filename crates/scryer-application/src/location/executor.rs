@@ -2871,6 +2871,7 @@ mod tests {
                 outcome,
                 detail: fell_back.then(|| "a cache-bypassed read-back could not run".to_string()),
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -3073,6 +3074,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -3100,6 +3102,7 @@ mod tests {
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
                     destination_mark: None,
+                    content_matched: false,
                 })
             }
         }
@@ -3185,6 +3188,7 @@ mod tests {
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
                     destination_mark: None,
+                    content_matched: false,
                 })
             }
         }
@@ -3343,6 +3347,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -3666,6 +3671,7 @@ mod tests {
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
                     destination_mark: None,
+                    content_matched: false,
                 })
             }
         }
@@ -3754,6 +3760,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -4049,6 +4056,7 @@ mod tests {
             outcome: FileVerificationOutcome::Verified,
             detail: None,
             verified_at: Utc::now(),
+            content_matched: false,
         }
     }
 
@@ -5182,6 +5190,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -5337,6 +5346,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -5371,6 +5381,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }
@@ -5457,6 +5468,7 @@ mod tests {
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
                 destination_mark: None,
+                content_matched: false,
             })
         }
     }

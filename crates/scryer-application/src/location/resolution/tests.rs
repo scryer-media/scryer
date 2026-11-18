@@ -112,17 +112,23 @@ async fn different_existing_files_keep_destination_and_reuse_durable_provenance_
     );
 }
 
+/// At quick depth, the user's setting, an occupied destination the quick check
+/// cannot tell from the source is the source's copy: it merges as identical
+/// with no hash taken and nothing read end to end, and its proof supports
+/// dropping the source at quick depth.
 #[tokio::test]
-async fn identical_existing_content_is_fully_compared_even_when_quick_copy_policy_was_requested() {
+async fn identical_existing_content_merges_at_quick_depth_without_a_whole_read() {
     let temp = tempfile::tempdir().unwrap();
     let (store, resolver, title) = fixture(&temp);
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
     std::fs::write(&title.files[0].destination_path, b"incoming").unwrap();
+    Disk::process().count_whole_reads();
     let proof = resolve(&resolver, &title, 0).await.unwrap();
-    assert!(proof.permits_source_removal() && proof.hashes.is_some());
+    assert!(proof.permits_source_removal() && proof.hashes.is_none());
+    assert!(proof.content_matched && !proof.is_link());
     assert_eq!(
         proof.depth,
-        AppliedVerificationDepth::exact(VerificationDepth::Full)
+        AppliedVerificationDepth::exact(VerificationDepth::Quick)
     );
     let row = store
         .file_resolutions("op", "title")
@@ -130,7 +136,18 @@ async fn identical_existing_content_is_fully_compared_even_when_quick_copy_polic
         .unwrap()
         .remove(0);
     assert_eq!(row.disposition, ResolutionDisposition::Identical);
-    assert!(row.identity_hash.is_some());
+    assert!(row.identity_hash.is_none());
+    assert!(
+        row.proof_supports_disposal(VerificationDepth::Quick)
+            .await
+            .unwrap()
+    );
+    for path in [
+        &title.files[0].source_path,
+        &title.files[0].destination_path,
+    ] {
+        assert_eq!(Disk::process().whole_reads_of(path), 0, "{path:?}");
+    }
     std::fs::remove_file(&title.files[0].source_path).unwrap();
     assert!(
         row.proof_is_current().await,
@@ -200,9 +217,15 @@ async fn a_size_difference_is_proven_different_without_reading_either_file() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"original bytes").unwrap();
     let (progress, _, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, None)
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        None,
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
     assert!(
         proof.hashes.is_none(),
@@ -221,9 +244,15 @@ async fn a_differing_sample_is_proven_different_without_the_full_comparison() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"original").unwrap();
     let (progress, _, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, None)
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        None,
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
     assert!(proof.hashes.is_none());
     assert!(!full_comparison.load(std::sync::atomic::Ordering::Relaxed));
@@ -239,9 +268,15 @@ async fn a_quick_identical_pair_earns_the_full_comparison_of_both_sides() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"incoming").unwrap();
     let (progress, reads, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, None)
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        None,
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
     assert!(full_comparison.load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(
@@ -285,9 +320,15 @@ async fn a_stored_source_hash_whose_mark_still_fits_reads_only_the_destination()
     std::fs::write(&destination, b"incoming").unwrap();
     let known = known_content_of(&source);
     let (progress, reads, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, Some(&known))
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        Some(&known),
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
     assert!(proof.permits_source_removal());
     assert!(full_comparison.load(std::sync::atomic::Ordering::Relaxed));
@@ -320,9 +361,15 @@ async fn a_stored_source_hash_whose_mark_no_longer_fits_falls_back_to_reading_bo
         .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000))
         .unwrap();
     let (progress, reads, _) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, Some(&known))
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        Some(&known),
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::Relaxed),
@@ -337,9 +384,15 @@ async fn a_stored_source_hash_whose_mark_no_longer_fits_falls_back_to_reading_bo
     let destination = temp.path().join("c");
     std::fs::write(&destination, b"incoming").unwrap();
     let (progress, reads, _) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, Some(&unmarked))
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        Some(&unmarked),
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::Relaxed),
@@ -360,9 +413,15 @@ async fn a_stored_source_hash_that_disagrees_with_the_destination_is_a_mismatch(
     let mut known = known_content_of(&source);
     known.full_blake3 = blake3::hash(b"something else").to_hex().to_string();
     let (progress, reads, _) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, Some(&known))
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        Some(&known),
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
     assert!(!proof.permits_source_removal());
     assert!(proof.hashes.is_none());
@@ -390,9 +449,15 @@ async fn a_stored_source_hash_detects_differences_outside_the_quick_check_sample
         assert_eq!(total, 12_000_000);
         count.fetch_max(bytes, Ordering::Relaxed);
     });
-    let proof = compare_existing(&source, &destination, &progress, Some(&known))
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        Some(&known),
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
     assert_eq!(reads.load(Ordering::Relaxed), 12_000_000);
     assert!(source.exists() && destination.exists());
@@ -417,9 +482,15 @@ async fn full_identity_detects_differences_outside_the_quick_check_samples_and_c
         assert_eq!(total, 24_000_000);
         count.fetch_max(bytes, Ordering::Relaxed);
     });
-    let proof = compare_existing(&source, &destination, &progress, None)
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        None,
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
     assert_eq!(reads.load(Ordering::Relaxed), 24_000_000);
     assert!(source.exists() && destination.exists());
@@ -796,9 +867,15 @@ async fn an_existing_second_link_is_a_no_copy_placement() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::hard_link(&source, &destination).unwrap();
     let (progress, reads, _) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress, None)
-        .await
-        .unwrap();
+    let proof = compare_existing(
+        &source,
+        &destination,
+        &progress,
+        None,
+        VerificationDepth::Full,
+    )
+    .await
+    .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
     assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
@@ -812,7 +889,7 @@ async fn an_alias_of_the_only_entry_is_refused_and_preserved() {
     let alias = temp.path().join("sub").join("..").join("a");
     std::fs::write(&source, b"incoming").unwrap();
     let (progress, _, _) = counting_progress();
-    let error = compare_existing(&source, &alias, &progress, None)
+    let error = compare_existing(&source, &alias, &progress, None, VerificationDepth::Full)
         .await
         .expect_err("one entry under two spellings is refused");
     assert_eq!(

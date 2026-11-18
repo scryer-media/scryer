@@ -84,6 +84,8 @@ impl AppUseCase {
                     .map(|_| p.title.id.clone())
             })
             .collect();
+        // The user's setting, read once for every plan enrolled now.
+        let depth = self.resolve_verification_depth().await;
         for mut plan in plans {
             if collisions.contains(&plan.title.id) {
                 plan.unresolved =
@@ -104,7 +106,7 @@ impl AppUseCase {
                 source_root_id: Some(plan.title.root_folder_id.clone()),
                 destination_root_id: plan.destination_root.as_ref().map(|r| r.id.clone()),
                 plan_fingerprint: blake3::hash(json.as_bytes()).to_hex().to_string(),
-                verification_depth: VerificationDepth::Full,
+                verification_depth: depth,
                 verification_fallback_count: 0,
                 counters: LocationOperationCounters {
                     titles_total: 1,
@@ -527,7 +529,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
                 destination: path_to_stored_string(&staging),
                 ..file.clone()
             };
-            prove_file(&staged_file, request.progress.clone()).await?;
+            prove_file(&staged_file, request.progress.clone(), request.depth).await?;
             inspect_path(parent, false).await?;
             crate::fs_safety::promote_recovery_staged_file(&staging, destination)
                 .await
@@ -538,16 +540,35 @@ impl TitleFileMover for RecoveryExecution<'_> {
                 })?;
             crate::location::verify::sync_parent_directory_after_promotion(destination).await;
         }
-        let hashes =
-            prove_and_apply_recovery_permissions(file, request.progress.clone(), &self.permissions)
-                .await?;
+        let hashes = prove_and_apply_recovery_permissions(
+            file,
+            request.progress.clone(),
+            request.depth,
+            &self.permissions,
+        )
+        .await?;
+        // A file proven by its full hash is recorded at full depth, whatever
+        // the setting: a missing source has no other proof.
+        let (depth, detail) = match hashes {
+            Some(_) => (
+                VerificationDepth::Full,
+                "Full content verified; original source preserved",
+            ),
+            None => (
+                VerificationDepth::Quick,
+                "Quick content check passed; original source preserved",
+            ),
+        };
         Ok(VerifiedFile {
             source_path: source.clone(),
             destination_path: destination.clone(),
-            hashes: Some(hashes),
-            depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+            // At quick depth the destination was matched by the quick check,
+            // not linked to the source.
+            content_matched: hashes.is_none(),
+            hashes,
+            depth: AppliedVerificationDepth::exact(depth),
             outcome: FileVerificationOutcome::Verified,
-            detail: Some("Full content verified; original source preserved".into()),
+            detail: Some(detail.into()),
             destination_mark: None,
         })
     }
@@ -611,9 +632,10 @@ async fn create_recovery_destination_directories(
 async fn prove_and_apply_recovery_permissions(
     file: &RecoveryFile,
     progress: CopyProgress,
+    depth: VerificationDepth,
     permissions: &dyn PlacedContentPermissions,
-) -> AppResult<StreamedContentHashes> {
-    let hashes = prove_file(file, progress).await?;
+) -> AppResult<Option<StreamedContentHashes>> {
+    let hashes = prove_file(file, progress, depth).await?;
     // In-place files are originals. Only a verified independent copy may have
     // destination permissions applied; source modes remain untouched.
     if !folder_paths_match(&file.media.file_path, &file.destination) {
@@ -624,7 +646,77 @@ async fn prove_and_apply_recovery_permissions(
     Ok(hashes)
 }
 
+/// Whether the destination holds the recovered file's content, at `depth`.
+/// With the source present, quick depth compares the two files by length and
+/// live head and tail and returns no hashes; full depth compares their full
+/// hashes. A missing source is proven only by the full hash its catalog row
+/// recorded, at either depth, since no quick proof of it is kept.
 pub(super) async fn prove_file(
+    file: &RecoveryFile,
+    progress: CopyProgress,
+    depth: VerificationDepth,
+) -> AppResult<Option<StreamedContentHashes>> {
+    if depth == VerificationDepth::Quick
+        && let Some(version) = &file.source_version
+    {
+        return quick_prove_file(file, version).await.map(|()| None);
+    }
+    full_prove_file(file, progress).await.map(Some)
+}
+
+async fn quick_prove_file(file: &RecoveryFile, version: &str) -> AppResult<()> {
+    let source = stored_path_to_path_buf(&file.media.file_path);
+    let destination = stored_path_to_path_buf(&file.destination);
+    inspect_path(&destination, false).await?;
+    let dest_before = recovery_file_version(&destination).await?;
+    inspect_path(&source, false).await?;
+    if !folder_paths_match(&file.media.file_path, &file.destination) && version == dest_before {
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_INDEPENDENT_COPY_REQUIRED,
+            "Recovery requires an independent destination copy, not a hardlink",
+        ));
+    }
+    if recovery_file_version(&source).await? != version {
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
+            "Source changed during recovery",
+        ));
+    }
+    let check = Disk::process()
+        .check(
+            crate::disk::CheckSide::new(source.as_path()),
+            crate::disk::CheckSide::new(destination.as_path()),
+            crate::disk::Depth::Quick,
+        )
+        .await;
+    if recovery_file_version(&source).await? != version {
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
+            "Source changed while verifying",
+        ));
+    }
+    let same = match check {
+        crate::disk::Check::Same => true,
+        crate::disk::Check::Differs | crate::disk::Check::Changed => false,
+        crate::disk::Check::Unread(why) => return Err(relay_failure(why)),
+    };
+    // The catalog's length, held to the destination as the full hash's
+    // length is at full depth: one read of the destination's name.
+    let sized = Disk::process()
+        .fingerprint(&destination)
+        .await
+        .map_err(unreadable)?
+        .is_len(file.media.size_bytes.max(0) as u64);
+    if !same || !sized || recovery_file_version(&destination).await? != dest_before {
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_CONTENT_MISMATCH,
+            "Destination content does not match; both files preserved",
+        ));
+    }
+    Ok(())
+}
+
+async fn full_prove_file(
     file: &RecoveryFile,
     progress: CopyProgress,
 ) -> AppResult<StreamedContentHashes> {
@@ -713,7 +805,7 @@ impl TitleReconciler for RecoveryExecution<'_> {
             self.revalidate_folder_identity().await?;
             // Receipts do not prove that a destination remained unchanged after a restart.
             for file in &self.plan.files {
-                prove_file(file, CopyProgress::none()).await?;
+                prove_file(file, CopyProgress::none(), operation.verification_depth).await?;
             }
             let mut title = self.plan.title.clone();
             title.folder_path = self.plan.destination.clone();

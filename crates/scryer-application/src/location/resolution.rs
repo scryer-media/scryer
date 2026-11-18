@@ -450,6 +450,7 @@ impl ConflictResolver {
                         &destination,
                         &comparison,
                         request.file.source_content.as_ref(),
+                        request.depth,
                     )
                     .await?;
                     // Distinct occupied names are additional work, not retries.
@@ -478,7 +479,7 @@ impl ConflictResolver {
                     number = number.saturating_add(1);
                     continue;
                 }
-                record.disposition = if proof.hashes.is_none() {
+                record.disposition = if proof.is_link() {
                     ResolutionDisposition::Hardlink
                 } else {
                     ResolutionDisposition::Identical
@@ -530,7 +531,7 @@ impl ConflictResolver {
                     "The destination changed during comparison. The source was preserved; try again when the files are no longer changing.",
                 ));
             }
-            if verified.hashes.is_none() {
+            if verified.is_link() {
                 let reading = Disk::process().uncached(source).await;
                 if reading.exists() != Some(true) {
                     return Err(unread(source, reading));
@@ -597,8 +598,11 @@ impl ConflictResolver {
                 .hashes
                 .as_ref()
                 .map(|hashes| hashes.full_blake3.clone());
+            // The retained link's full hash is recorded only at full depth; at
+            // quick depth its version and link count are the proof.
             if record.identity_hash.is_none()
                 && record.disposition == ResolutionDisposition::Hardlink
+                && request.depth == VerificationDepth::Full
                 && self
                     .store
                     .get_location_operation(request.operation_id)
@@ -829,6 +833,7 @@ pub async fn compare_existing(
     destination: &Path,
     progress: &CopyProgress,
     known: Option<&KnownSourceContent>,
+    depth: VerificationDepth,
 ) -> AppResult<VerifiedFile> {
     let (_, source_metadata) = file_version_and_metadata(source).await?;
     let (_, destination_metadata) = file_version_and_metadata(destination).await?;
@@ -883,14 +888,44 @@ pub async fn compare_existing(
             super::execution::SharedInode::Distinct => {}
         }
     }
-    // The quick check first (FR-073): a size difference or a differing
-    // head/tail sample proves different content without reading either file
-    // end to end, and the transfer copies straight away. Only a pair the quick
-    // check cannot tell apart earns the full comparison.
-    if source_len != destination_metadata.len()
-        || !sampled_proofs_agree(source, destination).await?
+    // A file read here must still be the one first stat'ed above: a change
+    // between that stat and the read is as much a change while being
+    // compared as one during the read.
+    let changed = || {
+        AppError::validation_refused(
+            crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
+            "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
+        )
+    };
+    // The quick check first, at either depth (FR-073): a length difference or
+    // a differing head/tail sample proves different content without reading
+    // either file end to end, and the transfer copies straight away. At quick
+    // depth a pair it cannot tell apart is the source's copy; at full depth
+    // that pair earns the full comparison.
+    match Disk::process()
+        .check(
+            crate::disk::CheckSide::new(source),
+            crate::disk::CheckSide::new(destination),
+            crate::disk::Depth::Quick,
+        )
+        .await
     {
-        return Ok(different_content(source, destination));
+        crate::disk::Check::Same => {}
+        crate::disk::Check::Differs => return Ok(different_content(source, destination, depth)),
+        crate::disk::Check::Changed => return Err(changed()),
+        crate::disk::Check::Unread(why) => return Err(file_error(destination, why)),
+    }
+    if depth != VerificationDepth::Full {
+        return Ok(VerifiedFile {
+            source_path: source.to_path_buf(),
+            destination_path: destination.to_path_buf(),
+            hashes: None,
+            depth: AppliedVerificationDepth::exact(depth),
+            outcome: FileVerificationOutcome::Verified,
+            detail: None,
+            destination_mark: None,
+            content_matched: true,
+        });
     }
     // Each side's full hash is the disk service's answer. The source's comes
     // from what its catalog row recorded while the file still fits that
@@ -910,15 +945,6 @@ pub async fn compare_existing(
     };
     let total = source_size.saturating_add(destination_metadata.len());
     progress.comparison(0, total);
-    // A file read here must still be the one first stat'ed above: a change
-    // between that stat and the read is as much a change while being
-    // compared as one during the read.
-    let changed = || {
-        AppError::validation_refused(
-            crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
-            "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
-        )
-    };
     let source_hash = match (recorded, known) {
         (Some(recorded), _) => recorded,
         (None, known) => {
@@ -947,7 +973,7 @@ pub async fn compare_existing(
     let identical = source_hash.blake3 == destination_hash.blake3
         && source_hash.size_bytes == destination_hash.size_bytes;
     if !identical {
-        return Ok(different_content(source, destination));
+        return Ok(different_content(source, destination, depth));
     }
     let hashes = streamed_hashes(&destination_hash)
         .or_else(|| streamed_hashes(&source_hash))
@@ -960,6 +986,7 @@ pub async fn compare_existing(
         outcome: FileVerificationOutcome::Verified,
         detail: None,
         destination_mark: None,
+        content_matched: false,
     })
 }
 
@@ -1003,37 +1030,22 @@ fn streamed_hashes(known: &KnownHash) -> Option<super::model::StreamedContentHas
     })
 }
 
-/// Whether the sampled head/tail proofs of two same-sized files agree. A
-/// disagreement is proof of different bytes; agreement only means the full
-/// comparison has to decide.
-async fn sampled_proofs_agree(source: &Path, destination: &Path) -> AppResult<bool> {
-    let (source, destination) = (source.to_path_buf(), destination.to_path_buf());
-    tokio::task::spawn_blocking(move || {
-        let left = crate::fs_integrity::import_content_proof(&source)
-            .map_err(|error| file_error(&source, error))?;
-        let right = crate::fs_integrity::import_content_proof(&destination)
-            .map_err(|error| file_error(&destination, error))?;
-        Ok(left.size_bytes == right.size_bytes && left.sample_blake3 == right.sample_blake3)
-    })
-    .await
-    .map_err(|error| AppError::Repository(error.to_string()))?
-}
-
 /// The comparison's answer for a pair proven different: no source hashes are
 /// claimed, because nothing was verified against anything — the resolver moves
 /// on to the next candidate name and the transfer copies the file.
-fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
+fn different_content(source: &Path, destination: &Path, depth: VerificationDepth) -> VerifiedFile {
     VerifiedFile {
         source_path: source.to_path_buf(),
         destination_path: destination.to_path_buf(),
         hashes: None,
-        depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+        depth: AppliedVerificationDepth::exact(depth),
         outcome: FileVerificationOutcome::Mismatch,
         detail: Some(format!(
             "{} contains different content. Both files were preserved.",
             destination.display()
         )),
         destination_mark: None,
+        content_matched: false,
     }
 }
 

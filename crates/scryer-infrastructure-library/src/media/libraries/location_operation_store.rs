@@ -61,7 +61,8 @@ const CHECKPOINT_COLUMNS: &str =
 
 const VERIFICATION_COLUMNS: &str = "id, operation_id, title_id, media_file_id, source_path,
     destination_path, size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
-    outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail, verified_at";
+    outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail, content_matched,
+    verified_at";
 
 /// States an operation can no longer be cancelled or resumed from.
 const TERMINAL_STATES: &str = "'completed', 'completed_with_warnings', 'canceled', 'failed'";
@@ -116,8 +117,8 @@ const VERIFICATION_UPSERT: &str = "INSERT INTO location_operation_verifications
              (id, operation_id, title_id, media_file_id, source_path, destination_path,
               size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
               outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail,
-              verified_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+              content_matched, verified_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
              ON CONFLICT(operation_id, destination_path) DO UPDATE SET
                 title_id = excluded.title_id,
                 media_file_id = excluded.media_file_id,
@@ -133,6 +134,7 @@ const VERIFICATION_UPSERT: &str = "INSERT INTO location_operation_verifications
                 full_blake3 = excluded.full_blake3,
                 failure_reason = excluded.failure_reason,
                 detail = excluded.detail,
+                content_matched = excluded.content_matched,
                 verified_at = excluded.verified_at";
 
 fn verification_upsert_args(record: &FileVerificationRecord) -> Vec<SqlArg> {
@@ -166,6 +168,7 @@ fn verification_upsert_args(record: &FileVerificationRecord) -> Vec<SqlArg> {
         SqlArg::OptText(hashes.map(|hashes| hashes.full_blake3.clone())),
         SqlArg::OptText(failure_reason),
         SqlArg::OptText(detail),
+        SqlArg::Bool(record.content_matched),
         SqlArg::Timestamp(record.verified_at),
     ]
 }
@@ -370,7 +373,7 @@ impl LocationOperationRepository for LocationOperationStore {
                     "UPDATE location_operations SET updated_at = updated_at WHERE id = {}",
                     &[SqlArg::Text(operation_id.clone())]).await?;
                 let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT recovery_committed_at, operation_type, execution_mode, cancel_requested FROM location_operations WHERE id = {}",
+                    "SELECT recovery_committed_at, operation_type, execution_mode, cancel_requested, verification_depth FROM location_operations WHERE id = {}",
                     &[SqlArg::Text(operation_id.clone())]).await?
                     .ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_OPERATION_NOT_FOUND, "Recovery operation no longer exists"))?;
                 if row.text("operation_type")? != "title_folder_recovery" || row.text("execution_mode")? != "copy_preserve_sources" {
@@ -378,6 +381,10 @@ impl LocationOperationRepository for LocationOperationStore {
                 }
                 if row.opt_timestamp("recovery_committed_at")?.is_some() { return Ok(RecoveryCommitStep::Settled(None)); }
                 if row.bool("cancel_requested")? { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_CANCELED_BEFORE_COMMIT, "Recovery canceled before catalog commit; original mappings preserved")); }
+                // A receipt is applied at the operation's depth or deeper: a
+                // full receipt always counts, a quick one only for a quick
+                // operation. A full receipt carries its full hash.
+                let operation_depth = row.text("verification_depth")?;
                 let stored_plan = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT plan FROM location_operation_plans WHERE operation_id = {}",
                     &[SqlArg::Text(operation_id.clone())]).await?
@@ -415,10 +422,14 @@ impl LocationOperationRepository for LocationOperationStore {
                         .ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_VERIFICATION_RECEIPT_REQUIRED, "Recovery file has no durable verification receipt"))?;
                     if receipt.opt_text("media_file_id")?.as_deref() != Some(file.media.id.as_str())
                         || receipt.text("source_path")? != file.media.file_path
-                        || receipt.i64("size_bytes")? != file.media.size_bytes
-                        || receipt.text("applied_depth")? != "full" || receipt.bool("fell_back")?
-                        || receipt.text("outcome")? != "verified"
-                        || receipt.opt_text("full_blake3")?.is_none_or(|hash| hash.len() != 64) {
+                        || !receipt_depth_holds(
+                            &receipt.text("applied_depth")?,
+                            &operation_depth,
+                            receipt.opt_text("full_blake3")?.as_deref(),
+                            receipt.i64("size_bytes")? == file.media.size_bytes,
+                        )
+                        || receipt.bool("fell_back")?
+                        || receipt.text("outcome")? != "verified" {
                         return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_VERIFICATION_MISMATCH, "Recovery requires matching full verification receipts"));
                     }
                     let changed = SqlRuntime::execute(SqlExec::Tx(tx),
@@ -1458,6 +1469,26 @@ impl LocationOperationStore {
     }
 }
 
+/// Whether a recovery receipt applied at `applied` answers for an operation
+/// at `operation` depth: a full receipt always does, when it carries its full
+/// hash and the length it hashed is the planned one (`sized`); a quick one
+/// only for a quick operation. A quick receipt records no length: the quick
+/// proof held the destination to the catalog's length before it was written.
+fn receipt_depth_holds(
+    applied: &str,
+    operation: &str,
+    full_blake3: Option<&str>,
+    sized: bool,
+) -> bool {
+    let full = VerificationDepth::Full.as_str();
+    let quick = VerificationDepth::Quick.as_str();
+    match applied {
+        _ if applied == full => sized && full_blake3.is_some_and(|hash| hash.len() == 64),
+        _ if applied == quick => operation == quick,
+        _ => false,
+    }
+}
+
 /// Driver-provided unique facts cover both datastore engines.
 fn is_unique_violation(error: &AppError) -> bool {
     matches!(
@@ -1665,6 +1696,7 @@ fn row_to_verification(row: &SqlRow) -> AppResult<FileVerificationRecord> {
             .opt_text("fallback_reason")?
             .or(row.opt_text("failure_reason")?)
             .or(row.opt_text("detail")?),
+        content_matched: row.bool("content_matched")?,
         verified_at: row.timestamp("verified_at")?,
     })
 }
@@ -1958,6 +1990,12 @@ mod tests {
     }
 
     async fn record_recovery_receipt(store: &LocationOperationStore) {
+        record_recovery_receipt_at(store, VerificationDepth::Full).await;
+    }
+
+    /// A receipt applied at `depth`: a full one carries its full hash, a
+    /// quick one none.
+    async fn record_recovery_receipt_at(store: &LocationOperationStore, depth: VerificationDepth) {
         store
             .record_location_file_verification(&FileVerificationRecord {
                 operation_id: RECOVERY_OPERATION.into(),
@@ -1965,15 +2003,16 @@ mod tests {
                 media_file_id: Some("media-fixture".into()),
                 source_path: RECOVERY_SOURCE.into(),
                 destination_path: RECOVERY_DESTINATION.into(),
-                hashes: Some(StreamedContentHashes {
+                hashes: (depth == VerificationDepth::Full).then(|| StreamedContentHashes {
                     size_bytes: 100,
                     crc_algorithm: MoveCrcAlgorithm::Crc64Nvme,
                     move_crc: 7,
                     full_blake3: "a".repeat(64),
                 }),
-                depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+                depth: AppliedVerificationDepth::exact(depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                content_matched: depth == VerificationDepth::Quick,
                 verified_at: timestamp(),
             })
             .await
@@ -2089,6 +2128,67 @@ mod tests {
                 .expect("a committed recovery is not an error"),
             None
         );
+    }
+
+    /// A receipt counts at the operation's depth or deeper: a quick receipt
+    /// commits a quick recovery, a full one commits either, and a quick one
+    /// under a full recovery is refused with nothing changed.
+    #[tokio::test]
+    async fn recovery_commit_holds_receipts_to_the_operation_depth() {
+        for (operation_depth, receipt_depth, commits) in [
+            (VerificationDepth::Quick, VerificationDepth::Quick, true),
+            (VerificationDepth::Quick, VerificationDepth::Full, true),
+            (VerificationDepth::Full, VerificationDepth::Full, true),
+            (VerificationDepth::Full, VerificationDepth::Quick, false),
+        ] {
+            let case = format!("{operation_depth:?} operation, {receipt_depth:?} receipt");
+            let store = test_store().await;
+            let plan = recovery_fixture(&store).await;
+            let mut op = operation(RECOVERY_OPERATION, LocationOperationState::Moving);
+            op.operation_type = LocationOperationType::TitleFolderRecovery;
+            op.mode = LocationExecutionMode::CopyPreserveSources;
+            op.verification_depth = operation_depth;
+            store
+                .create_location_operation(&op, Some(&serde_json::to_string(&plan).unwrap()))
+                .await
+                .expect("operation should persist");
+            record_recovery_receipt_at(&store, receipt_depth).await;
+            let result = store
+                .commit_title_folder_recovery(RECOVERY_OPERATION, &plan, &recovery_event())
+                .await;
+            if commits {
+                result.unwrap_or_else(|error| panic!("{case}: {error:?}"));
+                assert_eq!(
+                    recovery_media_path(&store).await,
+                    RECOVERY_DESTINATION,
+                    "{case}"
+                );
+            } else {
+                let refused = result.expect_err(&case);
+                assert_eq!(
+                    refused.validation_reason(),
+                    Some(crate::error_reasons::MEDIA_RECOVERY_VERIFICATION_MISMATCH),
+                    "{case}"
+                );
+                assert!(!store.recovery_committed(RECOVERY_OPERATION).await.unwrap());
+                assert_eq!(recovery_media_path(&store).await, RECOVERY_SOURCE, "{case}");
+            }
+        }
+    }
+
+    /// A full receipt needs its full hash and the planned length, whatever
+    /// the operation; a quick one counts only for a quick operation.
+    #[test]
+    fn a_full_receipt_needs_its_full_hash() {
+        let hash = "a".repeat(64);
+        assert!(receipt_depth_holds("full", "quick", Some(&hash), true));
+        assert!(receipt_depth_holds("full", "full", Some(&hash), true));
+        assert!(!receipt_depth_holds("full", "full", Some(&hash), false));
+        assert!(!receipt_depth_holds("full", "quick", None, true));
+        assert!(!receipt_depth_holds("full", "full", Some("short"), true));
+        assert!(receipt_depth_holds("quick", "quick", None, false));
+        assert!(!receipt_depth_holds("quick", "full", Some(&hash), true));
+        assert!(!receipt_depth_holds("other", "quick", Some(&hash), true));
     }
 
     /// An unresolved plan is refused even when it is the stored one.
@@ -3028,6 +3128,7 @@ mod tests {
             depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
             outcome,
             detail: None,
+            content_matched: false,
             verified_at: timestamp(),
         }
     }
@@ -3107,6 +3208,49 @@ mod tests {
             "a CRC above i64::MAX must survive the text column"
         );
         assert_eq!(loaded[0].outcome, FileVerificationOutcome::Verified);
+        assert!(!loaded[0].content_matched);
+    }
+
+    /// A destination the quick check matched keeps that on its record, so the
+    /// cleanup tells it from a rename or a second link, which also has no
+    /// hashes.
+    #[tokio::test]
+    async fn a_content_match_without_hashes_round_trips() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+        let matched = FileVerificationRecord {
+            hashes: None,
+            depth: AppliedVerificationDepth::exact(VerificationDepth::Quick),
+            content_matched: true,
+            ..verification("/archive/Arrival.mkv", FileVerificationOutcome::Verified)
+        };
+        let linked = FileVerificationRecord {
+            hashes: None,
+            content_matched: false,
+            ..verification("/archive/Arrival.en.srt", FileVerificationOutcome::Verified)
+        };
+        store
+            .record_location_file_verifications(&[matched, linked])
+            .await
+            .expect("the verifications should persist");
+
+        let loaded = store
+            .list_location_file_verifications("op-1", Some("title-1"))
+            .await
+            .expect("the read should succeed");
+        let by_path = |path: &str| {
+            loaded
+                .iter()
+                .find(|record| record.destination_path == path)
+                .expect("recorded")
+        };
+        assert!(by_path("/archive/Arrival.mkv").content_matched);
+        assert!(!by_path("/archive/Arrival.mkv").is_link());
+        assert!(!by_path("/archive/Arrival.en.srt").content_matched);
+        assert!(by_path("/archive/Arrival.en.srt").is_link());
     }
 
     #[tokio::test]
