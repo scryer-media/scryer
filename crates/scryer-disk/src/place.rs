@@ -272,7 +272,10 @@ pub enum Refused {
     /// name of a hard link that did not prove was already gone when the
     /// placement went to remove it.
     DestinationMissing,
+    /// The side the failed call named could not be reached.
     Unreachable(Side),
+    /// The disk did not answer in time on the side the failed call named.
+    TimedOut(Side),
     /// The name is a link the placement does not go through: a name the
     /// caller holds is written only when it is the file itself.
     LinkNotFollowed,
@@ -296,6 +299,7 @@ impl Refused {
             Self::Denied(_) => reason::DISK_PERMISSION_DENIED,
             Self::SourceMissing | Self::DestinationMissing => reason::DISK_PATH_MISSING,
             Self::Unreachable(_) => reason::DISK_PATH_UNREACHABLE,
+            Self::TimedOut(_) => reason::DISK_TIMED_OUT,
             Self::LinkNotFollowed => reason::DISK_LINK_NOT_FOLLOWED,
             Self::Failed => reason::DISK_OPERATION_FAILED,
         }
@@ -342,7 +346,8 @@ impl Fail {
             reason::DISK_PERMISSION_DENIED => Refused::Denied(side),
             reason::DISK_PATH_MISSING if side == Side::Destination => Refused::DestinationMissing,
             reason::DISK_PATH_MISSING => Refused::SourceMissing,
-            reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT => Refused::Unreachable(side),
+            reason::DISK_PATH_UNREACHABLE => Refused::Unreachable(side),
+            reason::DISK_TIMED_OUT => Refused::TimedOut(side),
             reason::DISK_LINK_NOT_FOLLOWED => Refused::LinkNotFollowed,
             _ => Refused::Failed,
         };
@@ -358,14 +363,13 @@ impl Fail {
     }
 
     /// A path whose reading gave no answer, refused by what stopped the
-    /// reading: only a path that timed out or could not be reached is
-    /// unreachable.
+    /// reading: a path that timed out is refused as
+    /// timed out, and one that could not be reached as unreachable.
     pub(crate) fn unread(reading: PathReading, side: Side, detail: String) -> Self {
         let refused = match reading.unreachable_cause() {
             Some(reason::DISK_PERMISSION_DENIED) => Refused::Denied(side),
-            Some(reason::DISK_PATH_UNREACHABLE | reason::DISK_TIMED_OUT) => {
-                Refused::Unreachable(side)
-            }
+            Some(reason::DISK_PATH_UNREACHABLE) => Refused::Unreachable(side),
+            Some(reason::DISK_TIMED_OUT) => Refused::TimedOut(side),
             _ => Refused::Failed,
         };
         Self::new(refused, io::ErrorKind::Other, detail)

@@ -250,7 +250,7 @@ fn an_empty_file_at_the_reserved_name_is_kept_when_the_source_is_not_there() {
             backend.stat_is(SOURCE, stat);
         }
         let refused = place(&disk, policy(Method::Move, Fallback::Copy)).expect_err("refused");
-        assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
+        assert_eq!(refused.refused, Refused::TimedOut(Side::Either));
         assert_eq!(backend.calls_of("lstat"), 2, "one look at each name");
         let said = refused.to_string();
         assert!(said.contains(SOURCE), "{said}");
@@ -587,6 +587,10 @@ fn failures_are_classified_once_into_typed_refusals() {
         moved(io::ErrorKind::NotConnected),
         Refused::Unreachable(Side::Either)
     );
+    assert_eq!(
+        moved(io::ErrorKind::TimedOut),
+        Refused::TimedOut(Side::Either)
+    );
     assert_eq!(moved(io::ErrorKind::InvalidInput), Refused::Failed);
 
     // The reservation of the copy's name is the destination's answer.
@@ -786,7 +790,7 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
     let refused = disk
         .place_blocking(&source, &dest, policy(Method::Move, Fallback::Copy))
         .expect_err("refused");
-    assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
+    assert_eq!(refused.refused, Refused::TimedOut(Side::Either));
     assert_eq!(backend.calls_of("rename"), 1, "no second attempt");
     assert_eq!(backend.calls_of("remove_file"), 0);
     let intermediate = backend.paths_of("open").pop().expect("claimed");
@@ -815,7 +819,7 @@ fn a_case_only_rename_goes_through_an_intermediate_name() {
         let refused = disk
             .place_blocking(&source, &dest, policy(Method::Move, Fallback::Copy))
             .expect_err("refused");
-        assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
+        assert_eq!(refused.refused, Refused::TimedOut(Side::Either));
         assert_eq!(backend.calls_of("rename"), attempts);
         let released = if said_of_it.is_none() { attempts } else { 0 };
         assert_eq!(removed_only_staging(&backend), released);
@@ -1035,7 +1039,7 @@ async fn a_recorded_copys_staged_name_is_read_within_the_bound_before_its_turn()
     let silent = bounded(disk.place_watched(SOURCE, DEST, policy, watch()))
         .await
         .expect_err("refused");
-    assert_eq!(silent.refused, Refused::Unreachable(Side::Destination));
+    assert_eq!(silent.refused, Refused::TimedOut(Side::Destination));
     assert_eq!(
         silent.to_string(),
         format!(

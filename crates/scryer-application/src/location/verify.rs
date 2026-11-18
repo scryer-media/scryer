@@ -345,11 +345,9 @@ pub(super) fn copy_refusal(refused: Refused, sentence: String) -> AppError {
         ),
         // Storage that timed out or could not be reached carries its own
         // variant and reason; every other refusal is a repository failure.
-        Refused::Unreachable(_) => AppError::temporary_unavailable_reason(
-            crate::disk::reason::DISK_PATH_UNREACHABLE,
-            sentence,
-            None,
-        ),
+        Refused::Unreachable(_) | Refused::TimedOut(_) => {
+            AppError::temporary_unavailable_reason(refused.reason(), sentence, None)
+        }
         _ => AppError::Repository(sentence),
     }
 }
@@ -1362,6 +1360,18 @@ mod tests {
         assert!(crate::location::executor::move_error_is_transient(
             &unreachable
         ));
+        // A timeout keeps its own reason instead of reading as unreachable.
+        let timed_out = refused(Refused::TimedOut(crate::disk::Side::Source));
+        assert!(matches!(
+            timed_out,
+            AppError::TemporaryUnavailable {
+                reason: Some(crate::disk::reason::DISK_TIMED_OUT),
+                ..
+            }
+        ));
+        assert!(crate::location::executor::move_error_is_transient(
+            &timed_out
+        ));
         assert!(matches!(refused(Refused::Failed), AppError::Repository(_)));
     }
 
@@ -1401,6 +1411,9 @@ mod tests {
         for side in [crate::disk::Side::Source, crate::disk::Side::Destination] {
             assert!(crate::location::executor::move_error_is_transient(
                 &refused(Refused::Unreachable(side))
+            ));
+            assert!(crate::location::executor::move_error_is_transient(
+                &refused(Refused::TimedOut(side))
             ));
         }
     }
