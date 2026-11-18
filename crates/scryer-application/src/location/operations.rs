@@ -3803,7 +3803,7 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
         plan: &RootMoveExecutionPlan,
     ) -> AppResult<()> {
         self.app
-            .validate_folder_conflict(plan, Some(&operation.id))
+            .validate_folder_conflict(plan, Some(&operation.id), operation.verification_depth)
             .await
     }
     async fn has_other_media_at_path(

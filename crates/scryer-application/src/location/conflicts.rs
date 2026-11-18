@@ -10,7 +10,9 @@ use super::collisions::{
     CollisionNaming, CollisionPlanRequest, DestinationItem, IncomingItem, PathCaseRule,
     plan_collisions,
 };
-use super::model::{LocationExecutionMode, LocationOperation, LocationOperationType};
+use super::model::{
+    LocationExecutionMode, LocationOperation, LocationOperationType, VerificationDepth,
+};
 use super::operations::{LocationJobRunActor, LocationOperationAdmission};
 use super::preview::{
     LocationPlan, LocationPlanBuilder, LocationPlanHeader, PlanItem, PlanItemKind,
@@ -202,7 +204,10 @@ pub struct ConflictExecution {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConflictHardlinkProof {
     pub version: String,
-    pub full_blake3: String,
+    /// The inode's full hash, taken only when the plan verifies at full
+    /// depth. At quick depth the version and exact link counts are the proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_blake3: Option<String>,
     pub link_count: u64,
 }
 
@@ -1058,7 +1063,9 @@ impl AppUseCase {
         }
         // Only an inode a disposal could unlink needs a content proof. Every
         // pathname of that inode shares the proof, so hashing the disposal
-        // targets themselves covers the files linked to them.
+        // targets themselves covers the files linked to them. The hash is
+        // taken only at full depth, the user's setting.
+        let depth = self.resolve_verification_depth().await;
         if !dispose.is_empty() {
             for file in files.iter().filter(|file| dispose.contains(&file.path)) {
                 if let Some(link_count) =
@@ -1070,7 +1077,12 @@ impl AppUseCase {
                 {
                     hardlink_proofs.push(ConflictHardlinkProof {
                         version: file.version.clone(),
-                        full_blake3: conflict_hash(&file.path, &file.version).await?,
+                        full_blake3: match depth {
+                            VerificationDepth::Full => {
+                                Some(conflict_hash(&file.path, &file.version).await?)
+                            }
+                            VerificationDepth::Quick => None,
+                        },
                         link_count,
                     });
                 }
@@ -1102,7 +1114,7 @@ impl AppUseCase {
                 )
                 .with_selection(vec![title.id.clone()]),
         );
-        builder.verification_depth(self.resolve_verification_depth().await);
+        builder.verification_depth(depth);
         for file in &execution_files {
             builder.push(
                 PlanItem::new(PlanItemKind::Move)
@@ -1738,6 +1750,22 @@ async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
     Ok(hashed.blake3)
 }
 
+/// Whether `path`, read as `version`, still holds the content a proof
+/// recorded. A recorded hash is always held to, whatever the depth. Without
+/// one, quick depth rests on the version and link counts its caller checks,
+/// and full depth refuses: a full proof needs the hash.
+async fn content_holds(
+    path: &str,
+    version: &str,
+    expected: Option<&str>,
+    depth: VerificationDepth,
+) -> AppResult<bool> {
+    match expected {
+        Some(expected) => Ok(conflict_hash(path, version).await? == expected),
+        None => Ok(depth == VerificationDepth::Quick),
+    }
+}
+
 fn disposal_proof(row: &super::resolution::FileResolution) -> Option<&DisposalProof> {
     match &row.disposition {
         super::resolution::ResolutionDisposition::Disposal(proof) => Some(proof),
@@ -1750,6 +1778,7 @@ async fn disposal_version_current(
     path: &str,
     expected: &str,
     resolutions: &[super::resolution::FileResolution],
+    depth: VerificationDepth,
 ) -> AppResult<bool> {
     let Some((row, proof)) = resolutions
         .iter()
@@ -1791,10 +1820,13 @@ async fn disposal_version_current(
         let payload = stored_path_to_path_buf(&recycle.recycled_path);
         super::title_folder_recovery::inspect_path(&payload, false).await?;
         let version = super::resolution::file_version(&payload).await?;
-        if conflict_hash(&recycle.recycled_path, &version)
-            .await?
-            .as_str()
-            != row.identity_hash.as_deref().unwrap_or("")
+        if !content_holds(
+            &recycle.recycled_path,
+            &version,
+            row.identity_hash.as_deref(),
+            depth,
+        )
+        .await?
         {
             return Ok(false);
         }
@@ -1804,14 +1836,14 @@ async fn disposal_version_current(
     }
     Ok(
         super::hardlinks::link_count(&native)?.count() == Some(expected_count)
-            && conflict_hash(path, &actual).await?.as_str()
-                == row.identity_hash.as_deref().unwrap_or(""),
+            && content_holds(path, &actual, row.identity_hash.as_deref(), depth).await?,
     )
 }
 
 async fn conflict_resolution_current(
     row: &super::resolution::FileResolution,
     resolutions: &[super::resolution::FileResolution],
+    depth: VerificationDepth,
 ) -> AppResult<bool> {
     // A change time here is explained only by a recorded disposal below.
     if row.proof_is_unchanged().await {
@@ -1822,7 +1854,7 @@ async fn conflict_resolution_current(
     };
     if row.is_disposal()
         || !row.completed
-        || !disposal_version_current(&row.destination_path, expected, resolutions).await?
+        || !disposal_version_current(&row.destination_path, expected, resolutions, depth).await?
     {
         return Ok(false);
     }
@@ -1836,8 +1868,13 @@ async fn conflict_resolution_current(
                     super::resolution::file_version(&stored_path_to_path_buf(&row.source_path))
                         .await?;
                 if &actual != source_expected
-                    && !disposal_version_current(&row.source_path, source_expected, resolutions)
-                        .await?
+                    && !disposal_version_current(
+                        &row.source_path,
+                        source_expected,
+                        resolutions,
+                        depth,
+                    )
+                    .await?
                 {
                     return Ok(false);
                 }
@@ -1853,12 +1890,13 @@ async fn preview_version_current(
     file: &ConflictFile,
     resolutions: &[super::resolution::FileResolution],
     conflict: &ConflictExecution,
+    depth: VerificationDepth,
 ) -> AppResult<bool> {
     let actual = super::resolution::file_version(&stored_path_to_path_buf(&file.path)).await?;
     if actual == file.version {
         return Ok(true);
     }
-    if disposal_version_current(&file.path, &file.version, resolutions).await? {
+    if disposal_version_current(&file.path, &file.version, resolutions, depth).await? {
         return Ok(true);
     }
     if let Some(proof) = conflict
@@ -1913,7 +1951,7 @@ async fn preview_version_current(
                     .link_count
                     .checked_add(added.len() as u64)
                     .and_then(|count| count.checked_sub(removed.len() as u64))
-            && conflict_hash(&file.path, &actual).await? == proof.full_blake3);
+            && content_holds(&file.path, &actual, proof.full_blake3.as_deref(), depth).await?);
     }
     if same_content_version(&actual, &file.version) == Sameness::Same {
         for resolution in resolutions.iter().filter(|row| {
@@ -2326,8 +2364,12 @@ impl AppUseCase {
                 // can never classify this task's queued row as stranded.
                 let guard = self.runtime.library.location_runners.begin(&operation_id);
                 if self.location_operation(&operation_id).await?.is_none() {
-                    self.validate_folder_conflict(&planned.execution, None)
-                        .await?;
+                    self.validate_folder_conflict(
+                        &planned.execution,
+                        None,
+                        planned.plan.verification.depth,
+                    )
+                    .await?;
                     self.admit_location_operation_dispatch(
                         LocationOperationAdmission {
                             actor: &actor,
@@ -2464,6 +2506,7 @@ impl AppUseCase {
         &self,
         plan: &RootMoveExecutionPlan,
         operation_id: Option<&str>,
+        depth: VerificationDepth,
     ) -> AppResult<()> {
         let conflict = plan
             .conflict
@@ -2565,7 +2608,7 @@ impl AppUseCase {
         }
         for file in &conflict.files {
             if let Some(resolution) = resolutions.iter().find(|row| row.source_path == file.path)
-                && conflict_resolution_current(resolution, &resolutions).await?
+                && conflict_resolution_current(resolution, &resolutions, depth).await?
             {
                 continue;
             }
@@ -2574,7 +2617,7 @@ impl AppUseCase {
             match reading.exists() {
                 Some(true) => {
                     super::title_folder_recovery::inspect_path(&path, false).await?;
-                    if !preview_version_current(file, &resolutions, conflict).await? {
+                    if !preview_version_current(file, &resolutions, conflict, depth).await? {
                         return Err(refused(
                             refusal::FILE_CHANGED,
                             "A previewed file changed; all unprocessed files were preserved",
@@ -2607,7 +2650,7 @@ impl AppUseCase {
         operation: &LocationOperation,
         plan: &RootMoveExecutionPlan,
     ) -> AppResult<()> {
-        self.validate_folder_conflict(plan, Some(&operation.id))
+        self.validate_folder_conflict(plan, Some(&operation.id), operation.verification_depth)
             .await?;
         let conflict = plan.conflict.as_ref().expect("conflict plan");
         let planned = &plan.titles[0];
@@ -2619,7 +2662,8 @@ impl AppUseCase {
             .file_resolutions(&operation.id, &planned.title_id)
             .await?;
         for row in resolutions.iter().filter(|row| !row.is_disposal()) {
-            if !conflict_resolution_current(row, &resolutions).await? {
+            if !conflict_resolution_current(row, &resolutions, operation.verification_depth).await?
+            {
                 return Err(refused(
                     refusal::FILE_CHANGED,
                     "A destination changed before catalog reconciliation",
@@ -2881,7 +2925,8 @@ impl AppUseCase {
         }
         let native = stored_path_to_path_buf(&file.path);
         let version = super::resolution::file_version(&native).await?;
-        if !preview_version_current(file, resolutions, conflict).await?
+        if !preview_version_current(file, resolutions, conflict, operation.verification_depth)
+            .await?
             || super::resolution::file_version(&native).await? != version
         {
             return Err(refused(
@@ -2954,7 +2999,7 @@ impl AppUseCase {
             completed: false,
             source_version: Some(version),
             destination_version: None,
-            identity_hash: Some(proof.full_blake3.clone()),
+            identity_hash: proof.full_blake3.clone(),
             warning: None,
             reason_code: None,
         };
@@ -2972,6 +3017,7 @@ impl AppUseCase {
         conflict: &ConflictExecution,
         resolutions: &mut [super::resolution::FileResolution],
         index: usize,
+        depth: VerificationDepth,
     ) -> AppResult<()> {
         let mut row = resolutions[index].clone();
         let mut proof = disposal_proof(&row).expect("disposal record").clone();
@@ -2991,10 +3037,13 @@ impl AppUseCase {
             let payload = stored_path_to_path_buf(&recycle.recycled_path);
             super::title_folder_recovery::inspect_path(&payload, false).await?;
             let version = super::resolution::file_version(&payload).await?;
-            if conflict_hash(&recycle.recycled_path, &version)
-                .await?
-                .as_str()
-                != row.identity_hash.as_deref().unwrap_or("")
+            if !content_holds(
+                &recycle.recycled_path,
+                &version,
+                row.identity_hash.as_deref(),
+                depth,
+            )
+            .await?
             {
                 return Err(refused(
                     refusal::FILE_CHANGED,
@@ -3041,8 +3090,7 @@ impl AppUseCase {
             if same_content_version(&version, source_version) != Sameness::Same
                 || super::hardlinks::link_count(&native)?.count() != Some(expected_count)
                 || (!verified_content
-                    && conflict_hash(&path, &version).await?.as_str()
-                        != row.identity_hash.as_deref().unwrap_or(""))
+                    && !content_holds(&path, &version, row.identity_hash.as_deref(), depth).await?)
             {
                 return Err(refused(
                     refusal::FILE_CHANGED,
@@ -3150,7 +3198,13 @@ impl AppUseCase {
                     let version = super::resolution::file_version(&native).await?;
                     if same_inode_version(&version, &proof.version) != Sameness::Different {
                         if same_content_version(&version, &proof.version) != Sameness::Same
-                            || conflict_hash(&path, &version).await? != proof.full_blake3
+                            || !content_holds(
+                                &path,
+                                &version,
+                                proof.full_blake3.as_deref(),
+                                operation.verification_depth,
+                            )
+                            .await?
                         {
                             return Err(refused(
                                 refusal::FILE_CHANGED,
@@ -3169,7 +3223,7 @@ impl AppUseCase {
                     .iter()
                     .find(|proof| same_inode_version(&proof.version, version) == Sameness::Same)
             });
-            if !conflict_resolution_current(row, &resolutions).await?
+            if !conflict_resolution_current(row, &resolutions, operation.verification_depth).await?
                 || (disposal_remaining
                     && linked_proof.is_none()
                     && !row
@@ -3195,7 +3249,13 @@ impl AppUseCase {
             let path = stored_path_to_path_buf(destination);
             super::title_folder_recovery::inspect_path(&path, false).await?;
             if destination == file.path
-                && !preview_version_current(file, &resolutions, conflict).await?
+                && !preview_version_current(
+                    file,
+                    &resolutions,
+                    conflict,
+                    operation.verification_depth,
+                )
+                .await?
             {
                 return Err(refused(
                     refusal::FILE_CHANGED,
@@ -3233,7 +3293,13 @@ impl AppUseCase {
                     super::title_folder_recovery::inspect_path(&source, false).await?;
                     if !reading.is(EntryKind::File)
                         || disposal_index.is_some_and(|index| resolutions[index].completed)
-                        || !preview_version_current(file, &resolutions, conflict).await?
+                        || !preview_version_current(
+                            file,
+                            &resolutions,
+                            conflict,
+                            operation.verification_depth,
+                        )
+                        .await?
                     {
                         return Err(refused(
                             refusal::FILE_CHANGED,
@@ -3400,8 +3466,13 @@ impl AppUseCase {
                 }
             }
             if let Some(index) = disposal_index {
-                self.finish_conflict_disposal(conflict, &mut resolutions, index)
-                    .await?;
+                self.finish_conflict_disposal(
+                    conflict,
+                    &mut resolutions,
+                    index,
+                    operation.verification_depth,
+                )
+                .await?;
             }
             if let Some(id) = &file.media_file_id
                 && self
@@ -3491,9 +3562,14 @@ mod hardlink_disposal_tests {
             };
             std::fs::remove_file(&source).unwrap();
             assert!(
-                disposal_version_current(&retained_path, &version, &[row.clone()])
-                    .await
-                    .unwrap()
+                disposal_version_current(
+                    &retained_path,
+                    &version,
+                    &[row.clone()],
+                    VerificationDepth::Full
+                )
+                .await
+                .unwrap()
             );
             if mutate_content {
                 // Same inode and length are insufficient: the durable content
@@ -3512,9 +3588,14 @@ mod hardlink_disposal_tests {
                     })
                     .unwrap();
                 assert!(
-                    !disposal_version_current(&retained_path, &version, &[row.clone()])
-                        .await
-                        .unwrap()
+                    !disposal_version_current(
+                        &retained_path,
+                        &version,
+                        &[row.clone()],
+                        VerificationDepth::Full
+                    )
+                    .await
+                    .unwrap()
                 );
             } else {
                 let current = super::super::resolution::file_version(&retained)
@@ -3527,23 +3608,150 @@ mod hardlink_disposal_tests {
                 proof.after_link_count = Some(2);
                 row.completed = true;
                 assert!(
-                    disposal_version_current(&retained_path, &version, &[row.clone()])
-                        .await
-                        .unwrap()
+                    disposal_version_current(
+                        &retained_path,
+                        &version,
+                        &[row.clone()],
+                        VerificationDepth::Full
+                    )
+                    .await
+                    .unwrap()
                 );
                 // Reoccupation of the selected pathname is never another
                 // disposal opportunity, even when the old inode is retained.
                 std::fs::write(&source, b"replacement file").unwrap();
                 assert!(
-                    !disposal_version_current(&retained_path, &version, &[row])
-                        .await
-                        .unwrap()
+                    !disposal_version_current(
+                        &retained_path,
+                        &version,
+                        &[row],
+                        VerificationDepth::Full
+                    )
+                    .await
+                    .unwrap()
                 );
                 assert_eq!(std::fs::read(&source).unwrap(), b"replacement file");
             }
             assert!(retained.exists());
             assert!(external.exists());
         }
+    }
+
+    /// A plan made at quick depth records no hash. Its disposal is then held
+    /// to the version and the exact link count alone, without reading the
+    /// file; a full-depth check of the same record refuses, and a link count
+    /// off by one refuses at quick depth too.
+    #[tokio::test]
+    async fn a_quick_disposal_rests_on_version_and_link_count_without_a_read() {
+        Disk::process().count_whole_reads();
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("selected.mkv");
+        let retained = temp.path().join("retained.mkv");
+        let external = temp.path().join("external.mkv");
+        std::fs::write(&source, b"historical movie").unwrap();
+        std::fs::hard_link(&source, &retained).unwrap();
+        std::fs::hard_link(&source, &external).unwrap();
+        let source_path = path_to_stored_string(&source);
+        let retained_path = path_to_stored_string(&retained);
+        let version = super::super::resolution::file_version(&source)
+            .await
+            .unwrap();
+        let row = FileResolution {
+            operation_id: "synthetic-operation".into(),
+            title_id: "synthetic-title".into(),
+            source_path: source_path.clone(),
+            original_destination: source_path.clone(),
+            destination_path: source_path,
+            disposition: ResolutionDisposition::Disposal(DisposalProof {
+                sequence: 1,
+                before_link_count: 3,
+                after_link_count: None,
+                after_versions: BTreeMap::from([(retained_path.clone(), version.clone())]),
+                recycle: None,
+            }),
+            completed: false,
+            source_version: Some(version.clone()),
+            destination_version: None,
+            identity_hash: None,
+            warning: None,
+            reason_code: None,
+        };
+        std::fs::remove_file(&source).unwrap();
+        let current = |depth| {
+            let row = row.clone();
+            let (retained_path, version) = (retained_path.clone(), version.clone());
+            async move {
+                disposal_version_current(&retained_path, &version, &[row], depth)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert!(current(VerificationDepth::Quick).await);
+        assert!(!current(VerificationDepth::Full).await);
+        let another = temp.path().join("another.mkv");
+        std::fs::hard_link(&retained, &another).unwrap();
+        assert!(!current(VerificationDepth::Quick).await);
+        for path in [&retained, &external, &another] {
+            assert_eq!(Disk::process().whole_reads_of(path), 0, "{path:?}");
+        }
+        assert_eq!(std::fs::read(&retained).unwrap(), b"historical movie");
+        assert_eq!(std::fs::read(&external).unwrap(), b"historical movie");
+    }
+
+    /// A recorded hash is held to at either depth; without one, only quick
+    /// depth accepts.
+    #[tokio::test]
+    async fn a_recorded_hash_is_held_to_at_either_depth() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("retained.mkv");
+        std::fs::write(&file, b"historical movie").unwrap();
+        let path = path_to_stored_string(&file);
+        let version = super::super::resolution::file_version(&file).await.unwrap();
+        let hash = conflict_hash(&path, &version).await.unwrap();
+        let wrong = "0".repeat(64);
+        for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+            assert!(
+                content_holds(&path, &version, Some(&hash), depth)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                !content_holds(&path, &version, Some(&wrong), depth)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(
+            content_holds(&path, &version, None, VerificationDepth::Quick)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !content_holds(&path, &version, None, VerificationDepth::Full)
+                .await
+                .unwrap()
+        );
+    }
+
+    /// A plan stored before the hash became optional decodes and encodes to
+    /// the same text, so its confirmation fingerprint is unchanged; a quick
+    /// plan's proof leaves the field out.
+    #[test]
+    fn a_stored_hardlink_proof_round_trips_unchanged() {
+        let stored = r#"{"version":"1:2:16:3:4:5:6","full_blake3":"ab","link_count":3}"#;
+        let proof: ConflictHardlinkProof = serde_json::from_str(stored).unwrap();
+        assert_eq!(proof.full_blake3.as_deref(), Some("ab"));
+        assert_eq!(serde_json::to_string(&proof).unwrap(), stored);
+        let quick = ConflictHardlinkProof {
+            full_blake3: None,
+            ..proof
+        };
+        let encoded = serde_json::to_string(&quick).unwrap();
+        assert_eq!(encoded, r#"{"version":"1:2:16:3:4:5:6","link_count":3}"#);
+        assert_eq!(
+            serde_json::from_str::<ConflictHardlinkProof>(&encoded).unwrap(),
+            quick
+        );
     }
 }
 
