@@ -74,6 +74,7 @@ mod initial_auth;
 mod list_account_origin;
 mod log_buffer;
 mod log_delivery;
+mod mcp;
 mod metadata_gateway_url;
 mod metrics_setup;
 mod middleware;
@@ -2623,6 +2624,10 @@ async fn bootstrap_application(
             post(graphql_handler)
                 .with_state(auth_state.clone())
                 .layer(DefaultBodyLimit::max(middleware::GRAPHQL_MAX_MESSAGE_BYTES)),
+        )
+        .route(
+            mcp::MCP_PATH,
+            post(mcp::mcp_handler).with_state(mcp::McpState::new(auth_state.clone())),
         )
         .route(
             "/images/media/{token}/{variant}",

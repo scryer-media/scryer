@@ -57,8 +57,20 @@ pub const HTTP_WEBSOCKET_API_KEY_UNSUPPORTED: &str = "HTTP_WEBSOCKET_API_KEY_UNS
 /// Scryer web client proof is required for unauthenticated WebSocket access.
 pub const HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED: &str = "HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED";
 
+/// The MCP endpoint was sent an Origin it does not accept.
+pub const HTTP_MCP_ORIGIN_NOT_ALLOWED: &str = "HTTP_MCP_ORIGIN_NOT_ALLOWED";
+
+/// The MCP endpoint accepts only an API key, and none was offered.
+pub const HTTP_MCP_API_KEY_REQUIRED: &str = "HTTP_MCP_API_KEY_REQUIRED";
+
+/// The API key offered to the MCP endpoint is unknown, expired or revoked.
+pub const HTTP_MCP_API_KEY_INVALID: &str = "HTTP_MCP_API_KEY_INVALID";
+
 #[cfg(test)]
 const ALL: &[&str] = &[
+    HTTP_MCP_ORIGIN_NOT_ALLOWED,
+    HTTP_MCP_API_KEY_REQUIRED,
+    HTTP_MCP_API_KEY_INVALID,
     HTTP_WEBSOCKET_API_KEY_UNSUPPORTED,
     HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED,
     HTTP_API_EXPLORER_DISABLED,

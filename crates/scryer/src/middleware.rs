@@ -716,7 +716,7 @@ pub(crate) struct WebSocketOriginPolicy {
 impl WebSocketOriginPolicy {
     /// Whether a rejection of this request's Origin should log at warn rather
     /// than debug.
-    fn rejection_warning_due(&self, headers: &HeaderMap, now: Instant) -> bool {
+    pub(crate) fn rejection_warning_due(&self, headers: &HeaderMap, now: Instant) -> bool {
         let origin = headers
             .get(header::ORIGIN)
             .and_then(|value| value.to_str().ok())
@@ -752,7 +752,7 @@ impl WebSocketOriginPolicy {
         }
     }
 
-    fn check(&self, headers: &HeaderMap) -> Result<(), String> {
+    pub(crate) fn check(&self, headers: &HeaderMap) -> Result<(), String> {
         let Some(origin) = headers
             .get(header::ORIGIN)
             .and_then(|value| value.to_str().ok())
@@ -1859,7 +1859,7 @@ mod restore_admission_tests {
     }
 }
 
-fn restore_maintenance_response() -> Response {
+pub(crate) fn restore_maintenance_response() -> Response {
     (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({
         "errors": [{"message": "Restore or recovery is in progress", "extensions": {
             "code": "VALIDATION_ERROR", "reason": scryer_application::restore_refusal::RESTORE_MAINTENANCE_ACTIVE
@@ -2065,78 +2065,32 @@ pub(crate) async fn graphql_handler(
         return rate_limited_graphql_http_response(&decision);
     }
     touch_oauth_grant_last_used(&state.app, actor.as_ref()).await;
-    let batch = if let Some(actor) = actor {
-        let oauth_session = actor.oauth_session();
-        let interactive_session = actor.is_interactive_session();
-        let authless_default_session = actor.is_authless_default_session();
-        let api_key_management_session = actor.can_manage_api_keys();
-        // Request-scoped dataloaders: the batch cache lives for exactly this
-        // HTTP request (shared across a batched request's entries — same actor,
-        // same snapshot). The WebSocket path intentionally gets none; resolvers
-        // fall back to direct application calls when loaders are absent.
-        let loaders = RequestLoaders::new(state.app.clone(), actor.user.clone());
-        match batch {
-            async_graphql::BatchRequest::Single(req) => {
-                let mut req = req
-                    .data(actor.mfa_verification())
-                    .data(actor.user)
-                    .data(loaders);
-                if interactive_session {
-                    req = req.data(InteractiveSession);
-                }
-                if authless_default_session {
-                    req = req.data(AuthlessDefaultSession);
-                }
-                if api_key_management_session {
-                    req = req.data(ApiKeyManagementSession);
-                }
-                if let Some(oauth_session) = oauth_session {
-                    req = req.data(oauth_session);
-                }
-                async_graphql::BatchRequest::Single(req)
-            }
-            async_graphql::BatchRequest::Batch(reqs) => async_graphql::BatchRequest::Batch(
-                reqs.into_iter()
-                    .map(|req| {
-                        let mut req = req
-                            .data(actor.mfa_verification())
-                            .data(actor.user.clone())
-                            .data(loaders.clone());
-                        if interactive_session {
-                            req = req.data(InteractiveSession);
-                        }
-                        if authless_default_session {
-                            req = req.data(AuthlessDefaultSession);
-                        }
-                        if api_key_management_session {
-                            req = req.data(ApiKeyManagementSession);
-                        }
-                        if let Some(oauth_session) = actor.oauth_session() {
-                            req = req.data(oauth_session);
-                        }
-                        req
-                    })
-                    .collect(),
-            ),
-        }
-    } else {
-        batch
+    // Request-scoped dataloaders: the batch cache lives for exactly this
+    // HTTP request (shared across a batched request's entries — same actor,
+    // same snapshot). The WebSocket path intentionally gets none; resolvers
+    // fall back to direct application calls when loaders are absent.
+    let loaders = actor
+        .as_ref()
+        .map(|actor| RequestLoaders::new(state.app.clone(), actor.user.clone()));
+    let facts = GraphqlRequestFacts {
+        session_persistence,
+        login_attempt_limiter,
+        client_ip,
     };
-
+    let caller = actor.as_ref().zip(loaders.as_ref());
     let batch = match batch {
         async_graphql::BatchRequest::Single(req) => async_graphql::BatchRequest::Single(
-            req.data(session_persistence)
-                .data(login_attempt_limiter)
-                .data(RequestClientIp(client_ip))
-                .data(state.list_account_origin_policy.request_context()),
+            attach_graphql_request_data(req, caller, &facts, &state.list_account_origin_policy),
         ),
         async_graphql::BatchRequest::Batch(reqs) => async_graphql::BatchRequest::Batch(
             reqs.into_iter()
                 .map(|req| {
-                    req.data(session_persistence)
-                        .data(login_attempt_limiter.clone())
-                        .data(RequestClientIp(client_ip))
-                        .data(state.list_account_origin_policy.request_context())
+                    attach_graphql_request_data(
+                        req,
+                        caller,
+                        &facts,
+                        &state.list_account_origin_policy,
+                    )
                 })
                 .collect(),
         ),
@@ -2193,6 +2147,206 @@ pub(crate) async fn graphql_handler(
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body))
         .unwrap()
+}
+
+/// Per-request facts every HTTP GraphQL operation carries, whatever its actor.
+struct GraphqlRequestFacts {
+    session_persistence: RequestSessionPersistence,
+    login_attempt_limiter: LoginAttemptLimiter,
+    client_ip: IpAddr,
+}
+
+/// Attach the actor and request data an HTTP GraphQL operation runs with.
+///
+/// `/graphql` and the MCP endpoint both go through here, so an API key gets
+/// the same permission, step-up and library-grant outcomes on either.
+fn attach_graphql_request_data(
+    request: GraphQLRequest,
+    caller: Option<(&ResolvedActor, &Arc<RequestLoaders>)>,
+    facts: &GraphqlRequestFacts,
+    list_account_origin_policy: &crate::list_account_origin::ListAccountOriginPolicy,
+) -> GraphQLRequest {
+    let mut request = request;
+    if let Some((actor, loaders)) = caller {
+        request = request
+            .data(actor.mfa_verification())
+            .data(actor.user.clone())
+            .data(loaders.clone());
+        if actor.is_interactive_session() {
+            request = request.data(InteractiveSession);
+        }
+        if actor.is_authless_default_session() {
+            request = request.data(AuthlessDefaultSession);
+        }
+        if actor.can_manage_api_keys() {
+            request = request.data(ApiKeyManagementSession);
+        }
+        if let Some(oauth_session) = actor.oauth_session() {
+            request = request.data(oauth_session);
+        }
+    }
+    request
+        .data(facts.session_persistence)
+        .data(facts.login_attempt_limiter.clone())
+        .data(RequestClientIp(facts.client_ip))
+        .data(list_account_origin_policy.request_context())
+}
+
+/// A caller admitted by API key alone, with the request facts its GraphQL
+/// operations need. Nothing else can build one, so a session token, an OAuth
+/// token or the authless default actor never reaches an MCP tool.
+#[derive(Clone)]
+pub(crate) struct ApiKeyCaller {
+    actor: ResolvedActor,
+    provenance: RateLimitProvenance,
+    client_ip: IpAddr,
+    default_persist_session: bool,
+}
+
+/// Why a request could not be admitted as an API-key caller.
+#[derive(Debug)]
+pub(crate) enum ApiKeyCallerRefusal {
+    /// The Authorization header is not a single bearer token.
+    HeaderInvalid,
+    /// No API key was offered: no header, a session JWT or an OAuth token.
+    Required,
+    /// The API key is unknown, expired or revoked, or its owner is disabled.
+    Invalid,
+    /// Resolving the key failed for a reason that is not the caller's.
+    Internal,
+}
+
+/// Admit a request that authenticates with an API key and nothing else.
+///
+/// Only an `Authorization: Bearer scryer_…` key is resolved, so a request with
+/// no credentials never falls through to the authless default actor, and a
+/// refusal costs no database read.
+pub(crate) async fn admit_api_key_caller(
+    state: &AuthState,
+    headers: &HeaderMap,
+    remote_addr: SocketAddr,
+) -> Result<ApiKeyCaller, ApiKeyCallerRefusal> {
+    match authorization_token_from_headers(headers) {
+        Ok(Some(token)) if is_api_key_bearer(token) => {}
+        Ok(_) => return Err(ApiKeyCallerRefusal::Required),
+        Err(_) => return Err(ApiKeyCallerRefusal::HeaderInvalid),
+    }
+    let actor = match resolve_actor(state, headers, Some(remote_addr)).await {
+        Ok(Some(actor)) => actor,
+        Ok(None) | Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+            return Err(ApiKeyCallerRefusal::Invalid);
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "failed to resolve MCP API key");
+            return Err(ApiKeyCallerRefusal::Internal);
+        }
+    };
+    // Key resolution never yields a reduced session, but the guard keeps a
+    // step-up or enrollment scope away from tools if that ever changes.
+    if !actor.is_api_key() || actor.token_claims.session_scope != JwtSessionScope::Full {
+        return Err(ApiKeyCallerRefusal::Invalid);
+    }
+    Ok(ApiKeyCaller {
+        actor,
+        provenance: rate_limit_provenance(headers, remote_addr, &state.rate_limiter),
+        client_ip: request_client_ip(headers, Some(remote_addr)).unwrap_or(remote_addr.ip()),
+        default_persist_session: default_persist_session_for_request(headers, Some(remote_addr)),
+    })
+}
+
+/// Run one GraphQL operation as an admitted API-key caller, with the same
+/// rate limits, request data, execution timeout and image-proxy flush as a
+/// single `/graphql` request.
+pub(crate) async fn execute_graphql_as_api_key_caller(
+    state: &AuthState,
+    caller: &ApiKeyCaller,
+    request: GraphQLRequest,
+) -> GraphQLResponse {
+    let request = request.data(scryer_interface::InitialAuthenticationRequest {
+        client_ip: caller.provenance.client_ip,
+    });
+    let authentication = analyze_authentication_request(&request);
+    if let Err(decision) = check_graphql_request_rate_limits(
+        &state.rate_limiter,
+        &caller.provenance.key(None),
+        &request,
+        &authentication,
+    ) {
+        return rate_limited_graphql_single_response(&decision);
+    }
+    if authentication.rejected && authentication.class.is_some() {
+        return authentication_mutation_single_field_response();
+    }
+    let user_key = caller.provenance.key(Some(&caller.actor.user.id));
+    if authentication.class.is_none()
+        && let Err(decision) = state
+            .rate_limiter
+            .check_graphql(classify_graphql_request(&request), &user_key)
+    {
+        return rate_limited_graphql_single_response(&decision);
+    }
+
+    let (operation_name, operation_type) = graphql_request_operation_metadata(&request);
+    let request_span = context_span(
+        LogContext::request(RequestContext {
+            id: Uuid::new_v4().to_string(),
+            transport: "mcp".to_owned(),
+            operation_name,
+            operation_type,
+            client_ip: Some(caller.client_ip.to_string()),
+        })
+        .with_actor(actor_log_context(&caller.actor)),
+    );
+
+    let loaders = RequestLoaders::new(state.app.clone(), caller.actor.user.clone());
+    let facts = GraphqlRequestFacts {
+        session_persistence: RequestSessionPersistence {
+            default_persist_session: caller.default_persist_session,
+        },
+        login_attempt_limiter: login_attempt_limiter(state.rate_limiter.clone(), user_key),
+        client_ip: caller.client_ip,
+    };
+    let request = attach_graphql_request_data(
+        request,
+        Some((&caller.actor, &loaders)),
+        &facts,
+        &state.list_account_origin_policy,
+    );
+
+    let execution_timeout = graphql_post_execution_timeout();
+    let response = match tokio::time::timeout(
+        execution_timeout,
+        state
+            .schema
+            .execute(request)
+            .instrument(request_span.clone()),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            request_span.in_scope(|| {
+                tracing::warn!(
+                    timeout_seconds = execution_timeout.as_secs(),
+                    "MCP GraphQL execution timed out"
+                );
+            });
+            graphql_execution_timeout_single_response()
+        }
+    };
+    if let Err(error) = state
+        .app
+        .image_proxy_repository()
+        .flush_image_proxy_sources()
+        .instrument(request_span)
+        .await
+    {
+        tracing::error!(error = %error, "failed to durably register MCP image proxy sources");
+        return GraphQLResponse::from_errors(vec![unpositioned_graphql_error(to_gql_error(
+            AppError::Repository(error.to_string()),
+        ))]);
+    }
+    response
 }
 
 pub(crate) async fn emby_avatar_handler(
@@ -2365,6 +2519,10 @@ fn response_has_error_code(response: &GraphQLResponse, code: &str) -> bool {
 }
 
 fn graphql_execution_timeout_response() -> async_graphql::BatchResponse {
+    async_graphql::BatchResponse::Single(graphql_execution_timeout_single_response())
+}
+
+fn graphql_execution_timeout_single_response() -> GraphQLResponse {
     let execution_timeout = graphql_post_execution_timeout();
     let mut extensions = ErrorExtensionValues::default();
     extensions.set("code", GRAPHQL_POST_EXECUTION_TIMEOUT_CODE);
@@ -2378,7 +2536,7 @@ fn graphql_execution_timeout_response() -> async_graphql::BatchResponse {
         None,
     );
     error.extensions = Some(extensions);
-    async_graphql::BatchResponse::Single(GraphQLResponse::from_errors(vec![error]))
+    GraphQLResponse::from_errors(vec![error])
 }
 
 fn graphql_batch_limit_response(max_operations: usize) -> Response {
@@ -3508,6 +3666,7 @@ fn classify_http_rate_limit(_method: &Method, path: &str) -> Option<HttpRateLimi
         || crate::nab_api::is_endpoint(path)
         || path == "/api"
         || path.starts_with("/api/")
+        || path == crate::mcp::MCP_PATH
         || path.starts_with("/compat/sonarr/api/")
         || path.starts_with("/compat/radarr/api/")
         || ["/compat/sonarr/library/", "/compat/radarr/library/"]
@@ -6573,6 +6732,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mcp_endpoint_consumes_http_api_quota() {
+        assert_eq!(
+            classify_http_rate_limit(&Method::POST, "/mcp"),
+            Some(HttpRateLimitClass::Api)
+        );
+        assert!(!skip_http_rate_limit(&Method::POST, "/mcp"));
+        assert!(skip_http_rate_limit(&Method::POST, "/mcp-elsewhere"));
     }
 
     #[test]

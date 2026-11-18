@@ -95,6 +95,9 @@ fixedbitset = "0.5"
 # location-operation copies. `ffi`/`panic-handler` (default) are for the crate's
 # C shared library and are deliberately off.
 crc-turbo = { version = "1.11", default-features = false, features = ["std"] }
+# The built-in MCP endpoint: a stateless Streamable HTTP server only. Tool
+# definitions are written by hand, so the derive macros are not needed.
+rmcp = { version = "3.11", default-features = false, features = ["server", "transport-streamable-http-server"] }
 
 [profile.release]
 lto = "fat"
