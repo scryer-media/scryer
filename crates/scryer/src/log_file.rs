@@ -575,7 +575,20 @@ fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
             // FAT/exFAT cannot hard-link. An exclusive rename retains both
             // atomic publication and collision safety on those filesystems.
             Ok(LinkOutcome::NotPossible) | Err(_) => {
-                disk.move_exclusive_blocking(&temporary, &destination)?;
+                disk.move_exclusive_blocking(&temporary, &destination)
+                    .inspect_err(|error| {
+                        // The disk service removes the empty name it
+                        // reserved when it can tell it is its own; anything
+                        // it could not is kept and named here, since
+                        // retention keeps only archives it can read as ours.
+                        if let Some(left) = error.left() {
+                            eprintln!(
+                                "Scryer file log rotation left {} in place after a failed rename: {}",
+                                left.at().display(),
+                                error.words()
+                            );
+                        }
+                    })?;
             }
         }
         sync_directory(source.parent().unwrap())

@@ -246,7 +246,19 @@ impl StagedNzbStore for FileSystemStagedNzbStore {
         Disk::process()
             .move_exclusive(&pending.partial_path, &pending.compressed_path)
             .await
-            .map_err(|error| failed("finalize staged nzb", &pending.compressed_path, error))?;
+            .map_err(|error| {
+                // The disk service removes the empty name it reserved when it
+                // can tell it is its own; anything it could not is kept and
+                // named here.
+                if let Some(left) = error.left() {
+                    tracing::warn!(
+                        left = %left.at().display(),
+                        error = %error.words(),
+                        "a staged nzb whose rename failed left a file in place"
+                    );
+                }
+                failed("finalize staged nzb", &pending.compressed_path, error)
+            })?;
         Ok(StagedNzbRef {
             password_candidates: Default::default(),
             id: pending.id,

@@ -236,6 +236,15 @@ pub enum Leftover {
     PutBackFailed { at: PathBuf },
 }
 
+impl Leftover {
+    /// Where the file is now.
+    pub fn at(&self) -> &Path {
+        match self {
+            Self::PutBack { at } | Self::AtReservedName { at } | Self::PutBackFailed { at } => at,
+        }
+    }
+}
+
 /// Which path a refusal is about, where the disk's answer says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
