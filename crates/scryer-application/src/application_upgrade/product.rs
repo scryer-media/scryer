@@ -40,12 +40,17 @@ pub const SCRYER_PRODUCT: ProductDescriptor = ProductDescriptor {
     windows_tray_executable: "scryer-tray.exe",
     windows_helper_executable: "scryer-upgrade-helper.exe",
     windows_product_process_names: &["scryer.exe", "scryer-tray.exe"],
+    // Keeps its long name: the journal of the release that staged a bundle
+    // names this directory, and the release that finishes the upgrade removes
+    // it only when it carries this one prefix.
     staged_replacement_prefix: ".scryer-upgrade-new-",
     disable_self_upgrade_env: "SCRYER_DISABLE_SELF_UPGRADE",
     package_env: "SCRYER_PACKAGE",
     tray_supervised_env: "SCRYER_TRAY_SUPERVISED",
     windows_registry_key: "Software\\Scryer Media\\Scryer",
-    write_probe_prefix: ".scryer-write-probe-",
+    // Not a cross-release contract: each probe is created and removed by the
+    // same call.
+    write_probe_prefix: ".scry-wp-",
     http_operation_timeout: scryer_outbound_http::LONG_RUNNING_HTTP_OPERATION_TIMEOUT,
 };
 
@@ -101,7 +106,7 @@ mod tests {
         );
         assert_eq!(SCRYER_PRODUCT.package_env, "SCRYER_PACKAGE");
         assert_eq!(SCRYER_PRODUCT.tray_supervised_env, "SCRYER_TRAY_SUPERVISED");
-        assert_eq!(SCRYER_PRODUCT.write_probe_prefix, ".scryer-write-probe-");
+        assert_eq!(SCRYER_PRODUCT.write_probe_prefix, ".scry-wp-");
         assert_eq!(
             SCRYER_PRODUCT.staged_replacement_prefix,
             ".scryer-upgrade-new-"

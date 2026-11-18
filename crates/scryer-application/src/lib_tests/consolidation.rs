@@ -274,6 +274,7 @@ impl ConsolidationFixture {
                     move_crc: None,
                     crc_algorithm: None,
                     hash_computed_at: Some(Utc::now()),
+                    mark: None,
                 },
             )
             .await
@@ -431,6 +432,7 @@ impl ConsolidationFixture {
                 replacement_path: None,
                 media_row: None,
             },
+            crate::location::model::VerificationDepth::Full,
         )
         .await
         .expect("recycle the fixture file")

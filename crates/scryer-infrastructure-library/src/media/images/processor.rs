@@ -21,6 +21,9 @@ const AVIF_SPEED: u8 = 4;
 const AVIF_QUALITY: u8 = 85;
 const PROXY_AVIF_SPEED: u8 = 10;
 const PROXY_AVIF_QUALITY: u8 = 60;
+/// Thread name prefix of the artwork workers; short enough that the index
+/// survives the 15-byte thread name limit some platforms impose.
+const ARTWORK_THREAD_PREFIX: &str = "scry-aw-";
 
 fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     if !matches!(workers, 2 | 4) {
@@ -32,7 +35,7 @@ fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     let (ready, results) = std::sync::mpsc::channel();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
-        .thread_name(|index| format!("scryer-artwork-{index}"))
+        .thread_name(|index| format!("{ARTWORK_THREAD_PREFIX}{index}"))
         .start_handler(move |index| {
             let result = scryer_application::background_worker_priority();
             match &result {
@@ -507,7 +510,7 @@ fn linear_to_srgb_u8(value: f32) -> u8 {
 fn encode_avif(image: &RgbaImage, speed: u8, quality: u8) -> AppResult<Vec<u8>> {
     if !std::thread::current()
         .name()
-        .is_some_and(|name| name.starts_with("scryer-artwork-"))
+        .is_some_and(|name| name.starts_with(ARTWORK_THREAD_PREFIX))
     {
         return Err(AppError::Repository(
             "AVIF encoding requires an artwork worker".into(),
@@ -616,7 +619,11 @@ mod tests {
                     std::thread::current().name().unwrap().to_string()
                 });
                 assert_eq!(names.len(), workers);
-                assert!(names.iter().all(|name| name.starts_with("scryer-artwork-")));
+                assert!(
+                    names
+                        .iter()
+                        .all(|name| name.starts_with(ARTWORK_THREAD_PREFIX))
+                );
                 pool.install(|| {
                     for alpha in [255, 96] {
                         let mut pixels = RgbaImage::new(64, 96);

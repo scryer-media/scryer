@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 

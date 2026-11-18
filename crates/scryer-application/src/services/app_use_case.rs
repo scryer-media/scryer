@@ -1857,12 +1857,16 @@ pub(super) fn probe_config_io_performance(
     const CHUNK_BYTES: usize = 1024 * 1024;
     const SLOW_CAP: std::time::Duration = std::time::Duration::from_millis(500);
 
-    if !config_dir.is_dir() && std::fs::create_dir_all(config_dir).is_err() {
+    let disk = crate::disk::Disk::process();
+    if disk
+        .create_dir_blocking(config_dir, crate::disk::Parents::Create)
+        .is_err()
+    {
         return (RuntimePerformanceClass::Slow, None);
     }
 
     let probe_name = format!(
-        ".scryer-runtime-probe-{}-{}.tmp",
+        ".scry-rp-{}-{}.tmp",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1874,7 +1878,7 @@ pub(super) fn probe_config_io_performance(
     let start = std::time::Instant::now();
 
     let result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&probe_path)?;
+        let mut file = disk.open_blocking(&probe_path, crate::disk::Open::create())?;
         let mut written = 0;
         while written < PAYLOAD_BYTES {
             let to_write = std::cmp::min(CHUNK_BYTES, PAYLOAD_BYTES - written);
@@ -1887,7 +1891,7 @@ pub(super) fn probe_config_io_performance(
         file.flush()?;
         file.sync_all()?;
 
-        let mut file = std::fs::File::open(&probe_path)?;
+        let mut file = disk.open_blocking(&probe_path, crate::disk::Open::read())?;
         let mut read_buffer = vec![0_u8; CHUNK_BYTES];
         loop {
             let bytes_read = file.read(&mut read_buffer)?;
@@ -1903,7 +1907,7 @@ pub(super) fn probe_config_io_performance(
         Ok(())
     })();
 
-    let cleanup_result = std::fs::remove_file(&probe_path);
+    let cleanup_result = disk.remove_blocking(&probe_path, crate::disk::Remove::File);
 
     if result.is_err() || cleanup_result.is_err() {
         let elapsed_ms = u64::try_from(start.elapsed().as_millis()).ok();

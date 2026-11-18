@@ -3,11 +3,12 @@
 //! Every free-space figure in Scryer comes from [`StorageCapacity`]: the
 //! health check, the dashboard, request and lifecycle rules, the import and
 //! sidecar guards, archive extraction limits, move previews, the application
-//! upgrade check and the diagnostics bundle. It owns the disk call (the only
-//! `statfs` / `statvfs` / `GetDiskFreeSpaceExW` for capacity in the crate), the
-//! timeout around it, the background cadence over library roots, the per-path
-//! cache and its staleness rule, and single-flight, so callers asking about one
-//! path at once share one call.
+//! upgrade check and the diagnostics bundle. It owns when the disk is called
+//! (the call itself, the only `statfs` / `statvfs` / `GetDiskFreeSpaceExW` for
+//! capacity, is `scryer_disk::capacity::probe`), the timeout around it, the
+//! background cadence over library roots, the per-path cache and its staleness
+//! rule, and single-flight, so callers asking about one path at once share one
+//! call.
 //!
 //! Library roots live on network shares, where each call is a round trip and a
 //! dead mount blocks it outright. So there are two ways to read:
@@ -40,8 +41,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use chrono::{DateTime, Duration, Utc};
 use tracing::{info, warn};
 
+use super::{DiskClock, Offloaded, SystemClock, offload, read, reusable, write};
 use crate::AppUseCase;
 use crate::helpers::FilesystemSpace;
+pub(crate) use scryer_disk::capacity::CapacityProbeReading;
 
 /// How often each library root is sampled. A root's free space moves when an
 /// import lands or a file is removed, a scale of minutes, and every guard that
@@ -60,15 +63,7 @@ pub fn storage_sample_max_age() -> Duration {
     Duration::from_std(STORAGE_CAPACITY_SAMPLE_INTERVAL * 2).unwrap_or(Duration::minutes(10))
 }
 
-/// A refreshing read answers from a figure taken this recently instead of
-/// calling the disk again, so a burst of callers costs at most one call per
-/// path per second. A guard reading a figure this old is no weaker than two
-/// guards that each probed at the same moment, which is what a concurrent burst
-/// did before.
-pub const STORAGE_CAPACITY_REFRESH_REUSE: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Bound on one background sample of one root.
-pub const STORAGE_CAPACITY_SAMPLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+pub use scryer_disk::capacity::{STORAGE_CAPACITY_REFRESH_REUSE, STORAGE_CAPACITY_SAMPLE_TIMEOUT};
 
 /// Every this many passes the sampler calls every root, even those it
 /// believes share a filesystem, so a remount or retarget is noticed within an
@@ -99,41 +94,20 @@ pub mod reason {
     ];
 }
 
-/// One capacity call's answer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CapacityProbeReading {
-    pub space: FilesystemSpace,
-    /// The filesystem's id as the call reported it, when the platform gives
-    /// one and it is not zero. Roots whose last calls agree on it and on the
-    /// total are sampled with one call.
-    pub filesystem_id: Option<u64>,
-}
-
 /// The disk seam: the capacity call itself. Tests replace it.
 pub(crate) trait CapacityDisk: Send + Sync + 'static {
     fn probe(&self, path: &Path) -> io::Result<CapacityProbeReading>;
-}
-
-/// The clock samples are stamped and aged by. Tests replace it.
-pub(crate) trait CapacityClock: Send + Sync + 'static {
-    fn now(&self) -> DateTime<Utc>;
-}
-
-#[derive(Debug, Default)]
-struct SystemClock;
-
-impl CapacityClock for SystemClock {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
-    }
 }
 
 #[derive(Debug, Default)]
 struct SystemDisk;
 
 impl CapacityDisk for SystemDisk {
+    // disk-guard: the capacity owner is the one caller of the platform's
+    // free-space call; it bounds, shares and caches it.
+    #[allow(clippy::disallowed_methods)]
     fn probe(&self, path: &Path) -> io::Result<CapacityProbeReading> {
-        system::probe(path)
+        scryer_disk::capacity::probe(path)
     }
 }
 
@@ -250,7 +224,7 @@ struct Entry {
 
 struct Inner {
     disk: Arc<dyn CapacityDisk>,
-    clock: Arc<dyn CapacityClock>,
+    clock: Arc<dyn DiskClock>,
     entries: RwLock<HashMap<String, Entry>>,
     passes: AtomicU64,
     #[cfg(test)]
@@ -270,15 +244,6 @@ impl std::fmt::Debug for StorageCapacity {
             .field("paths", &entries.len())
             .finish_non_exhaustive()
     }
-}
-
-fn read<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
-    lock.write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn key_of(path: &Path) -> String {
@@ -305,7 +270,7 @@ impl StorageCapacity {
             .clone()
     }
 
-    pub(crate) fn with_seams(disk: Arc<dyn CapacityDisk>, clock: Arc<dyn CapacityClock>) -> Self {
+    pub(crate) fn with_seams(disk: Arc<dyn CapacityDisk>, clock: Arc<dyn DiskClock>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 disk,
@@ -393,11 +358,10 @@ impl StorageCapacity {
         let _out = flight
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(sample) = self.sample(&key) {
-            let reuse = Duration::from_std(STORAGE_CAPACITY_REFRESH_REUSE).unwrap_or_default();
-            if sample.sampled_at >= asked_at || asked_at - sample.sampled_at < reuse {
-                return sample.space();
-            }
+        if let Some(sample) = self.sample(&key)
+            && reusable(sample.sampled_at, asked_at, STORAGE_CAPACITY_REFRESH_REUSE)
+        {
+            return sample.space();
         }
         let sample = self.call(path);
         let answer = sample.space();
@@ -416,11 +380,10 @@ impl StorageCapacity {
         let path = path.into();
         let owner = self.clone();
         let probed = path.clone();
-        let task = tokio::task::spawn_blocking(move || owner.refresh_blocking(&probed));
-        match tokio::time::timeout(timeout, task).await {
-            Ok(Ok(answer)) => answer,
-            Ok(Err(join)) => Err(io::Error::other(join.to_string())),
-            Err(_elapsed) => {
+        match offload(Some(timeout), move || owner.refresh_blocking(&probed)).await {
+            Offloaded::Done(answer) => answer,
+            Offloaded::Failed(join) => Err(io::Error::other(join)),
+            Offloaded::TimedOut => {
                 let failure = ProbeFailure {
                     kind: io::ErrorKind::TimedOut,
                     message: format!(
@@ -661,8 +624,9 @@ impl StorageCapacity {
 }
 
 impl AppUseCase {
-    /// Every configured library root path, for the sampler.
-    async fn storage_capacity_roots(&self) -> crate::AppResult<Vec<String>> {
+    /// Every configured library root path, for the sampler and the owner's
+    /// roots.
+    pub(super) async fn storage_capacity_roots(&self) -> crate::AppResult<Vec<String>> {
         let libraries = self.services.catalog.libraries.list(None).await?;
         Ok(libraries
             .into_iter()
@@ -703,144 +667,10 @@ pub async fn start_storage_capacity_sampler(
     }
 }
 
-/// The platform capacity calls. Nothing outside this module makes one.
-mod system {
-    use super::CapacityProbeReading;
-    use crate::helpers::FilesystemSpace;
-    use std::io;
-    use std::path::Path;
-
-    #[cfg(unix)]
-    fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
-        use std::os::unix::ffi::OsStrExt;
-        std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("disk-space path contains an interior NUL: {error}"),
-            )
-        })
-    }
-
-    /// Widen a `statvfs` counter to `u64`; the field types differ by target.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    fn widen<T: Into<u64>>(value: T) -> u64 {
-        value.into()
-    }
-
-    fn nonzero(id: u64) -> Option<u64> {
-        (id != 0).then_some(id)
-    }
-
-    /// `statfs`, not `statvfs`: Darwin's `statvfs` carries 32-bit block
-    /// counts, so a volume larger than `2^32 * f_frsize` bytes wraps (a 23 TB
-    /// SMB share reads back as about 1 TB). Darwin's `statfs` carries 64-bit
-    /// counts in `f_bsize` units.
-    #[cfg(target_os = "macos")]
-    pub(super) fn probe(path: &Path) -> io::Result<CapacityProbeReading> {
-        let c_path = c_path(path)?;
-        // SAFETY: `statfs` fills a zeroed struct we own for a valid,
-        // NUL-terminated path that outlives the call.
-        let buf = unsafe {
-            let mut buf: libc::statfs = std::mem::zeroed();
-            if libc::statfs(c_path.as_ptr(), &mut buf) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            buf
-        };
-        // SAFETY: `fsid_t` is two initialized 32-bit integers.
-        let fsid = unsafe {
-            (&buf.f_fsid as *const libc::fsid_t)
-                .cast::<[i32; 2]>()
-                .read_unaligned()
-        };
-        let bsize = u64::from(buf.f_bsize);
-        Ok(CapacityProbeReading {
-            space: FilesystemSpace {
-                total_bytes: buf.f_blocks.saturating_mul(bsize),
-                available_bytes: buf.f_bavail.saturating_mul(bsize),
-            },
-            filesystem_id: nonzero((u64::from(fsid[0] as u32) << 32) | u64::from(fsid[1] as u32)),
-        })
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    pub(super) fn probe(path: &Path) -> io::Result<CapacityProbeReading> {
-        let c_path = c_path(path)?;
-        // SAFETY: `statvfs` fills a zeroed struct we own for a valid,
-        // NUL-terminated path that outlives the call.
-        let buf = unsafe {
-            let mut buf: libc::statvfs = std::mem::zeroed();
-            if libc::statvfs(c_path.as_ptr(), &mut buf) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            buf
-        };
-        // Some FUSE filesystems report only `f_bsize`; POSIX says counts are
-        // in `f_frsize` units, so prefer it but fall back when it is zero.
-        let mut frsize = widen(buf.f_frsize);
-        if frsize == 0 {
-            frsize = widen(buf.f_bsize);
-        }
-        #[allow(clippy::useless_conversion)]
-        let fsid = u64::from(buf.f_fsid);
-        Ok(CapacityProbeReading {
-            space: FilesystemSpace {
-                total_bytes: widen(buf.f_blocks).saturating_mul(frsize),
-                available_bytes: widen(buf.f_bavail).saturating_mul(frsize),
-            },
-            filesystem_id: nonzero(fsid),
-        })
-    }
-
-    #[cfg(windows)]
-    pub(super) fn probe(path: &Path) -> io::Result<CapacityProbeReading> {
-        use std::iter;
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-        let wide_path: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(iter::once(0))
-            .collect();
-        let mut available = 0_u64;
-        let mut total = 0_u64;
-        // SAFETY: the path is NUL-terminated and outlives the call; the out
-        // pointers are valid for writes.
-        let result = unsafe {
-            GetDiskFreeSpaceExW(
-                wide_path.as_ptr(),
-                &mut available,
-                &mut total,
-                std::ptr::null_mut(),
-            )
-        };
-        if result == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let _ = nonzero;
-        Ok(CapacityProbeReading {
-            space: FilesystemSpace {
-                total_bytes: total,
-                available_bytes: available,
-            },
-            filesystem_id: None,
-        })
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    pub(super) fn probe(_path: &Path) -> io::Result<CapacityProbeReading> {
-        let _ = nonzero;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "disk-space queries are unsupported on this platform",
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk::test_support::ManualClock;
     use std::collections::VecDeque;
 
     fn at(seconds: i64) -> DateTime<Utc> {
@@ -854,22 +684,27 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct ManualClock(Mutex<Option<DateTime<Utc>>>);
+    #[test]
+    fn the_capacity_owner_is_the_process_one() {
+        use crate::disk::DiskCapacity;
 
-    impl ManualClock {
-        fn at(instant: DateTime<Utc>) -> Arc<Self> {
-            Arc::new(Self(Mutex::new(Some(instant))))
-        }
-        fn set(&self, instant: DateTime<Utc>) {
-            *self.0.lock().unwrap() = Some(instant);
-        }
-    }
-
-    impl CapacityClock for ManualClock {
-        fn now(&self) -> DateTime<Utc> {
-            self.0.lock().unwrap().expect("clock set")
-        }
+        let disk = crate::disk::Disk::process();
+        let path = "/srv/fixture-disk-owner-capacity";
+        disk.capacity().record_for_test(
+            path,
+            at(0),
+            Some(crate::helpers::FilesystemSpace {
+                total_bytes: 100,
+                available_bytes: 40,
+            }),
+        );
+        assert!(matches!(
+            StorageCapacity::process().reading(path, at(0)),
+            StorageCapacityReading::Known {
+                available_bytes: 40,
+                ..
+            }
+        ));
     }
 
     type Answer = io::Result<CapacityProbeReading>;

@@ -129,19 +129,78 @@ async fn run_import(
     let mut subtitles_pending =
         subtitle_failed || subtitle_plan.has_pending_sources(delivered_sources.into_iter());
     let subtitles_outstanding = subtitles_pending;
+    // A cleanup refusal that needs reconciliation ends the import so, and
+    // records no hold an operator could release.
+    let mut cleanup_refused = false;
     if !subtitles_pending
         && result
             .as_ref()
             .is_ok_and(|result| result.decision == ImportDecision::Imported)
-        && complete_deferred_import_source_cleanup(app, source_cleanups)
-            .await
-            .is_err()
     {
-        subtitles_pending = true;
-        tracing::warn!(
-            import_id,
-            "verified source cleanup could not finish; import remains successful and sources retained"
-        );
+        match complete_deferred_import_source_cleanup(app, import_id, source_cleanups, source_hold)
+            .await
+        {
+            Ok(()) => {}
+            Err(DeferredCleanupFailure::NeedsReconciliation(error)) => {
+                tracing::error!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup was refused; sources retained for reconciliation"
+                );
+                subtitles_pending = true;
+                cleanup_refused = true;
+                result = Err(error);
+            }
+            // No sources are held, so nothing waits for a release: the attempt
+            // ends failed with the cleanup's own error and is retried. Its
+            // files are placed and cataloged, so it is recorded as the retry
+            // it waits for, never as a failed import: no failed event or
+            // history entry is written for a file that was imported.
+            Err(DeferredCleanupFailure::Failed(error)) => {
+                tracing::warn!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup could not finish; sources retained and the import retried"
+                );
+                subtitles_pending = true;
+                cleanup_refused = true;
+                let title_id = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|imported| imported.title_id.clone());
+                let failed = ImportResult {
+                    decision: ImportDecision::Failed,
+                    skip_reason: completed_import_error_skip_reason(&error),
+                    error_message: Some(error.to_string()),
+                    reason_code: error.reason().map(str::to_string),
+                    needs_reconciliation: false,
+                    source_cleanup_failed: true,
+                    release_burned: false,
+                    title_id,
+                    ..base_completed_import_result(
+                        import_id,
+                        completed,
+                        release_evidence,
+                        started_at,
+                    )
+                };
+                app.update_import_status_and_notify(
+                    import_id,
+                    completed_import_status_for_result(&failed, ImportStatus::Failed),
+                    serde_json::to_string(&failed).ok(),
+                )
+                .await?;
+                result = Ok(failed);
+            }
+            Err(DeferredCleanupFailure::Held(error)) => {
+                subtitles_pending = true;
+                tracing::warn!(
+                    import_id,
+                    error = %error,
+                    "verified source cleanup could not finish; import remains successful and sources retained"
+                );
+            }
+        }
     }
     if source_hold
         && !subtitles_pending
@@ -165,7 +224,7 @@ async fn run_import(
 
     if subtitles_pending {
         workspace_reference.retain();
-        if source_hold {
+        if source_hold && !cleanup_refused {
             let reason = if target.archive_processing_pending {
                 HeldSourcesReason::ArchiveExtractionFailed
             } else if subtitles_outstanding {
@@ -239,7 +298,7 @@ async fn run_import(
 ///
 /// All three leave the download in `ImportBlocked` — `result_state.rs` maps
 /// every non-`Imported` decision there — so the dispositions differ only in
-/// their side effects (design §9, D17 restated).
+/// their side effects.
 async fn carry_out_import_rejection(
     app: &AppUseCase,
     actor: &User,
@@ -333,6 +392,9 @@ async fn carry_out_import_rejection(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -436,7 +498,8 @@ async fn relocate_titleless_archive_workspace_for_title(
         return Ok(TitlelessArchiveRelocation::Ready(extracted_dir));
     }
 
-    tokio::fs::create_dir_all(&target_parent)
+    Disk::process()
+        .create_dir(&target_parent, crate::disk::Parents::Create)
         .await
         .map_err(|error| {
             AppError::Repository(format!(
@@ -452,24 +515,32 @@ async fn relocate_titleless_archive_workspace_for_title(
     );
     // Keep the name recorded by the ownership marker and never replace an
     // existing directory. Unsupported filesystems can extract under the title.
-    let Some(result) = crate::fs_safety::exclusive_rename(&extracted_dir, &target).await else {
-        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-        return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
-    };
-    match result {
-        Ok(()) => Ok(TitlelessArchiveRelocation::Ready(target)),
+    let disk = crate::disk::Disk::process();
+    match disk.move_onto_free_name(&extracted_dir, &target).await {
+        Ok(crate::disk::FreeNameMove::NotOffered) => {
+            crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
+            Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle)
+        }
+        Ok(crate::disk::FreeNameMove::Moved) => Ok(TitlelessArchiveRelocation::Ready(target)),
         Err(error) => {
             crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-            if crate::fs_safety::is_cross_device_error(&error)
-                || error.kind() == std::io::ErrorKind::AlreadyExists
+            use crate::disk::reason;
+            // Windows extracts under the title on any refusal, as it did
+            // before it had this rename.
+            if cfg!(windows)
+                || matches!(
+                    error.reason(),
+                    reason::DISK_MOVE_NEEDS_COPY | reason::DISK_DESTINATION_EXISTS
+                )
             {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
             Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING, format!(
-                "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
+                "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {}",
                 title_name,
                 extracted_dir.display(),
-                target.display()
+                target.display(),
+                error.words()
             )))
         }
     }
@@ -701,8 +772,8 @@ async fn try_match_titleless_archive_from_inner_video(
             discover_video_files(dest_dir, is_series)?
                 .into_iter()
                 .filter(|file| {
-                    file.path()
-                        .canonicalize()
+                    Disk::process()
+                        .canonicalize_blocking(file.path())
                         .is_ok_and(|path| !replaced.contains(&path))
                 }),
         );
@@ -1097,8 +1168,8 @@ async fn resolve_completed_import_target(
                 discover_video_files(dest_dir, is_series)?
                     .into_iter()
                     .filter(|file| {
-                        file.path()
-                            .canonicalize()
+                        Disk::process()
+                            .canonicalize_blocking(file.path())
                             .is_ok_and(|path| !replaced.contains(&path))
                     }),
             );
@@ -1219,8 +1290,8 @@ async fn dispatch_completed_import_target(
     subtitle_deliveries: &mut Vec<(PathBuf, PathBuf)>,
 ) -> AppResult<ImportResult> {
     // The target title is settled and nothing has been written yet: the last
-    // point an import can be refused cleanly while an operation owns the title
-    // (FR-084). The refusal reaches the operator as a failed import record.
+    // point an import can be refused cleanly while an operation owns the title.
+    // The refusal reaches the operator as a failed import record.
     let _location_guard = app
         .acquire_location_title_mutation(
             &crate::location::ownership_guard::COMPLETED_IMPORT_ENTRY,
@@ -1416,6 +1487,9 @@ async fn hold_replacement_for_manual_resolution(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1466,14 +1540,16 @@ async fn existing_additional_import_media_file(
         let mut source_proof = None;
         for candidate in candidates {
             let copy_path = Path::new(&candidate.file_path);
-            match std::fs::metadata(copy_path) {
-                Ok(metadata) if metadata.len() as i64 == source_size => {}
-                Ok(_) => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
+            match Disk::process().follow_blocking(copy_path) {
+                PathReading::Known { len: Some(len), .. } if len as i64 == source_size => {}
+                PathReading::Known { .. } | PathReading::Missing { .. } => continue,
+                reading => {
                     return Err(AppError::Repository(format!(
-                        "failed to stat earlier additional import {}: {error}",
-                        copy_path.display()
+                        "failed to stat earlier additional import {}: {}",
+                        copy_path.display(),
+                        reading
+                            .unknown_reason()
+                            .unwrap_or(reason::DISK_PATH_UNREACHABLE)
                     )));
                 }
             }
@@ -1629,6 +1705,18 @@ async fn import_additional_movie_download(
         } else {
             "rejected"
         };
+        // Settled before the artifact that lets a later run call it imported.
+        let skip_reason = Some(
+            skip_reason_for_import_check_rejection(
+                app,
+                import_id,
+                Some(completed),
+                code,
+                source_video,
+                &dest_path,
+            )
+            .await?,
+        );
         persist_file_import_artifact(
             app,
             import_id,
@@ -1642,8 +1730,6 @@ async fn import_additional_movie_download(
             linked_episode_artifacts,
         )
         .await?;
-        let skip_reason =
-            Some(skip_reason_for_import_check_rejection(app, code, &dest_path).await?);
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
@@ -1664,6 +1750,9 @@ async fn import_additional_movie_download(
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1786,6 +1875,9 @@ async fn import_additional_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -1867,10 +1959,10 @@ async fn import_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = tokio::fs::metadata(&source_video)
-        .await
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let source_size = match Disk::process().follow(&source_video).await {
+        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
+        _ => 0,
+    };
 
     let ImportPathSettings {
         media_root,
@@ -2067,6 +2159,9 @@ async fn import_movie_download(
                 completed_at: Utc::now(),
                 upgrade: false,
                 upgrade_previous_path: None,
+                reason_code: None,
+                needs_reconciliation: false,
+                source_cleanup_failed: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2120,6 +2215,18 @@ async fn import_movie_download(
         } else {
             "rejected"
         };
+        // Settled before the artifact that lets a later run call it imported.
+        let skip_reason = Some(
+            skip_reason_for_import_check_rejection(
+                app,
+                import_id,
+                Some(completed),
+                code,
+                &source_video,
+                &dest_path,
+            )
+            .await?,
+        );
         persist_file_import_artifact(
             app,
             import_id,
@@ -2133,8 +2240,6 @@ async fn import_movie_download(
             &[],
         )
         .await?;
-        let skip_reason =
-            Some(skip_reason_for_import_check_rejection(app, code, &dest_path).await?);
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
@@ -2155,6 +2260,9 @@ async fn import_movie_download(
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2192,7 +2300,7 @@ async fn import_movie_download(
         .await;
     }
 
-    // **The one import decision** (design §3): subject, landed score, truth
+    // **The one import decision**: subject, landed score, truth
     // verdict and admission in one call, over the same incumbents and the same
     // comparator the grab path consulted. This used to be a bare
     // `new_score > old_score` against a stored `acquisition_score`, and — until
@@ -2330,6 +2438,9 @@ async fn import_movie_download(
                     completed_at: Utc::now(),
                     upgrade: true,
                     upgrade_previous_path: outcome.previous_path.clone(),
+                    reason_code: None,
+                    needs_reconciliation: false,
+                    source_cleanup_failed: false,
                 };
                 tracing::info!(
                     title = %title.name,
@@ -2609,6 +2720,9 @@ async fn import_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2712,10 +2826,10 @@ async fn import_series_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = tokio::fs::metadata(&source_video)
-        .await
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let source_size = match Disk::process().follow(&source_video).await {
+        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
+        _ => 0,
+    };
 
     let ImportPathSettings {
         media_root,
@@ -2964,6 +3078,9 @@ async fn import_series_movie_download(
                 completed_at: Utc::now(),
                 upgrade: false,
                 upgrade_previous_path: None,
+                reason_code: None,
+                needs_reconciliation: false,
+                source_cleanup_failed: false,
             };
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -3010,7 +3127,7 @@ async fn import_series_movie_download(
     )
     .await?;
 
-    // **The one import decision** (design §3). A linked movie is a scope like
+    // **The one import decision**. A linked movie is a scope like
     // any other; hand-rolling its comparison is what let it disagree with the
     // grab that fetched the file.
     let decision_input = crate::import_decide::ImportDecisionInput {
@@ -3031,7 +3148,7 @@ async fn import_series_movie_download(
         // Every primary file of the title, not the handful that happen to sit at
         // this import's destination path: the subject holds *every* file linked
         // to this series-movie link, wherever it lives, so a path filter here
-        // used to leave the lookup empty and panic (D14/A1).
+        // used to leave the lookup empty and panic.
         incumbent_rows: crate::import_decide::IncumbentRows::Title(&existing_files),
         scope_label: "this series-movie link",
     };
@@ -3182,6 +3299,9 @@ async fn import_series_movie_download(
                         completed_at: Utc::now(),
                         upgrade: true,
                         upgrade_previous_path: outcome.previous_path.clone(),
+                        reason_code: None,
+                        needs_reconciliation: false,
+                        source_cleanup_failed: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     app.update_import_status_and_notify(
@@ -3251,6 +3371,9 @@ async fn import_series_movie_download(
                         completed_at: Utc::now(),
                         upgrade: false,
                         upgrade_previous_path: None,
+                        reason_code: None,
+                        needs_reconciliation: false,
+                        source_cleanup_failed: false,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -3278,7 +3401,9 @@ async fn import_series_movie_download(
     persist_title_folder_path_if_missing(app, title, &full_folder_path).await?;
     // Ensure the configured episodic destination directory exists.
     if let Some(parent) = dest_path.parent()
-        && let Err(err) = tokio::fs::create_dir_all(parent).await
+        && let Err(err) = Disk::process()
+            .create_dir(parent, crate::disk::Parents::Create)
+            .await
     {
         tracing::warn!(error = %err, path = %parent.display(), "failed to create episodic import directory");
     }
@@ -3482,6 +3607,9 @@ async fn import_series_movie_download(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -3857,19 +3985,6 @@ mod archive_relocation_tests {
         ));
         assert!(source.is_dir());
         assert!(!moved.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cross_device_rename_error_is_detected() {
-        let error = std::io::Error::from_raw_os_error(18);
-        assert!(crate::fs_safety::is_cross_device_error(&error));
-    }
-
-    #[test]
-    fn unrelated_rename_error_is_not_cross_device() {
-        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        assert!(!crate::fs_safety::is_cross_device_error(&error));
     }
 }
 

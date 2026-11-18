@@ -93,10 +93,15 @@ impl PurgeFixture {
                 replacement_path: None,
                 media_row: None,
             };
-            let recycled = crate::recycle_bin::recycle_file(&config, &source, manifest)
-                .await
-                .expect("seed recycle entry")
-                .expect("file recycled");
+            let recycled = crate::recycle_bin::recycle_file(
+                &config,
+                &source,
+                manifest,
+                crate::location::model::VerificationDepth::Full,
+            )
+            .await
+            .expect("seed recycle entry")
+            .expect("file recycled");
             let entry_dir = recycled
                 .recycled_path
                 .parent()

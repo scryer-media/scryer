@@ -1,5 +1,30 @@
 #[cfg(test)]
 mod tests {
+    /// A cancelled import clears the staged name it writes and the one
+    /// imports wrote before, and never the destination itself.
+    #[test]
+    fn a_cancelled_import_clears_both_staging_spellings_but_never_its_destination() {
+        use std::path::{Path, PathBuf};
+        let at = |name: &str| Path::new("/srv/fixture-media/Fixture Show").join(name);
+        let cleared = |name: &str| super::cancelled_import_staging_paths(&at(name));
+        assert_eq!(
+            cleared("Fixture Show - S01E01.mkv"),
+            [
+                at("Fixture Show - S01E01.mkv.tmp_import"),
+                at("Fixture Show - S01E01.tmp_import"),
+            ]
+        );
+        assert_eq!(
+            super::import_staging_path(&at("Fixture Show - S01E01.mkv")),
+            at("Fixture Show - S01E01.mkv.tmp_import")
+        );
+        assert_eq!(cleared("Fixture Show"), [at("Fixture Show.tmp_import")]);
+        assert_eq!(
+            cleared("Fixture Show - S01E01.tmp_import"),
+            Vec::<PathBuf>::from([at("Fixture Show - S01E01.tmp_import.tmp_import")])
+        );
+    }
+
     #[cfg(unix)]
     use super::is_sample_file;
     // Only the runtime-media-analysis tests below use these; gating the import
@@ -1148,6 +1173,9 @@ mod tests {
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         assert_eq!(
@@ -1318,6 +1346,9 @@ mod tests {
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         assert_eq!(
@@ -1353,6 +1384,9 @@ mod tests {
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         for message in [

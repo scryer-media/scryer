@@ -242,8 +242,19 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
 
     let outcome = match execute_queued_manual_import_with_outcome(&app, &record.id, &payload).await
     {
-        Ok(result) => result,
-        Err(AppError::ManualReconciliationRequired(message)) => QueuedManualImportOutcome {
+        Ok(mut result) => {
+            if let Some(retry) = result.cleanup_retry.as_ref() {
+                let retry_attempts = previous_result
+                    .as_ref()
+                    .map_or(1, |result| result.retry_attempts.saturating_add(1));
+                result.result_json = retry.pending_result_json(&record.id, &payload, retry_attempts);
+            }
+            result
+        }
+        Err(
+            AppError::ManualReconciliationRequired(message)
+            | AppError::ManualReconciliationRefused { message, .. },
+        ) => QueuedManualImportOutcome {
             status: ImportStatus::Pending,
             result_json: manual_import_pending_result_json(
                 &record.id,
@@ -259,6 +270,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
             title_id: payload.title_id.clone(),
             expected_mapping_count: Some(payload.files.len()),
             prior_import_proven: false,
+            cleanup_retry: None,
         },
         Err(AppError::ImportEvidenceUnavailable(message)) => {
             let retry_attempts = previous_result
@@ -281,6 +293,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
                 title_id: payload.title_id.clone(),
                 expected_mapping_count: Some(payload.files.len()),
                 prior_import_proven: false,
+                cleanup_retry: None,
             }
         }
         Err(error) => QueuedManualImportOutcome {
@@ -298,6 +311,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
             title_id: payload.title_id.clone(),
             expected_mapping_count: None,
             prior_import_proven: false,
+            cleanup_retry: None,
         },
     };
 
@@ -503,7 +517,30 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
     // No tracked row on this path, so the client entry is assumed present and
     // the seeding gate decides on the client's own evidence. A torrent still
     // working off its goal is left alone; the tracked poller picks it up and
-    // parks it in `ImportedSeeding`.
+    // parks it in `ImportedSeeding`. While an archive or subtitle delivery of
+    // the same download still holds its sources, nothing is removed yet.
+    let mut library_holds_payload = false;
+    if let Some(download_id) = completed
+        .download_id
+        .as_deref()
+        .and_then(scryer_domain::download_identity::DownloadId::parse)
+    {
+        match app
+            .services
+            .workflow
+            .imports
+            .download_import_sources(&download_id)
+            .await
+        {
+            Ok(sources) if sources.held => return,
+            Ok(sources) => library_holds_payload = sources.library_holds_payload,
+            Err(error) => {
+                tracing::warn!(%download_id, error = %error,
+                    "could not tell whether the download's sources are still held; cleanup deferred");
+                return;
+            }
+        }
+    }
     let _ = reconcile_terminal_download_cleanup(
         app,
         None,
@@ -521,6 +558,7 @@ pub(crate) async fn maybe_remove_completed_manual_import_download(
         // Outside the reconcile tick: no shared prefetch, per-row reads.
         None,
         None,
+        library_holds_payload,
     )
     .await;
 }
@@ -835,12 +873,17 @@ fn import_record_proves_prior_import(record: &ImportRecord, current_import_id: &
     }
 }
 
+/// Whether another record already imported this source, so this manual
+/// import can mark the download imported without placing anything. Neither
+/// another record nor the download's tracked state counts while one of the
+/// download's imports ended where only the operator can settle what is on
+/// disk: that refusal is returned instead, and the import stays blocked.
 async fn manual_import_source_was_already_imported(
     app: &AppUseCase,
     source: &AuthorizedManualImportSource,
     current_import_id: &str,
 ) -> AppResult<bool> {
-    if app
+    let tracked_imported = app
         .services
         .workflow
         .download_submissions
@@ -848,31 +891,82 @@ async fn manual_import_source_was_already_imported(
         .await?
         .as_deref()
         .and_then(TrackedDownloadState::from_str_opt)
-        .is_some_and(TrackedDownloadState::counts_as_imported)
-    {
-        return Ok(true);
-    }
-    if source.title.facet != MediaFacet::Movie {
+        .is_some_and(TrackedDownloadState::counts_as_imported);
+    if !tracked_imported && source.title.facet != MediaFacet::Movie {
         return Ok(false);
     }
 
-    Ok(app
+    let records = app
         .services
         .workflow
         .imports
         .list_imports_for_identities(std::slice::from_ref(&source.identity))
-        .await?
+        .await?;
+    let proven = tracked_imported
+        || (source.title.facet == MediaFacet::Movie
+            && records
+                .iter()
+                .any(|record| import_record_proves_prior_import(record, current_import_id)));
+    if !proven {
+        return Ok(false);
+    }
+    match records
         .iter()
-        .any(|record| import_record_proves_prior_import(record, current_import_id)))
+        .find_map(|record| unresolved_reconciliation(record, current_import_id))
+    {
+        Some(refusal) => Err(refusal),
+        None => Ok(true),
+    }
+}
+
+/// The refusal a record of the download still stands on: its latest result
+/// ended where only the operator can settle what is on disk. The refusal
+/// carries the record's own reason code where it names a known one.
+fn unresolved_reconciliation(record: &ImportRecord, current_import_id: &str) -> Option<AppError> {
+    if record.id == current_import_id {
+        return None;
+    }
+    let message = format!(
+        "import {} of this download still needs manual reconciliation; another import is no proof this one was imported",
+        record.id
+    );
+    if manual_import_record_requires_reconciliation(record) {
+        return Some(AppError::ManualReconciliationRequired(message));
+    }
+    let result = record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
+        .filter(|result| result.needs_reconciliation)?;
+    let reason = result.reason_code.as_deref().and_then(|code| {
+        crate::error_reasons::import::ALL
+            .iter()
+            .copied()
+            .find(|known| *known == code)
+    });
+    Some(match reason {
+        Some(reason) => AppError::ManualReconciliationRefused {
+            message,
+            reason,
+            facts: Vec::new(),
+        },
+        None => AppError::ManualReconciliationRequired(message),
+    })
 }
 
 fn source_path_canonical(source_path: &Path) -> AppResult<PathBuf> {
-    std::fs::canonicalize(source_path).map_err(|err| {
-        manual_import_io_error(&err, format!(
-            "manual import path is not accessible: {} ({err})",
-            source_path.display()
-        ))
-    })
+    Disk::process()
+        .canonicalize_blocking(source_path)
+        .map_err(|err| {
+            let err = std::io::Error::from(err);
+            manual_import_io_error(
+                &err,
+                format!(
+                    "manual import path is not accessible: {} ({err})",
+                    source_path.display()
+                ),
+            )
+        })
 }
 
 fn source_entry_location_under_parent(source_path: &Path) -> AppResult<PathBuf> {
@@ -892,94 +986,133 @@ fn source_entry_location_under_parent(source_path: &Path) -> AppResult<PathBuf> 
     Ok(parent.join(file_name))
 }
 
-fn canonical_manual_import_source_under_trusted_root(
-    source_path: &Path,
-    trusted_root: &Path,
-) -> AppResult<PathBuf> {
-    canonical_manual_import_source_with_metadata(source_path, trusted_root)
-        .map(|(canonical, _)| canonical)
+/// The kind and size a followed reading shows, or an I/O error when it does
+/// not say; a refused read stays a permission error.
+fn followed_manual_import_entry(reading: PathReading) -> std::io::Result<(EntryKind, u64)> {
+    match reading {
+        PathReading::Known { kind, len, .. } if kind != EntryKind::File || len.is_some() => {
+            Ok((kind, len.unwrap_or(0)))
+        }
+        PathReading::Missing { .. } => Err(std::io::ErrorKind::NotFound.into()),
+        reading if reading.unreachable_cause() == Some(reason::DISK_PERMISSION_DENIED) => {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
+        reading => Err(std::io::Error::other(
+            reading
+                .unknown_reason()
+                .unwrap_or(reason::DISK_PATH_UNREACHABLE),
+        )),
+    }
 }
 
-/// [`canonical_manual_import_source_under_trusted_root`] with the metadata
-/// of the canonical source it already read, so a caller that needs the
-/// file's size does not stat it again.
+/// The canonical path of a manual import source that must lie under
+/// `trusted_root`, with the size it read for that file. The root is read only
+/// when the source lies outside
+/// it: a source strictly under the resolved root proves the root is a
+/// directory, and a source that is the root is answered by its own reading.
 fn canonical_manual_import_source_with_metadata(
     source_path: &Path,
     trusted_root: &Path,
-) -> AppResult<(PathBuf, std::fs::Metadata)> {
-    let trusted_root_metadata = std::fs::metadata(trusted_root).map_err(|err| {
-        manual_import_io_error(&err, format!(
-            "manual import source root is not accessible: {} ({err})",
-            trusted_root.display()
-        ))
-    })?;
-    let canonical_trusted_root = std::fs::canonicalize(trusted_root).map_err(|err| {
-        manual_import_io_error(&err, format!(
-            "manual import source root is not accessible: {} ({err})",
-            trusted_root.display()
-        ))
-    })?;
-    let canonical = std::fs::canonicalize(source_path).map_err(|err| {
-        manual_import_io_error(&err, format!(
-            "manual import file is not accessible: {} ({err})",
-            source_path.display()
-        ))
-    })?;
-
-    if trusted_root_metadata.is_file() {
-        if canonical == canonical_trusted_root {
-            // The root is this very file; its metadata is the file's.
-            return Ok((canonical, trusted_root_metadata));
+) -> AppResult<(PathBuf, u64)> {
+    use crate::error_reasons::import as import_reason;
+    let disk = Disk::process();
+    let root_error = |err: std::io::Error| {
+        manual_import_io_error(
+            &err,
+            format!(
+                "manual import source root is not accessible: {} ({err})",
+                trusted_root.display()
+            ),
+        )
+    };
+    let file_error = |err: std::io::Error| {
+        manual_import_io_error(
+            &err,
+            format!(
+                "manual import file is not accessible: {} ({err})",
+                source_path.display()
+            ),
+        )
+    };
+    let canonical_trusted_root = disk
+        .canonicalize_blocking(trusted_root)
+        .map_err(|err| root_error(err.into()))?;
+    let canonical = disk
+        .canonicalize_blocking(source_path)
+        .map_err(|err| file_error(err.into()))?;
+    let outside = || {
+        AppError::validation_refused(
+            import_reason::MANUAL_IMPORT_FILE_OUTSIDE_TRUSTED_SOURCE_ROOT,
+            format!(
+                "manual import file is outside the trusted source root: {}",
+                source_path.display()
+            ),
+        )
+    };
+    let not_file_or_directory = || {
+        AppError::validation_refused(
+            import_reason::MANUAL_IMPORT_SOURCE_ROOT_NOT_FILE_DIRECTORY,
+            format!(
+                "manual import source root is not a file or directory: {}",
+                trusted_root.display()
+            ),
+        )
+    };
+    let not_file = || {
+        AppError::validation_refused(
+            import_reason::MANUAL_IMPORT_SOURCE_NOT_FILE,
+            format!(
+                "manual import source is not a file: {}",
+                source_path.display()
+            ),
+        )
+    };
+    let entry_inside_root = || -> AppResult<()> {
+        if source_entry_location_under_parent(source_path)?.starts_with(&canonical_trusted_root) {
+            return Ok(());
         }
-        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
-            "manual import file is outside the trusted source root: {}",
-            source_path.display()
-        )));
-    }
-    if !trusted_root_metadata.is_dir() {
-        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_ROOT_NOT_FILE_DIRECTORY, format!(
-            "manual import source root is not a file or directory: {}",
-            trusted_root.display()
-        )));
-    }
-
-    let source_entry_location = source_entry_location_under_parent(source_path)?;
-    if source_entry_location != canonical_trusted_root
-        && !source_entry_location.starts_with(&canonical_trusted_root)
-    {
-        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_PATH_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
-            "manual import file path is outside the trusted source root: {}",
-            source_path.display()
-        )));
-    }
-
-    if canonical != canonical_trusted_root && !canonical.starts_with(&canonical_trusted_root) {
-        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
-            "manual import file is outside the trusted source root: {}",
-            source_path.display()
-        )));
-    }
-
-    let metadata = std::fs::metadata(&canonical).map_err(|err| {
-        manual_import_io_error(&err, format!(
-            "manual import file is not accessible: {} ({err})",
-            source_path.display()
+        Err(AppError::validation_refused(
+            import_reason::MANUAL_IMPORT_FILE_PATH_OUTSIDE_TRUSTED_SOURCE_ROOT,
+            format!(
+                "manual import file path is outside the trusted source root: {}",
+                source_path.display()
+            ),
         ))
-    })?;
-    if !metadata.is_file() {
-        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_NOT_FILE, format!(
-            "manual import source is not a file: {}",
-            source_path.display()
-        )));
+    };
+
+    if canonical == canonical_trusted_root {
+        return match followed_manual_import_entry(disk.follow_blocking(&canonical))
+            .map_err(root_error)?
+        {
+            (EntryKind::File, len) => Ok((canonical, len)),
+            (EntryKind::Directory, _) => entry_inside_root().and_then(|()| Err(not_file())),
+            _ => Err(not_file_or_directory()),
+        };
     }
-    Ok((canonical, metadata))
+    if !canonical.starts_with(&canonical_trusted_root) {
+        return match followed_manual_import_entry(disk.follow_blocking(&canonical_trusted_root))
+            .map_err(root_error)?
+            .0
+        {
+            EntryKind::File => Err(outside()),
+            EntryKind::Directory => entry_inside_root().and_then(|()| Err(outside())),
+            _ => Err(not_file_or_directory()),
+        };
+    }
+
+    entry_inside_root()?;
+    match followed_manual_import_entry(disk.follow_blocking(&canonical)).map_err(file_error)? {
+        (EntryKind::File, len) => Ok((canonical, len)),
+        _ => Err(not_file()),
+    }
 }
 
-pub(crate) fn validate_manual_import_source_under_trusted_root(
+#[cfg(test)]
+fn validate_manual_import_source_under_trusted_root(
     source_path: &Path,
     trusted_root: &Path,
 ) -> AppResult<()> {
-    canonical_manual_import_source_under_trusted_root(source_path, trusted_root).map(drop)
+    canonical_manual_import_source_with_metadata(source_path, trusted_root).map(drop)
 }
 
 #[derive(Clone, Debug)]
@@ -1017,20 +1150,27 @@ pub(crate) async fn qualify_manual_import_video_under_roots(
 }
 
 /// [`qualify_manual_import_video_candidate`] for a source whose canonical
-/// path and metadata [`canonical_manual_import_source_with_metadata`] just
+/// path and size [`canonical_manual_import_source_with_metadata`] just
 /// returned.
 async fn qualify_manual_import_video_canonical(
     source_path: &Path,
-    (canonical_path, metadata): (PathBuf, std::fs::Metadata),
+    (canonical_path, len): (PathBuf, u64),
 ) -> AppResult<Option<QualifiedManualImportVideo>> {
-    std::fs::File::open(&canonical_path).map_err(|error| {
-        manual_import_io_error(&error, format!(
-            "manual import file is not accessible: {} ({error})",
-            source_path.display()
-        ))
-    })?;
+    Disk::process()
+        .open(canonical_path.clone(), crate::disk::Open::read())
+        .await
+        .map_err(|error| {
+            let error = std::io::Error::from(error);
+            manual_import_io_error(
+                &error,
+                format!(
+                    "manual import file is not accessible: {} ({error})",
+                    source_path.display()
+                ),
+            )
+        })?;
     let has_known_video_extension = is_video_file(source_path);
-    if metadata.len() == 0 {
+    if len == 0 {
         return Ok(None);
     }
 
@@ -1039,12 +1179,12 @@ async fn qualify_manual_import_video_canonical(
         return Ok(Some(QualifiedManualImportVideo {
             source_entry_path: source_path.to_path_buf(),
             canonical_path,
-            size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+            size_bytes: i64::try_from(len).unwrap_or(i64::MAX),
             video_facts: None,
         }));
     }
 
-    if !is_disc_image && !opaque_video_probe_applies(source_path, metadata.len()) {
+    if !is_disc_image && !opaque_video_probe_applies(source_path, len) {
         return Ok(None);
     }
 
@@ -1068,7 +1208,7 @@ async fn qualify_manual_import_video_canonical(
     Ok(Some(QualifiedManualImportVideo {
         source_entry_path: source_path.to_path_buf(),
         canonical_path,
-        size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+        size_bytes: i64::try_from(len).unwrap_or(i64::MAX),
         video_facts: Some(video_facts),
     }))
 }
@@ -1076,13 +1216,17 @@ async fn qualify_manual_import_video_canonical(
 async fn discover_manual_import_video_candidates(
     trusted_root: &Path,
 ) -> AppResult<Vec<QualifiedManualImportVideo>> {
-    let root_metadata = std::fs::metadata(trusted_root).map_err(|error| {
-        manual_import_io_error(&error, format!(
-            "manual import source root is not accessible: {} ({error})",
-            trusted_root.display()
-        ))
+    let root_reading = Disk::process().follow(trusted_root).await;
+    let (root_kind, _) = followed_manual_import_entry(root_reading).map_err(|error| {
+        manual_import_io_error(
+            &error,
+            format!(
+                "manual import source root is not accessible: {} ({error})",
+                trusted_root.display()
+            ),
+        )
     })?;
-    let paths = if root_metadata.is_file() {
+    let paths = if root_kind == EntryKind::File {
         vec![trusted_root.to_path_buf()]
     } else {
         crate::filesystem_walk::FilesystemWalker::new()
@@ -1862,7 +2006,9 @@ fn reusable_manual_archive_workspace(
     if selection.trusted_source_root.trim().is_empty() {
         return None;
     }
-    let existing_root = std::fs::canonicalize(stored_path_to_path_buf(workspace)).ok()?;
+    let existing_root = Disk::process()
+        .canonicalize_blocking(&stored_path_to_path_buf(workspace))
+        .ok()?;
     (existing_root == stored_path_to_path_buf(&selection.trusted_source_root))
         .then(|| (existing_root, workspace.to_string()))
 }
@@ -1914,7 +2060,9 @@ pub async fn begin_manual_import_selection(
     }
     let release_evidence_json = serde_json::to_string(&release_evidence)
         .map_err(|error| AppError::Repository(error.to_string()))?;
-    let download_root = std::fs::canonicalize(&completed.dest_dir)
+    let download_root = Disk::process()
+        .canonicalize(&completed.dest_dir)
+        .await
         .map_err(|_| manual_import_source_unavailable())?;
     let source_identity = ClientJobLocator::new(
         Some(&completed.client_id),
@@ -1982,12 +2130,18 @@ pub async fn begin_manual_import_selection(
             .await?
         };
         if let Some(extracted_root) = extracted_root {
-            trusted_root = std::fs::canonicalize(&extracted_root).map_err(|error| {
-                AppError::validation_refused(crate::error_reasons::import::EXTRACTED_ARCHIVE_WORKSPACE_UNAVAILABLE, format!(
-                    "extracted archive workspace is not accessible: {} ({error})",
-                    extracted_root.display()
-                ))
-            })?;
+            trusted_root = Disk::process()
+                .canonicalize(&extracted_root)
+                .await
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::import::EXTRACTED_ARCHIVE_WORKSPACE_UNAVAILABLE,
+                        format!(
+                            "extracted archive workspace is not accessible: {} ({error})",
+                            extracted_root.display()
+                        ),
+                    )
+                })?;
             preview_root = trusted_root.clone();
             archive_workspace_root = Some(path_to_stored_string(&trusted_root));
         }
@@ -2269,11 +2423,21 @@ fn manual_import_mapping_target<'a>(
 /// Returns the index into `files` of the primary mapping, or `None` when no
 /// mapped movie file is importable (all sample-named, missing, or unreadable).
 /// Ties on size resolve to the earliest mapping so the choice is stable.
+#[cfg(test)]
 fn select_manual_movie_primary_index(
     files: &[ManualImportFileMapping],
     facet: &MediaFacet,
     trusted_source_root: &Path,
 ) -> Option<usize> {
+    select_manual_movie_primary(files, facet, trusted_source_root).map(|(index, _)| index)
+}
+
+/// The index of the largest importable mapped movie file and its size.
+fn select_manual_movie_primary(
+    files: &[ManualImportFileMapping],
+    facet: &MediaFacet,
+    trusted_source_root: &Path,
+) -> Option<(usize, u64)> {
     let mut primary: Option<(usize, u64)> = None;
     for (index, mapping) in files.iter().enumerate() {
         if !matches!(
@@ -2283,20 +2447,20 @@ fn select_manual_movie_primary_index(
             continue;
         }
         let source = stored_path_to_path_buf(&mapping.file_path);
-        if validate_manual_import_source_under_trusted_root(&source, trusted_source_root).is_err()
-            || !source.is_file()
-            || is_sample_named_file(&source)
-        {
+        if is_sample_named_file(&source) {
             continue;
         }
-        let Ok(size) = std::fs::metadata(&source).map(|metadata| metadata.len()) else {
+        // The containment check already read the resolved file and its size.
+        let Ok((_, size)) =
+            canonical_manual_import_source_with_metadata(&source, trusted_source_root)
+        else {
             continue;
         };
         if primary.is_none_or(|(_, primary_size)| size > primary_size) {
             primary = Some((index, size));
         }
     }
-    primary.map(|(index, _)| index)
+    primary
 }
 
 pub(crate) fn validate_manual_import_candidate_mapping_targets(
@@ -2914,9 +3078,16 @@ async fn execute_manual_series_movie_import(
     let search_title = crate::acquisition_release_search::series_movie_search_title(title, &link);
     let parsed =
         build_augmented_movie_import_metadata_for_title(source, release_evidence, &search_title);
-    let source_size = std::fs::metadata(source)
-        .map_err(|error| AppError::Repository(error.to_string()))?
-        .len();
+    let PathReading::Known {
+        len: Some(source_size),
+        ..
+    } = Disk::process().follow(source).await
+    else {
+        return Err(AppError::Repository(format!(
+            "manual import source is not readable: {}",
+            source.display()
+        )));
+    };
     let quality_profile = resolve_import_quality_profile(app, title).await?;
     let existing_files = app
         .services
@@ -3010,8 +3181,11 @@ async fn execute_manual_series_movie_import(
     }
     persist_title_folder_path_if_missing(app, title, full_folder_path).await?;
     if let Some(parent) = dest_path.parent()
-        && let Err(error) = tokio::fs::create_dir_all(parent).await
+        && let Err(error) = Disk::process()
+            .create_dir(parent, crate::disk::Parents::Create)
+            .await
     {
+        let error = std::io::Error::from(error);
         return Ok(manual_import_file_result(
             mapping,
             false,
@@ -3043,7 +3217,7 @@ async fn execute_manual_series_movie_import(
     .await
     {
         Ok(file_result) => file_result,
-        Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+        Err(error) if error.requires_manual_reconciliation() => return Err(error),
         Err(error) => {
             let message = error.to_string();
             return Ok(manual_import_file_result(
@@ -3157,7 +3331,7 @@ async fn execute_manual_series_movie_import(
     if let Err(error) =
         finalize_import_source_cleanup(app, import_mode, &file_result, &dest_path, completed).await
     {
-        if matches!(&error, AppError::ManualReconciliationRequired(_)) {
+        if error.requires_manual_reconciliation() {
             return Err(error);
         }
         let message = error.to_string();
@@ -3260,6 +3434,46 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     files: Vec<ManualImportFileMapping>,
     trusted_source_root: Option<PathBuf>,
 ) -> AppResult<Vec<ManualImportFileResult>> {
+    let run = run_manual_import_with_release_evidence(
+        app,
+        actor,
+        import_id,
+        title_id,
+        completed,
+        release_evidence,
+        files,
+        trusted_source_root,
+    )
+    .await?;
+    match run.cleanup_retry {
+        Some(error) => Err(error),
+        None => Ok(run.results),
+    }
+}
+
+/// One pass of a manual import: its file results and, when its files were
+/// placed and cataloged but a source cleanup that holds no sources could not
+/// finish, that cleanup's error. Such a pass waits for a retry; it is not a
+/// failed import.
+pub(crate) struct ManualImportRun {
+    pub(crate) results: Vec<ManualImportFileResult>,
+    pub(crate) cleanup_retry: Option<AppError>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "manual execution carries explicit user mappings, trusted root, and durable release evidence"
+)]
+pub(crate) async fn run_manual_import_with_release_evidence(
+    app: &AppUseCase,
+    actor: &User,
+    import_id: &str,
+    title_id: &str,
+    completed: Option<&CompletedDownload>,
+    release_evidence: &ReleaseEvidence,
+    files: Vec<ManualImportFileMapping>,
+    trusted_source_root: Option<PathBuf>,
+) -> AppResult<ManualImportRun> {
     let archive_source = trusted_source_root
         .as_deref()
         .is_some_and(crate::archive_extractor::is_owned_archive_workspace);
@@ -3286,9 +3500,23 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             .iter()
             .any(manual_file_has_scene_subtitle_hold);
     if can_release {
-        let cleanup_succeeded = complete_deferred_import_source_cleanup(app, cleanups)
-            .await
-            .is_ok();
+        let cleanup_succeeded = match complete_deferred_import_source_cleanup(app, import_id, cleanups, archive_source).await
+        {
+            Ok(()) => true,
+            // Ends the import needing reconciliation, with no hold recorded
+            // that an operator could release.
+            Err(DeferredCleanupFailure::NeedsReconciliation(error)) => return Err(error),
+            // No sources are held, so nothing waits for a release: the files
+            // are placed and cataloged, so the pass waits for a retry rather
+            // than failing the import.
+            Err(DeferredCleanupFailure::Failed(error)) => {
+                return Ok(ManualImportRun {
+                    results,
+                    cleanup_retry: Some(error),
+                });
+            }
+            Err(DeferredCleanupFailure::Held(_)) => false,
+        };
         let hold_released = cleanup_succeeded
             && (!archive_source
                 || app
@@ -3324,7 +3552,10 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         .await;
     }
     // Any other hold keeps no recorded reason and is reported as unknown.
-    Ok(results)
+    Ok(ManualImportRun {
+        results,
+        cleanup_retry: None,
+    })
 }
 
 async fn record_manual_hold_reason(
@@ -3407,14 +3638,24 @@ async fn execute_manual_import_with_release_evidence_inner(
     let trusted_source_root = trusted_source_root
         .as_deref()
         .ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_ROOT_REQUIRED, "manual import source root is required".to_string()))?;
-    let trusted_source_root = std::fs::canonicalize(trusted_source_root).map_err(|error| {
-        manual_import_io_error(&error, format!(
-            "manual import source root is not accessible: {} ({error})",
-            trusted_source_root.display()
-        ))
-    })?;
-    let download_root =
-        completed.and_then(|download| std::fs::canonicalize(&download.dest_dir).ok());
+    let disk = Disk::process();
+    let trusted_source_root = disk
+        .canonicalize(trusted_source_root)
+        .await
+        .map_err(|error| {
+            let error = std::io::Error::from(error);
+            manual_import_io_error(
+                &error,
+                format!(
+                    "manual import source root is not accessible: {} ({error})",
+                    trusted_source_root.display()
+                ),
+            )
+        })?;
+    let download_root = match completed {
+        Some(download) => disk.canonicalize(&download.dest_dir).await.ok(),
+        None => None,
+    };
 
     let subtitle_roots = std::iter::once(trusted_source_root.clone())
         .chain(
@@ -3496,15 +3737,9 @@ async fn execute_manual_import_with_release_evidence_inner(
         .then(|| {
             std::iter::once(&trusted_source_root)
                 .chain(download_root.iter())
-                .filter_map(|root| select_manual_movie_primary_index(&files, &title.facet, root))
-                .max_by_key(|index| {
-                    (
-                        std::fs::metadata(stored_path_to_path_buf(&files[*index].file_path))
-                            .map(|m| m.len())
-                            .unwrap_or(0),
-                        std::cmp::Reverse(*index),
-                    )
-                })
+                .filter_map(|root| select_manual_movie_primary(&files, &title.facet, root))
+                .max_by_key(|&(index, size)| (size, std::cmp::Reverse(index)))
+                .map(|(index, _)| index)
         })
         .flatten();
 
@@ -3546,7 +3781,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     mapping,
                     false,
                     None,
-                    Some(if !source.exists() {
+                    Some(if disk.follow(&source).await.exists() == Some(false) {
                         ImportErrorCode::FileNotFound
                     } else {
                         classify_manual_import_error(&err)
@@ -3566,7 +3801,7 @@ async fn execute_manual_import_with_release_evidence_inner(
 
         let target = match manual_import_mapping_target(mapping, &title.facet) {
             Ok(target) => target,
-            Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+            Err(error) if error.requires_manual_reconciliation() => return Err(error),
             Err(err) => {
                 results.push(manual_import_file_result(
                     mapping,
@@ -3663,7 +3898,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                             import_result.error_message,
                         )
                     }
-                    Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+                    Err(error) if error.requires_manual_reconciliation() => return Err(error),
                     Err(error) => {
                         let message = error.to_string();
                         manual_import_file_result(
@@ -3991,7 +4226,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     Some(rejection.message),
                 ));
             }
-            Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
+            Err(error) if error.requires_manual_reconciliation() => return Err(error),
             Err(err) => {
                 let error_message = err.to_string();
                 results.push(manual_import_file_result(
@@ -4413,6 +4648,37 @@ struct QueuedManualImportOutcome {
     title_id: Option<String>,
     expected_mapping_count: Option<usize>,
     prior_import_proven: bool,
+    /// Set when the pass placed and cataloged its files but a source cleanup
+    /// holding no sources could not finish: the import waits pending for a
+    /// retry, counted from the previous attempt.
+    cleanup_retry: Option<ManualCleanupRetry>,
+}
+
+/// A manual import pass whose files are placed and cataloged but whose source
+/// cleanup could not finish, kept so the retry state can be written with the
+/// attempt count the previous result carries.
+struct ManualCleanupRetry {
+    message: String,
+    file_results: Vec<ManualImportFileResult>,
+}
+
+impl ManualCleanupRetry {
+    fn pending_result_json(
+        &self,
+        import_id: &str,
+        payload: &ManualImportRequestPayload,
+        retry_attempts: u32,
+    ) -> Option<String> {
+        manual_import_pending_result_json(
+            import_id,
+            payload,
+            self.message.clone(),
+            false,
+            retry_attempts,
+            Some(Utc::now() + manual_import_recovery_retry_delay(retry_attempts)),
+            self.file_results.clone(),
+        )
+    }
 }
 
 impl QueuedManualImportOutcome {
@@ -4429,6 +4695,7 @@ impl QueuedManualImportOutcome {
             title_id: payload.title_id.clone(),
             expected_mapping_count: None,
             prior_import_proven: false,
+            cleanup_retry: None,
         }
     }
 
@@ -4454,6 +4721,9 @@ impl QueuedManualImportOutcome {
             completed_at: now,
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
         Self {
             status: ImportStatus::Skipped,
@@ -4463,6 +4733,7 @@ impl QueuedManualImportOutcome {
             title_id: payload.title_id.clone(),
             expected_mapping_count: None,
             prior_import_proven: true,
+            cleanup_retry: None,
         }
     }
 }
@@ -4584,8 +4855,12 @@ async fn execute_queued_manual_import_with_outcome_inner(
                 .to_string()));
     }
     let trusted_source_root_result = match payload.trusted_source_root.as_deref() {
-        Some(root) => std::fs::canonicalize(stored_path_to_path_buf(root)),
-        None => std::fs::canonicalize(&completed.dest_dir),
+        Some(root) => {
+            Disk::process()
+                .canonicalize(stored_path_to_path_buf(root))
+                .await
+        }
+        None => Disk::process().canonicalize(&completed.dest_dir).await,
     };
     let trusted_source_root = match trusted_source_root_result {
         Ok(root) => root,
@@ -4611,6 +4886,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
             title_id: Some(title_id.to_string()),
             expected_mapping_count: None,
             prior_import_proven: false,
+            cleanup_retry: None,
         });
     }
 
@@ -4618,7 +4894,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
     app.update_import_status_and_notify(import_id, ImportStatus::Processing, None)
         .await?;
 
-    let results = execute_manual_import_with_release_evidence(
+    let run = run_manual_import_with_release_evidence(
         app,
         &actor,
         import_id,
@@ -4629,6 +4905,29 @@ async fn execute_queued_manual_import_with_outcome_inner(
         Some(trusted_source_root),
     )
     .await?;
+    let results = run.results;
+    if let Some(error) = run.cleanup_retry {
+        tracing::warn!(
+            import_id,
+            title_id,
+            error = %error,
+            "manual import source cleanup could not finish; the import waits for a retry"
+        );
+        let retry = ManualCleanupRetry {
+            message: format!("Source cleanup could not finish: {error}"),
+            file_results: results,
+        };
+        return Ok(QueuedManualImportOutcome {
+            status: ImportStatus::Pending,
+            result_json: retry.pending_result_json(import_id, payload, 1),
+            files_imported_this_pass: 0,
+            completed: None,
+            title_id: Some(title_id.to_string()),
+            expected_mapping_count: Some(payload.files.len()),
+            prior_import_proven: false,
+            cleanup_retry: Some(retry),
+        });
+    }
     let files_imported_this_pass = results.iter().filter(|result| result.success).count();
     // Verification compares imported files against what the import attempted;
     // skipped mappings (movie samples/extras) were never expected to land.
@@ -4676,6 +4975,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
         title_id: Some(title_id.to_string()),
         expected_mapping_count,
         prior_import_proven: false,
+        cleanup_retry: None,
     })
 }
 
@@ -4730,6 +5030,30 @@ mod manual_archive_workspace_tests {
         let selection = selection(workspace.path(), trusted.path());
 
         assert!(reusable_manual_archive_workspace(&selection).is_none());
+    }
+
+    #[test]
+    fn an_unreadable_source_keeps_the_permission_code_and_other_failures_stay_io() {
+        let unreachable = |cause| PathReading::Unreachable {
+            observed_at: chrono::Utc::now(),
+            cause,
+        };
+        let code = |reading| {
+            let error = followed_manual_import_entry(reading).unwrap_err();
+            manual_import_io_error(&error, "invented".to_string()).reason()
+        };
+        assert_eq!(
+            code(unreachable(reason::DISK_PERMISSION_DENIED)),
+            Some(crate::error_reasons::import::PERMISSION_DENIED)
+        );
+        assert_eq!(
+            code(unreachable(reason::DISK_TIMED_OUT)),
+            Some(crate::error_reasons::import::IO_FAILED)
+        );
+        assert_eq!(
+            code(PathReading::NotObserved),
+            Some(crate::error_reasons::import::IO_FAILED)
+        );
     }
 }
 

@@ -1,11 +1,11 @@
-//! Full-hash backfill: the slow convergence job (FR-047, plan D9).
+//! Full-hash backfill: the slow convergence job.
 //!
 //! Every other producer of a full BLAKE3 in this feature gets it for free —
 //! [`crate::location::verify`] hashes bytes it was already copying. This job
 //! exists for the catalog that was never copied: files that were scanned,
-//! hardlinked, or imported before 0205 existed, and files a scan invalidated
-//! (FR-046). It reads them for no other reason than to hash them, which is why
-//! everything below is about *not* getting in the way.
+//! hardlinked, or imported before full hashes were recorded, and files a scan
+//! invalidated. It reads them for no other reason than to hash them, which is
+//! why everything below is about *not* getting in the way.
 //!
 //! # Shape
 //!
@@ -17,7 +17,7 @@
 //! - **Skips** unavailable mounts, files an active location operation owns, and
 //!   files that already carry a current full hash.
 //!
-//! # The cursor (SC-007: interrupt and re-run without rework)
+//! # The cursor: interrupt and re-run without rework
 //!
 //! The queue is `full_blake3 IS NULL` ordered by `id` — literally migration
 //! 0205's `idx_media_files_full_hash_missing` partial index. Every file the job
@@ -232,7 +232,7 @@ enum BackfillSkip {
     /// The file, or the directory it should live in, is not readable — an
     /// unmounted share, a removed disk, a deleted file.
     UnavailableMount,
-    /// A live location operation owns the title or the root (FR-084/SC-007).
+    /// A live location operation owns the title or the root.
     OwnedByOperation,
     /// Something else hashed it between the queue page and this file's turn.
     AlreadyHashed,
@@ -376,7 +376,7 @@ impl OwnedScope {
 }
 
 impl AppUseCase {
-    /// One bounded pass over the full-hash backfill queue (FR-047).
+    /// One bounded pass over the full-hash backfill queue.
     ///
     /// Never returns an error for a file it could not read: an unreachable
     /// mount is a normal state for this job, not a job failure. Only a store or
@@ -588,11 +588,13 @@ impl AppUseCase {
         // directory" instantly, where opening the file itself can block on a
         // dead network mount.
         if let Some(parent) = path.parent()
-            && tokio::fs::metadata(parent).await.is_err()
+            && crate::disk::Disk::process().follow(parent).await.exists() != Some(true)
         {
             return Err(BackfillOutcome::Skipped(BackfillSkip::UnavailableMount));
         }
-        let before = tokio::fs::metadata(&path)
+        let disk = crate::disk::Disk::process();
+        let before = disk
+            .fingerprint_followed(&path)
             .await
             .map_err(|_| BackfillOutcome::Skipped(BackfillSkip::UnavailableMount))?;
 
@@ -624,10 +626,14 @@ impl AppUseCase {
                 .await
                 .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
-        let after = tokio::fs::metadata(&path)
-            .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
-        if !same_file_version(&before, &after) || bytes != after.len() {
+        let after = disk.fingerprint_followed(&path).await.map_err(|reading| {
+            BackfillOutcome::Failed(format!(
+                "cannot read {}: {}",
+                path.display(),
+                reading.describe_absence()
+            ))
+        })?;
+        if !before.compare(&after).is_untouched() || !after.is_len(bytes) {
             return Err(BackfillOutcome::Failed("file changed while hashing".into()));
         }
         // The file held still, but it is not the size the catalog recorded:
@@ -645,7 +651,7 @@ impl AppUseCase {
             .media_files
             .update_media_file_content_hashes_if_unchanged(
                 &current,
-                &PersistedContentHashes::from_streamed(&hashes, Utc::now()),
+                &PersistedContentHashes::from_streamed(&hashes, Some(&after), Utc::now()),
             )
             .await
             .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
@@ -757,6 +763,7 @@ fn duration_ms(value: Duration) -> u64 {
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
 /// means a later move can compare a destination read-back against a stored
 /// value instead of re-reading the source.
+#[allow(clippy::disallowed_methods)] // disk-guard: hinted handle
 async fn hash_file_cancellable(
     path: PathBuf,
     io: std::sync::Arc<HashIoStats>,
@@ -790,9 +797,11 @@ async fn hash_file_cancellable(
                         path.display()
                     ))
                 })?;
-                let before = file
-                    .metadata()
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let before = crate::disk::Mark::of(
+                    &file
+                        .metadata()
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                );
                 let mut hasher = StreamedContentHasher::new();
                 let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
                 loop {
@@ -828,15 +837,22 @@ async fn hash_file_cancellable(
                         std::sync::atomic::Ordering::Relaxed,
                     );
                 }
-                let after = std::fs::metadata(&path)
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let after = crate::disk::Disk::process()
+                    .fingerprint_followed_blocking(&path)
+                    .map_err(|reading| {
+                        AppError::Repository(format!(
+                            "cannot read {}: {}",
+                            path.display(),
+                            reading.describe_absence()
+                        ))
+                    })?;
                 if cancellation.is_cancelled() {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FULL_HASH_BACKFILL_CANCELLED,
                         "Full-hash backfill cancelled",
                     ));
                 }
-                if !same_file_version(&before, &after) {
+                if !before.compare(&after).is_untouched() {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FILE_CHANGED_WHILE_HASHING,
                         "file changed while hashing",
@@ -856,6 +872,7 @@ async fn hash_file_cancellable(
 }
 
 /// Opens a buffered, read-only handle with a sequential access hint where supported.
+#[allow(clippy::disallowed_methods)] // disk-guard: sequential-scan open hint
 fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -879,6 +896,8 @@ fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 /// Applied only to this short-lived reader thread, never to a runtime pool.
+// disk-guard: an I/O scheduling hint for this thread, not a filesystem call.
+#[allow(clippy::disallowed_methods)]
 fn hash_reader_priority() -> std::io::Result<()> {
     crate::background_worker_priority()?;
     #[cfg(target_os = "linux")]
@@ -905,27 +924,6 @@ fn hash_reader_priority() -> std::io::Result<()> {
     ));
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     Ok(())
-}
-
-pub(super) fn same_file_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
-    if before.len() != after.len()
-        || before.modified().ok() != after.modified().ok()
-        || before.created().ok() != after.created().ok()
-    {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev()
-            || before.ino() != after.ino()
-            || before.ctime() != after.ctime()
-            || before.ctime_nsec() != after.ctime_nsec()
-        {
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]

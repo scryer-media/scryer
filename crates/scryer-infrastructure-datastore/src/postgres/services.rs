@@ -127,6 +127,8 @@ impl PostgresServices {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;

@@ -5,6 +5,8 @@ pub mod sqlite_backup;
 pub mod startup_bind;
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests;
 
 pub(crate) mod discovery {

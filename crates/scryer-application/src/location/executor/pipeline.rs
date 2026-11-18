@@ -151,8 +151,7 @@ impl LocationOperationRunner<'_> {
                     && fatal.is_none()
                     && !hub.has_storage_waiters(&operation.id)
                     && title_index < plan.titles.len()
-                    && copying.len()
-                        < crate::location::transfer::CopyCoordinator::shared().capacity()
+                    && copying.len() < crate::location::transfer::shared().capacity()
                     && pending.saturating_sub(copying.len()) < PIPELINE_POST_COPY_LIMIT
                 {
                     let title = &plan.titles[title_index];
@@ -717,7 +716,10 @@ impl LocationOperationRunner<'_> {
                 result => result,
             };
             match result {
-                Err(error) if move_error_is_transient(&error) => {
+                // Storage that went away answers like a missing source or a
+                // full or denied destination too, so storage is asked first;
+                // only when it is there does the error itself decide.
+                Err(error) if move_error_may_be_storage_loss(&error) => {
                     if let Some(storage) = &storage
                         && !storage.available().await
                     {
@@ -762,7 +764,7 @@ impl LocationOperationRunner<'_> {
                             0,
                         );
                         attempt = 1;
-                    } else if attempt < self.retry.attempts {
+                    } else if move_error_is_transient(&error) && attempt < self.retry.attempts {
                         tokio::time::sleep(self.retry.delay_before(attempt + 1)).await;
                         attempt += 1;
                     } else {

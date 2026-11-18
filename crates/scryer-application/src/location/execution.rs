@@ -1,5 +1,4 @@
-//! The root-move execution path: the three runner seams, wired end to end
-//! (US2, FR-030–033, FR-044, FR-076, FR-089).
+//! The root-move execution path: the three runner seams, wired end to end.
 //!
 //! [`crate::location::executor::LocationOperationRunner`] owns the state
 //! machine, the checkpoints, the cancel points, and the resume cursor. This
@@ -7,17 +6,17 @@
 //!
 //! | Seam | Implementation here | What it guarantees |
 //! |---|---|---|
-//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem link placement without copying bytes; otherwise a verified streaming copy at the operation's depth (FR-040–043), or a proof of a destination an interrupted run already placed. The source survives until the journal and catalog are durable. Configured permissions land on the destination straight after verification (FR-031). |
-//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order (FR-031, FR-044). For a title that merges into an existing destination title, the flip is replaced by the US7 merge engine's Groups 1–5 transaction (FR-063–FR-067). |
-//! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The FR-089 scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
+//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem link placement without copying bytes; otherwise a verified streaming copy at the operation's depth, or a proof of a destination an interrupted run already placed. The source survives until the journal and catalog are durable. Configured permissions land on the destination straight after verification. |
+//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are removed, then *empty* source directories. For a title that merges into an existing destination title, the flip is replaced by the merge engine's single catalog transaction. |
+//! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
 //!
 //! # Why the source is never touched by the mover
 //!
 //! A cross-volume move copies. Removing the source is [`RootMoveReconciler`]'s
 //! cleanup step, and it reads the *persisted verification records* to decide —
 //! not the absence of an error. A file whose record says anything other than
-//! `verified` keeps its source, which is what makes SC-006 (a byte flipped
-//! after write) end with both copies intact rather than with a corrupted
+//! `verified` keeps its source, which is what makes a byte flipped after
+//! write end with both copies intact rather than with a corrupted
 //! survivor.
 //!
 //! # Why cleanup is idempotent
@@ -34,6 +33,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_domain::MediaFacet;
 
+use crate::disk::reason::DISK_PATH_MISSING;
+use crate::disk::{
+    Disk, Done, Doubt, EntryKind, LinkAfter, LinkProof, Mark, Parents, PathReading, Placed,
+    Removal, Remove, Sameness, Unproven,
+};
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
     TitleFileMover, TitleReconciler, TitleStepOutcome,
@@ -42,14 +46,12 @@ use crate::location::merge::engine::{TitleMergeRepository, execute_merge, plan_m
 use crate::location::model::LocationOperation;
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
-use crate::location::verify::{
-    DestinationClaim, VerifiedCopier, VerifiedCopyRequest, VerifiedFile, same_filesystem,
-};
+use crate::location::verify::{DestinationClaim, VerifiedFile, same_filesystem};
 use crate::ports::LocationOperationRepository;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult};
 
-// ── Seam: configured destination permissions (FR-031) ───────────────────────
+// ── Seam: configured destination permissions ────────────────────────────────
 
 /// Applies the operator's configured file and folder permissions to content a
 /// location operation just placed.
@@ -119,7 +121,7 @@ impl PlacedContentPermissions for ImportFilePermissionsApplier {
 // ── Seam: catalog writes and reads ───────────────────────────────────────────
 
 /// Where a title's content sits according to the catalog, as the admission
-/// check compares it against the confirmed plan (FR-089).
+/// check compares it against the confirmed plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TitlePlacementSnapshot {
     pub root_folder_id: String,
@@ -158,7 +160,6 @@ pub trait RootMoveCatalog: Send + Sync {
         &self,
         _operation: &LocationOperation,
         _plan: &RootMoveExecutionPlan,
-        _recycler: &dyn SourceRecycler,
     ) -> AppResult<()> {
         Err(AppError::Repository(
             "Folder conflict cleanup is unavailable".into(),
@@ -202,7 +203,7 @@ pub trait RootMoveCatalog: Send + Sync {
     }
 
     /// Drop the catalog row for a source copy the collision engine proved
-    /// redundant (FR-073).
+    /// redundant.
     ///
     /// The destination's row is the survivor and keeps every association; this
     /// removes the duplicate that would otherwise point at a dropped file.
@@ -217,11 +218,11 @@ pub trait RootMoveCatalog: Send + Sync {
     /// moves.
     async fn check_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()>;
 
-    /// Update the title's root reference (FR-078 synthetic id).
+    /// Update the title's root reference (the synthetic id).
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()>;
 
     /// Transfer the title into another library, together with the root it lands
-    /// on, in **one** transaction (FR-056).
+    /// on, in **one** transaction.
     ///
     /// The two halves cannot be written separately: a title whose `library_id`
     /// says library B while its `root_folder_id` names a root of library A is a
@@ -232,11 +233,11 @@ pub trait RootMoveCatalog: Send + Sync {
     ///
     /// Implementations must also carry the title's library projections across —
     /// `title_external_ids.library_id` above all, since that column is what
-    /// destination-title detection reads (FR-055). A title transferred without
+    /// destination-title detection reads. A title transferred without
     /// it would keep answering identity lookups from the library it left.
     ///
-    /// `converted_facet` is the third half of the same indivisible write
-    /// (FR-057). A title's facet and its library's facet are one invariant, not
+    /// `converted_facet` is the third half of the same indivisible write.
+    /// A title's facet and its library's facet are one invariant, not
     /// two values that may briefly disagree: `title_root_folder_path` refuses a
     /// title whose facet does not match its library
     /// (`crate::catalog::workflow::roots`), so a series that reached an anime
@@ -254,7 +255,7 @@ pub trait RootMoveCatalog: Send + Sync {
     ) -> AppResult<()>;
 
     /// Persist the hashes the copy pass produced onto the moved media file
-    /// (FR-041, migration 0205).
+    /// (migration 0205).
     ///
     /// The operation's own per-file record (0206) is the audit trail; this is
     /// the *read model* the dedup gate and the backfill queue consult. Without
@@ -313,42 +314,6 @@ impl MergedSourceRetirer for NoMergedSourceRetirement {
     }
 }
 
-// ── Seam: recycling ──────────────────────────────────────────────────────────
-
-/// What happened to a source file the operation no longer needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceDisposal {
-    /// The source went to the recycle bin.
-    Recycled,
-    /// The source was already gone (a rename moved it, or a previous run
-    /// removed it).
-    AlreadyAbsent,
-    /// Recycling was not available, so the verified-redundant source was
-    /// removed. Always warned about, never silent (C3).
-    RemovedRecycleUnavailable(&'static str),
-    /// The recycle bin refused the file; the extra source copy remains.
-    PreservedRecycleUnavailable,
-}
-
-/// Recycles source copies a verified destination has made redundant.
-///
-/// Recycling is a seam because the recycle bin's configuration is per media
-/// root and lives in settings, and because the executor path has to be
-/// testable without a configured bin.
-#[async_trait]
-pub trait SourceRecycler: Send + Sync {
-    /// Recycle `source`, attributing the entry to `operation_id` and `title_id`
-    /// so the recycle manifest links back to the operation.
-    async fn recycle_source(
-        &self,
-        operation_id: &str,
-        title: &RootMoveTitleExecution,
-        source: &Path,
-        media_file_id: Option<&str>,
-        size_bytes: u64,
-    ) -> AppResult<SourceDisposal>;
-}
-
 // ── TitleFileMover ───────────────────────────────────────────────────────────
 
 /// Moves one file for a root move.
@@ -360,20 +325,20 @@ pub trait SourceRecycler: Send + Sync {
 /// Different filesystem → [`VerifiedCopier::copy_and_verify`] at the
 /// operation's configured depth. The source is left exactly where it is; only
 /// [`RootMoveReconciler`] removes it, and only against a persisted verification
-/// record (FR-044).
+/// record.
 #[derive(Clone)]
 pub struct RootMoveFileMover {
     resolver: Option<Arc<super::resolution::ConflictResolver>>,
-    copier: VerifiedCopier,
+    copier: Disk,
     permissions: Arc<dyn PlacedContentPermissions>,
-    /// Where the streamed hashes are persisted (FR-041, migration 0205).
+    /// Where the streamed hashes are persisted (migration 0205).
     ///
     /// The mover is the only place that ever holds them, so it is the only
     /// place that can hand them to the read model. `None` for a mover wired
     /// without a catalog, in which case the backfill job picks the files up
     /// later — a missing hash costs a re-read, never correctness.
     catalog: Option<Arc<dyn RootMoveCatalog>>,
-    /// Skip the FR-032 rename fast path and always copy.
+    /// Skip the rename fast path and always copy.
     ///
     /// The mover decides rename-vs-copy from the actual device ids, so a test
     /// living inside one temp directory can never reach the copy path — which
@@ -392,7 +357,7 @@ impl RootMoveFileMover {
         self.resolver = Some(resolver);
         self
     }
-    pub fn new(copier: VerifiedCopier, permissions: Arc<dyn PlacedContentPermissions>) -> Self {
+    pub fn new(copier: Disk, permissions: Arc<dyn PlacedContentPermissions>) -> Self {
         Self {
             copier,
             permissions,
@@ -412,7 +377,7 @@ impl RootMoveFileMover {
     }
 
     /// Persist each copy's hashes onto its media file, so a moved file leaves
-    /// the backfill queue instead of being read a second time (D4).
+    /// the backfill queue instead of being read a second time.
     pub fn with_catalog(mut self, catalog: Arc<dyn RootMoveCatalog>) -> Self {
         self.catalog = Some(catalog);
         self
@@ -421,15 +386,15 @@ impl RootMoveFileMover {
     /// A mover that changes no permissions — the right shape for a deployment
     /// with no configured modes, and for tests.
     pub fn without_permissions() -> Self {
-        Self::new(VerifiedCopier::new(), Arc::new(NoPlacedContentPermissions))
+        Self::new(Disk::process(), Arc::new(NoPlacedContentPermissions))
     }
 
-    /// FR-041/D4: the hashes the copy already computed go onto the media file
+    /// The hashes the copy already computed go onto the media file
     /// (0205) as well as into the operation's audit record (0206).
     ///
     /// Only for a verified destination — a hash of bytes that failed their
     /// check describes content we are about to refuse to trust. A
-    /// same-filesystem rename carries no hashes at all (FR-032), and a
+    /// same-filesystem rename carries no hashes at all, and a
     /// companion asset has no media-file row.
     async fn persist_content_hashes(&self, request: &FileMoveRequest<'_>, verified: &VerifiedFile) {
         let Some(catalog) = self.catalog.as_ref() else {
@@ -445,8 +410,14 @@ impl RootMoveFileMover {
             return;
         };
 
-        let persisted = crate::location::model::PersistedContentHashes::from_streamed(
+        let mark = verified
+            .destination_mark
+            .as_deref()
+            .and_then(crate::disk::Mark::from_stored);
+        let persisted = crate::location::model::PersistedContentHashes::from_verified(
             hashes,
+            &verified.depth,
+            mark.as_ref(),
             chrono::Utc::now(),
         );
         if let Err(error) = catalog
@@ -491,14 +462,17 @@ impl TitleFileMover for RootMoveFileMover {
         if let Some(parent) = destination.parent()
             && !parent.as_os_str().is_empty()
         {
-            tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to create destination directory {}: {error}",
-                    parent.display()
-                ))
-            })?;
+            Disk::process()
+                .create_dir(parent, Parents::Create)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to create destination directory {}: {error}",
+                        parent.display()
+                    ))
+                })?;
             // The directory is destination content too, so the operator's
-            // configured folder modes apply to it (FR-031).
+            // configured folder modes apply to it.
             self.permissions.apply_to_directory(parent).await?;
         }
 
@@ -507,33 +481,29 @@ impl TitleFileMover for RootMoveFileMover {
             && stage_same_filesystem_file(source, destination).await?
         {
             VerifiedFile::same_filesystem_rename(source.clone(), destination.clone(), request.depth)
-        } else if tokio::fs::symlink_metadata(destination).await.is_ok() {
+        } else if Disk::process().uncached(destination).await.exists() == Some(true) {
             // The runner only asks for files it has no verification record for,
             // so a destination that is already there is the crash window
             // between a completed copy's promotion and the record that should
             // have followed it — or a file that appeared from outside. Either
             // way it is proven against the source rather than replaced or
-            // trusted (FR-033, C4).
-            self.copier
-                .clone()
-                .with_progress(request.progress.clone())
-                .verify_existing_destination(
-                    source,
-                    destination,
-                    request.depth,
-                    request.file.source_content.as_ref(),
-                )
-                .await?
+            // trusted.
+            super::resolution::compare_existing(
+                source,
+                destination,
+                &request.progress,
+                request.file.source_content.as_ref(),
+            )
+            .await?
         } else {
-            self.copier
-                .copy_and_verify(VerifiedCopyRequest {
-                    source: source.clone(),
-                    destination: destination.clone(),
-                    depth: request.depth,
-                    claim: DestinationClaim::ClaimHere,
-                    progress: request.progress.clone(),
-                })
-                .await?
+            super::verify::copy_and_verify(
+                &self.copier,
+                source,
+                destination,
+                crate::disk::placement::verified_copy(request.depth, DestinationClaim::ClaimHere),
+                &request.progress,
+            )
+            .await?
         };
 
         // Only a destination that is actually there gets its modes changed; a
@@ -556,14 +526,32 @@ impl TitleFileMover for RootMoveFileMover {
 
 /// Place a second name for the same regular file without copying bytes. The
 /// source survives a crash before the verification journal is durable; cleanup
-/// removes that name only after the catalog has moved. Unsupported filesystems
-/// and platforms take the ordinary verified-copy path.
+/// removes that name only after the catalog has moved, and only when the two
+/// names read as one file that has another name. A symbolic link is staged
+/// as a link of its own on unix; anything else that is not a regular file,
+/// a symbolic link on Windows included, takes the ordinary verified-copy
+/// path, as every source does on other platforms. A regular file is linked
+/// only where its read tells it from every other file; on a volume whose
+/// reads cannot (FAT, exFAT, ReFS, a share without file numbers, a
+/// filesystem that numbers every file zero) cleanup could never prove the
+/// second name, so it is copied. A destination already there is not linked
+/// over: it is staged only as a proven second name of the source, refused
+/// as one entry under two spellings, and otherwise copied. Each name is read
+/// once, links not followed.
+#[allow(clippy::disallowed_methods)] // disk-guard: symlink placement
 async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppResult<bool> {
-    let source_metadata = tokio::fs::symlink_metadata(source).await.map_err(|error| {
-        AppError::Repository(format!("cannot inspect {}: {error}", source.display()))
-    })?;
+    let seen = Disk::process()
+        .fingerprint(source)
+        .await
+        .map_err(|reading| {
+            AppError::Repository(format!(
+                "cannot inspect {}: {}",
+                source.display(),
+                reading.absence()
+            ))
+        })?;
     #[cfg(unix)]
-    if source_metadata.file_type().is_symlink() {
+    if seen.kind() == Some(EntryKind::Symlink) {
         let target = tokio::fs::read_link(source).await.map_err(|error| {
             AppError::Repository(format!("cannot read link {}: {error}", source.display()))
         })?;
@@ -580,45 +568,95 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
             })?;
         return Ok(true);
     }
-    if !source_metadata.is_file() || !cfg!(unix) {
+    if seen.kind() != Some(EntryKind::File) || !cfg!(any(unix, windows)) {
         return Ok(false);
     }
-    if let Ok(destination_metadata) = tokio::fs::symlink_metadata(destination).await {
-        if tokio::fs::canonicalize(source).await.ok()
-            == tokio::fs::canonicalize(destination).await.ok()
-        {
+    if let Ok(destination_read) = Disk::process().fingerprint(destination).await {
+        let resolved = Resolved::of(source, destination).await;
+        if resolved.one_path() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
                 "source and destination are the same path",
             ));
         }
-        return match shared_inode(source, destination, &source_metadata, &destination_metadata)
-            .await
-        {
+        return match shared_inode(source, destination, &seen, &destination_read).await {
             SharedInode::SecondLink => Ok(true),
             SharedInode::OneEntry => Err(one_entry_refusal()),
             SharedInode::Distinct => Ok(false),
         };
     }
-    match tokio::fs::hard_link(source, destination).await {
-        Ok(()) => {
-            let placed = tokio::fs::symlink_metadata(destination)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "cannot inspect {}: {error}",
-                        destination.display()
-                    ))
-                })?;
-            if !same_regular_file(&source_metadata, &placed) {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
-                    "source changed during file placement",
-                ));
-            }
-            Ok(true)
+    // Only a read that tells this file from every other can prove the
+    // second name at cleanup; anything else is copied.
+    if seen.same_file(&seen) != Sameness::Same {
+        return Ok(false);
+    }
+    // The new name is read once and must be the file read above. A link that
+    // does not prove is removed by the disk service before it answers.
+    let linked = Disk::process()
+        .place_proven(
+            source,
+            destination,
+            crate::disk::placement::proven_link(),
+            seen,
+            LinkProof::Name,
+        )
+        .await;
+    let refusal = match linked {
+        Ok(Placed {
+            done: Done::HardLinked,
+            ..
+        }) => return Ok(true),
+        Ok(_) => {
+            return Err(AppError::Repository(format!(
+                "the link to {} was not made as a hard link",
+                destination.display()
+            )));
         }
-        Err(_) => Ok(false),
+        Err(refusal) => refusal,
+    };
+    unproven_link_answer(destination, refusal.unproven)
+}
+
+/// What staging answers for a refused link: `Ok(false)` when no link was
+/// made and the ordinary verified copy takes over, and a refusal for a link
+/// that was made and did not prove.
+pub(super) fn unproven_link_answer(
+    destination: &Path,
+    unproven: Option<Unproven>,
+) -> AppResult<bool> {
+    match unproven {
+        // No link was made: the ordinary verified copy takes over.
+        None => Ok(false),
+        // A link that did not prove and is still at the name, whatever the
+        // doubt: the path it was left at travels as its own fact.
+        Some(Unproven {
+            after: LinkAfter::NotRemoved,
+            ..
+        }) => Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::location::UNPROVEN_LINK_NOT_REMOVED,
+            format!(
+                "the link made at {} could not be proven and could not be removed; the source was kept",
+                destination.display()
+            ),
+            vec![crate::RefusalFact::new(
+                crate::error_reasons::location::LEFT_BEHIND_PATH_FACT,
+                path_to_stored_string(destination),
+            )],
+        )),
+        // The read that failed is the answer, when the name did not stay.
+        Some(Unproven {
+            doubt: Doubt::Unread(error),
+            ..
+        }) => Err(AppError::Repository(format!(
+            "cannot inspect {}: {}",
+            destination.display(),
+            error.words()
+        ))),
+        // Another file at the name, removed, already gone or left alone.
+        Some(_) => Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
+            "source changed during file placement",
+        )),
     }
 }
 
@@ -635,48 +673,54 @@ pub(super) enum SharedInode {
     OneEntry,
 }
 
-/// Decide a pair from the facts alone. Equal dev/ino is not trusted by itself:
-/// mounts that synthesize inodes (CIFS without serverino, mergerfs, rclone) can
-/// report it for two different files, so a length mismatch sends the pair to
-/// the content comparison. A shared inode counts as a second link only with a
-/// known link count of two or more; an unknown count is never assumed to be.
+/// Decide a pair from the facts alone. One file number is not trusted by
+/// itself: mounts that synthesize inodes (CIFS without serverino, mergerfs,
+/// rclone) can report it for two different files, so a length mismatch sends
+/// the pair to the content comparison. A shared file counts as a second link
+/// only when the read showed the destination to have another name; a count
+/// the read did not give is never assumed to be two.
 pub(super) fn shared_inode_decision(
     same_identity: bool,
     source_len: u64,
     destination_len: u64,
-    link_count: Option<u64>,
+    other_names: bool,
 ) -> SharedInode {
     if !same_identity || source_len != destination_len {
         return SharedInode::Distinct;
     }
-    match link_count {
-        Some(count) if count >= 2 => SharedInode::SecondLink,
-        _ => SharedInode::OneEntry,
+    match other_names {
+        true => SharedInode::SecondLink,
+        false => SharedInode::OneEntry,
     }
 }
 
-/// Classify a pair by metadata, then prove a claimed second link is really a
-/// second directory entry: two names in one directory must both be listed
-/// under their exact spelling, which a case-folding mount does not do.
+/// Classify a pair by the disk service's reads of both names, links not
+/// followed, then prove a claimed second link is really a second directory
+/// entry: two names in one directory must both be listed under their exact
+/// spelling, which a case-folding mount or a case-insensitive volume does not
+/// do.
 pub(super) async fn shared_inode(
     source: &Path,
     destination: &Path,
-    source_metadata: &std::fs::Metadata,
-    destination_metadata: &std::fs::Metadata,
+    source_read: &Mark,
+    destination_read: &Mark,
 ) -> SharedInode {
+    let sameness = regular_file_sameness(source_read, destination_read);
     let decision = shared_inode_decision(
-        same_regular_file(source_metadata, destination_metadata),
-        source_metadata.len(),
-        destination_metadata.len(),
-        super::hardlinks::link_count_from_metadata(destination_metadata).count(),
+        sameness == Sameness::Same,
+        source_read.len().unwrap_or_default(),
+        destination_read.len().unwrap_or_default(),
+        destination_read.has_other_names(),
     );
-    #[cfg(unix)]
-    if decision == SharedInode::SecondLink && !distinct_directory_entries(source, destination).await
+    // A pair the file numbers cannot tell apart is never a second link, and
+    // goes to the content comparison only as two listed entries: one entry
+    // under two spellings would be its own match.
+    let undecided = sameness == Sameness::CannotTell && source_read.len() == destination_read.len();
+    if (decision == SharedInode::SecondLink || undecided)
+        && !distinct_directory_entries(source, destination).await
     {
         return SharedInode::OneEntry;
     }
-    #[cfg(not(unix))]
-    let _ = (source, destination);
     decision
 }
 
@@ -687,25 +731,75 @@ pub(super) fn one_entry_refusal() -> AppError {
     )
 }
 
-/// Whether two paths are two directory entries. Names in two different
-/// directories are; names in one directory are only when they differ and the
-/// listing holds both exactly.
-#[cfg(unix)]
+/// Both paths as the platform resolves them, links and aliases followed;
+/// `None` for one that does not resolve. Used only to find one path: two
+/// resolutions that differ prove nothing, since one folder reached through
+/// two server-side spellings (a host name and its address, two shares over
+/// one folder) resolves to two strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Resolved {
+    source: Option<PathBuf>,
+    destination: Option<PathBuf>,
+}
+
+impl Resolved {
+    /// One resolution of each path.
+    pub(super) async fn of(source: &Path, destination: &Path) -> Self {
+        let disk = Disk::process();
+        Self {
+            source: disk.canonicalize(source).await.ok(),
+            destination: disk.canonicalize(destination).await.ok(),
+        }
+    }
+
+    /// Whether both resolve to one path, or neither resolves: either way the
+    /// pair is refused as the same path.
+    pub(super) fn one_path(&self) -> bool {
+        self.source == self.destination
+    }
+}
+
+/// Whether two names are in two folders, as the disk service's reads of the
+/// folders say. Folders the reads cannot tell apart are not two, whatever
+/// their paths resolve to. No probe.
+pub(super) fn in_two_folders(parents: Sameness) -> bool {
+    parents == Sameness::Different
+}
+
+/// Whether two paths are two directory entries. Names in two folders the
+/// disk service reads as different folders are; names in one folder, or in
+/// folders it cannot tell apart, are only when they differ and the listing of
+/// the source's folder holds both exactly.
 async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     let (Some(source_parent), Some(destination_parent)) = (source.parent(), destination.parent())
     else {
         return false;
     };
     let (Ok(source_dir), Ok(destination_dir)) = (
-        tokio::fs::metadata(source_parent).await,
-        tokio::fs::metadata(destination_parent).await,
+        Disk::process().fingerprint_followed(source_parent).await,
+        Disk::process()
+            .fingerprint_followed(destination_parent)
+            .await,
     ) else {
         return false;
     };
-    use std::os::unix::fs::MetadataExt;
-    if source_dir.dev() != destination_dir.dev() || source_dir.ino() != destination_dir.ino() {
+    distinct_entries_in(source_dir.same_file(&destination_dir), source, destination).await
+}
+
+/// [`distinct_directory_entries`] once the folders are read: `parents` is
+/// how the disk service's reads of the two folders compare.
+#[allow(clippy::disallowed_methods)] // disk-guard: early-exit listing
+pub(super) async fn distinct_entries_in(
+    parents: Sameness,
+    source: &Path,
+    destination: &Path,
+) -> bool {
+    if in_two_folders(parents) {
         return true;
     }
+    let Some(source_parent) = source.parent() else {
+        return false;
+    };
     let (Some(source_name), Some(destination_name)) = (source.file_name(), destination.file_name())
     else {
         return false;
@@ -728,17 +822,38 @@ async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     false
 }
 
-pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    if !left.is_file() || !right.is_file() {
-        return false;
+/// Whether two reads are one regular file, proven. A pair that cannot be
+/// told apart, such as two names on a filesystem that numbers every file
+/// zero, answers `false`, so no caller treats two files as one on a guess.
+pub(super) fn same_regular_file(left: &Mark, right: &Mark) -> bool {
+    regular_file_sameness(left, right) == Sameness::Same
+}
+
+/// Whether two reads are one regular file, two, or cannot be told apart.
+/// Anything but two regular files is [`Sameness::Different`]. The reads are
+/// the disk service's, so a Windows read carries the volume serial and file
+/// index where the volume keeps them, and cannot tell where it does not.
+pub(super) fn regular_file_sameness(left: &Mark, right: &Mark) -> Sameness {
+    if left.kind() != Some(EntryKind::File) || right.kind() != Some(EntryKind::File) {
+        return Sameness::Different;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        left.dev() == right.dev() && left.ino() == right.ino()
+    left.same_file(right)
+}
+
+/// The disk service's read of a name a caller has already read through std,
+/// links not followed: the metadata's own mark on unix, with no probe, and
+/// one handle read on Windows, where std's metadata names no volume or file.
+/// The reading when that read fails. Built from std metadata, the mark never
+/// proves a link.
+pub(super) async fn mark_beside(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<Mark, PathReading> {
+    if cfg!(windows) {
+        Disk::process().fingerprint(path).await
+    } else {
+        Ok(Mark::of(metadata))
     }
-    #[cfg(not(unix))]
-    false
 }
 
 // ── TitleReconciler ──────────────────────────────────────────────────────────
@@ -749,12 +864,11 @@ pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metad
 /// runs (it refuses to continue otherwise), so `reconcile_title` never has to
 /// re-check verification. `clean_up_title` does, because it is the step that
 /// touches the source: it reads the persisted verification records and skips
-/// any file that is not recorded `verified` (FR-044).
+/// any file that is not recorded `verified`.
 pub struct RootMoveReconciler<'a> {
     plan: &'a RootMoveExecutionPlan,
     catalog: &'a dyn RootMoveCatalog,
     store: &'a dyn LocationOperationRepository,
-    recycler: &'a dyn SourceRecycler,
     permissions: Arc<dyn PlacedContentPermissions>,
     merges: Option<&'a dyn TitleMergeRepository>,
     retirer: Arc<dyn MergedSourceRetirer>,
@@ -765,13 +879,11 @@ impl<'a> RootMoveReconciler<'a> {
         plan: &'a RootMoveExecutionPlan,
         catalog: &'a dyn RootMoveCatalog,
         store: &'a dyn LocationOperationRepository,
-        recycler: &'a dyn SourceRecycler,
     ) -> Self {
         Self {
             plan,
             catalog,
             store,
-            recycler,
             permissions: Arc::new(NoPlacedContentPermissions),
             merges: None,
             retirer: Arc::new(NoMergedSourceRetirement),
@@ -783,7 +895,7 @@ impl<'a> RootMoveReconciler<'a> {
         self
     }
 
-    /// The US7 merge engine. Required for a plan holding any merge title; a
+    /// The merge engine. Required for a plan holding any merge title; a
     /// plan with none never reaches it.
     pub fn with_merges(mut self, merges: &'a dyn TitleMergeRepository) -> Self {
         self.merges = Some(merges);
@@ -834,7 +946,7 @@ impl<'a> RootMoveReconciler<'a> {
         })
     }
 
-    /// US7's catalog step: the merge transaction, then the source title's
+    /// The merge's catalog step: the merge transaction, then the source title's
     /// logical retirement handed to the delete path.
     ///
     /// # Why the plan is re-derived here rather than read off the confirmed one
@@ -843,7 +955,7 @@ impl<'a> RootMoveReconciler<'a> {
     /// the user agreed to and what the fingerprint covers. The transaction has
     /// to run against the catalog as it is at this instant — this title's media
     /// files have just been repointed at their new paths. Re-deriving is also
-    /// what makes the FR-081 fingerprint meaningful: if the two disagreed, start
+    /// what makes the confirmation fingerprint meaningful: if the two disagreed, start
     /// would have refused the confirmation before reaching here.
     ///
     /// # Resume idempotence
@@ -883,7 +995,7 @@ impl<'a> RootMoveReconciler<'a> {
             )
             .await?;
         let plan = plan_merge(&snapshot);
-        // FR-066 again, at the last possible moment: the preview refused a
+        // Checked again, at the last possible moment: the preview refused a
         // blocked merge, and anything that became unmappable since is a failed
         // title rather than a merge attached to a guess. A failed title is
         // contained — the rest of the operation runs on.
@@ -903,7 +1015,7 @@ impl<'a> RootMoveReconciler<'a> {
         let identity_map = plan.require_identity_map()?.clone();
         execute_merge(merges, &plan).await?;
         // The merge is the plan's designed outcome, so it is stated, not warned
-        // about (FR-064): the user confirmed it in the preview.
+        // about: the user confirmed it in the preview.
         outcome.notes.push(merge_note(
             &planned.title_name,
             plan.summary.destination_title_name.as_deref(),
@@ -916,8 +1028,8 @@ impl<'a> RootMoveReconciler<'a> {
 
     /// Whether this title's merge already committed.
     ///
-    /// The source title row is the evidence, and it is sound evidence: FR-084
-    /// gives this operation exclusive ownership of the title for its whole
+    /// The source title row is the evidence, and it is sound evidence: this
+    /// operation holds exclusive ownership of the title for its whole
     /// duration, so nothing else can have removed it. Requiring the destination
     /// to be present too keeps the answer from being "yes" for a catalog that
     /// lost both.
@@ -978,18 +1090,17 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         let mut outcome = TitleStepOutcome::clean();
 
         // Destination directories are destination content: the operator's
-        // configured folder modes apply before the catalog points at them
-        // (FR-031).
+        // configured folder modes apply before the catalog points at them.
         if operation.mode != crate::location::model::LocationExecutionMode::UserMovedFiles
             && let Some(folder) = planned.destination_folder_path.as_deref()
         {
             let folder = stored_path_to_path_buf(folder);
-            if tokio::fs::symlink_metadata(&folder).await.is_ok() {
+            if Disk::process().fresh(&folder).await.exists() == Some(true) {
                 self.permissions.apply_to_directory(&folder).await?;
             }
         }
 
-        // US7, before anything else: a merge whose transaction already
+        // A merge, before anything else: one whose transaction already
         // committed has nothing left to reconcile. Its media-file paths were
         // written *before* that transaction, so re-writing them here would
         // reach for rows the merge has already repointed. Asking first is what
@@ -1024,7 +1135,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 ));
             }
             if let Some(warning) = &resolution.warning {
-                // A transfer-time rename is FR-074/FR-075 doing its job, not a
+                // A transfer-time rename is conflict resolution doing its job, not a
                 // departure from the plan.
                 outcome.notes.push(warning.clone());
             }
@@ -1119,8 +1230,8 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         }
         self.flush_media_file_paths(&mut pending_paths).await?;
 
-        // US7: for a merge there is no source title left to point anywhere —
-        // the destination title owns the folder (FR-063) and keeps the one it
+        // For a merge there is no source title left to point anywhere —
+        // the destination title owns the folder and keeps the one it
         // already had, which is the folder this title's files just moved into.
         // Groups 1–5 repoint everything else, in one transaction, and the
         // checkpoint's `merged_into_title_id` records where the title went.
@@ -1137,9 +1248,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        // FR-056/FR-057: the transfer's catalog flip is library + root + facet
+        // The transfer's catalog flip is library + root + facet
         // together, after the completeness gate the runner already applied. A
-        // same-library root move keeps its narrower write, so nothing about US2
+        // same-library root move keeps its narrower write, so nothing about it
         // changes.
         if planned.crosses_libraries() {
             self.catalog
@@ -1177,7 +1288,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         let mut outcome = TitleStepOutcome::clean();
 
         // The persisted records are the gate, not the absence of an error: only
-        // a file recorded `verified` may have its source touched (FR-044).
+        // a file recorded `verified` may have its source touched.
         let records = self
             .store
             .list_location_file_verifications(&operation.id, Some(&title.title_id))
@@ -1200,9 +1311,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .find(|row| row.source_path == file.source_path);
             let mut resolved = file.clone();
             if let Some(row) = resolution {
-                if tokio::fs::symlink_metadata(file.source())
-                    .await
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                // A source missing at its name may be one an interrupted
+                // cleanup set aside: it is put back and checked like any
+                // other, and only a source that is really gone is skipped.
+                if Disk::process().uncached(file.source()).await.exists() == Some(false)
+                    && read_copied_source(&file.source()).await?.is_none()
                 {
                     continue;
                 }
@@ -1223,10 +1336,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }) {
                 // The transfer proved this source byte-identical to the
                 // destination's copy while both existed, and the proof was
-                // re-checked above (C4). The source is a redundant copy of
+                // re-checked above. The source is a redundant copy of
                 // content the library already holds, not user data that can be
                 // lost, so it is dropped outright rather than recycled
-                // (FR-073) — the destination copy is the survivor.
+                // — the destination copy is the survivor.
                 //
                 // "The destination copy is the survivor" is the whole
                 // justification, so it is proven rather than assumed: the file
@@ -1234,20 +1347,23 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 // still have to hash to the identity the transfer recorded
                 // before this source is dropped without a recycle bin behind
                 // it.
-                if !row.proof_supports_disposal().await? {
+                if !row
+                    .proof_supports_disposal(operation.verification_depth)
+                    .await?
+                {
                     return Err(AppError::validation_refused(crate::error_reasons::location::DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE, "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again."
                             ));
                 }
                 let source = stored_path_to_path_buf(&file.source_path);
-                match tokio::fs::remove_file(&source).await {
-                    Ok(()) => tracing::info!(
+                match Disk::process().remove(&source, Remove::File).await {
+                    Ok(Removal::Removed) => tracing::info!(
                         operation_id = %operation.id,
                         title_id = %title.title_id,
                         source = %file.source_path,
                         destination = %file.destination_path,
                         "dropped a source copy proven identical to the destination's"
                     ),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(Removal::AlreadyAbsent) => {}
                     Err(error) => {
                         return Err(AppError::Repository(format!(
                             "failed to remove the identical source {}: {error}",
@@ -1265,111 +1381,124 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                         "source and destination are the same path",
                     ));
                 }
-                let source_metadata = match tokio::fs::symlink_metadata(&source).await {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(AppError::Repository(error.to_string())),
-                };
-                let destination_metadata = tokio::fs::symlink_metadata(file.destination())
-                    .await
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
-                let same_link = if source_metadata.file_type().is_symlink()
-                    && destination_metadata.file_type().is_symlink()
-                {
-                    match (
-                        tokio::fs::read_link(&source).await,
-                        tokio::fs::read_link(file.destination()).await,
-                    ) {
-                        (Ok(source_target), Ok(destination_target)) => {
-                            source_target == destination_target
-                        }
-                        _ => false,
-                    }
-                } else {
-                    false
-                };
-                let same_file = same_regular_file(&source_metadata, &destination_metadata);
-                if same_file
-                    && shared_inode(
-                        &source,
-                        &file.destination(),
-                        &source_metadata,
-                        &destination_metadata,
-                    )
-                    .await
-                        != SharedInode::SecondLink
-                {
-                    // Removing the source would remove the only entry.
-                    return Err(one_entry_refusal());
-                }
-                if !same_file && !same_link {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
-                        format!(
-                            "source or destination changed before cleanup: {}",
-                            file.source_path
-                        ),
-                    ));
-                }
-                tokio::fs::remove_file(&source)
-                    .await
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                retire_linked_source(&source, &file.destination(), &file.source_path).await?;
                 continue;
             }
             let source = stored_path_to_path_buf(&file.source_path);
             // A durable copy receipt describes the bytes copied, not whatever
             // occupies the source name after an interruption. Recheck both
             // copies and their versions before handing this path to disposal.
-            match tokio::fs::symlink_metadata(&source).await {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AppError::Repository(error.to_string())),
-                Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
-                        "Source changed before cleanup; preserved it.",
-                    ));
-                }
-                Ok(_) => {}
-            }
-            let source_version = super::resolution::file_version(&source).await?;
-            let destination = file.destination();
-            let destination_version = super::resolution::file_version(&destination).await?;
-            // The content proof was made once, at copy time, at the chosen
-            // depth, and the resolution row recorded both files' versions right
-            // after it. While both files still carry those versions the proof
-            // stands, so only the quick check is repeated. Without a row holding
-            // both versions there is nothing tying the proof to these files, and
-            // the source is re-read and the destination proven again.
-            let recorded_proof = resolution
-                .and_then(|row| {
-                    row.source_version
-                        .as_deref()
-                        .zip(row.destination_version.as_deref())
-                })
-                .zip(record.hashes.as_ref());
-            let content_proven = match recorded_proof {
-                Some(((row_source_version, row_destination_version), recorded_hashes)) => {
-                    row_source_version == source_version
-                        && row_destination_version == destination_version
-                        && super::verify::quick_recheck(&source, &destination, recorded_hashes)
-                            .await?
-                            .permits_source_removal()
-                }
-                None => {
-                    let source_hashes = super::verify::hash_existing_file(&source).await?;
-                    let destination_proof = super::verify::VerifiedCopier::default()
-                        .verify(&source, &destination, &source_hashes, record.depth.applied)
-                        .await?;
-                    record.hashes.as_ref() == Some(&source_hashes)
-                        && destination_proof.outcome.permits_source_removal()
-                        && destination_proof.depth.applied == record.depth.applied
-                }
+            // The source's own read, a link not followed, is also the mark its
+            // removal below is settled against.
+            let Some(source_mark) = read_copied_source(&source).await? else {
+                continue;
             };
-            if record.source_path != file.source_path
-                || !content_proven
-                || super::resolution::file_version(&source).await? != source_version
-                || super::resolution::file_version(&destination).await? != destination_version
-            {
+            // A linked source that took a copy is proven by the file it
+            // names (the proofs below read through the link); once proven,
+            // only the link's own name is removed, never the file it names.
+            if !matches!(
+                source_mark.kind(),
+                Some(EntryKind::File | EntryKind::Symlink)
+            ) {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                    "Source changed before cleanup; preserved it.",
+                ));
+            }
+            // A link is read once more, followed: one more probe, for a link
+            // source only.
+            let linked = source_mark.kind() == Some(EntryKind::Symlink);
+            if linked {
+                let named = Disk::process().follow(&source).await;
+                match named.exists() {
+                    // The link names nothing, so its name holds no data: after
+                    // the verified copy it goes, whatever it pointed at.
+                    Some(false) => {
+                        match Disk::process().remove(&source, Remove::File).await {
+                            Ok(Removal::Removed) => tracing::info!(
+                                operation_id = %operation.id,
+                                title_id = %title.title_id,
+                                source = %file.source_path,
+                                destination = %file.destination_path,
+                                "removed a source link that names nothing, beside its verified copy"
+                            ),
+                            Ok(Removal::AlreadyAbsent) => {}
+                            Err(error) => {
+                                return Err(AppError::Repository(format!(
+                                    "failed to remove the source link {}: {error}",
+                                    file.source_path
+                                )));
+                            }
+                        }
+                        continue;
+                    }
+                    // A link that cannot be followed for a reason that is not
+                    // the volume going quiet names something that is no
+                    // longer the file it was: Windows refuses to open a
+                    // folder through a link made for a file rather than
+                    // reading it as a folder. A timeout or an unreachable
+                    // volume is retried.
+                    None if !matches!(
+                        named.unreachable_cause(),
+                        Some(
+                            crate::disk::reason::DISK_TIMED_OUT
+                                | crate::disk::reason::DISK_PATH_UNREACHABLE
+                        )
+                    ) =>
+                    {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                            "Source changed before cleanup; preserved it.",
+                        ));
+                    }
+                    None => return Err(AppError::Repository(named.absence().into())),
+                    Some(true) if !named.is(EntryKind::File) => {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                            "Source changed before cleanup; preserved it.",
+                        ));
+                    }
+                    Some(true) => {}
+                }
+            }
+            let destination = file.destination();
+            // The resolution row recorded both files' versions right after the
+            // copy was proven; a file that no longer carries its version has
+            // changed since, and the source is kept. A link's version is the
+            // link's own.
+            let versions_held = match resolution.and_then(|row| {
+                row.source_version
+                    .as_deref()
+                    .zip(row.destination_version.as_deref())
+            }) {
+                Some((row_source_version, row_destination_version)) => {
+                    super::resolution::file_version(&source).await? == row_source_version
+                        && super::resolution::file_version(&destination).await?
+                            == row_destination_version
+                }
+                None => true,
+            };
+            // The source and the destination are then compared now, at the
+            // depth the copy was proven at: the quick check samples both
+            // live, and the full check holds their full hashes to each other.
+            // A link is compared as the file it names. A file that changed
+            // while it was read, or one that cannot be read, keeps the source.
+            let check = match versions_held {
+                true => {
+                    Disk::process()
+                        .check(
+                            // At full depth the hashes the copy streamed and
+                            // read back answer while both files still fit
+                            // them; a file that moved is read again.
+                            crate::disk::CheckSide::new(source.as_path()),
+                            crate::disk::CheckSide::new(destination.as_path()),
+                            super::verify::disk_depth(record.depth.applied),
+                        )
+                        .await
+                }
+                false => crate::disk::Check::Changed,
+            };
+            if record.source_path != file.source_path || check != crate::disk::Check::Same {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
                     "Source or destination changed before cleanup; preserved the source.",
@@ -1378,34 +1507,28 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // The destination was just proven to hold the source's bytes, so the
             // source is the redundant half of a finished move and is removed,
             // not recycled: a recycle entry would only be a second copy of
-            // content the library already holds.
-            match tokio::fs::remove_file(&source).await {
-                Ok(()) => tracing::info!(
+            // content the library already holds. Equal bytes do not show two
+            // entries, though: one entry reached under two spellings checks as
+            // the same content, and removing the source would remove the only
+            // copy. See [`remove_copied_source`].
+            if remove_copied_source(&source, &source_mark, &destination).await? {
+                tracing::info!(
                     operation_id = %operation.id,
                     title_id = %title.title_id,
                     source = %file.source_path,
                     destination = %file.destination_path,
                     "removed a source copy verified at its destination"
-                ),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to remove the verified source {}: {error}",
-                        file.source_path
-                    )));
-                }
+                );
             }
         }
 
         if self.plan.conflict.is_some() {
             // Historical hardlink content proofs remain usable after retiring
             // transfer sources. Inferior-file disposal rechecks the survivors.
-            self.catalog
-                .clean_up_conflict(operation, self.plan, self.recycler)
-                .await?;
+            self.catalog.clean_up_conflict(operation, self.plan).await?;
         }
 
-        // 2. Only *empty* source directories, deepest first (FR-031). A
+        // 2. Only *empty* source directories, deepest first. A
         //    directory that still holds anything — unmanaged content, a file
         //    this operation never planned — is left exactly as it is.
         let mut kept = Vec::new();
@@ -1425,6 +1548,235 @@ impl TitleReconciler for RootMoveReconciler<'_> {
 
         Ok(outcome)
     }
+}
+
+/// Read a copied source at the start of its cleanup, a link not followed.
+/// `None` when the source is gone, so there is nothing left to remove.
+///
+/// A cleanup interrupted after it set the source aside to tell it from its
+/// destination leaves the file at its set-aside name. A source name that
+/// reads missing is therefore put back first, as an import's start-of-run
+/// read does, and read again; where the two names were one entry, that is
+/// also what fills the destination's name again. A nonempty file at the
+/// set-aside name that cannot go back is kept there and blocks the cleanup,
+/// named by [`import::KEPT_PATH_FACT`].
+///
+/// Probes: one read of the source. Only when it reads missing, one read of
+/// the set-aside name, then one rename when it holds a nonempty file (and one
+/// more read of the source after it), or one removal of an empty one.
+///
+/// [`import::KEPT_PATH_FACT`]: crate::error_reasons::import::KEPT_PATH_FACT
+async fn read_copied_source(source: &Path) -> AppResult<Option<Mark>> {
+    match Disk::process().fingerprint(source).await {
+        Ok(mark) => return Ok(Some(mark)),
+        Err(reading) if reading.exists() == Some(false) => {}
+        Err(reading) => return Err(AppError::Repository(reading.absence().into())),
+    }
+    let owned = source.to_path_buf();
+    let answer = tokio::task::spawn_blocking(move || {
+        Disk::process().put_back_set_aside_source_blocking(&owned)
+    })
+    .await
+    .map_err(|error| {
+        AppError::Repository(format!(
+            "putting back the set-aside source {} stopped: {error}",
+            source.display()
+        ))
+    })?;
+    match answer {
+        crate::disk::PutBackAside::Nothing => Ok(None),
+        crate::disk::PutBackAside::PutBack => match Disk::process().fingerprint(source).await {
+            Ok(mark) => Ok(Some(mark)),
+            Err(reading) if reading.exists() == Some(false) => Ok(None),
+            Err(reading) => Err(AppError::Repository(reading.absence().into())),
+        },
+        crate::disk::PutBackAside::Failed { at, error } => {
+            tracing::error!(
+                source = %source.display(),
+                at = %at.display(),
+                error = %error,
+                "a move's source set aside by an interrupted cleanup could not be put back; it is kept at its set-aside name"
+            );
+            Err(set_aside_source_kept(source, &at))
+        }
+        crate::disk::PutBackAside::SourceNameTaken { at } => {
+            Err(set_aside_source_kept(source, &at))
+        }
+    }
+}
+
+/// The blocked cleanup of a source whose file is kept at its set-aside name
+/// `at`, which the refusal names for the operator. Nothing was removed.
+fn set_aside_source_kept(source: &Path, at: &Path) -> AppError {
+    AppError::ManualReconciliationRefused {
+        message: format!(
+            "the move's source {} is kept at {}, where a cleanup set it aside, and could not be put back; nothing was removed",
+            source.display(),
+            at.display()
+        ),
+        reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+        facts: vec![crate::RefusalFact {
+            key: crate::error_reasons::import::KEPT_PATH_FACT,
+            value: crate::RefusalFactValue::Text(at.display().to_string()),
+        }],
+    }
+}
+
+/// Remove a copied source once its destination was proven to hold its bytes,
+/// only when the two are separate entries. `source_mark` is the read of the
+/// source itself taken before the comparison. `Ok(false)` when the source was
+/// already gone, or when the two are one entry or one file: the library then
+/// holds the source's own file, so nothing is removed and the file is done.
+///
+/// The destination is read once, a link not followed, and the disk service's
+/// entry alias answers from the two reads.
+/// Where the reads carry nonzero file numbers on one known volume, neither
+/// path is on a share and the destination is no link, distinct numbers are
+/// two entries and the source is removed. Anywhere else the filesystem
+/// settles it as an import's cleanup does: the source is set aside, the
+/// destination read again, and the set-aside name removed only while the
+/// destination still holds its file; otherwise the source is put back.
+///
+/// Probes, on this cleanup path only: one read of the destination; then
+/// either one removal, or one rename, one read of the destination (a second
+/// when it is a link), one listing of its folder unless both are numbered on
+/// one volume off a share, and one removal, with one more rename to put the
+/// source back when it is not removed.
+async fn remove_copied_source(
+    source: &Path,
+    source_mark: &Mark,
+    destination: &Path,
+) -> AppResult<bool> {
+    let disk = Disk::process();
+    let destination_mark = disk
+        .fingerprint(destination)
+        .await
+        .map_err(|reading| AppError::Repository(reading.absence().into()))?;
+    let one_entry = || {
+        tracing::info!(
+            source = %source.display(),
+            destination = %destination.display(),
+            "a moved file's source and destination are one file; nothing was removed"
+        );
+        Ok(false)
+    };
+    if Disk::entry_alias_of(source, source_mark, destination, &destination_mark)
+        == crate::disk::EntryAlias::Same
+        || source_mark.same_file(&destination_mark) == Sameness::Same
+    {
+        return one_entry();
+    }
+    if !disk.adoption_needs_set_aside(source, source_mark, destination, &destination_mark) {
+        return match disk.remove(source, Remove::File).await {
+            Ok(Removal::Removed) => Ok(true),
+            Ok(Removal::AlreadyAbsent) => Ok(false),
+            Err(error) => Err(AppError::Repository(format!(
+                "failed to remove the verified source {}: {error}",
+                source.display()
+            ))),
+        };
+    }
+    use crate::disk::AsideRemoval;
+    match disk
+        .remove_source_beside(source, source_mark, destination, &destination_mark)
+        .await
+    {
+        AsideRemoval::Removed => Ok(true),
+        AsideRemoval::SameEntry => one_entry(),
+        AsideRemoval::DestinationChanged => Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+            "Source or destination changed before cleanup; preserved the source.",
+        )),
+        AsideRemoval::PutBackFailed { at, error } | AsideRemoval::SetAsideMoved { at, error } => {
+            tracing::error!(
+                source = %source.display(),
+                destination = %destination.display(),
+                at = %at.display(),
+                error = %error,
+                "a move's verified source set aside to tell it from its copy could not be put back"
+            );
+            Err(set_aside_source_kept(source, &at))
+        }
+        AsideRemoval::AsideNameTaken { at, error } => Err(AppError::Repository(format!(
+            "the verified source {} could not be set aside to tell it from {}: the name {} is taken: {error}; nothing was removed",
+            source.display(),
+            destination.display(),
+            at.display()
+        ))),
+        AsideRemoval::DestinationUnread(reading) => Err(AppError::Repository(format!(
+            "could not tell the verified source {} from {}: {}; nothing was removed",
+            source.display(),
+            destination.display(),
+            reading.describe_absence()
+        ))),
+        AsideRemoval::CannotTell | AsideRemoval::Apart => Err(AppError::Repository(format!(
+            "could not tell the verified source {} from {}; nothing was removed",
+            source.display(),
+            destination.display()
+        ))),
+        AsideRemoval::NotSetAside(error)
+        | AsideRemoval::NotRemoved(error)
+        | AsideRemoval::RemovalUnconfirmed(error) => Err(AppError::Repository(format!(
+            "failed to remove the verified source {}: {error}",
+            source.display()
+        ))),
+    }
+}
+
+/// Retire a source whose placement was a second link (or the same symlink), so
+/// no content hashes were recorded. Missing already is retired. The source
+/// goes only when the disk service reads both names as one regular file that
+/// has another name and the listing shows two entries, or when both are
+/// symbolic links to one target. A server that fakes a hard link with a
+/// symbolic link, or a volume whose reads cannot tell files apart, keeps it.
+#[allow(clippy::disallowed_methods)] // disk-guard: symlink target comparison and removal
+async fn retire_linked_source(
+    source: &Path,
+    destination: &Path,
+    source_path: &str,
+) -> AppResult<()> {
+    let source_read = match Disk::process().fingerprint(source).await {
+        Ok(read) => read,
+        Err(reading) if reading.exists() == Some(false) => return Ok(()),
+        Err(reading) => return Err(AppError::Repository(reading.absence().into())),
+    };
+    let destination_read = Disk::process()
+        .fingerprint(destination)
+        .await
+        .map_err(|reading| AppError::Repository(reading.absence().into()))?;
+    let same_link = if source_read.kind() == Some(EntryKind::Symlink)
+        && destination_read.kind() == Some(EntryKind::Symlink)
+    {
+        match (
+            tokio::fs::read_link(source).await,
+            tokio::fs::read_link(destination).await,
+        ) {
+            (Ok(source_target), Ok(destination_target)) => source_target == destination_target,
+            _ => false,
+        }
+    } else {
+        false
+    };
+    let same_file = same_regular_file(&source_read, &destination_read);
+    if same_file
+        && shared_inode(source, destination, &source_read, &destination_read).await
+            != SharedInode::SecondLink
+    {
+        // Removing the source would remove the only entry.
+        return Err(one_entry_refusal());
+    }
+    if !same_file && !same_link {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+            format!(
+                "source or destination changed before cleanup: {}",
+                source_path
+            ),
+        ));
+    }
+    tokio::fs::remove_file(source)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 /// The one line a merge leaves in the title's outcome.
@@ -1482,30 +1834,25 @@ pub(super) enum DirectoryPrune {
 ///
 /// `remove_dir` already refuses a non-empty directory, but reading the entries
 /// first is what lets the caller *report* "still holds content" rather than an
-/// errno the user cannot act on (C3).
+/// errno the user cannot act on.
 pub(super) async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
-    let mut entries = match tokio::fs::read_dir(path).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return DirectoryPrune::AlreadyAbsent;
-        }
-        Err(error) => return DirectoryPrune::Failed(error.to_string()),
-    };
-    match entries.next_entry().await {
-        Ok(None) => {}
-        Ok(Some(_)) => return DirectoryPrune::NotEmpty,
+    let disk = Disk::process();
+    match disk.has_entries(path).await {
+        Ok(false) => {}
+        Ok(true) => return DirectoryPrune::NotEmpty,
+        Err(error) if error.reason() == DISK_PATH_MISSING => return DirectoryPrune::AlreadyAbsent,
         Err(error) => return DirectoryPrune::Failed(error.to_string()),
     }
-    match tokio::fs::remove_dir(path).await {
-        Ok(()) => DirectoryPrune::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DirectoryPrune::AlreadyAbsent,
+    match disk.remove(path, Remove::EmptyDir).await {
+        Ok(Removal::Removed) => DirectoryPrune::Removed,
+        Ok(Removal::AlreadyAbsent) => DirectoryPrune::AlreadyAbsent,
         Err(error) => DirectoryPrune::Failed(error.to_string()),
     }
 }
 
 // ── TitleAdmissionCheck ──────────────────────────────────────────────────────
 
-/// The FR-089 staleness rule for a root move.
+/// The staleness rule for a root move.
 ///
 /// Asked once per title, immediately before that title starts, and never for a
 /// title that already settled. The two sides of the rule:
@@ -1549,12 +1896,12 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         };
 
         let Some(placement) = self.catalog.title_placement(title_id).await? else {
-            // US7: a merge title whose source row is gone is this operation's
+            // A merge title whose source row is gone is this operation's
             // own completed Groups 1–5 transaction, not a foreign deletion —
-            // FR-084 gives it exclusive ownership of the title, so nothing else
+            // it holds exclusive ownership of the title, so nothing else
             // could have removed it. Admitting it lets the reconciler recognize
             // the merge as already applied and settle the checkpoint that the
-            // crash left behind (FR-033, FR-089).
+            // crash left behind.
             if let Some(destination_title_id) = planned.merge_target_title_id.as_deref()
                 && self
                     .catalog
@@ -1573,7 +1920,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
 
         // The catalog inputs the plan was built from. A transfer that already
         // flipped this title's library is this operation's own footprint, not a
-        // foreign change (FR-089) — the same reasoning the root check below
+        // foreign change — the same reasoning the root check below
         // uses, and what lets a run interrupted after a title's checkpoint
         // re-enter that title and converge.
         if placement.library_id != planned.source_library_id
@@ -1621,7 +1968,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         // the plan would move, so the plan no longer describes reality.
         //
         // A deduplicated source counts as planned even though it moves no
-        // bytes: FR-073 decided at preview time that its destination twin
+        // bytes: the plan decided at preview time that its destination twin
         // already exists, so its catalog row is content the plan accounted for
         // and is about to recycle — not a file that appeared underneath it.
         let planned_media: BTreeSet<String> = planned
@@ -1652,7 +1999,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
 
         // Unprocessed content must still be there. Content that is gone because
         // this operation already verified its destination is the operation's own
-        // footprint (FR-089), not a foreign change.
+        // footprint, not a foreign change.
         for file in &planned.files {
             if context
                 .verified_destinations
@@ -1668,7 +2015,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
                     file.source_path
                 ),
             );
-            if tokio::fs::symlink_metadata(&path).await.is_err() {
+            if Disk::process().uncached(&path).await.exists() != Some(true) {
                 return Ok(stale(PlanInputChange::UnprocessedSourceItem, detail));
             }
         }
@@ -1694,113 +2041,6 @@ fn stale(change: PlanInputChange, detail: String) -> TitleAdmission {
         TitleAdmission::Stale(detail)
     } else {
         TitleAdmission::Proceed
-    }
-}
-
-// ── Recyclers ────────────────────────────────────────────────────────────────
-
-/// A recycler that removes verified-redundant sources outright, warning every
-/// time, for deployments with no recycle bin configured.
-///
-/// This is only ever reached for a file whose destination copy is *proven*
-/// present and correct, which is the difference between this and a deletion
-/// (C4: destruction requires proof). A source proven identical to content the
-/// destination already held never reaches any recycler: cleanup drops it
-/// directly (FR-073).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RemoveVerifiedSource;
-
-#[async_trait]
-impl SourceRecycler for RemoveVerifiedSource {
-    async fn recycle_source(
-        &self,
-        _operation_id: &str,
-        _title: &RootMoveTitleExecution,
-        source: &Path,
-        _media_file_id: Option<&str>,
-        _size_bytes: u64,
-    ) -> AppResult<SourceDisposal> {
-        match tokio::fs::remove_file(source).await {
-            Ok(()) => Ok(SourceDisposal::RemovedRecycleUnavailable(
-                "no recycle bin is configured for this root",
-            )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(SourceDisposal::AlreadyAbsent)
-            }
-            Err(error) => Err(AppError::Repository(format!(
-                "failed to remove the verified source {}: {error}",
-                source.display()
-            ))),
-        }
-    }
-}
-
-/// The production recycler retains an extra copy when the configured bin fails.
-/// A disabled bin permits cleanup of fresh placements, with a warning.
-pub struct RecycleBinSourceRecycler {
-    configs: BTreeMap<String, crate::recycle_bin::RecycleBinConfig>,
-}
-
-impl RecycleBinSourceRecycler {
-    /// `configs` is keyed by the stored source-root path each title moves out
-    /// of, because the recycle bin is configured per media root.
-    pub fn new(configs: BTreeMap<String, crate::recycle_bin::RecycleBinConfig>) -> Self {
-        Self { configs }
-    }
-
-    fn config_for(
-        &self,
-        title: &RootMoveTitleExecution,
-    ) -> Option<&crate::recycle_bin::RecycleBinConfig> {
-        self.configs.get(title.source_root_path.as_deref()?)
-    }
-}
-
-#[async_trait]
-impl SourceRecycler for RecycleBinSourceRecycler {
-    async fn recycle_source(
-        &self,
-        operation_id: &str,
-        title: &RootMoveTitleExecution,
-        source: &Path,
-        media_file_id: Option<&str>,
-        size_bytes: u64,
-    ) -> AppResult<SourceDisposal> {
-        if tokio::fs::symlink_metadata(source).await.is_err() {
-            return Ok(SourceDisposal::AlreadyAbsent);
-        }
-
-        let Some(config) = self.config_for(title).filter(|config| config.enabled) else {
-            return RemoveVerifiedSource
-                .recycle_source(operation_id, title, source, media_file_id, size_bytes)
-                .await;
-        };
-
-        let manifest = crate::recycle_bin::RecycleManifest {
-            schema: None,
-            entry_id: None,
-            source_operation_id: Some(operation_id.to_string()),
-            recycled_at: chrono::Utc::now().to_rfc3339(),
-            original_path: path_to_stored_string(source),
-            original_file_id: media_file_id.map(str::to_string),
-            size_bytes,
-            title_id: Some(title.title_id.clone()),
-            media_root: title.source_root_path.clone(),
-            reason: "location_operation_source".to_string(),
-            status: None,
-            replacement_file_id: None,
-            replacement_path: None,
-            media_row: None,
-        };
-
-        match crate::recycle_bin::recycle_file(config, source, manifest).await {
-            Ok(Some(_)) => Ok(SourceDisposal::Recycled),
-            Ok(None) => Ok(SourceDisposal::AlreadyAbsent),
-            Err(error) => {
-                tracing::warn!(%operation_id, source = %source.display(), %error, "source recycling failed; retaining the source");
-                Ok(SourceDisposal::PreservedRecycleUnavailable)
-            }
-        }
     }
 }
 

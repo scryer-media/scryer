@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -547,9 +549,10 @@ impl MediaFileRepository for FailingMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &scryer_application::MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<scryer_application::ClaimedMediaFile> {
         self.inner
-            .claim_import_destination(input, associations)
+            .claim_import_destination(input, associations, hashes)
             .await
     }
 
@@ -890,9 +893,10 @@ impl MediaFileRepository for CountingMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &scryer_application::MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<scryer_application::ClaimedMediaFile> {
         self.inner
-            .claim_import_destination(input, associations)
+            .claim_import_destination(input, associations, hashes)
             .await
     }
 

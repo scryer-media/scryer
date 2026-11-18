@@ -10,13 +10,13 @@ use super::collisions::{
     CollisionNaming, CollisionPlanRequest, DestinationItem, IncomingItem, PathCaseRule,
     plan_collisions,
 };
-use super::execution::SourceRecycler;
 use super::model::{LocationExecutionMode, LocationOperation, LocationOperationType};
 use super::operations::{LocationJobRunActor, LocationOperationAdmission};
 use super::preview::{
     LocationPlan, LocationPlanBuilder, LocationPlanHeader, PlanItem, PlanItemKind,
 };
 use super::root_move::{RootMoveExecutionPlan, RootMoveFileExecution, RootMoveTitleExecution};
+use crate::disk::{Disk, EntryKind, PathReading, Removal, Remove, Sameness, StoredVersion};
 use crate::stored_paths::{folder_paths_match, path_to_stored_string, stored_path_to_path_buf};
 use crate::{
     AppError, AppResult, AppUseCase, InsertMediaFileInput, MediaFileRole, PendingImportStatus,
@@ -238,6 +238,10 @@ fn refused(reason: &'static str, message: impl Into<String>) -> AppError {
     AppError::validation_refused(reason, message)
 }
 
+fn unread(reading: PathReading) -> AppError {
+    AppError::Repository(reading.absence().into())
+}
+
 fn conflict_io_error(error: std::io::Error) -> AppError {
     let (reason, message) = match error.kind() {
         std::io::ErrorKind::NotFound => (
@@ -260,6 +264,7 @@ fn conflict_io_error(error: std::io::Error) -> AppError {
     refused(reason, message)
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: io-kind refusals
 async fn conflict_path_metadata(path: &str) -> AppResult<std::fs::Metadata> {
     if !crate::stored_paths::stored_path_is_native(path) {
         return Err(refused(
@@ -576,6 +581,7 @@ fn folder_rank_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str
         .map(|id| id.value.trim())
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: io-kind refusals, entry lengths
 async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Vec<String>)> {
     let base = stored_path_to_path_buf(folder);
     super::title_folder_recovery::inspect_path(&base, false).await?;
@@ -1058,9 +1064,9 @@ impl AppUseCase {
                 if let Some(link_count) =
                     super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
                     && link_count > 1
-                    && !hardlink_proofs
-                        .iter()
-                        .any(|proof| same_inode_version(&proof.version, &file.version))
+                    && !hardlink_proofs.iter().any(|proof| {
+                        same_inode_version(&proof.version, &file.version) == Sameness::Same
+                    })
                 {
                     hardlink_proofs.push(ConflictHardlinkProof {
                         version: file.version.clone(),
@@ -1649,14 +1655,14 @@ fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
 
 /// The `dev:ino` prefix of a unix file version; `None` where versions carry no inode.
 fn inode_key(version: &str) -> Option<String> {
-    if !cfg!(unix) || version.starts_with("symlink:") {
+    if !cfg!(unix) {
         return None;
     }
-    let mut parts = version.split(':');
-    Some(format!("{}:{}", parts.next()?, parts.next()?))
+    StoredVersion::new(version).file_key()
 }
 
 /// A directory's physical `(dev, ino)`, or `None` on platforms without inodes.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino folder identity
 async fn directory_identity(path: &std::path::Path) -> AppResult<Option<(u64, u64)>> {
     #[cfg(unix)]
     {
@@ -1673,12 +1679,21 @@ async fn directory_identity(path: &std::path::Path) -> AppResult<Option<(u64, u6
     }
 }
 
-fn same_inode_version(left: &str, right: &str) -> bool {
-    cfg!(unix) && left.split(':').take(2).eq(right.split(':').take(2))
+/// Whether two unix file versions name one file. Versions on other platforms
+/// carry no file number and are never one file.
+fn same_inode_version(left: &str, right: &str) -> Sameness {
+    if !cfg!(unix) {
+        return Sameness::Different;
+    }
+    StoredVersion::new(left).same_file(StoredVersion::new(right))
 }
 
-fn same_content_version(left: &str, right: &str) -> bool {
-    cfg!(unix) && left.split(':').take(5).eq(right.split(':').take(5))
+/// Whether two unix file versions name one file with the recorded content.
+fn same_content_version(left: &str, right: &str) -> Sameness {
+    if !cfg!(unix) {
+        return Sameness::Different;
+    }
+    StoredVersion::new(left).same_content(StoredVersion::new(right))
 }
 
 async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
@@ -1689,19 +1704,38 @@ async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
             "A file changed before its content could be verified",
         ));
     }
-    let hashes = super::verify::hash_existing_file_with_progress(
-        &native,
-        super::verify::CopyProgress::none(),
-    )
-    .await
-    .map_err(|error| AppError::Repository(error.to_string()))?;
+    // The disk service's full hash, its read held to the file it began on;
+    // the version is read again after it, as before, so a file that changed
+    // between the first version and the read is refused too.
+    let hashed = match Disk::process()
+        .full_hash(crate::disk::HashAsk::new(native.as_path()))
+        .await
+    {
+        crate::disk::FullHashAnswer::Read(known)
+        | crate::disk::FullHashAnswer::Stored(known)
+        | crate::disk::FullHashAnswer::Cached(known) => known,
+        crate::disk::FullHashAnswer::Changed => {
+            return Err(refused(
+                refusal::FILE_CHANGED,
+                "A file changed while its content was verified",
+            ));
+        }
+        crate::disk::FullHashAnswer::Unreadable(why) => {
+            return Err(AppError::Repository(why.to_string()));
+        }
+        crate::disk::FullHashAnswer::Cancelled | crate::disk::FullHashAnswer::Unrecorded => {
+            return Err(AppError::Repository(format!(
+                "the full hash of {path} was not taken"
+            )));
+        }
+    };
     if super::resolution::file_version(&native).await? != version {
         return Err(refused(
             refusal::FILE_CHANGED,
             "A file changed while its content was verified",
         ));
     }
-    Ok(hashes.full_blake3)
+    Ok(hashed.blake3)
 }
 
 fn disposal_proof(row: &super::resolution::FileResolution) -> Option<&DisposalProof> {
@@ -1723,7 +1757,7 @@ async fn disposal_version_current(
             let proof = disposal_proof(row)?;
             row.source_version
                 .as_deref()
-                .filter(|version| same_inode_version(version, expected))?;
+                .filter(|version| same_inode_version(version, expected) == Sameness::Same)?;
             Some((row, proof))
         })
         .max_by_key(|(_, proof)| proof.sequence)
@@ -1732,12 +1766,11 @@ async fn disposal_version_current(
     };
     let native = stored_path_to_path_buf(path);
     let actual = super::resolution::file_version(&native).await?;
-    if !same_content_version(&actual, expected) {
+    if same_content_version(&actual, expected) != Sameness::Same {
         return Ok(false);
     }
-    let source_absent = tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
-        .await
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+    let source = stored_path_to_path_buf(&row.source_path);
+    let source_absent = Disk::process().uncached(source).await.exists() == Some(false);
     if !source_absent {
         return Ok(!row.completed
             && proof.after_versions.get(path) == Some(&actual)
@@ -1765,7 +1798,7 @@ async fn disposal_version_current(
         {
             return Ok(false);
         }
-        if same_inode_version(&version, expected) {
+        if same_inode_version(&version, expected) == Sameness::Same {
             expected_count = proof.before_link_count;
         }
     }
@@ -1793,8 +1826,11 @@ async fn conflict_resolution_current(
         return Ok(false);
     }
     if let Some(source_expected) = &row.source_version {
-        match tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path)).await {
-            Ok(_) => {
+        let reading = Disk::process()
+            .uncached(stored_path_to_path_buf(&row.source_path))
+            .await;
+        match reading.exists() {
+            Some(true) => {
                 let actual =
                     super::resolution::file_version(&stored_path_to_path_buf(&row.source_path))
                         .await?;
@@ -1805,8 +1841,8 @@ async fn conflict_resolution_current(
                     return Ok(false);
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(AppError::Repository(error.to_string())),
+            Some(false) => {}
+            None => return Err(unread(reading)),
         }
     }
     Ok(true)
@@ -1827,14 +1863,13 @@ async fn preview_version_current(
     if let Some(proof) = conflict
         .hardlink_proofs
         .iter()
-        .find(|proof| same_inode_version(&proof.version, &file.version))
+        .find(|proof| same_inode_version(&proof.version, &file.version) == Sameness::Same)
     {
         if resolutions.iter().any(|row| {
             row.is_disposal()
-                && row
-                    .source_version
-                    .as_deref()
-                    .is_some_and(|version| same_inode_version(version, &file.version))
+                && row.source_version.as_deref().is_some_and(|version| {
+                    same_inode_version(version, &file.version) != Sameness::Different
+                })
         }) {
             return Ok(false);
         }
@@ -1843,19 +1878,18 @@ async fn preview_version_current(
         for row in resolutions.iter().filter(|row| {
             row.completed
                 && row.disposition == super::resolution::ResolutionDisposition::Hardlink
-                && row
-                    .source_version
-                    .as_deref()
-                    .is_some_and(|version| same_inode_version(version, &file.version))
+                && row.source_version.as_deref().is_some_and(|version| {
+                    same_inode_version(version, &file.version) != Sameness::Different
+                })
         }) {
             if !row.proof_is_current().await
-                || !same_inode_version(
+                || same_inode_version(
                     &super::resolution::file_version(&stored_path_to_path_buf(
                         &row.destination_path,
                     ))
                     .await?,
                     &file.version,
-                )
+                ) != Sameness::Same
             {
                 return Ok(false);
             }
@@ -1866,15 +1900,13 @@ async fn preview_version_current(
             {
                 added.insert(&row.destination_path);
             }
-            if tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
-                .await
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-            {
+            let source = stored_path_to_path_buf(&row.source_path);
+            if Disk::process().uncached(source).await.exists() == Some(false) {
                 removed.insert(&row.source_path);
             }
         }
         return Ok((!added.is_empty() || !removed.is_empty())
-            && same_content_version(&actual, &file.version)
+            && same_content_version(&actual, &file.version) == Sameness::Same
             && super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
                 == proof
                     .link_count
@@ -1882,12 +1914,7 @@ async fn preview_version_current(
                     .and_then(|count| count.checked_sub(removed.len() as u64))
             && conflict_hash(&file.path, &actual).await? == proof.full_blake3);
     }
-    #[cfg(unix)]
-    if actual
-        .split(':')
-        .take(5)
-        .eq(file.version.split(':').take(5))
-    {
+    if same_content_version(&actual, &file.version) == Sameness::Same {
         for resolution in resolutions.iter().filter(|row| {
             row.destination_path == file.path
                 && row.disposition == super::resolution::ResolutionDisposition::Hardlink
@@ -2542,8 +2569,9 @@ impl AppUseCase {
                 continue;
             }
             let path = stored_path_to_path_buf(&file.path);
-            match tokio::fs::symlink_metadata(&path).await {
-                Ok(_) => {
+            let reading = Disk::process().uncached(&path).await;
+            match reading.exists() {
+                Some(true) => {
                     super::title_folder_recovery::inspect_path(&path, false).await?;
                     if !preview_version_current(file, &resolutions, conflict).await? {
                         return Err(refused(
@@ -2552,11 +2580,9 @@ impl AppUseCase {
                         ));
                     }
                 }
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && operation_id.is_some()
-                        && conflict.dispose_paths.contains(&file.path) => {}
-                Err(error) => return Err(AppError::Repository(error.to_string())),
+                Some(false)
+                    if operation_id.is_some() && conflict.dispose_paths.contains(&file.path) => {}
+                _ => return Err(unread(reading)),
             }
         }
         // The survivor's folder is recorded after its files move and before
@@ -2675,8 +2701,12 @@ impl AppUseCase {
             {
                 repo.update_media_file_content_hashes(
                     &file_id,
+                    // A receipt from the operation's record carries no mark
+                    // of the file, so the hash is stored without one and is
+                    // read again before the disk owner answers with it.
                     &super::model::PersistedContentHashes::from_streamed(
                         hashes,
+                        None,
                         chrono::Utc::now(),
                     ),
                 )
@@ -2861,7 +2891,7 @@ impl AppUseCase {
         let proof = conflict
             .hardlink_proofs
             .iter()
-            .find(|proof| same_inode_version(&proof.version, &version))
+            .find(|proof| same_inode_version(&proof.version, &version) == Sameness::Same)
             .ok_or_else(|| {
                 refused(
                     refusal::FILE_CHANGED,
@@ -2891,12 +2921,9 @@ impl AppUseCase {
             .collect();
         for path in candidates {
             let native = stored_path_to_path_buf(&path);
-            if tokio::fs::symlink_metadata(&native)
-                .await
-                .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-            {
+            if Disk::process().uncached(&native).await.is(EntryKind::File) {
                 let current = super::resolution::file_version(&native).await?;
-                if same_inode_version(&version, &current) {
+                if same_inode_version(&version, &current) != Sameness::Different {
                     before_versions.insert(path, current);
                 }
             }
@@ -2951,10 +2978,8 @@ impl AppUseCase {
             return Ok(());
         }
         let source_version = row.source_version.as_deref().expect("disposal version");
-        if !tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
-            .await
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
+        let source = stored_path_to_path_buf(&row.source_path);
+        if Disk::process().uncached(source).await.exists() != Some(false) {
             return Err(refused(
                 refusal::FILE_CHANGED,
                 "A disposal pathname is still occupied; its files were preserved",
@@ -2975,7 +3000,7 @@ impl AppUseCase {
                     "The reserved recycled copy changed; remaining files were preserved",
                 ));
             }
-            if same_inode_version(&version, source_version) {
+            if same_inode_version(&version, source_version) == Sameness::Same {
                 expected_count = proof.before_link_count;
             }
             row.destination_version = Some(version);
@@ -3001,19 +3026,18 @@ impl AppUseCase {
         let mut verified_content = false;
         for path in candidates {
             let native = stored_path_to_path_buf(&path);
-            match tokio::fs::symlink_metadata(&native).await {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AppError::Repository(error.to_string())),
-                Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                    continue;
-                }
-                Ok(_) => {}
+            let reading = Disk::process().uncached(&native).await;
+            match reading.exists() {
+                Some(false) => continue,
+                None => return Err(unread(reading)),
+                Some(true) if !reading.is(EntryKind::File) => continue,
+                Some(true) => {}
             }
             let version = super::resolution::file_version(&native).await?;
-            if !same_inode_version(&version, source_version) {
+            if same_inode_version(&version, source_version) == Sameness::Different {
                 continue;
             }
-            if !same_content_version(&version, source_version)
+            if same_content_version(&version, source_version) != Sameness::Same
                 || super::hardlinks::link_count(&native)?.count() != Some(expected_count)
                 || (!verified_content
                     && conflict_hash(&path, &version).await?.as_str()
@@ -3054,7 +3078,6 @@ impl AppUseCase {
         &self,
         operation: &LocationOperation,
         plan: &RootMoveExecutionPlan,
-        recycler: &dyn SourceRecycler,
     ) -> AppResult<()> {
         let conflict = plan.conflict.as_ref().expect("conflict plan");
         let planned = &plan.titles[0];
@@ -3093,12 +3116,16 @@ impl AppUseCase {
             .iter()
             .filter(|path| !retained.contains(*path))
         {
-            if tokio::fs::symlink_metadata(stored_path_to_path_buf(path))
-                .await
-                .is_ok()
-            {
-                disposal_remaining = true;
-                break;
+            let reading = Disk::process()
+                .uncached(stored_path_to_path_buf(path))
+                .await;
+            match reading.exists() {
+                Some(false) => {}
+                None => return Err(unread(reading)),
+                Some(true) => {
+                    disposal_remaining = true;
+                    break;
+                }
             }
         }
         if disposal_remaining {
@@ -3116,17 +3143,12 @@ impl AppUseCase {
                     .collect();
                 for path in candidates {
                     let native = stored_path_to_path_buf(&path);
-                    if !tokio::fs::symlink_metadata(&native)
-                        .await
-                        .is_ok_and(|metadata| {
-                            metadata.is_file() && !metadata.file_type().is_symlink()
-                        })
-                    {
+                    if !Disk::process().uncached(&native).await.is(EntryKind::File) {
                         continue;
                     }
                     let version = super::resolution::file_version(&native).await?;
-                    if same_inode_version(&version, &proof.version) {
-                        if !same_content_version(&version, &proof.version)
+                    if same_inode_version(&version, &proof.version) != Sameness::Different {
+                        if same_content_version(&version, &proof.version) != Sameness::Same
                             || conflict_hash(&path, &version).await? != proof.full_blake3
                         {
                             return Err(refused(
@@ -3144,12 +3166,14 @@ impl AppUseCase {
                 conflict
                     .hardlink_proofs
                     .iter()
-                    .find(|proof| same_inode_version(&proof.version, version))
+                    .find(|proof| same_inode_version(&proof.version, version) == Sameness::Same)
             });
             if !conflict_resolution_current(row, &resolutions).await?
                 || (disposal_remaining
                     && linked_proof.is_none()
-                    && !row.proof_supports_disposal().await?)
+                    && !row
+                        .proof_supports_disposal(operation.verification_depth)
+                        .await?)
             {
                 return Err(refused(
                     refusal::FILE_CHANGED,
@@ -3196,16 +3220,17 @@ impl AppUseCase {
             let linked = conflict
                 .hardlink_proofs
                 .iter()
-                .any(|proof| same_inode_version(&proof.version, &file.version));
+                .any(|proof| same_inode_version(&proof.version, &file.version) == Sameness::Same);
             let mut disposal_index = resolutions
                 .iter()
                 .position(|row| row.is_disposal() && row.source_path == *path);
-            match tokio::fs::symlink_metadata(&source).await {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(AppError::Repository(error.to_string())),
-                Ok(metadata) => {
+            let reading = Disk::process().uncached(&source).await;
+            match reading.exists() {
+                Some(false) => {}
+                None => return Err(unread(reading)),
+                Some(true) => {
                     super::title_folder_recovery::inspect_path(&source, false).await?;
-                    if !metadata.is_file()
+                    if !reading.is(EntryKind::File)
                         || disposal_index.is_some_and(|index| resolutions[index].completed)
                         || !preview_version_current(file, &resolutions, conflict).await?
                     {
@@ -3311,21 +3336,23 @@ impl AppUseCase {
                                     .source_version
                                     .as_deref()
                                     .expect("disposal version"),
-                                resolutions[index]
-                                    .identity_hash
-                                    .as_deref()
-                                    .expect("disposal hash"),
+                                operation.verification_depth,
                             )
                             .await
                             .map_err(|error| {
                                 refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
                             })?;
                         } else {
-                            crate::recycle_bin::recycle_file(&config, &source, manifest)
-                                .await
-                                .map_err(|error| {
-                                    refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
-                                })?;
+                            crate::recycle_bin::recycle_file(
+                                &config,
+                                &source,
+                                manifest,
+                                operation.verification_depth,
+                            )
+                            .await
+                            .map_err(|error| {
+                                refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
+                            })?;
                         }
                     } else {
                         if linked {
@@ -3362,9 +3389,12 @@ impl AppUseCase {
                                 ));
                             }
                         }
-                        tokio::fs::remove_file(&source)
-                            .await
-                            .map_err(|error| AppError::Repository(error.to_string()))?;
+                        let removal = Disk::process().remove(&source, Remove::File).await;
+                        if removal.map_err(|error| AppError::Repository(error.to_string()))?
+                            == Removal::AlreadyAbsent
+                        {
+                            return Err(AppError::Repository("it is not there".into()));
+                        }
                     }
                 }
             }
@@ -3414,7 +3444,6 @@ impl AppUseCase {
                     .await?;
             }
         }
-        let _ = recycler;
         Ok(())
     }
 }
@@ -3439,7 +3468,6 @@ mod hardlink_disposal_tests {
             let version = super::super::resolution::file_version(&source)
                 .await
                 .unwrap();
-            let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
             let mut row = FileResolution {
                 operation_id: "synthetic-operation".into(),
                 title_id: "synthetic-title".into(),
@@ -3467,14 +3495,20 @@ mod hardlink_disposal_tests {
                     .unwrap()
             );
             if mutate_content {
-                // Same inode, length and restored mtime are insufficient: the
-                // durable content hash must still match after the own unlink.
+                // Same inode and length are insufficient: the durable content
+                // hash must still match after the own unlink. The rewrite's
+                // modification time is set a second past the original, so a
+                // coarse-timestamp filesystem cannot leave it unchanged; a
+                // rewrite that keeps the modification time is beyond the full
+                // hash's fit, which no disposal reads past.
+                let modified = std::fs::metadata(&external).unwrap().modified().unwrap();
                 std::fs::write(&external, b"modified content").unwrap();
-                std::fs::File::options()
+                std::fs::OpenOptions::new()
                     .write(true)
                     .open(&external)
-                    .unwrap()
-                    .set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .and_then(|file| {
+                        file.set_modified(modified + std::time::Duration::from_secs(1))
+                    })
                     .unwrap();
                 assert!(
                     !disposal_version_current(&retained_path, &version, &[row.clone()])

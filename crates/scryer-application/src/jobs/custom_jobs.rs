@@ -373,7 +373,8 @@ impl AppUseCase {
         ensure_runnable_custom_job(&script)?;
 
         let scripts_dir = self.services.config.scripts_dir.clone();
-        tokio::fs::create_dir_all(&scripts_dir)
+        crate::disk::Disk::process()
+            .create_dir(&scripts_dir, crate::disk::Parents::Create)
             .await
             .map_err(|error| {
                 AppError::Repository(format!(

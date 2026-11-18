@@ -4,7 +4,8 @@ mod tests {
         DownloadImportActions, DownloadQueueBucket, TrackedDownloadBackgroundWorkKind,
         TrackedDownloadWorkDrain, apply_import_record_to_queue_item,
         apply_submission_to_queue_item, apply_tracked_download_activity_projection,
-        apply_tracked_download_queue_metadata, build_download_queue_status_detail,
+        apply_tracked_download_queue_metadata, automatic_import_stopped_by_block,
+        build_download_queue_status_detail,
         canonicalize_download_queue_item_clients, classify_download_queue_item,
         collect_download_client_filter_options, dedupe_download_queue_items,
         derive_download_queue_display_state, derive_download_queue_import_actions,
@@ -1097,6 +1098,75 @@ mod tests {
                 derive_download_queue_display_state(&queue_item),
                 DownloadDisplayState::ImportBlocked
             );
+        }
+
+        // An automatic import a block stopped is not pending: the row shows
+        // the block and its reason. A manual import queued on the same row is
+        // still live. The block holds as the import left it, in error, and as
+        // a restart restores it, as a warning.
+        for (import_type, stays, status) in [
+            (ImportType::MovieDownload, false, TrackedDownloadStatus::Error),
+            (ImportType::ManualImport, true, TrackedDownloadStatus::Error),
+            (ImportType::MovieDownload, false, TrackedDownloadStatus::Warning),
+            (ImportType::ManualImport, true, TrackedDownloadStatus::Warning),
+        ] {
+            let mut queue_item = item("job-1", DownloadQueueState::Completed);
+            queue_item.import_status = Some(ImportStatus::Pending);
+            queue_item.import_type = Some(import_type);
+            let mut tracked = blocked_tracked(&queue_item);
+            tracked.status = status;
+            tracked.status_messages =
+                vec!["the library file is the import source's own entry".to_string().into()];
+            let metadata = tracked_download_queue_snapshot(&tracked);
+
+            // The queue read lays the import record over the tracked row and
+            // leaves a stopped automatic import off it the same way.
+            let mut read_item = item("job-1", DownloadQueueState::Completed);
+            apply_tracked_download_queue_metadata(&mut read_item, &metadata);
+            let record = ImportRecord {
+                id: "import-1".to_string(),
+                source_client_id: Some("client-1".to_string()),
+                source_system: "weaver".to_string(),
+                source_ref: "job-1".to_string(),
+                import_type,
+                status: ImportStatus::Pending,
+                payload_json: "{}".to_string(),
+                result_json: None,
+                download_id: None,
+                import_transfer_phase: None,
+                import_transfer_bytes: None,
+                import_transfer_total_bytes: None,
+                import_transfer_started_at: None,
+                import_transfer_updated_at: None,
+                started_at: None,
+                finished_at: None,
+                created_at: "2026-06-17T12:00:00Z".to_string(),
+                updated_at: "2026-06-17T12:00:01Z".to_string(),
+            };
+            assert_eq!(
+                automatic_import_stopped_by_block(&read_item, &record),
+                !stays
+            );
+
+            apply_tracked_download_activity_projection(&mut queue_item, &metadata);
+            if stays {
+                assert_eq!(queue_item.import_status, Some(ImportStatus::Pending));
+                assert_eq!(
+                    derive_download_queue_display_state(&queue_item),
+                    DownloadDisplayState::ImportPending
+                );
+            } else {
+                assert_eq!(queue_item.import_status, None);
+                assert_eq!(
+                    derive_download_queue_display_state(&queue_item),
+                    DownloadDisplayState::ImportBlocked
+                );
+                assert!(
+                    build_download_queue_status_detail(&queue_item)
+                        .contains("the library file is the import source's own entry"),
+                    "the block's reason shows"
+                );
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::disk::{Disk, EntryKind, PathReading};
 use crate::domain_events::{
     DomainEventActor, created_media_update, deleted_media_update, new_title_domain_event,
     title_context_snapshot,
@@ -63,45 +64,34 @@ fn normalize_recycle_batch_ids(entry_ids: Vec<String>) -> AppResult<Vec<String>>
     Ok(normalized)
 }
 
-async fn restore_target_fingerprint(path: &Path) -> AppResult<String> {
-    match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) if metadata.file_type().is_symlink() => Ok("symlink".to_string()),
-        Ok(metadata) if metadata.is_file() => {
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
-                .unwrap_or_else(|| "unknown".to_string());
-            Ok(format!("file:{}:{modified}", metadata.len()))
-        }
-        Ok(_) => Ok("non-file".to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("missing".to_string()),
-        Err(error) => Err(AppError::Repository(format!(
+/// What is at a restore destination now, present or missing, never from a
+/// cache: the reading decides whether a file there is replaced.
+async fn restore_target(path: &Path) -> AppResult<PathReading> {
+    let reading = Disk::process().uncached(path).await;
+    reading.exists().map(|_| reading).ok_or_else(|| {
+        AppError::Repository(format!(
             "failed to inspect restore destination {}: {}",
             path.display(),
-            error
-        ))),
-    }
+            reading.describe_absence()
+        ))
+    })
 }
 
-async fn validate_replace_existing_restore_target(
+fn restore_target_fingerprint(reading: PathReading) -> String {
+    scryer_disk::restore_target_state(reading)
+}
+
+/// Whether the file `reading` shows at `path` may be replaced.
+fn validate_replace_existing_restore_target(
     path: &Path,
+    reading: PathReading,
     recycle_config: &crate::recycle_bin::RecycleBinConfig,
 ) -> AppResult<()> {
-    let metadata = match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to inspect restore destination {}: {}",
-                path.display(),
-                error
-            )));
-        }
+    let Some(kind) = reading.kind() else {
+        return Ok(());
     };
 
-    if metadata.file_type().is_symlink() {
+    if kind == EntryKind::Symlink {
         return Err(AppError::validation_refused(
             crate::error_reasons::jobs::SYMLINK_REFUSED,
             format!(
@@ -110,7 +100,7 @@ async fn validate_replace_existing_restore_target(
             ),
         ));
     }
-    if !metadata.is_file() {
+    if kind != EntryKind::File {
         return Err(AppError::validation_refused(
             crate::error_reasons::jobs::REGULAR_FILE_REQUIRED,
             format!(
@@ -345,23 +335,31 @@ async fn selected_names_in_recycle_bin(
     base_path: &std::path::Path,
     wanted: &HashSet<&str>,
 ) -> AppResult<Vec<String>> {
-    let mut entries = tokio::fs::read_dir(base_path).await.map_err(|error| {
+    let wanted: HashSet<String> = wanted.iter().map(|name| (*name).to_string()).collect();
+    let disk = Disk::process();
+    let names = disk.visit(base_path, Ok(Vec::new()), move |names, entry| {
+        let name = entry.map(|entry| entry.name().to_str().map(str::to_string));
+        match (name, names.as_mut()) {
+            (Ok(Some(name)), Ok(names)) if wanted.contains(&name) => names.push(name),
+            (Ok(_), _) => {}
+            (Err(error), _) => *names = Err(error),
+        }
+        match names {
+            Ok(_) => std::ops::ControlFlow::Continue(()),
+            Err(_) => std::ops::ControlFlow::Break(()),
+        }
+    });
+    let names = names.await.map_err(|error| {
         AppError::Repository(format!(
-            "failed to read recycle bin directory {}: {error}",
-            base_path.display()
+            "failed to read recycle bin directory {}: {}",
+            base_path.display(),
+            error.words()
         ))
     })?;
-    let mut names = Vec::new();
-    while let Some(entry) = entries.next_entry().await.map_err(|error| {
+    names.map_err(|error| {
+        let error = error.words();
         AppError::Repository(format!("failed to read recycle bin entry: {error}"))
-    })? {
-        if let Some(name) = entry.file_name().to_str()
-            && wanted.contains(name)
-        {
-            names.push(name.to_string());
-        }
-    }
-    Ok(names)
+    })
 }
 
 fn resolve_recycle_entry_library_with_title(
@@ -736,7 +734,7 @@ impl AppUseCase {
         }
         let replacement_path_buf =
             crate::stored_paths::stored_path_to_path_buf(&replacement.file_path);
-        if !replacement_path_buf.exists() {
+        if Disk::process().follow(&replacement_path_buf).await.exists() != Some(true) {
             return Err(format!(
                 "replacement media file does not exist on disk: {}",
                 replacement.file_path
@@ -1450,7 +1448,7 @@ impl AppUseCase {
         for entry_id in entry_ids {
             let context = self.resolve_restore_recycled_item(actor, &entry_id).await?;
             let original_path = context.manifest.original_path_buf();
-            let target_state = restore_target_fingerprint(&original_path).await?;
+            let target_state = restore_target_fingerprint(restore_target(&original_path).await?);
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
                 entry_id,
@@ -1486,12 +1484,14 @@ impl AppUseCase {
         for entry_id in &entry_ids {
             let context = self.resolve_restore_recycled_item(actor, entry_id).await?;
             let original_path = context.manifest.original_path_buf();
-            let target_state = restore_target_fingerprint(&original_path).await?;
-            if conflict_policy == crate::RecycleRestoreConflictPolicy::ReplaceExisting
-                && target_state != "missing"
-            {
-                validate_replace_existing_restore_target(&original_path, &context.recycle_config)
-                    .await?;
+            let target = restore_target(&original_path).await?;
+            let target_state = restore_target_fingerprint(target);
+            if conflict_policy == crate::RecycleRestoreConflictPolicy::ReplaceExisting {
+                validate_replace_existing_restore_target(
+                    &original_path,
+                    target,
+                    &context.recycle_config,
+                )?;
             }
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
@@ -1535,8 +1535,8 @@ impl AppUseCase {
 
         for entry_id in &entry_ids {
             let context = self.resolve_restore_recycled_item(actor, entry_id).await?;
-            let current_state =
-                restore_target_fingerprint(&context.manifest.original_path_buf()).await?;
+            let current = restore_target(&context.manifest.original_path_buf()).await?;
+            let current_state = restore_target_fingerprint(current);
             if expected_target_states.get(entry_id) != Some(&current_state) {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::jobs::RECYCLE_RESTORE_PREVIEW_STALE,
@@ -1951,11 +1951,13 @@ impl AppUseCase {
 
         let restored_to = match conflict_policy {
             crate::RecycleRestoreConflictPolicy::KeepBoth => {
+                let depth = self.resolve_verification_depth().await;
                 crate::recycle_bin::restore_from_recycle_with_roots(
                     &recycled_file,
                     &original_path,
                     false,
                     &context.library_roots,
+                    depth,
                 )
                 .await?
             }
@@ -2014,10 +2016,8 @@ impl AppUseCase {
                 .map(|value| value.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             nfo_path: None,
-            size_bytes: tokio::fs::metadata(restored_to)
-                .await
-                .ok()
-                .and_then(|metadata| i64::try_from(metadata.len()).ok()),
+            size_bytes: (Disk::process().follow(restored_to).await.size())
+                .and_then(|len| i64::try_from(len).ok()),
             source_signature_scheme: None,
             source_signature_value: None,
         };
@@ -2204,20 +2204,11 @@ impl AppUseCase {
         recycled_file: &Path,
         original_path: &Path,
     ) -> AppResult<PathBuf> {
-        let occupant_metadata = match tokio::fs::symlink_metadata(original_path).await {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "failed to inspect restore destination {}: {}",
-                    original_path.display(),
-                    error
-                )));
-            }
-        };
-
-        if occupant_metadata.is_none() {
-            crate::recycle_bin::restore_recycled_file_exact(recycled_file, original_path).await?;
+        let depth = self.resolve_verification_depth().await;
+        let occupant = restore_target(original_path).await?;
+        if occupant.exists() != Some(true) {
+            crate::recycle_bin::restore_recycled_file_exact(recycled_file, original_path, depth)
+                .await?;
             return Ok(original_path.to_path_buf());
         }
 
@@ -2238,7 +2229,6 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_path(&original_path_text)
             .await?;
-        let metadata = occupant_metadata.expect("checked occupied restore destination");
         let displaced_manifest = crate::recycle_bin::RecycleManifest {
             schema: None,
             entry_id: None,
@@ -2246,7 +2236,7 @@ impl AppUseCase {
             recycled_at: chrono::Utc::now().to_rfc3339(),
             original_path: original_path_text,
             original_file_id: incumbent.as_ref().map(|file| file.id.clone()),
-            size_bytes: metadata.len(),
+            size_bytes: occupant.size().unwrap_or(0),
             title_id: incumbent
                 .as_ref()
                 .map(|file| file.title_id.clone())
@@ -2264,6 +2254,7 @@ impl AppUseCase {
             &context.recycle_config,
             original_path,
             displaced_manifest,
+            depth,
         )
         .await?
         .ok_or_else(|| {
@@ -2276,12 +2267,14 @@ impl AppUseCase {
         if let Err(error) = crate::recycle_bin::link_recycled_file_to_exact_destination(
             recycled_file,
             original_path,
+            depth,
         )
         .await
         {
             match crate::recycle_bin::restore_recycled_file_exact(
                 &displaced.recycled_path,
                 original_path,
+                depth,
             )
             .await
             {
@@ -2313,6 +2306,7 @@ impl AppUseCase {
             match crate::recycle_bin::restore_recycled_file_exact(
                 &displaced.recycled_path,
                 original_path,
+                depth,
             )
             .await
             {
@@ -2368,8 +2362,8 @@ impl AppUseCase {
         for (index, entry_id) in entry_ids.iter().enumerate() {
             let result = async {
                 let context = self.resolve_restore_recycled_item(&actor, entry_id).await?;
-                let current_state =
-                    restore_target_fingerprint(&context.manifest.original_path_buf()).await?;
+                let current = restore_target(&context.manifest.original_path_buf()).await?;
+                let current_state = restore_target_fingerprint(current);
                 if expected_target_states.get(entry_id) != Some(&current_state) {
                     return Err(AppError::validation_refused(crate::error_reasons::jobs::RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION, "restore destination changed after confirmation; preview and retry this item"
                             .to_string()));
@@ -2884,7 +2878,7 @@ enum OrphanProbe {
     /// The root could not be proven available; the row is skipped.
     RootRefused(crate::AppError),
     /// The file's status could not be read; the row is skipped.
-    StatusUnreadable(std::io::Error),
+    StatusUnreadable(&'static str),
 }
 
 /// Decides one catalog row. Root availability is checked before probing the
@@ -2906,10 +2900,11 @@ fn probe_orphan_media_file(
     if let Err(error) = root_checks.check(&file_path, &roots) {
         return OrphanProbe::RootRefused(error);
     }
-    match std::fs::symlink_metadata(&file_path) {
-        Ok(_) => OrphanProbe::Present,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => OrphanProbe::Orphan,
-        Err(error) => OrphanProbe::StatusUnreadable(error),
+    let reading = Disk::process().uncached_blocking(&file_path);
+    match reading.exists() {
+        Some(true) => OrphanProbe::Present,
+        Some(false) => OrphanProbe::Orphan,
+        None => OrphanProbe::StatusUnreadable(reading.describe_absence()),
     }
 }
 

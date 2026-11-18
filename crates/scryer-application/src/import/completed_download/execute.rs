@@ -3,7 +3,6 @@ use super::lookup::{
 };
 use super::result_state::apply_import_result_with_completed;
 use super::*;
-use crate::AppError;
 use crate::import_workflow::import_completed_download_for_tracked;
 use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use tracing::Instrument;
@@ -233,18 +232,21 @@ async fn import_inner(
             .await
         }
         Err(error) => {
-            if let AppError::ManualReconciliationRequired(message) = &error {
+            if let Some(message) = error.manual_reconciliation_message() {
                 tracing::error!(
                     id = %td.id,
                     dest_dir = %completed.dest_dir,
+                    reason = error.reason(),
                     error = %message,
-                    "import filesystem worker was terminated; routing download to manual reconciliation"
+                    "import stopped where only the operator can settle what is on disk; routing download to manual reconciliation"
                 );
                 td.clear_import_execution_retry();
                 td.state = TrackedDownloadState::ImportBlocked;
                 td.status = TrackedDownloadStatus::Error;
+                td.client_item.attention_reason = Some(message.to_owned());
+                td.client_item.attention_reason_code = error.reason().map(str::to_string);
                 td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
-                    message.clone(),
+                    message.to_owned(),
                 )];
                 return false;
             }

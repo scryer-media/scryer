@@ -318,15 +318,17 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
 
 fn postgres_password(url: &url::Url) -> AppResult<String> {
     if let Some(password_file) = env_string("SCRYER_DB_PASSWORD_FILE") {
-        let password = std::fs::read_to_string(&password_file).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_PASSWORD_FILE_UNREADABLE,
-                format!(
-                    "failed to read SCRYER_DB_PASSWORD_FILE {}: {error}",
-                    password_file
-                ),
-            )
-        })?;
+        let password = scryer_application::disk::Disk::process()
+            .read_to_string_blocking(std::path::Path::new(&password_file))
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_PASSWORD_FILE_UNREADABLE,
+                    format!(
+                        "failed to read SCRYER_DB_PASSWORD_FILE {password_file}: {}",
+                        error.words()
+                    ),
+                )
+            })?;
         let password = password.trim_end().to_string();
         if password.is_empty() {
             return Err(AppError::validation_refused(
@@ -2058,6 +2060,8 @@ pub fn datastore_file_path(database_url: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use scryer_application::lifecycle_rules::{

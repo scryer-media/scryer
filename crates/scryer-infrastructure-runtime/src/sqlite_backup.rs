@@ -458,12 +458,15 @@ impl TablePartWriter {
         let staging = tables_dir.clone();
         let output_path = staging.path().join(backup_table_part_filename(&table));
         run_export_blocking(move || {
-            let file = File::create(&output_path).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to create {create_label} {}: {error}",
-                    output_path.display()
-                ))
-            })?;
+            let file = scryer_application::disk::Disk::process()
+                .open_blocking(&output_path, scryer_application::disk::Open::create())
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to create {create_label} {}: {}",
+                        output_path.display(),
+                        error.words()
+                    ))
+                })?;
             Ok(Self {
                 table,
                 writer: BufWriter::new(file),
@@ -1124,6 +1127,8 @@ fn quote_identifier(value: &str) -> String {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use serde_json::{Map as JsonMap, Value as JsonValue};
 

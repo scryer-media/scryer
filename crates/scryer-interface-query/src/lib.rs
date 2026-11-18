@@ -19,7 +19,7 @@ use scryer_application::{
 use scryer_domain::{AppPermission, RulePackInstallation, RuleSet, TitleHistoryEventType};
 use scryer_interface_metadata::MetadataQueries;
 use scryer_interface_settings::SettingsQueries;
-use std::{collections::HashMap, fs, io, path::Path};
+use std::{collections::HashMap, path::Path};
 
 mod lists;
 
@@ -112,51 +112,40 @@ fn from_metadata_search_item(
     }
 }
 
-fn browse_path_read_dir(path: &str) -> Result<fs::ReadDir, AppError> {
-    let target = Path::new(path);
-    if !target.is_absolute() {
+/// The non-hidden directories (and, when asked, regular files) under `path`,
+/// sorted by lowercased name. Links are not followed into. Blocking.
+fn browse_path_entries(
+    path: &str,
+    include_files: bool,
+) -> Result<Vec<DirectoryEntryPayload>, AppError> {
+    use scryer_application::disk::{Disk, EntryKind};
+    if !Path::new(path).is_absolute() {
         return Err(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_BROWSE_PATH_NOT_ABSOLUTE,
             "Path must be absolute.",
         ));
     }
-
-    let metadata = fs::metadata(target).map_err(|error| browse_path_io_error(path, error))?;
-    if !metadata.is_dir() {
-        return Err(AppError::validation_refused(
-            scryer_interface_core::refusal::INTERFACE_BROWSE_PATH_NOT_DIRECTORY,
-            format!("Path is not a directory: {path}"),
-        ));
-    }
-
-    fs::read_dir(target).map_err(|error| browse_path_io_error(path, error))
-}
-
-/// The non-hidden directories (and, when asked, regular files) under `path`,
-/// sorted by lowercased name. Blocking.
-fn browse_path_entries(
-    path: &str,
-    include_files: bool,
-) -> Result<Vec<DirectoryEntryPayload>, AppError> {
-    let read_dir = browse_path_read_dir(path)?;
+    let listed = Disk::process()
+        .list_blocking(Path::new(path))
+        .map_err(|error| browse_path_error(path, &error))?;
     let mut entries: Vec<DirectoryEntryPayload> = Vec::new();
-    for entry in read_dir.flatten() {
-        let ft = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
+    for entry in listed {
+        let is_directory = match entry.reading.kind() {
+            Some(EntryKind::Directory) => true,
+            Some(EntryKind::File) if include_files => false,
+            _ => continue,
         };
-        if !(ft.is_dir() || include_files && ft.is_file()) {
+        let Some(name) = entry.path.file_name() else {
             continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        };
+        let name = name.to_string_lossy().into_owned();
         if name.starts_with('.') {
             continue;
         }
-        let full_path = entry.path().to_string_lossy().into_owned();
         entries.push(DirectoryEntryPayload {
             name,
-            path: full_path,
-            is_directory: ft.is_dir(),
+            path: entry.path.to_string_lossy().into_owned(),
+            is_directory,
         });
     }
     entries.sort_by_key(|a| a.name.to_lowercase());
@@ -164,6 +153,8 @@ fn browse_path_entries(
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod browse_path_tests {
     use super::browse_path_entries;
 
@@ -206,20 +197,26 @@ mod browse_path_tests {
     }
 }
 
-fn browse_path_io_error(path: &str, error: io::Error) -> AppError {
-    let message = match error.kind() {
-        io::ErrorKind::NotFound => format!("Directory does not exist: {path}"),
-        io::ErrorKind::PermissionDenied => format!("Directory is not readable: {path}"),
-        _ => format!("Directory cannot be opened: {path}"),
-    };
-    let reason = match error.kind() {
-        io::ErrorKind::NotFound => {
-            scryer_interface_core::refusal::INTERFACE_BROWSE_DIRECTORY_MISSING
-        }
-        io::ErrorKind::PermissionDenied => {
-            scryer_interface_core::refusal::INTERFACE_BROWSE_DIRECTORY_UNREADABLE
-        }
-        _ => scryer_interface_core::refusal::INTERFACE_BROWSE_DIRECTORY_UNAVAILABLE,
+fn browse_path_error(path: &str, error: &scryer_application::disk::DiskError) -> AppError {
+    use scryer_application::disk::reason;
+    use scryer_interface_core::refusal;
+    let (reason, message) = match error.reason() {
+        reason::DISK_PATH_MISSING => (
+            refusal::INTERFACE_BROWSE_DIRECTORY_MISSING,
+            format!("Directory does not exist: {path}"),
+        ),
+        reason::DISK_PERMISSION_DENIED => (
+            refusal::INTERFACE_BROWSE_DIRECTORY_UNREADABLE,
+            format!("Directory is not readable: {path}"),
+        ),
+        reason::DISK_WRONG_KIND => (
+            refusal::INTERFACE_BROWSE_PATH_NOT_DIRECTORY,
+            format!("Path is not a directory: {path}"),
+        ),
+        _ => (
+            refusal::INTERFACE_BROWSE_DIRECTORY_UNAVAILABLE,
+            format!("Directory cannot be opened: {path}"),
+        ),
     };
     AppError::validation_refused(reason, message)
 }

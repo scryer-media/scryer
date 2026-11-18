@@ -26,12 +26,13 @@ use crate::queries::sql_runtime::{
 use crate::storage::sql::json::canonical_json_text;
 
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
-/// Same-path upgrades stage the verified replacement beside the final file
-/// under this prefix (`import::upgrade::sibling_guard_path`) and only rename it
-/// onto the final path once the old file is safely aside. The staged row exists
-/// in `media_files` for the whole copy, so every live query has to treat it the
-/// same way it treats a recycled file: not part of the library yet.
-const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
+// Same-path upgrades stage the verified replacement beside the final file
+// under `UPGRADE_REPLACEMENT_PREFIX` (or, from older releases, the legacy
+// prefix) and only rename it onto the final path once the old file is safely
+// aside. The staged row exists in `media_files` for the whole copy, so every
+// live query has to treat it the same way it treats a recycled file: not part
+// of the library yet.
+use scryer_application::{LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX};
 
 #[derive(Clone)]
 pub struct MediaFileStore {
@@ -50,7 +51,25 @@ impl MediaFileStore {
     }
 }
 
-const INSERT_MEDIA_FILE_SQL: &str =
+/// One stored hash column as an upsert leaves it: kept while the row's size
+/// and signature are unchanged, cleared when either changes, since a hash
+/// describes the file the row described before.
+macro_rules! hash_column_kept_while_unchanged {
+    ($column:literal) => {
+        concat!(
+            "\n        ",
+            $column,
+            " = CASE WHEN media_files.size_bytes = excluded.size_bytes",
+            " AND COALESCE(media_files.source_signature_scheme, '') = COALESCE(excluded.source_signature_scheme, '')",
+            " AND COALESCE(media_files.source_signature_value, '') = COALESCE(excluded.source_signature_value, '')",
+            " THEN media_files.",
+            $column,
+            " ELSE NULL END"
+        )
+    };
+}
+
+const INSERT_MEDIA_FILE_SQL: &str = concat!(
     "INSERT INTO media_files
      (id, title_id, file_path, size_bytes, announced_size_bytes, role, quality_id, scan_status, created_at,
       source_signature_scheme, source_signature_value,
@@ -90,7 +109,77 @@ const INSERT_MEDIA_FILE_SQL: &str =
         edition = excluded.edition,
         original_file_path = COALESCE(excluded.original_file_path, media_files.original_file_path),
         release_hash = excluded.release_hash,
-        release_listing_json = excluded.release_listing_json";
+        release_listing_json = excluded.release_listing_json,",
+    hash_column_kept_while_unchanged!("full_blake3"),
+    ",",
+    hash_column_kept_while_unchanged!("move_crc"),
+    ",",
+    hash_column_kept_while_unchanged!("move_crc_algorithm"),
+    ",",
+    hash_column_kept_while_unchanged!("hash_computed_at"),
+    ",",
+    hash_column_kept_while_unchanged!("full_hash_mark"),
+);
+
+/// Clear one row's stored hash unless the size and signature it is about to
+/// be given equal the ones it holds. A signature that appears where there was
+/// none is a change.
+const CLEAR_HASH_UNLESS_UNCHANGED_SQL: &str = "UPDATE media_files SET
+        full_blake3 = NULL, move_crc = NULL, move_crc_algorithm = NULL,
+        hash_computed_at = NULL, full_hash_mark = NULL
+     WHERE id = {} AND full_blake3 IS NOT NULL
+       AND NOT (size_bytes = {}
+            AND COALESCE(source_signature_scheme, '') = COALESCE({}, '')
+            AND COALESCE(source_signature_value, '') = COALESCE({}, ''))";
+
+async fn clear_hash_unless_unchanged_tx(
+    tx: &mut SqlTx<'_>,
+    file_id: &str,
+    size_bytes: i64,
+    source_signature_scheme: Option<String>,
+    source_signature_value: Option<String>,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        CLEAR_HASH_UNLESS_UNCHANGED_SQL,
+        &[
+            SqlArg::Text(file_id.to_string()),
+            SqlArg::I64(size_bytes),
+            SqlArg::OptText(source_signature_scheme),
+            SqlArg::OptText(source_signature_value),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+const WRITE_CONTENT_HASHES_SQL: &str = "UPDATE media_files SET
+        full_blake3 = {},
+        move_crc = {},
+        move_crc_algorithm = {},
+        hash_computed_at = {},
+        full_hash_mark = {}
+     WHERE id = {}";
+
+fn content_hash_args(
+    file_id: &str,
+    hashes: &scryer_application::location::model::PersistedContentHashes,
+) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(hashes.full_blake3.clone()),
+        // Stored as text: a u64 does not fit either engine's signed 64-bit
+        // integer column without wrapping.
+        SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
+        SqlArg::OptText(
+            hashes
+                .crc_algorithm
+                .map(|algorithm| algorithm.as_str().to_string()),
+        ),
+        SqlArg::OptTimestamp(hashes.hash_computed_at),
+        SqlArg::OptText(hashes.mark.clone()),
+        SqlArg::Text(file_id.to_string()),
+    ]
+}
 
 fn media_file_insert_args(
     datastore: &StoreDatastore,
@@ -1090,12 +1179,14 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&scryer_application::location::model::PersistedContentHashes>,
     ) -> AppResult<ClaimedMediaFile> {
         let id = Id::new().0;
         let args = media_file_insert_args(&self.datastore, input, &id)?;
         let file_path = input.file_path.clone();
         let input = input.clone();
         let associations = associations.clone();
+        let hashes = hashes.cloned();
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "claim_import_destination",
@@ -1104,6 +1195,7 @@ impl MediaFileRepository for MediaFileStore {
                 let file_path = file_path.clone();
                 let input = input.clone();
                 let associations = associations.clone();
+                let hashes = hashes.clone();
                 Box::pin(async move {
                     if let Some(existing) = load_media_file_ownership_tx(tx, &file_path).await? {
                         if !import_destination_ownership_matches(
@@ -1121,6 +1213,18 @@ impl MediaFileRepository for MediaFileStore {
                             &associations,
                         )
                         .await?;
+                        // The row now describes the file this import left
+                        // at its path: it takes that file's size and
+                        // signature, and keeps its stored hash only when
+                        // neither changed.
+                        clear_hash_unless_unchanged_tx(
+                            tx,
+                            &existing.media_file_id,
+                            input.size_bytes,
+                            input.source_signature_scheme.clone(),
+                            input.source_signature_value.clone(),
+                        )
+                        .await?;
                         // A reuse that carries a grab's listing snapshot
                         // overwrites the one an earlier import left; a reuse
                         // without a grab behind it (an adopted or manual
@@ -1129,14 +1233,28 @@ impl MediaFileRepository for MediaFileStore {
                         SqlRuntime::execute(
                             SqlExec::Tx(tx),
                             "UPDATE media_files
-                                SET release_listing_json = COALESCE({}, release_listing_json)
+                                SET release_listing_json = COALESCE({}, release_listing_json),
+                                    size_bytes = {},
+                                    source_signature_scheme = {},
+                                    source_signature_value = {}
                               WHERE id = {}",
                             &[
                                 SqlArg::OptText(input.release_listing_json.clone()),
+                                SqlArg::I64(input.size_bytes),
+                                SqlArg::OptText(input.source_signature_scheme.clone()),
+                                SqlArg::OptText(input.source_signature_value.clone()),
                                 SqlArg::Text(existing.media_file_id.clone()),
                             ],
                         )
                         .await?;
+                        if let Some(hashes) = &hashes {
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                WRITE_CONTENT_HASHES_SQL,
+                                &content_hash_args(&existing.media_file_id, hashes),
+                            )
+                            .await?;
+                        }
                         return Ok(ClaimedMediaFile {
                             media_file_id: existing.media_file_id,
                             disposition: MediaFileCatalogDisposition::Reused,
@@ -1144,6 +1262,14 @@ impl MediaFileRepository for MediaFileStore {
                     }
                     let file_id = insert_media_file_tx(tx, &file_path, &args).await?;
                     reconcile_media_file_associations_tx(tx, &file_id, &associations).await?;
+                    if let Some(hashes) = &hashes {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            WRITE_CONTENT_HASHES_SQL,
+                            &content_hash_args(&file_id, hashes),
+                        )
+                        .await?;
+                    }
                     Ok(ClaimedMediaFile {
                         media_file_id: file_id,
                         disposition: MediaFileCatalogDisposition::Created,
@@ -2230,8 +2356,11 @@ impl MediaFileRepository for MediaFileStore {
         source_signature_value: Option<String>,
         invalidate_full_hashes: bool,
     ) -> AppResult<()> {
+        // Without an invalidation the stored hash still goes when the size or
+        // signature changes, a signature appearing where there was none
+        // included: it describes the file the row described before.
         let invalidation = if invalidate_full_hashes {
-            ", full_blake3 = NULL, move_crc = NULL, move_crc_algorithm = NULL, hash_computed_at = NULL"
+            ", full_blake3 = NULL, move_crc = NULL, move_crc_algorithm = NULL, hash_computed_at = NULL, full_hash_mark = NULL"
         } else {
             ""
         };
@@ -2240,19 +2369,42 @@ impl MediaFileRepository for MediaFileStore {
                 source_signature_scheme = {{}}, source_signature_value = {{}}{invalidation}
              WHERE id = {{}}"
         );
-        execute_write(
+        let file_id = file_id.to_string();
+        SqlRuntime::run_in_transaction(
             &self.datastore,
             "update_media_file_source_signature",
-            &sql,
-            vec![
-                SqlArg::I64(size_bytes),
-                SqlArg::OptText(source_signature_scheme),
-                SqlArg::OptText(source_signature_value),
-                SqlArg::Text(file_id.to_string()),
-            ],
+            move |tx| {
+                let sql = sql.clone();
+                let file_id = file_id.clone();
+                let scheme = source_signature_scheme.clone();
+                let value = source_signature_value.clone();
+                Box::pin(async move {
+                    if !invalidate_full_hashes {
+                        clear_hash_unless_unchanged_tx(
+                            tx,
+                            &file_id,
+                            size_bytes,
+                            scheme.clone(),
+                            value.clone(),
+                        )
+                        .await?;
+                    }
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &sql,
+                        &[
+                            SqlArg::I64(size_bytes),
+                            SqlArg::OptText(scheme),
+                            SqlArg::OptText(value),
+                            SqlArg::Text(file_id),
+                        ],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()> {
@@ -2779,6 +2931,26 @@ impl MediaFileRepository for MediaFileStore {
         Ok(owners)
     }
 
+    async fn list_media_file_paths(&self, file_ids: &[String]) -> AppResult<Vec<(String, String)>> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Same id space and no liveness filter, as `get_media_file_by_id`.
+        let (file_ids, per_statement) = self.title_id_statements(file_ids);
+        let mut paths = Vec::with_capacity(file_ids.len());
+        for chunk in file_ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT mf.id, mf.file_path FROM media_files mf WHERE mf.id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                paths.push((row.text("id")?, row.text("file_path")?));
+            }
+        }
+        Ok(paths)
+    }
+
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
         let dialect = dialect_for_datastore(&self.datastore);
         let (where_clause, args) = media_file_path_predicate(file_path);
@@ -2898,25 +3070,8 @@ impl MediaFileRepository for MediaFileStore {
         execute_write(
             &self.datastore,
             "update_media_file_content_hashes",
-            "UPDATE media_files SET
-                full_blake3 = {},
-                move_crc = {},
-                move_crc_algorithm = {},
-                hash_computed_at = {}
-             WHERE id = {}",
-            vec![
-                SqlArg::Text(hashes.full_blake3.clone()),
-                // Stored as text: a u64 does not fit either engine's signed
-                // 64-bit integer column without wrapping.
-                SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
-                SqlArg::OptText(
-                    hashes
-                        .crc_algorithm
-                        .map(|algorithm| algorithm.as_str().to_string()),
-                ),
-                SqlArg::OptTimestamp(hashes.hash_computed_at),
-                SqlArg::Text(file_id.to_string()),
-            ],
+            WRITE_CONTENT_HASHES_SQL,
+            content_hash_args(file_id, hashes),
         )
         .await?;
         Ok(())
@@ -2931,11 +3086,11 @@ impl MediaFileRepository for MediaFileStore {
             &self.datastore,
             "publish_unchanged_media_file_hashes",
             "UPDATE media_files SET full_blake3 = {}, move_crc = {},
-                move_crc_algorithm = {}, hash_computed_at = {}
+                move_crc_algorithm = {}, hash_computed_at = {}, full_hash_mark = {}
              WHERE id = {} AND title_id = {} AND file_path = {} AND size_bytes = {}
                AND COALESCE(source_signature_scheme, '') = {}
                AND COALESCE(source_signature_value, '') = {}
-               AND full_blake3 IS NULL",
+               AND full_blake3 IS NULL AND full_hash_mark IS NULL",
             vec![
                 SqlArg::Text(hashes.full_blake3.clone()),
                 SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
@@ -2945,6 +3100,7 @@ impl MediaFileRepository for MediaFileStore {
                         .map(|algorithm| algorithm.as_str().to_string()),
                 ),
                 SqlArg::OptTimestamp(hashes.hash_computed_at),
+                SqlArg::OptText(hashes.mark.clone()),
                 SqlArg::Text(expected.id.clone()),
                 SqlArg::Text(expected.title_id.clone()),
                 SqlArg::Text(expected.file_path.clone()),
@@ -2969,9 +3125,61 @@ impl MediaFileRepository for MediaFileStore {
                 full_blake3 = NULL,
                 move_crc = NULL,
                 move_crc_algorithm = NULL,
-                hash_computed_at = NULL
+                hash_computed_at = NULL,
+                full_hash_mark = NULL
              WHERE id = {} AND full_blake3 IS NOT NULL",
             vec![SqlArg::Text(file_id.to_string())],
+        )
+        .await?;
+        Ok(affected > 0)
+    }
+
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &scryer_application::disk::HashRow,
+    ) -> AppResult<Option<scryer_application::location::model::PersistedContentHashes>> {
+        let (filter, args) = hash_row_filter(row);
+        let sql = format!(
+            "SELECT full_blake3, move_crc, move_crc_algorithm, hash_computed_at, full_hash_mark
+             FROM media_files WHERE {filter} AND full_blake3 IS NOT NULL
+             LIMIT 1"
+        );
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        match rows.first() {
+            Some(found) => row_to_persisted_content_hashes(found),
+            None => Ok(None),
+        }
+    }
+
+    async fn record_media_file_full_hash(
+        &self,
+        row: &scryer_application::disk::HashRow,
+        size_bytes: i64,
+        hashes: &scryer_application::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let (filter, row_args) = hash_row_filter(row);
+        let mut args = vec![
+            SqlArg::Text(hashes.full_blake3.clone()),
+            SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
+            SqlArg::OptText(
+                hashes
+                    .crc_algorithm
+                    .map(|algorithm| algorithm.as_str().to_string()),
+            ),
+            SqlArg::OptTimestamp(hashes.hash_computed_at),
+            SqlArg::OptText(hashes.mark.clone()),
+        ];
+        args.extend(row_args);
+        args.push(SqlArg::I64(size_bytes));
+        let affected = execute_write(
+            &self.datastore,
+            "record_media_file_full_hash",
+            &format!(
+                "UPDATE media_files SET full_blake3 = {{}}, move_crc = {{}},
+                    move_crc_algorithm = {{}}, hash_computed_at = {{}}, full_hash_mark = {{}}
+                 WHERE {filter} AND size_bytes = {{}}"
+            ),
+            args,
         )
         .await?;
         Ok(affected > 0)
@@ -3203,11 +3411,13 @@ fn live_media_file_predicate(dialect: SqlDialect, alias: &str) -> String {
     match dialect {
         SqlDialect::Sqlite => format!(
             "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
-              AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0)"
+              AND instr({alias}.file_path, '/{UPGRADE_REPLACEMENT_PREFIX}') = 0
+              AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0)"
         ),
         SqlDialect::Postgres => format!(
             "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
-              AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0)"
+              AND POSITION('/{UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
+              AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0)"
         ),
     }
 }
@@ -3378,7 +3588,7 @@ fn media_file_select_columns(dialect: SqlDialect, episode_expr: &str, role_expr:
             mf.file_path,
             mf.size_bytes, mf.announced_size_bytes, {role_expr} AS role,
             mf.source_signature_scheme, mf.source_signature_value,
-            mf.full_blake3, mf.move_crc, mf.move_crc_algorithm, mf.hash_computed_at,
+            mf.full_blake3, mf.move_crc, mf.move_crc_algorithm, mf.hash_computed_at, mf.full_hash_mark,
             mf.quality_id, mf.scan_status, mf.created_at,
             mf.video_codec, mf.video_width, mf.video_height,
             mf.video_bitrate_kbps, mf.video_bit_depth,
@@ -3888,6 +4098,19 @@ fn title_media_file_columns(
     })
 }
 
+/// The `WHERE` filter, and its arguments, naming one media file row: by its
+/// id, or by its title and stored path. Both are served by an index.
+fn hash_row_filter(row: &scryer_application::disk::HashRow) -> (&'static str, Vec<SqlArg>) {
+    use scryer_application::disk::HashRow;
+    match row {
+        HashRow::Id(id) => ("id = {}", vec![SqlArg::Text(id.clone())]),
+        HashRow::TitlePath { title_id, path } => (
+            "title_id = {} AND file_path = {}",
+            vec![SqlArg::Text(title_id.clone()), SqlArg::Text(path.clone())],
+        ),
+    }
+}
+
 /// Reads the migration-0205 columns off a media file row.
 ///
 /// The CRC is stored as text because it is a `u64` and neither engine has an
@@ -3921,6 +4144,9 @@ fn row_to_persisted_content_hashes(
         move_crc,
         crc_algorithm,
         hash_computed_at: row.opt_timestamp("hash_computed_at")?,
+        mark: row
+            .opt_text("full_hash_mark")?
+            .filter(|mark| !mark.trim().is_empty()),
     }))
 }
 
@@ -4070,6 +4296,46 @@ mod tests {
         Collection, CollectionType, Episode, MediaFacet, MovieEntity, SeriesMovieLink, Title,
     };
     use scryer_infrastructure_datastore::SqliteServices;
+
+    /// The stored path of each asked file that has a row, in one read; ids
+    /// with no row are left out.
+    #[tokio::test]
+    async fn media_file_paths_are_read_for_the_asked_ids_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("paths.db").to_string_lossy())
+            .await
+            .unwrap();
+        title_store(&services)
+            .create(make_test_series_title("selected"))
+            .await
+            .unwrap();
+        let files = media_file_store(&services);
+        let mut ids = Vec::new();
+        for name in ["first", "second", "unasked"] {
+            ids.push(
+                files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: "selected".into(),
+                        file_path: format!("/synthetic/{name}.mkv"),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let mut paths = files
+            .list_media_file_paths(&[ids[0].clone(), ids[1].clone(), "no-such-file".into()])
+            .await
+            .unwrap();
+        paths.sort();
+        let mut expected = vec![
+            (ids[0].clone(), "/synthetic/first.mkv".to_string()),
+            (ids[1].clone(), "/synthetic/second.mkv".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(paths, expected);
+        assert!(files.list_media_file_paths(&[]).await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn score_evaluation_episode_selection_deduplicates_shared_files() {
@@ -4449,6 +4715,11 @@ mod tests {
             (
                 &title.id,
                 "/synthetic/.scryer-upgrade-replacement-staged.mkv",
+                MediaFileRole::Primary,
+            ),
+            (
+                &title.id,
+                "/synthetic/.scry-ur-staged.mkv",
                 MediaFileRole::Primary,
             ),
             (
@@ -5040,6 +5311,7 @@ mod tests {
             move_crc: None,
             crc_algorithm: None,
             hash_computed_at: Some(Utc::now()),
+            mark: None,
         };
         files
             .update_media_file_content_hashes(&id, &hashes)
@@ -5179,6 +5451,7 @@ mod tests {
             move_crc: Some(u64::MAX - 1),
             crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
             hash_computed_at: Some(computed_at),
+            mark: None,
         };
         let expected = media_files
             .get_media_file_by_id(&ids[0])
@@ -5280,6 +5553,314 @@ mod tests {
                 .await
                 .expect("clear an unhashed row")
         );
+    }
+
+    #[tokio::test]
+    async fn a_full_hash_is_stored_and_read_with_its_mark_by_id_or_title_and_path() {
+        use scryer_application::disk::HashRow;
+        use scryer_application::location::model::{MoveCrcAlgorithm, PersistedContentHashes};
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_hash_rows_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-hash-rows");
+        titles.create(title.clone()).await.expect("insert title");
+        let path = "/library/show/file-a.mkv".to_string();
+        let id = media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.clone(),
+                size_bytes: 4096,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        let by_id = HashRow::Id(id.clone());
+        let by_path = HashRow::TitlePath {
+            title_id: title.id.clone(),
+            path: path.clone(),
+        };
+
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&by_id)
+                .await
+                .unwrap(),
+            None,
+            "an unhashed row stores nothing"
+        );
+
+        let hashes = PersistedContentHashes {
+            full_blake3: "cd".repeat(32),
+            move_crc: Some(u64::MAX - 2),
+            crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(Utc::now()),
+            mark: Some("synthetic-mark".to_string()),
+        };
+        assert!(
+            !media_files
+                .record_media_file_full_hash(&by_path, 4097, &hashes)
+                .await
+                .unwrap(),
+            "a row recording another size is not written"
+        );
+        assert!(
+            media_files
+                .record_media_file_full_hash(&by_path, 4096, &hashes)
+                .await
+                .unwrap()
+        );
+
+        for row in [&by_id, &by_path] {
+            let stored = media_files
+                .stored_media_file_full_hash(row)
+                .await
+                .unwrap()
+                .expect("stored hash");
+            assert_eq!(stored.full_blake3, hashes.full_blake3);
+            assert_eq!(stored.move_crc, hashes.move_crc);
+            assert_eq!(stored.mark.as_deref(), Some("synthetic-mark"));
+        }
+        let other_title = HashRow::TitlePath {
+            title_id: "title-elsewhere".to_string(),
+            path,
+        };
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&other_title)
+                .await
+                .unwrap(),
+            None,
+            "a path is only ever read under its own title"
+        );
+
+        // The mark goes with the hash: an invalidation clears both.
+        media_files
+            .refresh_media_file_source_signature(
+                &id,
+                4096,
+                Some("stat-v1".into()),
+                Some("replacement".into()),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&by_id)
+                .await
+                .unwrap(),
+            None
+        );
+        media_files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        assert!(
+            media_files
+                .clear_media_file_content_hashes(&id)
+                .await
+                .unwrap()
+        );
+        let cleared = media_files
+            .get_media_file_by_id(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.content_hashes.is_none());
+        let unmarked = PersistedContentHashes {
+            mark: None,
+            ..hashes.clone()
+        };
+        media_files
+            .update_media_file_content_hashes(&id, &unmarked)
+            .await
+            .unwrap();
+        assert_eq!(
+            media_files
+                .stored_media_file_full_hash(&by_id)
+                .await
+                .unwrap()
+                .expect("stored hash")
+                .mark,
+            None,
+            "a clear leaves no mark behind for a later hash stored without one"
+        );
+    }
+
+    /// A stored hash describes the file its row described when it was taken:
+    /// every writer that changes the row's size or signature clears it, a
+    /// signature appearing where there was none included, and keeps it while
+    /// neither changes. A claim that reuses a row writes the new size,
+    /// signature and hash together.
+    #[tokio::test]
+    async fn a_stored_hash_goes_when_its_rows_size_or_signature_changes() {
+        use scryer_application::disk::HashRow;
+        use scryer_application::location::model::{MoveCrcAlgorithm, PersistedContentHashes};
+
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("hash-writers.db").to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title("title-hash-writers");
+        title_store(&services).create(title.clone()).await.unwrap();
+        let files = media_file_store(&services);
+        let path = "/synthetic/show/file-hash-writers.mkv".to_string();
+        let row = HashRow::TitlePath {
+            title_id: title.id.clone(),
+            path: path.clone(),
+        };
+        let input = |size_bytes: i64, signature: Option<&str>| InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: path.clone(),
+            size_bytes,
+            role: MediaFileRole::Primary,
+            source_signature_scheme: signature.map(|_| "stat-v1".to_string()),
+            source_signature_value: signature.map(str::to_string),
+            ..Default::default()
+        };
+        let hashes = PersistedContentHashes {
+            full_blake3: "ef".repeat(32),
+            move_crc: Some(7),
+            crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(Utc::now()),
+            mark: Some("synthetic-mark".to_string()),
+        };
+        let stored = || async { files.stored_media_file_full_hash(&row).await.unwrap() };
+
+        let id = files
+            .insert_media_file(&input(4096, Some("one")))
+            .await
+            .unwrap();
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+
+        // The upsert by path.
+        files
+            .insert_media_file(&input(4096, Some("one")))
+            .await
+            .unwrap();
+        assert!(
+            stored().await.is_some(),
+            "an unchanged upsert keeps the hash"
+        );
+        files
+            .insert_media_file(&input(4096, Some("two")))
+            .await
+            .unwrap();
+        assert_eq!(stored().await, None, "a new signature clears the hash");
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        files
+            .insert_media_file(&input(8192, Some("two")))
+            .await
+            .unwrap();
+        assert_eq!(stored().await, None, "a new size clears the hash");
+
+        // A refresh that does not ask to invalidate.
+        files.insert_media_file(&input(8192, None)).await.unwrap();
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        files
+            .refresh_media_file_source_signature(&id, 8192, None, None, false)
+            .await
+            .unwrap();
+        assert!(
+            stored().await.is_some(),
+            "an unchanged refresh keeps the hash"
+        );
+        files
+            .refresh_media_file_source_signature(
+                &id,
+                8192,
+                Some("stat-v1".into()),
+                Some("three".into()),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stored().await,
+            None,
+            "a signature appearing where there was none clears the hash"
+        );
+
+        // A claim that reuses a row an import claimed.
+        let claimed_path = "/synthetic/show/file-hash-claimed.mkv".to_string();
+        let claimed_row = HashRow::TitlePath {
+            title_id: title.id.clone(),
+            path: claimed_path.clone(),
+        };
+        let input = |size_bytes: i64, signature: Option<&str>| InsertMediaFileInput {
+            file_path: claimed_path.clone(),
+            original_file_path: Some("/synthetic/downloads/file-hash-claimed.mkv".to_string()),
+            ..input(size_bytes, signature)
+        };
+        let stored = || async {
+            files
+                .stored_media_file_full_hash(&claimed_row)
+                .await
+                .unwrap()
+        };
+        let id = files
+            .claim_import_destination(
+                &input(512, Some("zero")),
+                &MediaFileAssociations::default(),
+                None,
+            )
+            .await
+            .unwrap()
+            .media_file_id;
+        files
+            .update_media_file_content_hashes(&id, &hashes)
+            .await
+            .unwrap();
+        let claimed = files
+            .claim_import_destination(
+                &input(1024, Some("four")),
+                &MediaFileAssociations::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.disposition, MediaFileCatalogDisposition::Reused);
+        assert_eq!(
+            stored().await,
+            None,
+            "a reuse of another file clears the hash"
+        );
+        let placed = PersistedContentHashes {
+            full_blake3: "a1".repeat(32),
+            mark: Some("placed-mark".to_string()),
+            ..hashes.clone()
+        };
+        files
+            .claim_import_destination(
+                &input(2048, Some("five")),
+                &MediaFileAssociations::default(),
+                Some(&placed),
+            )
+            .await
+            .unwrap();
+        let reused = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(reused.size_bytes, 2048);
+        assert_eq!(reused.source_signature_value.as_deref(), Some("five"));
+        let written = stored().await.expect("the claim's hash");
+        assert_eq!(written.full_blake3, placed.full_blake3);
+        assert_eq!(written.mark.as_deref(), Some("placed-mark"));
     }
 
     #[tokio::test]
@@ -6261,7 +6842,7 @@ mod tests {
             series_movie_link_ids: Vec::new(),
         };
         let created = media_files
-            .claim_import_destination(&input, &associations)
+            .claim_import_destination(&input, &associations, None)
             .await
             .expect("media file and associations should insert atomically");
         assert_eq!(created.disposition, MediaFileCatalogDisposition::Created);
@@ -6301,6 +6882,7 @@ mod tests {
                     ..input.clone()
                 },
                 &associations,
+                None,
             )
             .await
             .expect("matching ownership should be reusable");
@@ -6329,7 +6911,7 @@ mod tests {
             .await
             .expect("partial association should insert");
         let recovered = media_files
-            .claim_import_destination(&partial_input, &associations)
+            .claim_import_destination(&partial_input, &associations, None)
             .await
             .expect("a partial same-target pack should be recovered");
         assert_eq!(recovered.media_file_id, partial_id);
@@ -6348,6 +6930,7 @@ mod tests {
                     episode_ids: vec!["episode-path-ownership-1".to_string()],
                     series_movie_link_ids: Vec::new(),
                 },
+                None,
             )
             .await
             .expect_err("an additional existing association must remain a conflict");
@@ -6368,11 +6951,12 @@ mod tests {
                     ..unassociated_input.clone()
                 },
                 &MediaFileAssociations::default(),
+                None,
             )
             .await
             .expect_err("unassociated rows require matching source provenance");
         let recovered = media_files
-            .claim_import_destination(&unassociated_input, &MediaFileAssociations::default())
+            .claim_import_destination(&unassociated_input, &MediaFileAssociations::default(), None)
             .await
             .expect("matching source provenance should recover an unassociated row");
         assert_eq!(recovered.media_file_id, unassociated_id);
@@ -6985,6 +7569,7 @@ mod tests {
                     episode_ids: vec!["missing-episode".to_string()],
                     series_movie_link_ids: Vec::new(),
                 },
+                None,
             )
             .await
             .expect_err("a missing association must roll back the media row");
@@ -7024,7 +7609,7 @@ mod tests {
             ..Default::default()
         };
         let created = media_files
-            .claim_import_destination(&first, &MediaFileAssociations::default())
+            .claim_import_destination(&first, &MediaFileAssociations::default(), None)
             .await
             .expect("destination should be claimed");
         assert_eq!(created.disposition, MediaFileCatalogDisposition::Created);
@@ -7053,6 +7638,7 @@ mod tests {
                     ..first.clone()
                 },
                 &MediaFileAssociations::default(),
+                None,
             )
             .await
             .expect("same import target should reuse the row");
@@ -7070,6 +7656,7 @@ mod tests {
                     ..first
                 },
                 &MediaFileAssociations::default(),
+                None,
             )
             .await
             .expect("same import target should reuse the row");

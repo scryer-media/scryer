@@ -878,7 +878,8 @@ pub async fn queue_import_request_with_identity_for_download(
         let import_type = import_type.clone();
         let normalized_client_id = normalized_client_id.clone();
         let lookup_client_id = lookup_client_id.clone();
-        let payload_arg = payload_arg.clone();
+        let mut payload_arg = payload_arg.clone();
+        let payload_json = payload_json.clone();
         let rename_arg = rename_arg.clone();
         let result_arg = result_arg.clone();
         let download_id = download_id.clone();
@@ -903,6 +904,22 @@ pub async fn queue_import_request_with_identity_for_download(
             let import_sql = if has_download_id {
                 import_request_insert_active_download_id_sql(tx)
             } else {
+                // The upsert replaces the payload of the import it lands on.
+                // That the download's file is the library file is evidence
+                // that outlives a requeue: the client must still never
+                // remove its data.
+                if let Some(payload) = payload_keeping_library_holds_mark_tx(
+                    tx,
+                    &lookup_client_id,
+                    &source_system,
+                    &source_ref,
+                    &import_type_key,
+                    &payload_json,
+                )
+                .await?
+                {
+                    payload_arg = json_arg_for_tx(tx, Some(&payload))?;
+                }
                 import_request_upsert_sql(tx)
             };
             SqlRuntime::execute(
@@ -960,6 +977,58 @@ pub async fn queue_import_request_with_identity_for_download(
         })
     })
     .await
+}
+
+/// The new payload with the library-holds mark carried over, when the import
+/// the upsert replaces carries it; `None` when there is nothing to carry.
+async fn payload_keeping_library_holds_mark_tx(
+    tx: &mut SqlTx<'_>,
+    source_client_id: &str,
+    source_system: &str,
+    source_ref: &str,
+    import_type: &str,
+    payload_json: &str,
+) -> AppResult<Option<String>> {
+    let Some(row) = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT payload_json FROM imports
+         WHERE COALESCE(source_client_id, '') = {}
+           AND source_system = {}
+           AND source_ref = {}
+           AND import_type = {}
+           AND download_id IS NULL
+         LIMIT 1",
+        &[
+            SqlArg::Text(source_client_id.to_string()),
+            SqlArg::Text(source_system.to_string()),
+            SqlArg::Text(source_ref.to_string()),
+            SqlArg::Text(import_type.to_string()),
+        ],
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let previous = json_text_from_row(&row, "payload_json")?
+        .and_then(|json| serde_json::from_str::<JsonValue>(&json).ok());
+    let holds = previous.is_some_and(|previous| {
+        previous[scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY].as_bool() == Some(true)
+    });
+    if !holds {
+        return Ok(None);
+    }
+    let mut payload: JsonValue = serde_json::from_str(payload_json)
+        .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+    payload
+        .as_object_mut()
+        .ok_or_else(|| AppError::Repository("invalid import payload".into()))?
+        .insert(
+            scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY.into(),
+            JsonValue::Bool(true),
+        );
+    serde_json::to_string(&payload)
+        .map(Some)
+        .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 async fn find_active_import_by_download_id_tx(

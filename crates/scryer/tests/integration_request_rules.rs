@@ -14,6 +14,9 @@
 //!    carries the policy tags, the lease is a real claim, and the trace explains
 //!    all of it.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use async_graphql::Variables;

@@ -2101,7 +2101,7 @@ pub trait TitleRepository: Send + Sync {
     /// which is exactly what this default does. A narrowing repository must
     /// compare at least as loosely as `folder_paths_match` does: on Windows
     /// that means folding both sides through
-    /// [`crate::stored_paths::folder_path_lookup_key`] (case and separator
+    /// [`crate::stored_paths::folder_path_lookup_key_for_platform`] (case and separator
     /// insensitive) rather than plain equality, or a stored `C:\Media\Show`
     /// is invisible to a scan that supplies `c:/media/show`.
     ///
@@ -9010,6 +9010,21 @@ pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reaso
 /// interrupted release can be told apart from an import that never held.
 pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released";
 
+/// Import payload key set when the download's file turned out to be the
+/// library file itself. While any import of a download carries it, the
+/// download's client entry is removed without its data.
+pub const LIBRARY_HOLDS_PAYLOAD_KEY: &str = "library_holds_download_payload";
+
+/// What the imports of one download say about its sources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DownloadImportSources {
+    /// An import still holds the download's sources, so nothing is removed.
+    pub held: bool,
+    /// An import found that the download's file is the library file, so the
+    /// client entry may go but never its data.
+    pub library_holds_payload: bool,
+}
+
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
     async fn set_archive_processing_pending(
@@ -9060,6 +9075,31 @@ pub trait ImportRepository: Send + Sync {
     ) -> AppResult<bool> {
         Ok(false)
     }
+
+    /// Whether an import holds `download_id`'s sources, and whether one found
+    /// that the download's file is the library file, in one read. A store
+    /// that keeps no such mark answers the hold alone.
+    async fn download_import_sources(
+        &self,
+        download_id: &DownloadId,
+    ) -> AppResult<DownloadImportSources> {
+        Ok(DownloadImportSources {
+            held: self
+                .archive_processing_pending_for_download(download_id)
+                .await?,
+            library_holds_payload: false,
+        })
+    }
+
+    /// Mark the import `import_id` as one whose download's file is the
+    /// library file. Answers `false`, changing nothing, when the import has
+    /// no download identity that a later cleanup could read the mark by.
+    async fn record_library_holds_download_payload(&self, _import_id: &str) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import source records are unavailable".into(),
+        ))
+    }
+
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,
@@ -9786,6 +9826,24 @@ pub trait FileImporter: Send + Sync {
         self.remove_import_source_after_verified_import(guard, final_dest_path)
             .await
     }
+
+    /// Whether the library file a re-run found already imported is the
+    /// download's file itself; see
+    /// [`crate::library_file_is_import_source_blocking`]. An importer that
+    /// gives each source a turn runs it in that turn, since the check may
+    /// set the source aside for a moment. The default has no turns to take.
+    async fn library_file_is_import_source(
+        &self,
+        source: &Path,
+        library_path: &Path,
+    ) -> AppResult<bool> {
+        let (source, library_path) = (source.to_path_buf(), library_path.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            crate::library_file_is_import_source_blocking(&source, &library_path)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("library file check failed: {error}")))?
+    }
 }
 
 #[async_trait]
@@ -9880,10 +9938,16 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(ids)
     }
 
+    /// Catalog an import's destination, or reuse the row already there, in
+    /// one transaction. A reused row takes the input's size and signature,
+    /// and its stored hash is cleared unless both are unchanged. `hashes`,
+    /// when given, are written in the same transaction as what the import
+    /// proved about the file the row now describes.
     async fn claim_import_destination(
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<ClaimedMediaFile>;
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()>;
@@ -10227,6 +10291,30 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(false)
     }
 
+    /// The whole-file hash stored on `row`, by the row's id or by its title
+    /// and stored path. `None` when the row is absent or holds no hash. The
+    /// default stores nothing.
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+    ) -> AppResult<Option<crate::location::model::PersistedContentHashes>> {
+        let _ = row;
+        Ok(None)
+    }
+
+    /// Store a whole-file hash, with its mark, on `row` while the row still
+    /// records `size_bytes`. Returns whether a row changed. The default
+    /// stores nothing.
+    async fn record_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+        size_bytes: i64,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let _ = (row, size_bytes, hashes);
+        Ok(false)
+    }
+
     /// Fill the acquisition-time columns of a row a recycle-bin restore
     /// recreated from what the recycled row recorded. Only columns the row has
     /// no value for are written, so anything the rescan did establish stands.
@@ -10327,6 +10415,19 @@ pub trait MediaFileRepository: Send + Sync {
             }
         }
         Ok(owners)
+    }
+
+    /// `(file id, stored path)` for each of `file_ids` that has a row, the
+    /// path `get_media_file_by_id` reports. Order is not guaranteed. SQL
+    /// stores read only the two columns; the default reads each row.
+    async fn list_media_file_paths(&self, file_ids: &[String]) -> AppResult<Vec<(String, String)>> {
+        let mut paths = Vec::with_capacity(file_ids.len());
+        for file_id in file_ids {
+            if let Some(file) = self.get_media_file_by_id(file_id).await? {
+                paths.push((file_id.clone(), file.file_path));
+            }
+        }
+        Ok(paths)
     }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>>;
@@ -13638,6 +13739,10 @@ pub struct DownloadCleanupRecord {
     /// was rescheduled with; `None` after any other outcome. Lets the next
     /// failure back off further without counting holds and deferrals.
     pub previous_failure_retry_seconds: Option<i64>,
+    /// Not stored: read with the import holds right before the cleanup runs.
+    /// An import found the download's file is the library file, so the
+    /// client entry may go but never its data.
+    pub library_holds_payload: bool,
 }
 
 /// The catalog references one download submission holds, exactly as stored.

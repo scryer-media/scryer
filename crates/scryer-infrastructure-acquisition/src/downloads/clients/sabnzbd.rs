@@ -4,6 +4,7 @@ use async_compression::tokio::bufread::ZstdDecoder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{StatusCode, Url, multipart};
+use scryer_application::disk::{Disk, Open, Remove};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientStatus,
     DownloadGrabResult, NullStagedNzbStore, PluginFailureReason, RateLimitCooldownAction,
@@ -16,7 +17,6 @@ use scryer_outbound_http::{
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::{OnceCell, Semaphore};
 use tokio_util::io::ReaderStream;
@@ -269,23 +269,31 @@ impl SabnzbdDownloadClient {
         staged_nzb: &StagedNzbRef,
     ) -> AppResult<(PathBuf, u64)> {
         let nzb_path = Self::sab_nzb_path(staged_nzb);
-        let input = File::open(&staged_nzb.compressed_path)
+        let disk = Disk::process();
+        let input = disk
+            .open(&staged_nzb.compressed_path, Open::read())
             .await
             .map_err(|error| {
                 AppError::Repository(format!(
-                    "failed to open staged nzb {}: {error}",
-                    staged_nzb.compressed_path.display()
+                    "failed to open staged nzb {}: {}",
+                    staged_nzb.compressed_path.display(),
+                    error.words()
                 ))
             })?;
-        let mut output = File::create(&nzb_path).await.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create sabnzbd nzb file {}: {error}",
-                nzb_path.display()
-            ))
-        })?;
+        let mut output = disk
+            .open(&nzb_path, Open::create())
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to create sabnzbd nzb file {}: {}",
+                    nzb_path.display(),
+                    error.words()
+                ))
+            })?;
 
         let mut decoder = ZstdDecoder::new(BufReader::new(input));
-        tokio::io::copy(&mut decoder, &mut output)
+        // The file was created empty, so what was copied into it is its length.
+        let nzb_len = tokio::io::copy(&mut decoder, &mut output)
             .await
             .map_err(|error| {
                 AppError::Repository(format!("sabnzbd nzb decompression failed: {error}"))
@@ -294,16 +302,6 @@ impl SabnzbdDownloadClient {
             .flush()
             .await
             .map_err(|error| AppError::Repository(format!("sabnzbd nzb flush failed: {error}")))?;
-
-        let nzb_len = tokio::fs::metadata(&nzb_path)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to stat sabnzbd nzb file {}: {error}",
-                    nzb_path.display()
-                ))
-            })?
-            .len();
 
         Ok((nzb_path, nzb_len))
     }
@@ -909,12 +907,16 @@ impl SabnzbdDownloadClient {
                 async move {
                     let nzb_part = match upload_payload {
                         SabAddfilePayload::File { path, len } => {
-                            let upload_file = File::open(&path).await.map_err(|error| {
-                                AppError::Repository(format!(
-                                    "failed to reopen sabnzbd upload file {}: {error}",
-                                    path.display()
-                                ))
-                            })?;
+                            let upload_file = Disk::process()
+                                .open(&path, Open::read())
+                                .await
+                                .map_err(|error| {
+                                    AppError::Repository(format!(
+                                        "failed to reopen sabnzbd upload file {}: {}",
+                                        path.display(),
+                                        error.words()
+                                    ))
+                                })?;
                             multipart::Part::stream_with_length(
                                 reqwest::Body::wrap_stream(ReaderStream::new(upload_file)),
                                 len,
@@ -1288,9 +1290,7 @@ impl DownloadClient for SabnzbdDownloadClient {
                     "failed to mark transient sabnzbd nzb artifact inactive"
                 );
             }
-            if let Err(error) = tokio::fs::remove_file(&nzb_path).await
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
+            if let Err(error) = Disk::process().remove(&nzb_path, Remove::File).await {
                 warn!(
                     path = %nzb_path.display(),
                     error = %error,

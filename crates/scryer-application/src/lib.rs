@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 mod acquisition;
 mod api_keys;
 pub mod application_upgrade;
@@ -9,6 +12,7 @@ pub mod delete_refusal;
 #[cfg(feature = "runtime-diagnostics")]
 pub mod diagnostics;
 mod discovery;
+pub mod disk;
 pub use discovery::{
     CatalogOwnershipDecisions, DISCOVERY_CREDIBLE_RATING_MIN_VOTES,
     DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT, DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
@@ -169,7 +173,6 @@ pub mod scripts;
 mod security;
 mod services;
 mod settings;
-pub(crate) mod storage_capacity;
 pub mod stored_paths;
 pub mod subtitles;
 pub mod testing;
@@ -207,10 +210,14 @@ pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
+pub use import::import::library_file_is_import_source_blocking;
 pub(crate) use import::parameters as import_parameters;
 pub(crate) use import::post_download_gate;
 pub(crate) use import::seeding_gate;
 pub(crate) use import::title_resolution as import_title_resolution;
+pub use import::upgrade::{
+    LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX, is_upgrade_replacement_name,
+};
 pub(crate) use integration::integration as app_usecase_integration;
 pub(crate) use library::discovery as library_discovery;
 pub(crate) use library::filename_parser as library_filename_parser;
@@ -441,6 +448,7 @@ pub use contracts::{
     TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
     UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
 };
+pub use disk::capacity::start_storage_capacity_sampler;
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{
     DownloadClientRemotePathMapping, apply_remote_path_mappings_to_completed_download,
@@ -463,8 +471,8 @@ pub use import_workflow::{
     HeldSourcesSettlement, HeldWorkspacePreserved, ManualImportCandidateMapping,
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
     ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
-    execute_queued_manual_import, import_completed_download, release_held_import_sources,
-    retry_failed_import, start_background_manual_import_poller,
+    execute_queued_manual_import, import_completed_download, import_staging_path,
+    release_held_import_sources, retry_failed_import, start_background_manual_import_poller,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;
 pub(crate) use integration::integration::ManualImportSourceResolution;
@@ -562,7 +570,6 @@ pub use settings::settings::{
     UpdateSecuritySettings, UpdateServiceSettings, UpdateSubtitleSettings,
     validated_title_audio_overrides, validated_title_audio_patch,
 };
-pub use storage_capacity::start_storage_capacity_sampler;
 pub use subtitles::orchestration::{
     DownloadSubtitleForMediaFileRequest, SubtitleSearchOutcome, SubtitleSearchStatus,
     spawn_subtitle_search_for_file, start_background_subtitle_poller,
@@ -688,59 +695,60 @@ pub use ports::{
     DiscoveryAffinityTitle, DiscoveryContextTitle, DiscoveryHomeProjection, DomainEventRepository,
     DownloadClient, DownloadClientConfigRepository, DownloadClientFeedbackScope,
     DownloadClientListing, DownloadClientPluginProvider, DownloadClientSnapshotOutcome,
-    DownloadClientStatusRepository, DownloadQueueCommandRepository, DownloadRegistryRepository,
-    DownloadSubmissionRepository, EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar,
-    EmbyConnectAddressStatus, EmbyConnectIdentityVerification, EmbyConnectServer,
-    EmbyConnectUserType, EmbyServerIdentity, EmbyServerUser, ExternalIdentityVerifier,
-    ExternalImportMonitorSnapshotRepository, ExternalImportSetupInstanceApiKeyDraft,
-    ExternalImportSetupSecretDraft, ExternalImportSetupSecretDraftInput,
-    ExternalImportSetupSecretDraftRepository, ExternalImportSetupSecretDraftSaveResult,
-    ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
-    ExternalImportSetupSecretOverrideDraft, ExternalPluginWasm, FileImporter,
-    HousekeepingMediaFileRootRow, HousekeepingRepository, IMPORT_RETRY_TRACKED_STATE_REASON,
-    IdentityTrackedStateTarget, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
-    ImageProxyCacheUsage, ImageProxyKind, ImageProxyRegistration, ImageProxyRepository,
-    ImageProxySourceRecord, ImportArtifactRepository, ImportFileExecutionContext,
-    ImportFilePermissions, ImportFileTransferProgress, ImportFileTransferProgressSender,
-    ImportRepository, ImportRetryClaim, ImportRetryClaimOutcome, ImportRetryFinishOutcome,
-    IndexerAccountingContext, IndexerArtifactResolver, IndexerCapsSnapshotRefresher, IndexerClient,
-    IndexerConfigRepository, IndexerDispatchGate, IndexerGrabClient, IndexerGrabSelection,
-    IndexerLoginChallenge, IndexerManagementClient, IndexerPluginProvider,
-    IndexerSearchCandidateWrite, IndexerSearchLearningBatch, IndexerSearchLearningContext,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerSearchListing, IndexerSearchListingClaim, IndexerSearchListingReader,
-    IndexerSearchListingScope, IndexerSearchListingStrategy, IndexerSearchRunWrite,
-    IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser, JobRunRepository,
-    LibraryProbeRepository, LibraryRepository, LibraryScanUnmatchedItemRepository,
-    LifecycleActionJobReceiptClaim, LifecycleActionJobReceiptTransition,
-    LifecycleActionRunRepository, LifecycleActionStepCandidateKey, LifecycleActionStepClaim,
-    LifecycleActionStepRepository, LifecycleCandidateQuery, LifecycleCandidateRepository,
-    LifecycleClaimRepository, LifecycleDueCursor, LifecycleEvaluationRepository,
-    LifecycleEvaluationRunRepository, LifecycleExclusionRepository, LifecycleRuleScheduleAnchor,
-    LifecycleRuleSetRepository, LifecycleSearchJobRunCreation,
-    LifecycleSequenceCompletionRepository, LifecycleStepAct, LocationOperationProgress,
-    LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
-    LogicalBackupExporter, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaAnalyzer,
-    MediaFileHashCandidate, MediaFileRepository, MediaRequestFingerprintSummary, MediaRequestOrder,
-    MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
-    MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
-    NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,
-    NotificationAppPayload, NotificationApplicationUpdatePayload, NotificationChannelRepository,
-    NotificationClient, NotificationDownloadPayload, NotificationEpisodePayload,
-    NotificationExternalIdsPayload, NotificationFilePayload, NotificationHealthPayload,
-    NotificationImportPayload, NotificationManualInteractionPayload, NotificationMediaFilePayload,
-    NotificationMediaUpdatePayload, NotificationMediaUpdateTypePayload, NotificationPayload,
-    NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
-    NotificationSubscriptionRepository, NotificationTitleMovePayload, NotificationTitlePayload,
-    OAuthRepository, PendingReleaseRepository, PlexServerDiscovery, PlexServerUser,
-    PluginDescriptorLoader, PluginDynamicConfigFields, PluginHttpTrustConfigRuntime,
-    PluginInstallationRepository, PostProcessingScriptRepository, PrefetchedCompletedDownloads,
-    ProxyConfigRepository, QualityProfileRepository, ReleaseAttemptRepository,
-    RequestRuleDecisionRepository, RequestRuleSetRepository, ReusableIndexerSearchCandidate,
-    ReusableIndexerSearchCandidatePage, ReusableIndexerSearchStrategy, RuleSetRepository,
-    RuntimePluginLoad, SEARCH_STRATEGY_CONTAINED, SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN,
-    ScopeCoverageRow, ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository,
-    ShowRepository, SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
+    DownloadClientStatusRepository, DownloadImportSources, DownloadQueueCommandRepository,
+    DownloadRegistryRepository, DownloadSubmissionRepository, EmbyApiKeyExchange,
+    EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
+    EmbyConnectIdentityVerification, EmbyConnectServer, EmbyConnectUserType, EmbyServerIdentity,
+    EmbyServerUser, ExternalIdentityVerifier, ExternalImportMonitorSnapshotRepository,
+    ExternalImportSetupInstanceApiKeyDraft, ExternalImportSetupSecretDraft,
+    ExternalImportSetupSecretDraftInput, ExternalImportSetupSecretDraftRepository,
+    ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus,
+    ExternalImportSetupSecretInstanceKind, ExternalImportSetupSecretOverrideDraft,
+    ExternalPluginWasm, FileImporter, HousekeepingMediaFileRootRow, HousekeepingRepository,
+    IMPORT_RETRY_TRACKED_STATE_REASON, IdentityTrackedStateTarget, ImageProxyCacheControl,
+    ImageProxyCacheEntryRecord, ImageProxyCacheUsage, ImageProxyKind, ImageProxyRegistration,
+    ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
+    ImportFileExecutionContext, ImportFilePermissions, ImportFileTransferProgress,
+    ImportFileTransferProgressSender, ImportRepository, ImportRetryClaim, ImportRetryClaimOutcome,
+    ImportRetryFinishOutcome, IndexerAccountingContext, IndexerArtifactResolver,
+    IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository, IndexerDispatchGate,
+    IndexerGrabClient, IndexerGrabSelection, IndexerLoginChallenge, IndexerManagementClient,
+    IndexerPluginProvider, IndexerSearchCandidateWrite, IndexerSearchLearningBatch,
+    IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerSearchListing, IndexerSearchListingClaim,
+    IndexerSearchListingReader, IndexerSearchListingScope, IndexerSearchListingStrategy,
+    IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
+    JobRunRepository, LIBRARY_HOLDS_PAYLOAD_KEY, LibraryProbeRepository, LibraryRepository,
+    LibraryScanUnmatchedItemRepository, LifecycleActionJobReceiptClaim,
+    LifecycleActionJobReceiptTransition, LifecycleActionRunRepository,
+    LifecycleActionStepCandidateKey, LifecycleActionStepClaim, LifecycleActionStepRepository,
+    LifecycleCandidateQuery, LifecycleCandidateRepository, LifecycleClaimRepository,
+    LifecycleDueCursor, LifecycleEvaluationRepository, LifecycleEvaluationRunRepository,
+    LifecycleExclusionRepository, LifecycleRuleScheduleAnchor, LifecycleRuleSetRepository,
+    LifecycleSearchJobRunCreation, LifecycleSequenceCompletionRepository, LifecycleStepAct,
+    LocationOperationProgress, LocationOperationRepository, LocationOwnershipClaim,
+    LocationOwnershipOutcome, LogicalBackupExporter, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS,
+    MediaAnalyzer, MediaFileHashCandidate, MediaFileRepository, MediaRequestFingerprintSummary,
+    MediaRequestOrder, MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository,
+    MediaServerUser, MediaServerUserGroup, MediaServerUserGroupStatus,
+    NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest, NormalizedIndexerSearchCandidate,
+    NotificationActorPayload, NotificationAppPayload, NotificationApplicationUpdatePayload,
+    NotificationChannelRepository, NotificationClient, NotificationDownloadPayload,
+    NotificationEpisodePayload, NotificationExternalIdsPayload, NotificationFilePayload,
+    NotificationHealthPayload, NotificationImportPayload, NotificationManualInteractionPayload,
+    NotificationMediaFilePayload, NotificationMediaUpdatePayload,
+    NotificationMediaUpdateTypePayload, NotificationPayload, NotificationPluginProvider,
+    NotificationReleasePayload, NotificationSeverityPayload, NotificationSubscriptionRepository,
+    NotificationTitleMovePayload, NotificationTitlePayload, OAuthRepository,
+    PendingReleaseRepository, PlexServerDiscovery, PlexServerUser, PluginDescriptorLoader,
+    PluginDynamicConfigFields, PluginHttpTrustConfigRuntime, PluginInstallationRepository,
+    PostProcessingScriptRepository, PrefetchedCompletedDownloads, ProxyConfigRepository,
+    QualityProfileRepository, ReleaseAttemptRepository, RequestRuleDecisionRepository,
+    RequestRuleSetRepository, ReusableIndexerSearchCandidate, ReusableIndexerSearchCandidatePage,
+    ReusableIndexerSearchStrategy, RuleSetRepository, RuntimePluginLoad, SEARCH_STRATEGY_CONTAINED,
+    SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN, ScopeCoverageRow,
+    ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, ShowRepository,
+    SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
     SubtitlePluginProvider, SubtitleProviderClient, SubtitleProviderConfigRepository,
     SystemInfoProvider, TitleHistoryTitleScope, TitleImageProcessor, TitleImageRepository,
     TitleListProjection, TitleNameBucketQuery, TitleNameCandidate, TitleRepository,
@@ -1193,6 +1201,18 @@ pub enum AppError {
     #[error("manual reconciliation required: {0}")]
     ManualReconciliationRequired(String),
 
+    /// [`AppError::ManualReconciliationRequired`] with a stable condition.
+    /// The same failure to every workflow that parks or reports it; `reason`
+    /// travels beside the sentence. Match both through
+    /// [`AppError::manual_reconciliation_message`].
+    #[error("manual reconciliation required: {message}")]
+    ManualReconciliationRefused {
+        message: String,
+        reason: &'static str,
+        /// Values the client needs, each its own extension beside `reason`.
+        facts: Vec<RefusalFact>,
+    },
+
     #[error("import evidence unavailable: {0}")]
     ImportEvidenceUnavailable(String),
 
@@ -1237,6 +1257,16 @@ pub enum AppError {
     RepositoryFailed {
         message: String,
         reason: &'static str,
+    },
+
+    /// [`AppError::RepositoryFailed`] that also hands the client values it
+    /// needs, each as its own extension beside `reason`, never only inside
+    /// the masked sentence.
+    #[error("repository: {message}")]
+    RepositoryFailedWithFacts {
+        message: String,
+        reason: &'static str,
+        facts: Vec<RefusalFact>,
     },
 }
 
@@ -1325,12 +1355,29 @@ impl AppError {
         }
     }
 
-    /// The facts a named validation failure carries beside its reason.
+    /// The facts a named failure carries beside its reason.
     pub fn refusal_facts(&self) -> &[RefusalFact] {
         match self {
-            Self::ValidationRefused { facts, .. } => facts,
+            Self::ValidationRefused { facts, .. }
+            | Self::ManualReconciliationRefused { facts, .. }
+            | Self::RepositoryFailedWithFacts { facts, .. } => facts,
             _ => &[],
         }
+    }
+
+    /// The sentence of a failure that needs manual reconciliation, named or
+    /// not; `None` for any other failure.
+    pub fn manual_reconciliation_message(&self) -> Option<&str> {
+        match self {
+            Self::ManualReconciliationRequired(message)
+            | Self::ManualReconciliationRefused { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
+    /// Whether the failure needs manual reconciliation, named or not.
+    pub fn requires_manual_reconciliation(&self) -> bool {
+        self.manual_reconciliation_message().is_some()
     }
 
     /// The stable reason a validation failure names, if it names one.
@@ -1346,6 +1393,8 @@ impl AppError {
     pub fn reason(&self) -> Option<&'static str> {
         match self {
             Self::RepositoryFailed { reason, .. }
+            | Self::RepositoryFailedWithFacts { reason, .. }
+            | Self::ManualReconciliationRefused { reason, .. }
             | Self::NotFoundReason { reason, .. }
             | Self::UnauthorizedReason { reason, .. } => Some(reason),
             Self::TemporaryUnavailable { reason, .. } => *reason,

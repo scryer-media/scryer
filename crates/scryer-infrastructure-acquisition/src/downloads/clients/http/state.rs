@@ -20,10 +20,13 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use scryer_application::disk::{
+    Access, Disk, EntryKind, IfPresent, Open, Parents, PathReading, Remove, Replace, Staging,
+    reason,
+};
 use scryer_application::{AppError, AppResult};
 use scryer_plugin_sdk::{PluginHttpResource, PluginHttpVerify};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 
 /// The directory under `download_dir` that holds the client's own state.
 pub(crate) const STATE_DIR_NAME: &str = ".scryer-http";
@@ -380,6 +383,10 @@ pub(crate) struct HttpStateStore {
 /// The directory under the state directory that holds per-job progress.
 const PROGRESS_DIR_NAME: &str = "progress";
 
+/// The extension the queue and progress documents were staged under before
+/// staging moved to the disk owner's own sibling names.
+const LEGACY_STAGING_EXTENSION: &str = "json.next";
+
 impl HttpStateStore {
     pub(crate) fn for_client(download_dir: &Path, client_id: &str) -> Self {
         let state_dir = download_dir.join(STATE_DIR_NAME);
@@ -402,9 +409,10 @@ impl HttpStateStore {
 
     /// The stored document, or an empty one when none was ever written.
     pub(crate) async fn load(&self) -> AppResult<HttpQueueDocument> {
-        let bytes = match tokio::fs::read(&self.path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        let read = Disk::process().read(&self.path).await.if_present();
+        let bytes = match read {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
                 return Ok(HttpQueueDocument {
                     version: STATE_FORMAT_VERSION,
                     jobs: Vec::new(),
@@ -412,8 +420,9 @@ impl HttpStateStore {
             }
             Err(error) => {
                 return Err(AppError::Repository(format!(
-                    "the HTTP downloader could not read its queue at {}: {error}",
-                    self.path.display()
+                    "the HTTP downloader could not read its queue at {}: {}",
+                    self.path.display(),
+                    error.words()
                 )));
             }
         };
@@ -437,74 +446,76 @@ impl HttpStateStore {
     /// proving the directory is writable without touching anything else.
     pub(crate) async fn initialize(&self) -> AppResult<()> {
         let parent = self.state_dir()?;
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
-                format!(
-                    "the download directory is not writable ({}): {error}",
-                    parent.display()
-                ),
-            )
-        })?;
-        match tokio::fs::metadata(&self.path).await {
-            Ok(_) => {
+        let disk = Disk::process();
+        disk.create_dir(parent, Parents::Create)
+            .await
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
+                    format!(
+                        "the download directory is not writable ({}): {}",
+                        parent.display(),
+                        error.words()
+                    ),
+                )
+            })?;
+        match disk.follow(&self.path).await {
+            PathReading::Known { .. } => {
                 // Opening for write without truncation proves the document
                 // can be replaced later and changes nothing.
-                tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&self.path)
+                disk.open(&self.path, Open::write_existing())
                     .await
                     .map(|_| ())
                     .map_err(|error| {
                         AppError::validation_refused(
                             crate::error_reasons::ACQUISITION_HTTP_QUEUE_NOT_WRITABLE,
                             format!(
-                                "the HTTP downloader's queue at {} is not writable: {error}",
-                                self.path.display()
+                                "the HTTP downloader's queue at {} is not writable: {}",
+                                self.path.display(),
+                                error.words()
                             ),
                         )
                     })
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            PathReading::Missing { .. } => {
                 self.save(&HttpQueueDocument {
                     version: STATE_FORMAT_VERSION,
                     jobs: Vec::new(),
                 })
                 .await
             }
-            Err(error) => Err(AppError::validation_refused(
-                crate::error_reasons::ACQUISITION_HTTP_QUEUE_UNREADABLE,
-                format!(
-                    "the HTTP downloader's queue at {} cannot be inspected: {error}",
-                    self.path.display()
-                ),
-            )),
+            PathReading::Unreachable { .. } | PathReading::NotObserved => {
+                Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_HTTP_QUEUE_UNREADABLE,
+                    format!(
+                        "the HTTP downloader's queue at {} cannot be inspected: it could not be read",
+                        self.path.display()
+                    ),
+                ))
+            }
         }
     }
 
     pub(crate) async fn save(&self, document: &HttpQueueDocument) -> AppResult<()> {
         let parent = self.state_dir()?;
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            AppError::Repository(format!(
-                "the HTTP downloader could not create {}: {error}",
-                parent.display()
-            ))
-        })?;
         let bytes = serde_json::to_vec(&HttpQueueDocumentRef {
             version: STATE_FORMAT_VERSION,
             jobs: &document.jobs,
         })
         .map_err(|error| AppError::Repository(error.to_string()))?;
-        let staging = self.path.with_extension("json.next");
+        let disk = Disk::process();
         let write = async {
-            let mut file = tokio::fs::File::create(&staging).await?;
-            file.write_all(&bytes).await?;
-            file.sync_all().await?;
-            drop(file);
-            tokio::fs::rename(&staging, &self.path).await?;
+            let (replace, access) = (Replace::Allowed, Access::Default);
+            disk.write_staged(&self.path, bytes, replace, access, Staging::Fixed, true)
+                .await?;
             // The rename lives in the directory; without this a crash right
-            // after it could bring the previous document back.
-            sync_directory(parent).await
+            // after it could bring the previous document back. Windows has
+            // no directory sync, so there it is not required.
+            let synced = disk.sync_dir(parent).await?;
+            if cfg!(unix) {
+                synced.required()?;
+            }
+            Ok::<(), std::io::Error>(())
         };
         write.await.map_err(|error| {
             AppError::Repository(format!(
@@ -514,9 +525,9 @@ impl HttpStateStore {
         })
     }
 
-    /// Replace one job's progress file. Only the data is synced: losing the
-    /// newest progress to a crash only means resuming from an earlier offset
-    /// the partial file still holds.
+    /// Replace one job's progress file. The file is synced but its directory
+    /// is not: losing the newest progress to a crash only means resuming from
+    /// an earlier offset the partial file still holds.
     pub(crate) async fn save_progress(
         &self,
         job_id: &str,
@@ -525,30 +536,27 @@ impl HttpStateStore {
         let path = self.progress_path(job_id);
         let bytes = serde_json::to_vec(progress)
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        let staging = path.with_extension("json.next");
-        let write = async {
-            tokio::fs::create_dir_all(&self.progress_dir).await?;
-            let mut file = tokio::fs::File::create(&staging).await?;
-            file.write_all(&bytes).await?;
-            file.sync_data().await?;
-            drop(file);
-            tokio::fs::rename(&staging, &path).await
-        };
-        write.await.map_err(|error| {
-            AppError::Repository(format!(
-                "the HTTP downloader could not record progress at {}: {error}",
-                path.display()
-            ))
-        })
+        let (replace, access) = (Replace::Allowed, Access::Default);
+        Disk::process()
+            .write_staged(&path, bytes, replace, access, Staging::Fixed, true)
+            .await
+            .map(|_| ())
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "the HTTP downloader could not record progress at {}: {}",
+                    path.display(),
+                    error.words()
+                ))
+            })
     }
 
     /// A job's progress file, when one was written and can be read. An
     /// unreadable one is ignored: the document's own offsets still hold.
     pub(crate) async fn load_progress(&self, job_id: &str) -> Option<HttpJobProgress> {
         let path = self.progress_path(job_id);
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        let bytes = match Disk::process().read(&path).await.if_present() {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return None,
             Err(error) => {
                 tracing::warn!(path = %path.display(), error = %error, "HTTP downloader could not read a progress file");
                 return None;
@@ -561,6 +569,52 @@ impl HttpStateStore {
                 None
             }
         }
+    }
+
+    /// Remove the staging files earlier versions left beside this client's
+    /// queue and beside the progress documents: regular files only, as a
+    /// reading that does not follow links shows them. A failure is logged.
+    pub(crate) async fn remove_legacy_staging(&self) {
+        let disk = Disk::process();
+        let queue = self.path.with_extension(LEGACY_STAGING_EXTENSION);
+        let mut leftovers = Vec::new();
+        if disk.uncached(&queue).await.is(EntryKind::File) {
+            leftovers.push(queue);
+        }
+        match disk.list(&self.progress_dir).await {
+            Ok(entries) => leftovers.extend(
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.reading.is(EntryKind::File))
+                    .map(|entry| entry.path)
+                    .filter(|path| self.is_legacy_progress_staging(path)),
+            ),
+            Err(error) if error.reason() == reason::DISK_PATH_MISSING => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "HTTP downloader could not list its progress files");
+            }
+        }
+        for leftover in leftovers {
+            if let Err(error) = disk.remove(&leftover, Remove::File).await {
+                tracing::warn!(error = %error, "HTTP downloader could not remove an old staging file");
+            }
+        }
+    }
+
+    /// Whether `path` is the name an earlier version staged some job's
+    /// progress document under.
+    fn is_legacy_progress_staging(&self, path: &Path) -> bool {
+        let suffix = format!(".{LEGACY_STAGING_EXTENSION}");
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(&suffix))
+            .is_some_and(|stem| {
+                safe_file_stem(stem) == stem
+                    && self
+                        .progress_path(stem)
+                        .with_extension(LEGACY_STAGING_EXTENSION)
+                        == path
+            })
     }
 
     fn state_dir(&self) -> AppResult<&Path> {
@@ -588,16 +642,4 @@ fn safe_file_stem(raw: &str) -> String {
     } else {
         safe
     }
-}
-
-#[cfg(unix)]
-async fn sync_directory(dir: &Path) -> std::io::Result<()> {
-    tokio::fs::File::open(dir).await?.sync_all().await
-}
-
-/// Windows cannot open a directory as a file; its renames are not made
-/// durable this way.
-#[cfg(not(unix))]
-async fn sync_directory(_dir: &Path) -> std::io::Result<()> {
-    Ok(())
 }

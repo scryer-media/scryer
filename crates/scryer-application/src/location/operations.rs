@@ -49,6 +49,7 @@
 //! itself.
 
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -57,6 +58,7 @@ use scryer_domain::{
     LibraryPermission, MediaFacet, Title, User,
 };
 
+use crate::disk::{Disk, EntryKind};
 use crate::domain_events::{DomainEventActor, new_job_run_domain_event};
 
 use crate::location::classify::{
@@ -65,9 +67,8 @@ use crate::location::classify::{
 };
 use crate::location::collisions::{CollisionNaming, ContentFacts, DestinationItem, PathCaseRule};
 use crate::location::execution::{
-    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer,
-    RecycleBinSourceRecycler, RootMoveAdmission, RootMoveCatalog, RootMoveFileMover,
-    RootMoveReconciler, TitlePlacementSnapshot,
+    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer, RootMoveAdmission,
+    RootMoveCatalog, RootMoveFileMover, RootMoveReconciler, TitlePlacementSnapshot,
 };
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
 use crate::location::hardlinks::{HardlinkFact, detect_hardlinks};
@@ -93,7 +94,7 @@ use crate::location::root_move::{
     build_root_move_plan,
 };
 use crate::location::transfer_effects::{TitleAssociationFacts, converts_facet};
-use crate::location::verify::{VerifiedCopier, same_filesystem};
+use crate::location::verify::same_filesystem;
 use crate::ports::LocationOperationProgress;
 use crate::services::AppUseCase;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
@@ -1323,11 +1324,6 @@ impl AppUseCase {
     ) -> AppResult<OperationRunOutcome> {
         let catalog = AppUseCaseRootMoveCatalog { app: self.clone() };
         let manual = mode == LocationExecutionMode::UserMovedFiles;
-        let recycler = if manual {
-            RecycleBinSourceRecycler::new(BTreeMap::new())
-        } else {
-            self.root_move_recycler(plan).await
-        };
         let permissions: Arc<dyn crate::location::execution::PlacedContentPermissions> = if manual {
             Arc::new(crate::location::execution::NoPlacedContentPermissions)
         } else {
@@ -1351,7 +1347,7 @@ impl AppUseCase {
                 .unwrap_or_else(|| "source".into());
             contexts.insert(title.title_id.clone(), label);
         }
-        let copy_mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
+        let copy_mover = RootMoveFileMover::new(Disk::process(), permissions.clone())
             .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }))
             .with_resolver(Arc::new(super::resolution::ConflictResolver::new(
                 self.services.library.location_operations.clone(),
@@ -1363,7 +1359,6 @@ impl AppUseCase {
             plan,
             &catalog,
             self.services.library.location_operations.as_ref(),
-            &recycler,
         )
         .with_permissions(permissions)
         // US7: the merge engine, and the delete path the retired source title is
@@ -1768,37 +1763,6 @@ impl AppUseCase {
             .await;
     }
 
-    /// Recycle-bin configuration per source root, so a redundant source copy
-    /// goes to the bin rather than being deleted (FR-073, C4).
-    async fn root_move_recycler(&self, plan: &RootMoveExecutionPlan) -> RecycleBinSourceRecycler {
-        let mut configs = BTreeMap::new();
-        for title in &plan.titles {
-            let Some(root_path) = title.source_root_path.as_deref() else {
-                continue;
-            };
-            if configs.contains_key(root_path) {
-                continue;
-            }
-            configs.insert(
-                root_path.to_string(),
-                self.recycle_bin_config_for_media_root(Some(root_path))
-                    .await,
-            );
-        }
-        if let Some(conflict) = &plan.conflict {
-            for root in &conflict.roots {
-                if !configs.contains_key(&root.path) {
-                    configs.insert(
-                        root.path.clone(),
-                        self.recycle_bin_config_for_media_root(Some(&root.path))
-                            .await,
-                    );
-                }
-            }
-        }
-        RecycleBinSourceRecycler::new(configs)
-    }
-
     /// The operator's configured modes for the destination library, applied to
     /// placed content (FR-031).
     async fn root_move_permissions(
@@ -1988,9 +1952,10 @@ async fn unavailable_plan_root(
             })
         }) {
             if seen.insert(&root.path)
-                && !tokio::fs::metadata(stored_path_to_path_buf(&root.path))
+                && !Disk::process()
+                    .follow(stored_path_to_path_buf(&root.path))
                     .await
-                    .is_ok_and(|metadata| metadata.is_dir())
+                    .is(EntryKind::Directory)
             {
                 return Some(format!("a conflict root {}", root.path));
             }
@@ -2011,11 +1976,7 @@ async fn unavailable_plan_root(
                 continue;
             }
             let path = stored_path_to_path_buf(root);
-            let available = tokio::fs::metadata(&path)
-                .await
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false);
-            if !available {
+            if !Disk::process().follow(&path).await.is(EntryKind::Directory) {
                 return Some(format!("{label} {root}"));
             }
         }
@@ -3531,9 +3492,8 @@ pub(super) async fn collect_source_files(
                             .files
                             .into_iter()
                             .map(|path| {
-                                let size_bytes = std::fs::symlink_metadata(&path)
-                                    .map(|metadata| metadata.len())
-                                    .unwrap_or(0);
+                                let reading = Disk::process().fresh_blocking(&path);
+                                let size_bytes = reading.size().unwrap_or(0);
                                 (path, size_bytes)
                             })
                             .collect(),
@@ -3586,9 +3546,7 @@ pub(super) async fn collect_source_files(
             paths
                 .into_iter()
                 .map(|path| {
-                    let size_bytes = std::fs::symlink_metadata(&path)
-                        .map(|metadata| metadata.len())
-                        .ok();
+                    let size_bytes = Disk::process().fresh_blocking(&path).size();
                     (path, size_bytes)
                 })
                 .collect::<Vec<_>>()
@@ -3632,33 +3590,29 @@ pub(super) async fn read_destination_entries(
     // One blocking task for the listing and every `stat` in it; the folder is
     // usually absent (a fresh move) or one title deep (a merge).
     tokio::task::spawn_blocking(move || {
-        let mut items = Vec::new();
-        let mut pending = vec![destination_folder.clone()];
+        let disk = Disk::process();
+        let (mut items, mut pending) = (Vec::new(), vec![destination_folder.clone()]);
         while let Some(folder) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&folder) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
-                    continue;
+            // Unreadable folders and entries are skipped.
+            let _ = disk.visit_blocking(&folder, |entry| {
+                let Ok(entry) = entry else {
+                    return ControlFlow::Continue(());
                 };
-                if metadata.is_dir() {
-                    pending.push(entry.path());
-                    continue;
+                let reading = disk.fresh_blocking(entry.path());
+                if reading.is(EntryKind::Directory) {
+                    pending.push(entry.into_path());
+                } else if let Some(len) = reading.size() {
+                    let name = entry.path().strip_prefix(&destination_folder);
+                    let name = name.expect("walked child").to_string_lossy().to_string();
+                    let path = path_to_stored_string(entry.path());
+                    items.push(
+                        DestinationItem::companion(name, len)
+                            .with_content(ContentFacts::new(len))
+                            .with_path(path),
+                    );
                 }
-                let name = entry
-                    .path()
-                    .strip_prefix(&destination_folder)
-                    .expect("walked child")
-                    .to_string_lossy()
-                    .to_string();
-                let path = path_to_stored_string(entry.path());
-                items.push(
-                    DestinationItem::companion(name, metadata.len())
-                        .with_content(ContentFacts::new(metadata.len()))
-                        .with_path(path),
-                );
-            }
+                ControlFlow::Continue(())
+            });
         }
         items.sort_by(|left, right| left.name.cmp(&right.name));
         items
@@ -3677,11 +3631,13 @@ pub(super) async fn read_destination_entries(
 ///
 /// For each colliding pair:
 ///
-/// - the same regular file on both sides (a case-only rename, a hardlink) is
-///   left unsampled, so it can never read as its own duplicate;
+/// - the same regular file on both sides (a case-only rename, a hardlink),
+///   proven by file numbers, is left unsampled, so it can never read as its
+///   own duplicate; a pair they cannot tell apart is sampled;
 /// - different sizes need no sample: the planner rules the pair out on size;
 /// - equal sizes get a sampled proof on each side; a side that cannot be read
 ///   stays `None`, which the planner reports rather than guessing.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino same-file check
 pub(crate) async fn quick_check_name_collisions(
     files: &mut [SourceFile],
     destination_entries: &mut [DestinationItem],
@@ -3725,7 +3681,25 @@ pub(crate) async fn quick_check_name_collisions(
         ) else {
             continue;
         };
-        if super::execution::same_regular_file(&source_metadata, &destination_metadata) {
+        // One file earns no sampled proof: two names for one file are never
+        // a duplicate. A pair the file numbers cannot tell apart, or whose
+        // names the disk service could not read, is sampled like two files:
+        // a side that does not read stays `None` for the planner to report,
+        // and the transfer proves the pair in full, one entry refused. A
+        // sample never removes anything: a source beside an existing
+        // destination is dropped only as `Identical`, which only
+        // `compare_existing` sets, and that refuses a pair the reads cannot
+        // tell apart unless both names are listed in one folder.
+        let sameness = match (
+            super::execution::mark_beside(&file.path, &source_metadata).await,
+            super::execution::mark_beside(&destination, &destination_metadata).await,
+        ) {
+            (Ok(source_read), Ok(destination_read)) => {
+                super::execution::regular_file_sameness(&source_read, &destination_read)
+            }
+            _ => crate::disk::Sameness::CannotTell,
+        };
+        if sameness == crate::disk::Sameness::Same {
             continue;
         }
         // The planner compares the sizes it is handed; a fresh `stat` keeps
@@ -3820,11 +3794,8 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
         &self,
         operation: &LocationOperation,
         plan: &RootMoveExecutionPlan,
-        recycler: &dyn crate::location::execution::SourceRecycler,
     ) -> AppResult<()> {
-        self.app
-            .clean_up_folder_conflict(operation, plan, recycler)
-            .await
+        self.app.clean_up_folder_conflict(operation, plan).await
     }
     async fn admit_conflict(
         &self,

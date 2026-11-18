@@ -156,6 +156,24 @@ test("media queue refusals translate the code and suppress duplicated server pro
   );
 });
 
+test("import blocks translate the code and suppress duplicated server prose", () => {
+  for (const code of [
+    "IMPORT_DESTINATION_IS_SOURCE",
+    "IMPORT_DESTINATION_ALIAS_UNKNOWN",
+  ]) {
+    const item = queueItem({
+      attentionReasonCode: code,
+      attentionReason: "changed server wording",
+      importErrorMessage: "changed server wording",
+      trackedStatusMessages: ["changed server wording"],
+    });
+    assert.equal(
+      downloadQueue.buildQueueStatusDetail(item, (key) => key),
+      `error.reason.${code}`,
+    );
+  }
+});
+
 test("unknown queue codes preserve explanations and code changes invalidate equality", () => {
   const item = queueItem({
     attentionReasonCode: "HTTP_FUTURE",

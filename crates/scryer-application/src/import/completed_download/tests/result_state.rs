@@ -114,6 +114,9 @@ async fn apply_result_marks_verified_already_present_skip_imported() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(apply_import_result(&app, &mut td, result, 0).await);
@@ -179,6 +182,9 @@ async fn unavailable_artifact_evidence_keeps_already_present_import_retryable() 
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -224,6 +230,9 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     // First pass imported one file: pending, behind the first backoff step.
@@ -322,6 +331,9 @@ async fn verified_import_mark_retries_without_rolling_back_import() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(apply_import_result(&app, &mut td, result, 0).await);
@@ -368,6 +380,9 @@ async fn verified_import_mark_stops_after_bounded_permanent_failures() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     schedule_non_destructive_import_mark(&app, &td, &result, None);
@@ -438,6 +453,9 @@ async fn verified_import_mark_uses_completed_client_identity() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(
@@ -579,6 +597,9 @@ async fn apply_result_keeps_rejected_already_imported_result_blocked() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -832,6 +853,9 @@ async fn apply_result_does_not_verify_unresolved_identity_rejection_as_imported(
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -863,6 +887,9 @@ async fn apply_result_blocks_cancelled_import_for_manual_review() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -912,6 +939,9 @@ async fn apply_result_blocks_post_download_rule_error_hold_for_operator_review()
             completed_at: Utc::now(),
             upgrade: false,
             upgrade_previous_path: None,
+            reason_code: None,
+            needs_reconciliation: false,
+            source_cleanup_failed: false,
         };
 
         assert!(
@@ -956,6 +986,9 @@ async fn apply_result_keeps_ambiguous_obfuscated_episode_blocked_with_actionable
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -992,6 +1025,9 @@ async fn apply_result_keeps_retrying_no_video_import_after_unchanged_checks() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -1051,6 +1087,9 @@ async fn apply_result_blocks_no_video_import_once_slow_retries_reach_the_ceiling
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     // The first check records the unchanged source signature; then jump the
@@ -1102,6 +1141,9 @@ async fn apply_result_resets_no_video_retry_when_source_signature_changes() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -1134,6 +1176,9 @@ fn failed_execution_result(error_message: &str) -> ImportResult {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     }
 }
 

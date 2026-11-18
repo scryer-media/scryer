@@ -7,6 +7,9 @@
 //! reported complete and is not held as contained. Operator searches still
 //! ask, and do not reset the background read.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::HashMap;

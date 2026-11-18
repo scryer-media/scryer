@@ -447,6 +447,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         &self,
         input: &InsertMediaFileInput,
         associations: &MediaFileAssociations,
+        hashes: Option<&crate::location::model::PersistedContentHashes>,
     ) -> AppResult<crate::ClaimedMediaFile> {
         let mut files = self.store.lock().await;
         if let Some(existing) = files
@@ -486,6 +487,21 @@ impl MediaFileRepository for MockMediaFileRepo {
             if input.release_listing_json.is_some() {
                 existing.release_listing_json = input.release_listing_json.clone();
             }
+            // Like the store: the row takes the input's size and signature,
+            // and keeps its hash only when both are unchanged.
+            let unchanged = existing.size_bytes == input.size_bytes
+                && input.source_signature_value.is_some()
+                && existing.source_signature_scheme == input.source_signature_scheme
+                && existing.source_signature_value == input.source_signature_value;
+            if !unchanged {
+                existing.content_hashes = None;
+            }
+            existing.size_bytes = input.size_bytes;
+            existing.source_signature_scheme = input.source_signature_scheme.clone();
+            existing.source_signature_value = input.source_signature_value.clone();
+            if let Some(hashes) = hashes {
+                existing.content_hashes = Some(hashes.clone());
+            }
             return Ok(crate::ClaimedMediaFile {
                 media_file_id: existing.id.clone(),
                 disposition: crate::MediaFileCatalogDisposition::Reused,
@@ -496,6 +512,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         let mut file = mock_media_file(id.clone(), input);
         file.episode_id = associations.episode_ids.first().cloned();
         file.series_movie_link_ids = associations.series_movie_link_ids.clone();
+        file.content_hashes = hashes.cloned();
         files.push(file);
         self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(crate::ClaimedMediaFile {
@@ -1425,6 +1442,10 @@ pub(super) struct TrackingImportRepo {
     pub(super) open_selection_roots: Arc<Mutex<Vec<String>>>,
     /// Makes the next hold release fail before it changes anything.
     pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
+    /// The tracked state each finished history retry settled on.
+    pub(super) retry_finished_states: Arc<Mutex<Vec<TrackedDownloadState>>>,
+    /// Held-source reads of one download.
+    pub(super) held_reads_per_download: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
@@ -1555,12 +1576,51 @@ impl ImportRepository for TrackingImportRepo {
         &self,
         download_id: &scryer_domain::download_identity::DownloadId,
     ) -> AppResult<bool> {
+        self.held_reads_per_download
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let canonical_ids = self.canonical_ids.lock().await;
         Ok(self.records.lock().await.iter().any(|record| {
             canonical_ids.get(&record.id) == Some(download_id)
                 && serde_json::from_str::<serde_json::Value>(&record.payload_json)
                     .is_ok_and(|payload| payload["archive_processing_pending"] == true)
         }))
+    }
+
+    async fn download_import_sources(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadImportSources> {
+        self.held_reads_per_download
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let canonical_ids = self.canonical_ids.lock().await;
+        let mut answer = crate::DownloadImportSources::default();
+        for record in self.records.lock().await.iter() {
+            if canonical_ids.get(&record.id) != Some(download_id) {
+                continue;
+            }
+            let payload =
+                serde_json::from_str::<serde_json::Value>(&record.payload_json).unwrap_or_default();
+            answer.held |= payload["archive_processing_pending"] == true;
+            answer.library_holds_payload |= payload[crate::LIBRARY_HOLDS_PAYLOAD_KEY] == true;
+        }
+        Ok(answer)
+    }
+
+    async fn record_library_holds_download_payload(&self, import_id: &str) -> AppResult<bool> {
+        if !self.canonical_ids.lock().await.contains_key(import_id) {
+            return Ok(false);
+        }
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(false);
+        };
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(crate::LIBRARY_HOLDS_PAYLOAD_KEY.into(), true.into());
+        }
+        record.payload_json = payload.to_string();
+        Ok(true)
     }
 
     async fn queue_import_request_with_identity_for_download(
@@ -1631,6 +1691,7 @@ impl ImportRepository for TrackingImportRepo {
             return Ok(crate::ImportRetryFinishOutcome::Superseded);
         }
         claims.remove(&claim.import_id);
+        self.retry_finished_states.lock().await.push(state);
         let mut records = self.records.lock().await;
         let record = records
             .iter_mut()

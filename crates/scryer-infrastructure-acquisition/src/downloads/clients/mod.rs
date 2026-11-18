@@ -14,6 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use scryer_application::disk::{Disk, Open, Remove};
 use scryer_application::{
     AppError, AppResult, DownloadClientAddRequest, ResolvedDownloadArtifact, StagedNzbRef,
     StagedNzbStore, enforce_nzb_category_gate,
@@ -451,12 +452,15 @@ struct TeeZstdReader<R: Read> {
 
 impl<R: Read> TeeZstdReader<R> {
     fn new(inner: R, output_path: &Path) -> AppResult<Self> {
-        let file = std::fs::File::create(output_path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create staged nzb file {}: {error}",
-                output_path.display()
-            ))
-        })?;
+        let file = Disk::process()
+            .open_blocking(output_path, Open::create())
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to create staged nzb file {}: {}",
+                    output_path.display(),
+                    error.words()
+                ))
+            })?;
         let writer = std::io::BufWriter::new(file);
         let encoder =
             zstd::stream::Encoder::new(writer, STAGED_NZB_ZSTD_LEVEL).map_err(|error| {
@@ -705,8 +709,7 @@ pub async fn stage_nzb_from_bytes(
     }
     .await;
 
-    if let Err(error) = tokio::fs::remove_file(&partial_path).await
-        && error.kind() != std::io::ErrorKind::NotFound
+    if let Err(error) = Disk::process().remove(&partial_path, Remove::File).await
         && stage_result.is_err()
     {
         tracing::warn!(

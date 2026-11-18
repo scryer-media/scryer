@@ -1254,8 +1254,14 @@ const en: LocaleDictionary = {
     "The completed download has not been observed yet; release again once it has.",
   "error.reason.IMPORT_COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY":
     "The completed source has no trustworthy download identity; use manual import.",
+  "error.reason.IMPORT_COPY_KEPT_SOURCE_GONE":
+    "The copy was kept at its destination because the source no longer holds the file.",
+  "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN":
+    "Could not tell whether the existing destination is the source file itself. Nothing was removed. If a kept path is shown, the source is there instead of at its own name.",
+  "error.reason.IMPORT_DESTINATION_IS_SOURCE":
+    "The existing destination is the source file itself, so removing the source would remove the only copy. Nothing was removed.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
-    "Refusing to restore the old file's backup because its destination is occupied.",
+    "A file this import did not place is already at the destination. Nothing there was replaced.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":
     "Disc import targets must exactly match its explicit episode mappings.",
   "error.reason.IMPORT_DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET":
@@ -2079,8 +2085,12 @@ const en: LocaleDictionary = {
     "The destination changed during comparison. The source was preserved; try again when the files are no longer changing.",
   "error.reason.LOCATION_DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE":
     "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again.",
+  "error.reason.LOCATION_DESTINATION_NO_SPACE":
+    "The destination does not have enough free space for this file. The source was preserved; free space there and try again.",
   "error.reason.LOCATION_DESTINATION_OCCUPIED":
     "The destination staging path is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
+  "error.reason.LOCATION_DESTINATION_PERMISSION_DENIED":
+    "Scryer is not allowed to write this file at the destination. The source was preserved; check the folder's permissions and try again.",
   "error.reason.LOCATION_DESTINATION_REQUIRED":
     "Choose a destination library or root.",
   "error.reason.LOCATION_DESTINATION_TITLE_NOT_FOUND":
@@ -2289,6 +2299,8 @@ const en: LocaleDictionary = {
     "The transferred file needs to be verified again before its catalog entry can be updated.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION":
     "The transferred file has not finished verification. Its catalog entry was left unchanged.",
+  "error.reason.LOCATION_UNPROVEN_LINK_NOT_REMOVED":
+    "A link made at the destination could not be proven to be the source and could not be removed, so it is still there. The source was preserved; check that path before trying again.",
   "error.reason.LOCATION_VERIFICATION_FAILED":
     "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":

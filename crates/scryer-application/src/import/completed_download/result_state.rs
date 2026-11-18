@@ -172,22 +172,29 @@ fn no_video_import_source_signature(source_path: &str) -> NoVideoImportSourceSig
 }
 
 fn accumulate_no_video_source_signature(path: &Path, signature: &mut NoVideoImportSourceSignature) {
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let disk = crate::disk::Disk::process();
+    let crate::disk::PathReading::Known {
+        kind,
+        len,
+        modified,
+        ..
+    } = disk.follow_blocking(path)
+    else {
         return;
     };
-    update_no_video_signature_mtime(signature, metadata.modified().ok());
+    update_no_video_signature_mtime(signature, modified);
 
-    if metadata.is_file() {
+    if kind == crate::disk::EntryKind::File {
         signature.file_count = signature.file_count.saturating_add(1);
-        signature.total_bytes = signature.total_bytes.saturating_add(metadata.len());
+        signature.total_bytes = signature.total_bytes.saturating_add(len.unwrap_or(0));
         return;
     }
 
-    if metadata.is_dir()
-        && let Ok(entries) = std::fs::read_dir(path)
+    if kind == crate::disk::EntryKind::Directory
+        && let Ok(entries) = disk.list_blocking(path)
     {
-        for entry in entries.flatten() {
-            accumulate_no_video_source_signature(&entry.path(), signature);
+        for entry in entries {
+            accumulate_no_video_source_signature(&entry.path, signature);
         }
     }
 }

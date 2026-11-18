@@ -39,12 +39,16 @@
 //!   must see a write it just made.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use scryer_application::disk::{
+    Disk, DiskError, EntryKind, Open, Parents, PathReading, PlaceRefusal, Remove, placement, reason,
+};
 use scryer_application::{AppError, AppResult};
 use tantivy::collector::{DocSetCollector, TopDocs};
 use tantivy::directory::MmapDirectory;
@@ -626,18 +630,19 @@ impl TitleFuzzyIndex {
     }
 
     fn write_meta(&self, stamp: &ProjectionStamp) -> AppResult<()> {
-        // `fs::write` follows a symlink; never let the stamp land elsewhere.
-        reject_symlink(&self.meta_path())?;
         let payload = serde_json::json!({
             "schema_version": FUZZY_SCHEMA_VERSION,
             "stamp": stamp,
         });
-        std::fs::write(
-            self.meta_path(),
-            serde_json::to_vec(&payload)
-                .map_err(|error| AppError::Repository(error.to_string()))?,
-        )
-        .map_err(|error| AppError::Repository(error.to_string()))?;
+        let bytes = serde_json::to_vec(&payload)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        // Never follow a symlink: the stamp must not land elsewhere.
+        let path = self.meta_path();
+        Disk::process()
+            .open_blocking(&path, Open::create().without_following_links())
+            .map_err(|error| index_path_error(&path, error))?
+            .write_all(&bytes)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
         self.store_meta(Some(stamp.clone()));
         Ok(())
     }
@@ -648,11 +653,10 @@ impl TitleFuzzyIndex {
         // remove the file cannot leave the process trusting a stamp it just
         // decided was wrong.
         self.store_meta(None);
-        match std::fs::remove_file(self.meta_path()) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(AppError::Repository(error.to_string())),
-        }
+        Disk::process()
+            .remove_blocking(&self.meta_path(), Remove::File)
+            .map(drop)
+            .map_err(|error| AppError::Repository(error.words().to_string()))
     }
 
     fn ready(&self) -> bool {
@@ -985,26 +989,32 @@ fn read_meta_file(path: &Path) -> Option<ProjectionStamp> {
         schema_version: u32,
         stamp: ProjectionStamp,
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = Disk::process().read_blocking(path).ok()?;
     let meta = serde_json::from_slice::<Meta>(&bytes).ok()?;
     (meta.schema_version == FUZZY_SCHEMA_VERSION).then_some(meta.stamp)
 }
 
-fn reject_symlink(path: &Path) -> AppResult<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(AppError::Repository(format!(
-            "title index path must not be a symlink: {}",
-            path.display()
-        ))),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AppError::Repository(error.to_string())),
+fn symlink_refused(path: &Path) -> AppError {
+    AppError::Repository(format!(
+        "title index path must not be a symlink: {}",
+        path.display()
+    ))
+}
+
+fn index_path_error(path: &Path, error: DiskError) -> AppError {
+    if error.reason() == reason::DISK_LINK_NOT_FOLLOWED {
+        return symlink_refused(path);
     }
+    AppError::Repository(error.words().to_string())
 }
 
 fn open_index_files(dir: &Path) -> tantivy::Result<(Index, IndexReader)> {
-    std::fs::create_dir_all(dir)?;
-    if dir.join(META_FILE).exists() && !dir.join("meta.json").exists() {
+    let disk = Disk::process();
+    disk.create_dir_blocking(dir, Parents::Create)
+        .map_err(std::io::Error::from)?;
+    if disk.follow_blocking(&dir.join(META_FILE)).exists() == Some(true)
+        && disk.follow_blocking(&dir.join("meta.json")).exists() != Some(true)
+    {
         return Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(
             dir.join("meta.json"),
         )
@@ -1050,26 +1060,39 @@ fn open_owned_index(dir: &Path) -> AppResult<(std::fs::File, Index, IndexReader)
     let parent = dir
         .parent()
         .ok_or_else(|| AppError::Repository("title index has no parent".into()))?;
-    std::fs::create_dir_all(parent).map_err(|error| AppError::Repository(error.to_string()))?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(parent, Parents::Create)
+        .map_err(|error| AppError::Repository(error.words().to_string()))?;
     let lock_path = parent.join("title-fuzzy-index.lock");
-    reject_symlink(&lock_path)?;
-    let ownership = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .map_err(|error| AppError::Repository(error.to_string()))?;
+    let ownership = disk
+        .open_blocking(&lock_path, Open::create_or_keep().without_following_links())
+        .map_err(|error| index_path_error(&lock_path, error))?;
     ownership.try_lock().map_err(|error| {
         AppError::Repository(format!(
             "title index is already owned or cannot be locked: {error}"
         ))
     })?;
-    reject_symlink(dir)?;
-    if dir.exists() && !dir.is_dir() {
-        return Err(AppError::Repository(
-            "title index path is not a directory".into(),
-        ));
+    match disk.fresh_blocking(dir) {
+        PathReading::Known {
+            kind: EntryKind::Symlink,
+            ..
+        } => return Err(symlink_refused(dir)),
+        PathReading::Known {
+            kind: EntryKind::Directory,
+            ..
+        }
+        | PathReading::Missing { .. } => {}
+        PathReading::Known { .. } => {
+            return Err(AppError::Repository(
+                "title index path is not a directory".into(),
+            ));
+        }
+        PathReading::Unreachable { .. } | PathReading::NotObserved => {
+            return Err(AppError::Repository(format!(
+                "title index path cannot be read: {}",
+                dir.display()
+            )));
+        }
     }
     let (index, reader) = match open_index_files(dir) {
         Ok(opened) => opened,
@@ -1079,13 +1102,15 @@ fn open_owned_index(dir: &Path) -> AppResult<(std::fs::File, Index, IndexReader)
             let mut suffix = 0u64;
             let preserved = loop {
                 let candidate = parent.join(format!("{FUZZY_INDEX_DIR}.recovery-{suffix}"));
-                match std::fs::create_dir(&candidate) {
+                match disk.create_dir_blocking(&candidate, Parents::MustExist) {
                     Ok(()) => break candidate,
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => suffix += 1,
-                    Err(error) => return Err(AppError::Repository(error.to_string())),
+                    Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => suffix += 1,
+                    Err(error) => {
+                        return Err(AppError::Repository(error.words().to_string()));
+                    }
                 }
             };
-            std::fs::rename(dir, preserved.join(FUZZY_INDEX_DIR))
+            move_into_reserved_dir(dir, &preserved.join(FUZZY_INDEX_DIR))
                 .map_err(|error| AppError::Repository(error.to_string()))?;
             tracing::warn!(%error, path = %preserved.display(), "preserved unreadable title index; rebuilding before use");
             open_index_files(dir).map_err(|error| AppError::Repository(error.to_string()))?
@@ -1093,6 +1118,16 @@ fn open_owned_index(dir: &Path) -> AppResult<(std::fs::File, Index, IndexReader)
         Err(error) => return Err(AppError::Repository(error.to_string())),
     };
     Ok((ownership, index, reader))
+}
+
+/// Move the index directory to a name inside a directory this pass just
+/// created, so nothing can be there to replace: a rename alone, which a
+/// reservation by an empty file would refuse for a directory.
+fn move_into_reserved_dir(dir: &Path, dest: &Path) -> Result<(), PlaceRefusal> {
+    let policy = placement::rename_onto_held_name();
+    Disk::process()
+        .place_blocking(dir, dest, policy)
+        .map(|_| ())
 }
 
 fn term_clause(field: Field, value: &str) -> Box<dyn Query> {
@@ -1258,6 +1293,8 @@ pub fn group_terms_by_title(terms: Vec<IndexedTerm>) -> HashMap<String, Vec<Inde
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod remove_meta_tests {
     use super::*;
 
@@ -1371,6 +1408,8 @@ mod remove_meta_tests {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod drain_cadence_tests {
     use super::*;
     use std::sync::Mutex;

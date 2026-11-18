@@ -608,18 +608,18 @@ impl RestoreRowReader {
         part_path: &Path,
         columns: Vec<ImportColumnRule>,
     ) -> AppResult<Self> {
-        let path = part_path.to_path_buf();
-        let file = tokio::task::spawn_blocking(move || std::fs::File::open(path))
+        let file = scryer_application::disk::Disk::process()
+            .open(part_path, scryer_application::disk::Open::read())
             .await
             .map_err(|error| {
-                AppError::Repository(format!("backup table part open task failed: {error}"))
-            })?
-            .map_err(|error| {
+                let error = error.words();
                 AppError::validation_refused(
                     crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
                     format!("backup table payload missing for {table}: {error}"),
                 )
-            })?;
+            })?
+            .into_std()
+            .await;
         let lines = BufReader::new(scryer_application::RestoreReader::new(file))
             .lines()
             .enumerate();

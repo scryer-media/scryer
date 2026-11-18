@@ -1065,6 +1065,8 @@ async fn configure_restore_transaction(
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod restore_tests {
     use super::*;
 

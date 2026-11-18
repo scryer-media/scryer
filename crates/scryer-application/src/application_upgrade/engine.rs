@@ -27,6 +27,7 @@ use crate::application_upgrade::InstallationKind;
 use crate::application_upgrade::manifest::{UpgradeArtifact, UpgradeManifest};
 use crate::application_upgrade::product::{JOURNAL_SCHEMA, SCRYER_PRODUCT};
 use crate::application_upgrade::shared::{map_updater_error, to_updater_error};
+use crate::disk::{Disk, EntryKind, Parents};
 use crate::domain_events::DomainEventActor;
 use crate::{
     AppError, AppResult, AppUseCase, JobKey, JobRun, JobRunRecord, JobRunStatus, JobTriggerSource,
@@ -399,9 +400,12 @@ impl AppUseCase {
             == application_updater::manifest::UpgradeArchive::Msi
         {
             let cache = self.application_upgrade_root_dir().join("installer-cache");
-            std::fs::create_dir_all(&cache).map_err(|e| {
-                AppError::Repository(format!("failed to create installer cache: {e}"))
-            })?;
+            Disk::process()
+                .create_dir(&cache, Parents::Create)
+                .await
+                .map_err(|e| {
+                    AppError::Repository(format!("failed to create installer cache: {e}"))
+                })?;
             (dependencies.ensure_available_space)(&cache, staging_space_requirement(&artifact))?;
             super::msi_source::retain_installer(&download_path, &cache, &artifact)?
         } else {
@@ -705,12 +709,10 @@ impl AppUseCase {
             current_version: SCRYER_VERSION,
             written_at: Utc::now(),
         })?;
-        if let Some(existing_backup) = handoff
-            .journal
-            .backup_paths
-            .iter()
-            .find(|path| path.exists())
-        {
+        for existing_backup in &handoff.journal.backup_paths {
+            if Disk::process().follow(existing_backup).await.exists() != Some(true) {
+                continue;
+            }
             return Err(AppError::validation_refused(
                 crate::error_reasons::application_upgrade::BACKUP_ALREADY_EXISTS,
                 format!(
@@ -884,11 +886,15 @@ impl AppUseCase {
                 // a later upgrade replaces the journal, and the next boot
                 // finds this run already finished.
                 RebootRequiredOutcome::NotInstalled => {
+                    let mut msi_log = self.application_upgrade_msi_log_path(&journal.run_id);
+                    if let Some(path) = &msi_log
+                        && Disk::process().follow(path).await.kind() != Some(EntryKind::File)
+                    {
+                        msi_log = None;
+                    }
                     let message = reboot_required_not_installed_message(
                         &journal.expected_version,
-                        self.application_upgrade_msi_log_path(&journal.run_id)
-                            .filter(|path| path.is_file())
-                            .as_deref(),
+                        msi_log.as_deref(),
                     );
                     tracing::warn!(
                         run_id = %journal.run_id,
@@ -1428,7 +1434,7 @@ fn staging_space_requirement(artifact: &UpgradeArtifact) -> u64 {
 }
 
 fn ensure_available_space(path: &Path, required_bytes: u64) -> AppResult<()> {
-    let space = crate::storage_capacity::StorageCapacity::process()
+    let space = crate::disk::capacity::StorageCapacity::process()
         .refresh_blocking(path)
         .map_err(|error| {
             AppError::Repository(format!(

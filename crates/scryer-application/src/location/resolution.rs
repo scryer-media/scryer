@@ -44,33 +44,35 @@ impl FileResolution {
         }
         let source = stored_path_to_path_buf(&self.source_path);
         let destination = stored_path_to_path_buf(&self.destination_path);
-        let source_metadata = tokio::fs::symlink_metadata(&source).await;
+        // The disk service's read of the source itself, a link not followed:
+        // the same read on every platform, and the one a hardlink proof
+        // compares with the destination's.
+        let source_read = Disk::process().fingerprint(&source).await;
         let destination_version = file_version(&destination).await.ok();
         let Some(expected) = self.destination_version.as_deref() else {
             return false;
         };
-        if source_metadata
+        if source_read
             .as_ref()
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            .is_err_and(|reading| reading.exists() == Some(false))
         {
             // Cleanup may have committed before its title checkpoint. Unlinking
             // a hardlink changes ctime, but not its identity, length or mtime.
             return destination_version.as_deref() == Some(expected)
                 || (self.disposition == ResolutionDisposition::Hardlink
                     && destination_version.as_deref().is_some_and(|actual| {
-                        actual.split(':').take(5).eq(expected.split(':').take(5))
+                        crate::disk::StoredVersion::new(actual)
+                            .same_content(crate::disk::StoredVersion::new(expected))
+                            == crate::disk::Sameness::Same
                     }));
         }
         if self.disposition == ResolutionDisposition::Hardlink {
-            return match (
-                source_metadata,
-                tokio::fs::symlink_metadata(&destination).await,
-            ) {
-                (Ok(source), Ok(destination)) => {
-                    super::execution::same_regular_file(&source, &destination)
-                }
-                _ => false,
+            let (Ok(source_read), Ok(destination_read)) =
+                (source_read, Disk::process().fingerprint(&destination).await)
+            else {
+                return false;
             };
+            return super::execution::same_regular_file(&source_read, &destination_read);
         }
         destination_version.as_deref() == Some(expected)
             && file_version(&source).await.ok() == self.source_version
@@ -87,40 +89,67 @@ impl FileResolution {
     /// apart. Disposal is irreversible, so past the fast negative the bytes
     /// themselves have to agree with what was recorded.
     ///
-    /// The destination is re-read and compared against the record's
-    /// `identity_hash`, the full-file BLAKE3 the transfer wrote. A record
-    /// carrying no `identity_hash` proves nothing about content on its own, so
-    /// the two copies are re-hashed and compared to each other instead — never
-    /// unlinked on the strength of a version alone.
-    pub async fn proof_supports_disposal(&self) -> AppResult<bool> {
+    /// The destination's full hash, the disk service's answer, is compared
+    /// against the record's `identity_hash`, the full-file BLAKE3 the
+    /// transfer wrote. A record carrying no `identity_hash` proves nothing
+    /// about content on its own, so the two copies' full hashes are compared
+    /// to each other instead — never unlinked on the strength of a version
+    /// alone. A file that changed while it was read proves nothing.
+    ///
+    /// All of that is at full `depth`, the user's setting. At quick depth the
+    /// two files are compared by their lengths and live head and tail.
+    pub async fn proof_supports_disposal(&self, depth: VerificationDepth) -> AppResult<bool> {
         if !self.proof_is_current().await {
             return Ok(false);
         }
         let destination = stored_path_to_path_buf(&self.destination_path);
-        let destination_hashes =
-            hash_existing_file_with_progress(&destination, CopyProgress::none())
-                .await
-                .map_err(|error| file_error(&destination, error))?;
-        if let Some(identity_hash) = self.identity_hash.as_deref() {
-            return Ok(destination_hashes.full_blake3 == identity_hash);
+        let check = match self.identity_hash.as_deref() {
+            _ if depth != VerificationDepth::Full => {
+                let source = stored_path_to_path_buf(&self.source_path);
+                Disk::process()
+                    .check(
+                        crate::disk::CheckSide::new(source.as_path()),
+                        crate::disk::CheckSide::new(destination.as_path()),
+                        crate::disk::Depth::Quick,
+                    )
+                    .await
+            }
+            Some(identity_hash) => {
+                Disk::process()
+                    .check_against(
+                        crate::disk::CheckSide::new(destination.as_path()),
+                        Some(identity_hash),
+                    )
+                    .await
+            }
+            None => {
+                let source = stored_path_to_path_buf(&self.source_path);
+                Disk::process()
+                    .check(
+                        crate::disk::CheckSide::new(source.as_path()),
+                        crate::disk::CheckSide::new(destination.as_path()),
+                        crate::disk::Depth::Full,
+                    )
+                    .await
+            }
+        };
+        match check {
+            crate::disk::Check::Same => Ok(true),
+            crate::disk::Check::Differs | crate::disk::Check::Changed => Ok(false),
+            crate::disk::Check::Unread(why) => Err(file_error(&destination, why)),
         }
-        let source = stored_path_to_path_buf(&self.source_path);
-        let source_hashes = hash_existing_file_with_progress(&source, CopyProgress::none())
-            .await
-            .map_err(|error| file_error(&source, error))?;
-        Ok(source_hashes.size_bytes == destination_hashes.size_bytes
-            && source_hashes.full_blake3 == destination_hashes.full_blake3)
     }
 }
 
 use super::executor::{
     FileAbandonment, FileMoveRequest, PlannedFile, PlannedTitle, TitleFileMover,
-    move_error_is_transient,
+    move_error_may_be_storage_loss,
 };
 use super::model::{
     AppliedVerificationDepth, FileVerificationOutcome, KnownSourceContent, VerificationDepth,
 };
 use super::verify::{CopyProgress, VerifiedFile, hash_existing_file_with_progress};
+use crate::disk::{Disk, EntryKind, FullHashAnswer, HashAsk, KnownHash, PathReading, Remove};
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult, LocationOperationRepository};
 use std::{
@@ -192,7 +221,7 @@ impl ConflictResolver {
                 // keep waiting for the attempt that places the media file. The
                 // runner reports a file it gives up on through
                 // `media_abandoned`.
-                Err(error) if move_error_is_transient(error) => None,
+                Err(error) if move_error_may_be_storage_loss(error) => None,
                 Ok(file) if file.outcome == FileVerificationOutcome::Unavailable => None,
                 _ => Some(Err(MediaUnplaced::NotTransferred)),
             };
@@ -378,8 +407,9 @@ impl ConflictResolver {
                 warning: None,
                 reason_code: None,
             };
-            let existing = match tokio::fs::symlink_metadata(&destination).await {
-                Ok(_) => {
+            let reading = Disk::process().uncached(&destination).await;
+            let existing = match reading.exists() {
+                Some(true) => {
                     record.destination_version = Some(file_version(&destination).await?);
                     let read = Arc::new(std::sync::atomic::AtomicU64::new(0));
                     let count = read.clone();
@@ -404,8 +434,8 @@ impl ConflictResolver {
                         .saturating_add(read.load(std::sync::atomic::Ordering::Relaxed));
                     Some(proof)
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(file_error(&destination, error)),
+                Some(false) => None,
+                None => return Err(unread(&destination, reading)),
             };
             let preserved = destination != *original;
             if let Some(proof) = existing.as_ref() {
@@ -478,32 +508,31 @@ impl ConflictResolver {
                 ));
             }
             if verified.hashes.is_none() {
-                record.disposition = if tokio::fs::symlink_metadata(source)
-                    .await
-                    .map_err(|error| file_error(source, error))?
-                    .file_type()
-                    .is_symlink()
-                {
+                let reading = Disk::process().uncached(source).await;
+                if reading.exists() != Some(true) {
+                    return Err(unread(source, reading));
+                }
+                record.disposition = if reading.is(EntryKind::Symlink) {
                     ResolutionDisposition::Symlink
                 } else {
                     ResolutionDisposition::Hardlink
                 };
             } else {
-                let probed = file_version_and_metadata(source).await;
+                let probed = file_version(source).await;
                 // At full depth the bytes the copy streamed also have to agree
                 // with the full hash the catalog already holds for this source,
-                // while the source still carries the signature that hash was
-                // recorded against. Nothing is read for this: both hashes are
-                // already in hand.
+                // where the disk service finds that record still fits the file.
+                // Nothing is read for this: both hashes are already in hand.
                 let disagrees_with_stored_hash = match probed.as_ref() {
-                    Ok((version, metadata)) => {
+                    Ok(version) => {
                         record.source_version.as_deref() == Some(version.as_str())
                             && copy_disagrees_with_stored_hash(
                                 request.depth,
                                 request.file.source_content.as_ref(),
                                 verified.hashes.as_ref(),
-                                metadata,
+                                source,
                             )
+                            .await
                     }
                     Err(_) => false,
                 };
@@ -522,7 +551,7 @@ impl ConflictResolver {
                         )
                         .await;
                 }
-                let (source_version, _) = probed?;
+                let source_version = probed?;
                 if record.source_version != Some(source_version) {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::SOURCE_CHANGED_DURING_TRANSFER,
@@ -603,17 +632,16 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
         return Ok(());
     }
     let partial = super::verify::partial_destination_path(destination);
-    let metadata = match tokio::fs::symlink_metadata(&partial).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(file_error(&partial, error)),
-    };
-    let source = stored_path_to_path_buf(&row.source_path);
-    let source_len = tokio::fs::symlink_metadata(&source)
-        .await
-        .map(|metadata| metadata.len())
-        .unwrap_or_default();
-    if !metadata.is_file() || metadata.len() > source_len {
+    let reading = Disk::process().uncached(&partial).await;
+    match reading.exists() {
+        Some(false) => return Ok(()),
+        None => return Err(unread(&partial, reading)),
+        Some(true) => {}
+    }
+    let source = Disk::process()
+        .uncached(stored_path_to_path_buf(&row.source_path))
+        .await;
+    if !reading.is(EntryKind::File) || reading.size() > Some(source.size().unwrap_or_default()) {
         return Err(AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_OCCUPIED,
             format!(
@@ -622,12 +650,15 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
             ),
         ));
     }
-    tokio::fs::remove_file(&partial).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to clear this move's abandoned partial copy at {}: {error}",
-            partial.display()
-        ))
-    })?;
+    Disk::process()
+        .remove(&partial, Remove::File)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to clear this move's abandoned partial copy at {}: {error}",
+                partial.display()
+            ))
+        })?;
     tracing::info!(
         operation_id = %row.operation_id,
         title_id = %row.title_id,
@@ -652,6 +683,10 @@ fn numbered_name(base: &str, number: u32) -> String {
     ))
 }
 
+fn unread(path: &Path, reading: PathReading) -> AppError {
+    file_error(path, reading.absence())
+}
+
 fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
     tracing::warn!(path = %path.display(), error = %error, "file comparison failed");
     AppError::validation_refused(
@@ -668,24 +703,38 @@ pub async fn file_version(path: &Path) -> AppResult<String> {
 }
 
 /// Whether a full-depth copy's streamed hash contradicts the full hash the
-/// catalog holds for its source, while `metadata` still carries the signature
-/// that stored hash was recorded against.
-fn copy_disagrees_with_stored_hash(
+/// catalog holds for its source, where the disk service finds that record
+/// still fits the file. Nothing is read: a record that no longer fits has
+/// nothing to say.
+///
+/// Probes: one stat of `source`, followed, when there is a record.
+async fn copy_disagrees_with_stored_hash(
     depth: VerificationDepth,
     known: Option<&KnownSourceContent>,
     hashes: Option<&super::model::StreamedContentHashes>,
-    metadata: &std::fs::Metadata,
+    source: &Path,
 ) -> bool {
     let (Some(known), Some(hashes)) = (known, hashes) else {
         return false;
     };
-    depth == VerificationDepth::Full
-        && known.matches(metadata)
-        && (hashes.full_blake3 != known.full_blake3 || hashes.size_bytes != known.size_bytes)
+    if depth != VerificationDepth::Full {
+        return false;
+    }
+    match Disk::process()
+        .full_hash(known.ask(source).recorded_only())
+        .await
+        .into_known()
+    {
+        Some(recorded) => {
+            hashes.full_blake3 != recorded.blake3 || hashes.size_bytes != recorded.size_bytes
+        }
+        None => false,
+    }
 }
 
 /// [`file_version`] together with the metadata it was read from, for a caller
 /// that needs both from the one probe.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
 async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::Metadata)> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
@@ -694,6 +743,7 @@ async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::M
     Ok((version, metadata))
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: symlink target versions
 async fn file_version_from_metadata(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -738,42 +788,51 @@ async fn file_version_from_metadata(
     }
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
 pub async fn compare_existing(
     source: &Path,
     destination: &Path,
     progress: &CopyProgress,
     known: Option<&KnownSourceContent>,
 ) -> AppResult<VerifiedFile> {
-    let source_before = file_version(source).await?;
-    let destination_before = file_version(destination).await?;
-    let source_metadata = tokio::fs::symlink_metadata(source)
+    let (_, source_metadata) = file_version_and_metadata(source).await?;
+    let (_, destination_metadata) = file_version_and_metadata(destination).await?;
+    // A source that is a symbolic link was copied as the file it names, so
+    // it is compared as that file: the disk service reads it through the
+    // link, on every platform alike, so that every later read of the source
+    // is held to the same file. The destination is held to its own name.
+    // std's metadata names no file on Windows, so there the disk service
+    // reads each unlinked name once more; on unix the metadata's own mark is
+    // used.
+    let source_read = match source_metadata.file_type().is_symlink() {
+        true => Disk::process().fingerprint_followed(source).await,
+        false => super::execution::mark_beside(source, &source_metadata).await,
+    }
+    .map_err(|reading| unread(source, reading))?;
+    let destination_read = super::execution::mark_beside(destination, &destination_metadata)
         .await
-        .map_err(|error| file_error(source, error))?;
-    let destination_metadata = tokio::fs::symlink_metadata(destination)
-        .await
-        .map_err(|error| file_error(destination, error))?;
-    if !source_metadata.is_file() || !destination_metadata.is_file() {
+        .map_err(|reading| unread(destination, reading))?;
+    if source_read.kind() != Some(EntryKind::File) || !destination_metadata.is_file() {
         return Err(AppError::validation_refused(
             crate::error_reasons::location::EXISTING_PATH_NOT_REGULAR_FILE,
             "An existing path is not a regular file. Resolve the conflicting path and try again; the source was preserved.",
         ));
     }
-    if super::execution::same_regular_file(&source_metadata, &destination_metadata) {
-        if tokio::fs::canonicalize(source).await.ok()
-            == tokio::fs::canonicalize(destination).await.ok()
-        {
+    let source_len = source_read.len().unwrap_or_default();
+    // A pair that cannot be told apart is checked as one file would be: the
+    // same path or one entry is refused, and two entries are compared below.
+    if super::execution::regular_file_sameness(&source_read, &destination_read)
+        != crate::disk::Sameness::Different
+    {
+        let resolved = super::execution::Resolved::of(source, destination).await;
+        if resolved.one_path() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
                 "The source and destination are the same path.",
             ));
         }
-        match super::execution::shared_inode(
-            source,
-            destination,
-            &source_metadata,
-            &destination_metadata,
-        )
-        .await
+        match super::execution::shared_inode(source, destination, &source_read, &destination_read)
+            .await
         {
             super::execution::SharedInode::SecondLink => {
                 return Ok(VerifiedFile::same_filesystem_rename(
@@ -793,82 +852,119 @@ pub async fn compare_existing(
     // head/tail sample proves different content without reading either file
     // end to end, and the transfer copies straight away. Only a pair the quick
     // check cannot tell apart earns the full comparison.
-    if source_metadata.len() != destination_metadata.len()
+    if source_len != destination_metadata.len()
         || !sampled_proofs_agree(source, destination).await?
     {
         return Ok(different_content(source, destination));
     }
-    // The source's bytes were already hashed end to end when the catalog
-    // recorded them; while its signature still matches, that hash stands in
-    // for a second read and only the destination is read.
-    if let Some(known) = known.filter(|known| known.matches(&source_metadata)) {
-        let total = destination_metadata.len();
-        progress.comparison(0, total);
-        let sink = progress.clone();
-        let destination_progress =
-            CopyProgress::none().with_transfer_sink(move |_, bytes| sink.comparison(bytes, total));
-        let destination_hashes =
-            hash_existing_file_with_progress(destination, destination_progress)
-                .await
-                .map_err(|error| file_error(destination, error))?;
-        if source_before != file_version(source).await?
-            || destination_before != file_version(destination).await?
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
-                "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
-            ));
-        }
-        let identical = destination_hashes.full_blake3 == known.full_blake3
-            && destination_hashes.size_bytes == known.size_bytes;
-        if !identical {
-            return Ok(different_content(source, destination));
-        }
-        return Ok(VerifiedFile {
-            source_path: source.to_path_buf(),
-            destination_path: destination.to_path_buf(),
-            hashes: Some(destination_hashes),
-            depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
-            outcome: FileVerificationOutcome::Verified,
-            detail: None,
-        });
-    }
-    let source_size = source_metadata.len();
+    // Each side's full hash is the disk service's answer. The source's comes
+    // from what its catalog row recorded while the file still fits that
+    // record, and then only the destination is read; otherwise both are.
+    // Every read is held to the file it began on, and one that saw its file
+    // change refuses the comparison.
+    let recorded = match known {
+        Some(known) => Disk::process()
+            .full_hash(known.ask(source).recorded_only())
+            .await
+            .into_known(),
+        None => None,
+    };
+    let source_size = match recorded {
+        Some(_) => 0,
+        None => source_len,
+    };
     let total = source_size.saturating_add(destination_metadata.len());
     progress.comparison(0, total);
-    let first = progress.clone();
-    let source_progress =
-        CopyProgress::none().with_transfer_sink(move |_, bytes| first.comparison(bytes, total));
-    let second = progress.clone();
-    let destination_progress = CopyProgress::none().with_transfer_sink(move |_, bytes| {
-        second.comparison(source_size.saturating_add(bytes), total)
-    });
-    let source_hashes = hash_existing_file_with_progress(source, source_progress)
-        .await
-        .map_err(|error| file_error(source, error))?;
-    let destination_hashes = hash_existing_file_with_progress(destination, destination_progress)
-        .await
-        .map_err(|error| file_error(destination, error))?;
-    if source_before != file_version(source).await?
-        || destination_before != file_version(destination).await?
-    {
-        return Err(AppError::validation_refused(
+    // A file read here must still be the one first stat'ed above: a change
+    // between that stat and the read is as much a change while being
+    // compared as one during the read.
+    let changed = || {
+        AppError::validation_refused(
             crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
             "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
-        ));
+        )
+    };
+    let source_hash = match (recorded, known) {
+        (Some(recorded), _) => recorded,
+        (None, known) => {
+            let ask = known.map_or_else(|| HashAsk::new(source), |known| known.ask(source));
+            let read = compared_full_hash(source, ask, progress, 0, total).await?;
+            if !source_read.compare(&read.mark).is_untouched() {
+                return Err(changed());
+            }
+            read
+        }
+    };
+    let destination_hash = compared_full_hash(
+        destination,
+        HashAsk::new(destination),
+        progress,
+        source_size,
+        total,
+    )
+    .await?;
+    if !destination_read
+        .compare(&destination_hash.mark)
+        .is_untouched()
+    {
+        return Err(changed());
     }
-    let identical = source_hashes.full_blake3 == destination_hashes.full_blake3
-        && source_hashes.size_bytes == destination_hashes.size_bytes;
+    let identical = source_hash.blake3 == destination_hash.blake3
+        && source_hash.size_bytes == destination_hash.size_bytes;
     if !identical {
         return Ok(different_content(source, destination));
     }
+    let hashes = streamed_hashes(&destination_hash)
+        .or_else(|| streamed_hashes(&source_hash))
+        .ok_or_else(|| file_error(destination, "no whole-file CRC was taken of it"))?;
     Ok(VerifiedFile {
         source_path: source.to_path_buf(),
         destination_path: destination.to_path_buf(),
-        hashes: Some(source_hashes),
+        hashes: Some(hashes),
         depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
         outcome: FileVerificationOutcome::Verified,
         detail: None,
+        destination_mark: None,
+    })
+}
+
+/// One side's full hash for [`compare_existing`], its read reported from
+/// `offset` of the comparison's `total`.
+async fn compared_full_hash(
+    path: &Path,
+    ask: HashAsk,
+    progress: &CopyProgress,
+    offset: u64,
+    total: u64,
+) -> AppResult<KnownHash> {
+    let sink = progress.clone();
+    let reported = CopyProgress::none()
+        .with_transfer_sink(move |_, bytes| sink.comparison(offset.saturating_add(bytes), total));
+    match Disk::process()
+        .full_hash(ask.progress(reported.disk_progress()))
+        .await
+    {
+        FullHashAnswer::Read(known)
+        | FullHashAnswer::Stored(known)
+        | FullHashAnswer::Cached(known) => Ok(known),
+        FullHashAnswer::Changed => Err(AppError::validation_refused(
+            crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
+            "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
+        )),
+        FullHashAnswer::Unreadable(refusal) => Err(file_error(path, refusal)),
+        FullHashAnswer::Cancelled | FullHashAnswer::Unrecorded => {
+            Err(file_error(path, "its full hash was not taken"))
+        }
+    }
+}
+
+/// A full hash as the catalog stores one, where it carries its CRC.
+fn streamed_hashes(known: &KnownHash) -> Option<super::model::StreamedContentHashes> {
+    Some(super::model::StreamedContentHashes {
+        size_bytes: known.size_bytes,
+        crc_algorithm: super::model::MoveCrcAlgorithm::Crc64Nvme,
+        move_crc: known.crc?,
+        full_blake3: known.blake3.clone(),
     })
 }
 
@@ -902,6 +998,7 @@ fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
             "{} contains different content. Both files were preserved.",
             destination.display()
         )),
+        destination_mark: None,
     }
 }
 

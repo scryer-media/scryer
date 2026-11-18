@@ -490,9 +490,11 @@ pub const PROGRESS_PULSE_INTERVAL: Duration = Duration::from_secs(5);
 ///
 /// A verification mismatch is deliberately *not* covered: a mismatch is
 /// evidence about the bytes, not a hiccup, and retrying it would turn a caught
-/// corruption into a loop (FR-044, C4). Only an I/O-shaped error
-/// ([`AppError::Repository`]) — a dropped network mount, a momentary ENOSPC, a
-/// blocked descriptor — is worth a second look.
+/// corruption into a loop (FR-044, C4). Only storage that did not answer — a
+/// dropped network mount, a blocked descriptor, an I/O error with no lasting
+/// cause — is worth a second look. A full or denied destination and a missing
+/// source are lasting and fail at once, unless the storage itself has gone
+/// away, in which case the runner waits for it and tries again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMoveRetry {
     /// Total attempts, including the first. `1` disables retrying.
@@ -528,13 +530,42 @@ impl FileMoveRetry {
 }
 
 /// Whether an error is the transient, I/O-shaped kind a retry can help with.
+/// A source that is not there, one that Scryer may not read, and a link where
+/// a held name was to be written are not: none comes back on a retry.
 pub(super) fn move_error_is_transient(error: &AppError) -> bool {
-    matches!(
-        error,
+    match error {
+        AppError::RepositoryFailed { reason, .. } => !matches!(
+            *reason,
+            crate::disk::reason::DISK_PATH_MISSING
+                | crate::disk::reason::DISK_PERMISSION_DENIED
+                | crate::disk::reason::DISK_LINK_NOT_FOLLOWED
+        ),
         AppError::Repository(_)
-            | AppError::RepositoryFailure { .. }
-            | AppError::RepositoryFailed { .. }
-    )
+        | AppError::TemporaryUnavailable { .. }
+        | AppError::RepositoryFailure { .. } => true,
+        _ => false,
+    }
+}
+
+/// Whether an error can be what storage that went away mid-run looks like:
+/// anything transient, and the lasting refusals an unmounted share also gives
+/// (a source that reads as missing or denied, a destination that reads as full
+/// or denied). The runner asks whether storage is still there before it
+/// trusts one of these as the file's answer.
+pub(super) fn move_error_may_be_storage_loss(error: &AppError) -> bool {
+    use crate::error_reasons::location;
+    move_error_is_transient(error)
+        || matches!(error, AppError::RepositoryFailed { .. })
+        || matches!(
+            error.validation_reason(),
+            Some(
+                location::DESTINATION_NO_SPACE
+                    | location::DESTINATION_PERMISSION_DENIED
+                    // A link proof whose read failed as the mount dropped,
+                    // and whose removal then failed too.
+                    | location::UNPROVEN_LINK_NOT_REMOVED
+            )
+        )
 }
 
 /// The reason code a run-level stop writes on the operation row.
@@ -2839,6 +2870,7 @@ mod tests {
                 },
                 outcome,
                 detail: fell_back.then(|| "a cache-bypassed read-back could not run".to_string()),
+                destination_mark: None,
             })
         }
     }
@@ -3007,7 +3039,8 @@ mod tests {
     #[async_trait]
     impl TitleFileMover for PipelinedMover {
         async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
-            let copy = self.copies.acquire("volume", "library").await;
+            let lane = crate::disk::Mark::from_stored("unknown-volume").expect("lane");
+            let copy = self.copies.acquire_on(&lane).await;
             let active = self.copying.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_copying.fetch_max(active, Ordering::SeqCst);
             request
@@ -3039,6 +3072,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -3065,6 +3099,7 @@ mod tests {
                     depth: AppliedVerificationDepth::exact(request.depth),
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
+                    destination_mark: None,
                 })
             }
         }
@@ -3102,6 +3137,114 @@ mod tests {
         assert_eq!(mover.attempts.load(Ordering::SeqCst), 2);
         assert!(!hub.has_storage_waiters("op-1"));
         assert_eq!(reconciler.cleaned.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lasting_refusal_waits_for_storage_that_left_and_fails_at_once_when_it_is_there() {
+        use crate::disk::Refused;
+        struct RefuseOnce {
+            destination: PathBuf,
+            detached: PathBuf,
+            disconnect: bool,
+            /// `None` is a link left unproven at its name.
+            refused: Option<Refused>,
+            attempts: AtomicU64,
+        }
+        #[async_trait]
+        impl TitleFileMover for RefuseOnce {
+            async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    if self.disconnect {
+                        std::fs::rename(&self.destination, &self.detached).unwrap();
+                    }
+                    return Err(match self.refused {
+                        Some(refused) => {
+                            crate::location::verify::copy_refusal(refused, "synthetic".to_owned())
+                        }
+                        None => {
+                            use crate::disk::{Doubt, LinkAfter, Mark, Unproven};
+                            let unproven = Unproven {
+                                doubt: Doubt::OtherFile {
+                                    linked: Mark::on_volume(7),
+                                },
+                                after: LinkAfter::NotRemoved,
+                            };
+                            crate::location::execution::unproven_link_answer(
+                                &request.file.destination_path,
+                                Some(unproven),
+                            )
+                            .expect_err("an unproven link is refused")
+                        }
+                    });
+                }
+                Ok(VerifiedFile {
+                    source_path: request.file.source_path.clone(),
+                    destination_path: request.file.destination_path.clone(),
+                    hashes: None,
+                    depth: AppliedVerificationDepth::exact(request.depth),
+                    outcome: FileVerificationOutcome::Verified,
+                    detail: None,
+                    destination_mark: None,
+                })
+            }
+        }
+        for refused in [Some(Refused::SourceMissing), Some(Refused::NoSpace), None] {
+            for disconnect in [true, false] {
+                let temp = tempfile::tempdir().unwrap();
+                let destination = temp.path().join("destination");
+                std::fs::create_dir(&destination).unwrap();
+                let mover = RefuseOnce {
+                    detached: temp.path().join("detached"),
+                    destination,
+                    disconnect,
+                    refused,
+                    attempts: AtomicU64::new(0),
+                };
+                let mut title = planned_title("first", 0, 1);
+                title.files[0].source_path = temp.path().join("source.mkv");
+                title.files[0].destination_path = mover.destination.join("file.mkv");
+                let plan = OperationWorkPlan::new(vec![title]);
+                let store = FakeStore::with_operation(operation());
+                let admission = ScriptedAdmission::new(&[]);
+                let reconciler = RecordingReconciler::default();
+                let hub = crate::location::live::TransferHub::default();
+                let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+                    .with_transfers(&hub);
+                let run = runner.run("op-1", &plan);
+                tokio::pin!(run);
+                // A run that ends without waiting ends this loop too, so a
+                // missed wait fails the assertions below instead of hanging.
+                let result = loop {
+                    tokio::select! {
+                        result = &mut run => break result,
+                        () = tokio::task::yield_now() => {
+                            if disconnect && hub.has_storage_waiters("op-1") {
+                                assert_eq!(mover.attempts.load(Ordering::SeqCst), 1);
+                                std::fs::rename(&mover.detached, &mover.destination).unwrap();
+                                break run.await;
+                            }
+                        }
+                    }
+                };
+                let result = result.unwrap();
+                if disconnect {
+                    assert_eq!(
+                        result.state,
+                        LocationOperationState::Completed,
+                        "{refused:?} waits for storage and resumes"
+                    );
+                    assert_eq!(mover.attempts.load(Ordering::SeqCst), 2, "{refused:?}");
+                } else {
+                    assert_eq!(
+                        result.state,
+                        LocationOperationState::Failed,
+                        "{refused:?} with storage present fails"
+                    );
+                    assert_eq!(mover.attempts.load(Ordering::SeqCst), 1, "{refused:?}");
+                }
+                assert!(!hub.has_storage_waiters("op-1"));
+            }
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -3199,6 +3342,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -3521,6 +3665,7 @@ mod tests {
                     depth: AppliedVerificationDepth::exact(request.depth),
                     outcome: FileVerificationOutcome::Verified,
                     detail: None,
+                    destination_mark: None,
                 })
             }
         }
@@ -3608,6 +3753,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -3657,8 +3803,7 @@ mod tests {
         // Every admitted file is either one of the copy slots or one of the
         // bounded files past its copy; the one being recorded is the last.
         let bound = (super::pipeline::PIPELINE_POST_COPY_LIMIT
-            + crate::location::transfer::CopyCoordinator::shared().capacity())
-            as u64;
+            + crate::location::transfer::shared().capacity()) as u64;
         let max_ahead = mover.max_ahead.load(Ordering::SeqCst);
         assert!(
             max_ahead <= bound,
@@ -5036,6 +5181,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -5120,6 +5266,81 @@ mod tests {
         );
     }
 
+    /// A full destination, a denied one and a missing source are moved once
+    /// and fail the title; a timed out destination is moved again and the
+    /// title completes.
+    #[tokio::test]
+    async fn only_storage_that_did_not_answer_is_moved_again() {
+        use crate::disk::{Refused, Side};
+        let failing = "/destination/title-1/1.mkv";
+        for (refused, retried) in [
+            (Refused::NoSpace, false),
+            (Refused::Denied(Side::Destination), false),
+            (Refused::Denied(Side::Source), false),
+            (Refused::SourceMissing, false),
+            (Refused::LinkNotFollowed, false),
+            (Refused::Unreachable(Side::Destination), true),
+        ] {
+            let store = FakeStore::with_operation(operation());
+            let mover = FailFirstWithMover {
+                attempts: Mutex::new(BTreeMap::new()),
+                fail_once: failing.to_string(),
+                error: crate::location::verify::copy_refusal(refused, "synthetic".to_owned()),
+            };
+            let admission = ScriptedAdmission::new(&[]);
+            let reconciler = RecordingReconciler::default();
+            let plan = two_title_plan();
+            let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+                .with_file_move_retry(FileMoveRetry {
+                    attempts: 3,
+                    base_delay: Duration::ZERO,
+                })
+                .run("op-1", &plan)
+                .await
+                .expect("a run returns an outcome");
+            let attempts = mover.attempts.lock().expect("lock").get(failing).copied();
+            assert_eq!(attempts, Some(if retried { 2 } else { 1 }), "{refused:?}");
+            assert_eq!(
+                outcome.state == LocationOperationState::Completed,
+                retried,
+                "{refused:?}: {outcome:?}"
+            );
+        }
+    }
+
+    /// Fails one destination on its first attempt with `error` and succeeds
+    /// on every attempt after that.
+    struct FailFirstWithMover {
+        attempts: Mutex<BTreeMap<String, u32>>,
+        fail_once: String,
+        error: AppError,
+    }
+
+    #[async_trait]
+    impl TitleFileMover for FailFirstWithMover {
+        async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            let destination = request.file.stored_destination();
+            let attempt = {
+                let mut attempts = self.attempts.lock().expect("lock");
+                let attempt = attempts.entry(destination.clone()).or_insert(0);
+                *attempt += 1;
+                *attempt
+            };
+            if destination == self.fail_once && attempt == 1 {
+                return Err(self.error.clone());
+            }
+            Ok(VerifiedFile {
+                source_path: request.file.source_path.clone(),
+                destination_path: request.file.destination_path.clone(),
+                hashes: None,
+                depth: AppliedVerificationDepth::exact(request.depth),
+                outcome: FileVerificationOutcome::Verified,
+                detail: None,
+                destination_mark: None,
+            })
+        }
+    }
+
     /// Fails one destination on its first attempt with an I/O-shaped error and
     /// succeeds on every attempt after that.
     struct FailOnceMover {
@@ -5149,6 +5370,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }
@@ -5234,6 +5456,7 @@ mod tests {
                 depth: AppliedVerificationDepth::exact(request.depth),
                 outcome: FileVerificationOutcome::Verified,
                 detail: None,
+                destination_mark: None,
             })
         }
     }

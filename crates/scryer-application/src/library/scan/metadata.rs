@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::disk::{Disk, EntryKind};
 use crate::library::library::library_scan_cancel_requested;
 use crate::library_discovery::{
     LibraryTitleWalk, MovieTopLevelEntry, is_sample_video_candidate, matching_movie_nfo_path_async,
@@ -208,12 +209,7 @@ pub(crate) async fn read_valid_movie_nfo_metadata(
     nfo_path: Option<&str>,
 ) -> Option<crate::nfo::NfoMetadata> {
     let path = stored_path_to_path_buf(nfo_path?);
-    let metadata = tokio::fs::metadata(&path).await.ok()?;
-    if !metadata.is_file() || metadata.len() > RADARR_MOVIE_NFO_MAX_BYTES {
-        return None;
-    }
-
-    let content = tokio::fs::read_to_string(path).await.ok()?;
+    let content = read_small_file(&path, RADARR_MOVIE_NFO_MAX_BYTES).await?;
     let root_kind = detect_nfo_root_kind(&content);
     let meta = parse_nfo(&content);
     if root_kind != NfoRootKind::Movie
@@ -226,24 +222,25 @@ pub(crate) async fn read_valid_movie_nfo_metadata(
 }
 
 async fn read_tvshow_nfo_metadata(folder: PathBuf) -> Option<crate::nfo::NfoMetadata> {
-    let path = folder.join("tvshow.nfo");
-    let metadata = tokio::fs::metadata(&path).await.ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
-    let content = tokio::fs::read_to_string(path).await.ok()?;
+    let content = read_small_file(&folder.join("tvshow.nfo"), u64::MAX).await?;
     Some(parse_nfo(&content))
 }
 
 async fn read_plexmatch_metadata(folder: Option<PathBuf>) -> Option<NfoMetadata> {
-    let path = folder?.join(".plexmatch");
-    let metadata = tokio::fs::metadata(&path).await.ok()?;
-    if !metadata.is_file() || metadata.len() > PLEXMATCH_MAX_BYTES {
-        return None;
-    }
-    let content = tokio::fs::read_to_string(path).await.ok()?;
+    let content = read_small_file(&folder?.join(".plexmatch"), PLEXMATCH_MAX_BYTES).await?;
     let meta = parse_plexmatch(&content);
     (!meta.is_empty()).then_some(meta)
+}
+
+/// The text of the regular file at `path`, following links, when it is at
+/// most `max_bytes` long and can be read.
+async fn read_small_file(path: &Path, max_bytes: u64) -> Option<String> {
+    let disk = Disk::process();
+    let reading = disk.follow(path).await;
+    if !reading.is(EntryKind::File) || reading.size().is_some_and(|len| len > max_bytes) {
+        return None;
+    }
+    disk.read_to_string(path).await.ok()
 }
 
 fn normalized_non_empty(value: Option<&str>) -> Option<String> {
@@ -1387,11 +1384,7 @@ async fn build_movie_entry_representative_file(
 
 async fn same_stem_movie_nfo_path(path: &Path) -> Option<String> {
     let same_stem = path.with_extension("nfo");
-    if tokio::fs::metadata(&same_stem)
-        .await
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
+    if Disk::process().follow(&same_stem).await.is(EntryKind::File) {
         return Some(path_to_stored_string(&same_stem));
     }
 
@@ -1411,11 +1404,7 @@ async fn directory_movie_nfo_path(entry_path: &Path, file_path: &str) -> Option<
     // representative fell back to discovered_files[0] or primary detection
     // returned None, leaving titles to a slow, id-less text search.
     let movie_nfo = entry_path.join("movie.nfo");
-    if tokio::fs::metadata(&movie_nfo)
-        .await
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
+    if Disk::process().follow(&movie_nfo).await.is(EntryKind::File) {
         return Some(path_to_stored_string(&movie_nfo));
     }
 

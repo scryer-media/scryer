@@ -1033,13 +1033,11 @@ async fn file_availability(path: &str) -> EpisodeFileAvailability {
     if path.trim().is_empty() {
         return EpisodeFileAvailability::Missing;
     }
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) if metadata.is_file() => EpisodeFileAvailability::Present,
-        Ok(_) => EpisodeFileAvailability::Missing,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            EpisodeFileAvailability::Missing
-        }
-        Err(_) => EpisodeFileAvailability::Unreadable,
+    let reading = crate::disk::Disk::process().follow(path).await;
+    match reading.exists() {
+        Some(true) if reading.is(crate::disk::EntryKind::File) => EpisodeFileAvailability::Present,
+        Some(_) => EpisodeFileAvailability::Missing,
+        None => EpisodeFileAvailability::Unreadable,
     }
 }
 

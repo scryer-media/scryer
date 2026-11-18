@@ -1,7 +1,8 @@
 use std::collections::HashSet;
-use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+use crate::disk::{Disk, EntryKind};
 use crate::{AppError, AppResult};
 use scryer_domain::is_standalone_video_file as is_video_file;
 
@@ -138,23 +139,12 @@ impl FilesystemWalker {
         let listing = self.read_directory(root)?;
         let symlinked_subdirs = listing.symlinked_subdirs.clone();
         let subdirs = listing.subdirs;
-        let root_visit_key = fs::canonicalize(root).map_err(|err| {
-            AppError::Repository(format!(
-                "failed to resolve directory {}: {err}",
-                root.display()
-            ))
-        })?;
+        let root_visit_key = canonical(root)?;
         let mut seen = HashSet::new();
 
         for path in subdirs {
             let visit_key =
-                visit_key_for_child(&root_visit_key, &path, symlinked_subdirs.contains(&path))
-                    .map_err(|err| {
-                        AppError::Repository(format!(
-                            "failed to resolve directory {}: {err}",
-                            path.display()
-                        ))
-                    })?;
+                visit_key_for_child(&root_visit_key, &path, symlinked_subdirs.contains(&path))?;
             if seen.insert(visit_key) {
                 visitor(path)?;
             }
@@ -167,12 +157,7 @@ impl FilesystemWalker {
     where
         F: FnMut(WalkedDirectory) -> AppResult<bool>,
     {
-        let root_visit_key = fs::canonicalize(root).map_err(|err| {
-            AppError::Repository(format!(
-                "failed to resolve directory {}: {err}",
-                root.display()
-            ))
-        })?;
+        let root_visit_key = canonical(root)?;
         let mut stack = vec![(root.to_path_buf(), root_visit_key.clone(), 0usize)];
         let mut visited = HashSet::new();
         let mut has_visited_root = false;
@@ -274,30 +259,54 @@ impl FilesystemWalker {
     /// One `read_dir` pass, returning the listing and the number of raw
     /// directory entries it saw before any policy filtering.
     fn read_directory_once(&self, dir: &Path) -> AppResult<(WalkedDirectory, usize)> {
-        let entries = fs::read_dir(dir).map_err(|err| {
-            AppError::Repository(format!("failed to read directory {}: {err}", dir.display()))
+        let disk = Disk::process();
+        let mut entries = Vec::new();
+        let mut failure = None;
+        disk.visit_blocking(dir, |entry| {
+            let kind = entry
+                .map_err(|error| ("failed to read entry in", dir.to_path_buf(), error))
+                .and_then(|entry| match entry.kind() {
+                    Ok(kind) => Ok((entry.into_path(), kind)),
+                    Err(error) => Err((
+                        "failed to inspect filesystem entry",
+                        entry.into_path(),
+                        error,
+                    )),
+                });
+            match kind {
+                Ok(entry) => {
+                    entries.push(entry);
+                    ControlFlow::Continue(())
+                }
+                Err(failed) => {
+                    failure = Some(failed);
+                    ControlFlow::Break(())
+                }
+            }
+        })
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read directory {}: {}",
+                dir.display(),
+                error.words()
+            ))
         })?;
+        if let Some((what, path, error)) = failure {
+            return Err(AppError::Repository(format!(
+                "{what} {}: {}",
+                path.display(),
+                error.words()
+            )));
+        }
 
         let mut subdirs = Vec::new();
         let mut files = Vec::new();
         let mut filenames_lower = HashSet::new();
         let mut symlinked_subdirs = HashSet::new();
-        let mut entry_count = 0usize;
+        let entry_count = entries.len();
 
-        for entry in entries {
-            entry_count = entry_count.saturating_add(1);
-            let entry = entry.map_err(|err| {
-                AppError::Repository(format!("failed to read entry in {}: {err}", dir.display()))
-            })?;
-            let path = entry.path();
-            let file_type = entry.file_type().map_err(|err| {
-                AppError::Repository(format!(
-                    "failed to inspect filesystem entry {}: {err}",
-                    path.display()
-                ))
-            })?;
-
-            let Some(kind) = classify_entry_kind(&path, &file_type) else {
+        for (path, kind) in entries {
+            let Some(kind) = classify_entry_kind(&disk, &path, kind) else {
                 continue;
             };
 
@@ -394,36 +403,39 @@ fn path_has_extension(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
-fn classify_entry_kind(path: &Path, file_type: &fs::FileType) -> Option<WalkEntryKind> {
-    if file_type.is_dir() {
-        return Some(WalkEntryKind::Directory { via_symlink: false });
+/// A link is classified by what it points at, with one probe.
+fn classify_entry_kind(disk: &Disk, path: &Path, kind: EntryKind) -> Option<WalkEntryKind> {
+    match kind {
+        EntryKind::Directory => Some(WalkEntryKind::Directory { via_symlink: false }),
+        EntryKind::File => Some(WalkEntryKind::File),
+        EntryKind::Other => None,
+        EntryKind::Symlink => match disk.follow_blocking(path).kind()? {
+            EntryKind::Directory => Some(WalkEntryKind::Directory { via_symlink: true }),
+            EntryKind::File => Some(WalkEntryKind::File),
+            _ => None,
+        },
     }
+}
 
-    if file_type.is_file() {
-        return Some(WalkEntryKind::File);
-    }
-
-    if !file_type.is_symlink() {
-        return None;
-    }
-
-    let metadata = fs::metadata(path).ok()?;
-    if metadata.is_dir() {
-        Some(WalkEntryKind::Directory { via_symlink: true })
-    } else if metadata.is_file() {
-        Some(WalkEntryKind::File)
-    } else {
-        None
-    }
+fn canonical(path: &Path) -> AppResult<PathBuf> {
+    Disk::process()
+        .canonicalize_blocking(path)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to resolve directory {}: {}",
+                path.display(),
+                error.words()
+            ))
+        })
 }
 
 fn visit_key_for_child(
     parent_visit_key: &Path,
     path: &Path,
     via_symlink: bool,
-) -> std::io::Result<PathBuf> {
+) -> AppResult<PathBuf> {
     if via_symlink {
-        fs::canonicalize(path)
+        canonical(path)
     } else {
         Ok(match path.file_name() {
             Some(name) => parent_visit_key.join(name),
@@ -435,6 +447,7 @@ fn visit_key_for_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[cfg(unix)]
     #[test]

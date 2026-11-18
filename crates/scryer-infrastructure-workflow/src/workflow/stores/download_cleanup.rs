@@ -21,6 +21,7 @@ fn cleanup_record(row: &SqlRow) -> AppResult<DownloadCleanupRecord> {
         facet: blank_to_none(row.opt_text("facet")?),
         source_title: blank_to_none(row.opt_text("source_title")?),
         previous_failure_retry_seconds: None,
+        library_holds_payload: false,
     })
 }
 

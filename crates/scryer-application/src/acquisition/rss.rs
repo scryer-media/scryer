@@ -1431,7 +1431,9 @@ struct RssCycleIntake {
 /// platform reports them (`/proc/self/status` on Linux), for the RSS cycle
 /// logs. `None` elsewhere or when the file cannot be read.
 fn process_resident_kib() -> (Option<u64>, Option<u64>) {
-    match std::fs::read_to_string("/proc/self/status") {
+    match crate::disk::Disk::process()
+        .read_to_string_blocking(std::path::Path::new("/proc/self/status"))
+    {
         Ok(status) => (
             proc_status_kib(&status, "VmRSS:"),
             proc_status_kib(&status, "VmHWM:"),

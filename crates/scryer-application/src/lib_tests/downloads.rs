@@ -1354,6 +1354,9 @@ async fn local_password_retry_action_requires_current_identity_failure_and_libra
         completed_at: now,
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     let record = ImportRecord {
         id: result.import_id.clone(),
@@ -2461,8 +2464,12 @@ async fn queued_manual_import_rejects_observed_targets_before_consuming_or_queue
     );
 }
 
-#[tokio::test]
-async fn queued_manual_import_reports_prior_automatic_import_after_source_cleanup() {
+/// Queues a manual import of a movie download another automatic import
+/// already completed, beside `refusal`, the stored result of one more import
+/// of the same download, and runs it.
+async fn run_manual_import_beside_a_prior_import(
+    refusal: Option<String>,
+) -> AppResult<(ImportStatus, Option<String>)> {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -2528,6 +2535,30 @@ async fn queued_manual_import_reports_prior_automatic_import_after_source_cleanu
 
     let manual_import_id = Id::new().0;
     let now = Utc::now().to_rfc3339();
+    import_repo
+        .records
+        .lock()
+        .await
+        .extend(refusal.map(|result_json| ImportRecord {
+            id: Id::new().0,
+            source_client_id: Some(client_id.to_string()),
+            source_system: "weaver".to_string(),
+            source_ref: item_id.to_string(),
+            import_type: ImportType::MovieDownload,
+            status: ImportStatus::Pending,
+            payload_json: String::new(),
+            result_json: Some(result_json),
+            download_id: None,
+            import_transfer_phase: None,
+            import_transfer_bytes: None,
+            import_transfer_total_bytes: None,
+            import_transfer_started_at: None,
+            import_transfer_updated_at: None,
+            started_at: None,
+            finished_at: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        }));
     import_repo.records.lock().await.extend([
         ImportRecord {
             id: Id::new().0,
@@ -2584,10 +2615,14 @@ async fn queued_manual_import_reports_prior_automatic_import_after_source_cleanu
         requested_at: now,
     };
 
-    let (status, result_json) =
-        crate::import_workflow::execute_queued_manual_import(&app, &manual_import_id, &payload)
-            .await
-            .expect("prior import should win without a live source lookup");
+    crate::import_workflow::execute_queued_manual_import(&app, &manual_import_id, &payload).await
+}
+
+#[tokio::test]
+async fn queued_manual_import_reports_prior_automatic_import_after_source_cleanup() {
+    let (status, result_json) = run_manual_import_beside_a_prior_import(None)
+        .await
+        .expect("prior import should win without a live source lookup");
 
     assert_eq!(status, ImportStatus::Skipped);
     let result: scryer_domain::ImportResult = serde_json::from_str(
@@ -2598,6 +2633,59 @@ async fn queued_manual_import_reports_prior_automatic_import_after_source_cleanu
     .expect("parse already-imported result");
     assert_eq!(result.decision, scryer_domain::ImportDecision::Skipped);
     assert_eq!(result.skip_reason, Some(ImportSkipReason::AlreadyImported));
+}
+
+/// While another import of the download stands refused as needing manual
+/// reconciliation, a completed import of it is no proof this one was
+/// imported: the manual import stops with that refusal's reason instead of
+/// marking the download imported, so it is never removed from its client.
+#[tokio::test]
+async fn a_manual_import_beside_an_unresolved_reconciliation_is_not_taken_as_imported() {
+    let now = Utc::now();
+    let refused = scryer_domain::ImportResult {
+        import_id: "refused-import".to_string(),
+        decision: scryer_domain::ImportDecision::Failed,
+        skip_reason: None,
+        title_id: None,
+        source_system: Some("weaver".to_string()),
+        source_ref: Some("manual-race-source".to_string()),
+        source_title: None,
+        source_path: "/srv/fixture-media/downloads/sample.mkv".to_string(),
+        dest_path: None,
+        quality: None,
+        episode_ids: Vec::new(),
+        file_size_bytes: None,
+        link_type: None,
+        error_message: Some("the library file is the import source's own entry".to_string()),
+        reason_code: Some(crate::error_reasons::import::DESTINATION_IS_SOURCE.to_string()),
+        needs_reconciliation: true,
+        source_cleanup_failed: false,
+        release_burned: false,
+        started_at: now,
+        completed_at: now,
+        upgrade: false,
+        upgrade_previous_path: None,
+    };
+    let error =
+        run_manual_import_beside_a_prior_import(Some(serde_json::to_string(&refused).unwrap()))
+            .await
+            .expect_err("an unresolved refusal is no prior import");
+    assert!(error.requires_manual_reconciliation(), "{error:?}");
+    assert_eq!(
+        error.reason(),
+        Some(crate::error_reasons::import::DESTINATION_IS_SOURCE)
+    );
+
+    // The same result once settled is proof again.
+    let settled = scryer_domain::ImportResult {
+        needs_reconciliation: false,
+        ..refused
+    };
+    let (status, _) =
+        run_manual_import_beside_a_prior_import(Some(serde_json::to_string(&settled).unwrap()))
+            .await
+            .expect("a settled import leaves the prior proof standing");
+    assert_eq!(status, ImportStatus::Skipped);
 }
 
 struct TrackedTitleAssignmentFixture {
@@ -5141,16 +5229,41 @@ async fn external_weaver_idless_bad_observed_item_blocks_after_history_retry() {
         .expect("download queue poller should stop cleanly");
 }
 
-#[tokio::test]
-async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
+/// How one unclaimed failed cleanup is set up.
+#[derive(Clone, Copy, Default)]
+struct HeldSourceCase {
+    /// An import of the download holds its sources.
+    held: bool,
+    /// The cleanup runs in a reconcile tick.
+    tick: bool,
+}
+
+/// Held-source reads of the one download that reached the repository.
+type HeldSourceReads = usize;
+
+/// Runs the cleanup of a failed tracked download that holds no cleanup claim
+/// of its own. With `held`, an import of the same download still holds its
+/// sources for an archive or subtitle delivery. Returns the outcome, the
+/// client removals asked for, the client id and the held-source reads.
+async fn run_unclaimed_failed_tracked_cleanup(
+    case: HeldSourceCase,
+) -> (
+    crate::import::import::TerminalDownloadCleanup,
+    Vec<(Option<String>, Option<String>, String, bool, bool)>,
+    String,
+    HeldSourceReads,
+) {
+    let HeldSourceCase { held, tick } = case;
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
-    let (app, user) = bootstrap_with_cleanup_tracking(
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
         download_client.clone(),
         download_submissions,
         pending_releases,
     );
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| services.with_imports(import_repo.clone()));
 
     let config =
         create_enabled_download_client_config(&app, &user, "Series NZBGet", "nzbget").await;
@@ -5174,6 +5287,33 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
 
     let item_id = "failed-cleanup-1";
     let download_id = scryer_domain::download_identity::DownloadId::new();
+    if held {
+        import_repo.records.lock().await.push(ImportRecord {
+            id: "held-import".to_string(),
+            source_client_id: Some(config.id.clone()),
+            source_system: "nzbget".to_string(),
+            source_ref: item_id.to_string(),
+            import_type: ImportType::MovieDownload,
+            status: ImportStatus::Completed,
+            payload_json: serde_json::json!({ "archive_processing_pending": true }).to_string(),
+            result_json: None,
+            download_id: None,
+            import_transfer_phase: None,
+            import_transfer_bytes: None,
+            import_transfer_total_bytes: None,
+            import_transfer_started_at: None,
+            import_transfer_updated_at: None,
+            started_at: None,
+            finished_at: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        });
+        import_repo
+            .canonical_ids
+            .lock()
+            .await
+            .insert("held-import".to_string(), download_id);
+    }
     let source_root = tempfile::tempdir().expect("source root");
     let absent_payload = source_root.path().join("Failed.Cleanup");
     let mut completed = completed_download_fixture_item(
@@ -5233,29 +5373,66 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
         retained_in_client_after_cleanup: false,
     };
 
+    let cache = match tick {
+        true => Some(crate::import::import::TerminalCleanupTickCache::prefetch(&app, &[]).await),
+        false => None,
+    };
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         &app,
         &tracked,
         TrackedDownloadState::Failed,
-        None,
+        cache.as_ref(),
     )
     .await;
+    let deleted = download_client.deleted_requests.lock().await.clone();
+    let reads = import_repo
+        .held_reads_per_download
+        .load(std::sync::atomic::Ordering::Relaxed);
+    (outcome, deleted, config.id, reads)
+}
+
+#[tokio::test]
+async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
+    let (outcome, deleted, client_id, _) =
+        run_unclaimed_failed_tracked_cleanup(HeldSourceCase::default()).await;
 
     assert_eq!(
         outcome,
         crate::import::import::TerminalDownloadCleanupOutcome::Removed
     );
     assert_eq!(
-        download_client.deleted_requests.lock().await.clone(),
+        deleted,
         // Usenet: the entry goes, the data stays the client's business.
         vec![(
-            Some(config.id.clone()),
+            Some(client_id),
             None,
-            item_id.to_string(),
+            "failed-cleanup-1".to_string(),
             true,
             false,
         )]
     );
+}
+
+/// A download without a cleanup claim of its own waits, as a claimed one
+/// does, while an import of it still holds its sources: nothing is removed
+/// from the client, and the cleanup is tried again later. Each attempt reads
+/// that one download's sources, right before its cleanup, in a tick or not.
+#[tokio::test]
+async fn unclaimed_tracked_cleanup_waits_while_an_import_holds_the_sources() {
+    use crate::import::import::TerminalDownloadCleanupOutcome::{Removed, RetryableFailure};
+
+    for tick in [false, true] {
+        let (outcome, deleted, _, reads) =
+            run_unclaimed_failed_tracked_cleanup(HeldSourceCase { held: true, tick }).await;
+        assert_eq!(outcome, RetryableFailure);
+        assert!(deleted.is_empty(), "{deleted:?}");
+        assert_eq!(reads, 1);
+
+        let (outcome, _, _, reads) =
+            run_unclaimed_failed_tracked_cleanup(HeldSourceCase { held: false, tick }).await;
+        assert_eq!(outcome, Removed);
+        assert_eq!(reads, 1);
+    }
 }
 
 #[tokio::test]
@@ -15272,6 +15449,328 @@ async fn quality_mismatch_retry_uses_the_current_profile_and_fresh_probe() {
     assert_eq!(std::fs::read_to_string(unrelated).unwrap(), "preserve this");
 }
 
+/// A move import whose source cleanup refuses: by default because the
+/// source was left at its set-aside name, which waits for an operator, or,
+/// with `is_source`, because the library file is the source's own entry.
+/// The first placement stops on a title folder the operator must settle; once
+/// it is settled the file lands and its source cleanup refuses.
+#[derive(Default)]
+struct CleanupRefusingImporter {
+    folder_settled: std::sync::atomic::AtomicBool,
+    is_source: bool,
+    /// Fail as a removal that could not finish, which is retried.
+    could_not_finish: bool,
+    /// Fail as a cleanup that could not tell whether the library file is
+    /// the source's own entry.
+    cannot_tell: bool,
+}
+
+#[async_trait]
+impl FileImporter for CleanupRefusingImporter {
+    async fn snapshot_import_source(
+        &self,
+        source: &Path,
+    ) -> AppResult<scryer_domain::ImportSourceSnapshot> {
+        CopyingFileImporter.snapshot_import_source(source).await
+    }
+
+    async fn import_file(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: scryer_domain::ImportMode,
+        expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
+    ) -> AppResult<scryer_domain::ImportFileResult> {
+        if !self
+            .folder_settled
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::folder_ownership::TITLE_FOLDER_INVALID,
+                "the title folder is not usable",
+            ));
+        }
+        let mut placed = CopyingFileImporter
+            .import_file(
+                source,
+                dest,
+                scryer_domain::ImportMode::HardlinkOrCopy,
+                expected_source,
+            )
+            .await?;
+        if mode == scryer_domain::ImportMode::Move {
+            let snapshot = test_import_source_snapshot(source)?;
+            placed.source_cleanup = Some(scryer_domain::ImportSourceCleanupGuard {
+                source_path: source.to_path_buf(),
+                dest_path: dest.to_path_buf(),
+                size_bytes: placed.size_bytes,
+                source_identity: snapshot.identity,
+                source_proof: None,
+                dest_proof: None,
+                depth: Some(scryer_domain::VerificationDepth::Quick),
+                adopted_destination_mark: None,
+            });
+        }
+        Ok(placed)
+    }
+
+    async fn remove_import_source_after_verified_import(
+        &self,
+        _guard: scryer_domain::ImportSourceCleanupGuard,
+        _final_dest_path: &Path,
+    ) -> AppResult<()> {
+        Err(if self.could_not_finish {
+            AppError::Repository("the import source could not be removed".into())
+        } else if self.cannot_tell {
+            AppError::RepositoryFailed {
+                message: "could not tell whether the library file is the import source".into(),
+                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+            }
+        } else if self.is_source {
+            AppError::ManualReconciliationRefused {
+                message: "the library file is the import source's own entry".into(),
+                reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
+                facts: Vec::new(),
+            }
+        } else {
+            AppError::ManualReconciliationRefused {
+                message: "the import source was left at its set-aside name".into(),
+                reason: crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN,
+                facts: Vec::new(),
+            }
+        })
+    }
+}
+
+/// A history retry whose source cleanup refuses as needing reconciliation
+/// leaves the download blocked with the refusal's reason, never imported,
+/// although the retry placed and recorded the file first: an imported
+/// download may be removed from its client with its files. Nothing is removed.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_needs_reconciliation_stays_blocked() {
+    let (fixture, source, source_bytes, retried) =
+        history_retry_with_refusing_cleanup(CleanupRefusingImporter::default()).await;
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{retried:?}"
+    );
+    assert!(retried.needs_reconciliation, "{retried:?}");
+    assert_eq!(
+        retried.reason_code.as_deref(),
+        Some(crate::error_reasons::import::DESTINATION_ALIAS_UNKNOWN)
+    );
+    assert_eq!(
+        fixture
+            .import_repo
+            .retry_finished_states
+            .lock()
+            .await
+            .as_slice(),
+        &[TrackedDownloadState::ImportBlocked],
+        "the retried download stays blocked, never imported"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    let placed = primary_movie_files(&fixture).await;
+    assert_eq!(placed.len(), 1, "{placed:?}");
+    assert!(Path::new(&placed[0].file_path).exists());
+}
+
+/// A deferred cleanup that finds the library file is the source's own entry
+/// finishes the import on that file: nothing is removed, and the import's
+/// row records that the download's client may remove its entry but never
+/// its data, which the download's next cleanup read answers.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_finds_the_library_file_is_imported_and_keeps_the_data() {
+    let (fixture, source, source_bytes, retried) =
+        history_retry_with_refusing_cleanup(CleanupRefusingImporter {
+            is_source: true,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{retried:?}"
+    );
+    assert!(!retried.needs_reconciliation, "{retried:?}");
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    let download_id = fixture
+        .import_repo
+        .canonical_ids
+        .lock()
+        .await
+        .get(&retried.import_id)
+        .copied()
+        .expect("the retried import carries the download's identity");
+    let sources = fixture
+        .import_repo
+        .download_import_sources(&download_id)
+        .await
+        .expect("sources read");
+    assert!(sources.library_holds_payload, "{sources:?}");
+    assert!(!sources.held, "{sources:?}");
+}
+
+/// A history retry whose source cleanup could not finish, after the file was
+/// placed and cataloged, is not recorded as a failed import: no failed entry
+/// joins the title's history for a file that was imported once. Nothing is
+/// removed.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_could_not_finish_adds_no_failed_entry() {
+    let (fixture, source, source_bytes, retried) =
+        history_retry_with_refusing_cleanup(CleanupRefusingImporter {
+            could_not_finish: true,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{retried:?}"
+    );
+    assert!(!retried.needs_reconciliation, "{retried:?}");
+    let rejected = fixture
+        .app
+        .services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::ImportRejected]),
+            title_id: Some(fixture.title.id.clone()),
+            facet: None,
+            stream_id: None,
+            media_request_ids: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "only the first attempt's refusal is in the history: {rejected:?}"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
+}
+
+/// A history retry whose source cleanup could not tell whether the library
+/// file is the download's file is never taken as imported, although it
+/// placed and cataloged the file: an imported download may be removed from
+/// its client with its data. It waits as the automatic import's retry, and
+/// that pass, finding the moved file already in the library, stops blocked
+/// rather than imported. Nothing is removed.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_cannot_tell_is_never_imported() {
+    let (fixture, source, source_bytes, retried) =
+        history_retry_with_refusing_cleanup(CleanupRefusingImporter {
+            cannot_tell: true,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{retried:?}"
+    );
+    assert!(retried.source_cleanup_failed, "{retried:?}");
+    assert!(!retried.needs_reconciliation, "{retried:?}");
+    assert_eq!(
+        fixture
+            .import_repo
+            .retry_finished_states
+            .lock()
+            .await
+            .as_slice(),
+        &[TrackedDownloadState::ImportPending],
+        "the retried download waits for its retry, never imported"
+    );
+    assert!(
+        !crate::import_workflow::should_remove_terminal_download(
+            &fixture.app,
+            "",
+            "sabnzbd",
+            None,
+            Some(&scryer_domain::MediaFacet::Movie),
+            TrackedDownloadState::ImportPending,
+            None,
+        )
+        .await,
+        "a download waiting for its retry is not removed from its client"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
+
+    // The next automatic pass finds the moved file already in the library
+    // and stops blocked, never imported.
+    let mut tracked = fixture.tracked_import_pending();
+    {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::completed_download_handler::import(&fixture.app, &fixture.user, &mut tracked).await;
+    }
+    assert_eq!(
+        tracked.state,
+        TrackedDownloadState::ImportBlocked,
+        "{tracked:?}"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
+}
+
+async fn history_retry_with_refusing_cleanup(
+    importer: CleanupRefusingImporter,
+) -> (DispositionFixture, PathBuf, Vec<u8>, crate::ImportResult) {
+    let release_title = "Cleanup Refusal Movie.2026.1080p.WEB-DL.x264-GRP";
+    let mut fixture = disposition_fixture("Cleanup Refusal Movie", release_title).await;
+    let profiles = Arc::new(StoredQualityProfileRepo::default());
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let profile = crate::builtin_default_quality_profile();
+    profiles.set_profiles(vec![profile.clone()]).await;
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            &serde_json::to_string(&profile.id).unwrap(),
+        )
+        .await;
+    settings
+        .set_value(SETTINGS_SCOPE_SYSTEM, IMPORT_MODE_KEY, "\"move\"")
+        .await;
+    fixture.app.services.config.quality_profiles = profiles;
+    fixture.app.services.config.settings = settings;
+    fixture.app.services.workflow.file_importer = Arc::new(importer);
+    let source = PathBuf::from(&fixture.completed.dest_dir).join(format!("{release_title}.mkv"));
+    let source_bytes = std::fs::read(&source).unwrap();
+
+    let mut tracked = fixture.tracked_import_pending();
+    {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::completed_download_handler::import(&fixture.app, &fixture.user, &mut tracked).await;
+    }
+    let first = fixture.latest_import_result().await;
+    assert_eq!(
+        first.skip_reason,
+        Some(scryer_domain::ImportSkipReason::TitleFolderConflict),
+        "{first:?}"
+    );
+    assert!(primary_movie_files(&fixture).await.is_empty());
+
+    let retried = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import_workflow::retry_failed_import(
+            &fixture.app,
+            &fixture.user,
+            &first.import_id,
+            None,
+        )
+        .await
+        .expect("the retry records its outcome")
+    };
+    (fixture, source, source_bytes, retried)
+}
+
 /// A file rule the operator wrote vetoes the file over something the release name
 /// never disclosed. That is an import failure, so burn this release and reopen
 /// the scope to try another candidate.
@@ -15636,6 +16135,81 @@ async fn manual_movie_upgrade_sends_one_import_completed_marked_as_upgrade() {
             "the replacement must be reported as created: {event:?}"
         );
     }
+}
+
+/// A manual move import whose files are placed and cataloged, but whose
+/// source cleanup could not finish while it holds no sources, comes back with
+/// its file results and the cleanup's error as a retry, not as a failed
+/// import. The source is still there.
+#[tokio::test]
+async fn a_manual_import_whose_cleanup_could_not_finish_keeps_its_results_for_a_retry() {
+    let release_title = "Manual Cleanup Retry Movie.2026.1080p.WEB-DL-GRP";
+    let mut fixture = disposition_fixture("Manual Cleanup Retry Movie", release_title).await;
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(SETTINGS_SCOPE_SYSTEM, IMPORT_MODE_KEY, "\"move\"")
+        .await;
+    fixture.app.services.config.settings = settings;
+    fixture.app.services.workflow.file_importer = Arc::new(CleanupRefusingImporter {
+        folder_settled: std::sync::atomic::AtomicBool::new(true),
+        could_not_finish: true,
+        ..Default::default()
+    });
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let source_bytes = std::fs::read(&source_file).unwrap();
+    let import_id = fixture
+        .app
+        .services
+        .workflow
+        .imports
+        .queue_import_request(
+            ClientJobLocator::for_import_artifact(
+                Some(&fixture.completed.client_id),
+                &fixture.completed.client_type,
+                &fixture.completed.download_client_item_id,
+            ),
+            ImportType::ManualImport.as_str().to_string(),
+            "{}".to_string(),
+        )
+        .await
+        .expect("queue manual import record");
+    let release_evidence = crate::import_workflow::resolve_release_evidence_for_completed_download(
+        &fixture.app,
+        &fixture.completed,
+        None,
+    )
+    .await
+    .expect("release evidence");
+
+    let run = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import_workflow::run_manual_import_with_release_evidence(
+            &fixture.app,
+            &fixture.user,
+            &import_id,
+            &fixture.title.id,
+            Some(&fixture.completed),
+            &release_evidence,
+            vec![ManualImportFileMapping {
+                disc_selection: None,
+                file_path: source_file.to_string_lossy().into_owned(),
+                episode_id: None,
+                episode_ids: Vec::new(),
+                series_movie_link_id: None,
+            }],
+            Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+        )
+        .await
+        .expect("the pass ends with its results")
+    };
+
+    assert_eq!(run.results.len(), 1, "{:?}", run.results);
+    assert!(run.results[0].success, "{:?}", run.results);
+    let error = run.cleanup_retry.expect("the cleanup waits for a retry");
+    assert!(!error.requires_manual_reconciliation(), "{error:?}");
+    assert_eq!(std::fs::read(&source_file).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
 }
 
 #[tokio::test]
@@ -23118,4 +23692,103 @@ async fn a_bound_download_imports_despite_a_typo_in_its_folder_name() {
         "unexpected import result: {result:?}"
     );
     assert_eq!(result.episode_ids, vec![episode.id]);
+}
+
+/// Runs the direct cleanup a verified manual import gives a download that
+/// has no durable binding. With `held`, an import of the same download still
+/// holds its sources. Returns the client removals asked for.
+async fn run_unbound_manual_import_cleanup(
+    held: bool,
+) -> Vec<(Option<String>, Option<String>, String, bool, bool)> {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| services.with_imports(import_repo.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Unbound NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Unbound Cleanup".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create movie title");
+
+    let item_id = "unbound-cleanup-1";
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_root = tempfile::tempdir().expect("source root");
+    let payload = source_root.path().join("Unbound.Cleanup");
+    let mut completed = completed_download_fixture_item(
+        item_id,
+        &title.id,
+        "Unbound.Cleanup",
+        &payload.to_string_lossy(),
+    );
+    completed.client_id = config.id.clone();
+    completed.download_id = Some(download_id.to_string());
+    download_client.cleanup_payloads.lock().await.insert(
+        item_id.to_string(),
+        crate::DownloadCleanupPayload {
+            download: completed.clone(),
+            native_delete_paths: vec![payload.to_string_lossy().into_owned()],
+        },
+    );
+    if held {
+        import_repo.records.lock().await.push(ImportRecord {
+            id: "held-import".to_string(),
+            source_client_id: Some(config.id.clone()),
+            source_system: "nzbget".to_string(),
+            source_ref: item_id.to_string(),
+            import_type: ImportType::MovieDownload,
+            status: ImportStatus::Completed,
+            payload_json: serde_json::json!({ "archive_processing_pending": true }).to_string(),
+            result_json: None,
+            download_id: None,
+            import_transfer_phase: None,
+            import_transfer_bytes: None,
+            import_transfer_total_bytes: None,
+            import_transfer_started_at: None,
+            import_transfer_updated_at: None,
+            started_at: None,
+            finished_at: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        });
+        import_repo
+            .canonical_ids
+            .lock()
+            .await
+            .insert("held-import".to_string(), download_id);
+    }
+
+    crate::import::import::maybe_remove_completed_manual_import_download(
+        &app,
+        Some(&completed),
+        Some(&title.id),
+        true,
+    )
+    .await;
+    download_client.deleted_requests.lock().await.clone()
+}
+
+/// The direct cleanup a manual import gives an unbound download waits, as a
+/// claimed cleanup does, while an import of it still holds its sources.
+#[tokio::test]
+async fn unbound_manual_import_cleanup_waits_while_an_import_holds_the_sources() {
+    assert!(
+        !run_unbound_manual_import_cleanup(false).await.is_empty(),
+        "without a hold the download is removed"
+    );
+    let deleted = run_unbound_manual_import_cleanup(true).await;
+    assert!(deleted.is_empty(), "{deleted:?}");
 }

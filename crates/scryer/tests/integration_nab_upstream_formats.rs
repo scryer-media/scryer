@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 use std::{collections::HashMap, time::Duration};
 

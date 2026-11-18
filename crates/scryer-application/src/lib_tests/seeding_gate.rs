@@ -521,6 +521,7 @@ fn cleanup_record_for(tracked: &TrackedDownload) -> crate::DownloadCleanupRecord
         history_offset: 0,
         payload_checkpoint: None,
         previous_failure_retry_seconds: None,
+        library_holds_payload: false,
     }
 }
 
@@ -840,6 +841,48 @@ async fn durable_qbit_cleanup_proves_identity_by_the_submission_item_hash() {
         "client_reports_seeding_obligation_met"
     );
     assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+/// A download an import found to be the library file is removed from its
+/// client as an entry only: the same cleanup that removes it with its data
+/// otherwise keeps the data.
+#[tokio::test]
+async fn durable_cleanup_of_a_download_the_library_holds_removes_its_entry_only() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, _, record) = unhashed_qbit_cleanup_fixture(&client, true).await;
+    let imports = Arc::new(TrackingImportRepo::default());
+    let import_id = imports
+        .queue_import_request_with_identity_for_download(
+            ClientJobLocator::new(
+                Some(&record.client_id),
+                &record.client_type,
+                &record.item_id,
+            ),
+            "movie_download".into(),
+            "{}".into(),
+            None,
+            Some(&record.download_id),
+        )
+        .await
+        .unwrap();
+    assert!(
+        imports
+            .record_library_holds_download_payload(&import_id)
+            .await
+            .unwrap()
+    );
+    app.services.workflow.imports = imports;
+
+    let (_, _, cleanup) = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .expect("the cleanup runs");
+    assert_eq!(cleanup.outcome, TerminalDownloadCleanupOutcome::Removed);
+    let deleted = client.deleted_requests.lock().await;
+    assert_eq!(deleted.len(), 1);
+    assert!(
+        !deleted[0].4,
+        "the library's data is never removed with the entry"
+    );
 }
 
 #[tokio::test]

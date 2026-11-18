@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use reqwest::header::{
     ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
 };
+use scryer_application::disk::{Access, Disk, DiskError, Parents, Remove, Replace, reason};
 use scryer_application::{
     AppError, AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage,
     ImageProxyRepository, ImageProxySourceRecord, TitleImageKind, TitleImageProcessor,
@@ -241,21 +242,13 @@ impl ImageProxyRuntime {
     pub async fn clear_cache(&self) -> AppResult<()> {
         let _lifecycle_guard = self.cache_lifecycle.write().await;
         self.conversions.invalidate(None);
-        if tokio::fs::try_exists(&self.cache_dir)
-            .await
-            .unwrap_or(false)
-        {
-            tokio::fs::remove_dir_all(&self.cache_dir)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!("failed to clear image cache: {error}"))
-                })?;
+        let disk = Disk::process();
+        if disk.follow(&self.cache_dir).await.exists() == Some(true) {
+            let cleared = disk.remove(&self.cache_dir, Remove::Tree).await;
+            cleared.map_err(cache_failure("clear image cache"))?;
         }
-        tokio::fs::create_dir_all(&self.cache_dir)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to recreate image cache: {error}"))
-            })?;
+        let created = disk.create_dir(&self.cache_dir, Parents::Create).await;
+        created.map_err(cache_failure("recreate image cache"))?;
         self.repository.clear_image_proxy_cache_entries().await?;
         self.repository.clear_image_proxy_memory();
         self.inflight.lock().await.clear();
@@ -322,7 +315,7 @@ impl ImageProxyRuntime {
             .await
             .ok()??;
         let path = self.existing_cache_path(&entry).await;
-        let bytes = match tokio::fs::read(&path).await {
+        let bytes = match Disk::process().read(&path).await {
             Ok(bytes) if bytes.len() as i64 == entry.byte_size => bytes,
             _ => {
                 let _ = self
@@ -470,11 +463,9 @@ impl ImageProxyRuntime {
             let Some(mut entry) = existing else {
                 return Ok(None);
             };
-            let bytes = tokio::fs::read(self.existing_cache_path(&entry).await)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!("failed to read image cache: {error}"))
-                })?;
+            let path = self.existing_cache_path(&entry).await;
+            let read = Disk::process().read(path).await;
+            let bytes = read.map_err(cache_failure("read image cache"))?;
             entry.fetched_at = Utc::now();
             entry.last_accessed_at = entry.fetched_at;
             self.update_cache_metadata_in_background(entry.clone(), lifecycle_guard);
@@ -708,30 +699,30 @@ impl ImageProxyRuntime {
 
     async fn write_cache_file_at(&self, path: &Path, bytes: &[u8]) -> AppResult<()> {
         self.conversions.invalidate(Some(path));
-        tokio::fs::create_dir_all(&self.cache_dir)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to create image cache: {error}"))
-            })?;
+        self.create_cache_dir().await?;
+        let disk = Disk::process();
         let temp = path.with_extension(format!("{}.part", uuid::Uuid::new_v4()));
-        tokio::fs::write(&temp, bytes).await.map_err(|error| {
-            AppError::Repository(format!("failed to write image cache: {error}"))
-        })?;
-        if let Err(error) = tokio::fs::rename(&temp, path).await {
-            let _ = tokio::fs::remove_file(&temp).await;
-            return Err(AppError::Repository(format!(
-                "failed to atomically commit image cache: {error}"
-            )));
+        let written = disk.write(&temp, bytes.to_vec(), Replace::Allowed, Access::Default);
+        written.await.map_err(cache_failure("write image cache"))?;
+        if let Err(error) = disk.move_replacing(&temp, path).await {
+            let _ = disk.remove(&temp, Remove::File).await;
+            return Err(cache_failure("atomically commit image cache")(error));
         }
         Ok(())
     }
 
+    async fn create_cache_dir(&self) -> AppResult<()> {
+        let disk = Disk::process();
+        let created = disk.create_dir(&self.cache_dir, Parents::Create).await;
+        created.map_err(cache_failure("create image cache"))
+    }
+
+    // disk-guard: each entry's size comes from its own directory entry, which
+    // costs no call on Windows and one lstat on unix; the owner's listing
+    // either leaves the size out or reads every entry's kind first.
+    #[allow(clippy::disallowed_methods)]
     async fn reconcile_cache_state(&self) -> AppResult<()> {
-        tokio::fs::create_dir_all(&self.cache_dir)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to create image cache: {error}"))
-            })?;
+        self.create_cache_dir().await?;
         let entries = self.repository.list_image_proxy_cache_entries_lru().await?;
         let mut expected = HashMap::new();
         for entry in entries {
@@ -835,12 +826,12 @@ impl ImageProxyRuntime {
 
     async fn remove_cache_file(&self, path: &Path) -> AppResult<()> {
         self.conversions.invalidate(Some(path));
-        match tokio::fs::remove_file(path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        match Disk::process().remove(path, Remove::File).await {
+            Ok(_) => Ok(()),
             Err(error) => Err(AppError::Repository(format!(
-                "failed to remove image cache file {}: {error}",
-                path.display()
+                "failed to remove image cache file {}: {}",
+                path.display(),
+                error.words()
             ))),
         }
     }
@@ -858,7 +849,7 @@ impl ImageProxyRuntime {
         let path = self.entry_cache_path(entry);
         // Older upstream AVIF responses used the format-independent filename.
         if entry.content_type == "image/avif"
-            && !tokio::fs::try_exists(&path).await.unwrap_or(false)
+            && Disk::process().follow(&path).await.exists() != Some(true)
         {
             self.cache_path(&entry.token, &entry.variant)
         } else {
@@ -948,14 +939,10 @@ impl ImageProxyCacheControl for ImageProxyRuntime {
             let conversion = self.conversions.watch(source_path.clone());
             #[cfg(test)]
             self.jpeg_source_reads.fetch_add(1, Ordering::Relaxed);
-            let bytes = match tokio::fs::read(source_path).await {
+            let bytes = match Disk::process().read(source_path).await {
                 Ok(bytes) => bytes,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "failed to read cached JPEG: {error}"
-                    )));
-                }
+                Err(error) if error.reason() == reason::DISK_PATH_MISSING => return Ok(false),
+                Err(error) => return Err(cache_failure("read cached JPEG")(error)),
             };
             if bytes.len() as i64 != entry.byte_size {
                 return Ok(false);
@@ -1187,6 +1174,11 @@ fn outbound_error(error: OutboundHttpError) -> AppError {
             AppError::Repository(format!("image proxy fetch failed: {source}"))
         }
     }
+}
+
+/// The repository error the image cache raises for a failed disk call.
+fn cache_failure(action: &'static str) -> impl FnOnce(DiskError) -> AppError {
+    move |error| AppError::Repository(format!("failed to {action}: {}", error.words()))
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use futures_util::{Stream, StreamExt};
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use scryer_application::disk::{Disk, Open, Remove};
 use scryer_application::{
     AppError, AppResult, NZB_HEAD_PROBE_BYTES, StagedNzbStore, enforce_nzb_category_gate,
 };
@@ -27,9 +28,7 @@ struct PartialArtifactCleanup(std::path::PathBuf);
 
 impl Drop for PartialArtifactCleanup {
     fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.0)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
+        if let Err(error) = Disk::process().remove_blocking(&self.0, Remove::File) {
             tracing::warn!(path = %self.0.display(), %error, "failed to remove partial staged nzb artifact");
         }
     }
@@ -591,8 +590,7 @@ where
     .await;
 
     if stage_result.is_err()
-        && let Err(error) = tokio::fs::remove_file(&partial_path).await
-        && error.kind() != std::io::ErrorKind::NotFound
+        && let Err(error) = Disk::process().remove(&partial_path, Remove::File).await
     {
         tracing::warn!(path = %partial_path.display(), %error, "failed to remove partial staged nzb artifact");
     }
@@ -760,12 +758,15 @@ struct TeeZstdReader<R: Read> {
 
 impl<R: Read> TeeZstdReader<R> {
     fn new(inner: R, output_path: &Path) -> AppResult<Self> {
-        let file = std::fs::File::create(output_path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create staged nzb file {}: {error}",
-                output_path.display()
-            ))
-        })?;
+        let file = Disk::process()
+            .open_blocking(output_path, Open::create())
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to create staged nzb file {}: {}",
+                    output_path.display(),
+                    error.words()
+                ))
+            })?;
         let encoder =
             zstd::stream::Encoder::new(std::io::BufWriter::new(file), STAGED_NZB_ZSTD_LEVEL)
                 .map_err(|error| {

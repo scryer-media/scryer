@@ -2303,6 +2303,12 @@ pub mod location {
     /// Source changed during file placement.
     pub const SOURCE_CHANGED_DURING_FILE_PLACEMENT: &str =
         "LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT";
+    /// A hard link made at the destination could not be proven to be the source and could not be removed. It is left at the path named by [`LEFT_BEHIND_PATH_FACT`]; the source was kept.
+    pub const UNPROVEN_LINK_NOT_REMOVED: &str = "LOCATION_UNPROVEN_LINK_NOT_REMOVED";
+    /// The destination has no room for the file. The source was kept.
+    pub const DESTINATION_NO_SPACE: &str = "LOCATION_DESTINATION_NO_SPACE";
+    /// Scryer is not allowed to write the file there. The source was kept.
+    pub const DESTINATION_PERMISSION_DENIED: &str = "LOCATION_DESTINATION_PERMISSION_DENIED";
     /// The confirmed plan has no instructions for this title.
     pub const CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE: &str =
         "LOCATION_CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE";
@@ -2551,6 +2557,9 @@ pub mod location {
         MERGE_TITLE_INTO_BLOCKED,
         SOURCE_DESTINATION_SAME_PATH,
         SOURCE_CHANGED_DURING_FILE_PLACEMENT,
+        UNPROVEN_LINK_NOT_REMOVED,
+        DESTINATION_NO_SPACE,
+        DESTINATION_PERMISSION_DENIED,
         CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE,
         FILE_CHANGED_BEFORE_SOURCE_CLEANUP,
         DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE,
@@ -2633,6 +2642,36 @@ pub mod location {
         RECOVERY_DESTINATION_CONTENT_MISMATCH,
         RECOVERY_TITLE_CHANGED,
     ];
+
+    /// The path where an unproven link that could not be removed was left.
+    pub const LEFT_BEHIND_PATH_FACT: &str = "leftBehindPath";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[LEFT_BEHIND_PATH_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod plugins {
@@ -5329,7 +5368,7 @@ pub mod import {
     pub const REGULAR_FILE_REQUIRED: &str = "IMPORT_REGULAR_FILE_REQUIRED";
     /// Refusing to upgrade because the recycle bin path is unsafe.
     pub const UPGRADE_RECYCLE_BIN_PATH_UNSAFE: &str = "IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE";
-    /// Refusing to restore the old file's backup because its destination is occupied.
+    /// The destination holds something this import did not place: a file that appeared before the copy, or one in the way of restoring the old file's backup. Nothing there was replaced.
     pub const DESTINATION_OCCUPIED: &str = "IMPORT_DESTINATION_OCCUPIED";
     /// A script's trigger cannot be changed after it is created.
     pub const SCRIPT_S_TRIGGER_CANNOT_CHANGED_AFTER_CREATED: &str =
@@ -5773,6 +5812,12 @@ pub mod import {
     pub const EPISODE_LOOKUP_FAILED: &str = "IMPORT_EPISODE_LOOKUP_FAILED";
     /// The source download failed.
     pub const SOURCE_JOB_FAILED: &str = "IMPORT_SOURCE_JOB_FAILED";
+    /// The existing destination is the source's own entry, so removing the source would remove the only copy. Nothing was removed. An import of a download ends on that file, and the client may remove its entry but not its data; the import is held only when that could not be recorded.
+    pub const DESTINATION_IS_SOURCE: &str = "IMPORT_DESTINATION_IS_SOURCE";
+    /// Could not tell whether the existing destination, or the library file a re-run found already imported, is the source's own entry: a read failed, the source could not be set aside or its set-aside name was taken, or it could not be put back. Nothing was removed. An import that holds no sources fails and is retried; it stops for reconciliation where it holds its sources, or where a set-aside source could not be put back at its name, which [`KEPT_PATH_FACT`] then names.
+    pub const DESTINATION_ALIAS_UNKNOWN: &str = "IMPORT_DESTINATION_ALIAS_UNKNOWN";
+    /// A copy that failed was kept at its destination, named by [`KEPT_PATH_FACT`], because the source no longer holds the file.
+    pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         MEDIA_ROOT_REQUIRED,
@@ -5946,7 +5991,40 @@ pub mod import {
         EPISODE_NOT_FOUND,
         EPISODE_LOOKUP_FAILED,
         SOURCE_JOB_FAILED,
+        DESTINATION_IS_SOURCE,
+        DESTINATION_ALIAS_UNKNOWN,
+        COPY_KEPT_SOURCE_GONE,
     ];
+
+    /// The path where a failed copy was kept.
+    pub const KEPT_PATH_FACT: &str = "keptPath";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[KEPT_PATH_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
 }
 
 pub mod notifications {

@@ -30,7 +30,7 @@ pub fn stored_path_to_path_buf(stored: &str) -> PathBuf {
 }
 
 /// Foreign native encodings can be displayed, but cannot identify a local file.
-pub(crate) fn stored_path_is_native(stored: &str) -> bool {
+pub fn stored_path_is_native(stored: &str) -> bool {
     !(cfg!(unix) && stored.starts_with(STORED_PATH_WINDOWS_PREFIX)
         || cfg!(windows) && stored.starts_with(STORED_PATH_UNIX_PREFIX))
 }
@@ -47,7 +47,7 @@ pub fn stored_path_to_display_string(stored: &str) -> String {
 
 /// Fold Unicode text while preserving native bytes or unpaired UTF-16 units.
 /// Opaque portions of a path must never acquire the replacement character's identity.
-pub(crate) fn lowercase_os_str(value: &OsStr) -> OsString {
+pub fn lowercase_os_str(value: &OsStr) -> OsString {
     map_os_str_text(value, |text| text.to_lowercase())
 }
 
@@ -106,11 +106,7 @@ fn map_os_str_text(value: &OsStr, transform: impl Fn(&str) -> String) -> OsStrin
 }
 
 /// Split a native name at a native prefix without decoding either lossily.
-pub(crate) fn native_name_suffix(
-    value: &OsStr,
-    prefix: &OsStr,
-    ignore_case: bool,
-) -> Option<OsString> {
+pub fn native_name_suffix(value: &OsStr, prefix: &OsStr, ignore_case: bool) -> Option<OsString> {
     if ignore_case {
         let prefix = lowercase_os_str(prefix);
         #[cfg(unix)]
@@ -172,7 +168,7 @@ pub(crate) fn native_name_suffix(
 }
 
 /// Append a suffix before the final extension without changing the native name.
-pub(crate) fn suffix_path_stem(path: &Path, suffix: &str) -> PathBuf {
+pub fn suffix_path_stem(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_stem().unwrap_or_default().to_os_string();
     name.push(suffix);
     if let Some(extension) = path.extension() {
@@ -313,13 +309,8 @@ pub fn folder_path_match_candidates(folder_path: &str) -> Vec<String> {
 ///
 /// The repository's SQL twin of this is `lower(replace(folder_path, '/', '\'))`,
 /// which both dialects understand; it is only applied to plain stored paths,
-/// because the escape form is compared by exact equality instead.
-pub fn folder_path_lookup_key(folder_path: &str) -> String {
-    folder_path_lookup_key_for_platform(folder_path, cfg!(windows))
-}
-
-/// [`folder_path_lookup_key`] with the platform rule chosen explicitly, so the
-/// Windows rule can be asserted and applied from any host.
+/// because the escape form is compared by exact equality instead. The caller
+/// names the platform rule, so the Windows rule can be asserted from any host.
 pub fn folder_path_lookup_key_for_platform(folder_path: &str, windows: bool) -> String {
     if !windows {
         return folder_path.to_string();
@@ -354,14 +345,14 @@ const fn folder_path_trailing_separators() -> &'static [char] {
     if cfg!(windows) { &['/', '\\'] } else { &['/'] }
 }
 
-pub(crate) fn stored_path_is_within_folder(folder: &str, path: &str) -> bool {
+pub fn stored_path_is_within_folder(folder: &str, path: &str) -> bool {
     native_path_is_within_folder(
         &stored_path_to_path_buf(folder),
         &stored_path_to_path_buf(path),
     )
 }
 
-pub(crate) fn stored_path_is_lexically_within_folder(folder: &str, path: &str) -> bool {
+pub fn stored_path_is_lexically_within_folder(folder: &str, path: &str) -> bool {
     native_path_is_within_folder(
         &lexically_normalize(&stored_path_to_path_buf(folder)),
         &lexically_normalize(&stored_path_to_path_buf(path)),
@@ -379,7 +370,7 @@ fn native_path_is_within_folder(folder: &Path, path: &Path) -> bool {
     path.starts_with(folder)
 }
 
-pub(crate) fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
+pub fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
     let decoded = stored_path_to_path_buf(path);
     if decoded.as_os_str().is_empty() {
         return None;
@@ -406,6 +397,22 @@ pub(crate) fn folder_path_identity_key_for_platform(path: &str, windows: bool) -
             normalized.push(character);
         }
         previous_was_separator = is_separator;
+    }
+    // A `.` segment past the first names the folder it is in, as Windows
+    // itself reads it and as the posix rule's components drop it; a leading
+    // `.` and every `..` are kept, as there.
+    if normalized.split('/').skip(1).any(|segment| segment == ".") {
+        let kept: Vec<&str> = normalized
+            .split('/')
+            .enumerate()
+            .filter(|(at, segment)| *at == 0 || *segment != ".")
+            .map(|(_, segment)| segment)
+            .collect();
+        let ends_open = normalized.ends_with("/.");
+        normalized = kept.join("/");
+        if ends_open && !normalized.ends_with('/') {
+            normalized.push('/');
+        }
     }
 
     while normalized.len() > 1 && normalized.ends_with('/') {
@@ -613,21 +620,6 @@ mod tests {
             lowercase_os_str(first.as_os_str()),
             lowercase_os_str(second.as_os_str())
         );
-        let child = path_to_stored_string(first.join("movie.mkv"));
-        assert!(crate::title_folder_rules::path_is_strictly_within(
-            &child, &first_key
-        ));
-        assert!(!crate::title_folder_rules::path_is_strictly_within(
-            &child,
-            &second_key
-        ));
-        assert!(!crate::title_folder_rules::path_is_strictly_within(
-            &path_to_stored_string(first.join("../outside.mkv")),
-            &first_key
-        ));
-        assert!(!crate::title_folder_rules::path_is_strictly_within(
-            &first_key, &first_key
-        ));
     }
 
     #[test]
@@ -687,14 +679,21 @@ mod tests {
     /// form. Each has to be reachable from the others' candidate sets.
     #[test]
     fn folder_path_candidates_cover_the_spellings_of_one_folder() {
+        // The lookup compares both sides through the platform's fold: plain
+        // equality off Windows, case and separator folded on it.
+        let folded = |value: &str| super::folder_path_lookup_key_for_platform(value, cfg!(windows));
+        let reaches = |from: &str, to: &str| {
+            super::folder_path_match_candidates(from)
+                .iter()
+                .any(|candidate| folded(candidate) == folded(to))
+        };
         let canonical = "/media/movies/Arrival (2016)";
         for stored in [
             "/media/movies/Arrival (2016)/",
             "/media/movies/./Arrival (2016)",
         ] {
             assert!(
-                super::folder_path_match_candidates(canonical).contains(&stored.to_string())
-                    || super::folder_path_match_candidates(stored).contains(&canonical.to_string()),
+                reaches(canonical, stored) || reaches(stored, canonical),
                 "{stored} is not reachable from {canonical}"
             );
         }
@@ -865,6 +864,9 @@ mod tests {
 
     #[test]
     fn folder_identity_normalizes_separators_and_trailing_separators() {
+        // The posix rule reads the path with the host's own path type, and
+        // only a unix host applies it.
+        #[cfg(unix)]
         assert_eq!(
             folder_path_identity_key_for_platform("/library//Show/", false),
             Some("/library/Show".to_string())
@@ -872,6 +874,21 @@ mod tests {
         assert_eq!(
             folder_path_identity_key_for_platform(r"C:\\Media\\Show\\", true),
             Some("c:/media/show".to_string())
+        );
+        for dotted in [r"C:\Media\.\Show", r"C:\Media\Show\.", "c:/./media/show/"] {
+            assert_eq!(
+                folder_path_identity_key_for_platform(dotted, true),
+                Some("c:/media/show".to_string()),
+                "{dotted}"
+            );
+        }
+        assert_eq!(
+            folder_path_identity_key_for_platform(r"C:\.", true),
+            Some("c:/".to_string())
+        );
+        assert_eq!(
+            folder_path_identity_key_for_platform(r"C:\Media\..\Show", true),
+            Some("c:/media/../show".to_string())
         );
     }
 
@@ -887,6 +904,9 @@ mod tests {
         );
     }
 
+    /// The posix rule reads the path with the host's own path type, and only
+    /// a unix host applies it; a Windows host reads `\` as a separator.
+    #[cfg(unix)]
     #[test]
     fn posix_folder_identity_preserves_backslashes_and_whitespace() {
         assert_ne!(

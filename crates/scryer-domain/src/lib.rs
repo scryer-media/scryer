@@ -3655,6 +3655,21 @@ pub struct ImportResult {
     pub file_size_bytes: Option<i64>,
     pub link_type: Option<ImportStrategy>,
     pub error_message: Option<String>,
+    /// The stable reason code of the failure `error_message` words, when the
+    /// failure names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    /// The attempt stopped where only the operator can settle what is on
+    /// disk: the download must stay blocked, and is never taken as imported
+    /// whatever the attempt recorded before it stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_reconciliation: bool,
+    /// The attempt placed and cataloged its files, and then the removal of
+    /// their sources could not finish. It is never taken as imported: until
+    /// a later pass settles whether the download's file is the library file,
+    /// the download may not be removed with its data. It waits as a retry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_cleanup_failed: bool,
     #[serde(default)]
     pub release_burned: bool,
     pub started_at: DateTime<Utc>,
@@ -3712,6 +3727,10 @@ pub enum ImportSourceDisposition {
     /// The source was archive extraction output and was renamed into place, so
     /// nothing is left at its path and there is nothing to clean up.
     RenamedIntoPlace,
+    /// The destination is the source's own entry: the download's file is the
+    /// library file. Nothing was placed and nothing is removed, and the
+    /// download client may remove its entry only, never its data.
+    IsLibraryFile,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3802,6 +3821,12 @@ impl AppliedVerificationDepth {
             applied: depth,
             fell_back: false,
         }
+    }
+
+    /// Whether the destination itself was read back whole: only then is the
+    /// streamed full hash a hash of the destination's bytes.
+    pub fn read_back_whole(&self) -> bool {
+        self.applied == VerificationDepth::Full && !self.fell_back
     }
 
     /// Full verification was requested but only the quick floor could run.
@@ -3916,6 +3941,11 @@ pub struct ImportVerification {
     pub outcome: FileVerificationOutcome,
     /// Why the outcome is not a plain pass, or why the depth fell back.
     pub detail: Option<String>,
+    /// The stored mark of the destination as it read once the copy landed:
+    /// the size and times the copy's hashes describe. Absent when the
+    /// destination did not read as a regular file of the copied length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_mark: Option<String>,
 }
 
 impl ImportVerification {
@@ -3938,8 +3968,24 @@ pub struct ImportSourceCleanupGuard {
     pub dest_path: std::path::PathBuf,
     pub size_bytes: u64,
     pub source_identity: ImportSourceIdentity,
-    pub source_proof: ImportContentProof,
-    pub dest_proof: ImportContentProof,
+    /// Samples of both files that guards written by earlier builds carry.
+    /// They are read so such a guard still loads, and never used as proof:
+    /// cleanup compares the two files as they are then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_proof: Option<ImportContentProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_proof: Option<ImportContentProof>,
+    /// The operator's verification depth for the import, at which cleanup
+    /// compares the source with the destination. Absent from guards written
+    /// by earlier builds, which are compared at quick depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<VerificationDepth>,
+    /// The stored mark of a destination that was already there and was
+    /// adopted rather than placed, read with links not followed. Its source
+    /// is removed only once the filesystem shows the two are separate
+    /// entries. Absent when this import placed the destination itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_destination_mark: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

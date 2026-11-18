@@ -19,7 +19,11 @@ fn import_payload_json(row: &SqlRow) -> AppResult<String> {
 }
 
 pub(super) fn archive_import_has_pending_sources(row: &SqlRow) -> AppResult<bool> {
-    let payload: serde_json::Value = serde_json::from_str(&import_payload_json(row)?)
+    payload_text_holds_sources(&import_payload_json(row)?)
+}
+
+fn payload_text_holds_sources(payload: &str) -> AppResult<bool> {
+    let payload: serde_json::Value = serde_json::from_str(payload)
         .map_err(|_| AppError::Repository("import preservation metadata is unavailable".into()))?;
     Ok(payload["archive_processing_pending"].as_bool() == Some(true))
 }
@@ -275,6 +279,64 @@ impl ImportRepository for ImportStore {
             }
         }
         Ok(false)
+    }
+
+    async fn download_import_sources(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<scryer_application::DownloadImportSources> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT payload_json FROM imports WHERE canonical_download_id = {}",
+            &[SqlArg::Text(download_id.to_string())],
+        )
+        .await?;
+        let mut answer = scryer_application::DownloadImportSources::default();
+        for row in rows {
+            let payload: serde_json::Value = serde_json::from_str(&import_payload_json(&row)?)
+                .map_err(|_| {
+                    AppError::Repository("import preservation metadata is unavailable".into())
+                })?;
+            answer.held |= payload["archive_processing_pending"].as_bool() == Some(true);
+            answer.library_holds_payload |=
+                payload[scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY].as_bool() == Some(true);
+        }
+        Ok(answer)
+    }
+
+    async fn record_library_holds_download_payload(&self, import_id: &str) -> AppResult<bool> {
+        let import_id = import_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "import_library_holds_payload", move |tx| {
+            let import_id = import_id.clone();
+            Box::pin(async move {
+                let Some(row) = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT canonical_download_id, payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(import_id.clone())]).await?
+                else {
+                    return Ok(false);
+                };
+                let Some(download_id) = row.opt_text("canonical_download_id")? else {
+                    return Ok(false);
+                };
+                lock_retry_download(tx, &download_id).await?;
+                // A cleanup that already owns the download may be removing its
+                // data, so the mark could come too late to keep it.
+                if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT download_id FROM download_cleanup WHERE download_id = {} AND (lease_until IS NOT NULL OR payload_checkpoint IS NOT NULL)",
+                    &[SqlArg::Text(download_id)]).await?.is_some() {
+                    return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_SOURCE_CLEANUP_ALREADY_CLAIMED, "source cleanup already owns this download"));
+                }
+                let mut payload: serde_json::Value = serde_json::from_str(&import_payload_json(&row)?)
+                    .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+                let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                object.insert(scryer_application::LIBRARY_HOLDS_PAYLOAD_KEY.into(), serde_json::Value::Bool(true));
+                let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+                let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
+                    &[payload, SqlArg::Text(import_id)]).await?;
+                Ok(true)
+            })
+        }).await
     }
 
     async fn queue_import_request(

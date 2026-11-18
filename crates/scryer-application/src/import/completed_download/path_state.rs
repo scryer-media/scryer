@@ -25,8 +25,11 @@ pub(super) fn evaluate_completed_download_path(
         return CompletedDownloadPathState::Blocked;
     }
 
-    let path_available =
-        !completed.dest_dir.trim().is_empty() && Path::new(&completed.dest_dir).exists();
+    let path_available = !completed.dest_dir.trim().is_empty()
+        && crate::disk::Disk::process()
+            .follow_blocking(Path::new(&completed.dest_dir))
+            .exists()
+            == Some(true);
 
     if path_available {
         if td.path_missing_since.take().is_some() {

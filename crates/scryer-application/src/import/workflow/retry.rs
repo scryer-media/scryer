@@ -118,7 +118,7 @@ async fn validate_import_retry_source(
             return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_STATE_UNAVAILABLE, "the client's current download state could not be established; try again when its history is available"));
         }
     }
-    if !Path::new(&completed.dest_dir).exists() {
+    if Disk::process().follow(&completed.dest_dir).await.exists() != Some(true) {
         return Err(AppError::validation_refused(crate::error_reasons::import::SOURCE_UNAVAILABLE, "the import source is no longer available; restore the download or correct its path before retrying"));
     }
     Ok(canonical)
@@ -197,6 +197,65 @@ async fn reconcile_claimed_history_retry(
     }
     app.refresh_import_record_queue_snapshot(&claim.import_id)
         .await;
+    Ok(())
+}
+
+/// An interrupted retry that ends as already imported placed nothing in this
+/// run, so whether each download file it imported is the library file itself
+/// is settled now, before the download's client may remove it with its data.
+/// A file imported from an owned archive workspace is Scryer's own copy and
+/// not the client's. One read of the library rows' paths for all of them.
+/// The mark that keeps the client from removing the download's data is the
+/// download's, so it is written once, for the first file found to be the
+/// library file, and the files after it are not checked. A check that cannot
+/// tell fails the recovery, which keeps the claim and tries again on its
+/// next pass.
+async fn settle_interrupted_retry_library_files(
+    app: &AppUseCase,
+    import_id: &str,
+    completed: &CompletedDownload,
+    artifacts: &[ImportArtifact],
+) -> AppResult<()> {
+    let placed: Vec<(&str, &str)> = artifacts
+        .iter()
+        .filter(|artifact| matches!(artifact.result.as_str(), "imported" | "already_present"))
+        .filter(|artifact| artifact.workspace_relative_path.is_none())
+        .filter_map(|artifact| {
+            Some((
+                artifact.imported_media_file_id.as_deref()?,
+                artifact.relative_path.as_deref()?,
+            ))
+        })
+        .collect();
+    if placed.is_empty() {
+        return Ok(());
+    }
+    let file_ids: Vec<String> = placed.iter().map(|(id, _)| (*id).to_string()).collect();
+    let library_paths: HashMap<String, String> = app
+        .services
+        .library
+        .media_files
+        .list_media_file_paths(&file_ids)
+        .await?
+        .into_iter()
+        .collect();
+    let download_folder = stored_path_to_path_buf(&completed.dest_dir);
+    for (file_id, relative_path) in placed {
+        let Some(library_path) = library_paths.get(file_id) else {
+            continue;
+        };
+        let source = download_folder.join(relative_path);
+        if settle_already_imported_source(
+            app,
+            import_id,
+            &source,
+            &stored_path_to_path_buf(library_path),
+        )
+        .await?
+        {
+            break;
+        }
+    }
     Ok(())
 }
 
@@ -333,6 +392,9 @@ pub(crate) async fn recover_import_retry(
             None => {
                 let artifacts = app.services.workflow.import_artifacts.list_by_source_identity_for_download(Some(&claim.download_id), &claim.source).await?;
                 let verified_candidate = artifacts.iter().any(|artifact| matches!(artifact.result.as_str(), "imported" | "already_present"));
+                if verified_candidate {
+                    settle_interrupted_retry_library_files(app, &claim.import_id, &completed, &artifacts).await?;
+                }
                 let result = ImportResult {
                     decision: if verified_candidate { ImportDecision::Skipped } else { ImportDecision::Failed },
                     skip_reason: Some(if verified_candidate { scryer_domain::ImportSkipReason::AlreadyImported } else { scryer_domain::ImportSkipReason::PolicyMismatch }),
@@ -354,4 +416,60 @@ pub(crate) async fn recover_import_retry(
             .await?;
     }
     outcome
+}
+
+#[cfg(all(test, unix))]
+mod already_imported_entry_tests {
+    use super::library_file_is_import_source_blocking as already_imported_is_source_entry;
+    use std::path::Path;
+
+    fn download(root: &Path) -> std::path::PathBuf {
+        let folder = root.join("downloads");
+        std::fs::create_dir_all(&folder).expect("downloads");
+        let source = folder.join("sample.mkv");
+        std::fs::write(&source, b"only video bytes").expect("source");
+        source
+    }
+
+    /// The download's own file under another name is the library file: its
+    /// folder reached through a link, or a link to it. A separate file of the
+    /// same content, a second hard link, and a download file that is gone are
+    /// not. The download's file is back at its name every time.
+    #[test]
+    fn the_library_file_is_the_download_file_only_when_one_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = download(dir.path());
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(source.parent().unwrap(), &alias).expect("folder link");
+        let library = dir.path().join("library");
+        std::fs::create_dir_all(&library).expect("library");
+        let pointer = library.join("Pointer.mkv");
+        std::os::unix::fs::symlink(&source, &pointer).expect("file link");
+        let separate = library.join("Separate.mkv");
+        std::fs::write(&separate, b"only video bytes").expect("separate");
+        // Last, since a second name of the download's file reads as another
+        // entry wherever that file is read.
+        let linked = library.join("Linked.mkv");
+        for (library_path, same) in [
+            (alias.join("sample.mkv"), true),
+            (pointer, true),
+            (separate, false),
+            (linked.clone(), false),
+        ] {
+            if library_path == linked {
+                std::fs::hard_link(&source, &linked).expect("hard link");
+            }
+            assert_eq!(
+                already_imported_is_source_entry(&source, &library_path).expect("told"),
+                same,
+                "{}",
+                library_path.display()
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), b"only video bytes");
+            assert!(!crate::disk::aside_path_for(&source).exists());
+        }
+
+        let gone = source.with_file_name("gone.mkv");
+        assert!(!already_imported_is_source_entry(&gone, &library.join("Separate.mkv")).unwrap());
+    }
 }

@@ -65,6 +65,8 @@ mod request_rules_enable_only_upgrade_tests;
 mod rule_migrations_dialect_parity_tests;
 pub mod rule_set_runtime_wrapper;
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod single_connection_runner_tests;
 pub mod synthetic_root_ids;
 #[cfg(test)]

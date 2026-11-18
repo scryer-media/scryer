@@ -683,6 +683,9 @@ async fn verified_retry_clears_failed_state_durably() {
         completed_at: Utc::now(),
         upgrade: false,
         upgrade_previous_path: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
     };
     crate::import_workflow::reconcile_history_retry_result(
         &app, &mut td, &completed, &evidence, &result,

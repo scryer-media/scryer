@@ -1,11 +1,11 @@
 use super::*;
+use crate::disk::Parents;
+use crate::disk::reason::DISK_DESTINATION_EXISTS;
 use crate::domain_events::{DomainEventActor, new_title_domain_event, title_context_snapshot};
 use crate::location::execution::{ImportFilePermissionsApplier, PlacedContentPermissions};
 use crate::location::executor::*;
 use crate::location::ownership_guard::LiveRunnerGuard;
-use crate::location::verify::{
-    CopyProgress, VerifiedCopier, VerifiedFile, hash_existing_file_with_progress,
-};
+use crate::location::verify::{CopyProgress, VerifiedFile, hash_existing_file_with_progress};
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_domain::{DomainEventPayload, TitleUpdatedEventData};
@@ -484,10 +484,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
                 ));
             }
         }
-        if tokio::fs::symlink_metadata(destination)
-            .await
-            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-        {
+        if Disk::process().uncached(destination).await.exists() == Some(false) {
             if file.source_version.is_none() {
                 return Err(fail(
                     crate::error_reasons::location::RECOVERY_SOURCE_AND_DESTINATION_NOT_FOUND,
@@ -503,7 +500,11 @@ impl TitleFileMover for RecoveryExecution<'_> {
             create_recovery_destination_directories(parent, &self.permissions).await?;
             // Each attempt gets its own durably recorded staging name. An
             // interrupted attempt is never mistaken for permission to delete it.
-            let staging = parent.join(format!(".scryer-recovery-{}", scryer_domain::Id::new().0));
+            let staging = parent.join(format!(
+                "{}{}",
+                super::RECOVERY_STAGING_PREFIX,
+                scryer_domain::Id::new().0
+            ));
             self.app
                 .services
                 .library
@@ -514,9 +515,14 @@ impl TitleFileMover for RecoveryExecution<'_> {
                     &path_to_stored_string(&staging),
                 )
                 .await?;
-            VerifiedCopier::new()
-                .copy_to_journaled_staging(source, &staging, request.progress)
-                .await?;
+            crate::location::verify::recorded_copy(
+                &Disk::process(),
+                source,
+                &staging,
+                crate::disk::placement::journaled_staging_copy(),
+                request.progress,
+            )
+            .await?;
             let staged_file = RecoveryFile {
                 destination: path_to_stored_string(&staging),
                 ..file.clone()
@@ -542,6 +548,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
             depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
             outcome: FileVerificationOutcome::Verified,
             detail: Some("Full content verified; original source preserved".into()),
+            destination_mark: None,
         })
     }
 }
@@ -553,16 +560,18 @@ async fn create_recovery_destination_directories(
     inspect_path(parent, true).await?;
     let mut missing = Vec::new();
     let mut current = parent;
+    let disk = Disk::process();
     loop {
-        match tokio::fs::symlink_metadata(current).await {
-            Ok(metadata) if metadata.is_dir() => break,
-            Ok(_) => {
+        let reading = disk.uncached(current).await;
+        match reading.exists() {
+            Some(true) if reading.is(EntryKind::Directory) => break,
+            Some(true) => {
                 return Err(fail(
                     crate::error_reasons::location::RECOVERY_DESTINATION_PARENT_NOT_DIRECTORY,
                     "Recovery destination parent is not a directory",
                 ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Some(false) => {
                 missing.push(current.to_path_buf());
                 current = current.parent().ok_or_else(|| {
                     fail(
@@ -571,22 +580,22 @@ async fn create_recovery_destination_directories(
                     )
                 })?;
             }
-            Err(error) => return Err(relay_failure(error.to_string())),
+            None => return Err(unreadable(reading)),
         }
     }
     for directory in missing.into_iter().rev() {
-        match tokio::fs::create_dir(&directory).await {
+        match disk.create_dir(&directory, Parents::MustExist).await {
             Ok(()) => {
                 inspect_path(&directory, false).await?;
                 permissions.apply_to_directory(&directory).await?;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if error.reason() == DISK_DESTINATION_EXISTS => {
                 inspect_path(&directory, false).await?;
-                if !tokio::fs::symlink_metadata(&directory)
-                    .await
-                    .map_err(|e| relay_failure(e.to_string()))?
-                    .is_dir()
-                {
+                let reading = disk.uncached(&directory).await;
+                if reading.exists().is_none() {
+                    return Err(unreadable(reading));
+                }
+                if !reading.is(EntryKind::Directory) {
                     return Err(fail(
                         crate::error_reasons::location::RECOVERY_DESTINATION_PARENT_NOT_DIRECTORY,
                         "Recovery destination parent is not a directory",

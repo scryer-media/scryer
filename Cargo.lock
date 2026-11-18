@@ -5623,6 +5623,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "rustls-pki-types",
+ "scryer-disk",
  "scryer-domain",
  "scryer-logging",
  "scryer-media-types",
@@ -5650,6 +5651,23 @@ dependencies = [
  "windows-sys 0.61.2",
  "wiremock",
  "zstd 0.14.4",
+]
+
+[[package]]
+name = "scryer-disk"
+version = "0.22.4"
+dependencies = [
+ "blake3",
+ "chrono",
+ "crc-turbo",
+ "libc",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6245,7 +6263,6 @@ dependencies = [
  "chrono",
  "crc-turbo",
  "glob",
- "libc",
  "postcard",
  "proxy-tunnels",
  "quick-xml",
