@@ -3496,10 +3496,20 @@ mod hardlink_disposal_tests {
             );
             if mutate_content {
                 // Same inode and length are insufficient: the durable content
-                // hash must still match after the own unlink. A rewrite that
-                // also restores the modification time is beyond the full
+                // hash must still match after the own unlink. The rewrite's
+                // modification time is set a second past the original, so a
+                // coarse-timestamp filesystem cannot leave it unchanged; a
+                // rewrite that keeps the modification time is beyond the full
                 // hash's fit, which no disposal reads past.
+                let modified = std::fs::metadata(&external).unwrap().modified().unwrap();
                 std::fs::write(&external, b"modified content").unwrap();
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&external)
+                    .and_then(|file| {
+                        file.set_modified(modified + std::time::Duration::from_secs(1))
+                    })
+                    .unwrap();
                 assert!(
                     !disposal_version_current(&retained_path, &version, &[row.clone()])
                         .await
