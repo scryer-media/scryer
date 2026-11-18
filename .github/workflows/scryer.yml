@@ -563,8 +563,6 @@ jobs:
         shell: pwsh
         run: |
           "RUSTC_WRAPPER=sccache" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CC=sccache clang-cl" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CXX=sccache clang-cl" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "RUSTFLAGS=--remap-path-prefix=$env:GITHUB_WORKSPACE=. -C target-feature=+crt-static -Clinker=lld-link -W linker-messages" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "SCRYER_EMBED_UI_DIR=$env:GITHUB_WORKSPACE/scryer-web-out" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Install pinned NASM
@@ -1914,7 +1912,7 @@ jobs:
             artifact_name: scryer-windows-x86_64
             release_profile: release
             install_nasm: true
-            use_clang_cl: true
+            use_clang_cl: false
             use_lld_link: true
           - arch: arm64
             msi_arch: arm64
@@ -1927,7 +1925,7 @@ jobs:
             artifact_name: scryer-windows-arm64
             release_profile: release-thin
             install_nasm: false
-            use_clang_cl: true
+            use_clang_cl: false
             use_lld_link: true
     env:
       CARGO_INCREMENTAL: "0"
@@ -2113,12 +2111,9 @@ jobs:
           # our own cc::Build) only reaches sccache when CC/CXX name the wrapper
           # explicitly: cc-rs applies the RUSTC_WRAPPER fallback to its default
           # compiler, never to the vswhere-located cl.exe, so a plain MSVC lane
-          # compiles every native file uncached on every run. clang-cl is on PATH
-          # on the hosted Windows images (the LLVM install that also provides
-          # lld-link) and locates the MSVC SDK itself, so no developer shell is
-          # needed; the arm64 lane has run this exact wiring with C/C++ and
-          # assembler cache hits. cl.exe stays available as the escape hatch
-          # (use_clang_cl: false) but is deliberately left unwrapped: `sccache cl`
+          # compiles every native file uncached on every run. Use the MSVC cl.exe
+          # fallback while the hosted VS2026 headers require a newer clang-cl
+          # than the runner provides. Leave cl.exe unwrapped: `sccache cl`
           # would need INCLUDE/LIB/PATH from a vcvars shell that this job does
           # not set up. NASM-driven asm (aws-lc x86_64) is outside sccache either
           # way. The CMake launcher variables cover the aws-lc-sys cmake fallback
