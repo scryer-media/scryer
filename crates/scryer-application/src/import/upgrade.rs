@@ -9,6 +9,7 @@ use crate::domain_events::{
     DomainEventActor, created_media_update, deleted_media_update, modified_media_update,
     new_title_domain_event, title_context_snapshot,
 };
+use crate::location::model::VerificationDepth;
 use crate::recycle_bin::{self, RecycleBinConfig};
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::types::TitleMediaFile;
@@ -982,6 +983,7 @@ async fn dispose_same_path_guard_after_confirmed_db_swap(
             backup_path,
             recycle_metadata,
             true,
+            app.resolve_verification_depth().await,
         )
         .await?;
         let replacement_path = stored_path_to_path_buf(&manifest.replacement_path);
@@ -1260,6 +1262,8 @@ async fn finalize_distinct_path_upgrade(
     replacement_media_root: Option<&str>,
     old_file_media_root: Option<&str>,
 ) -> AppResult<bool> {
+    // The user's depth, read once for this upgrade's recycle and rollback.
+    let depth = app.resolve_verification_depth().await;
     let old_disposition = match prepare_old_file_disposition_for_upgrade(
         recycle_config,
         existing_file,
@@ -1267,6 +1271,7 @@ async fn finalize_distinct_path_upgrade(
         &existing_file.file_path,
         title,
         old_file_media_root,
+        depth,
     )
     .await
     {
@@ -1295,7 +1300,8 @@ async fn finalize_distinct_path_upgrade(
         )
         .await
     {
-        let rollback_result = rollback_old_file_disposition(&old_disposition, old_path).await;
+        let rollback_result =
+            rollback_old_file_disposition(&old_disposition, old_path, depth).await;
         rollback_new_replacement(
             app,
             &replacement.new_file_id,
@@ -1356,6 +1362,7 @@ async fn prepare_old_file_disposition_for_upgrade(
     manifest_original_path: &str,
     title: &Title,
     media_root: Option<&str>,
+    depth: VerificationDepth,
 ) -> AppResult<OldFileDisposition> {
     if recycle_config.enabled {
         let metadata = recycle_bin::ReplacedMediaRecycleMetadata {
@@ -1373,6 +1380,7 @@ async fn prepare_old_file_disposition_for_upgrade(
             old_file_source_path,
             metadata,
             false,
+            depth,
         )
         .await
         .map(|result| {
@@ -1450,11 +1458,13 @@ async fn commit_old_file_disposition_after_db_success(
 async fn rollback_old_file_disposition(
     disposition: &OldFileDisposition,
     original_path: &Path,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     match disposition {
         OldFileDisposition::Noop => Ok(()),
         OldFileDisposition::PendingRecycle(result) => {
-            recycle_bin::restore_recycled_file_exact(&result.recycled_path, original_path).await?;
+            recycle_bin::restore_recycled_file_exact(&result.recycled_path, original_path, depth)
+                .await?;
             if let Err(error) =
                 crate::fs_safety::remove_dir_all_safely_if_exists(&result.entry_dir).await
             {
@@ -1693,6 +1703,7 @@ async fn finalize_same_path_upgrade(
         old_file_media_root,
         &replacement.new_file_id,
         &replacement_physical_path,
+        app.resolve_verification_depth().await,
     )
     .await?;
     update_same_path_upgrade_guard_phase(&guard_path, UPGRADE_GUARD_PHASE_DISPOSED).await?;
@@ -1713,6 +1724,7 @@ async fn dispose_old_file_after_verified_upgrade(
     media_root: Option<&str>,
     replacement_file_id: &str,
     replacement_path: &Path,
+    depth: VerificationDepth,
 ) -> AppResult<bool> {
     if !recycle_config.enabled {
         recycle_bin::ensure_source_within_roots(recycle_config, old_file_source_path)?;
@@ -1735,6 +1747,7 @@ async fn dispose_old_file_after_verified_upgrade(
         old_file_source_path,
         metadata,
         true,
+        depth,
     )
     .await?;
 

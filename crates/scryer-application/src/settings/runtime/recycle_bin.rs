@@ -624,6 +624,7 @@ impl AppUseCase {
                 Ok(after) => {
                     let report = crate::recycle_bin::relocate_recycle_entries(
                         Self::recycle_bin_relocation_plans(&before, &after),
+                        self.resolve_verification_depth().await,
                     )
                     .await;
                     (!report.is_empty()).then_some(report)

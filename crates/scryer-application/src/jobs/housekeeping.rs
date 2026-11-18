@@ -1951,11 +1951,13 @@ impl AppUseCase {
 
         let restored_to = match conflict_policy {
             crate::RecycleRestoreConflictPolicy::KeepBoth => {
+                let depth = self.resolve_verification_depth().await;
                 crate::recycle_bin::restore_from_recycle_with_roots(
                     &recycled_file,
                     &original_path,
                     false,
                     &context.library_roots,
+                    depth,
                 )
                 .await?
             }
@@ -2202,9 +2204,11 @@ impl AppUseCase {
         recycled_file: &Path,
         original_path: &Path,
     ) -> AppResult<PathBuf> {
+        let depth = self.resolve_verification_depth().await;
         let occupant = restore_target(original_path).await?;
         if occupant.exists() != Some(true) {
-            crate::recycle_bin::restore_recycled_file_exact(recycled_file, original_path).await?;
+            crate::recycle_bin::restore_recycled_file_exact(recycled_file, original_path, depth)
+                .await?;
             return Ok(original_path.to_path_buf());
         }
 
@@ -2250,6 +2254,7 @@ impl AppUseCase {
             &context.recycle_config,
             original_path,
             displaced_manifest,
+            depth,
         )
         .await?
         .ok_or_else(|| {
@@ -2262,12 +2267,14 @@ impl AppUseCase {
         if let Err(error) = crate::recycle_bin::link_recycled_file_to_exact_destination(
             recycled_file,
             original_path,
+            depth,
         )
         .await
         {
             match crate::recycle_bin::restore_recycled_file_exact(
                 &displaced.recycled_path,
                 original_path,
+                depth,
             )
             .await
             {
@@ -2299,6 +2306,7 @@ impl AppUseCase {
             match crate::recycle_bin::restore_recycled_file_exact(
                 &displaced.recycled_path,
                 original_path,
+                depth,
             )
             .await
             {

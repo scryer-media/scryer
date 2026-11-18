@@ -194,6 +194,7 @@ impl SourceRecycler for RecordingRecycler {
         source: &Path,
         _media_file_id: Option<&str>,
         _size_bytes: u64,
+        _depth: VerificationDepth,
     ) -> AppResult<SourceDisposal> {
         if tokio::fs::symlink_metadata(source).await.is_err() {
             return Ok(SourceDisposal::AlreadyAbsent);
@@ -2229,7 +2230,14 @@ async fn removing_a_verified_source_is_always_reported() {
     let plan = single_title_plan(&temp.path().join("a"), &temp.path().join("b"), "m.mkv", 5);
 
     let disposal = RemoveVerifiedSource
-        .recycle_source("op-1", &plan.titles[0], &source, Some("mf-1"), 5)
+        .recycle_source(
+            "op-1",
+            &plan.titles[0],
+            &source,
+            Some("mf-1"),
+            5,
+            VerificationDepth::Full,
+        )
         .await
         .expect("dispose");
 
@@ -2242,7 +2250,14 @@ async fn removing_a_verified_source_is_always_reported() {
     // Running it again on the now-missing source is a no-op, so a resumed
     // cleanup cannot fail.
     let disposal = RemoveVerifiedSource
-        .recycle_source("op-1", &plan.titles[0], &source, Some("mf-1"), 5)
+        .recycle_source(
+            "op-1",
+            &plan.titles[0],
+            &source,
+            Some("mf-1"),
+            5,
+            VerificationDepth::Full,
+        )
         .await
         .expect("dispose");
     assert_eq!(disposal, SourceDisposal::AlreadyAbsent);

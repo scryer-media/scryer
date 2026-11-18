@@ -937,6 +937,7 @@ async fn cleanup_superseded_episode_incumbents(
     replacement_file_id: &str,
     replacement_path: &Path,
 ) {
+    let depth = app.resolve_verification_depth().await;
     for incumbent in superseded {
         let mut recycle_result = None;
         let old_path =
@@ -986,6 +987,7 @@ async fn cleanup_superseded_episode_incumbents(
                 &old_path,
                 metadata,
                 true,
+                depth,
             )
             .await
             {

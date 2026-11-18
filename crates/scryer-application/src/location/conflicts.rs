@@ -3343,11 +3343,16 @@ impl AppUseCase {
                                 refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
                             })?;
                         } else {
-                            crate::recycle_bin::recycle_file(&config, &source, manifest)
-                                .await
-                                .map_err(|error| {
-                                    refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
-                                })?;
+                            crate::recycle_bin::recycle_file(
+                                &config,
+                                &source,
+                                manifest,
+                                operation.verification_depth,
+                            )
+                            .await
+                            .map_err(|error| {
+                                refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
+                            })?;
                         }
                     } else {
                         if linked {

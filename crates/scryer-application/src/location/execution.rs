@@ -43,7 +43,7 @@ use crate::location::executor::{
     TitleFileMover, TitleReconciler, TitleStepOutcome,
 };
 use crate::location::merge::engine::{TitleMergeRepository, execute_merge, plan_merge};
-use crate::location::model::LocationOperation;
+use crate::location::model::{LocationOperation, VerificationDepth};
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
 use crate::location::verify::{DestinationClaim, VerifiedFile, same_filesystem};
@@ -340,7 +340,8 @@ pub enum SourceDisposal {
 #[async_trait]
 pub trait SourceRecycler: Send + Sync {
     /// Recycle `source`, attributing the entry to `operation_id` and `title_id`
-    /// so the recycle manifest links back to the operation.
+    /// so the recycle manifest links back to the operation. `depth` is the
+    /// operation's verification depth, which a copy into the bin is proven at.
     async fn recycle_source(
         &self,
         operation_id: &str,
@@ -348,6 +349,7 @@ pub trait SourceRecycler: Send + Sync {
         source: &Path,
         media_file_id: Option<&str>,
         size_bytes: u64,
+        depth: VerificationDepth,
     ) -> AppResult<SourceDisposal>;
 }
 
@@ -1931,6 +1933,7 @@ impl SourceRecycler for RemoveVerifiedSource {
         source: &Path,
         _media_file_id: Option<&str>,
         _size_bytes: u64,
+        _depth: VerificationDepth,
     ) -> AppResult<SourceDisposal> {
         match Disk::process().remove(source, Remove::File).await {
             Ok(Removal::Removed) => Ok(SourceDisposal::RemovedRecycleUnavailable(
@@ -1975,6 +1978,7 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         source: &Path,
         media_file_id: Option<&str>,
         size_bytes: u64,
+        depth: VerificationDepth,
     ) -> AppResult<SourceDisposal> {
         let reading = Disk::process().uncached(source).await;
         match reading.exists() {
@@ -1992,7 +1996,14 @@ impl SourceRecycler for RecycleBinSourceRecycler {
 
         let Some(config) = self.config_for(title).filter(|config| config.enabled) else {
             return RemoveVerifiedSource
-                .recycle_source(operation_id, title, source, media_file_id, size_bytes)
+                .recycle_source(
+                    operation_id,
+                    title,
+                    source,
+                    media_file_id,
+                    size_bytes,
+                    depth,
+                )
                 .await;
         };
 
@@ -2013,7 +2024,7 @@ impl SourceRecycler for RecycleBinSourceRecycler {
             media_row: None,
         };
 
-        match crate::recycle_bin::recycle_file(config, source, manifest).await {
+        match crate::recycle_bin::recycle_file(config, source, manifest, depth).await {
             Ok(Some(_)) => Ok(SourceDisposal::Recycled),
             Ok(None) => Ok(SourceDisposal::AlreadyAbsent),
             Err(error) => {

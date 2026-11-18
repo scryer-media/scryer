@@ -5,7 +5,7 @@ use crate::disk::{
 };
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
-    CopyProgress, DestinationClaim, copy_and_verify, copy_and_verify_reporting, hash_existing_file,
+    CopyProgress, DestinationClaim, copy_and_verify, copy_and_verify_reporting,
 };
 use crate::{AppError, AppResult};
 
@@ -554,8 +554,17 @@ pub async fn recycle_file(
     config: &RecycleBinConfig,
     source_path: &Path,
     manifest: RecycleManifest,
+    depth: VerificationDepth,
 ) -> AppResult<Option<RecycleResult>> {
-    recycle_file_inner(config, source_path, source_path, manifest, true, false).await
+    recycle_file_inner(
+        config,
+        source_path,
+        source_path,
+        manifest,
+        true,
+        RecycleStep::Move(depth),
+    )
+    .await
 }
 
 /// Moves a file into a pending recycle entry that retention housekeeping must
@@ -564,8 +573,17 @@ pub(crate) async fn recycle_file_pending(
     config: &RecycleBinConfig,
     source_path: &Path,
     manifest: RecycleManifest,
+    depth: VerificationDepth,
 ) -> AppResult<Option<RecycleResult>> {
-    recycle_file_inner(config, source_path, source_path, manifest, false, false).await
+    recycle_file_inner(
+        config,
+        source_path,
+        source_path,
+        manifest,
+        false,
+        RecycleStep::Move(depth),
+    )
+    .await
 }
 
 pub(crate) async fn recycle_replaced_media_file(
@@ -573,6 +591,7 @@ pub(crate) async fn recycle_replaced_media_file(
     source_path: &Path,
     metadata: ReplacedMediaRecycleMetadata<'_>,
     commit_after_move: bool,
+    depth: VerificationDepth,
 ) -> AppResult<Option<RecycleResult>> {
     let mut manifest = RecycleManifest::pending_upgrade(
         metadata.original_path.to_string(),
@@ -589,7 +608,7 @@ pub(crate) async fn recycle_replaced_media_file(
         &payload_name_path,
         manifest,
         commit_after_move,
-        false,
+        RecycleStep::Move(depth),
     )
     .await
 }
@@ -665,14 +684,21 @@ pub(crate) async fn prepare_conflict_recycle(
             "A reserved recycle entry requires its operation identity",
         )
     })?;
-    let result = recycle_file_inner(config, source, source, manifest, false, true)
-        .await?
-        .ok_or_else(|| {
-            AppError::validation_refused(
-                crate::error_reasons::library::REGULAR_FILE_REQUIRED,
-                "The file disappeared before its recycle entry was reserved",
-            )
-        })?;
+    let result = recycle_file_inner(
+        config,
+        source,
+        source,
+        manifest,
+        false,
+        RecycleStep::Prepare,
+    )
+    .await?
+    .ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::library::REGULAR_FILE_REQUIRED,
+            "The file disappeared before its recycle entry was reserved",
+        )
+    })?;
     Ok(PreparedRecycleFile {
         entry_id: result.entry_id,
         original_path,
@@ -799,7 +825,7 @@ pub(crate) async fn execute_conflict_recycle(
                 return Err(AppError::Repository(gone));
             }
         }
-        Some(false) => recycle_source_to_destination(source.to_owned(), payload).await?,
+        Some(false) => recycle_source_to_destination(source.to_owned(), payload, depth).await?,
         None => return Err(unreadable(&payload, reading)),
     }
     finish_conflict_recycle(config, prepared).await
@@ -1006,14 +1032,25 @@ mod conflict_recycle_tests {
     }
 }
 
+/// What a recycle does once its entry is made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecycleStep {
+    /// Reserve the entry only; the file is moved later.
+    Prepare,
+    /// Move the file in now. A move that must copy proves the copy at the
+    /// user's depth before the source goes.
+    Move(VerificationDepth),
+}
+
 async fn recycle_file_inner(
     config: &RecycleBinConfig,
     source_path: &Path,
     payload_name_path: &Path,
     mut manifest: RecycleManifest,
     commit_after_move: bool,
-    prepare_only: bool,
+    step: RecycleStep,
 ) -> AppResult<Option<RecycleResult>> {
+    let prepare_only = step == RecycleStep::Prepare;
     let source_reading = Disk::process().uncached(source_path).await;
     match source_reading.exists() {
         Some(true) => {}
@@ -1124,17 +1161,20 @@ async fn recycle_file_inner(
             .map_err(repository)?;
     }
 
-    if prepare_only {
-        return Ok(Some(RecycleResult {
-            entry_id: dir_name,
-            entry_dir: recycle_dir.clone(),
-            recycled_path,
-            manifest_path: manifest_path(&recycle_dir),
-        }));
-    }
+    let depth = match step {
+        RecycleStep::Prepare => {
+            return Ok(Some(RecycleResult {
+                entry_id: dir_name,
+                entry_dir: recycle_dir.clone(),
+                recycled_path,
+                manifest_path: manifest_path(&recycle_dir),
+            }));
+        }
+        RecycleStep::Move(depth) => depth,
+    };
 
     if let Err(error) =
-        recycle_source_to_destination(source_path.to_path_buf(), recycled_path.clone()).await
+        recycle_source_to_destination(source_path.to_path_buf(), recycled_path.clone(), depth).await
     {
         let _ = crate::fs_safety::remove_dir_all_safely_if_exists(&recycle_dir).await;
         return Err(error);
@@ -1169,6 +1209,7 @@ async fn recycle_file_inner(
 async fn recycle_source_to_destination(
     source_path: PathBuf,
     recycled_path: PathBuf,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     let policy = placement::rename_onto_held_name();
     match (Disk::process().place(&source_path, &recycled_path, policy)).await {
@@ -1192,17 +1233,25 @@ async fn recycle_source_to_destination(
         }
     }
 
-    recycle_by_verified_copy(&source_path, &recycled_path, CopyProgress::none()).await
+    recycle_by_verified_copy(&source_path, &recycled_path, CopyProgress::none(), depth).await
 }
 
-/// Copy `source_path` into the recycle bin, prove the copy, and only then
-/// remove the source. `recycled_path` must not exist yet.
+/// Copy `source_path` into the recycle bin, prove the copy at `depth`, and
+/// only then remove the source. `recycled_path` must not exist yet.
 async fn recycle_by_verified_copy(
     source_path: &Path,
     recycled_path: &Path,
     progress: CopyProgress,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
-    quick_verified_copy(source_path, recycled_path, CopyTarget::Unclaimed, progress).await?;
+    proven_copy(
+        source_path,
+        recycled_path,
+        CopyTarget::Unclaimed,
+        progress,
+        depth,
+    )
+    .await?;
 
     match crate::fs_safety::remove_file_safely_if_exists(source_path).await {
         Ok(()) => Ok(()),
@@ -1242,14 +1291,16 @@ enum CopyTarget {
     Occupied,
 }
 
-/// Copy one file through the verified copier and prove it with the quick
-/// check. Anything short of a verified copy removes what the copy wrote and
-/// fails, so the caller never removes a source on an unproven destination.
-async fn quick_verified_copy(
+/// Copy one file through the verified copier and prove it at `depth`, the
+/// user's verification setting for this request. Anything short of a verified
+/// copy removes what the copy wrote and fails, so the caller never removes a
+/// source on an unproven destination.
+async fn proven_copy(
     source: &Path,
     destination: &Path,
     target: CopyTarget,
     progress: CopyProgress,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     let claim = match target {
         CopyTarget::Unclaimed => DestinationClaim::ClaimHere,
@@ -1259,7 +1310,7 @@ async fn quick_verified_copy(
         &Disk::process(),
         source,
         destination,
-        placement::verified_copy(VerificationDepth::Quick, claim),
+        placement::verified_copy(depth, claim),
         &progress,
     )
     .await;
@@ -1421,14 +1472,23 @@ async fn copy_recycled_to_claimed_destination(
     recycled_path: &Path,
     destination: &Path,
     progress: CopyProgress,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
-    quick_verified_copy(recycled_path, destination, CopyTarget::OwnClaim, progress).await
+    proven_copy(
+        recycled_path,
+        destination,
+        CopyTarget::OwnClaim,
+        progress,
+        depth,
+    )
+    .await
 }
 
 async fn restore_without_overwrite(
     recycled_path: &Path,
     original_path: &Path,
     allowed_roots: Option<&[PathBuf]>,
+    depth: VerificationDepth,
 ) -> AppResult<PathBuf> {
     let disk = Disk::process();
     let policy = placement::recycle_restore_link();
@@ -1492,6 +1552,7 @@ async fn restore_without_overwrite(
                     recycled_path,
                     &destination,
                     CopyProgress::none(),
+                    depth,
                 )
                 .await?;
             }
@@ -1532,8 +1593,9 @@ pub async fn restore_from_recycle(
     recycled_path: &Path,
     original_path: &Path,
     overwrite: bool,
+    depth: VerificationDepth,
 ) -> AppResult<PathBuf> {
-    restore_from_recycle_inner(recycled_path, original_path, overwrite, None).await
+    restore_from_recycle_inner(recycled_path, original_path, overwrite, None, depth).await
 }
 
 pub(crate) async fn restore_from_recycle_with_roots(
@@ -1541,15 +1603,24 @@ pub(crate) async fn restore_from_recycle_with_roots(
     original_path: &Path,
     overwrite: bool,
     allowed_roots: &[PathBuf],
+    depth: VerificationDepth,
 ) -> AppResult<PathBuf> {
-    restore_from_recycle_inner(recycled_path, original_path, overwrite, Some(allowed_roots)).await
+    restore_from_recycle_inner(
+        recycled_path,
+        original_path,
+        overwrite,
+        Some(allowed_roots),
+        depth,
+    )
+    .await
 }
 
 pub(crate) async fn restore_recycled_file_exact(
     recycled_path: &Path,
     destination: &Path,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
-    link_recycled_file_to_exact_destination(recycled_path, destination).await?;
+    link_recycled_file_to_exact_destination(recycled_path, destination, depth).await?;
     crate::fs_safety::remove_file_safely(recycled_path)
         .await
         .map_err(|error| {
@@ -1569,6 +1640,7 @@ pub(crate) async fn restore_recycled_file_exact(
 pub(crate) async fn link_recycled_file_to_exact_destination(
     recycled_path: &Path,
     destination: &Path,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     ensure_recycled_restore_source_is_regular(recycled_path).await?;
     let disk = Disk::process();
@@ -1622,8 +1694,13 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
                 ))
             })?;
             drop(claimed);
-            copy_recycled_to_claimed_destination(recycled_path, destination, CopyProgress::none())
-                .await
+            copy_recycled_to_claimed_destination(
+                recycled_path,
+                destination,
+                CopyProgress::none(),
+                depth,
+            )
+            .await
         }
     }
 }
@@ -1636,6 +1713,7 @@ async fn restore_over_by_verified_copy(
     recycled_path: &Path,
     original_path: &Path,
     progress: CopyProgress,
+    depth: VerificationDepth,
 ) -> AppResult<()> {
     let reading = Disk::process().uncached(original_path).await;
     let target = match reading.exists() {
@@ -1643,7 +1721,7 @@ async fn restore_over_by_verified_copy(
         Some(false) => CopyTarget::Unclaimed,
         None => return Err(unreadable(original_path, reading)),
     };
-    quick_verified_copy(recycled_path, original_path, target, progress).await?;
+    proven_copy(recycled_path, original_path, target, progress, depth).await?;
     let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
     Ok(())
 }
@@ -1653,6 +1731,7 @@ async fn restore_from_recycle_inner(
     original_path: &Path,
     overwrite: bool,
     allowed_roots: Option<&[PathBuf]>,
+    depth: VerificationDepth,
 ) -> AppResult<PathBuf> {
     ensure_recycled_restore_source_is_regular(recycled_path).await?;
 
@@ -1676,7 +1755,7 @@ async fn restore_from_recycle_inner(
 
     if !overwrite {
         let destination =
-            restore_without_overwrite(recycled_path, original_path, allowed_roots).await?;
+            restore_without_overwrite(recycled_path, original_path, allowed_roots, depth).await?;
         info!(
             restored = %destination.display(),
             "file restored from recycle bin"
@@ -1688,8 +1767,13 @@ async fn restore_from_recycle_inner(
     match (Disk::process().place(recycled_path, original_path, policy)).await {
         Ok(_) => {}
         Err(error) if error.refused == Refused::NeedsCopy => {
-            restore_over_by_verified_copy(recycled_path, original_path, CopyProgress::none())
-                .await?;
+            restore_over_by_verified_copy(
+                recycled_path,
+                original_path,
+                CopyProgress::none(),
+                depth,
+            )
+            .await?;
         }
         Err(error) => {
             return Err(AppError::Repository(format!(
@@ -2377,13 +2461,24 @@ struct RelocationOps {
     allow_rename: bool,
     /// Copies and proves each file of an entry that cannot be renamed.
     copier: Disk,
+    /// The user's verification depth for this relocation's copies.
+    depth: VerificationDepth,
 }
 
+/// The full depth the relocation tests were written for.
+#[cfg(test)]
 impl Default for RelocationOps {
     fn default() -> Self {
+        Self::at(VerificationDepth::Full)
+    }
+}
+
+impl RelocationOps {
+    fn at(depth: VerificationDepth) -> Self {
         Self {
             allow_rename: true,
             copier: Disk::process(),
+            depth,
         }
     }
 }
@@ -2395,10 +2490,11 @@ impl Default for RelocationOps {
 /// is left as it is. An entry is never written over an existing entry.
 pub(crate) async fn relocate_recycle_entries(
     plans: Vec<RecycleRelocationPlan>,
+    depth: VerificationDepth,
 ) -> RecycleBinRelocationReport {
     let mut report = RecycleBinRelocationReport::default();
     for plan in plans {
-        report.merge(relocate_plan(&plan, RelocationOps::default()).await);
+        report.merge(relocate_plan(&plan, RelocationOps::at(depth)).await);
     }
     report
 }
@@ -2781,7 +2877,7 @@ async fn copy_entry_tree(
             &ops.copier,
             &source,
             &target,
-            placement::verified_copy(VerificationDepth::Full, DestinationClaim::ClaimHere),
+            placement::verified_copy(ops.depth, DestinationClaim::ClaimHere),
             &CopyProgress::none(),
         )
         .await
@@ -2802,10 +2898,45 @@ async fn copy_entry_tree(
                 target.display()
             ));
         }
-        let source_now = hash_existing_file(&source)
-            .await
-            .map_err(|error| format!("could not re-check {}: {error}", source.display()))?;
-        if verified.hashes.as_ref() != Some(&source_now) {
+        // The entry's file must still hold what was copied, at the same
+        // depth: at full depth its fresh full hash is the copy's, at quick
+        // depth it and the copy are sampled now.
+        let held = match ops.depth {
+            VerificationDepth::Full => {
+                match Disk::process()
+                    .full_hash(crate::disk::HashAsk::new(source.as_path()).fresh())
+                    .await
+                {
+                    crate::disk::FullHashAnswer::Read(known) => {
+                        verified.hashes.as_ref().is_some_and(|copied| {
+                            copied.full_blake3 == known.blake3
+                                && copied.size_bytes == known.size_bytes
+                        })
+                    }
+                    crate::disk::FullHashAnswer::Unreadable(why) => {
+                        return Err(format!("could not re-check {}: {why}", source.display()));
+                    }
+                    _ => false,
+                }
+            }
+            VerificationDepth::Quick => {
+                match Disk::process()
+                    .check(
+                        source.as_path(),
+                        target.as_path(),
+                        crate::disk::Depth::Quick,
+                    )
+                    .await
+                {
+                    Check::Same => true,
+                    Check::Unread(why) => {
+                        return Err(format!("could not re-check {}: {why}", source.display()));
+                    }
+                    Check::Differs | Check::Changed => false,
+                }
+            }
+        };
+        if !held {
             return Err(format!(
                 "{} changed while it was being copied",
                 source.display()
@@ -3309,7 +3440,7 @@ mod tests {
                         crate::stored_paths::stored_path_to_path_buf(&receipt.recycled_path),
                     )
                 } else {
-                    let result = recycle_file(&config, &source, manifest)
+                    let result = recycle_file(&config, &source, manifest, VerificationDepth::Full)
                         .await
                         .unwrap()
                         .unwrap();
@@ -3327,9 +3458,15 @@ mod tests {
                 );
                 let listed = list_committed_entries(&config).await.unwrap();
                 assert_eq!(listed.len(), 1);
-                let restored = restore_from_recycle_with_roots(&payload, &source, false, &[root])
-                    .await
-                    .unwrap();
+                let restored = restore_from_recycle_with_roots(
+                    &payload,
+                    &source,
+                    false,
+                    &[root],
+                    VerificationDepth::Full,
+                )
+                .await
+                .unwrap();
                 assert_eq!(restored, source);
                 assert_eq!(std::fs::read(restored).unwrap(), bytes);
                 assert_eq!(
@@ -3402,9 +3539,15 @@ mod tests {
             let manifest = read_manifest(&entry).await.unwrap().unwrap();
             let payload = recycled_payload_path(&entry, &manifest).await.unwrap();
             assert_eq!(std::fs::read(&payload).unwrap(), bytes);
-            restore_from_recycle_with_roots(&payload, &source, false, &[root])
-                .await
-                .unwrap();
+            restore_from_recycle_with_roots(
+                &payload,
+                &source,
+                false,
+                &[root],
+                VerificationDepth::Full,
+            )
+            .await
+            .unwrap();
             assert_eq!(std::fs::read(&source).unwrap(), bytes);
         }
     }
@@ -3419,7 +3562,7 @@ mod tests {
         let config = test_config(&root.join("bin"));
         let mut manifest = test_manifest();
         manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
-        let result = recycle_file(&config, &source, manifest)
+        let result = recycle_file(&config, &source, manifest, VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
@@ -3520,7 +3663,7 @@ mod tests {
         tokio::fs::write(&source, b"video data").await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap();
 
@@ -3549,7 +3692,7 @@ mod tests {
         let mut manifest = test_manifest();
         manifest.original_path = "scryer-path-v1:u:/data/movies/%FFmanifest-name.mkv".to_string();
 
-        let result = recycle_file(&config, &source, manifest)
+        let result = recycle_file(&config, &source, manifest, VerificationDepth::Full)
             .await
             .unwrap()
             .expect("recycled");
@@ -3569,7 +3712,7 @@ mod tests {
         let before = std::fs::metadata(&source).unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .expect("recycled");
@@ -3595,7 +3738,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &link, test_manifest()).await;
+        let result = recycle_file(&config, &link, test_manifest(), VerificationDepth::Full).await;
 
         assert!(result.is_err(), "symlink source must be refused");
         assert!(link.exists(), "refused symlink should remain");
@@ -3620,9 +3763,10 @@ mod tests {
             media_root: Some(tmp.path().to_str().unwrap()),
             media_row: None,
         };
-        let result = recycle_replaced_media_file(&config, &source, metadata, false)
-            .await
-            .unwrap();
+        let result =
+            recycle_replaced_media_file(&config, &source, metadata, false, VerificationDepth::Full)
+                .await
+                .unwrap();
 
         let replacement_name = std::ffi::OsString::from_vec(b"replacement-\xFF.mkv".to_vec());
         let replacement_path = tmp.path().join(replacement_name);
@@ -3658,7 +3802,7 @@ mod tests {
             source_roots: vec![tmp.path().to_path_buf()],
         };
 
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap();
 
@@ -3683,7 +3827,8 @@ mod tests {
             source_roots: vec![tmp.path().join("media-root")],
         };
 
-        let result = recycle_file(&config, &outside, test_manifest()).await;
+        let result =
+            recycle_file(&config, &outside, test_manifest(), VerificationDepth::Full).await;
         assert!(result.is_err(), "out-of-root source must be refused");
         assert!(outside.exists(), "refused source must not be deleted");
     }
@@ -3862,7 +4007,7 @@ mod tests {
             source_roots: Vec::new(),
         };
 
-        let result = recycle_file(&config, &source, test_manifest()).await;
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full).await;
         assert!(result.is_err(), "unknown roots must fail closed");
         assert!(source.exists(), "refused source must not be deleted");
     }
@@ -3882,9 +4027,14 @@ mod tests {
             source_roots: vec![media_root],
         };
 
-        let error = recycle_file(&config, &source_dir, test_manifest())
-            .await
-            .expect_err("directory sources must be refused");
+        let error = recycle_file(
+            &config,
+            &source_dir,
+            test_manifest(),
+            VerificationDepth::Full,
+        )
+        .await
+        .expect_err("directory sources must be refused");
         assert!(
             error.to_string().contains("not a regular file"),
             "unexpected error: {error}"
@@ -3900,9 +4050,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp.path().join("recycle"));
 
-        let result = recycle_file(&config, &tmp.path().join("nope.mkv"), test_manifest())
-            .await
-            .unwrap();
+        let result = recycle_file(
+            &config,
+            &tmp.path().join("nope.mkv"),
+            test_manifest(),
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert!(result.is_none());
     }
@@ -3916,16 +4071,21 @@ mod tests {
         tokio::fs::write(&source, content).await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
 
         assert!(!source.exists());
 
-        let restored_to = restore_from_recycle(&result.recycled_path, &source, false)
-            .await
-            .unwrap();
+        let restored_to = restore_from_recycle(
+            &result.recycled_path,
+            &source,
+            false,
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(restored_to, source);
         assert!(source.exists());
@@ -3942,12 +4102,12 @@ mod tests {
         tokio::fs::write(&source, content).await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
 
-        restore_recycled_file_exact(&result.recycled_path, &source)
+        restore_recycled_file_exact(&result.recycled_path, &source, VerificationDepth::Full)
             .await
             .unwrap();
 
@@ -3967,14 +4127,18 @@ mod tests {
         tokio::fs::write(&source, content).await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
 
-        link_recycled_file_to_exact_destination(&result.recycled_path, &source)
-            .await
-            .unwrap();
+        link_recycled_file_to_exact_destination(
+            &result.recycled_path,
+            &source,
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(tokio::fs::read(&source).await.unwrap(), content);
         assert_eq!(
@@ -3992,10 +4156,11 @@ mod tests {
 
         let mut config = test_config(&recycle_dir);
         config.retention_days = 0;
-        let result = recycle_file_pending(&config, &source, test_manifest())
-            .await
-            .unwrap()
-            .unwrap();
+        let result =
+            recycle_file_pending(&config, &source, test_manifest(), VerificationDepth::Full)
+                .await
+                .unwrap()
+                .unwrap();
         let mut manifest = read_manifest(&result.entry_dir).await.unwrap().unwrap();
         manifest.recycled_at = (Utc::now() - chrono::Duration::days(1)).to_rfc3339();
         write_manifest(&result.entry_dir, &manifest).await.unwrap();
@@ -4026,10 +4191,15 @@ mod tests {
         tokio::fs::write(&stale_source, b"stale video")
             .await
             .unwrap();
-        let stale = recycle_file_pending(&config, &stale_source, test_manifest())
-            .await
-            .unwrap()
-            .unwrap();
+        let stale = recycle_file_pending(
+            &config,
+            &stale_source,
+            test_manifest(),
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let mut stale_manifest = read_manifest(&stale.entry_dir).await.unwrap().unwrap();
         stale_manifest.recycled_at = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
         write_manifest(&stale.entry_dir, &stale_manifest)
@@ -4040,10 +4210,15 @@ mod tests {
         tokio::fs::write(&fresh_source, b"fresh video")
             .await
             .unwrap();
-        let fresh = recycle_file_pending(&config, &fresh_source, test_manifest())
-            .await
-            .unwrap()
-            .unwrap();
+        let fresh = recycle_file_pending(
+            &config,
+            &fresh_source,
+            test_manifest(),
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
         assert_eq!(reconcile_stale_pending_entries(&config).await.unwrap(), 1);
 
@@ -4101,9 +4276,14 @@ mod tests {
         tokio::fs::write(&source, b"library bytes").await.unwrap();
         tokio::fs::write(&bystander, b"unrelated").await.unwrap();
 
-        recycle_by_verified_copy(&source, &recycled, CopyProgress::none())
-            .await
-            .unwrap();
+        recycle_by_verified_copy(
+            &source,
+            &recycled,
+            CopyProgress::none(),
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert!(!source.exists(), "the proven copy replaces the source");
         assert_eq!(std::fs::read(&recycled).unwrap(), b"library bytes");
@@ -4124,6 +4304,7 @@ mod tests {
             &source,
             &recycled,
             damage_when_verification_starts(&recycled, b"damaged"),
+            VerificationDepth::Full,
         )
         .await
         .expect_err("an unproven copy must fail the recycle");
@@ -4147,9 +4328,14 @@ mod tests {
         tokio::fs::write(&source, b"library bytes").await.unwrap();
         tokio::fs::write(&recycled, b"already here").await.unwrap();
 
-        recycle_by_verified_copy(&source, &recycled, CopyProgress::none())
-            .await
-            .expect_err("an occupied destination must fail the recycle");
+        recycle_by_verified_copy(
+            &source,
+            &recycled,
+            CopyProgress::none(),
+            VerificationDepth::Full,
+        )
+        .await
+        .expect_err("an occupied destination must fail the recycle");
 
         assert_eq!(std::fs::read(&source).unwrap(), b"library bytes");
         assert_eq!(std::fs::read(&recycled).unwrap(), b"already here");
@@ -4219,6 +4405,7 @@ mod tests {
             &source,
             &recycled,
             set_mode_when_verification_starts(&library, 0o555),
+            VerificationDepth::Full,
         )
         .await
         .expect_err("a source that cannot be removed fails the recycle");
@@ -4268,7 +4455,7 @@ mod tests {
             })
         };
 
-        recycle_by_verified_copy(&source, &recycled, progress)
+        recycle_by_verified_copy(&source, &recycled, progress, VerificationDepth::Full)
             .await
             .expect_err("a source that cannot be removed fails the recycle");
         assert!(
@@ -4295,11 +4482,12 @@ mod tests {
         std::fs::write(&original, b"the occupant").unwrap();
         std::fs::write(&bystander, b"unrelated").unwrap();
 
-        quick_verified_copy(
+        proven_copy(
             &recycled,
             &original,
             CopyTarget::Occupied,
             CopyProgress::none(),
+            VerificationDepth::Quick,
         )
         .await
         .expect_err("a missing recycled file fails the restore");
@@ -4321,11 +4509,12 @@ mod tests {
         std::fs::write(&reserved, b"").unwrap();
         std::fs::write(&bystander, b"unrelated").unwrap();
 
-        quick_verified_copy(
+        proven_copy(
             &recycled,
             &reserved,
             CopyTarget::OwnClaim,
             CopyProgress::none(),
+            VerificationDepth::Quick,
         )
         .await
         .expect_err("a missing recycled file fails the restore");
@@ -4356,6 +4545,7 @@ mod tests {
             &recycled_path,
             &destination,
             damage_when_verification_starts(&destination, b"mismatched restored bytes"),
+            VerificationDepth::Full,
         )
         .await
         .expect_err("sampled proof mismatch should fail restore");
@@ -4386,9 +4576,10 @@ mod tests {
             .await
             .unwrap();
 
-        let error = restore_recycled_file_exact(&recycled_path, &destination)
-            .await
-            .expect_err("occupied destination must be refused");
+        let error =
+            restore_recycled_file_exact(&recycled_path, &destination, VerificationDepth::Full)
+                .await
+                .expect_err("occupied destination must be refused");
 
         assert!(
             error.to_string().contains("destination is occupied"),
@@ -4410,7 +4601,7 @@ mod tests {
         tokio::fs::write(&source, recycled_content).await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
@@ -4419,9 +4610,14 @@ mod tests {
         let live_content = b"the current live file";
         tokio::fs::write(&source, live_content).await.unwrap();
 
-        let restored_to = restore_from_recycle(&result.recycled_path, &source, false)
-            .await
-            .unwrap();
+        let restored_to = restore_from_recycle(
+            &result.recycled_path,
+            &source,
+            false,
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         // Live file must be untouched; restored file lands at a -restored sibling.
         assert_eq!(tokio::fs::read(&source).await.unwrap(), live_content);
@@ -4442,7 +4638,7 @@ mod tests {
         tokio::fs::write(&source, recycled_content).await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
@@ -4454,9 +4650,14 @@ mod tests {
             .await
             .unwrap();
 
-        let restored_to = restore_from_recycle(&result.recycled_path, &source, false)
-            .await
-            .unwrap();
+        let restored_to = restore_from_recycle(
+            &result.recycled_path,
+            &source,
+            false,
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         let second_sibling = tmp.path().join("movie-restored-2.mkv");
         assert_eq!(restored_to, second_sibling);
@@ -4498,9 +4699,14 @@ mod tests {
             .unwrap();
         tokio::fs::write(&bystander, b"unrelated").await.unwrap();
 
-        restore_over_by_verified_copy(&recycled, &original, CopyProgress::none())
-            .await
-            .unwrap();
+        restore_over_by_verified_copy(
+            &recycled,
+            &original,
+            CopyProgress::none(),
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(std::fs::read(&original).unwrap(), b"recycled bytes");
         assert!(!recycled.exists(), "the proven restore replaces the copy");
@@ -4516,9 +4722,14 @@ mod tests {
             .await
             .unwrap();
 
-        restore_over_by_verified_copy(&recycled, &original, CopyProgress::none())
-            .await
-            .unwrap();
+        restore_over_by_verified_copy(
+            &recycled,
+            &original,
+            CopyProgress::none(),
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(std::fs::read(&original).unwrap(), b"recycled bytes");
         assert!(!recycled.exists());
@@ -4537,6 +4748,7 @@ mod tests {
             &recycled,
             &original,
             damage_when_verification_starts(&original, b"damaged"),
+            VerificationDepth::Full,
         )
         .await
         .expect_err("an unproven restore must fail");
@@ -4580,11 +4792,12 @@ mod tests {
 
         let restored = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            quick_verified_copy(
+            proven_copy(
                 &recycled,
                 &original,
                 CopyTarget::Occupied,
                 CopyProgress::none(),
+                VerificationDepth::Quick,
             ),
         )
         .await
@@ -4605,7 +4818,7 @@ mod tests {
         tokio::fs::write(&source, recycled_content).await.unwrap();
 
         let config = test_config(&recycle_dir);
-        let result = recycle_file(&config, &source, test_manifest())
+        let result = recycle_file(&config, &source, test_manifest(), VerificationDepth::Full)
             .await
             .unwrap()
             .unwrap();
@@ -4614,9 +4827,14 @@ mod tests {
             .await
             .unwrap();
 
-        let restored_to = restore_from_recycle(&result.recycled_path, &source, true)
-            .await
-            .unwrap();
+        let restored_to = restore_from_recycle(
+            &result.recycled_path,
+            &source,
+            true,
+            VerificationDepth::Full,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(restored_to, source);
         assert_eq!(tokio::fs::read(&source).await.unwrap(), recycled_content);
@@ -4634,9 +4852,10 @@ mod tests {
             .unwrap();
         std::os::unix::fs::symlink(&target, &recycled_link).unwrap();
 
-        let error = restore_from_recycle(&recycled_link, &destination, false)
-            .await
-            .expect_err("symlink recycle source should be refused");
+        let error =
+            restore_from_recycle(&recycled_link, &destination, false, VerificationDepth::Full)
+                .await
+                .expect_err("symlink recycle source should be refused");
 
         assert!(
             error.to_string().contains("symlink"),
@@ -4672,9 +4891,10 @@ mod tests {
             .unwrap();
         std::os::unix::fs::symlink(&target, &recycled_link).unwrap();
 
-        let error = restore_from_recycle(&recycled_link, &destination, true)
-            .await
-            .expect_err("symlink recycle source should be refused");
+        let error =
+            restore_from_recycle(&recycled_link, &destination, true, VerificationDepth::Full)
+                .await
+                .expect_err("symlink recycle source should be refused");
 
         assert!(
             error.to_string().contains("symlink"),
@@ -4947,6 +5167,7 @@ mod tests {
     ) -> RelocationOps {
         RelocationOps {
             allow_rename: false,
+            depth: VerificationDepth::Full,
             copier: Disk::process().with_read_back_opener(std::sync::Arc::new(
                 move |path: &Path| {
                     if path.file_name().is_some_and(|name| name == "media.mkv") {

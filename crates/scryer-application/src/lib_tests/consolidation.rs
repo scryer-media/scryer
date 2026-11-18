@@ -432,6 +432,7 @@ impl ConsolidationFixture {
                 replacement_path: None,
                 media_row: None,
             },
+            crate::location::model::VerificationDepth::Full,
         )
         .await
         .expect("recycle the fixture file")
