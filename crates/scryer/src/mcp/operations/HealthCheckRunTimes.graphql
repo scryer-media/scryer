@@ -1,0 +1,9 @@
+# When the latest health-check run started and finished. The results
+# themselves come from the cached checks, not from the run's summary.
+query HealthCheckRunTimes {
+  jobRuns(jobKey: HEALTH_CHECKS, limit: 1) {
+    status
+    startedAt
+    completedAt
+  }
+}

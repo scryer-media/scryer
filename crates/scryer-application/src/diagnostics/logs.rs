@@ -3,6 +3,7 @@
 use crate::disk::{Disk, Open};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Raw bytes read from the log files at most, newest content first. The
 /// archive cap trims further; this bound keeps sanitizing time reasonable.
@@ -18,7 +19,7 @@ pub const LEGACY_LOG_ROTATION_MARKER: &str = ".scryer-rotate-";
 
 /// What reading the log files produced.
 #[derive(Debug, Default)]
-pub(crate) struct LogFileRead {
+pub struct LogFileRead {
     /// Lines, oldest first, across the archives and the active file.
     pub lines: Vec<String>,
     /// Sources read, as code-defined labels (`active`, `rotated-1`, ...).
@@ -32,11 +33,11 @@ pub(crate) struct LogFileRead {
 }
 
 impl LogFileRead {
-    pub(crate) fn absent() -> Self {
+    pub fn absent() -> Self {
         Self::default()
     }
 
-    pub(crate) fn failed(reason: &str) -> Self {
+    pub fn failed(reason: &str) -> Self {
         Self {
             configured: true,
             failures: vec![("log_file".to_string(), reason.to_string())],
@@ -47,7 +48,13 @@ impl LogFileRead {
 
 /// Reads the active file and up to [`ROTATED_ARCHIVES_READ`] rotated gzip
 /// archives beside it, newest content first, until the read cap.
-pub(crate) fn read_log_files(active: &Path) -> LogFileRead {
+pub fn read_log_files(active: &Path) -> LogFileRead {
+    read_log_files_unless_cancelled(active, &AtomicBool::new(false))
+}
+
+/// [`read_log_files`], checking `cancelled` before each file and stopping
+/// with what was read so far once it is raised.
+pub fn read_log_files_unless_cancelled(active: &Path, cancelled: &AtomicBool) -> LogFileRead {
     let mut read = LogFileRead {
         configured: true,
         ..LogFileRead::default()
@@ -55,6 +62,9 @@ pub(crate) fn read_log_files(active: &Path) -> LogFileRead {
     let mut budget = LOG_FILE_READ_CAP_BYTES;
     // Newest first: the active file, then archives newest to oldest.
     let mut chunks: Vec<Vec<String>> = Vec::new();
+    if cancelled.load(Ordering::Acquire) {
+        return read;
+    }
     match read_tail(active, budget) {
         Ok((lines, used, capped)) => {
             budget = budget.saturating_sub(used);
@@ -66,6 +76,9 @@ pub(crate) fn read_log_files(active: &Path) -> LogFileRead {
     }
     for (index, archive) in rotated_archives(active).into_iter().enumerate() {
         let label = format!("rotated-{}", index + 1);
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
         if budget == 0 {
             read.read_capped = true;
             break;

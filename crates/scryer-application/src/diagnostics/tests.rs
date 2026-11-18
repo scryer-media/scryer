@@ -951,3 +951,93 @@ fn incomplete_known_values_leave_logs_and_metrics_out() {
                 && o["reason"] == "known_values_incomplete:indexers")
     );
 }
+
+// ---- log search ------------------------------------------------------------
+
+fn budget_search(max_scanned: usize, before: Option<LogCursor>) -> LogSearch {
+    LogSearch {
+        pattern: Some(LogPattern::new("fixture-never-matches").expect("pattern")),
+        min_level: None,
+        source: LogSource::Both,
+        max_lines: 10,
+        max_chars: 10_000,
+        max_scanned,
+        before,
+    }
+}
+
+fn fixture_lines(prefix: &str, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| format!("{prefix} line {index}"))
+        .collect()
+}
+
+#[test]
+fn log_search_stops_at_its_scan_budget_and_the_cursor_continues() {
+    let buffer = fixture_lines("buffer", 5);
+    let file = fixture_lines("file", 5);
+    let running = std::sync::atomic::AtomicBool::new(false);
+    let first = search_log_lines(
+        &patterns(),
+        &buffer,
+        &file,
+        &budget_search(4, None),
+        &running,
+    );
+    assert!(first.lines.is_empty());
+    assert_eq!(first.scanned, 4);
+    assert!(first.scan_capped);
+    assert_eq!(first.next_cursor, Some(LogCursor::Buffer(4)));
+
+    // The next page crosses into the file and stops again.
+    let second = search_log_lines(
+        &patterns(),
+        &buffer,
+        &file,
+        &budget_search(4, first.next_cursor),
+        &running,
+    );
+    assert!(second.scan_capped);
+    assert_eq!(second.next_cursor, Some(LogCursor::File(3)));
+
+    // What is left fits the budget: no cap, no cursor.
+    let third = search_log_lines(
+        &patterns(),
+        &buffer,
+        &file,
+        &budget_search(4, second.next_cursor),
+        &running,
+    );
+    assert_eq!(third.scanned, 2);
+    assert!(!third.scan_capped);
+    assert_eq!(third.next_cursor, None);
+}
+
+#[test]
+fn a_raised_cancellation_flag_stops_the_log_search() {
+    let buffer = fixture_lines("buffer", 5);
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let result = search_log_lines(
+        &patterns(),
+        &buffer,
+        &[],
+        &budget_search(100, None),
+        &cancelled,
+    );
+    assert!(result.cancelled);
+    assert_eq!(result.scanned, 0);
+    assert!(result.lines.is_empty());
+}
+
+#[test]
+fn a_raised_cancellation_flag_stops_the_log_file_read() {
+    let directory = tempfile::tempdir().expect("log directory");
+    let active = directory.path().join("scryer.log");
+    std::fs::write(&active, "fixture log line\n").expect("write log");
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let read = read_log_files_unless_cancelled(&active, &cancelled);
+    let running = std::sync::atomic::AtomicBool::new(false);
+    let full = read_log_files_unless_cancelled(&active, &running);
+    assert!(read.lines.is_empty());
+    assert_eq!(full.lines.len(), 1);
+}

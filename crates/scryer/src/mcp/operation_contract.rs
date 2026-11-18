@@ -107,3 +107,72 @@ async fn every_skill_operation_file_validates_against_the_served_schema() {
         failures.join("\n")
     );
 }
+
+fn validating_schema() -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+    Schema::build(
+        QueryRoot::default(),
+        MutationRoot::default(),
+        SubscriptionRoot,
+    )
+    .limit_recursive_depth(scryer_interface::GRAPHQL_RECURSIVE_DEPTH_LIMIT)
+    .extension(ValidateOnly)
+    .finish()
+}
+
+#[tokio::test]
+async fn every_document_an_mcp_tool_runs_validates_against_the_served_schema() {
+    let schema = validating_schema();
+    let documents = super::tools::every_operation_document();
+    assert!(!documents.is_empty());
+    let mut failures = Vec::new();
+    for (name, document) in &documents {
+        let response = schema.execute(Request::new(*document)).await;
+        if !response.errors.is_empty() {
+            let messages = response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            failures.push(format!("{name}: {messages}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} tool documents do not validate:\n{}",
+        failures.len(),
+        documents.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn no_document_an_mcp_tool_runs_is_an_authentication_operation() {
+    // Tool calls are charged once, before the tool runs, and their operations
+    // run without the authentication limiter; that holds only while no tool
+    // document authenticates.
+    let analyze =
+        |document: &str| crate::rate_limit::analyze_authentication_request(&Request::new(document));
+    let control = analyze("mutation Fixture { login(input: {}) { token } }");
+    assert!(control.class.is_some(), "the check must see a login");
+    for (name, document) in super::tools::every_operation_document() {
+        let analysis = analyze(document);
+        assert!(
+            analysis.class.is_none() && !analysis.rejected,
+            "{name} is an authentication operation or could not be read"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_document_naming_an_unknown_field_fails_validation() {
+    // Guards the check itself: a document the schema does not serve must not
+    // pass because execution was skipped.
+    let schema = validating_schema();
+    let response = schema
+        .execute(Request::new(
+            "query Fixture { me { notAFieldScryerServes } }",
+        ))
+        .await;
+    assert!(!response.errors.is_empty());
+}

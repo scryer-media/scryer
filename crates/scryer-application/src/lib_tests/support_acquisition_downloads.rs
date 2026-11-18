@@ -849,6 +849,24 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             .filter(|decision| decision.wanted_item_id == wanted_item_id)
             .count() as i64)
     }
+
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<crate::ReleaseDecisionCodeTally> {
+        let decisions = self.release_decisions.lock().await;
+        let mut newest = decisions.iter().collect::<Vec<_>>();
+        newest.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        let mut by_code = std::collections::BTreeMap::<String, i64>::new();
+        for decision in newest.iter().take(sample.max(0) as usize) {
+            *by_code.entry(decision.decision_code.clone()).or_default() += 1;
+        }
+        Ok(crate::ReleaseDecisionCodeTally {
+            total_rows: decisions.len() as i64,
+            sampled: by_code.values().sum(),
+            by_code: by_code.into_iter().collect(),
+        })
+    }
 }
 
 #[async_trait]

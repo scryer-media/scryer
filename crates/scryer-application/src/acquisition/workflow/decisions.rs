@@ -361,4 +361,21 @@ impl AppUseCase {
         }
         Ok((vec![], 0))
     }
+
+    /// Decision codes over the newest `sample` decisions of the whole
+    /// instance. Every library's decisions are counted, so it takes the
+    /// system-settings permission.
+    pub async fn tally_recent_release_decision_codes(
+        &self,
+        actor: &User,
+        sample: i64,
+    ) -> AppResult<crate::ReleaseDecisionCodeTally> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        self.services
+            .workflow
+            .acquisition_scope_states
+            .tally_recent_release_decision_codes(sample)
+            .await
+    }
 }

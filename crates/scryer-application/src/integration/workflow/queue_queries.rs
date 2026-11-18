@@ -1540,6 +1540,94 @@ impl AppUseCase {
             stale,
         })
     }
+
+    /// Counts over the caller's whole visible queue and one page of it, in a
+    /// single pass over the read model. Visibility is the same as
+    /// [`Self::list_download_queue_page`]: rows in the caller's libraries,
+    /// and rows with no title or an unknown title only with the
+    /// system-settings permission. The page follows the status sort.
+    pub async fn diagnose_download_queue(
+        &self,
+        actor: &User,
+        title_id: Option<&str>,
+        attention_only: bool,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<DownloadQueueDiagnosis> {
+        let allowed_library_ids = self.require_privileged_queue_library_ids(actor).await?;
+        let can_view_operational_history = self
+            .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let (snapshot, model) = self.current_download_queue_read_model().await?;
+        let stale = snapshot.stale_at(Utc::now());
+        let ordering = Self::download_queue_ordering(
+            &model,
+            DownloadHistorySort {
+                key: crate::DownloadHistorySortKey::Status,
+                direction: crate::SortDirection::Asc,
+            },
+        )
+        .await;
+        let mut diagnosis = DownloadQueueDiagnosis {
+            ready: snapshot.ready,
+            stale,
+            updated_at: snapshot.updated_at,
+            ..DownloadQueueDiagnosis::default()
+        };
+        for index in ordering.iter().copied() {
+            let item = &model.items[index];
+            let authorized =
+                item.title_id
+                    .as_deref()
+                    .map_or(can_view_operational_history, |title_id| {
+                        model
+                            .title_library_ids
+                            .get(title_id)
+                            .map_or(can_view_operational_history, |library_id| {
+                                allowed_library_ids.contains(library_id)
+                            })
+                    });
+            if !authorized
+                || !matches_download_activity_filter(item, DownloadActivityFilter::All)
+                || title_id.is_some_and(|title_id| item.title_id.as_deref() != Some(title_id))
+            {
+                continue;
+            }
+            diagnosis.total_count += 1;
+            let state = crate::derive_download_queue_display_state(item);
+            // Both tallies are keyed by small closed enums, so the lookups
+            // stay constant-time per row.
+            match diagnosis
+                .by_display_state
+                .iter_mut()
+                .find(|(known, _)| *known == state)
+            {
+                Some((_, count)) => *count += 1,
+                None => diagnosis.by_display_state.push((state, 1)),
+            }
+            if item.attention_required {
+                diagnosis.attention_count += 1;
+            }
+            if let Some(code) = item.import_error_code {
+                match diagnosis
+                    .by_import_error_code
+                    .iter_mut()
+                    .find(|(known, _)| *known == code)
+                {
+                    Some((_, count)) => *count += 1,
+                    None => diagnosis.by_import_error_code.push((code, 1)),
+                }
+            }
+            if attention_only && !item.attention_required {
+                continue;
+            }
+            if diagnosis.matching_count >= offset && diagnosis.items.len() < limit {
+                diagnosis.items.push(item.clone());
+            }
+            diagnosis.matching_count += 1;
+        }
+        Ok(diagnosis)
+    }
 }
 impl AppUseCase {
     async fn find_download_queue_item_raw(

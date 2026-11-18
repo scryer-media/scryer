@@ -1605,6 +1605,12 @@ impl AcquisitionScopeStateRepository for NullAcquisitionScopeStateRepository {
     ) -> AppResult<i64> {
         Ok(0)
     }
+    async fn tally_recent_release_decision_codes(
+        &self,
+        _sample: i64,
+    ) -> AppResult<crate::ReleaseDecisionCodeTally> {
+        Ok(crate::ReleaseDecisionCodeTally::default())
+    }
 }
 
 #[derive(Default)]

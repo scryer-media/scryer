@@ -1,0 +1,17 @@
+# Per-indexer 24-hour statistics.
+query IndexerStats {
+  systemHealth {
+    indexerStats {
+      indexerId
+      queriesLast24H
+      successfulLast24H
+      failedLast24H
+      grabsLast24H
+      lastQueryAt
+      apiCurrent
+      apiMax
+      grabCurrent
+      grabMax
+    }
+  }
+}

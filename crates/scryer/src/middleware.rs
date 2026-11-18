@@ -2203,13 +2203,28 @@ pub(crate) struct ApiKeyCaller {
     default_persist_session: bool,
 }
 
+impl ApiKeyCaller {
+    pub(crate) fn user(&self) -> &scryer_domain::User {
+        &self.actor.user
+    }
+
+    /// Whether the key resolved to a full session. Admission refuses any
+    /// other scope; tools that mirror a route's own check ask again.
+    pub(crate) fn full_session(&self) -> bool {
+        self.actor.token_claims.session_scope == JwtSessionScope::Full
+    }
+}
+
 /// Why a request could not be admitted as an API-key caller.
 #[derive(Debug)]
 pub(crate) enum ApiKeyCallerRefusal {
     /// The Authorization header is not a single bearer token.
     HeaderInvalid,
-    /// No API key was offered: no header, a session JWT or an OAuth token.
+    /// No credentials were offered.
     Required,
+    /// A bearer token was offered that is not an API key: a session JWT or
+    /// an OAuth access token.
+    NotApiKey,
     /// The API key is unknown, expired or revoked, or its owner is disabled.
     Invalid,
     /// Resolving the key failed for a reason that is not the caller's.
@@ -2218,9 +2233,10 @@ pub(crate) enum ApiKeyCallerRefusal {
 
 /// Admit a request that authenticates with an API key and nothing else.
 ///
-/// Only an `Authorization: Bearer scryer_…` key is resolved, so a request with
-/// no credentials never falls through to the authless default actor, and a
-/// refusal costs no database read.
+/// Only a bearer token that carries the API-key prefix ([`API_KEY_PREFIX`]
+/// followed by `_`) is resolved, so a request with no credentials never falls
+/// through to the authless default actor, and a refusal costs no database
+/// read.
 pub(crate) async fn admit_api_key_caller(
     state: &AuthState,
     headers: &HeaderMap,
@@ -2228,7 +2244,8 @@ pub(crate) async fn admit_api_key_caller(
 ) -> Result<ApiKeyCaller, ApiKeyCallerRefusal> {
     match authorization_token_from_headers(headers) {
         Ok(Some(token)) if is_api_key_bearer(token) => {}
-        Ok(_) => return Err(ApiKeyCallerRefusal::Required),
+        Ok(Some(_)) => return Err(ApiKeyCallerRefusal::NotApiKey),
+        Ok(None) => return Err(ApiKeyCallerRefusal::Required),
         Err(_) => return Err(ApiKeyCallerRefusal::HeaderInvalid),
     }
     let actor = match resolve_actor(state, headers, Some(remote_addr)).await {
@@ -2254,9 +2271,30 @@ pub(crate) async fn admit_api_key_caller(
     })
 }
 
-/// Run one GraphQL operation as an admitted API-key caller, with the same
-/// rate limits, request data, execution timeout and image-proxy flush as a
-/// single `/graphql` request.
+/// Charges one MCP tool call to the GraphQL rate limits, as one API request
+/// on the peer and on the user, the same as one `/graphql` read. A call is
+/// charged once however many operations or application reads it runs.
+pub(crate) fn charge_api_key_call(
+    state: &AuthState,
+    caller: &ApiKeyCaller,
+) -> Result<(), GraphQLResponse> {
+    let class = crate::rate_limit::GraphqlRateLimitClass::Api;
+    state
+        .rate_limiter
+        .check_graphql(class, &caller.provenance.key(None))
+        .and_then(|()| {
+            state
+                .rate_limiter
+                .check_graphql(class, &caller.provenance.key(Some(&caller.actor.user.id)))
+        })
+        .map_err(|decision| rate_limited_graphql_single_response(&decision))
+}
+
+/// Run one GraphQL operation as an admitted API-key caller whose tool call
+/// [`charge_api_key_call`] has already charged, with the same request data,
+/// execution timeout and image-proxy flush as a single `/graphql` request.
+/// No tool document touches authentication, so none needs the
+/// authentication limits; the contract tests keep it that way.
 pub(crate) async fn execute_graphql_as_api_key_caller(
     state: &AuthState,
     caller: &ApiKeyCaller,
@@ -2266,25 +2304,10 @@ pub(crate) async fn execute_graphql_as_api_key_caller(
         client_ip: caller.provenance.client_ip,
     });
     let authentication = analyze_authentication_request(&request);
-    if let Err(decision) = check_graphql_request_rate_limits(
-        &state.rate_limiter,
-        &caller.provenance.key(None),
-        &request,
-        &authentication,
-    ) {
-        return rate_limited_graphql_single_response(&decision);
-    }
     if authentication.rejected && authentication.class.is_some() {
         return authentication_mutation_single_field_response();
     }
     let user_key = caller.provenance.key(Some(&caller.actor.user.id));
-    if authentication.class.is_none()
-        && let Err(decision) = state
-            .rate_limiter
-            .check_graphql(classify_graphql_request(&request), &user_key)
-    {
-        return rate_limited_graphql_single_response(&decision);
-    }
 
     let (operation_name, operation_type) = graphql_request_operation_metadata(&request);
     let request_span = context_span(

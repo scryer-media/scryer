@@ -129,6 +129,7 @@ mod polling_worker;
 mod ports;
 pub use acquisition::anime_numbering::{ExactCourTitleMatch, exact_cour_title_match};
 pub use ports::ObservationTouch;
+pub use ports::ReleaseDecisionCodeTally;
 pub use ports::UnfinishedLibraryScanSession;
 pub use ports::ensure_acquisition_scopes_grabbed_per_row;
 pub use ports::{
@@ -872,14 +873,15 @@ pub use types::{
     DecisionCodeCount, DiskSpaceInfo, DownloadActivityFilter, DownloadDisplayState,
     DownloadGrabResult, DownloadHistoryFilter, DownloadHistoryPage, DownloadHistorySort,
     DownloadHistorySortKey, DownloadImportFilter, DownloadImportPage, DownloadQueueCommandRecord,
-    DownloadQueuePage, DownloadSourceKind, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
-    EpisodeMediaSizeSummary, EpisodeScopedMediaFile, FixTitleMatchResult, HealthCheckResult,
-    HealthCheckStatus, HousekeepingReport, IgnorePendingImportResult, IgnorePendingImportsResult,
-    IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass, LoginVerificationChallengeRecord,
-    LoginVerificationMethod, LoginVerificationRequirement, LoginVerificationSatisfied,
-    ManualImportSelection, ManualImportSelectionCandidate, MdblistSummary, MediaFileAssociations,
-    MediaFileCutoffSummary, MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
+    DownloadQueueDiagnosis, DownloadQueuePage, DownloadSourceKind, EpisodeMediaAvailability,
+    EpisodeMediaAvailabilityState, EpisodeMediaSizeSummary, EpisodeScopedMediaFile,
+    FixTitleMatchResult, HealthCheckResult, HealthCheckStatus, HousekeepingReport,
+    IgnorePendingImportResult, IgnorePendingImportsResult, IndexerQueryStats, JwtAuthConfig,
+    JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt,
+    LoginFailureTimingClass, LoginVerificationChallengeRecord, LoginVerificationMethod,
+    LoginVerificationRequirement, LoginVerificationSatisfied, ManualImportSelection,
+    ManualImportSelectionCandidate, MdblistSummary, MediaFileAssociations, MediaFileCutoffSummary,
+    MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
     MissingSeriesMovieLinkCandidate, MissingTitleCandidate, MovieAvailabilityDecision,
     MovieAvailabilityProjection, MovieAvailabilityStatus, OAuthAuthorizationCodeRecord,
     OAuthAuthorizationSource, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,

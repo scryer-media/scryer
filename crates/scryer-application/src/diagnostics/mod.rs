@@ -16,6 +16,7 @@ mod archive;
 mod environment;
 mod gather;
 mod logs;
+mod query;
 pub mod sanitize;
 
 #[cfg(test)]
@@ -26,7 +27,11 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-pub use logs::{LEGACY_LOG_ROTATION_MARKER, LOG_ROTATION_MARKER};
+pub use logs::{
+    LEGACY_LOG_ROTATION_MARKER, LOG_ROTATION_MARKER, LogFileRead, read_log_files,
+    read_log_files_unless_cancelled,
+};
+pub use query::*;
 pub use sanitize::{KnownValues, PATH_POLICY, PathPolicy, Sanitizer};
 
 /// The largest compressed bundle produced. The oldest log content is dropped
@@ -81,7 +86,7 @@ pub struct DiagnosticsBundle {
 
 /// One item left out of the bundle and why. `reason` is a stable code.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Omission {
+pub struct Omission {
     pub item: String,
     pub reason: String,
 }
@@ -119,17 +124,9 @@ impl crate::AppUseCase {
             .await?;
 
         let mut omissions = Vec::new();
-        let mut known = KnownValues::new();
-        for word in ["movie", "series", "anime"] {
-            known.protect(word);
-        }
-        let incomplete = self.harvest_known_values(actor, &mut known).await;
-        for value in &host.sensitive_values {
-            known.secret(value);
-        }
-        for (pseudonym, path) in &host.sensitive_paths {
-            known.path(pseudonym, path);
-        }
+        let (known, incomplete) = self
+            .diagnostics_known_values(actor, &host.sensitive_values, &host.sensitive_paths)
+            .await;
         let summary = self.diagnostics_summary(actor, &mut omissions).await;
         let mut environment = host.environment.clone();
         self.diagnostics_environment(actor, &mut environment, &mut omissions)

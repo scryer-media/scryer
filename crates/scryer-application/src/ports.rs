@@ -11057,6 +11057,24 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         &self,
         wanted_item_id: &str,
     ) -> AppResult<i64>;
+
+    /// Decision codes of the newest `sample` decisions across the instance,
+    /// counted in the store, and how many decisions there are in all.
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<ReleaseDecisionCodeTally>;
+}
+
+/// Decision codes counted over the newest decisions of the whole instance.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReleaseDecisionCodeTally {
+    /// Every decision stored.
+    pub total_rows: i64,
+    /// The decisions the codes were counted over, newest first.
+    pub sampled: i64,
+    /// `(decision code, count)` over the sampled decisions, by code.
+    pub by_code: Vec<(String, i64)>,
 }
 
 /// One row at a time: ensure, read back `last_search_at`, mark grabbed.

@@ -1935,6 +1935,45 @@ impl AcquisitionScopeStateRepository for WantedStore {
         .transpose()
         .map(|value| value.unwrap_or_default())
     }
+
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<scryer_application::ReleaseDecisionCodeTally> {
+        let sample = sample.max(0);
+        // The newest rows come off `idx_release_decisions_created_at`; only
+        // the bounded sample is grouped.
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT recent.decision_code AS decision_code, COUNT(*) AS cnt
+               FROM (SELECT decision_code
+                       FROM release_decisions
+                      ORDER BY created_at DESC
+                      LIMIT {}) AS recent
+              GROUP BY recent.decision_code
+              ORDER BY recent.decision_code",
+            &[SqlArg::I64(sample)],
+        )
+        .await?;
+        let by_code = rows
+            .iter()
+            .map(|row| Ok((row.text("decision_code")?, row.i64("cnt")?)))
+            .collect::<AppResult<Vec<_>>>()?;
+        let total_rows = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(*) AS cnt FROM release_decisions",
+            &[],
+        )
+        .await?
+        .map(|row| row.i64("cnt"))
+        .transpose()?
+        .unwrap_or_default();
+        Ok(scryer_application::ReleaseDecisionCodeTally {
+            total_rows,
+            sampled: by_code.iter().map(|(_, count)| count).sum(),
+            by_code,
+        })
+    }
 }
 
 fn housekeeping_cutoff_arg(days: i64) -> SqlArg {
