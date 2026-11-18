@@ -1463,18 +1463,22 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }
             let destination = file.destination();
             // The resolution row recorded both files' versions right after the
-            // copy was proven; a file that no longer carries its version has
-            // changed since, and the source is kept. A link's version is the
-            // link's own.
+            // copy was proven; a file that no longer holds its version's
+            // content has changed since, and the source is kept. A link's
+            // version is the link's own.
             let versions_held = match resolution.and_then(|row| {
                 row.source_version
                     .as_deref()
                     .zip(row.destination_version.as_deref())
             }) {
                 Some((row_source_version, row_destination_version)) => {
-                    super::resolution::file_version(&source).await? == row_source_version
-                        && super::resolution::file_version(&destination).await?
-                            == row_destination_version
+                    super::resolution::version_holds(
+                        Some(&super::resolution::file_version(&source).await?),
+                        row_source_version,
+                    ) && super::resolution::version_holds(
+                        Some(&super::resolution::file_version(&destination).await?),
+                        row_destination_version,
+                    )
                 }
                 None => true,
             };

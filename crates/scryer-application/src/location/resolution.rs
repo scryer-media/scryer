@@ -38,7 +38,24 @@ impl FileResolution {
         matches!(self.disposition, ResolutionDisposition::Disposal(_))
     }
 
+    /// Whether both files still hold the content this row recorded, as the
+    /// disk service judges a stored version: the same file, length and
+    /// modification time. A rename, a permission change or another link's
+    /// removal moves a file's change time without changing its content, so a
+    /// change time alone does not stale the proof.
     pub async fn proof_is_current(&self) -> bool {
+        self.proof_holds(version_holds).await
+    }
+
+    /// [`Self::proof_is_current`] with every stored version compared whole,
+    /// change time included, for a caller that reads an unexplained change
+    /// time as a change to the file's links.
+    pub async fn proof_is_unchanged(&self) -> bool {
+        self.proof_holds(|actual, expected| actual == Some(expected))
+            .await
+    }
+
+    async fn proof_holds(&self, holds: fn(Option<&str>, &str) -> bool) -> bool {
         if !self.completed || self.is_disposal() {
             return false;
         }
@@ -58,7 +75,7 @@ impl FileResolution {
         {
             // Cleanup may have committed before its title checkpoint. Unlinking
             // a hardlink changes ctime, but not its identity, length or mtime.
-            return destination_version.as_deref() == Some(expected)
+            return holds(destination_version.as_deref(), expected)
                 || (self.disposition == ResolutionDisposition::Hardlink
                     && destination_version.as_deref().is_some_and(|actual| {
                         crate::disk::StoredVersion::new(actual)
@@ -74,8 +91,14 @@ impl FileResolution {
             };
             return super::execution::same_regular_file(&source_read, &destination_read);
         }
-        destination_version.as_deref() == Some(expected)
-            && file_version(&source).await.ok() == self.source_version
+        if !holds(destination_version.as_deref(), expected) {
+            return false;
+        }
+        let source_version = file_version(&source).await.ok();
+        match self.source_version.as_deref() {
+            Some(source_expected) => holds(source_version.as_deref(), source_expected),
+            None => source_version.is_none(),
+        }
     }
 
     /// Whether this record proves enough to dispose of the source.
@@ -700,6 +723,18 @@ fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
 
 pub async fn file_version(path: &Path) -> AppResult<String> {
     Ok(file_version_and_metadata(path).await?.0)
+}
+
+/// Whether a file read now as `actual` still holds the content a row stored
+/// as `expected`: the same text, or the disk service's answer that both name
+/// one file with the same length and modification time. No probe.
+pub(super) fn version_holds(actual: Option<&str>, expected: &str) -> bool {
+    actual.is_some_and(|actual| {
+        actual == expected
+            || crate::disk::StoredVersion::new(actual)
+                .same_content(crate::disk::StoredVersion::new(expected))
+                == crate::disk::Sameness::Same
+    })
 }
 
 /// Whether a full-depth copy's streamed hash contradicts the full hash the

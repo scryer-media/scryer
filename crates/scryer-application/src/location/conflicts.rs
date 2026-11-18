@@ -1813,7 +1813,8 @@ async fn conflict_resolution_current(
     row: &super::resolution::FileResolution,
     resolutions: &[super::resolution::FileResolution],
 ) -> AppResult<bool> {
-    if row.proof_is_current().await {
+    // A change time here is explained only by a recorded disposal below.
+    if row.proof_is_unchanged().await {
         return Ok(true);
     }
     let Some(expected) = &row.destination_version else {

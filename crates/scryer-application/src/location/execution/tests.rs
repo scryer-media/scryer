@@ -3327,8 +3327,9 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
 /// (the destination's folder a link to the source's) has its destination's
 /// name filled again and is done with nothing removed. A set-aside file that
 /// cannot go back is kept where it is, and the cleanup is blocked naming it.
-/// With a resolution row the file is put back the same way, and the row's
-/// version check then stops the cleanup with the source at its own name.
+/// With a resolution row the file is put back the same way and ends the same
+/// way: the rename moved only its change time, which the row's proof does
+/// not compare.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
@@ -3363,6 +3364,27 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
             let folder = destination.parent().unwrap();
             std::fs::remove_dir_all(folder).unwrap();
             std::os::unix::fs::symlink(source.parent().unwrap(), folder).unwrap();
+            if with_row {
+                // A row written while the two names were one entry: the copy
+                // it recorded is gone with the folder the link replaced, so
+                // both versions are those of the one file.
+                let mut row = store
+                    .file_resolutions("op-1", "title-1")
+                    .await
+                    .unwrap()
+                    .remove(0);
+                for (version, path) in [
+                    (&mut row.source_version, &source),
+                    (&mut row.destination_version, &destination),
+                ] {
+                    *version = Some(
+                        crate::location::resolution::file_version(path)
+                            .await
+                            .unwrap(),
+                    );
+                }
+                store.save_file_resolution(&row).await.unwrap();
+            }
         }
         let aside = crate::disk::aside_path_for(&source);
         std::fs::rename(&source, &aside).unwrap();
@@ -3381,26 +3403,10 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
         }
 
         match case {
-            "separate" | "one_entry" if with_row => {
-                // The rename out and back moved the source's change time, so
-                // the row's recorded version no longer fits it: the cleanup
-                // stops, with the file back at its own name.
-                let error = result.expect_err("a put-back source no longer fits its row");
-                assert_eq!(
-                    error.reason(),
-                    Some(crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP),
-                    "{case} {with_row}: {error:?}"
-                );
-                assert_eq!(
-                    std::fs::read(&source).unwrap(),
-                    source_bytes,
-                    "{case} {with_row}: the source is back at its name"
-                );
-                assert!(!aside.exists(), "{case} {with_row}");
-                assert_eq!(std::fs::read(&destination).unwrap(), source_bytes);
-            }
             "separate" => {
-                result.expect("cleanup");
+                // The rename out and back moves only the source's change
+                // time, so a row's recorded version still fits it.
+                result.unwrap_or_else(|error| panic!("{case} {with_row}: cleanup: {error:?}"));
                 assert!(
                     !source.exists(),
                     "{case} {with_row}: the put-back source is removed"
@@ -3409,8 +3415,15 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
                 assert_eq!(std::fs::read(&destination).unwrap(), source_bytes);
             }
             "one_entry" => {
-                result.expect("one entry is done with nothing removed");
-                assert!(!aside.exists(), "{case}");
+                result.unwrap_or_else(|error| {
+                    panic!("{case} {with_row}: one entry is done with nothing removed: {error:?}")
+                });
+                assert!(!aside.exists(), "{case} {with_row}");
+                assert_eq!(
+                    std::fs::read(&source).unwrap(),
+                    source_bytes,
+                    "{case} {with_row}: the file is back at its name"
+                );
                 assert_eq!(
                     std::fs::read(&destination).unwrap(),
                     source_bytes,
