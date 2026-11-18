@@ -3227,7 +3227,10 @@ impl AppUseCase {
                 || (disposal_remaining
                     && linked_proof.is_none()
                     && !row
-                        .proof_supports_disposal(operation.verification_depth)
+                        .proof_supports_disposal(
+                            operation.verification_depth,
+                            super::resolution::VersionCheck::Exact,
+                        )
                         .await?)
             {
                 return Err(refused(

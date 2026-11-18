@@ -3558,7 +3558,7 @@ async fn cleanup_after_a_copy_keeps_a_source_its_destination_names_under_another
 /// cannot go back is kept where it is, and the cleanup is blocked naming it.
 /// With a resolution row the file is put back the same way and ends the same
 /// way: the rename moved only its change time, which the row's proof does
-/// not compare.
+/// not compare in the pass that put the file back.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
@@ -3679,6 +3679,72 @@ async fn a_resumed_cleanup_puts_back_a_source_it_had_set_aside() {
                     source_bytes,
                     "{case}: the set-aside file is kept"
                 );
+            }
+        }
+    }
+}
+
+/// Outside a pass that put the source back, a row's versions are held whole.
+/// A same-length rewrite in the middle of the source, or of the destination,
+/// with its modification time set back to the recorded one leaves only the
+/// change time moved: that keeps the source, at either depth, although the
+/// quick comparison would not have sampled the rewrite.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_rewrite_with_its_modification_time_restored_keeps_the_source() {
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        for changed in ["source", "destination"] {
+            let case = format!("{depth:?}/{changed}");
+            let temp = tempfile::tempdir().unwrap();
+            let (plan, store, operation, copies) =
+                copied_files_awaiting_cleanup(temp.path(), depth, true, &["Thornmere.mkv"]).await;
+            record_copy(
+                &store,
+                &copies[0],
+                "mf-1",
+                crate::location::model::FileVerificationOutcome::Verified,
+            )
+            .await;
+            let file = plan.titles[0].files[0].clone();
+            let original = std::fs::read(file.source()).unwrap();
+            let path = match changed {
+                "source" => file.source(),
+                _ => file.destination(),
+            };
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            rewrite_middle(&path);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+            let row = store
+                .file_resolutions("op-1", "title-1")
+                .await
+                .unwrap()
+                .remove(0);
+            assert!(
+                row.proof_is_current().await,
+                "{case}: only the change time moved"
+            );
+            assert!(!row.proof_is_unchanged().await, "{case}");
+
+            let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+            let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store);
+            let error = reconciler
+                .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+                .await
+                .expect_err("a rewrite with its modification time restored keeps the source");
+
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP),
+                "{case}"
+            );
+            assert!(file.source().exists(), "{case}: source preserved");
+            if changed == "destination" {
+                assert_eq!(std::fs::read(file.source()).unwrap(), original, "{case}");
             }
         }
     }

@@ -22,6 +22,36 @@ pub struct FileResolution {
     pub reason_code: Option<String>,
 }
 
+/// How a resolution row's stored file versions are held to the files now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionCheck {
+    /// Every stored version compared whole, change time included: a file
+    /// touched since the proof, even with its length and modification time
+    /// put back, no longer holds it.
+    Exact,
+    /// The change time set aside: this pass renamed the source back from its
+    /// set-aside name, which moves the change time of the file, and of the
+    /// destination too where both names are one file.
+    SourcePutBack,
+}
+
+impl VersionCheck {
+    /// The comparison of one file's version read now with the stored one.
+    pub fn holds(self) -> fn(Option<&str>, &str) -> bool {
+        match self {
+            Self::Exact => |actual, expected| actual == Some(expected),
+            Self::SourcePutBack => version_holds,
+        }
+    }
+}
+
+/// What a holding proof found at the source's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceName {
+    Present,
+    Gone,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionDisposition {
@@ -42,22 +72,30 @@ impl FileResolution {
     /// disk service judges a stored version: the same file, length and
     /// modification time. A rename, a permission change or another link's
     /// removal moves a file's change time without changing its content, so a
-    /// change time alone does not stale the proof.
+    /// change time alone does not stale the proof. For a gate that removes
+    /// nothing; one that removes a file asks [`Self::proof_holds_by`].
     pub async fn proof_is_current(&self) -> bool {
-        self.proof_holds(version_holds).await
+        self.proof_holds_by(VersionCheck::SourcePutBack).await
     }
 
     /// [`Self::proof_is_current`] with every stored version compared whole,
     /// change time included, for a caller that reads an unexplained change
     /// time as a change to the file's links.
     pub async fn proof_is_unchanged(&self) -> bool {
-        self.proof_holds(|actual, expected| actual == Some(expected))
-            .await
+        self.proof_holds_by(VersionCheck::Exact).await
     }
 
-    async fn proof_holds(&self, holds: fn(Option<&str>, &str) -> bool) -> bool {
+    /// Whether both files still hold what this row recorded, each stored
+    /// version compared as `check` says.
+    pub async fn proof_holds_by(&self, check: VersionCheck) -> bool {
+        self.proof_holds(check.holds()).await.is_some()
+    }
+
+    /// `None` when the proof does not hold; otherwise whether it held with
+    /// the source name gone, so a caller needs no second read of it.
+    async fn proof_holds(&self, holds: fn(Option<&str>, &str) -> bool) -> Option<SourceName> {
         if !self.completed || self.is_disposal() {
-            return false;
+            return None;
         }
         let source = stored_path_to_path_buf(&self.source_path);
         let destination = stored_path_to_path_buf(&self.destination_path);
@@ -67,38 +105,48 @@ impl FileResolution {
         let source_read = Disk::process().fingerprint(&source).await;
         let destination_version = file_version(&destination).await.ok();
         let Some(expected) = self.destination_version.as_deref() else {
-            return false;
+            return None;
         };
+        let held = |held: bool, source: SourceName| held.then_some(source);
         if source_read
             .as_ref()
             .is_err_and(|reading| reading.exists() == Some(false))
         {
             // Cleanup may have committed before its title checkpoint. Unlinking
             // a hardlink changes ctime, but not its identity, length or mtime.
-            return holds(destination_version.as_deref(), expected)
-                || (self.disposition == ResolutionDisposition::Hardlink
-                    && destination_version.as_deref().is_some_and(|actual| {
-                        crate::disk::StoredVersion::new(actual)
-                            .same_content(crate::disk::StoredVersion::new(expected))
-                            == crate::disk::Sameness::Same
-                    }));
+            return held(
+                holds(destination_version.as_deref(), expected)
+                    || (self.disposition == ResolutionDisposition::Hardlink
+                        && destination_version.as_deref().is_some_and(|actual| {
+                            crate::disk::StoredVersion::new(actual)
+                                .same_content(crate::disk::StoredVersion::new(expected))
+                                == crate::disk::Sameness::Same
+                        })),
+                SourceName::Gone,
+            );
         }
         if self.disposition == ResolutionDisposition::Hardlink {
             let (Ok(source_read), Ok(destination_read)) =
                 (source_read, Disk::process().fingerprint(&destination).await)
             else {
-                return false;
+                return None;
             };
-            return super::execution::same_regular_file(&source_read, &destination_read);
+            return held(
+                super::execution::same_regular_file(&source_read, &destination_read),
+                SourceName::Present,
+            );
         }
         if !holds(destination_version.as_deref(), expected) {
-            return false;
+            return None;
         }
         let source_version = file_version(&source).await.ok();
-        match self.source_version.as_deref() {
-            Some(source_expected) => holds(source_version.as_deref(), source_expected),
-            None => source_version.is_none(),
-        }
+        held(
+            match self.source_version.as_deref() {
+                Some(source_expected) => holds(source_version.as_deref(), source_expected),
+                None => source_version.is_none(),
+            },
+            SourceName::Present,
+        )
     }
 
     /// Whether this record proves enough to dispose of the source.
@@ -121,12 +169,35 @@ impl FileResolution {
     ///
     /// All of that is at full `depth`, the user's setting. At quick depth the
     /// two files are compared by their lengths and live head and tail.
-    pub async fn proof_supports_disposal(&self, depth: VerificationDepth) -> AppResult<bool> {
-        if !self.proof_is_current().await {
+    ///
+    /// A hardlink this operation placed whose source name is already gone,
+    /// removed by this operation's own cleanup, leaves one name to judge: the
+    /// retained name holding the recorded version is the proof at quick
+    /// depth, and a recorded hash is still held to at either depth.
+    ///
+    /// The stored versions are compared as `versions` says: whole, unless
+    /// this cleanup has just put the source back from its set-aside name.
+    pub async fn proof_supports_disposal(
+        &self,
+        depth: VerificationDepth,
+        versions: VersionCheck,
+    ) -> AppResult<bool> {
+        let Some(source_name) = self.proof_holds(versions.holds()).await else {
             return Ok(false);
-        }
+        };
         let destination = stored_path_to_path_buf(&self.destination_path);
+        let linked_and_gone =
+            self.disposition == ResolutionDisposition::Hardlink && source_name == SourceName::Gone;
         let check = match self.identity_hash.as_deref() {
+            None if linked_and_gone && depth != VerificationDepth::Full => return Ok(true),
+            Some(identity_hash) if linked_and_gone => {
+                Disk::process()
+                    .check_against(
+                        crate::disk::CheckSide::new(destination.as_path()),
+                        Some(identity_hash),
+                    )
+                    .await
+            }
             _ if depth != VerificationDepth::Full => {
                 let source = stored_path_to_path_buf(&self.source_path);
                 Disk::process()

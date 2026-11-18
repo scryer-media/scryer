@@ -1311,16 +1311,21 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .iter()
                 .find(|row| row.source_path == file.source_path);
             let mut resolved = file.clone();
+            // Whether this pass renamed the source back from its set-aside
+            // name: only then is a moved change time explained, and only then
+            // are the stored versions held to content rather than whole.
+            let mut put_back = false;
             if let Some(row) = resolution {
                 // A source missing at its name may be one an interrupted
                 // cleanup set aside: it is put back and checked like any
                 // other, and only a source that is really gone is skipped.
-                if Disk::process().uncached(file.source()).await.exists() == Some(false)
-                    && read_copied_source(&file.source()).await?.is_none()
-                {
-                    continue;
+                if Disk::process().uncached(file.source()).await.exists() == Some(false) {
+                    match read_copied_source(&file.source()).await? {
+                        None => continue,
+                        Some(read) => put_back = read.put_back,
+                    }
                 }
-                if !row.proof_is_current().await {
+                if !row.proof_holds_by(version_check(put_back)).await {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP,
                         "A file changed before source cleanup. The source was preserved; retry to compare it again.",
@@ -1349,7 +1354,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 // before this source is dropped without a recycle bin behind
                 // it.
                 if !row
-                    .proof_supports_disposal(operation.verification_depth)
+                    .proof_supports_disposal(operation.verification_depth, version_check(put_back))
                     .await?
                 {
                     return Err(AppError::validation_refused(crate::error_reasons::location::DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE, "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again."
@@ -1394,9 +1399,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // copies and their versions before handing this path to disposal.
             // The source's own read, a link not followed, is also the mark its
             // removal below is settled against.
-            let Some(source_mark) = read_copied_source(&source).await? else {
+            let Some(source_read) = read_copied_source(&source).await? else {
                 continue;
             };
+            put_back |= source_read.put_back;
+            let source_mark = source_read.mark;
             // A linked source that took a copy is proven by the file it
             // names (the proofs below read through the link); once proven,
             // only the link's own name is removed, never the file it names.
@@ -1476,10 +1483,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     .zip(row.destination_version.as_deref())
             }) {
                 Some((row_source_version, row_destination_version)) => {
-                    super::resolution::version_holds(
+                    let holds = version_check(put_back).holds();
+                    holds(
                         Some(&super::resolution::file_version(&source).await?),
                         row_source_version,
-                    ) && super::resolution::version_holds(
+                    ) && holds(
                         Some(&super::resolution::file_version(&destination).await?),
                         row_destination_version,
                     )
@@ -1558,6 +1566,22 @@ impl TitleReconciler for RootMoveReconciler<'_> {
     }
 }
 
+/// How a cleanup holds a row's stored versions: whole, unless it renamed the
+/// source back from its set-aside name in this pass.
+fn version_check(put_back: bool) -> super::resolution::VersionCheck {
+    match put_back {
+        true => super::resolution::VersionCheck::SourcePutBack,
+        false => super::resolution::VersionCheck::Exact,
+    }
+}
+
+/// A copied source as its cleanup starts: its read, a link not followed, and
+/// whether this read renamed it back from its set-aside name first.
+struct CopiedSource {
+    mark: Mark,
+    put_back: bool,
+}
+
 /// Read a copied source at the start of its cleanup, a link not followed.
 /// `None` when the source is gone, so there is nothing left to remove.
 ///
@@ -1574,9 +1598,14 @@ impl TitleReconciler for RootMoveReconciler<'_> {
 /// more read of the source after it), or one removal of an empty one.
 ///
 /// [`import::KEPT_PATH_FACT`]: crate::error_reasons::import::KEPT_PATH_FACT
-async fn read_copied_source(source: &Path) -> AppResult<Option<Mark>> {
+async fn read_copied_source(source: &Path) -> AppResult<Option<CopiedSource>> {
     match Disk::process().fingerprint(source).await {
-        Ok(mark) => return Ok(Some(mark)),
+        Ok(mark) => {
+            return Ok(Some(CopiedSource {
+                mark,
+                put_back: false,
+            }));
+        }
         Err(reading) if reading.exists() == Some(false) => {}
         Err(reading) => return Err(AppError::Repository(reading.absence().into())),
     }
@@ -1594,7 +1623,10 @@ async fn read_copied_source(source: &Path) -> AppResult<Option<Mark>> {
     match answer {
         crate::disk::PutBackAside::Nothing => Ok(None),
         crate::disk::PutBackAside::PutBack => match Disk::process().fingerprint(source).await {
-            Ok(mark) => Ok(Some(mark)),
+            Ok(mark) => Ok(Some(CopiedSource {
+                mark,
+                put_back: true,
+            })),
             Err(reading) if reading.exists() == Some(false) => Ok(None),
             Err(reading) => Err(AppError::Repository(reading.absence().into())),
         },

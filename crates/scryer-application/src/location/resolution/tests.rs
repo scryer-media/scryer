@@ -138,7 +138,7 @@ async fn identical_existing_content_merges_at_quick_depth_without_a_whole_read()
     assert_eq!(row.disposition, ResolutionDisposition::Identical);
     assert!(row.identity_hash.is_none());
     assert!(
-        row.proof_supports_disposal(VerificationDepth::Quick)
+        row.proof_supports_disposal(VerificationDepth::Quick, VersionCheck::Exact)
             .await
             .unwrap()
     );
@@ -155,6 +155,84 @@ async fn identical_existing_content_merges_at_quick_depth_without_a_whole_read()
     );
     std::fs::write(&title.files[0].destination_path, b"modified").unwrap();
     assert!(!row.proof_is_current().await);
+}
+
+/// A hardlink this operation placed, whose source name its own cleanup has
+/// already removed, is proven at quick depth by the retained name holding the
+/// recorded version, with nothing read; a recorded hash is still held to. A
+/// retained name that is gone or holds other content refuses.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hardlink_whose_source_name_is_gone_is_proven_by_its_retained_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("incoming.srt");
+    let destination = temp.path().join("kept.srt");
+    std::fs::write(&source, b"subtitle bytes").unwrap();
+    std::fs::hard_link(&source, &destination).unwrap();
+    let hash = crate::location::verify::hash_existing_file(&destination)
+        .await
+        .unwrap()
+        .full_blake3;
+    let row = |identity_hash: Option<String>, version: String| FileResolution {
+        operation_id: "op".into(),
+        title_id: "title".into(),
+        source_path: path_to_stored_string(&source),
+        original_destination: path_to_stored_string(&destination),
+        destination_path: path_to_stored_string(&destination),
+        disposition: ResolutionDisposition::Hardlink,
+        completed: true,
+        source_version: Some(version.clone()),
+        destination_version: Some(version),
+        identity_hash,
+        warning: None,
+        reason_code: None,
+    };
+    let version = file_version(&destination).await.unwrap();
+    std::fs::remove_file(&source).unwrap();
+    Disk::process().count_whole_reads();
+    let unhashed = row(None, version.clone());
+    assert!(
+        unhashed
+            .proof_supports_disposal(VerificationDepth::Quick, VersionCheck::Exact)
+            .await
+            .unwrap()
+    );
+    assert_eq!(Disk::process().whole_reads_of(&destination), 0);
+    let hashed = row(Some(hash), version.clone());
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        assert!(
+            hashed
+                .proof_supports_disposal(depth, VersionCheck::Exact)
+                .await
+                .unwrap(),
+            "{depth:?}"
+        );
+    }
+    let wrong = row(Some("0".repeat(64)), version.clone());
+    assert!(
+        !wrong
+            .proof_supports_disposal(VerificationDepth::Quick, VersionCheck::Exact)
+            .await
+            .unwrap(),
+        "a recorded hash is held to at quick depth"
+    );
+
+    std::fs::write(&destination, b"other subtitle bytes").unwrap();
+    assert!(
+        !unhashed
+            .proof_supports_disposal(VerificationDepth::Quick, VersionCheck::Exact)
+            .await
+            .unwrap(),
+        "a retained name holding other content refuses"
+    );
+    std::fs::remove_file(&destination).unwrap();
+    assert!(
+        !unhashed
+            .proof_supports_disposal(VerificationDepth::Quick, VersionCheck::Exact)
+            .await
+            .unwrap(),
+        "a retained name that is gone refuses"
+    );
 }
 
 /// Every occupied candidate name is quick-checked in turn (FR-073): the
