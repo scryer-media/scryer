@@ -2512,7 +2512,7 @@ jobs:
 
   docker-prepare-pr-rc:
     name: docker-prepare-pr-rc
-    if: ${{ needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.changes.result == 'success' && needs.changes.outputs.full == 'true' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: [changes, launcher-build, linux-build]
