@@ -80,8 +80,8 @@ file and that is recorded, the import completes on that file and the client
 entry is later removed without its data. When Scryer could not tell for an
 import that holds no sources, the import fails and retries automatically; the
 download shows the failure and its retry time, not a block. After a client
-refresh or a restart
-the block may show only its sentence. `passwordFailureCode`:
+refresh or a restart the block keeps its code and its sentence; a kept path
+is named only in the sentence. `passwordFailureCode`:
 ARCHIVE_PASSWORD_REQUIRED, ARCHIVE_PASSWORD_OR_CORRUPTION.
 
 `importErrorCode`:

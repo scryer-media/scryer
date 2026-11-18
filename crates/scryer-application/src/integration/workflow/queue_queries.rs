@@ -316,6 +316,10 @@ fn apply_import_record_overlay_to_queue_item(item: &mut DownloadQueueItem, recor
 pub struct ImportRecordResultOverlay {
     pub error_code: Option<scryer_domain::ImportErrorCode>,
     pub error_message: Option<String>,
+    /// The import refusal's reason code an automatic import stored with its
+    /// result, when it is one this release knows. A queue rebuilt from the
+    /// record carries it as the attention code instead of a generic one.
+    pub reason_code: Option<String>,
     pub decision: Option<scryer_domain::ImportDecision>,
     pub skip_reason: Option<scryer_domain::ImportSkipReason>,
     pub title_id: Option<String>,
@@ -367,6 +371,7 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
         return ImportRecordResultOverlay {
             error_code,
             error_message,
+            reason_code: None,
             decision: None,
             skip_reason: None,
             title_id: non_empty(result.title_id),
@@ -378,9 +383,17 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
     let Ok(result) = serde_json::from_str::<scryer_domain::ImportResult>(result_json) else {
         return ImportRecordResultOverlay::default();
     };
+    let reason_code = result.reason_code.as_deref().and_then(|code| {
+        crate::error_reasons::import::ALL
+            .iter()
+            .copied()
+            .find(|known| *known == code)
+            .map(str::to_owned)
+    });
     ImportRecordResultOverlay {
         error_code: None,
         error_message: non_empty(result.error_message),
+        reason_code,
         decision: Some(result.decision),
         skip_reason: result.skip_reason,
         title_id: non_empty(result.title_id),
@@ -393,20 +406,29 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
 
 pub(crate) fn import_record_error_overlay(
     record: &ImportRecord,
-) -> (Option<scryer_domain::ImportErrorCode>, Option<String>) {
+) -> (
+    Option<scryer_domain::ImportErrorCode>,
+    Option<String>,
+    Option<String>,
+) {
     let overlay = import_record_result_overlay(record);
-    (overlay.error_code, overlay.error_message)
+    (
+        overlay.error_code,
+        overlay.error_message,
+        overlay.reason_code,
+    )
 }
 
 fn apply_import_record_to_queue_item(item: &mut DownloadQueueItem, record: &ImportRecord) {
     apply_import_record_overlay_to_queue_item(item, record);
-    let (error_code, error_message) = import_record_error_overlay(record);
+    let (error_code, error_message, reason_code) = import_record_error_overlay(record);
     item.import_error_code = error_code;
     item.import_error_message = error_message.clone();
     if let Some(error_message) = error_message {
         item.attention_reason = Some(error_message);
-        item.attention_reason_code =
-            error_code.map(|code| format!("IMPORT_{}", code.as_str().to_ascii_uppercase()));
+        item.attention_reason_code = reason_code.or_else(|| {
+            error_code.map(|code| format!("IMPORT_{}", code.as_str().to_ascii_uppercase()))
+        });
     }
 }
 fn apply_delete_command_to_queue_item(

@@ -492,6 +492,7 @@ impl DownloadQueueSnapshotCache {
         record: &scryer_domain::ImportRecord,
         error_code: Option<scryer_domain::ImportErrorCode>,
         error_message: Option<String>,
+        reason_code: Option<String>,
     ) {
         let mut pending = self.pending.lock().await;
         if pending.is_none() {
@@ -529,11 +530,11 @@ impl DownloadQueueSnapshotCache {
         item.import_error_message = error_message.clone();
         if error_message.is_some() {
             item.attention_reason = error_message;
-            item.attention_reason_code = Some(
+            item.attention_reason_code = Some(reason_code.unwrap_or_else(|| {
                 error_code
                     .map(|code| format!("IMPORT_{}", code.as_str().to_ascii_uppercase()))
-                    .unwrap_or_else(|| "IMPORT_FAILED".to_string()),
-            );
+                    .unwrap_or_else(|| "IMPORT_FAILED".to_string())
+            }));
         }
         item.import_transfer_phase = record.import_transfer_phase;
         item.import_transfer_bytes = record.import_transfer_bytes;
@@ -866,7 +867,7 @@ mod download_queue_snapshot_cache_tests {
             updated_at: "2026-08-27T01:48:38Z".to_string(),
         };
 
-        cache.stage_import_record(&record, None, None).await;
+        cache.stage_import_record(&record, None, None, None).await;
         cache.commit_pending().await;
 
         let snapshot = cache.snapshot().await;

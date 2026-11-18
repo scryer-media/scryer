@@ -1465,6 +1465,63 @@ mod tests {
         );
     }
 
+    fn automatic_import_record(id: &str, reason_code: Option<&str>) -> ImportRecord {
+        let reason = reason_code
+            .map(|code| format!(r#","reason_code":"{code}""#))
+            .unwrap_or_default();
+        let mut record = manual_import_record(
+            id,
+            ImportStatus::Failed,
+            &format!(
+                r#"{{"import_id":"import-auto","decision":"failed","source_path":"/downloads/Synthetic.Title.S01E01.mkv","episode_ids":[],"error_message":"the existing destination is the source file itself"{reason},"needs_reconciliation":true,"started_at":"2026-09-17T00:00:00Z","completed_at":"2026-09-17T00:00:00Z"}}"#
+            ),
+        );
+        record.import_type = ImportType::SeriesDownload;
+        record
+    }
+
+    /// A queue rebuilt from a stored automatic import keeps the refusal's code
+    /// as its attention code, not only its sentence.
+    #[test]
+    fn a_rebuilt_queue_row_keeps_the_stored_import_refusal_code() {
+        let record = automatic_import_record(
+            "job-auto-refused",
+            Some(crate::error_reasons::import::DESTINATION_IS_SOURCE),
+        );
+        let overlay = import_record_result_overlay(&record);
+        assert_eq!(
+            overlay.reason_code.as_deref(),
+            Some(crate::error_reasons::import::DESTINATION_IS_SOURCE)
+        );
+        let mut queue_item = item("job-auto-refused", DownloadQueueState::Completed);
+        apply_import_record_to_queue_item(&mut queue_item, &record);
+        assert_eq!(
+            queue_item.attention_reason_code.as_deref(),
+            Some("IMPORT_DESTINATION_IS_SOURCE")
+        );
+        assert_eq!(
+            queue_item.attention_reason.as_deref(),
+            Some("the existing destination is the source file itself")
+        );
+    }
+
+    /// A stored code this release does not know, or none, leaves the row as
+    /// it was before codes were carried.
+    #[test]
+    fn a_rebuilt_queue_row_without_a_known_code_behaves_as_before() {
+        for reason_code in [Some("IMPORT_SYNTHETIC_UNKNOWN_REASON"), None] {
+            let record = automatic_import_record("job-auto-uncoded", reason_code);
+            assert_eq!(import_record_result_overlay(&record).reason_code, None);
+            let mut queue_item = item("job-auto-uncoded", DownloadQueueState::Completed);
+            apply_import_record_to_queue_item(&mut queue_item, &record);
+            assert_eq!(queue_item.attention_reason_code, None, "{reason_code:?}");
+            assert_eq!(
+                queue_item.attention_reason.as_deref(),
+                Some("the existing destination is the source file itself")
+            );
+        }
+    }
+
     /// A manual import result carries its reason on the failed mapping when the
     /// run itself recorded no summary; history and the queue row both read it
     /// through the same overlay.

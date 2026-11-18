@@ -376,12 +376,12 @@ impl AppUseCase {
                 return;
             }
         };
-        let (error_code, error_message) =
+        let (error_code, error_message, reason_code) =
             crate::integration::workflow::import_record_error_overlay(&record);
         self.runtime
             .acquisition
             .download_queue_snapshot
-            .stage_import_record(&record, error_code, error_message)
+            .stage_import_record(&record, error_code, error_message, reason_code)
             .await;
     }
 
