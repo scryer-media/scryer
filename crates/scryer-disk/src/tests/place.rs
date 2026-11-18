@@ -69,6 +69,7 @@ fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) 
         source_read: Default::default(),
         folder_is_dir: false,
         wrote_dest: Default::default(),
+        claims: Default::default(),
     }
 }
 
@@ -1607,6 +1608,40 @@ mod real {
         );
         assert_eq!(std::fs::read(&staged).expect("kept"), b"");
         assert_eq!(std::fs::read(&source).expect("source"), b"payload");
+        assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");
+    }
+
+    /// The empty file a move made to reserve a name is removed on a failure
+    /// even where its source cannot be found, because a read shows it is
+    /// still that file. An empty source renamed onto the name is another
+    /// file: it is never removed, and goes back under the source's name.
+    #[test]
+    fn a_failed_move_removes_its_own_empty_claim_but_never_an_empty_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let staged = dir.path().join(".scryer-move.partial");
+        let dest = dir.path().join("dest.mkv");
+        let neighbour = dir.path().join("neighbour.mkv");
+        write(&neighbour, b"unrelated");
+        let disk = disk();
+
+        // The claim this move made, beside a source whose folder is gone.
+        let source = dir.path().join("vanished").join("source.mkv");
+        let own = job(&disk, &source, &dest, moving());
+        own.claim(&staged).is_ok().then_some(()).expect("claim");
+        let said = own.roll_back(&staged, StagedHolds::EmptyClaim);
+        assert!(said.is_none(), "nothing is left to report");
+        assert!(own.left.take().is_empty());
+        assert!(!staged.exists(), "the move's own claim is removed");
+
+        // An empty source moved onto the claim by a rename.
+        let source = dir.path().join("source.mkv");
+        write(&source, b"");
+        let renamed = job(&disk, &source, &dest, moving());
+        renamed.claim(&staged).is_ok().then_some(()).expect("claim");
+        std::fs::rename(&source, &staged).expect("rename onto the claim");
+        let _ = renamed.roll_back(&staged, StagedHolds::EmptyClaim);
+        assert_eq!(std::fs::read(&source).expect("put back"), b"");
+        assert!(!staged.exists(), "the source left the reserved name");
         assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"unrelated");
     }
 

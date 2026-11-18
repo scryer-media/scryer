@@ -344,6 +344,7 @@ async fn the_turn_is_given_back_before_the_copy_is_proven() {
         source_read: Default::default(),
         folder_is_dir: false,
         wrote_dest: Default::default(),
+        claims: Default::default(),
     };
     job.recorded_copy(Evidence {
         depth: Depth::Full,
@@ -453,6 +454,7 @@ fn a_move_that_would_need_a_recorded_copy_is_refused() {
         source_read: Default::default(),
         folder_is_dir: false,
         wrote_dest: Default::default(),
+        claims: Default::default(),
     };
     let crossing = DiskError::new(
         DiskVerb::Move,

@@ -25,6 +25,23 @@ pub(crate) mod by_handle;
 #[cfg(any(windows, test))]
 pub(crate) mod win_facts;
 
+/// The identity of the file an open handle holds, where the disk gives a
+/// usable one. One read of the handle, never of a path.
+pub(crate) fn identity_of_handle(file: &std::fs::File) -> Option<FileIdentity> {
+    #[cfg(windows)]
+    {
+        by_handle::ByHandle::of(file)
+            .ok()
+            .and_then(|read| read.identity())
+    }
+    #[cfg(not(windows))]
+    {
+        file.metadata()
+            .ok()
+            .and_then(|metadata| RawStat::of(&metadata).identity)
+    }
+}
+
 /// What one stat call said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RawStat {

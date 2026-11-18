@@ -686,6 +686,7 @@ impl Disk {
             source_read: Cell::new(answered.as_ref().map(|answered| answered.source)),
             folder_is_dir: answered.is_some_and(|answered| answered.folder_is_dir),
             wrote_dest: Cell::new(false),
+            claims: RefCell::new(Vec::new()),
         };
         match job.run() {
             Ok(done) => Ok(Placed {
@@ -1025,6 +1026,45 @@ pub(crate) struct Job<'a> {
     /// Whether a copy that lands directly on the destination name emptied
     /// or wrote it before failing.
     pub(crate) wrote_dest: Cell<bool>,
+    /// The names this job reserved with an empty file.
+    pub(crate) claims: RefCell<Vec<Claim>>,
+}
+
+/// A name a job reserved with an empty file, and what tells that file from
+/// anything later put at the name: a rename onto the name replaces the entry,
+/// so a source that reached it is never this file. Unix keeps the handle,
+/// which also keeps the file's number from going to another file, and reads
+/// it on a failure alone; Windows reads it once, before the handle closes for
+/// the rename.
+pub(crate) struct Claim {
+    at: PathBuf,
+    #[cfg(not(windows))]
+    held: std::fs::File,
+    #[cfg(windows)]
+    identity: Option<super::FileIdentity>,
+}
+
+impl Claim {
+    fn of(at: &Path, file: std::fs::File) -> Self {
+        Self {
+            at: at.to_path_buf(),
+            #[cfg(not(windows))]
+            held: file,
+            #[cfg(windows)]
+            identity: super::backend::identity_of_handle(&file),
+        }
+    }
+
+    fn identity(&self) -> Option<super::FileIdentity> {
+        #[cfg(not(windows))]
+        {
+            super::backend::identity_of_handle(&self.held)
+        }
+        #[cfg(windows)]
+        {
+            self.identity
+        }
+    }
 }
 
 impl Job<'_> {
@@ -1422,11 +1462,57 @@ impl Job<'_> {
 
     /// Reserves `path` so no other writer can take it, failing if it is
     /// already held.
-    fn claim(&self, path: &Path) -> Result<(), Fail> {
-        self.disk
+    /// Reserves `path` with an empty file. Probes: the create; on Windows one
+    /// read of its handle as well, none on unix.
+    pub(crate) fn claim(&self, path: &Path) -> Result<(), Fail> {
+        let file = self
+            .disk
             .open_blocking(path, Open::create_new())
-            .map(drop)
-            .map_err(|error| Fail::of(error, Side::Destination))
+            .map_err(|error| Fail::of(error, Side::Destination))?;
+        self.claims.borrow_mut().push(Claim::of(path, file));
+        Ok(())
+    }
+
+    /// Removes the empty file this job made at `name`, on an exit that
+    /// placed nothing there, when a read of the name taken immediately
+    /// before the removal shows it is still that file and still empty. A
+    /// name this job did not reserve, a file it cannot tell from its own,
+    /// or anything else there is left alone. True when it is gone.
+    ///
+    /// `seen`, a read of the name the caller already holds, answers first:
+    /// one that is not the claim costs no read.
+    ///
+    /// Probes, on a failure only: one read of the claim's handle on unix,
+    /// then, while the name can still be the claim, one read of the name and
+    /// one removal.
+    fn release_own_claim(&self, name: &Path, seen: Option<PathReading>) -> bool {
+        let Some(made) = self
+            .claims
+            .borrow()
+            .iter()
+            .find(|claim| claim.at == name)
+            .and_then(Claim::identity)
+        else {
+            return false;
+        };
+        let ours = |reading: PathReading| {
+            holds_only_the_claim(reading)
+                && matches!(reading, PathReading::Known { identity: Some(found), .. } if found == made)
+        };
+        if seen.is_some_and(|seen| !ours(seen)) || !ours(self.disk.uncached_blocking(name)) {
+            return false;
+        }
+        match self.disk.remove_blocking(name, Remove::File) {
+            Ok(_) => true,
+            Err(error) => {
+                tracing::warn!(
+                    name = %name.display(),
+                    error = %error.words(),
+                    "the empty claim of a failed placement could not be removed"
+                );
+                false
+            }
+        }
     }
 
     fn promote(&self, staged: &Path, dest: &Path) -> Result<(), Fail> {
@@ -1501,9 +1587,16 @@ impl Job<'_> {
                     let _ = disk.remove_blocking(staged, Remove::File);
                     return None;
                 }
-                return Some(self.settle_empty_claim(staged, source_reads));
+                return self.settle_empty_claim(staged, reading, source_reads);
             }
             StagedHolds::EmptyClaim if reading.exists() == Some(false) => return None,
+            // A read again that shows the claim this move made, still empty,
+            // removes it.
+            StagedHolds::EmptyClaim
+                if reading.exists().is_none() && self.release_own_claim(staged, None) =>
+            {
+                return None;
+            }
             // An unread claim may be the source, moved by a rename that
             // reported failure. It goes back only when the source reads as
             // gone, and never over anything: an empty file under a source
@@ -1611,12 +1704,22 @@ impl Job<'_> {
 
     /// Settles an empty file at a reserved name, `name`, that may be the
     /// source moved by a rename that reported failure, once the source read
-    /// as `source_reads` and not as present. A source that reads as gone gets
+    /// as `source_reads` and not as present, and the name as `seen`. A source that reads as gone gets
     /// the file back under its name, never over anything there; one that
     /// cannot be read, or a put-back that fails, leaves the file where it is.
-    /// Nothing is removed. Returns what the refusal adds, and records where
-    /// the file is in [`PlaceRefusal::left`].
-    fn settle_empty_claim(&self, name: &Path, source_reads: PathReading) -> String {
+    /// The one file removed is the claim this job made, read again as that
+    /// file and still empty: a source renamed onto the name would be another
+    /// file. Returns what the refusal adds, `None` once the claim is removed,
+    /// and records where the file is in [`PlaceRefusal::left`].
+    fn settle_empty_claim(
+        &self,
+        name: &Path,
+        seen: PathReading,
+        source_reads: PathReading,
+    ) -> Option<String> {
+        if self.release_own_claim(name, Some(seen)) {
+            return None;
+        }
         let (disk, source) = (self.disk, self.source);
         if source_reads.exists() == Some(false) {
             let put_back = format!(
@@ -1629,14 +1732,14 @@ impl Job<'_> {
                     self.left
                         .borrow_mut()
                         .push(Leftover::PutBack { at: source.into() });
-                    put_back
+                    Some(put_back)
                 }
                 Err(error) => {
                     let left = self.after_failed_put_back(name, &error);
                     let put_back_after_all = matches!(left, Leftover::PutBack { .. });
                     self.left.borrow_mut().push(left);
                     if put_back_after_all {
-                        return put_back;
+                        return Some(put_back);
                     }
                     tracing::error!(
                         name = %name.display(),
@@ -1644,12 +1747,12 @@ impl Job<'_> {
                         error = %error.words(),
                         "the source of a failed move reads as gone and the empty file at its reserved name could not be put back; it is left in place"
                     );
-                    format!(
+                    Some(format!(
                         "the empty file at {} may be the source and is left in place (putting it back at {} failed: {})",
                         name.display(),
                         source.display(),
                         error.words()
-                    )
+                    ))
                 }
             };
         }
@@ -1662,7 +1765,7 @@ impl Job<'_> {
         self.left
             .borrow_mut()
             .push(Leftover::AtReservedName { at: name.into() });
-        left_as_the_source(name, source, source_reads)
+        Some(left_as_the_source(name, source, source_reads))
     }
 
     /// Finishes a move whose destination is in place by unlinking the source.
@@ -1863,8 +1966,13 @@ impl Job<'_> {
                     }
                     let source_reads = disk.uncached_blocking(source);
                     if source_reads.exists() != Some(true) {
-                        let note = self.settle_empty_claim(&intermediate, source_reads);
-                        return Err(Fail::of(error, Side::Either).noting(&note));
+                        let fail = Fail::of(error, Side::Either);
+                        return Err(
+                            match self.settle_empty_claim(&intermediate, reading, source_reads) {
+                                Some(note) => fail.noting(&note),
+                                None => fail,
+                            },
+                        );
                     }
                     let _ = disk.remove_blocking(&intermediate, Remove::File);
                     last_failure = Some(Fail::of(error, Side::Either));
