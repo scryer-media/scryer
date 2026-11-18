@@ -137,6 +137,7 @@ pub struct HashAsk {
     row: Option<HashRow>,
     recorded: Option<StoredHash>,
     recorded_only: bool,
+    fresh: bool,
     cancel: Cancel,
     progress: Progress,
     times: Option<Arc<ReadTimes>>,
@@ -150,6 +151,7 @@ impl HashAsk {
             row: None,
             recorded: None,
             recorded_only: false,
+            fresh: false,
             cancel: Cancel::never(),
             progress: Progress::none(),
             times: None,
@@ -174,6 +176,15 @@ impl HashAsk {
     /// nothing otherwise: [`FullHashAnswer::Unrecorded`].
     pub fn recorded_only(mut self) -> Self {
         self.recorded_only = true;
+        self
+    }
+
+    /// Read the file now, whatever is recorded or cached of it: for a proof
+    /// a removal rests on, where a rewrite that kept the length and the
+    /// modification time must still be seen. What is read is recorded as
+    /// any read is.
+    pub fn fresh(mut self) -> Self {
+        self.fresh = true;
         self
     }
 
@@ -408,6 +419,7 @@ impl Short {
 pub struct CheckSide {
     path: PathBuf,
     row: Option<HashRow>,
+    fresh: bool,
 }
 
 impl CheckSide {
@@ -415,7 +427,14 @@ impl CheckSide {
         Self {
             path: path.into(),
             row: None,
+            fresh: false,
         }
+    }
+
+    /// At full depth, read the file now: [`HashAsk::fresh`].
+    pub fn fresh(mut self) -> Self {
+        self.fresh = true;
+        self
     }
 
     /// The catalog row the file's hash is stored on.
@@ -433,6 +452,7 @@ impl CheckSide {
     fn ask(self) -> HashAsk {
         HashAsk {
             row: self.row,
+            fresh: self.fresh,
             ..HashAsk::new(self.path)
         }
     }
@@ -536,6 +556,7 @@ impl Disk {
             }))
         };
         let recorded = match (&ask.recorded, &store) {
+            _ if ask.fresh => None,
             (Some(stored), _) => as_stored(stored.clone()),
             (None, Some((row, store))) => store.stored(row).await.and_then(as_stored),
             (None, None) => self

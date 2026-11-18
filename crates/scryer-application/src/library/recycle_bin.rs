@@ -781,11 +781,12 @@ pub(crate) async fn execute_conflict_recycle(
             }
             crate::location::title_folder_recovery::inspect_path(&payload, false).await?;
             // The payload must hold what the source holds, at the user's
-            // depth, and neither may change while they are compared.
+            // depth, and neither may change while they are compared. The
+            // source goes on this answer, so at full depth both are read now.
             let check = Disk::process()
                 .check(
-                    payload.as_path(),
-                    source,
+                    crate::disk::CheckSide::new(payload.as_path()).fresh(),
+                    crate::disk::CheckSide::new(source).fresh(),
                     crate::location::verify::disk_depth(depth),
                 )
                 .await;

@@ -38,21 +38,23 @@ impl FileResolution {
         matches!(self.disposition, ResolutionDisposition::Disposal(_))
     }
 
-    #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino hardlink proof
     pub async fn proof_is_current(&self) -> bool {
         if !self.completed || self.is_disposal() {
             return false;
         }
         let source = stored_path_to_path_buf(&self.source_path);
         let destination = stored_path_to_path_buf(&self.destination_path);
-        let source_metadata = tokio::fs::symlink_metadata(&source).await;
+        // The disk service's read of the source itself, a link not followed:
+        // the same read on every platform, and the one a hardlink proof
+        // compares with the destination's.
+        let source_read = Disk::process().fingerprint(&source).await;
         let destination_version = file_version(&destination).await.ok();
         let Some(expected) = self.destination_version.as_deref() else {
             return false;
         };
-        if source_metadata
+        if source_read
             .as_ref()
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            .is_err_and(|reading| reading.exists() == Some(false))
         {
             // Cleanup may have committed before its title checkpoint. Unlinking
             // a hardlink changes ctime, but not its identity, length or mtime.
@@ -65,13 +67,9 @@ impl FileResolution {
                     }));
         }
         if self.disposition == ResolutionDisposition::Hardlink {
-            let Ok(source_metadata) = source_metadata else {
-                return false;
-            };
-            let (Ok(source_read), Ok(destination_read)) = (
-                super::execution::mark_beside(&source, &source_metadata).await,
-                crate::disk::Disk::process().fingerprint(&destination).await,
-            ) else {
+            let (Ok(source_read), Ok(destination_read)) =
+                (source_read, Disk::process().fingerprint(&destination).await)
+            else {
                 return false;
             };
             return super::execution::same_regular_file(&source_read, &destination_read);
@@ -91,29 +89,42 @@ impl FileResolution {
     /// apart. Disposal is irreversible, so past the fast negative the bytes
     /// themselves have to agree with what was recorded.
     ///
-    /// The destination is re-read and compared against the record's
-    /// `identity_hash`, the full-file BLAKE3 the transfer wrote. A record
-    /// carrying no `identity_hash` proves nothing about content on its own, so
-    /// the two copies are re-hashed and compared to each other instead — never
-    /// unlinked on the strength of a version alone.
+    /// The destination's full hash, the disk service's answer, is compared
+    /// against the record's `identity_hash`, the full-file BLAKE3 the
+    /// transfer wrote. A record carrying no `identity_hash` proves nothing
+    /// about content on its own, so the two copies' full hashes are compared
+    /// to each other instead — never unlinked on the strength of a version
+    /// alone. A file that changed while it was read proves nothing.
     pub async fn proof_supports_disposal(&self) -> AppResult<bool> {
         if !self.proof_is_current().await {
             return Ok(false);
         }
+        // Disposal is irreversible, so each file is read now, never answered
+        // from a hash kept while it fit.
         let destination = stored_path_to_path_buf(&self.destination_path);
-        let destination_hashes =
-            hash_existing_file_with_progress(&destination, CopyProgress::none())
-                .await
-                .map_err(|error| file_error(&destination, error))?;
-        if let Some(identity_hash) = self.identity_hash.as_deref() {
-            return Ok(destination_hashes.full_blake3 == identity_hash);
+        let fresh = |path: &Path| crate::disk::CheckSide::new(path).fresh();
+        let check = match self.identity_hash.as_deref() {
+            Some(identity_hash) => {
+                Disk::process()
+                    .check_against(fresh(&destination), Some(identity_hash))
+                    .await
+            }
+            None => {
+                let source = stored_path_to_path_buf(&self.source_path);
+                Disk::process()
+                    .check(
+                        fresh(&source),
+                        fresh(&destination),
+                        crate::disk::Depth::Full,
+                    )
+                    .await
+            }
+        };
+        match check {
+            crate::disk::Check::Same => Ok(true),
+            crate::disk::Check::Differs | crate::disk::Check::Changed => Ok(false),
+            crate::disk::Check::Unread(why) => Err(file_error(&destination, why)),
         }
-        let source = stored_path_to_path_buf(&self.source_path);
-        let source_hashes = hash_existing_file_with_progress(&source, CopyProgress::none())
-            .await
-            .map_err(|error| file_error(&source, error))?;
-        Ok(source_hashes.size_bytes == destination_hashes.size_bytes
-            && source_hashes.full_blake3 == destination_hashes.full_blake3)
     }
 }
 

@@ -1519,8 +1519,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 true => {
                     Disk::process()
                         .check(
-                            source.as_path(),
-                            destination.as_path(),
+                            // The source goes on this answer, so at full
+                            // depth both are read now, never answered from a
+                            // hash kept while it fit.
+                            crate::disk::CheckSide::new(source.as_path()).fresh(),
+                            crate::disk::CheckSide::new(destination.as_path()).fresh(),
                             super::verify::disk_depth(record.depth.applied),
                         )
                         .await

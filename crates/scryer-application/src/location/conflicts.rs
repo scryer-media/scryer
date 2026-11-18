@@ -1705,19 +1705,38 @@ async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
             "A file changed before its content could be verified",
         ));
     }
-    let hashes = super::verify::hash_existing_file_with_progress(
-        &native,
-        super::verify::CopyProgress::none(),
-    )
-    .await
-    .map_err(|error| AppError::Repository(error.to_string()))?;
+    // The disk service's full hash, its read held to the file it began on;
+    // the version is read again after it, as before, so a file that changed
+    // between the first version and the read is refused too.
+    let hashed = match Disk::process()
+        .full_hash(crate::disk::HashAsk::new(native.as_path()).fresh())
+        .await
+    {
+        crate::disk::FullHashAnswer::Read(known)
+        | crate::disk::FullHashAnswer::Stored(known)
+        | crate::disk::FullHashAnswer::Cached(known) => known,
+        crate::disk::FullHashAnswer::Changed => {
+            return Err(refused(
+                refusal::FILE_CHANGED,
+                "A file changed while its content was verified",
+            ));
+        }
+        crate::disk::FullHashAnswer::Unreadable(why) => {
+            return Err(AppError::Repository(why.to_string()));
+        }
+        crate::disk::FullHashAnswer::Cancelled | crate::disk::FullHashAnswer::Unrecorded => {
+            return Err(AppError::Repository(format!(
+                "the full hash of {path} was not taken"
+            )));
+        }
+    };
     if super::resolution::file_version(&native).await? != version {
         return Err(refused(
             refusal::FILE_CHANGED,
             "A file changed while its content was verified",
         ));
     }
-    Ok(hashes.full_blake3)
+    Ok(hashed.blake3)
 }
 
 fn disposal_proof(row: &super::resolution::FileResolution) -> Option<&DisposalProof> {
