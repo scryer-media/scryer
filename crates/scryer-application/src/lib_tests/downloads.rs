@@ -15456,6 +15456,8 @@ async fn quality_mismatch_retry_uses_the_current_profile_and_fresh_probe() {
 struct CleanupRefusingImporter {
     folder_settled: std::sync::atomic::AtomicBool,
     is_source: bool,
+    /// Fail as a removal that could not finish, which is retried.
+    could_not_finish: bool,
 }
 
 #[async_trait]
@@ -15512,7 +15514,9 @@ impl FileImporter for CleanupRefusingImporter {
         _guard: scryer_domain::ImportSourceCleanupGuard,
         _final_dest_path: &Path,
     ) -> AppResult<()> {
-        Err(if self.is_source {
+        Err(if self.could_not_finish {
+            AppError::Repository("the import source could not be removed".into())
+        } else if self.is_source {
             AppError::ManualReconciliationRefused {
                 message: "the library file is the import source's own entry".into(),
                 reason: crate::error_reasons::import::DESTINATION_IS_SOURCE,
@@ -15596,6 +15600,50 @@ async fn a_history_retry_whose_cleanup_finds_the_library_file_is_imported_and_ke
         .expect("sources read");
     assert!(sources.library_holds_payload, "{sources:?}");
     assert!(!sources.held, "{sources:?}");
+}
+
+/// A history retry whose source cleanup could not finish, after the file was
+/// placed and cataloged, is not recorded as a failed import: no failed entry
+/// joins the title's history for a file that was imported once. Nothing is
+/// removed.
+#[tokio::test]
+async fn a_history_retry_whose_cleanup_could_not_finish_adds_no_failed_entry() {
+    let (fixture, source, source_bytes, retried) =
+        history_retry_with_refusing_cleanup(CleanupRefusingImporter {
+            could_not_finish: true,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(
+        retried.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{retried:?}"
+    );
+    assert!(!retried.needs_reconciliation, "{retried:?}");
+    let rejected = fixture
+        .app
+        .services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::ImportRejected]),
+            title_id: Some(fixture.title.id.clone()),
+            facet: None,
+            stream_id: None,
+            media_request_ids: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "only the first attempt's refusal is in the history: {rejected:?}"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(primary_movie_files(&fixture).await.len(), 1);
 }
 
 async fn history_retry_with_refusing_cleanup(

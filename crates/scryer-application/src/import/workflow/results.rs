@@ -3059,10 +3059,12 @@ enum DeferredCleanupFailure {
     NeedsReconciliation(AppError),
     /// The sources stay held, and the hold may be released.
     Held(AppError),
-    /// The import holds no sources, so nothing is held: the import fails
-    /// with this error and is retried as any failed import is. A re-run
-    /// finds the placed file already imported and, before the download may
-    /// be removed with its data, settles whether its file is that file.
+    /// The import holds no sources, so nothing is held: the attempt ends
+    /// failed with this error and is retried as any failed import is, but it
+    /// is recorded pending, never as a failed import, since its files are
+    /// placed and cataloged. A re-run finds the placed file already imported
+    /// and, before the download may be removed with its data, settles
+    /// whether its file is that file.
     Failed(AppError),
 }
 

@@ -151,8 +151,11 @@ async fn run_import(
                 cleanup_refused = true;
                 result = Err(error);
             }
-            // No sources are held, so nothing waits for a release: the import
-            // fails with the cleanup's own error and is retried.
+            // No sources are held, so nothing waits for a release: the attempt
+            // ends failed with the cleanup's own error and is retried. Its
+            // files are placed and cataloged, so it is recorded as the retry
+            // it waits for, never as a failed import: no failed event or
+            // history entry is written for a file that was imported.
             Err(DeferredCleanupFailure::Failed(error)) => {
                 tracing::warn!(
                     import_id,
@@ -161,7 +164,32 @@ async fn run_import(
                 );
                 subtitles_pending = true;
                 cleanup_refused = true;
-                result = Err(error);
+                let title_id = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|imported| imported.title_id.clone());
+                let failed = ImportResult {
+                    decision: ImportDecision::Failed,
+                    skip_reason: completed_import_error_skip_reason(&error),
+                    error_message: Some(error.to_string()),
+                    reason_code: error.reason().map(str::to_string),
+                    needs_reconciliation: false,
+                    release_burned: false,
+                    title_id,
+                    ..base_completed_import_result(
+                        import_id,
+                        completed,
+                        release_evidence,
+                        started_at,
+                    )
+                };
+                app.update_import_status_and_notify(
+                    import_id,
+                    completed_import_status_for_result(&failed, ImportStatus::Failed),
+                    serde_json::to_string(&failed).ok(),
+                )
+                .await?;
+                result = Ok(failed);
             }
             Err(DeferredCleanupFailure::Held(error)) => {
                 subtitles_pending = true;
