@@ -646,6 +646,8 @@ fn compile_rule(
             return Err(unsupported());
         }
         let mut guards = first_operand.guard;
+        // A computed operand exists only once its value line binds.
+        guards.extend(first_operand.value);
         if matches!(
             first_operand.shape,
             Shape::Text | Shape::TextList | Shape::Instant | Shape::Day
@@ -893,6 +895,66 @@ fn operand(
                 format!("count({var}_played) > 0"),
             ],
             vec![format!("{var} := {var}_played[0]")],
+        ),
+        Source::TitleFact(fact) => (
+            vec![
+                format!("{var} := input.facts.{fact}"),
+                format!("{type_guard}({var})"),
+            ],
+            Vec::new(),
+        ),
+        Source::TitleTextIs(fact, expected) => (
+            vec![
+                format!("{var}_text := input.facts.{fact}"),
+                format!("is_string({var}_text)"),
+            ],
+            vec![format!(
+                "{var} := lower({var}_text) == {}",
+                literal(&expected.to_lowercase())
+            )],
+        ),
+        Source::TitleRating { source, votes } => {
+            let field = if votes { "votes" } else { "value" };
+            (
+                vec![
+                    format!("{var}_ratings := input.facts.ratings"),
+                    format!("is_array({var}_ratings)"),
+                    format!(
+                        "{var}_found := [r.{field} | some r in {var}_ratings; is_string(r.source); lower(r.source) == {}; is_number(r.{field})]",
+                        literal(source)
+                    ),
+                    format!("count({var}_found) > 0"),
+                ],
+                vec![format!("{var} := {var}_found[0]")],
+            )
+        }
+        Source::EarliestDay(facts_read) => {
+            let parts = facts_read
+                .iter()
+                .map(|fact| format!("[d | d := {facts}.{fact}; is_string(d)]"))
+                .collect::<Vec<_>>();
+            let mut joined = parts[0].clone();
+            for part in &parts[1..] {
+                joined = format!("array.concat({joined}, {part})");
+            }
+            (
+                vec![
+                    format!("{var}_days := {joined}"),
+                    format!("count({var}_days) > 0"),
+                ],
+                vec![format!("{var} := min({var}_days)")],
+            )
+        }
+        Source::LatestFileAddedAt => (
+            vec![
+                format!("{var}_files := {facts}.files"),
+                format!("is_array({var}_files)"),
+                format!(
+                    "{var}_added := [f.added_at | some f in {var}_files; is_string(f.added_at)]"
+                ),
+                format!("count({var}_added) > 0"),
+            ],
+            vec![format!("{var} := max({var}_added)")],
         ),
     };
     Operand {

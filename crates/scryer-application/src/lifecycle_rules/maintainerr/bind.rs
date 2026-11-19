@@ -41,6 +41,18 @@ pub(super) enum Source {
     UserPlayCount,
     /// The named user's latest play of the subject.
     UserLastPlayedAt,
+    /// A fact of the title, read at every level: a season or an episode
+    /// reads its show's value.
+    TitleFact(&'static str),
+    /// Whether a text fact of the title equals the given value, ignoring case.
+    TitleTextIs(&'static str, &'static str),
+    /// The title's first stored rating from the given source: its own value,
+    /// or its vote count when `votes` is set.
+    TitleRating { source: &'static str, votes: bool },
+    /// The earliest of the given `YYYY-MM-DD` facts that are present.
+    EarliestDay(&'static [&'static str]),
+    /// When Scryer recorded the subject's newest file.
+    LatestFileAddedAt,
 }
 
 impl Source {
@@ -92,6 +104,13 @@ const UNCONFIRMED_PER_USER: &str =
     "a user who never played the item reads as no plays or no play date";
 const REQUESTED: &str =
     "Scryer says whether a request created the title, not whether a request exists";
+const OWN_RATING: &str =
+    "Scryer reads the rating from its own metadata, which it refreshes on its own schedule";
+const OWN_STATUS: &str = "Scryer reads the show's status from its own metadata provider";
+const FILE_RECORDED: &str =
+    "Scryer uses when it recorded the newest file, not when Radarr imported it";
+const OWN_RELEASE_DATES: &str =
+    "Scryer reads the digital and physical release dates from its own metadata";
 
 struct Entry {
     apps: &'static [&'static str],
@@ -291,6 +310,113 @@ const ENTRIES: &[Entry] = &[
         Source::MebibytesRounded("total_file_size_bytes"),
         Shape::Number,
     ),
+    caveat(
+        entry(
+            &["radarr"],
+            "releaseDate",
+            DATE,
+            &[MediaLevel::Movie],
+            Source::EarliestDay(&["digital_release_date", "physical_release_date"]),
+            Shape::Day,
+        ),
+        OWN_RELEASE_DATES,
+    ),
+    caveat(
+        entry(
+            &["radarr"],
+            "fileDate",
+            DATE,
+            &[MediaLevel::Movie],
+            Source::LatestFileAddedAt,
+            Shape::Instant,
+        ),
+        FILE_RECORDED,
+    ),
+    caveat(
+        entry(
+            &["radarr"],
+            "imdbRating",
+            NUMBER,
+            &[MediaLevel::Movie],
+            Source::TitleRating {
+                source: "imdb",
+                votes: false,
+            },
+            Shape::Number,
+        ),
+        OWN_RATING,
+    ),
+    caveat(
+        entry(
+            &["radarr"],
+            "imdbRatingVotes",
+            NUMBER,
+            &[MediaLevel::Movie],
+            Source::TitleRating {
+                source: "imdb",
+                votes: true,
+            },
+            Shape::Number,
+        ),
+        OWN_RATING,
+    ),
+    // Plex: the IMDb and TMDB audience ratings Plex shows, both out of ten.
+    caveat(
+        entry(
+            &["plex"],
+            "rating_imdb",
+            NUMBER,
+            TITLES,
+            Source::TitleRating {
+                source: "imdb",
+                votes: false,
+            },
+            Shape::Number,
+        ),
+        OWN_RATING,
+    ),
+    caveat(
+        entry(
+            &["plex"],
+            "rating_imdbShow",
+            NUMBER,
+            &[MediaLevel::Season, MediaLevel::Episode],
+            Source::TitleRating {
+                source: "imdb",
+                votes: false,
+            },
+            Shape::Number,
+        ),
+        OWN_RATING,
+    ),
+    caveat(
+        entry(
+            &["plex"],
+            "rating_tmdb",
+            NUMBER,
+            TITLES,
+            Source::TitleRating {
+                source: "tmdb",
+                votes: false,
+            },
+            Shape::Number,
+        ),
+        OWN_RATING,
+    ),
+    caveat(
+        entry(
+            &["plex"],
+            "rating_tmdbShow",
+            NUMBER,
+            &[MediaLevel::Season, MediaLevel::Episode],
+            Source::TitleRating {
+                source: "tmdb",
+                votes: false,
+            },
+            Shape::Number,
+        ),
+        OWN_RATING,
+    ),
     // Sonarr.
     entry(
         &["sonarr"],
@@ -339,6 +465,28 @@ const ENTRIES: &[Entry] = &[
         SHOW_LEVELS,
         Source::Fact("missing_episode_count"),
         Shape::Number,
+    ),
+    caveat(
+        entry(
+            &["sonarr"],
+            "status",
+            TEXT,
+            &[MediaLevel::Show, MediaLevel::Season],
+            Source::TitleFact("series_status"),
+            Shape::Text,
+        ),
+        OWN_STATUS,
+    ),
+    caveat(
+        entry(
+            &["sonarr"],
+            "ended",
+            BOOL,
+            &[MediaLevel::Show, MediaLevel::Season],
+            Source::TitleTextIs("series_status", "ended"),
+            Shape::Bool,
+        ),
+        OWN_STATUS,
     ),
     entry(
         &["sonarr"],
