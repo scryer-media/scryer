@@ -261,6 +261,8 @@ pub(crate) struct MockMediaFileRepo {
     pub(super) title_file_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) primary_cutoff_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// How many single-file lookups by id ran.
+    pub(super) file_id_reads: Arc<std::sync::atomic::AtomicUsize>,
     /// Each file's title-wide role, as `media_files.role` holds it. Episode
     /// elections change only the per-link role (`role` on the link rows in
     /// `store`), the way the real store changes only `file_episode_map`, so
@@ -1280,6 +1282,8 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>> {
+        self.file_id_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self
             .store
             .lock()

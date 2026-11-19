@@ -3351,6 +3351,7 @@ impl AppUseCase {
                             status: None,
                             replacement_file_id: None,
                             replacement_path: None,
+                            episode_ids: None,
                             media_row,
                         };
                         if linked {

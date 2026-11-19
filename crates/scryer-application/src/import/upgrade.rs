@@ -431,6 +431,26 @@ struct PreparedUpgradeReplacement {
     same_final_path: bool,
     source_cleanup: Option<ImportSourceCleanupGuard>,
     destination_permit: crate::import_workflow::ImportDestinationPermit,
+    /// The episodes the replaced file covered, as its recycle entry records
+    /// them; empty for a movie.
+    replaced_episode_ids: Vec<String>,
+}
+
+/// The episodes an upgrade replaced: its targets, or the replaced file's own
+/// episode when no target was given. The same set the upgrade's events carry.
+fn replaced_episode_ids(
+    target_episode_ids: &[String],
+    existing_file: &TitleMediaFile,
+) -> Vec<String> {
+    let mut episode_ids = target_episode_ids.to_vec();
+    if episode_ids.is_empty()
+        && let Some(episode_id) = existing_file.episode_id.clone()
+    {
+        episode_ids.push(episode_id);
+    }
+    episode_ids.sort();
+    episode_ids.dedup();
+    episode_ids
 }
 
 enum OldFileDisposition {
@@ -1091,8 +1111,10 @@ async fn dispose_same_path_guard_after_confirmed_db_swap(
             title_id: &manifest.title_id,
             media_root: Some(&manifest.media_root),
             // The same-path guard manifest does not record the old row, which
-            // is already gone by the time the guard disposes of the backup.
+            // is already gone by the time the guard disposes of the backup,
+            // nor the episodes it covered.
             media_row: None,
+            episode_ids: Vec::new(),
         };
         let recycle_result = recycle_bin::recycle_replaced_media_file(
             &recycle_config,
@@ -1320,6 +1342,7 @@ async fn prepare_replacement_before_old_removal(
         same_final_path,
         source_cleanup: file_result.source_cleanup.clone(),
         destination_permit: file_result.destination_permit(),
+        replaced_episode_ids: replaced_episode_ids(target_episode_ids, existing_file),
     })
 }
 
@@ -1387,6 +1410,7 @@ async fn finalize_distinct_path_upgrade(
         &existing_file.file_path,
         title,
         old_file_media_root,
+        &replacement.replaced_episode_ids,
         depth,
     )
     .await
@@ -1471,6 +1495,10 @@ async fn finalize_distinct_path_upgrade(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "old-file disposition needs the original, its episodes, and recycle context"
+)]
 async fn prepare_old_file_disposition_for_upgrade(
     recycle_config: &RecycleBinConfig,
     existing_file: &TitleMediaFile,
@@ -1478,6 +1506,7 @@ async fn prepare_old_file_disposition_for_upgrade(
     manifest_original_path: &str,
     title: &Title,
     media_root: Option<&str>,
+    replaced_episode_ids: &[String],
     depth: VerificationDepth,
 ) -> AppResult<OldFileDisposition> {
     if recycle_config.enabled {
@@ -1490,6 +1519,7 @@ async fn prepare_old_file_disposition_for_upgrade(
             media_row: Some(recycle_bin::RecycledMediaRowSnapshot::from_media_file(
                 existing_file,
             )),
+            episode_ids: replaced_episode_ids.to_vec(),
         };
         return recycle_bin::recycle_replaced_media_file(
             recycle_config,
@@ -1819,6 +1849,7 @@ async fn finalize_same_path_upgrade(
         old_file_media_root,
         &replacement.new_file_id,
         &replacement_physical_path,
+        &replacement.replaced_episode_ids,
         app.resolve_verification_depth().await,
     )
     .await?;
@@ -1840,6 +1871,7 @@ async fn dispose_old_file_after_verified_upgrade(
     media_root: Option<&str>,
     replacement_file_id: &str,
     replacement_path: &Path,
+    replaced_episode_ids: &[String],
     depth: VerificationDepth,
 ) -> AppResult<bool> {
     if !recycle_config.enabled {
@@ -1857,6 +1889,7 @@ async fn dispose_old_file_after_verified_upgrade(
         media_row: Some(recycle_bin::RecycledMediaRowSnapshot::from_media_file(
             existing_file,
         )),
+        episode_ids: replaced_episode_ids.to_vec(),
     };
     let recycle_result = recycle_bin::recycle_replaced_media_file(
         recycle_config,

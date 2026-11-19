@@ -455,8 +455,12 @@ impl AppUseCase {
             recorded.keep_libraries(bin_libraries);
         }
         let cutoff = crate::recycle_bin::expiry_cutoff(config);
-        let (entries, withheld) =
-            crate::recycle_bin::list_committed_entries_reporting_withheld(config).await?;
+        let crate::recycle_bin::RecycleRootListing {
+            committed: entries,
+            withheld_titles: withheld,
+            upgrade_links,
+        } = crate::recycle_bin::list_committed_entries_with_upgrade_links(config).await?;
+        let mut upgrades = UpgradePurgeContext::listed(upgrade_links);
         for title_id in &withheld {
             if recorded.claims(title_id, bin_libraries) {
                 recorded.keep(title_id);
@@ -515,6 +519,7 @@ impl AppUseCase {
                     config,
                     &entry,
                     DomainEventActor::system(),
+                    &mut upgrades,
                 )
                 .await?
             {
@@ -579,10 +584,11 @@ impl AppUseCase {
         config: &crate::recycle_bin::RecycleBinConfig,
         entry: &crate::recycle_bin::CommittedRecycleEntry,
         actor: impl Into<DomainEventActor>,
+        upgrades: &mut UpgradePurgeContext,
     ) -> AppResult<bool> {
         let actor = actor.into();
         if let Err(reason) = self
-            .validate_recycle_entry_before_permanent_delete(&entry.manifest)
+            .validate_recycle_entry_before_permanent_delete(&entry.manifest, upgrades)
             .await
         {
             warn!(
@@ -680,6 +686,7 @@ impl AppUseCase {
     async fn validate_recycle_entry_before_permanent_delete(
         &self,
         manifest: &crate::recycle_bin::RecycleManifest,
+        upgrades: &mut UpgradePurgeContext,
     ) -> Result<(), String> {
         if manifest.reason != "upgrade_replaced" {
             return Ok(());
@@ -709,59 +716,9 @@ impl AppUseCase {
             ));
         }
 
-        let replacement_file_id = manifest
-            .replacement_file_id
-            .as_deref()
-            .ok_or_else(|| "missing replacement media file id".to_string())?;
-        let replacement_path = manifest
-            .replacement_path
-            .as_deref()
-            .ok_or_else(|| "missing replacement media file path".to_string())?;
-        let replacement = self
-            .services
-            .library
-            .media_files
-            .get_media_file_by_id(replacement_file_id)
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "replacement media file row is missing".to_string())?;
-
-        if replacement.file_path != replacement_path {
-            return Err(format!(
-                "replacement media file path mismatch: manifest={} db={}",
-                replacement_path, replacement.file_path
-            ));
-        }
-        let replacement_path_buf =
-            crate::stored_paths::stored_path_to_path_buf(&replacement.file_path);
-        if Disk::process().follow(&replacement_path_buf).await.exists() != Some(true) {
-            return Err(format!(
-                "replacement media file does not exist on disk: {}",
-                replacement.file_path
-            ));
-        }
-        if replacement.title_id != title_id {
-            return Err(format!(
-                "replacement title mismatch: manifest={} db={}",
-                title_id, replacement.title_id
-            ));
-        }
-        if !crate::recycle_bin::path_is_under_configured_root(
-            &replacement_path_buf,
-            &media_root_path,
-        ) {
-            return Err(format!(
-                "replacement path is outside manifest media root: replacement={} root={}",
-                replacement.file_path, media_root
-            ));
-        }
         if self
-            .services
-            .library
-            .media_files
-            .get_media_file_by_id(original_file_id)
-            .await
-            .map_err(|error| error.to_string())?
+            .upgrade_purge_row(upgrades, original_file_id)
+            .await?
             .is_some()
         {
             return Err("original media file row is still active".to_string());
@@ -773,7 +730,8 @@ impl AppUseCase {
             .get_media_file_by_path(&manifest.original_path)
             .await
             .map_err(|error| error.to_string())?
-            && active_at_original_path.id != replacement_file_id
+            && (active_at_original_path.id == original_file_id
+                || active_at_original_path.title_id != title_id)
         {
             return Err(format!(
                 "original path is active for a different media file: {}",
@@ -781,7 +739,295 @@ impl AppUseCase {
             ));
         }
 
+        let live_path = self
+            .recycled_unit_live_file_path(
+                upgrades,
+                manifest,
+                title_id,
+                original_file_id,
+                &media_root_path,
+            )
+            .await?;
+        let live_path_buf = crate::stored_paths::stored_path_to_path_buf(&live_path);
+        if !crate::recycle_bin::path_is_under_configured_root(&live_path_buf, &media_root_path) {
+            return Err(format!(
+                "replacement path is outside manifest media root: replacement={} root={}",
+                live_path, media_root
+            ));
+        }
+        if !library_file_path_is_live(&live_path_buf) {
+            return Err(format!(
+                "replacement path is a recycled or staged file, not a library file: {live_path}"
+            ));
+        }
+        if !upgrades.file_exists(&live_path_buf).await {
+            return Err(format!(
+                "replacement media file does not exist on disk: {live_path}"
+            ));
+        }
+
         Ok(())
+    }
+
+    /// The media file row `file_id` names, read once per purge pass.
+    async fn upgrade_purge_row(
+        &self,
+        upgrades: &mut UpgradePurgeContext,
+        file_id: &str,
+    ) -> Result<Option<crate::TitleMediaFile>, String> {
+        if let Some(row) = upgrades.rows.get(file_id) {
+            return Ok(row.clone());
+        }
+        let row = self
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(file_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        upgrades.rows.insert(file_id.to_string(), row.clone());
+        Ok(row)
+    }
+
+    /// The catalog path of the library file that now covers what an
+    /// upgrade-recycled file covered, narrowest evidence first:
+    ///
+    /// 1. the replacement row the manifest names, wherever it now lives, so a
+    ///    rename or move of the replacement is followed;
+    /// 2. when the manifest records the episodes the file covered, a live
+    ///    primary file of the title covering all of them;
+    /// 3. for a movie, its newest live primary file;
+    /// 4. for an episode entry that records no episodes, the replacement chain
+    ///    the bin's own entries record, followed to a row that still exists.
+    ///
+    /// Anything else is refused.
+    async fn recycled_unit_live_file_path(
+        &self,
+        upgrades: &mut UpgradePurgeContext,
+        manifest: &crate::recycle_bin::RecycleManifest,
+        title_id: &str,
+        original_file_id: &str,
+        media_root_path: &Path,
+    ) -> Result<String, String> {
+        let replacement_file_id = manifest
+            .replacement_file_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        if let Some(replacement_file_id) = replacement_file_id
+            && let Some(replacement) = self
+                .upgrade_purge_row(upgrades, replacement_file_id)
+                .await?
+        {
+            if replacement.title_id != title_id {
+                return Err(format!(
+                    "replacement title mismatch: manifest={} db={}",
+                    title_id, replacement.title_id
+                ));
+            }
+            return Ok(replacement.file_path);
+        }
+
+        if let Some(episode_ids) = manifest
+            .episode_ids
+            .as_ref()
+            .filter(|episode_ids| !episode_ids.is_empty())
+        {
+            return self
+                .live_primary_covering_episodes(
+                    upgrades,
+                    title_id,
+                    episode_ids,
+                    original_file_id,
+                    media_root_path,
+                )
+                .await;
+        }
+
+        let facet = match upgrades.facets.get(title_id) {
+            Some(facet) => facet.clone(),
+            None => {
+                let facet = self
+                    .services
+                    .catalog
+                    .titles
+                    .get_by_id(title_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .map(|title| title.facet);
+                upgrades.facets.insert(title_id.to_string(), facet.clone());
+                facet
+            }
+        };
+        let facet = facet.ok_or_else(|| {
+            "replacement media file row is missing and the title is gone".to_string()
+        })?;
+        if facet == scryer_domain::MediaFacet::Movie {
+            return self
+                .newest_live_movie_file(upgrades, title_id, original_file_id, media_root_path)
+                .await;
+        }
+
+        let replacement_file_id = replacement_file_id.ok_or_else(|| {
+            "replacement media file row is missing and the entry records neither its replacement nor the episodes it covered"
+                .to_string()
+        })?;
+        let terminal = self
+            .resolve_upgrade_chain(upgrades, title_id, replacement_file_id)
+            .await?;
+        Ok(terminal.file_path)
+    }
+
+    /// A live primary file of `title_id` covering every one of `episode_ids`,
+    /// under the media root and not the recycled file. When several do, the
+    /// newest is chosen, then the lowest id.
+    async fn live_primary_covering_episodes(
+        &self,
+        upgrades: &mut UpgradePurgeContext,
+        title_id: &str,
+        episode_ids: &[String],
+        original_file_id: &str,
+        media_root_path: &Path,
+    ) -> Result<String, String> {
+        let key = (title_id.to_string(), episode_ids.to_vec());
+        if !upgrades.episode_files.contains_key(&key) {
+            let files = self
+                .services
+                .library
+                .media_files
+                .list_live_media_files_for_episode_ids(title_id, episode_ids)
+                .await
+                .map_err(|error| error.to_string())?;
+            upgrades.episode_files.insert(key.clone(), files);
+        }
+        upgrades.episode_files[&key]
+            .iter()
+            .filter(|file| {
+                file.title_role.is_primary()
+                    && file.media_file.title_id == title_id
+                    && file.media_file.id != original_file_id
+                    && episode_ids
+                        .iter()
+                        .all(|episode_id| file.primary_episode_ids.contains(episode_id))
+                    && crate::recycle_bin::path_is_under_configured_root(
+                        &crate::stored_paths::stored_path_to_path_buf(&file.media_file.file_path),
+                        media_root_path,
+                    )
+            })
+            .max_by(|left, right| {
+                left.media_file
+                    .created_at
+                    .cmp(&right.media_file.created_at)
+                    .then_with(|| right.media_file.id.cmp(&left.media_file.id))
+            })
+            .map(|file| file.media_file.file_path.clone())
+            .ok_or_else(|| {
+                "replacement media file row is missing and no live primary file covers the episodes the entry covered"
+                    .to_string()
+            })
+    }
+
+    /// The newest live primary file of a movie under the media root that is
+    /// not the recycled file.
+    async fn newest_live_movie_file(
+        &self,
+        upgrades: &mut UpgradePurgeContext,
+        title_id: &str,
+        original_file_id: &str,
+        media_root_path: &Path,
+    ) -> Result<String, String> {
+        if !upgrades.movie_files.contains_key(title_id) {
+            let files = self
+                .services
+                .library
+                .media_files
+                .list_primary_file_cutoffs_for_title(title_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            upgrades.movie_files.insert(title_id.to_string(), files);
+        }
+        upgrades.movie_files[title_id]
+            .iter()
+            .find(|file| {
+                file.id != original_file_id
+                    && crate::recycle_bin::path_is_under_configured_root(
+                        &crate::stored_paths::stored_path_to_path_buf(&file.file_path),
+                        media_root_path,
+                    )
+            })
+            .map(|file| file.file_path.clone())
+            .ok_or_else(|| {
+                "replacement media file row is missing and the movie has no live primary file"
+                    .to_string()
+            })
+    }
+
+    /// Follows the upgrades the bin's entries record from `start`, a file
+    /// whose row is gone, to the first file whose row still exists. Each step
+    /// must be recorded by exactly one upgrade of `title_id`; a missing or
+    /// ambiguous step, a step of another title, a loop, or a terminal row of
+    /// another title is refused. Every file on the walk keeps the outcome, so
+    /// one pass walks each chain once however many of its entries it purges.
+    async fn resolve_upgrade_chain(
+        &self,
+        upgrades: &mut UpgradePurgeContext,
+        title_id: &str,
+        start: &str,
+    ) -> Result<crate::TitleMediaFile, String> {
+        upgrades.ensure_links().await?;
+        let mut walked: Vec<String> = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut current = start.to_string();
+        let outcome: Result<String, String> = loop {
+            if let Some(known) = upgrades
+                .chains
+                .get(&(title_id.to_string(), current.clone()))
+            {
+                break known.clone();
+            }
+            if !visited.insert(current.clone()) {
+                break Err(format!("replacement chain loops at media file {current}"));
+            }
+            walked.push(current.clone());
+            if let Some(row) = self.upgrade_purge_row(upgrades, &current).await? {
+                if row.title_id != title_id {
+                    break Err(format!(
+                        "replacement chain ends at a media file of another title: {}",
+                        row.id
+                    ));
+                }
+                break Ok(row.id);
+            }
+            match upgrades.links().step(&current) {
+                crate::recycle_bin::UpgradeLinkStep::Missing => {
+                    break Err(format!(
+                        "replacement chain breaks: no recycle entry records what replaced media file {current}"
+                    ));
+                }
+                crate::recycle_bin::UpgradeLinkStep::Ambiguous => {
+                    break Err(format!(
+                        "replacement chain breaks: recycle entries disagree on what replaced media file {current}"
+                    ));
+                }
+                crate::recycle_bin::UpgradeLinkStep::Link(link) => {
+                    if link.title_id != title_id {
+                        break Err(format!(
+                            "replacement chain crosses to another title at media file {current}"
+                        ));
+                    }
+                    current = link.replacement_file_id.clone();
+                }
+            }
+        };
+        for file_id in walked {
+            upgrades
+                .chains
+                .insert((title_id.to_string(), file_id), outcome.clone());
+        }
+        let terminal_id = outcome?;
+        self.upgrade_purge_row(upgrades, &terminal_id)
+            .await?
+            .ok_or_else(|| format!("replacement chain ends at a missing media file: {terminal_id}"))
     }
 
     pub async fn run_housekeeping(&self, actor: &User) -> AppResult<HousekeepingReport> {
@@ -2246,6 +2492,7 @@ impl AppUseCase {
             status: None,
             replacement_file_id: None,
             replacement_path: None,
+            episode_ids: None,
             media_row: incumbent
                 .as_ref()
                 .map(crate::recycle_bin::RecycledMediaRowSnapshot::from_media_file),
@@ -2681,6 +2928,7 @@ impl AppUseCase {
                         &config,
                         &committed_entry,
                         actor,
+                        &mut UpgradePurgeContext::unlisted(&config),
                     )
                     .await;
             }
@@ -2775,9 +3023,10 @@ impl AppUseCase {
 
         let mut total = 0u32;
         for (media_root, config) in self.resolve_all_recycle_configs().await {
-            match crate::recycle_bin::list_committed_entries(&config).await {
-                Ok(entries) => {
-                    for entry in entries {
+            match crate::recycle_bin::list_committed_entries_with_upgrade_links(&config).await {
+                Ok(listing) => {
+                    let mut upgrades = UpgradePurgeContext::listed(listing.upgrade_links);
+                    for entry in listing.committed {
                         let entry_id = entry
                             .entry_dir
                             .file_name()
@@ -2803,6 +3052,7 @@ impl AppUseCase {
                                 &config,
                                 &entry,
                                 actor,
+                                &mut upgrades,
                             )
                             .await
                         {
@@ -2822,6 +3072,120 @@ impl AppUseCase {
             }
         }
         Ok(total)
+    }
+}
+
+/// Where one purge pass finds the upgrades its bin's entries record.
+enum UpgradeLinkSource {
+    /// Read from the listing the pass already holds.
+    Listed(crate::recycle_bin::UpgradeLinks),
+    /// Not read yet: the bin is listed once, the first time an entry needs
+    /// to follow a chain.
+    Unlisted(crate::recycle_bin::RecycleBinConfig),
+}
+
+/// What one recycle purge pass has learned while validating upgrade entries,
+/// so each media file row, chain, title and on-disk probe is read at most once
+/// per pass however many entries lead to it. Each entry is still validated,
+/// and still under its own guard; only the reads are shared.
+pub(crate) struct UpgradePurgeContext {
+    links: UpgradeLinkSource,
+    rows: HashMap<String, Option<crate::TitleMediaFile>>,
+    chains: HashMap<(String, String), Result<String, String>>,
+    facets: HashMap<String, Option<scryer_domain::MediaFacet>>,
+    movie_files: HashMap<String, Vec<crate::MediaFileCutoffSummary>>,
+    episode_files: HashMap<(String, Vec<String>), Vec<crate::EpisodeScopedMediaFile>>,
+    probes: HashMap<PathBuf, bool>,
+}
+
+impl UpgradePurgeContext {
+    fn with_links(links: UpgradeLinkSource) -> Self {
+        Self {
+            links,
+            rows: HashMap::new(),
+            chains: HashMap::new(),
+            facets: HashMap::new(),
+            movie_files: HashMap::new(),
+            episode_files: HashMap::new(),
+            probes: HashMap::new(),
+        }
+    }
+
+    /// A pass over entries a listing returned, with the upgrades that listing
+    /// read.
+    pub(crate) fn listed(links: crate::recycle_bin::UpgradeLinks) -> Self {
+        Self::with_links(UpgradeLinkSource::Listed(links))
+    }
+
+    /// A pass over entries found without a listing of `config`'s bin.
+    pub(crate) fn unlisted(config: &crate::recycle_bin::RecycleBinConfig) -> Self {
+        Self::with_links(UpgradeLinkSource::Unlisted(config.clone()))
+    }
+
+    async fn ensure_links(&mut self) -> Result<(), String> {
+        if let UpgradeLinkSource::Unlisted(config) = &self.links {
+            let listing = crate::recycle_bin::list_committed_entries_with_upgrade_links(config)
+                .await
+                .map_err(|error| error.to_string())?;
+            self.links = UpgradeLinkSource::Listed(listing.upgrade_links);
+        }
+        Ok(())
+    }
+
+    fn links(&self) -> &crate::recycle_bin::UpgradeLinks {
+        static NONE: std::sync::LazyLock<crate::recycle_bin::UpgradeLinks> =
+            std::sync::LazyLock::new(crate::recycle_bin::UpgradeLinks::default);
+        match &self.links {
+            UpgradeLinkSource::Listed(links) => links,
+            UpgradeLinkSource::Unlisted(_) => &NONE,
+        }
+    }
+
+    /// Whether `path` is on disk, probed once per pass.
+    async fn file_exists(&mut self, path: &Path) -> bool {
+        if let Some(exists) = self.probes.get(path) {
+            return *exists;
+        }
+        #[cfg(test)]
+        test_upgrade_purge_probes::record(path);
+        let exists = Disk::process().follow(path).await.exists() == Some(true);
+        self.probes.insert(path.to_path_buf(), exists);
+        exists
+    }
+}
+
+/// Whether `path` names a library file rather than a recycled copy or an
+/// upgrade's staged replacement.
+fn library_file_path_is_live(path: &Path) -> bool {
+    !path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|name| {
+            name == crate::recycle_bin::RECYCLE_DIR_NAME
+                || crate::import::upgrade::is_upgrade_replacement_name(name)
+        })
+    })
+}
+
+/// Each on-disk probe an upgrade purge validation makes, so tests can bound
+/// them.
+#[cfg(test)]
+pub(crate) mod test_upgrade_purge_probes {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static PROBES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(super) fn record(path: &Path) {
+        PROBES.lock().unwrap().push(path.to_path_buf());
+    }
+
+    /// The probes of paths under `root`.
+    pub(crate) fn count_under(root: &Path) -> usize {
+        PROBES
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| path.starts_with(root))
+            .count()
     }
 }
 

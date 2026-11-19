@@ -82,6 +82,11 @@ pub struct RecycleManifest {
     pub replacement_file_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replacement_path: Option<String>,
+    /// The episodes the recycled file covered, sorted, when an upgrade of an
+    /// episode file recycled it. Entries written before this was recorded,
+    /// and entries of movies, have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode_ids: Option<Vec<String>>,
     /// Decision-time columns of the media row that tracked the recycled file.
     /// A rescan of the restored file can re-parse its name and re-probe its
     /// streams, but it cannot recover what the file scored when it was grabbed,
@@ -168,6 +173,9 @@ pub(crate) struct ReplacedMediaRecycleMetadata<'a> {
     pub title_id: &'a str,
     pub media_root: Option<&'a str>,
     pub media_row: Option<RecycledMediaRowSnapshot>,
+    /// The episodes the replaced file covered; empty for a movie or when
+    /// they are not known.
+    pub episode_ids: Vec<String>,
 }
 
 /// A committed recycle entry that passed local recycle-root checks.
@@ -225,6 +233,7 @@ impl RecycleManifest {
             status: Some(RECYCLE_STATUS_PENDING.to_string()),
             replacement_file_id: None,
             replacement_path: None,
+            episode_ids: None,
             media_row: None,
         }
     }
@@ -437,6 +446,25 @@ fn trusted_committed_entry(
     entry_dir: &Path,
     manifest: &RecycleManifest,
 ) -> Result<(), String> {
+    trusted_entry_layout(config, entry_dir, manifest)?;
+    committed_status(manifest)
+}
+
+fn committed_status(manifest: &RecycleManifest) -> Result<(), String> {
+    if !manifest.is_committed() {
+        return Err("recycle entry is not committed".to_string());
+    }
+    Ok(())
+}
+
+/// Every check of [`trusted_committed_entry`] but the entry's status: the
+/// directory is one Scryer generated, directly under the configured root,
+/// and its manifest is current and names it.
+fn trusted_entry_layout(
+    config: &RecycleBinConfig,
+    entry_dir: &Path,
+    manifest: &RecycleManifest,
+) -> Result<(), String> {
     if !cleanup_ready(config) {
         return Err(config
             .validation_error
@@ -465,9 +493,6 @@ fn trusted_committed_entry(
     }
     if manifest.entry_id.as_deref() != Some(entry_name) {
         return Err("recycle manifest entry id does not match directory".to_string());
-    }
-    if !manifest.is_committed() {
-        return Err("recycle entry is not committed".to_string());
     }
 
     let expected_parent = normalize_path(&config.base_path);
@@ -601,6 +626,10 @@ pub(crate) async fn recycle_replaced_media_file(
         metadata.media_root.map(str::to_string),
     );
     manifest.media_row = metadata.media_row;
+    let mut episode_ids = metadata.episode_ids;
+    episode_ids.sort();
+    episode_ids.dedup();
+    manifest.episode_ids = (!episode_ids.is_empty()).then_some(episode_ids);
     let payload_name_path = crate::stored_paths::stored_path_to_path_buf(metadata.original_path);
     recycle_file_inner(
         config,
@@ -1956,17 +1985,111 @@ async fn trusted_committed_entry_from_dir(
     config: &RecycleBinConfig,
     entry_dir: PathBuf,
 ) -> AppResult<Option<CommittedRecycleEntry>> {
-    Ok(inspect_entry_dir(config, entry_dir).await.1)
+    Ok(inspect_entry_dir(config, entry_dir).await.committed)
+}
+
+/// What one look at an entry directory found.
+struct InspectedEntry {
+    /// The title the manifest names, whenever the directory is a real entry
+    /// directory under the root with a readable manifest.
+    title_id: Option<Option<String>>,
+    /// The entry, when it is trusted and committed.
+    committed: Option<CommittedRecycleEntry>,
+    /// The upgrade the manifest records, when the entry is laid out as
+    /// Scryer wrote it and is committed or quarantined.
+    upgrade_link: Option<(String, UpgradeLink)>,
+}
+
+impl InspectedEntry {
+    fn none() -> Self {
+        Self {
+            title_id: None,
+            committed: None,
+            upgrade_link: None,
+        }
+    }
+}
+
+/// An upgrade a recycle entry records: the file it recycled was replaced by
+/// `replacement_file_id`, a file of `title_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UpgradeLink {
+    pub title_id: String,
+    pub replacement_file_id: String,
+}
+
+/// The next step from a file id along the upgrades the bin records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpgradeLinkStep<'a> {
+    /// No entry records an upgrade of this file.
+    Missing,
+    /// Entries record different upgrades of this file.
+    Ambiguous,
+    Link(&'a UpgradeLink),
+}
+
+/// The upgrades the entries of one bin record, by the file each replaced,
+/// gathered from the manifests one listing already read.
+#[derive(Debug, Default)]
+pub(crate) struct UpgradeLinks {
+    by_original: std::collections::HashMap<String, Option<UpgradeLink>>,
+}
+
+impl UpgradeLinks {
+    fn record(&mut self, original_file_id: String, link: UpgradeLink) {
+        match self.by_original.entry(original_file_id) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(Some(link));
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if slot.get().as_ref() != Some(&link) {
+                    slot.insert(None);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn step(&self, file_id: &str) -> UpgradeLinkStep<'_> {
+        match self.by_original.get(file_id) {
+            None => UpgradeLinkStep::Missing,
+            Some(None) => UpgradeLinkStep::Ambiguous,
+            Some(Some(link)) => UpgradeLinkStep::Link(link),
+        }
+    }
+}
+
+/// The upgrade an entry's manifest records, when it records one completely.
+fn manifest_upgrade_link(manifest: &RecycleManifest) -> Option<(String, UpgradeLink)> {
+    let reason = manifest.reason.split(';').next().unwrap_or_default().trim();
+    if reason != "upgrade_replaced" {
+        return None;
+    }
+    let non_empty = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let original = non_empty(&manifest.original_file_id)?;
+    let replacement = non_empty(&manifest.replacement_file_id)?;
+    if original == replacement {
+        return None;
+    }
+    Some((
+        original,
+        UpgradeLink {
+            title_id: non_empty(&manifest.title_id)?,
+            replacement_file_id: replacement,
+        },
+    ))
 }
 
 /// The trusted committed entry at `entry_dir`, plus the title its manifest
 /// names whenever the directory is a real entry directory under the root with a
 /// readable manifest. Manifests never change their title once written, so that
 /// title is stable for the life of the directory.
-async fn inspect_entry_dir(
-    config: &RecycleBinConfig,
-    entry_dir: PathBuf,
-) -> (Option<Option<String>>, Option<CommittedRecycleEntry>) {
+async fn inspect_entry_dir(config: &RecycleBinConfig, entry_dir: PathBuf) -> InspectedEntry {
     let reading = Disk::process().uncached(&entry_dir).await;
     if reading.exists().is_none() {
         warn!(
@@ -1980,13 +2103,13 @@ async fn inspect_entry_dir(
             path = %entry_dir.display(),
             "skipping symlinked recycle entry"
         );
-        return (None, None);
+        return InspectedEntry::none();
     }
     if !reading.is(EntryKind::Directory) {
-        return (None, None);
+        return InspectedEntry::none();
     }
     let Some(parent) = entry_dir.parent() else {
-        return (None, None);
+        return InspectedEntry::none();
     };
     if normalize_path(parent) != normalize_path(&config.base_path) {
         warn!(
@@ -1994,21 +2117,25 @@ async fn inspect_entry_dir(
             recycle_root = %config.base_path.display(),
             "skipping recycle entry outside configured recycle root"
         );
-        return (None, None);
+        return InspectedEntry::none();
     }
 
     let Some(manifest) = (match read_manifest(&entry_dir).await {
         Ok(manifest) => manifest,
         Err(error) => {
             warn!(path = %entry_dir.display(), error = %error, "failed to inspect recycle entry, skipping");
-            return (None, None);
+            return InspectedEntry::none();
         }
     }) else {
-        return (None, None);
+        return InspectedEntry::none();
     };
     let title_id = Some(manifest.title_id.clone());
+    let layout = trusted_entry_layout(config, &entry_dir, &manifest);
+    let upgrade_link = (layout.is_ok() && (manifest.is_committed() || manifest.is_quarantined()))
+        .then(|| manifest_upgrade_link(&manifest))
+        .flatten();
 
-    if let Err(reason) = trusted_committed_entry(config, &entry_dir, &manifest) {
+    if let Err(reason) = layout.and_then(|()| committed_status(&manifest)) {
         if let Err(error) =
             quarantine_untrusted_committed_entry(config, &entry_dir, &manifest, &reason).await
         {
@@ -2018,20 +2145,29 @@ async fn inspect_entry_dir(
                 "failed to quarantine untrusted recycle entry"
             );
         }
-        return (title_id, None);
+        return InspectedEntry {
+            title_id,
+            committed: None,
+            upgrade_link,
+        };
     }
 
     if let Err(error) = recycled_payload_path(&entry_dir, &manifest).await {
         warn!(path = %entry_dir.display(), error = %error, "recycle metadata cannot be used as its payload; entry preserved");
-        return (title_id, None);
+        return InspectedEntry {
+            title_id,
+            committed: None,
+            upgrade_link,
+        };
     }
-    (
+    InspectedEntry {
         title_id,
-        Some(CommittedRecycleEntry {
+        committed: Some(CommittedRecycleEntry {
             entry_dir,
             manifest,
         }),
-    )
+        upgrade_link,
+    }
 }
 
 /// Remembers, per recycle root, which title each entry directory belongs to,
@@ -2051,16 +2187,32 @@ pub struct TitleRecycleEntryIndex {
 
 /// The same entries, in the same order and with the same inspection, that
 /// [`list_committed_entries`] returns for this title.
+#[cfg(test)]
 pub(crate) async fn list_committed_entries_for_title(
     config: &RecycleBinConfig,
     title_id: &str,
     index: &mut TitleRecycleEntryIndex,
 ) -> AppResult<Vec<CommittedRecycleEntry>> {
+    Ok(
+        list_committed_entries_for_title_with_upgrade_links(config, title_id, index)
+            .await?
+            .0,
+    )
+}
+
+/// The same entries, in the same order and with the same inspection, that
+/// [`list_committed_entries`] returns for this title, plus the upgrades of
+/// this title that the manifests it read record.
+pub(crate) async fn list_committed_entries_for_title_with_upgrade_links(
+    config: &RecycleBinConfig,
+    title_id: &str,
+    index: &mut TitleRecycleEntryIndex,
+) -> AppResult<(Vec<CommittedRecycleEntry>, UpgradeLinks)> {
     if !cleanup_ready(config) {
         if let Some(error) = &config.validation_error {
             warn!(error = %error, path = %config.base_path.display(), "recycle bin cleanup disabled");
         }
-        return Ok(Vec::new());
+        return Ok((Vec::new(), UpgradeLinks::default()));
     }
 
     #[cfg(test)]
@@ -2070,6 +2222,7 @@ pub(crate) async fn list_committed_entries_for_title(
         .entry(normalize_path(&config.base_path))
         .or_default();
     let mut results = Vec::new();
+    let mut links = UpgradeLinks::default();
     for entry in recycle_root_entries(config, |_| true).await? {
         let name = entry.file_name().unwrap_or_default().to_os_string();
         if let Some(owner) = known.get(&name)
@@ -2077,7 +2230,16 @@ pub(crate) async fn list_committed_entries_for_title(
         {
             continue;
         }
-        let (owner, committed) = inspect_entry_dir(config, entry).await;
+        let InspectedEntry {
+            title_id: owner,
+            committed,
+            upgrade_link,
+        } = inspect_entry_dir(config, entry).await;
+        if let Some((original_file_id, link)) = upgrade_link
+            && link.title_id == title_id
+        {
+            links.record(original_file_id, link);
+        }
         match owner {
             Some(owner) => {
                 known.insert(name, owner);
@@ -2093,7 +2255,7 @@ pub(crate) async fn list_committed_entries_for_title(
         }
     }
 
-    Ok(results)
+    Ok((results, links))
 }
 
 /// Each listing, lookup and purge of a recycle root's entries, so tests can
@@ -2151,26 +2313,52 @@ pub async fn list_committed_entries(
 pub(crate) async fn list_committed_entries_reporting_withheld(
     config: &RecycleBinConfig,
 ) -> AppResult<(Vec<CommittedRecycleEntry>, Vec<String>)> {
+    let listing = list_committed_entries_with_upgrade_links(config).await?;
+    Ok((listing.committed, listing.withheld_titles))
+}
+
+/// One listing of a recycle root.
+#[derive(Debug, Default)]
+pub(crate) struct RecycleRootListing {
+    /// The trusted committed entries.
+    pub committed: Vec<CommittedRecycleEntry>,
+    /// The title of every entry directory withheld from `committed` whose
+    /// manifest names one.
+    pub withheld_titles: Vec<String>,
+    /// The upgrades recorded by the committed and quarantined entries the
+    /// listing read.
+    pub upgrade_links: UpgradeLinks,
+}
+
+/// [`list_committed_entries_reporting_withheld`], plus the upgrades the
+/// manifests it already read record. The listing and the inspection of each
+/// entry are the same.
+pub(crate) async fn list_committed_entries_with_upgrade_links(
+    config: &RecycleBinConfig,
+) -> AppResult<RecycleRootListing> {
     if !cleanup_ready(config) {
         if let Some(error) = &config.validation_error {
             warn!(error = %error, path = %config.base_path.display(), "recycle bin cleanup disabled");
         }
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(RecycleRootListing::default());
     }
 
     #[cfg(test)]
     test_bin_calls::record(test_bin_calls::LIST, &config.base_path);
-    let mut results = Vec::new();
-    let mut withheld = Vec::new();
+    let mut listing = RecycleRootListing::default();
     for entry in recycle_root_entries(config, |_| true).await? {
-        match inspect_entry_dir(config, entry).await {
-            (_, Some(committed)) => results.push(committed),
-            (Some(Some(title_id)), None) => withheld.push(title_id),
+        let inspected = inspect_entry_dir(config, entry).await;
+        if let Some((original_file_id, link)) = inspected.upgrade_link {
+            listing.upgrade_links.record(original_file_id, link);
+        }
+        match (inspected.title_id, inspected.committed) {
+            (_, Some(committed)) => listing.committed.push(committed),
+            (Some(Some(title_id)), None) => listing.withheld_titles.push(title_id),
             _ => {}
         }
     }
 
-    Ok((results, withheld))
+    Ok(listing)
 }
 
 /// The moment before which an entry of `config` has expired.
@@ -3105,6 +3293,7 @@ mod tests {
             status: None,
             replacement_file_id: None,
             replacement_path: None,
+            episode_ids: None,
             media_row: None,
         }
     }
@@ -3130,6 +3319,7 @@ mod tests {
             status: Some(RECYCLE_STATUS_COMMITTED.to_string()),
             replacement_file_id: None,
             replacement_path: None,
+            episode_ids: None,
             media_row: None,
         }
     }
@@ -3831,6 +4021,7 @@ mod tests {
             title_id: "title",
             media_root: Some(tmp.path().to_str().unwrap()),
             media_row: None,
+            episode_ids: Vec::new(),
         };
         let result =
             recycle_replaced_media_file(&config, &source, metadata, false, VerificationDepth::Full)
@@ -3854,6 +4045,67 @@ mod tests {
             crate::stored_paths::stored_path_to_path_buf(&stored),
             replacement_path
         );
+    }
+
+    #[tokio::test]
+    async fn an_upgrade_entry_records_the_episodes_its_file_covered() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp.path().join("recycle"));
+        let mut recorded = Vec::new();
+        for (name, episode_ids) in [
+            (
+                "episode.mkv",
+                vec![
+                    "synthetic-episode-2".to_string(),
+                    "synthetic-episode-1".to_string(),
+                    "synthetic-episode-2".to_string(),
+                ],
+            ),
+            ("movie.mkv", Vec::new()),
+        ] {
+            let source = tmp.path().join(name);
+            tokio::fs::write(&source, b"old video").await.unwrap();
+            let metadata = ReplacedMediaRecycleMetadata {
+                original_path: source.to_str().unwrap(),
+                original_file_id: "old-file",
+                size_bytes: 9,
+                title_id: "title",
+                media_root: Some(tmp.path().to_str().unwrap()),
+                media_row: None,
+                episode_ids,
+            };
+            let result = recycle_replaced_media_file(
+                &config,
+                &source,
+                metadata,
+                false,
+                VerificationDepth::Full,
+            )
+            .await
+            .unwrap();
+            let replacement = tmp.path().join(format!("new-{name}"));
+            tokio::fs::write(&replacement, b"new video").await.unwrap();
+            commit_recycle_entry(&result, "new-file", &replacement)
+                .await
+                .unwrap();
+            let entry_dir = result.expect("pending recycle result").entry_dir;
+            recorded.push(read_test_manifest(&entry_dir).await.episode_ids);
+        }
+
+        assert_eq!(
+            recorded,
+            vec![
+                Some(vec![
+                    "synthetic-episode-1".to_string(),
+                    "synthetic-episode-2".to_string()
+                ]),
+                None
+            ]
+        );
+        let mut older = serde_json::to_value(test_manifest()).unwrap();
+        older.as_object_mut().unwrap().remove("episode_ids");
+        let decoded: RecycleManifest = serde_json::from_value(older).unwrap();
+        assert_eq!(decoded.episode_ids, None);
     }
 
     #[tokio::test]

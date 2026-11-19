@@ -138,6 +138,7 @@ fn removal_manifest(source: &Path) -> crate::recycle_bin::RecycleManifest {
         status: None,
         replacement_file_id: None,
         replacement_path: None,
+        episode_ids: None,
         media_row: None,
     }
 }
@@ -341,6 +342,7 @@ async fn upgrade_refuses_a_custom_bin_inside_another_library_root_and_keeps_the_
             title_id: &title.id,
             media_root: Some(context.media_root.as_str()),
             media_row: None,
+            episode_ids: Vec::new(),
         },
         true,
         crate::location::model::VerificationDepth::Full,

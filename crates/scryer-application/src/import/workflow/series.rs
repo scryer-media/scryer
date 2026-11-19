@@ -982,6 +982,11 @@ async fn cleanup_superseded_episode_incumbents(
                         &incumbent.media_file,
                     ),
                 ),
+                episode_ids: if incumbent.primary_episode_ids.is_empty() {
+                    incumbent.episode_ids.clone()
+                } else {
+                    incumbent.primary_episode_ids.clone()
+                },
             };
 
             match crate::recycle_bin::recycle_replaced_media_file(
