@@ -69,7 +69,7 @@ jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_r
 rand_core = "0.10"
 webauthn-rs = { package = "scryer-webauthn", path = "crates/scryer-webauthn" }
 # SQLite is compiled in via sqlx-sqlite -> libsqlite3-sys bundled mode for single-executable
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json", "chrono", "migrate"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json", "chrono", "migrate"] }
 argon2 = "0.6"
 aws-lc-rs = { version = "1.18", default-features = false, features = ["non-fips"] }
 tokio-util = { version = "0.7", features = ["rt", "io"] }
