@@ -1,10 +1,10 @@
 use super::*;
 use crate::diagnostics_routes::DiagnosticsProcessFacts;
 use crate::error_reasons::{
-    HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_GRAPHQL_ERROR,
-    HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_OPERATION_AMBIGUOUS, HTTP_MCP_OPERATION_KIND_MISMATCH,
-    HTTP_MCP_OPERATION_UNKNOWN, HTTP_MCP_RESULT_TOO_LARGE, HTTP_MCP_SKILL_UNKNOWN,
-    HTTP_MCP_TOOL_UNKNOWN,
+    HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_DISABLED,
+    HTTP_MCP_GRAPHQL_ERROR, HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_OPERATION_AMBIGUOUS,
+    HTTP_MCP_OPERATION_KIND_MISMATCH, HTTP_MCP_OPERATION_UNKNOWN, HTTP_MCP_RESULT_TOO_LARGE,
+    HTTP_MCP_SKILL_UNKNOWN, HTTP_MCP_TOOL_UNKNOWN,
 };
 use crate::log_buffer::LogRingBuffer;
 use crate::middleware::integration_test_common as common;
@@ -563,6 +563,67 @@ async fn mcp_refuses_a_revoked_key_and_an_expired_key() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(body["reason"], HTTP_MCP_API_KEY_INVALID);
+}
+
+/// Saves the security settings as they are, with the MCP switch set.
+async fn set_mcp_enabled(fixture: &Fixture, enabled: bool) {
+    let app = &fixture.context.app;
+    let current = app.security_settings().await.expect("security settings");
+    let saved = app
+        .update_security_settings(
+            &fixture.admin,
+            scryer_application::UpdateSecuritySettings {
+                form_login_enabled: current.form_login_enabled,
+                session_duration_days: None,
+                password_min_length: current.password_min_length,
+                skip_login_for_local_ips: current.skip_login_for_local_ips,
+                api_keys_restrict_to_system_settings_users: None,
+                mcp_enabled: Some(enabled),
+                mfa_require_config_step_up: current.mfa_require_config_step_up,
+                mfa_require_password_login: current.mfa_require_password_login,
+                totp_require_jellyfin_login: current.totp_require_jellyfin_login,
+                totp_require_emby_login: None,
+            },
+        )
+        .await
+        .expect("save security settings");
+    assert_eq!(saved.mcp_enabled, enabled);
+}
+
+#[tokio::test]
+async fn mcp_is_on_by_default_and_the_security_switch_turns_it_off_and_on() {
+    let fixture = fixture().await;
+    // The definitions a real start-up seeds, so the switch reads its seeded
+    // default and the security save can write it.
+    crate::settings_bootstrap::seed_service_setting_definitions(
+        fixture.context.settings_store.clone(),
+    )
+    .await
+    .expect("seed setting definitions");
+    let key = fixture.api_key.clone();
+    assert!(fixture.context.app.mcp_enabled().await.expect("setting"));
+    let (status, _, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    set_mcp_enabled(&fixture, false).await;
+    let (status, _, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["reason"], HTTP_MCP_DISABLED);
+    // Off means off for everyone: no key is needed to learn it, and a valid
+    // key does not get past it.
+    let (status, _, body) = send(&fixture.router, rpc_request(None, None, list_tools())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["reason"], HTTP_MCP_DISABLED);
+    // The API key itself keeps working on GraphQL.
+    let me = graphql_body(&fixture, &key, "query { me { username } }", json!({})).await;
+    assert!(me["errors"].is_null(), "{me}");
+
+    set_mcp_enabled(&fixture, true).await;
+    let (status, _, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
@@ -2112,4 +2173,281 @@ async fn a_name_that_differs_between_skills_needs_its_skill() {
         )
         .await,
     );
+}
+
+/// Roots, download clients and indexers of one seeded arr source.
+struct ArrSourceShape {
+    kind: scryer_application::ExternalImportArrSourceKind,
+    source_key: &'static str,
+    titles: i32,
+    roots: usize,
+    /// Parent folders of titles outside every root; arr reports each one as
+    /// that title's root folder.
+    stray_parents: usize,
+    clients: usize,
+    direct_indexers: usize,
+    prowlarr_indexers: usize,
+}
+
+/// Seeds a completed arr warm-up session of `shape` owned by the admin and
+/// returns its id.
+async fn seed_arr_source(fixture: &Fixture, shape: &ArrSourceShape) -> String {
+    use scryer_application::external_import::{ArrDownloadClient, ArrIndexer, ArrRootFolder};
+    use scryer_application::{
+        ExternalImportArrSourceKind, ExternalImportArrSourceWarmupResult,
+        ExternalImportMonitorWarmupPhase, ExternalImportMonitorWarmupStatus,
+    };
+    let app = &fixture.context.app;
+    within(
+        "maintain import sessions",
+        app.maintain_external_import_arr_source_sessions(&fixture.admin),
+    )
+    .await
+    .expect("maintain import sessions");
+    let begin = within(
+        "begin warm-up",
+        app.begin_external_import_monitor_warmup(&fixture.admin, shape.source_key),
+    )
+    .await
+    .expect("begin warm-up");
+    let session_id = begin.snapshot.session_id.clone();
+    let movies = shape.kind == ExternalImportArrSourceKind::Radarr;
+    let base = if movies {
+        "/arr-data/films"
+    } else {
+        "/arr-data/shows"
+    };
+    let root_folders = (0..shape.roots)
+        .map(|id| ArrRootFolder {
+            id: id as i64 + 1,
+            path: format!("{base}-{id}"),
+        })
+        .collect::<Vec<_>>();
+    let mut title_root_paths = root_folders
+        .iter()
+        .map(|root| root.path.clone())
+        .collect::<Vec<_>>();
+    title_root_paths
+        .extend((0..shape.stray_parents).map(|id| format!("/arr-data/loose/shelf-{id:04}")));
+    let field = |value: Value| value;
+    let clients = (0..shape.clients)
+        .map(|id| {
+            let (implementation, port) = if id % 2 == 0 {
+                ("Sabnzbd", 8080)
+            } else {
+                ("QBittorrent", 8090)
+            };
+            ArrDownloadClient {
+                id: id as i64 + 1,
+                name: format!("Fixture client {id}"),
+                implementation: implementation.into(),
+                fields: [
+                    (
+                        "host".to_string(),
+                        field(json!(format!("client-{id}.fixture.test"))),
+                    ),
+                    ("port".to_string(), json!(port)),
+                    ("apiKey".to_string(), json!("********")),
+                    ("password".to_string(), json!("********")),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        })
+        .collect();
+    let mut indexers = (0..shape.direct_indexers)
+        .map(|id| ArrIndexer {
+            id: id as i64 + 1,
+            name: format!("Fixture indexer {id}"),
+            implementation: "Newznab".into(),
+            fields: [
+                (
+                    "baseUrl".to_string(),
+                    json!(format!("https://indexer-{id}.fixture.test")),
+                ),
+                ("apiPath".to_string(), json!("/api")),
+                ("apiKey".to_string(), json!("********")),
+            ]
+            .into_iter()
+            .collect(),
+        })
+        .collect::<Vec<_>>();
+    indexers.extend((0..shape.prowlarr_indexers).map(|id| {
+        ArrIndexer {
+            id: 1000 + id as i64,
+            name: format!("Fixture tracker {id} (Prowlarr)"),
+            implementation: "Torznab".into(),
+            fields: [
+                (
+                    "baseUrl".to_string(),
+                    json!(format!("http://prowlarr.fixture.test:9696/{}/", id + 1)),
+                ),
+                ("apiPath".to_string(), json!("/api")),
+                ("apiKey".to_string(), json!("********")),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }));
+    app.set_external_import_arr_source_warmup_result(
+        &session_id,
+        ExternalImportArrSourceWarmupResult {
+            source_key: shape.source_key.to_string(),
+            kind: shape.kind,
+            base_url: format!("http://{}.fixture.test", shape.source_key),
+            version: Some(if movies { "5.20.0" } else { "4.0.15" }.into()),
+            root_folders,
+            title_root_paths,
+            naming_config: None,
+            media_management_config: None,
+            metadata_providers: Vec::new(),
+            quality_profiles: Vec::new(),
+            signal_warnings: Vec::new(),
+            download_clients: clients,
+            indexers,
+        },
+    )
+    .await;
+    let mut snapshot = begin.snapshot.clone();
+    snapshot.status = ExternalImportMonitorWarmupStatus::Completed;
+    snapshot.phase = ExternalImportMonitorWarmupPhase::Ready;
+    if movies {
+        snapshot.movies_total_known = true;
+        snapshot.movies_progress.total = shape.titles;
+        snapshot.movies_progress.completed = shape.titles;
+        snapshot.matched_movie_count = shape.titles - shape.titles / 50;
+        snapshot.unmatched_movie_count = shape.titles / 50;
+    } else {
+        snapshot.series_total_known = true;
+        snapshot.series_progress.total = shape.titles;
+        snapshot.series_progress.completed = shape.titles;
+        snapshot.matched_series_count = shape.titles - shape.titles / 50;
+        snapshot.unmatched_series_count = shape.titles / 50;
+    }
+    snapshot.overall_total_known = true;
+    snapshot.overall_progress.total = shape.titles;
+    snapshot.overall_progress.completed = shape.titles;
+    app.update_external_import_monitor_warmup_progress(&session_id, snapshot)
+        .await;
+    session_id
+}
+
+/// The import's reads at 10,000 series and 50,000 movies, with 170 distinct
+/// roots, 8 download clients and Prowlarr-fed indexers. Each answer must fit
+/// the MCP result cap, and the read an agent polls must stay small.
+#[tokio::test]
+async fn arr_import_reads_fit_the_result_cap_for_ten_thousand_series_and_fifty_thousand_movies() {
+    use scryer_application::ExternalImportArrSourceKind;
+    let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
+    let key = fixture.api_key.clone();
+    let sonarr = seed_arr_source(
+        &fixture,
+        &ArrSourceShape {
+            kind: ExternalImportArrSourceKind::Sonarr,
+            source_key: "sonarr-fixture",
+            titles: 10_000,
+            roots: 4,
+            stray_parents: 40,
+            clients: 4,
+            direct_indexers: 8,
+            prowlarr_indexers: 30,
+        },
+    )
+    .await;
+    let radarr = seed_arr_source(
+        &fixture,
+        &ArrSourceShape {
+            kind: ExternalImportArrSourceKind::Radarr,
+            source_key: "radarr-fixture",
+            titles: 50_000,
+            roots: 6,
+            stray_parents: 120,
+            clients: 4,
+            direct_indexers: 8,
+            prowlarr_indexers: 30,
+        },
+    )
+    .await;
+    let preview_input = json!({"input": {
+        "sourceWarmupSessionIds": [sonarr, radarr], "prowlarrWarmupSessionId": null}});
+    let aggregate_input = json!({"input": {"sourceWarmupSessionIds": [sonarr, radarr]}});
+    let reads = [
+        (
+            "run_mutation",
+            "ExternalImportPreviewStatus",
+            preview_input.clone(),
+        ),
+        (
+            "run_mutation",
+            "ExternalImportPreviewRoots",
+            preview_input.clone(),
+        ),
+        (
+            "run_mutation",
+            "ExternalImportPreviewSources",
+            preview_input,
+        ),
+        (
+            "run_query",
+            "ExternalImportWarmupStatus",
+            json!({"sessionId": radarr}),
+        ),
+        (
+            "run_query",
+            "ExternalImportAggregateWarmupProgress",
+            aggregate_input,
+        ),
+        ("run_query", "QualityProfileChoices", json!({})),
+        ("run_query", "Libraries", json!({})),
+        ("run_query", "SetupStatus", json!({})),
+    ];
+    for (tool, name, variables) in reads {
+        let body = call(
+            &fixture,
+            &key,
+            tool,
+            json!({"name": name, "skill": "scryer-migrate-from-arr", "variables": variables}),
+        )
+        .await;
+        assert_eq!(body["result"]["isError"], false, "{name}: {body}");
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool result text");
+        assert!(
+            text.len() <= tools::RESULT_MAX_BYTES,
+            "{name} answered {} bytes",
+            text.len()
+        );
+        let data: Value = serde_json::from_str(text).expect("tool result JSON");
+        match name {
+            "ExternalImportPreviewStatus" => {
+                let sources = data["previewExternalImport"]["arrSources"]
+                    .as_array()
+                    .expect("arr sources");
+                assert_eq!(sources.len(), 2, "{data}");
+                assert!(
+                    text.len() <= 1024,
+                    "polled status answered {} bytes",
+                    text.len()
+                );
+            }
+            "ExternalImportPreviewRoots" => {
+                let roots = data["previewExternalImport"]["rootFolders"]
+                    .as_array()
+                    .expect("root folders");
+                assert_eq!(roots.len(), 170, "every configured and stray root");
+            }
+            "ExternalImportPreviewSources" => {
+                let preview = &data["previewExternalImport"];
+                assert_eq!(preview["downloadClients"].as_array().map(Vec::len), Some(4));
+                assert!(
+                    preview["indexers"]
+                        .as_array()
+                        .is_some_and(|i| !i.is_empty())
+                );
+            }
+            _ => {}
+        }
+    }
 }

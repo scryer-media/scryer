@@ -1,0 +1,15 @@
+# Whether each arr source and Prowlarr has settled. Poll this, not the roots or
+# sources reads. Read-only. Variables: {"input": {"sourceWarmupSessionIds": ["..."],
+#   "prowlarrWarmupSessionId": null}}
+mutation ExternalImportPreviewStatus($input: PreviewExternalImportInput!) {
+  previewExternalImport(input: $input) {
+    prowlarrConnected
+    prowlarrError
+    arrSources {
+      sessionId
+      kind
+      status
+      error
+    }
+  }
+}

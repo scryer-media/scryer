@@ -116,6 +116,8 @@ pub const SKIP_LOGIN_FOR_LOCAL_IPS_KEY: &str = "auth.skip_login_for_local_ips";
 pub const MFA_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.mfa.require_config_step_up";
 pub const API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY: &str =
     "auth.api_keys.restrict_to_system_settings_users";
+/// Whether the built-in MCP endpoint answers. On by default.
+pub const MCP_ENABLED_KEY: &str = "auth.mcp.enabled";
 pub const MFA_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.mfa.require_password_login";
 pub const LEGACY_TOTP_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.totp.require_config_step_up";
 pub const LEGACY_TOTP_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.totp.require_local_login";
