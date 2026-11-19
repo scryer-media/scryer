@@ -17,6 +17,9 @@ async fn run_import(
     preparation_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     resolved_title_authorization: Option<&User>,
 ) -> AppResult<ImportResult> {
+    // The download's workspace is not removed while this pass reads it.
+    let _workspace_reader =
+        crate::import::archive_extraction::read_download_workspace(app, completed);
     let mut preparation_permit = Some(match preparation_permit {
         Some(permit) => permit,
         None => {
@@ -769,7 +772,10 @@ async fn try_match_titleless_archive_from_inner_video(
         .await?;
     let reused = match &download {
         Some(download) => {
-            crate::import::archive_extraction::completed_download_extraction(app, download).await?
+            crate::import::archive_extraction::completed_download_extraction(
+                app, download, dest_dir,
+            )
+            .await?
         }
         None => None,
     };
@@ -1149,8 +1155,10 @@ async fn resolve_completed_import_target(
         // never redone.
         let reused = match &download {
             Some(download) if needs_archives => {
-                crate::import::archive_extraction::completed_download_extraction(app, download)
-                    .await
+                crate::import::archive_extraction::completed_download_extraction(
+                    app, download, dest_dir,
+                )
+                .await
             }
             _ => Ok(None),
         };

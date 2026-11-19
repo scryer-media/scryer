@@ -78,6 +78,12 @@ impl ArchiveExtractionState {
             _ => return None,
         })
     }
+
+    /// Whether a download in this state has extraction output on disk: a
+    /// failed, blocked, password-waiting or pending one's was removed.
+    pub fn has_output_on_disk(self) -> bool {
+        matches!(self, Self::Extracted | Self::Extracting)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,7 +116,7 @@ pub struct UnsettledArchiveExtraction {
 /// The scratch the records account for.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ArchiveScratchSummary {
-    /// Downloads with a workspace on disk.
+    /// Downloads with extraction output on disk: extracted, or extracting.
     pub workspaces: u64,
     /// Bytes their completed extractions wrote.
     pub bytes: u64,
@@ -142,11 +148,13 @@ pub trait ArchiveExtractionRepository: Send + Sync {
         limit: usize,
     ) -> AppResult<Vec<ArchiveExtractionRecord>>;
     async fn delete_many(&self, keys: &[(String, String)]) -> AppResult<()>;
-    /// Unsettled downloads whose key sorts after `after` (from the start
-    /// when `None`), in key order, at most `limit`.
+    /// Unsettled downloads last changed at or before `changed_before` whose
+    /// key sorts after `after` (from the start when `None`), in key order, at
+    /// most `limit`.
     async fn list_unsettled_after(
         &self,
         after: Option<(String, String)>,
+        changed_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<UnsettledArchiveExtraction>>;
     /// The workspace names, of those given, that end some record's
@@ -244,13 +252,16 @@ impl ArchiveExtractionRepository for InMemoryArchiveExtractionRepository {
     async fn list_unsettled_after(
         &self,
         after: Option<(String, String)>,
+        changed_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<UnsettledArchiveExtraction>> {
         let rows = self.rows.lock().await;
         let mut unsettled: Vec<_> = rows
             .iter()
             .filter(|(key, row)| {
-                row.settled_at.is_none() && after.as_ref().is_none_or(|after| *key > after)
+                row.settled_at.is_none()
+                    && row.updated_at <= changed_before
+                    && after.as_ref().is_none_or(|after| *key > after)
             })
             .map(|(key, row)| UnsettledArchiveExtraction {
                 client_id: key.0.clone(),
@@ -279,9 +290,10 @@ impl ArchiveExtractionRepository for InMemoryArchiveExtractionRepository {
 
     async fn scratch_summary(&self) -> AppResult<ArchiveScratchSummary> {
         let rows = self.rows.lock().await;
+        let on_disk = || rows.values().filter(|row| row.state.has_output_on_disk());
         Ok(ArchiveScratchSummary {
-            workspaces: rows.len() as u64,
-            bytes: rows.values().map(|row| row.output_bytes).sum(),
+            workspaces: on_disk().count() as u64,
+            bytes: on_disk().map(|row| row.output_bytes).sum(),
             blocked: rows
                 .values()
                 .filter(|row| row.state == ArchiveExtractionState::Blocked)
@@ -362,12 +374,15 @@ impl DownloadExtractionKey {
         }
     }
 
-    /// None when the client gave no item id, so the download has no identity
-    /// to key a workspace on.
+    /// None when the download names no configured client or the client gave
+    /// no item id: without both it has no identity the tracker settles it
+    /// by, and two clients' item ids could meet. Such a download extracts per
+    /// pass instead.
     pub(crate) fn new(client_id: Option<&str>, client_item_id: &str) -> Option<Self> {
+        let client_id = client_id.unwrap_or("").trim();
         let client_item_id = client_item_id.trim();
-        (!client_item_id.is_empty()).then(|| Self {
-            client_id: client_id.unwrap_or("").trim().to_ascii_lowercase(),
+        (!client_id.is_empty() && !client_item_id.is_empty()).then(|| Self {
+            client_id: client_id.to_ascii_lowercase(),
             client_item_id: client_item_id.to_string(),
         })
     }
@@ -452,38 +467,125 @@ pub(crate) fn is_download_workspace_path(root: &Path) -> bool {
         .is_some_and(|name| name == ARCHIVE_EXTRACTION_DIR_NAME)
 }
 
-/// Downloads whose extraction runs in this process. A record left
-/// `Extracting` by a download not listed here was interrupted.
+/// Downloads whose workspace is in use in this process: an extraction or a
+/// removal holds a download exclusively, and import passes and manual imports
+/// reading its workspace hold it as readers. A record left `Extracting` by a
+/// download no extraction here holds was interrupted.
 #[derive(Clone, Default)]
-pub(crate) struct ArchiveExtractionsInFlight(Arc<std::sync::Mutex<HashSet<DownloadExtractionKey>>>);
+pub(crate) struct ArchiveExtractionsInFlight(
+    Arc<std::sync::Mutex<std::collections::HashMap<DownloadExtractionKey, WorkspaceHolders>>>,
+);
+
+#[derive(Debug, Default, Clone, Copy)]
+struct WorkspaceHolders {
+    exclusive: bool,
+    readers: usize,
+}
+
+type HoldersGuard<'a> =
+    std::sync::MutexGuard<'a, std::collections::HashMap<DownloadExtractionKey, WorkspaceHolders>>;
 
 impl ArchiveExtractionsInFlight {
-    pub(crate) fn claim(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
-        let mut keys = self
-            .0
+    fn holders(&self) -> HoldersGuard<'_> {
+        self.0
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        keys.insert(key.clone()).then(|| InFlightClaim {
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Hold the download for an extraction. Readers do not stop one: they
+    /// read only a completed extraction, which an extraction reuses.
+    pub(crate) fn claim(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
+        let mut holders = self.holders();
+        let entry = holders.entry(key.clone()).or_default();
+        if entry.exclusive {
+            return None;
+        }
+        entry.exclusive = true;
+        Some(InFlightClaim {
             set: self.clone(),
             key: key.clone(),
         })
     }
 
-    fn contains(&self, key: &DownloadExtractionKey) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains(key)
+    /// Hold the download to remove its workspace: refused while anything
+    /// extracts or reads it.
+    fn claim_for_removal(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
+        let mut holders = self.holders();
+        if holders.contains_key(key) {
+            return None;
+        }
+        holders.insert(
+            key.clone(),
+            WorkspaceHolders {
+                exclusive: true,
+                readers: 0,
+            },
+        );
+        Some(InFlightClaim {
+            set: self.clone(),
+            key: key.clone(),
+        })
     }
 
-    /// Whether a running extraction's workspace has this name.
+    /// Read the download's workspace until the reader is dropped; its
+    /// removal waits for a later sweep meanwhile.
+    pub(crate) fn read(&self, key: &DownloadExtractionKey) -> WorkspaceReader {
+        self.holders().entry(key.clone()).or_default().readers += 1;
+        WorkspaceReader {
+            set: self.clone(),
+            key: key.clone(),
+        }
+    }
+
+    /// Whether an extraction or a removal holds the download.
+    fn contains(&self, key: &DownloadExtractionKey) -> bool {
+        self.holders()
+            .get(key)
+            .is_some_and(|holders| holders.exclusive)
+    }
+
+    /// Whether anything holds the download whose workspace has this name.
     fn holds_workspace(&self, name: &str) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
+        self.holders()
+            .keys()
             .any(|key| key.workspace_name() == name)
     }
+
+    fn release(&self, key: &DownloadExtractionKey, exclusive: bool) {
+        let mut holders = self.holders();
+        if let Some(entry) = holders.get_mut(key) {
+            if exclusive {
+                entry.exclusive = false;
+            } else {
+                entry.readers = entry.readers.saturating_sub(1);
+            }
+            if !entry.exclusive && entry.readers == 0 {
+                holders.remove(key);
+            }
+        }
+    }
+}
+
+/// A download's workspace, read by an import pass or a manual import.
+pub(crate) struct WorkspaceReader {
+    set: ArchiveExtractionsInFlight,
+    key: DownloadExtractionKey,
+}
+
+impl Drop for WorkspaceReader {
+    fn drop(&mut self) {
+        self.set.release(&self.key, false);
+    }
+}
+
+/// Hold `completed`'s workspace as a reader for as long as the result lives;
+/// `None` for a download without a key.
+pub(crate) fn read_download_workspace(
+    app: &AppUseCase,
+    completed: &crate::CompletedDownload,
+) -> Option<WorkspaceReader> {
+    DownloadExtractionKey::for_completed(completed)
+        .map(|key| app.runtime.imports.archive_extractions_in_flight.read(&key))
 }
 
 /// Process-local state of workspace upkeep.
@@ -495,12 +597,27 @@ pub(crate) struct ArchiveWorkspaceUpkeep {
     untracked_cursor: Arc<std::sync::Mutex<Option<(String, String)>>>,
     /// Removals of imported downloads' workspaces still running.
     removals: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// For each download whose last extraction here ended waiting for a
+    /// password, a fingerprint of the candidates it tried. Kept in memory
+    /// only, so no password is persisted in any form; after a restart the
+    /// first pass with candidates tries them once.
+    passwords_tried:
+        Arc<std::sync::Mutex<std::collections::HashMap<DownloadExtractionKey, blake3::Hash>>>,
 }
 
 impl ArchiveWorkspaceUpkeep {
     pub(crate) fn last_orphan_sweep(&self) -> Option<OrphanSweep> {
         *self
             .last_orphan_sweep
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn passwords_tried(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<DownloadExtractionKey, blake3::Hash>>
+    {
+        self.passwords_tried
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -536,11 +653,7 @@ pub(crate) struct InFlightClaim {
 
 impl Drop for InFlightClaim {
     fn drop(&mut self) {
-        self.set
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&self.key);
+        self.set.release(&self.key, true);
     }
 }
 
@@ -566,6 +679,46 @@ pub(crate) fn blocked_error() -> AppError {
     )
 }
 
+fn password_required_error() -> AppError {
+    AppError::ArchivePasswordRequired {
+        message: "the download's archives need a password none of its candidates opened; \
+                  retry the import with the password"
+            .to_string(),
+    }
+}
+
+/// The candidates a pass offers, in order, as one value to compare with the
+/// ones an earlier attempt tried.
+fn password_fingerprint(
+    passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
+) -> blake3::Hash {
+    let mut hasher = blake3::Hasher::new();
+    for candidate in passwords.iter() {
+        for part in [candidate.source().as_str(), candidate.value()] {
+            hasher.update(&(part.len() as u64).to_le_bytes());
+            hasher.update(part.as_bytes());
+        }
+    }
+    hasher.finalize()
+}
+
+/// Mark a download live again: a settled one is unsettled, so its workspace
+/// is not swept while it is used. Writes only when it was settled.
+async fn unsettle(app: &AppUseCase, record: &ArchiveExtractionRecord) -> AppResult<()> {
+    if record.settled_at.is_none() {
+        return Ok(());
+    }
+    app.services
+        .workflow
+        .archive_extractions
+        .save(&ArchiveExtractionRecord {
+            settled_at: None,
+            updated_at: app.runtime.environment.now(),
+            ..record.clone()
+        })
+        .await
+}
+
 fn in_progress_error() -> AppError {
     AppError::validation_refused(
         reasons::IN_PROGRESS,
@@ -574,11 +727,14 @@ fn in_progress_error() -> AppError {
 }
 
 /// The completed extraction an import pass reads, without extracting. `None`
-/// when the download has none yet. A download whose extraction is running
-/// waits for it.
+/// when the download has none yet, or when the archive sets in `dir` are not
+/// the ones it was made from; [`extract_download_archives`] then replaces it.
+/// A download whose extraction is running waits for it. A settled download
+/// handed to a pass is live again.
 pub(crate) async fn completed_download_extraction(
     app: &AppUseCase,
     key: &DownloadExtractionKey,
+    dir: &Path,
 ) -> AppResult<Option<PathBuf>> {
     if app
         .runtime
@@ -601,11 +757,17 @@ pub(crate) async fn completed_download_extraction(
         return Ok(None);
     }
     let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
-    Ok(
-        (archive_extractor::download_workspace_presence(&root, &key.owner_id()).await
-            == DownloadWorkspacePresence::Owned)
-            .then_some(root),
-    )
+    if archive_extractor::download_workspace_presence(&root, &key.owner_id()).await
+        != DownloadWorkspacePresence::Owned
+    {
+        return Ok(None);
+    }
+    let current = archive_extractor::download_archive_digest(dir).await?;
+    if current.is_none() || current != record.archive_digest {
+        return Ok(None);
+    }
+    unsettle(app, &record).await?;
+    Ok(Some(root))
 }
 
 /// Extract the download's archives into its workspace once.
@@ -646,7 +808,19 @@ pub(crate) async fn extract_download_archives(
                 if archive_extractor::download_workspace_presence(&recorded, &owner_id).await
                     == DownloadWorkspacePresence::Owned
                 {
-                    return Ok(Some(recorded));
+                    let current = archive_extractor::download_archive_digest(dir).await?;
+                    if current.is_some() && current == record.archive_digest {
+                        unsettle(app, record).await?;
+                        return Ok(Some(recorded));
+                    }
+                    // Made from other archives than the download holds now:
+                    // that output goes, and the download starts afresh.
+                    if archive_extractor::remove_download_workspace(&recorded, &owner_id).await {
+                        repository
+                            .delete(&key.client_id, &key.client_item_id)
+                            .await?;
+                        previous = None;
+                    }
                 }
             }
             ArchiveExtractionState::Extracting => {
@@ -671,6 +845,21 @@ pub(crate) async fn extract_download_archives(
             {
                 return Err(waiting_error());
             }
+            // Still waiting for a password: tried again only with candidates
+            // the last attempt here did not try. An operator retry resets the
+            // record to pending first, so it always runs.
+            ArchiveExtractionState::NeedsPassword => {
+                let tried = app
+                    .runtime
+                    .imports
+                    .archive_workspace_upkeep
+                    .passwords_tried()
+                    .get(key)
+                    .copied();
+                if passwords.is_empty() || tried == Some(password_fingerprint(passwords)) {
+                    return Err(password_required_error());
+                }
+            }
             _ => {}
         }
     }
@@ -687,13 +876,14 @@ pub(crate) async fn extract_download_archives(
 
     let occupied = match archive_extractor::download_workspace_presence(&root, &owner_id).await {
         DownloadWorkspacePresence::Missing => false,
-        // A recorded failure's leftover is this download's partial output.
-        DownloadWorkspacePresence::Owned if previous.is_some() => {
+        // This download's own scratch, which no completed extraction still
+        // reads: a failure's leftover, or one whose record is gone (a backup
+        // restore). It is replaced.
+        DownloadWorkspacePresence::Owned => {
             !archive_extractor::remove_download_workspace(&root, &owner_id).await
         }
-        // An owned workspace with no record is not known to be partial, and
-        // anything else is not Scryer's: both are left in place.
-        DownloadWorkspacePresence::Owned | DownloadWorkspacePresence::Foreign => true,
+        // Not Scryer's: left in place.
+        DownloadWorkspacePresence::Foreign => true,
     };
     // A completed extraction whose output went missing starts a fresh count.
     let attempts = previous
@@ -714,7 +904,8 @@ pub(crate) async fn extract_download_archives(
         output_count: 0,
         output_bytes: 0,
         next_attempt_at: None,
-        settled_at: previous.as_ref().and_then(|record| record.settled_at),
+        // An attempt makes the download live again.
+        settled_at: None,
         created_at: previous.as_ref().map_or(now, |record| record.created_at),
         updated_at: now,
     };
@@ -734,9 +925,25 @@ pub(crate) async fn extract_download_archives(
     let extracting = base;
     repository.save(&extracting).await?;
 
-    match archive_extractor::extract_planned_download(plan, &destination, passwords, &provider)
-        .await
+    let outcome =
+        archive_extractor::extract_planned_download(plan, &destination, passwords, &provider).await;
     {
+        let mut tried = app
+            .runtime
+            .imports
+            .archive_workspace_upkeep
+            .passwords_tried();
+        match &outcome {
+            Err(error) if archive_extractor::is_password_required_error(error) => {
+                tried.insert(key.clone(), password_fingerprint(passwords));
+            }
+            Err(AppError::Canceled(_) | AppError::ArchiveExtractionPluginRequired { .. }) => {}
+            _ => {
+                tried.remove(key);
+            }
+        }
+    }
+    match outcome {
         Ok(output) => {
             repository
                 .save(&ArchiveExtractionRecord {
@@ -800,9 +1007,10 @@ pub(crate) async fn extract_download_archives(
                 );
                 return Err(blocked_error());
             }
-            if record.state == ArchiveExtractionState::Failed {
+            if record.state == ArchiveExtractionState::Failed && error.reason().is_none() {
                 // Attempts remain, so the import retries after the backoff
-                // instead of stopping at the first failure.
+                // instead of stopping at the first failure. An error that
+                // already carries a code is returned as it is.
                 return Err(AppError::validation_refused(
                     failure_reason,
                     error.to_string(),
@@ -835,28 +1043,39 @@ fn failed_attempt(
 }
 
 /// An operator retry: a blocked, failed or password-waiting extraction is
-/// pending again with its attempts and backoff cleared. Nothing is written
-/// for a download with no such record.
+/// pending again with its attempts and backoff cleared, and a settled
+/// download is live again. Nothing is written for a download with no record,
+/// or with one neither retryable nor settled.
 pub(crate) async fn reset_download_extraction(app: &AppUseCase, key: &DownloadExtractionKey) {
     let repository = &app.services.workflow.archive_extractions;
     let Ok(Some(record)) = repository.get(&key.client_id, &key.client_item_id).await else {
         return;
     };
-    if !matches!(
+    let retryable = matches!(
         record.state,
         ArchiveExtractionState::Blocked
             | ArchiveExtractionState::Failed
             | ArchiveExtractionState::NeedsPassword
-    ) {
+    );
+    if !retryable && record.settled_at.is_none() {
         return;
     }
-    let reset = ArchiveExtractionRecord {
-        state: ArchiveExtractionState::Pending,
-        attempts: 0,
-        last_reason_code: None,
-        next_attempt_at: None,
-        updated_at: app.runtime.environment.now(),
-        ..record
+    let reset = if retryable {
+        ArchiveExtractionRecord {
+            state: ArchiveExtractionState::Pending,
+            attempts: 0,
+            last_reason_code: None,
+            next_attempt_at: None,
+            settled_at: None,
+            updated_at: app.runtime.environment.now(),
+            ..record
+        }
+    } else {
+        ArchiveExtractionRecord {
+            settled_at: None,
+            updated_at: app.runtime.environment.now(),
+            ..record
+        }
     };
     if repository.save(&reset).await.is_err() {
         tracing::warn!("archive extraction record could not be reset for the retry");
@@ -908,11 +1127,12 @@ pub(crate) async fn settle_download_extraction(
 /// extraction of it runs now or a new one has unsettled it. A workspace that
 /// stays is left to the sweep, where the record is already due.
 async fn remove_imported_workspace(app: AppUseCase, key: DownloadExtractionKey) {
+    // A pass reading it or an extraction keeps it; the record stays due.
     let Some(_claim) = app
         .runtime
         .imports
         .archive_extractions_in_flight
-        .claim(&key)
+        .claim_for_removal(&key)
     else {
         return;
     };
@@ -1008,8 +1228,9 @@ pub(crate) async fn sweep_settled_download_extractions(
     let mut retry = Vec::new();
     for record in &due {
         let key = DownloadExtractionKey::of_record(record);
-        // A running extraction keeps its workspace; still due next pass.
-        let Some(_claim) = in_flight.claim(&key) else {
+        // A running extraction or a reader keeps its workspace; still due
+        // next pass.
+        let Some(_claim) = in_flight.claim_for_removal(&key) else {
             sweep.deferred += 1;
             continue;
         };
@@ -1050,14 +1271,21 @@ pub(crate) async fn settle_untracked_download_extractions(app: &AppUseCase) -> A
     let Some(tracker) = app.runtime.acquisition.tracked_download_handle.clone() else {
         return Ok(0);
     };
-    let configured: HashSet<String> = app
+    // Each configured client by its key's spelling: its id as configured
+    // and its type, which name its downloads' imports.
+    let configured: std::collections::HashMap<String, (String, String)> = app
         .services
         .integrations
         .download_client_configs
         .list(None)
         .await?
         .into_iter()
-        .map(|config| config.id.trim().to_ascii_lowercase())
+        .map(|config| {
+            (
+                config.id.trim().to_ascii_lowercase(),
+                (config.id.trim().to_string(), config.client_type),
+            )
+        })
         .collect();
     let repository = &app.services.workflow.archive_extractions;
     let upkeep = &app.runtime.imports.archive_workspace_upkeep;
@@ -1071,7 +1299,7 @@ pub(crate) async fn settle_untracked_download_extractions(app: &AppUseCase) -> A
     let mut settled = 0;
     for _ in 0..UNTRACKED_PAGES_PER_PASS {
         let page = repository
-            .list_unsettled_after(after.clone(), UNTRACKED_PAGE)
+            .list_unsettled_after(after.clone(), changed_before, UNTRACKED_PAGE)
             .await?;
         after = page
             .last()
@@ -1079,11 +1307,22 @@ pub(crate) async fn settle_untracked_download_extractions(app: &AppUseCase) -> A
             .map(|last| (last.client_id.clone(), last.client_item_id.clone()));
         let (mut ended, of_configured): (Vec<_>, Vec<_>) = page
             .into_iter()
-            .filter(|row| row.updated_at <= changed_before)
             .map(|row| (row.client_id, row.client_item_id))
-            .partition(|(client_id, _)| !configured.contains(client_id));
+            .partition(|(client_id, _)| !configured.contains_key(client_id));
         if !of_configured.is_empty() {
-            ended.extend(tracker.untracked_extractions(of_configured).await?);
+            let untracked = tracker.untracked_extractions(of_configured).await?;
+            // A download an import still holds the sources of (subtitles
+            // pending, an unfinished cleanup) keeps its workspace however it
+            // left its client; it settles once the hold is released.
+            let sources: Vec<_> = untracked
+                .iter()
+                .filter_map(|(client_id, item_id)| {
+                    let (id, client_type) = configured.get(client_id)?;
+                    Some(ClientJobLocator::new(Some(id), client_type, item_id))
+                })
+                .collect();
+            let held = crate::import::workflow::downloads_holding_sources(app, &sources).await?;
+            ended.extend(untracked.into_iter().filter(|key| !held.contains(key)));
         }
         if !ended.is_empty() {
             repository.settle(&ended, now).await?;
@@ -1108,8 +1347,9 @@ pub(crate) struct OrphanSweep {
     /// Owned workspaces kept for now: younger than a day (whether or not a
     /// record names them), an extraction runs in them, or removal failed.
     pub waiting: usize,
-    /// Entries Scryer cannot prove it made for the download their name
-    /// names. They are never removed.
+    /// Directories named like a workspace whose marker does not prove Scryer
+    /// made them for the download their name names. They are never removed;
+    /// entries named otherwise are not counted.
     pub unmarked: usize,
 }
 
@@ -1133,9 +1373,9 @@ async fn library_roots(app: &AppUseCase) -> AppResult<Vec<PathBuf>> {
 /// were made, from each library root's extraction folder.
 ///
 /// Per root: one listing of the extraction folder, and nothing more when it
-/// is missing or empty. Per entry named like a workspace: one directory
-/// open, one reading and one read of its marker; an entry named otherwise
-/// costs nothing. One batched lookup per root of the old ones' names, and
+/// is missing or empty. Per directory named like a workspace: one directory
+/// open, one reading and one read of its marker; any other entry costs
+/// nothing. One batched lookup per root of the old ones' names, and
 /// for each one removed, the owner check and release of the removal itself.
 ///
 /// It never races an extraction: a record is saved before its workspace is
@@ -1162,18 +1402,15 @@ pub(crate) async fn sweep_orphaned_download_workspaces(app: &AppUseCase) -> AppR
                 .file_name()
                 .and_then(|name| name.to_str())
                 .map(str::to_string);
+            // Only a directory named like a workspace can be one; anything
+            // else (a desktop's metadata file, a NAS index folder) is not
+            // Scryer's, is not counted, and is never touched.
             let Some(name) =
                 name.filter(|name| archive_extractor::is_download_workspace_name(name))
             else {
-                sweep.unmarked += 1;
                 continue;
             };
-            if entry
-                .reading
-                .kind()
-                .is_some_and(|kind| kind != crate::disk::EntryKind::Directory)
-            {
-                sweep.unmarked += 1;
+            if entry.reading.kind() != Some(crate::disk::EntryKind::Directory) {
                 continue;
             }
             if in_flight.holds_workspace(&name) {
@@ -1380,6 +1617,31 @@ mod tests {
         );
         assert_eq!(key.owner_id(), format!("download:{hex}"));
         assert!(DownloadExtractionKey::new(Some("client-a"), "  ").is_none());
+    }
+
+    #[test]
+    fn a_download_without_a_client_id_has_no_key() {
+        assert!(DownloadExtractionKey::new(None, "item-1").is_none());
+        assert!(DownloadExtractionKey::new(Some(""), "item-1").is_none());
+        assert!(DownloadExtractionKey::new(Some("  "), "item-1").is_none());
+        let completed = crate::CompletedDownload {
+            client_type: "nzbget".to_string(),
+            client_id: String::new(),
+            download_client_item_id: "10495".to_string(),
+            download_id: None,
+            name: "Synthetic.Release".to_string(),
+            release_name: None,
+            dest_dir: "/downloads/Synthetic.Release".to_string(),
+            category: None,
+            size_bytes: None,
+            completed_at: None,
+            parameters: Vec::new(),
+            posted_file_names: Vec::new(),
+            subtitle_paths: Vec::new(),
+        };
+        assert!(DownloadExtractionKey::for_completed(&completed).is_none());
+        let source = ClientJobLocator::new(None, "nzbget", "10495");
+        assert!(DownloadExtractionKey::for_source(&source).is_none());
     }
 
     #[test]

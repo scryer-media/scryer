@@ -617,8 +617,7 @@ pub(crate) struct PlannedArchiveExtraction {
 }
 
 impl PlannedArchiveExtraction {
-    /// A digest of the archive sets' names and types, relative to the
-    /// download folder.
+    /// See [`archive_set_digest`].
     pub(crate) fn digest(&self) -> &str {
         &self.digest
     }
@@ -640,16 +639,15 @@ pub(crate) async fn plan_download_extraction(
     archive_provider: Option<&Arc<dyn ArchiveExtractorPluginProvider>>,
 ) -> AppResult<Option<PlannedArchiveExtraction>> {
     let dir = dir.to_path_buf();
-    let sets = {
-        let dir = dir.clone();
-        tokio::task::spawn_blocking(move || plan_archive_extraction(&dir, is_sample))
-            .await
-            .map_err(|e| AppError::Repository(format!("archive detection task failed: {e}")))?
-            .map_err(classify_archive_failure)?
-    };
-    if sets.is_empty() {
+    let sized = planned_archive_sets(&dir).await?;
+    if sized.is_empty() {
         return Ok(None);
     }
+    let digest = archive_set_digest(&dir, &sized)?;
+    let sets: Vec<_> = sized
+        .into_iter()
+        .map(|(path, archive_type, _)| (path, archive_type))
+        .collect();
     let plugin_required = || {
         AppError::archive_extraction_plugin_required(Some(redact_archive_diagnostic(
             &dir.to_string_lossy(),
@@ -666,30 +664,58 @@ pub(crate) async fn plan_download_extraction(
             formats.push(format);
         }
     }
-    let digest = {
-        let mut names: Vec<(String, &'static str)> = sets
-            .iter()
-            .map(|(path, archive_type)| {
-                (
-                    path.strip_prefix(&dir)
-                        .map(crate::stored_paths::path_to_stored_string)
-                        .unwrap_or_default(),
-                    archive_type.as_str(),
-                )
-            })
-            .collect();
-        names.sort();
-        let bytes = serde_json::to_vec(&("archive-set-v1", names)).map_err(|error| {
-            AppError::Repository(format!("failed to encode archive set digest: {error}"))
-        })?;
-        blake3::hash(&bytes).to_hex()[..32].to_string()
-    };
     Ok(Some(PlannedArchiveExtraction {
         dir,
         sets,
         is_sample,
         digest,
     }))
+}
+
+/// The download's archive sets with their first volumes' sizes, off the
+/// async runtime.
+async fn planned_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType, Option<u64>)>> {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || plan_archive_sets_sized(&dir))
+        .await
+        .map_err(|e| AppError::Repository(format!("archive detection task failed: {e}")))?
+        .map_err(classify_archive_failure)
+}
+
+/// A digest of each archive set's first volume: its name relative to the
+/// download folder, its type, and its size as the listing gave it.
+fn archive_set_digest(
+    dir: &Path,
+    sets: &[(PathBuf, ArchiveType, Option<u64>)],
+) -> AppResult<String> {
+    let mut names: Vec<(String, &'static str, Option<u64>)> = sets
+        .iter()
+        .map(|(path, archive_type, size)| {
+            (
+                path.strip_prefix(dir)
+                    .map(crate::stored_paths::path_to_stored_string)
+                    .unwrap_or_default(),
+                archive_type.as_str(),
+                *size,
+            )
+        })
+        .collect();
+    names.sort();
+    let bytes = serde_json::to_vec(&("archive-set-v2", names)).map_err(|error| {
+        AppError::Repository(format!("failed to encode archive set digest: {error}"))
+    })?;
+    Ok(blake3::hash(&bytes).to_hex()[..32].to_string())
+}
+
+/// The digest [`plan_download_extraction`] would record for the download,
+/// from the same listing and without an extractor; `None` when it holds no
+/// archive set.
+pub(crate) async fn download_archive_digest(dir: &Path) -> AppResult<Option<String>> {
+    let sets = planned_archive_sets(dir).await?;
+    if sets.is_empty() {
+        return Ok(None);
+    }
+    archive_set_digest(dir, &sets).map(Some)
 }
 
 /// Extract a planned download into its fixed workspace. Any failure removes
@@ -1227,6 +1253,15 @@ fn plan_archive_extraction(
     dir: &Path,
     _is_sample: fn(&Path) -> bool,
 ) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
+    Ok(plan_archive_sets_sized(dir)?
+        .into_iter()
+        .map(|(path, archive_type, _)| (path, archive_type))
+        .collect())
+}
+
+/// [`plan_archive_extraction`], with each first volume's size as the
+/// listing (or the download's own reading) gave it.
+fn plan_archive_sets_sized(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType, Option<u64>)>> {
     let reading = Disk::process().fresh_blocking(dir);
     let Some(kind) = reading.kind() else {
         return Err(AppError::Repository(format!(
@@ -1244,12 +1279,12 @@ fn plan_archive_extraction(
     }
     if kind == EntryKind::File {
         return Ok(archive_type_for_path(dir)
-            .map(|archive_type| (dir.to_path_buf(), archive_type))
+            .map(|archive_type| (dir.to_path_buf(), archive_type, reading.size()))
             .into_iter()
             .collect());
     }
 
-    let sets = find_archive_sets(dir)?;
+    let sets = find_archive_sets_sized(dir)?;
     if sets.len() > MAX_ARCHIVE_SETS {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS,
@@ -2015,7 +2050,18 @@ fn has_importable_video_files(dir: &Path, is_sample: fn(&Path) -> bool) -> AppRe
 /// Every archive set of a download, each named by its first volume: the top
 /// level first, then subdirectories breadth-first in name order.
 fn find_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
-    let files = archive_inventory(dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
+    Ok(find_archive_sets_sized(dir)?
+        .into_iter()
+        .map(|(path, archive_type, _)| (path, archive_type))
+        .collect())
+}
+
+/// [`find_archive_sets`], with each first volume's size as the listing gave
+/// it.
+fn find_archive_sets_sized(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType, Option<u64>)>> {
+    let listed = archive_inventory_sized(dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
+    let sizes: std::collections::HashMap<PathBuf, Option<u64>> = listed.iter().cloned().collect();
+    let files = listed.into_iter().map(|(path, _)| path);
     let mut by_directory = std::collections::BTreeMap::<PathBuf, Vec<PathBuf>>::new();
     for path in files {
         if let Some(parent) = path.parent() {
@@ -2030,11 +2076,23 @@ fn find_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
     Ok(directories
         .into_iter()
         .flat_map(|(_, paths)| archive_sets_in_paths(paths))
+        .map(|(path, archive_type)| {
+            let size = sizes.get(&path).copied().flatten();
+            (path, archive_type, size)
+        })
         .collect())
 }
 
 /// A bounded inventory that never follows links or silently truncates a source.
 fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
+    Ok(archive_inventory_sized(dir, max_depth)?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect())
+}
+
+/// [`archive_inventory`], with each file's size as its listing gave it.
+fn archive_inventory_sized(dir: &Path, max_depth: usize) -> AppResult<Vec<(PathBuf, Option<u64>)>> {
     let disk = Disk::process();
     let io_error = |error: &dyn std::fmt::Display| {
         AppError::Repository(format!("archive discovery failed: {error}"))
@@ -2081,7 +2139,7 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
                 }
                 children.push(path);
             } else if kind == EntryKind::File {
-                files.push(path);
+                files.push((path, entry.reading.size()));
             }
         }
         children.sort();

@@ -6496,6 +6496,7 @@ mod tests {
             ("EVENTS_", events::ALL),
             ("IMPORT_", import::ALL),
             ("ARCHIVE_EXTRACTION_", archive_extraction::ALL),
+            ("ARCHIVE_WORKSPACE_", archive_workspace_health::ALL),
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),

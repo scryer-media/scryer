@@ -98,6 +98,10 @@ pub(crate) async fn plan_download_extraction(
     Ok(None)
 }
 
+pub(crate) async fn download_archive_digest(_dir: &Path) -> AppResult<Option<String>> {
+    Ok(None)
+}
+
 pub(crate) async fn extract_planned_download(
     plan: PlannedArchiveExtraction,
     _destination: &ArchiveExtractionDestination,

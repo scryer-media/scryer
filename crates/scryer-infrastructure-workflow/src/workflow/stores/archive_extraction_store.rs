@@ -257,21 +257,23 @@ impl ArchiveExtractionRepository for ArchiveExtractionStore {
     async fn list_unsettled_after(
         &self,
         after: Option<(String, String)>,
+        changed_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<UnsettledArchiveExtraction>> {
-        let (after_predicate, mut args) = match after {
-            Some((client_id, client_item_id)) => (
-                "AND (client_id, client_item_id) > ({}, {}) ",
-                key_args(&client_id, &client_item_id).to_vec(),
-            ),
-            None => ("", Vec::new()),
+        let mut args = vec![SqlArg::Timestamp(changed_before)];
+        let after_predicate = match after {
+            Some((client_id, client_item_id)) => {
+                args.extend(key_args(&client_id, &client_item_id));
+                "AND (client_id, client_item_id) > ({}, {}) "
+            }
+            None => "",
         };
         args.push(limit_arg(limit));
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
                 "SELECT client_id, client_item_id, updated_at FROM archive_extractions \
-                 WHERE settled_at IS NULL {after_predicate}\
+                 WHERE settled_at IS NULL AND updated_at <= {{}} {after_predicate}\
                  ORDER BY client_id, client_item_id LIMIT {{}}"
             ),
             &args,
@@ -313,8 +315,12 @@ impl ArchiveExtractionRepository for ArchiveExtractionStore {
     async fn scratch_summary(&self) -> AppResult<ArchiveScratchSummary> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT COUNT(*) AS workspaces, \
-                    CAST(COALESCE(SUM(output_bytes), 0) AS BIGINT) AS bytes, \
+            // Only extracted and extracting downloads have output on disk; a
+            // failed, blocked, password-waiting or pending one's was removed.
+            "SELECT CAST(COALESCE(SUM(CASE WHEN state IN ('extracted', 'extracting') \
+                         THEN 1 ELSE 0 END), 0) AS BIGINT) AS workspaces, \
+                    CAST(COALESCE(SUM(CASE WHEN state IN ('extracted', 'extracting') \
+                         THEN output_bytes ELSE 0 END), 0) AS BIGINT) AS bytes, \
                     CAST(COALESCE(SUM(CASE WHEN state = 'blocked' THEN 1 ELSE 0 END), 0) \
                          AS BIGINT) AS blocked \
              FROM archive_extractions",
@@ -622,7 +628,10 @@ mod tests {
             store.save(&row).await.expect("save");
         }
 
-        let first = store.list_unsettled_after(None, 2).await.expect("first");
+        let first = store
+            .list_unsettled_after(None, at(7), 2)
+            .await
+            .expect("first");
         let keys: Vec<_> = first
             .iter()
             .map(|row| (row.client_id.as_str(), row.client_item_id.as_str()))
@@ -637,6 +646,7 @@ mod tests {
         let rest = store
             .list_unsettled_after(
                 Some((last.client_id.clone(), last.client_item_id.clone())),
+                at(7),
                 10,
             )
             .await
@@ -652,21 +662,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_unsettled_scan_leaves_rows_changed_after_the_cutoff() {
+        let store = store().await;
+        for (item, updated) in [("item-1", 5), ("item-2", 9), ("item-3", 7)] {
+            let mut row = record(item);
+            row.settled_at = None;
+            row.updated_at = at(updated);
+            store.save(&row).await.expect("save");
+        }
+
+        let page = store
+            .list_unsettled_after(None, at(7), 10)
+            .await
+            .expect("page");
+        let items: Vec<_> = page.iter().map(|row| row.client_item_id.as_str()).collect();
+        assert_eq!(
+            items,
+            ["item-1", "item-3"],
+            "item-2 changed after the cutoff"
+        );
+        // A full page of old rows is not cut short by recent ones between them.
+        let first = store
+            .list_unsettled_after(None, at(7), 2)
+            .await
+            .expect("first");
+        let items: Vec<_> = first
+            .iter()
+            .map(|row| row.client_item_id.as_str())
+            .collect();
+        assert_eq!(items, ["item-1", "item-3"]);
+    }
+
+    #[tokio::test]
     async fn the_unsettled_scan_and_workspace_lookup_are_served_by_their_indexes() {
         let store = store().await;
         let unsettled = plan_details(
             &store,
             "EXPLAIN QUERY PLAN SELECT client_id, client_item_id, updated_at \
-             FROM archive_extractions WHERE settled_at IS NULL \
-             AND (client_id, client_item_id) > (?1, ?2) \
+             FROM archive_extractions WHERE settled_at IS NULL AND updated_at <= ?1 \
+             AND (client_id, client_item_id) > (?2, ?3) \
              ORDER BY client_id, client_item_id LIMIT 500",
-            &["client-alpha", "item-1"],
+            &["2026-01-01T00:00:00Z", "client-alpha", "item-1"],
         )
         .await;
+        // The index holds every column the scan reads, the change time
+        // included, so the cutoff is checked without reading the rows.
         assert!(
             unsettled
                 .iter()
-                .any(|line| line.contains("idx_archive_extractions_settled_at")),
+                .any(|line| { line.contains("COVERING INDEX idx_archive_extractions_settled_at") }),
             "{unsettled:?}"
         );
         assert!(
@@ -723,7 +767,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_scratch_summary_counts_workspaces_bytes_and_blocked() {
+    async fn the_scratch_summary_counts_only_output_on_disk_and_blocked_apart() {
         let store = store().await;
         assert_eq!(
             store.scratch_summary().await.expect("empty"),
@@ -737,6 +781,12 @@ mod tests {
             ),
             ("item-2", ArchiveExtractionState::Blocked, 0),
             ("item-3", ArchiveExtractionState::Extracted, 7),
+            ("item-4", ArchiveExtractionState::Extracting, 0),
+            // A failed or waiting attempt's output was removed; a stale
+            // byte count on its row is not scratch on disk.
+            ("item-5", ArchiveExtractionState::Failed, 11),
+            ("item-6", ArchiveExtractionState::NeedsPassword, 13),
+            ("item-7", ArchiveExtractionState::Pending, 17),
         ] {
             let mut row = record(item);
             row.state = state;
@@ -749,7 +799,8 @@ mod tests {
                 workspaces: 3,
                 bytes: 5_000_000_007,
                 blocked: 1,
-            }
+            },
+            "extracted and extracting count; blocked is counted apart"
         );
     }
 

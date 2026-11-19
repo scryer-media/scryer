@@ -24020,6 +24020,11 @@ mod held_sources {
 
         type OutputDirs = Arc<std::sync::Mutex<Vec<PathBuf>>>;
 
+        /// The video the latest extraction wrote.
+        fn extracted_video(output_dirs: &OutputDirs, video_name: &str) -> PathBuf {
+            output_dirs.lock().unwrap().last().expect("extracted").join(video_name)
+        }
+
         fn extracting_provider(
             video_name: &str,
             output_dirs: &OutputDirs,
@@ -24108,6 +24113,7 @@ mod held_sources {
             let read = crate::import::archive_extraction::completed_download_extraction(
                 app,
                 &download.key,
+                &download.folder,
             )
             .await
             .unwrap();
@@ -24415,18 +24421,89 @@ mod held_sources {
             let app = &download.fixture.app;
             let _clock = Clock::start(app);
 
-            for pass in 1..=4usize {
-                download
-                    .extract(app, Some(provider.clone()))
-                    .await
-                    .expect_err("a password is needed");
-                let record = download.key.record_in(app).await.unwrap();
-                assert_eq!(record.state, crate::ArchiveExtractionState::NeedsPassword);
-                assert_eq!(record.attempts, 0, "pass {pass}");
-                assert_eq!(record.next_attempt_at, None);
-                assert_eq!(calls_of(&calls), pass, "runs again at once");
-            }
+            download
+                .extract(app, Some(provider.clone()))
+                .await
+                .expect_err("a password is needed");
+            let waiting = download.key.record_in(app).await.unwrap();
+            assert_eq!(waiting.state, crate::ArchiveExtractionState::NeedsPassword);
+            assert_eq!(waiting.attempts, 0);
+            assert_eq!(waiting.next_attempt_at, None);
+            assert_eq!(calls_of(&calls), 1);
             assert!(!download.workspace().exists());
+        }
+
+        #[tokio::test]
+        async fn a_download_waiting_for_a_password_is_tried_again_only_with_new_candidates() {
+            let download = archive_download("Password Repeat Movie").await;
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let provider: Arc<dyn crate::ArchiveExtractorPluginProvider> =
+                Arc::new(ExtractingArchiveProvider {
+                    client: Arc::new(PasswordArchiveClient {
+                        calls: calls.clone(),
+                    }),
+                });
+            let (app, repository) = counted(&download);
+            let _clock = Clock::start(&app);
+            let extract = |passwords: crate::import::archive_passwords::ArchivePasswordCandidates| {
+                let app = app.clone();
+                let provider = provider.clone();
+                let download = &download;
+                async move {
+                    crate::import::archive_extraction::extract_download_archives(
+                        &app,
+                        &download.key,
+                        &download.folder,
+                        crate::import::workflow::is_sample_file,
+                        download.key.destination(download.library_root()),
+                        &passwords,
+                        Some(provider),
+                    )
+                    .await
+                }
+            };
+            let with_operator = |value: &str| {
+                let mut passwords =
+                    crate::import::archive_passwords::ArchivePasswordCandidates::default();
+                passwords.push_operator(Some(value));
+                passwords
+            };
+            let password_required = |result: AppResult<Option<PathBuf>>| {
+                matches!(result, Err(AppError::ArchivePasswordRequired { .. }))
+            };
+
+            assert!(password_required(extract(Default::default()).await));
+            assert_eq!(calls_of(&calls), 1);
+            let writes = repository.writes();
+
+            // Nothing new to try: refused at once, with no extraction and no
+            // write.
+            for _ in 0..3 {
+                assert!(password_required(extract(Default::default()).await));
+            }
+            assert_eq!(calls_of(&calls), 1, "no candidate to try");
+            assert_eq!(repository.writes(), writes, "a repeat refusal writes nothing");
+
+            // A candidate the last attempt did not try runs it once. The
+            // plugin is asked once per password tried, so calls are compared
+            // before and after each pass.
+            assert!(password_required(extract(with_operator("synthetic-one")).await));
+            let after_one = calls_of(&calls);
+            assert!(after_one > 1, "a new candidate runs it");
+            assert!(password_required(extract(with_operator("synthetic-one")).await));
+            assert_eq!(calls_of(&calls), after_one, "the same candidates were tried");
+            assert!(password_required(extract(with_operator("synthetic-two")).await));
+            let after_two = calls_of(&calls);
+            assert!(after_two > after_one, "another candidate runs it again");
+
+            // An operator retry runs it whatever was tried.
+            crate::import::archive_extraction::reset_download_extraction(&app, &download.key)
+                .await;
+            assert!(password_required(extract(with_operator("synthetic-two")).await));
+            assert!(calls_of(&calls) > after_two);
+            let record = download.key.record_in(&app).await.unwrap();
+            assert_eq!(record.state, crate::ArchiveExtractionState::NeedsPassword);
+            assert_eq!(record.attempts, 0, "waiting for a password costs no attempt");
         }
 
         /// The extraction records, counting every write that changes a row.
@@ -24503,9 +24580,12 @@ mod held_sources {
             async fn list_unsettled_after(
                 &self,
                 after: Option<(String, String)>,
+                changed_before: chrono::DateTime<Utc>,
                 limit: usize,
             ) -> AppResult<Vec<crate::UnsettledArchiveExtraction>> {
-                self.inner.list_unsettled_after(after, limit).await
+                self.inner
+                    .list_unsettled_after(after, changed_before, limit)
+                    .await
             }
 
             async fn recorded_workspace_names(
@@ -24850,17 +24930,30 @@ mod held_sources {
             std::fs::write(&hex_file, b"operator").unwrap();
             let operator_file = download.library_root().join("Operator.Notes.txt");
             std::fs::write(&operator_file, b"operator").unwrap();
+            // What desktops and NAS boxes leave in any folder: never counted,
+            // never touched.
+            let litter = [
+                folder.join(".DS_Store"),
+                folder.join("._0123456789abcdef"),
+                folder.join("Thumbs.db"),
+            ];
+            for path in &litter {
+                std::fs::write(path, b"metadata").unwrap();
+            }
+            let nas_index = folder.join("@eaDir");
+            write_video(&nas_index.join("Index.Thumb.mkv"));
             let writes = repository.writes();
 
             clock.advance(&app, chrono::Duration::hours(23));
             let early = sweep_orphans(&app).await;
 
+            // Only the workspace-named directory without a marker counts.
             assert_eq!(
                 early,
                 crate::import::archive_extraction::OrphanSweep {
                     removed: 0,
                     waiting: 2,
-                    unmarked: 3,
+                    unmarked: 1,
                 }
             );
             assert!(orphan.join("Orphaned.Feature.mkv").exists(), "inside its day");
@@ -24873,10 +24966,14 @@ mod held_sources {
                 crate::import::archive_extraction::OrphanSweep {
                     removed: 1,
                     waiting: 0,
-                    unmarked: 3,
+                    unmarked: 1,
                 }
             );
             assert!(!orphan.exists());
+            for path in &litter {
+                assert!(path.exists(), "{}", path.display());
+            }
+            assert!(nas_index.join("Index.Thumb.mkv").exists());
             assert!(
                 recorded.join("Another.Feature.mkv").exists(),
                 "a recorded workspace goes when its download settles"
@@ -25105,6 +25202,237 @@ mod held_sources {
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
             assert_eq!(download.key.record_in(&app).await.unwrap().settled_at, None);
+        }
+
+        #[tokio::test]
+        async fn a_held_download_that_left_its_client_keeps_its_workspace() {
+            let download = archive_download("Held Untracked Movie").await;
+            let (app, repository) = counted(&download);
+            let (handle, _) = scripted_tracker(&[
+                "another-synthetic-item",
+                &download.fixture.completed.download_client_item_id,
+            ]);
+            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let clock = Clock::start(&app);
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
+            // The download's import keeps its sources for pending subtitles.
+            download
+                .fixture
+                .import_repo
+                .records
+                .lock()
+                .await
+                .push(import_record(
+                    "held-untracked-import",
+                    &download.fixture.completed,
+                    ImportType::MovieDownload,
+                    ImportStatus::Completed,
+                    serde_json::json!({
+                        "archive_processing_pending": true,
+                        crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY: "subtitles_pending",
+                    }),
+                    None,
+                ));
+            clock.advance(&app, chrono::Duration::hours(25));
+            let writes = repository.writes();
+
+            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                .await
+                .unwrap();
+
+            assert_eq!(settled, 1, "only the download nothing holds");
+            assert_eq!(repository.writes(), writes + 1, "one batch");
+            assert_eq!(download.key.record_in(&app).await.unwrap().settled_at, None);
+            assert_eq!(
+                other_key.record_in(&app).await.unwrap().settled_at,
+                Some(clock.now())
+            );
+            clock.advance(&app, chrono::Duration::days(2));
+            assert_eq!(sweep(&app).await.removed, 1);
+            assert!(extracted_video(&output_dirs, &download.video_name).exists(), "held: kept");
+            assert!(!other_workspace.exists());
+        }
+
+        #[tokio::test]
+        async fn a_dismissed_download_handed_to_a_manual_import_is_live_again() {
+            let download = archive_download("Dismissed Manual Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = with_provider(&download, provider.clone());
+            let clock = Clock::start(&app);
+            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            settle_as(&app, &download, TrackedDownloadState::ImportDismissed).await;
+            assert!(download.key.record_in(&app).await.unwrap().settled_at.is_some());
+
+            clock.advance(&app, chrono::Duration::hours(1));
+            begin_manual(&app, &download, false).await.unwrap();
+            assert_eq!(download.key.record_in(&app).await.unwrap().settled_at, None);
+
+            clock.advance(&app, chrono::Duration::hours(24));
+            assert_eq!(sweep(&app).await, Default::default(), "nothing is due");
+            assert!(extracted_video(&output_dirs, &download.video_name).exists());
+            assert_eq!(output_dirs.lock().unwrap().len(), 1, "extracted once");
+        }
+
+        #[tokio::test]
+        async fn a_settled_download_reported_again_is_live_again() {
+            let download = archive_download("Reported Again Movie").await;
+            let (app, repository) = counted(&download);
+            let clock = Clock::start(&app);
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let workspace = download.extract(&app, Some(provider.clone())).await.unwrap().unwrap();
+            let writes = repository.writes();
+            // A pass reusing a live download's extraction writes nothing.
+            assert_eq!(
+                download.extract(&app, Some(provider.clone())).await.unwrap(),
+                Some(workspace.clone())
+            );
+            assert_eq!(repository.writes(), writes);
+
+            crate::import::archive_extraction::settle_download_extractions(
+                &app,
+                std::slice::from_ref(&download.key),
+            )
+            .await;
+            clock.advance(&app, chrono::Duration::hours(1));
+            // The client lists it again, and an automatic pass reuses it.
+            assert_eq!(
+                download.extract(&app, Some(provider)).await.unwrap(),
+                Some(workspace.clone())
+            );
+            assert_eq!(download.key.record_in(&app).await.unwrap().settled_at, None);
+
+            clock.advance(&app, chrono::Duration::hours(24));
+            assert_eq!(sweep(&app).await, Default::default());
+            assert!(extracted_video(&output_dirs, &download.video_name).exists());
+
+            // An operator retry also makes a settled download live again.
+            crate::import::archive_extraction::settle_download_extractions(
+                &app,
+                std::slice::from_ref(&download.key),
+            )
+            .await;
+            crate::import::archive_extraction::reset_download_extraction(&app, &download.key).await;
+            let record = download.key.record_in(&app).await.unwrap();
+            assert_eq!(record.settled_at, None);
+            assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
+            assert_eq!(output_dirs.lock().unwrap().len(), 1);
+        }
+
+        #[tokio::test]
+        async fn an_extraction_of_other_archives_than_the_download_holds_is_replaced() {
+            let download = archive_download("Changed Archives Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = &download.fixture.app;
+            let workspace = download.extract(app, Some(provider.clone())).await.unwrap().unwrap();
+            let first_digest = download.key.record_in(app).await.unwrap().archive_digest;
+            let leftover = workspace.join("Earlier.Output.mkv");
+            std::fs::write(&leftover, b"earlier").unwrap();
+            // The client replaced the archive with another one. A Unix
+            // listing carries no sizes, so the digest sees the new name.
+            let replacement = download.folder.join("Changed.Archives.Movie.REPACK.rar");
+            std::fs::rename(&download.archive, &replacement).unwrap();
+
+            let read = crate::import::archive_extraction::completed_download_extraction(
+                app,
+                &download.key,
+                &download.folder,
+            )
+            .await
+            .unwrap();
+            assert_eq!(read, None, "an import pass does not read it");
+            assert!(leftover.exists(), "reading changes nothing");
+
+            let again = download.extract(app, Some(provider)).await.unwrap();
+
+            assert_eq!(again, Some(workspace.clone()));
+            assert_eq!(output_dirs.lock().unwrap().len(), 2, "extracted afresh");
+            assert!(!leftover.exists(), "the earlier output went");
+            assert!(extracted_video(&output_dirs, &download.video_name).exists());
+            let record = download.key.record_in(app).await.unwrap();
+            assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
+            assert_eq!(record.attempts, 1, "a fresh record");
+            assert_ne!(record.archive_digest, first_digest);
+            assert!(replacement.exists());
+            assert!(download.unrelated.exists());
+
+            // A record without a digest cannot be checked, so it is not read.
+            let mut unchecked = record.clone();
+            unchecked.archive_digest = None;
+            download.key.save_in(app, &unchecked).await;
+            assert_eq!(
+                crate::import::archive_extraction::completed_download_extraction(
+                    app,
+                    &download.key,
+                    &download.folder,
+                )
+                .await
+                .unwrap(),
+                None
+            );
+        }
+
+        #[tokio::test]
+        async fn an_owned_workspace_without_a_record_is_replaced_at_once() {
+            let download = archive_download("Restored Workspace Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = &download.fixture.app;
+            // A backup restore: the records are gone, the owned folder stays.
+            let workspace = crate::archive_extractor::create_test_download_workspace(
+                &download.key.destination(download.library_root()),
+            );
+            let leftover = workspace.join("Before.Restore.mkv");
+            std::fs::write(&leftover, b"before").unwrap();
+            assert!(download.key.record_in(app).await.is_none());
+
+            let extracted = download.extract(app, Some(provider)).await.unwrap();
+
+            assert_eq!(extracted, Some(workspace.clone()));
+            assert!(!leftover.exists());
+            assert!(extracted_video(&output_dirs, &download.video_name).exists());
+            assert_eq!(output_dirs.lock().unwrap().len(), 1);
+            let record = download.key.record_in(app).await.unwrap();
+            assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
+            assert_eq!(record.attempts, 1, "no attempt spent on the leftover");
+            assert_eq!(record.last_reason_code, None);
+            assert!(download.archive.exists());
+        }
+
+        #[tokio::test]
+        async fn a_workspace_a_pass_reads_is_not_removed_until_it_is_done() {
+            let download = archive_download("Read Workspace Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = &download.fixture.app;
+            let clock = Clock::start(app);
+            let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
+            let in_flight = &app.runtime.imports.archive_extractions_in_flight;
+
+            // Imported while a pass reads it: the removal waits, still due.
+            let reader = in_flight.read(&download.key);
+            let second_reader = in_flight.read(&download.key);
+            settle_as(app, &download, TrackedDownloadState::Imported).await;
+            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            assert!(extracted_video(&output_dirs, &download.video_name).exists());
+            assert!(download.key.record_in(app).await.unwrap().settled_at.is_some());
+            assert_eq!(sweep(app).await.deferred, 1, "read: deferred");
+            drop(reader);
+            assert_eq!(sweep(app).await.deferred, 1, "another reader remains");
+            assert!(extracted_video(&output_dirs, &download.video_name).exists());
+            drop(second_reader);
+
+            clock.advance(app, chrono::Duration::minutes(1));
+            let swept = sweep(app).await;
+            assert_eq!(swept.removed, 1);
+            assert!(!workspace.exists());
+            assert!(download.key.record_in(app).await.is_none());
+            assert!(download.archive.exists());
         }
 
         async fn begin_manual(

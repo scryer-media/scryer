@@ -185,6 +185,30 @@ fn import_holds_sources(record: &ImportRecord) -> bool {
             .is_ok_and(|payload| payload["archive_processing_pending"] == true)
 }
 
+/// Of `sources`, the downloads an import still holds the sources of, as
+/// (client id lowercased, item id): one batched read of their imports.
+pub(crate) async fn downloads_holding_sources(
+    app: &AppUseCase,
+    sources: &[ClientJobLocator],
+) -> AppResult<HashSet<(String, String)>> {
+    if sources.is_empty() {
+        return Ok(HashSet::new());
+    }
+    Ok(app
+        .services
+        .workflow
+        .imports
+        .list_imports_for_identities(sources)
+        .await?
+        .iter()
+        .filter(|record| import_holds_sources(record))
+        .map(|record| {
+            let (client_id, _, item_id) = source_match_key(&held_import_source(record));
+            (client_id, item_id)
+        })
+        .collect())
+}
+
 fn import_hold_reason(record: &ImportRecord) -> HeldSourcesReason {
     let payload = serde_json::from_str::<serde_json::Value>(&record.payload_json).ok();
     HeldSourcesReason::parse(
