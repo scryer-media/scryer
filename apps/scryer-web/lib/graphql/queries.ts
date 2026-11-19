@@ -3751,6 +3751,42 @@ export const externalImportSetupSecretDraftStatusQuery = `query ExternalImportSe
   }
 }`;
 
+const EXTERNAL_RULE_IMPORT_FACT_FIELDS = `code message details`;
+export const externalRuleImportStatusQuery = `query ExternalRuleImportStatus($runId: ID!) {
+  externalRuleImportStatus(runId: $runId) {
+    runId
+    status
+    active
+    revision
+    updatedAt
+    source
+    baseUrl
+    phase
+    reason
+    message
+    counts {
+      total
+      pending
+      saved
+      savedNeedsReview
+      savedFailedTranslation
+      skippedExists
+      failed
+    }
+    items {
+      key
+      sourceName
+      savedName
+      ruleSetId
+      state
+      reason
+      message
+      facts { ${EXTERNAL_RULE_IMPORT_FACT_FIELDS} }
+    }
+    facts { ${EXTERNAL_RULE_IMPORT_FACT_FIELDS} }
+  }
+}`;
+
 // Returns null when there is no draft or another user owns it.
 export const externalImportSetupSecretDraftQuery = `query ExternalImportSetupSecretDraft {
   externalImportSetupSecretDraft {

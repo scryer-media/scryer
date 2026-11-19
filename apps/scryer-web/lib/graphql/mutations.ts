@@ -3042,6 +3042,14 @@ export const skipExternalImportSourceMutation = `mutation SkipExternalImportSour
   skipExternalImportSource(runId: $runId, key: $key) { ${sourceImportJobFields} }
 }`;
 
+// Starts a background import of external rules; progress arrives through the
+// job-run stream and the final report through externalRuleImportStatusQuery.
+export const startExternalRuleImportMutation = `mutation StartExternalRuleImport($requestKey: String!, $input: ExternalRuleImportInput!) {
+  startExternalRuleImport(requestKey: $requestKey, input: $input) {
+${JOB_RUN_FIELDS}
+  }
+}`;
+
 export const finalizeExternalImportMutation = `mutation FinalizeExternalImport($input: FinalizeExternalImportInput!) {
   finalizeExternalImport(input: $input) {
     monitorWarmupSessionId

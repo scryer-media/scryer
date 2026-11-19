@@ -539,8 +539,26 @@ pub mod external_import {
     pub const SOURCE_APPLICATION_MISMATCH: &str = "EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH";
     /// The source URL is invalid.
     pub const SOURCE_URL_INVALID: &str = "EXTERNAL_IMPORT_SOURCE_URL_INVALID";
+    /// The source could not be reached: refused, timed out, or the name did not resolve.
+    pub const SOURCE_UNREACHABLE: &str = "EXTERNAL_IMPORT_SOURCE_UNREACHABLE";
+    /// The source rejected the supplied API key.
+    pub const SOURCE_UNAUTHORIZED: &str = "EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED";
+    /// The source kept answering that requests were rate limited.
+    pub const SOURCE_RATE_LIMITED: &str = "EXTERNAL_IMPORT_SOURCE_RATE_LIMITED";
+    /// The source has no such endpoint, usually because its version predates it.
+    pub const SOURCE_ENDPOINT_MISSING: &str = "EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING";
+    /// The source answered with an error status, a body that is not JSON, or JSON of the wrong shape.
+    pub const SOURCE_UNEXPECTED_RESPONSE: &str = "EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE";
+    /// The source's response exceeded the size Scryer reads from it.
+    pub const SOURCE_RESPONSE_TOO_LARGE: &str = "EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        SOURCE_UNREACHABLE,
+        SOURCE_UNAUTHORIZED,
+        SOURCE_RATE_LIMITED,
+        SOURCE_ENDPOINT_MISSING,
+        SOURCE_UNEXPECTED_RESPONSE,
+        SOURCE_RESPONSE_TOO_LARGE,
         SESSION_GONE,
         COULD_NOT_DETERMINE_VERSION,
         VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED,

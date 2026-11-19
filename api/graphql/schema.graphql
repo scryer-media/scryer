@@ -7828,6 +7828,246 @@ enum ExternalReleaseStatusValue {
 }
 
 """
+Number of report lines in each state.
+"""
+type ExternalRuleImportCountsPayload {
+	"""
+	Every report line.
+	"""
+	total: Int!
+	"""
+	Lines not yet saved.
+	"""
+	pending: Int!
+	"""
+	Lines saved as exact translations.
+	"""
+	saved: Int!
+	"""
+	Lines saved but needing review.
+	"""
+	savedNeedsReview: Int!
+	"""
+	Lines saved as untranslated placeholders.
+	"""
+	savedFailedTranslation: Int!
+	"""
+	Lines skipped because the rule already exists.
+	"""
+	skippedExists: Int!
+	"""
+	Lines where nothing was saved.
+	"""
+	failed: Int!
+}
+
+"""
+A coded observation about an import run or one of its items.
+"""
+type ExternalRuleImportFactPayload {
+	"""
+	Stable reason code.
+	"""
+	code: String!
+	"""
+	The server's sentence: the fallback for an unrecognized code.
+	"""
+	message: String!
+	"""
+	Values the code refers to, such as a settings id or a limit, or null.
+	"""
+	details: JSON
+}
+
+"""
+Where an external rule import reads from.
+"""
+input ExternalRuleImportInput {
+	"""
+	Application the URL serves.
+	"""
+	source: ExternalRuleImportSource!
+	"""
+	Base URL of the application, including any URL base or BASE_PATH prefix.
+	"""
+	baseUrl: String!
+	"""
+	API key; required for Sonarr and Radarr. Maintainerr has no API authentication, so a key sent with a Maintainerr import is ignored.
+	"""
+	apiKey: String
+}
+
+"""
+Report line for one source object.
+"""
+type ExternalRuleImportItemPayload {
+	"""
+	Stable identity within the source, such as customformat:12.
+	"""
+	key: String!
+	"""
+	Name in the source application.
+	"""
+	sourceName: String!
+	"""
+	Name the saved rule received, or null when nothing was saved.
+	"""
+	savedName: String
+	"""
+	Saved rule set identity, or null when nothing was saved.
+	"""
+	ruleSetId: ID
+	"""
+	Outcome.
+	"""
+	state: ExternalRuleImportItemState!
+	"""
+	Stable reason code for a skipped, failed or partial outcome, or null.
+	"""
+	reason: String
+	"""
+	The server's failure sentence: the fallback for an unrecognized reason.
+	"""
+	message: String
+	"""
+	Translation observations about this item.
+	"""
+	facts: [ExternalRuleImportFactPayload!]!
+}
+
+"""
+Outcome of one imported source object.
+"""
+enum ExternalRuleImportItemState {
+	"""
+	Planned and not yet saved.
+	"""
+	PENDING
+	"""
+	Saved as an exact translation.
+	"""
+	SAVED
+	"""
+	Saved, but the translation needs review.
+	"""
+	SAVED_NEEDS_REVIEW
+	"""
+	Saved as a placeholder because the source rule could not be translated.
+	"""
+	SAVED_FAILED_TRANSLATION
+	"""
+	A rule with this name already exists; nothing was written.
+	"""
+	SKIPPED_EXISTS
+	"""
+	Nothing was saved.
+	"""
+	FAILED
+}
+
+"""
+Step an external rule import has reached.
+"""
+enum ExternalRuleImportPhase {
+	"""
+	Accepted and not yet started.
+	"""
+	QUEUED
+	"""
+	Reading the source.
+	"""
+	FETCHING
+	"""
+	Translating what was read.
+	"""
+	PLANNING
+	"""
+	Saving translated rules.
+	"""
+	SAVING
+	"""
+	Done; the report is final.
+	"""
+	FINISHED
+}
+
+"""
+Application an external rule import reads from.
+"""
+enum ExternalRuleImportSource {
+	"""
+	Sonarr custom formats, imported as disabled scoring rule sets.
+	"""
+	SONARR
+	"""
+	Radarr custom formats, imported as disabled scoring rule sets.
+	"""
+	RADARR
+	"""
+	Maintainerr rule groups, imported as disabled lifecycle rules.
+	"""
+	MAINTAINERR
+}
+
+"""
+An external rule import run and its per-item report. Credentials are never returned.
+"""
+type ExternalRuleImportStatusPayload {
+	"""
+	Job run identity.
+	"""
+	runId: ID!
+	"""
+	Job run status.
+	"""
+	status: JobRunStatusValue!
+	"""
+	Whether the run is still working.
+	"""
+	active: Boolean!
+	"""
+	Report revision; a higher revision is newer.
+	"""
+	revision: Int!
+	"""
+	Last persisted update time.
+	"""
+	updatedAt: DateTime!
+	"""
+	Application read.
+	"""
+	source: ExternalRuleImportSource!
+	"""
+	Base URL read.
+	"""
+	baseUrl: String!
+	"""
+	Step reached.
+	"""
+	phase: ExternalRuleImportPhase!
+	"""
+	Stable reason the run stopped short, or null.
+	"""
+	reason: String
+	"""
+	The server's sentence for that reason: the fallback for an unrecognized code.
+	"""
+	message: String
+	"""
+	Per-state counts.
+	"""
+	counts: ExternalRuleImportCountsPayload!
+	"""
+	One line per source object, at most 1000.
+	"""
+	items: [ExternalRuleImportItemPayload!]!
+	"""
+	Observations about the fetch that belong to no single item.
+	"""
+	facts: [ExternalRuleImportFactPayload!]!
+}
+
+"""
 Subtitle provider record blocked for a media file.
 """
 type ExternalSubtitleBlocklistEntryPayload {
@@ -10591,6 +10831,10 @@ enum JobKeyValue {
 	Background import of selected indexers and download clients.
 	"""
 	SOURCE_IMPORT
+	"""
+	Background import of rules from Sonarr, Radarr, or Maintainerr.
+	"""
+	EXTERNAL_RULE_IMPORT
 	"""
 	A user-defined scheduled script; each script is told apart by its
 	`customJobId`.
@@ -22361,6 +22605,19 @@ type MutationRoot {
 		corrections: [IndexerApiKeyOverrideInput!]!
 	): ExternalImportSourceJobPayload!
 	"""
+	Start importing Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules. Requires catalog-settings management; repeating a request key returns the run it started.
+	"""
+	startExternalRuleImport(
+		"""
+		Stable caller-generated request identity reused when a response is lost.
+		"""
+		requestKey: String!,
+		"""
+		Application, base URL and, for Sonarr or Radarr, API key to read.
+		"""
+		input: ExternalRuleImportInput!
+	): JobRunPayload!
+	"""
 	Explicitly skip one unresolved terminal source so it no longer blocks finishing setup.
 	"""
 	skipExternalImportSource(
@@ -27214,6 +27471,15 @@ type QueryRoot {
 	Read the caller-visible external import setup secret draft; requires system-settings management permission.
 	"""
 	externalImportSetupSecretDraft: ExternalImportSetupSecretDraftPayload
+	"""
+	Read one of the caller's external rule imports and its per-item report; requires catalog-settings management.
+	"""
+	externalRuleImportStatus(
+		"""
+		Rule import job run identity.
+		"""
+		runId: ID!
+	): ExternalRuleImportStatusPayload!
 	"""
 	Report whether an external import setup secret draft exists and whether the caller owns it.
 	"""
