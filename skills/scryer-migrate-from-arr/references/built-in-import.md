@@ -71,9 +71,7 @@ jq -c '[.data.previewExternalImport.rootFolders[] | [.kind, .arrRootPath]]' root
 
 Over MCP: `run_mutation` with the same names; poll every 10 s or slower.
 Each preview read costs the server a full preview build, so read roots and
-sources once each, never in the poll. Roots answer is about 150 bytes per
-root; past about 200 distinct roots it exceeds the MCP result cap
-(`HTTP_MCP_RESULT_TOO_LARGE`): use `gql.sh` for that one read.
+sources once each, never in the poll.
 
 `rootFolders` holds every arr root folder and every folder titles actually
 live in. Each needs a Scryer library and Scryer-side path (same path, or where
