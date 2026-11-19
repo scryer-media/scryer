@@ -150,6 +150,67 @@ fn main() {
         compiled_build_lane.as_str()
     );
     println!("cargo:rerun-if-env-changed=SCRYER_BUILD_LANE");
+
+    generate_skill_operations(Path::new(&out_dir));
+}
+
+/// Writes the table of every operator-skill operation file, embedded with
+/// `include_str!`, that the MCP endpoint serves as its operation catalog.
+fn generate_skill_operations(out_dir: &Path) {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let skills = manifest_dir.join("..").join("..").join("skills");
+    // A directory is scanned whole, so a new skill or operation file reruns
+    // this as well as an edited one.
+    println!("cargo:rerun-if-changed={}", skills.display());
+    let mut rows = Vec::new();
+    let skill_dirs =
+        fs::read_dir(&skills).unwrap_or_else(|error| panic!("read {}: {error}", skills.display()));
+    for skill in skill_dirs {
+        let skill = skill.expect("skill entry").path();
+        let operations = skill.join("operations");
+        if !operations.is_dir() {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", operations.display());
+        let skill_name = skill
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("skill directory name")
+            .to_string();
+        for file in fs::read_dir(&operations)
+            .unwrap_or_else(|error| panic!("read {}: {error}", operations.display()))
+        {
+            let path = file.expect("operation entry").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("graphql") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("operation file name")
+                .to_string();
+            // Joined, not canonicalized: a canonical Windows path is a
+            // verbatim `\\?\` path.
+            let embedded = manifest_dir
+                .join("..")
+                .join("..")
+                .join("skills")
+                .join(&skill_name)
+                .join("operations")
+                .join(&file_name);
+            rows.push((skill_name.clone(), file_name, embedded));
+        }
+    }
+    rows.sort();
+    let mut code = String::from("pub(crate) static SKILL_OPERATIONS: &[SkillOperationFile] = &[\n");
+    for (skill, file, path) in &rows {
+        let path = path.to_str().expect("operation file path is UTF-8");
+        code.push_str(&format!(
+            "    SkillOperationFile {{ skill: {skill:?}, file: {file:?}, text: include_str!({path:?}) }},\n"
+        ));
+    }
+    code.push_str("];\n");
+    fs::write(out_dir.join("skill_operations.rs"), code).expect("write skill_operations.rs");
 }
 
 fn compile_windows_resources() {

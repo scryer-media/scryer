@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::Omission;
 use super::gather::{download_roots, error_kind};
+use super::query::EnvironmentSection;
 use crate::AppUseCase;
 
 /// Filesystem facts for one root, identified by pseudonym.
@@ -28,59 +29,92 @@ impl AppUseCase {
         environment: &mut Map<String, Value>,
         omissions: &mut Vec<Omission>,
     ) {
-        match self.services.config.system_info.datastore_info().await {
-            Ok(info) => {
-                environment.insert(
-                    "datastore".to_string(),
-                    json!({
+        for name in EnvironmentSection::ALL {
+            if let Some(value) = self.environment_section(actor, *name, omissions).await {
+                environment.insert(name.as_str().to_string(), value);
+            }
+        }
+    }
+
+    /// One environment section, read on its own. A section that could not be
+    /// read is `None`, with its omission recorded.
+    pub(super) async fn environment_section(
+        &self,
+        actor: &crate::User,
+        name: EnvironmentSection,
+        omissions: &mut Vec<Omission>,
+    ) -> Option<Value> {
+        match name {
+            EnvironmentSection::Datastore => {
+                match self.services.config.system_info.datastore_info().await {
+                    Ok(info) => Some(json!({
                         "engine": info.engine,
                         "current_migration_key": info.current_migration_key,
+                    })),
+                    Err(error) => {
+                        omissions.push(Omission::new(
+                            "environment.datastore",
+                            format!("read_failed:{}", error_kind(&error)),
+                        ));
+                        None
+                    }
+                }
+            }
+            EnvironmentSection::SetupComplete => match self.setup_complete().await {
+                Ok(complete) => Some(json!(complete)),
+                Err(error) => {
+                    omissions.push(Omission::new(
+                        "environment.setup_complete",
+                        format!("read_failed:{}", error_kind(&error)),
+                    ));
+                    None
+                }
+            },
+            EnvironmentSection::SmgCompatibilityNotice => {
+                Some(match self.smg_version_compatibility_notice().await {
+                    Ok(Some(notice)) => json!({
+                        "present": true,
+                        "status": notice.status,
+                        "minimum_version": notice.minimum_version,
+                        "your_version": notice.your_version,
+                        "has_upgrade_deadline": notice.upgrade_deadline.is_some(),
                     }),
-                );
-            }
-            Err(error) => omissions.push(Omission::new(
-                "environment.datastore",
-                format!("read_failed:{}", error_kind(&error)),
-            )),
-        }
-
-        match self.setup_complete().await {
-            Ok(complete) => {
-                environment.insert("setup_complete".to_string(), json!(complete));
-            }
-            Err(error) => omissions.push(Omission::new(
-                "environment.setup_complete",
-                format!("read_failed:{}", error_kind(&error)),
-            )),
-        }
-
-        match self.smg_version_compatibility_notice().await {
-            Ok(notice) => {
-                environment.insert(
-                    "smg_compatibility_notice".to_string(),
-                    match notice {
-                        Some(notice) => json!({
-                            "present": true,
-                            "status": notice.status,
-                            "minimum_version": notice.minimum_version,
-                            "your_version": notice.your_version,
-                            "has_upgrade_deadline": notice.upgrade_deadline.is_some(),
-                        }),
-                        None => json!({ "present": false }),
-                    },
-                );
-            }
-            Err(error) => {
-                environment.insert(
-                    "smg_compatibility_notice".to_string(),
-                    json!({
+                    Ok(None) => json!({ "present": false }),
+                    Err(error) => json!({
                         "present": true,
                         "reason": error.validation_reason().unwrap_or("unavailable"),
                     }),
-                );
+                })
             }
+            EnvironmentSection::Settings => Some(self.environment_settings(actor, omissions).await),
+            EnvironmentSection::NetworkConfiguration => {
+                let public_url = self.public_url_runtime().snapshot();
+                let trusted_proxies = self.trusted_proxy_runtime().snapshot();
+                Some(json!({
+                    "public_url_configured": public_url.configured_value().is_some(),
+                    "trusted_proxies_configured": !trusted_proxies.addresses.is_empty(),
+                    "trusted_proxy_count": trusted_proxies.addresses.len(),
+                }))
+            }
+            EnvironmentSection::UserCount => match self.services.identity.users.list_all().await {
+                Ok(users) => Some(json!(users.len())),
+                Err(error) => {
+                    omissions.push(Omission::new(
+                        "environment.user_count",
+                        format!("read_failed:{}", error_kind(&error)),
+                    ));
+                    None
+                }
+            },
+            EnvironmentSection::Filesystems => self.filesystem_facts(omissions).await,
         }
+    }
 
+    async fn environment_settings(
+        &self,
+        actor: &crate::User,
+        omissions: &mut Vec<Omission>,
+    ) -> Value {
         let mut settings = Map::new();
         match self.general_settings().await {
             Ok(general) => {
@@ -167,37 +201,10 @@ impl AppUseCase {
                 format!("read_failed:{}", error_kind(&error)),
             )),
         }
-        environment.insert("settings".to_string(), Value::Object(settings));
-
-        let public_url = self.public_url_runtime().snapshot();
-        let trusted_proxies = self.trusted_proxy_runtime().snapshot();
-        environment.insert(
-            "network_configuration".to_string(),
-            json!({
-                "public_url_configured": public_url.configured_value().is_some(),
-                "trusted_proxies_configured": !trusted_proxies.addresses.is_empty(),
-                "trusted_proxy_count": trusted_proxies.addresses.len(),
-            }),
-        );
-
-        match self.services.identity.users.list_all().await {
-            Ok(users) => {
-                environment.insert("user_count".to_string(), json!(users.len()));
-            }
-            Err(error) => omissions.push(Omission::new(
-                "environment.user_count",
-                format!("read_failed:{}", error_kind(&error)),
-            )),
-        }
-
-        self.filesystem_facts(environment, omissions).await;
+        Value::Object(settings)
     }
 
-    async fn filesystem_facts(
-        &self,
-        environment: &mut Map<String, Value>,
-        omissions: &mut Vec<Omission>,
-    ) {
+    async fn filesystem_facts(&self, omissions: &mut Vec<Omission>) -> Option<Value> {
         // Pseudonyms follow the known-value harvest's order, so `root-N` and
         // `download-root-N` here are the same roots the logs name.
         let mut roots: Vec<(String, &'static str, String)> = Vec::new();
@@ -250,7 +257,7 @@ impl AppUseCase {
                 "environment.filesystems",
                 "probe_task_failed",
             ));
-            return;
+            return None;
         };
 
         // Devices become small group numbers so the raw device ids, which can
@@ -290,19 +297,16 @@ impl AppUseCase {
                 })
             })
             .collect::<Vec<_>>();
-        environment.insert(
-            "filesystems".to_string(),
-            json!({
-                "roots": rows,
-                "same_filesystem_pairs": hardlink_pairs,
-            }),
-        );
         if cfg!(windows) {
             omissions.push(Omission::new(
                 "environment.filesystems.type_and_device",
                 "not_portable_on_windows",
             ));
         }
+        Some(json!({
+            "roots": rows,
+            "same_filesystem_pairs": hardlink_pairs,
+        }))
     }
 }
 

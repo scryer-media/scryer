@@ -1314,6 +1314,8 @@ mod tests {
         ] {
             assert!(indexes.insert(added.to_string()), "{added} is new in 0354");
         }
+        // 0357 lets import history read the newest imports first.
+        assert!(indexes.insert("idx_imports_created_at".to_string()));
         // 0348 drops the operator-keep claim index, which nothing writes, and
         // renames the lifecycle rule tables' indexes.
         assert!(indexes.remove("idx_lifecycle_claims_live_operator_keep"));

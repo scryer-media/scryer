@@ -88,6 +88,29 @@ gql.sh <operation-file.graphql> [variables-json-file] > out.json
 - Write variables with `jq -n ... > vars.json`. Do not hand-edit JSON that
   contains secrets.
 
+### MCP instead of the runner
+
+Scryer also serves the same operations over MCP at `POST $SCRYER_URL/mcp`
+(streamable HTTP, stateless), with the same `Authorization: Bearer <api key>`
+header. Use it when the agent has an MCP client and no shell. The operator
+adds the server to the client's configuration, so the key stays out of the
+conversation.
+
+- `whoami` replaces the section 4 check.
+- `list_operations` (optionally one `skill`) names the operations;
+  `describe_operation` gives one operation's variables and their types.
+- `run_query` and `run_mutation` take `name`, `variables`, and `skill` when
+  two skills ship different text under one name. Only operations under a
+  skill's `operations/` directory run.
+- `read_diagnostics_section` and `search_service_logs` read diagnostics
+  without downloading the bundle.
+
+A skill step that says `gql.sh operations/X.graphql vars.json` is
+`run_query` or `run_mutation` with `name: "X"` and the same variables. A
+result over 32 KiB is refused with `reason` `HTTP_MCP_RESULT_TOO_LARGE`:
+narrow it with paging or filter variables. Every rule in section 8 applies
+unchanged.
+
 ## 6. Reading errors
 
 Branch on `extensions.code` and `extensions.reason`, never on message text.

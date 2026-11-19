@@ -1247,11 +1247,16 @@ impl ImportRepository for ImportStore {
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>> {
         fetch_imports(
             self.datastore.read_exec(),
-            &format!("SELECT {IMPORT_COLUMNS} FROM imports ORDER BY created_at DESC LIMIT {{}}"),
+            &newest_imports_sql(),
             &[SqlArg::I64((limit as i64).clamp(1, 500))],
         )
         .await
     }
+}
+
+/// The newest imports first, served by `idx_imports_created_at`.
+fn newest_imports_sql() -> String {
+    format!("SELECT {IMPORT_COLUMNS} FROM imports ORDER BY created_at DESC LIMIT {{}}")
 }
 
 fn manual_import_selection_from_rows(
@@ -2133,5 +2138,36 @@ mod tests {
             .await
             .expect("batched read");
         assert!(absent.is_empty());
+    }
+
+    /// Import history pages the newest imports through the creation-time
+    /// index, without sorting the whole table.
+    #[tokio::test]
+    async fn newest_imports_are_read_through_the_creation_time_index() {
+        let store = store().await;
+        let migration =
+            include_str!("../../../../scryer/src/db/migrations/0357_imports_created_at_index.sql");
+        SqlRuntime::execute(store.datastore.read_exec(), migration, &[])
+            .await
+            .expect("index migration should apply");
+        let plan = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            &format!("EXPLAIN QUERY PLAN {}", newest_imports_sql()),
+            &[SqlArg::I64(25)],
+        )
+        .await
+        .expect("query plan should read")
+        .iter()
+        .map(|row| row.text("detail").expect("plan detail"))
+        .collect::<Vec<_>>();
+        assert!(
+            plan.iter()
+                .any(|line| line == "SCAN imports USING INDEX idx_imports_created_at"),
+            "the newest imports must be read through the index: {plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "the imports must not be sorted: {plan:#?}"
+        );
     }
 }

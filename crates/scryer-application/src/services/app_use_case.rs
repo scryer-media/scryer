@@ -718,44 +718,37 @@ impl AppUseCase {
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
         let records = self.services.workflow.imports.list_imports(limit).await?;
-        let mut title_library_cache = std::collections::HashMap::<String, Option<String>>::new();
-        let mut visible = Vec::new();
-        for record in records {
-            let title_id = record
-                .result_json
-                .as_deref()
-                .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
-                .and_then(|result| result.title_id)
-                .or_else(|| {
-                    serde_json::from_str::<crate::ManualImportRequestPayload>(&record.payload_json)
-                        .ok()
-                        .and_then(|payload| payload.title_id)
-                });
-            let allowed = if let Some(title_id) = title_id {
-                let library_id = if let Some(cached) = title_library_cache.get(&title_id) {
-                    cached.clone()
-                } else {
-                    let library_id = self
-                        .services
-                        .catalog
-                        .titles
-                        .get_by_id(&title_id)
-                        .await?
-                        .map(|title| title.library_id);
-                    title_library_cache.insert(title_id.clone(), library_id.clone());
-                    library_id
-                };
-                library_id
+        let title_ids = records
+            .iter()
+            .map(import_record_title_id)
+            .collect::<Vec<_>>();
+        let mut distinct = title_ids.iter().flatten().cloned().collect::<Vec<_>>();
+        distinct.sort();
+        distinct.dedup();
+        // One read for every title the page names; a title that no longer
+        // exists has no library and its imports stay hidden.
+        let library_by_title = if distinct.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            self.services
+                .catalog
+                .titles
+                .list_library_ids_for_titles(&distinct)
+                .await?
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        Ok(records
+            .into_iter()
+            .zip(title_ids)
+            .filter(|(_, title_id)| {
+                title_id
                     .as_ref()
+                    .and_then(|title_id| library_by_title.get(title_id))
                     .is_some_and(|library_id| allowed_library_ids.contains(library_id))
-            } else {
-                false
-            };
-            if allowed {
-                visible.push(record);
-            }
-        }
-        Ok(visible)
+            })
+            .map(|(record, _)| record)
+            .collect())
     }
 
     async fn require_privileged_access_for_title(
@@ -1699,6 +1692,21 @@ impl AppUseCase {
             .unwrap()
             .clone()
     }
+}
+
+/// The title an import belongs to: the one its result names, else the one a
+/// manual import request named.
+pub(crate) fn import_record_title_id(record: &ImportRecord) -> Option<String> {
+    record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
+        .and_then(|result| result.title_id)
+        .or_else(|| {
+            serde_json::from_str::<crate::ManualImportRequestPayload>(&record.payload_json)
+                .ok()
+                .and_then(|payload| payload.title_id)
+        })
 }
 
 fn should_invalidate_wanted_projection(payload: &scryer_domain::DomainEventPayload) -> bool {
