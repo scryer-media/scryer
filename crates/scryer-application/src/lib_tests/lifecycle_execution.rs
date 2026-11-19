@@ -1466,6 +1466,46 @@ async fn active_playback_blocks_every_due_action() {
     );
 }
 
+/// A pass that finds a candidate still held by the same safety check writes
+/// nothing for it: no state change, no new history entry. A hold for another
+/// reason is still written.
+#[tokio::test]
+async fn a_second_pass_under_the_same_safety_hold_writes_nothing() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(1)));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Lantern Cove", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    let before = fixture.evaluation.all_candidates().await;
+    assert_eq!(before[0].state_reason, execution_reason::PLAYBACK_HOLD);
+    let runs_before = fixture.evaluation.all_action_runs().await;
+
+    fixture.evaluation.begin_next_evaluation().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "examined again: {report:?}");
+    assert_eq!(report.executed, 0);
+    let after = fixture.evaluation.all_candidates().await;
+    assert_eq!(after[0].state, LifecycleCandidateState::Blocked);
+    assert_eq!(after[0].state_reason, execution_reason::PLAYBACK_HOLD);
+    assert_eq!(
+        after[0].updated_at, before[0].updated_at,
+        "already held for it: nothing is written"
+    );
+    assert_eq!(
+        fixture.evaluation.all_action_runs().await.len(),
+        runs_before.len(),
+        "no new history entry"
+    );
+}
+
 #[tokio::test]
 async fn an_unreachable_media_server_fails_closed() {
     let fixture = execution_app(Some(PlaybackProbeStatus::Unreachable(

@@ -8,6 +8,7 @@ pub(super) type OneshotGate = (
 
 #[derive(Clone)]
 pub(super) struct MockReleaseAttemptRecord {
+    pub(super) id: String,
     pub(super) title_id: Option<String>,
     pub(super) source_hint: Option<String>,
     pub(super) source_title: Option<String>,
@@ -42,6 +43,7 @@ impl ReleaseAttemptRepository for MockReleaseAttemptRepo {
         source_password: Option<String>,
     ) -> AppResult<()> {
         self.attempts.lock().await.push(MockReleaseAttemptRecord {
+            id: scryer_domain::Id::new().0,
             title_id,
             source_hint,
             source_title,
@@ -50,6 +52,46 @@ impl ReleaseAttemptRepository for MockReleaseAttemptRepo {
             source_password,
             attempted_at: Utc::now().to_rfc3339(),
         });
+        Ok(())
+    }
+
+    async fn begin_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<Option<String>> {
+        let id = scryer_domain::Id::new().0;
+        self.attempts.lock().await.push(MockReleaseAttemptRecord {
+            id: id.clone(),
+            title_id,
+            source_hint: crate::url_redaction::redact_optional_url_credentials(source_hint),
+            source_title,
+            outcome: ReleaseDownloadAttemptOutcome::Pending,
+            error_message: None,
+            source_password,
+            attempted_at: Utc::now().to_rfc3339(),
+        });
+        Ok(Some(id))
+    }
+
+    async fn settle_release_attempt(
+        &self,
+        attempt_id: &str,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+    ) -> AppResult<()> {
+        if let Some(attempt) = self
+            .attempts
+            .lock()
+            .await
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id)
+        {
+            attempt.outcome = outcome;
+            attempt.error_message = error_message;
+        }
         Ok(())
     }
 

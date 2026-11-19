@@ -2282,19 +2282,10 @@ async fn begin_background_refresh_probe(
             && probe.probe_signature_value.as_deref() == Some(value.as_str())
     });
 
+    // An unchanged folder has nothing to record: the stored signature already
+    // says so, and nothing reads `last_probed_at` to decide anything, so a
+    // refresh of an unchanged library writes no row.
     if unchanged {
-        app.services
-            .library
-            .library_probe_signatures
-            .upsert_probe_signature(&LibraryProbeSignature {
-                title_id: title_id.to_string(),
-                path: path_string,
-                probe_signature_scheme: Some(scheme),
-                probe_signature_value: Some(value),
-                last_probed_at: Some(now),
-                last_changed_at: stored_probe.and_then(|probe| probe.last_changed_at),
-            })
-            .await?;
         return Ok(None);
     }
 

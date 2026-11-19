@@ -4949,6 +4949,23 @@ pub mod test_nulls {
         ) -> AppResult<()> {
             Ok(())
         }
+        async fn begin_release_attempt(
+            &self,
+            _: Option<String>,
+            _: Option<String>,
+            _: Option<String>,
+            _: Option<String>,
+        ) -> AppResult<Option<String>> {
+            Ok(None)
+        }
+        async fn settle_release_attempt(
+            &self,
+            _: &str,
+            _: ReleaseDownloadAttemptOutcome,
+            _: Option<String>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
         async fn list_failed_release_signatures(
             &self,
             _: usize,

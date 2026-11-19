@@ -1402,7 +1402,16 @@ impl AppUseCase {
                 self.lifecycle_read_ahead_started_delete_steps(candidates, &mut started_reads)
                     .await;
             }
+            // Repeat matches are recorded for the whole page in one
+            // transaction once every subject of it is reconciled, and before
+            // any title's cross-level markers are written. Each pending write
+            // remembers its title and, when it paired, its decision, so a
+            // write that fails still counts against that subject alone.
+            let mut page_matches: Vec<crate::LifecycleCandidateMatch> = Vec::new();
+            let mut page_match_owners: Vec<(usize, Option<usize>)> = Vec::new();
+            let mut page_titles = Vec::with_capacity(prepared.len());
             for (title, subjects, title_input, people, watch, claims, series_movies) in prepared {
+                let title_index = page_titles.len();
                 let mut decisions: Vec<LifecycleSubjectDecision> = Vec::new();
                 // A subject that failed or lost a write this pass is missing
                 // from `decisions`, so its partners cannot be judged free of
@@ -1430,10 +1439,19 @@ impl AppUseCase {
                             &mut started_reads,
                             &mut counts,
                             &mut incomplete,
+                            &mut page_matches,
                         )
                         .await
                     {
-                        Ok(decision) => decisions.extend(decision),
+                        Ok(decision) => {
+                            if page_matches.len() > page_match_owners.len() {
+                                page_match_owners.push((
+                                    title_index,
+                                    decision.as_ref().map(|_| decisions.len()),
+                                ));
+                            }
+                            decisions.extend(decision);
+                        }
                         Err(error) => {
                             // One subject's write or evaluation failing is
                             // bounded to that subject: the rule keeps going
@@ -1449,6 +1467,33 @@ impl AppUseCase {
                             );
                         }
                     }
+                }
+                page_titles.push((title, decisions, incomplete, HashSet::new()));
+            }
+            for (title_index, decision_index) in self
+                .record_lifecycle_page_matches(&page_matches, &page_match_owners)
+                .await
+            {
+                let (title, _, incomplete, dropped) = &mut page_titles[title_index];
+                if let Some(decision_index) = decision_index {
+                    dropped.insert(decision_index);
+                }
+                *incomplete = true;
+                counts.errors += 1;
+                warn!(
+                    rule_set_id = rule_set.id.as_str(),
+                    title_id = title.id.as_str(),
+                    "lifecycle evaluation failed for one subject"
+                );
+            }
+            for (title, mut decisions, incomplete, dropped) in page_titles {
+                if !dropped.is_empty() {
+                    let mut index = 0;
+                    decisions.retain(|_| {
+                        let keep = !dropped.contains(&index);
+                        index += 1;
+                        keep
+                    });
                 }
                 if cross_level
                     && let Err(error) = self
@@ -1612,6 +1657,49 @@ impl AppUseCase {
 
     /// Reconcile one subject. Every branch is RFC 7.5 stated literally.
     ///
+    /// Record one page's repeat matches in one transaction. When the batch
+    /// fails, each row is recorded on its own, as before batching, and the
+    /// owners (title index, decision index) of the rows that still fail are
+    /// returned so each counts against its own subject.
+    async fn record_lifecycle_page_matches(
+        &self,
+        matches: &[crate::LifecycleCandidateMatch],
+        owners: &[(usize, Option<usize>)],
+    ) -> Vec<(usize, Option<usize>)> {
+        if matches.is_empty() {
+            return Vec::new();
+        }
+        let candidates = &self.services.customization.lifecycle_evaluation;
+        let Err(error) = candidates.record_candidate_matches(matches).await else {
+            return Vec::new();
+        };
+        debug!(
+            error = %error,
+            rows = matches.len(),
+            "could not record a page of lifecycle matches together; recording them one at a time"
+        );
+        let mut failed = Vec::new();
+        for (candidate_match, owner) in matches.iter().zip(owners) {
+            if let Err(error) = candidates
+                .record_candidate_match(
+                    &candidate_match.id,
+                    candidate_match.last_matched_at,
+                    &candidate_match.reason_codes,
+                    candidate_match.updated_at,
+                )
+                .await
+            {
+                debug!(
+                    error = %error,
+                    candidate_id = candidate_match.id.as_str(),
+                    "could not record a lifecycle match"
+                );
+                failed.push(*owner);
+            }
+        }
+        failed
+    }
+
     /// With `track` set, returns what was decided for the subject and its
     /// live candidate, for [`Self::mark_cross_level_conflicts`]. A subject
     /// this pass cannot decide (unknown, an error, or a leased candidate) is
@@ -1640,6 +1728,7 @@ impl AppUseCase {
         started_reads: &mut super::action_execution::StartedDeleteReads,
         counts: &mut RuleCounts,
         incomplete: &mut bool,
+        matches: &mut Vec<crate::LifecycleCandidateMatch>,
     ) -> AppResult<Option<LifecycleSubjectDecision>> {
         let rule_set_id = detail.rule_set.id.as_str();
         let candidates = &self.services.customization.lifecycle_evaluation;
@@ -1915,15 +2004,23 @@ impl AppUseCase {
                     Some(candidate) => {
                         // Continuing membership: the clock keeps running from
                         // the original first match, which is why
-                        // `first_matched_at` is not a parameter here.
-                        candidates
-                            .record_candidate_match(
-                                &candidate.id,
-                                evaluation_time,
-                                &decision.reason_codes,
-                                evaluation_time,
-                            )
-                            .await?;
+                        // `first_matched_at` is not a parameter here. The
+                        // write joins the page's batch, recorded before the
+                        // title's cross-level markers; a row that already
+                        // holds these exact values is not written again.
+                        let unchanged = candidate.last_matched_at == evaluation_time
+                            && candidate.last_evaluated_at == evaluation_time
+                            && candidate.updated_at == evaluation_time
+                            && candidate.held_since.is_none()
+                            && candidate.reason_codes == decision.reason_codes;
+                        if !unchanged {
+                            matches.push(crate::LifecycleCandidateMatch {
+                                id: candidate.id.clone(),
+                                last_matched_at: evaluation_time,
+                                reason_codes: decision.reason_codes.clone(),
+                                updated_at: evaluation_time,
+                            });
+                        }
                         return Ok(tracked_decision(
                             track,
                             subject,

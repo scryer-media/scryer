@@ -1177,7 +1177,11 @@ async fn process_tracked_download_snapshot(
         let id = tracked_download_id_for_item(item);
         seen_ids.insert(id.clone());
 
-        let Some(outcome) = runtime.tracker.track(app, item.clone()).await else {
+        let Some(outcome) = runtime
+            .tracker
+            .track_with_origin(app, item.clone(), enrichment.origin_is_unknown(item))
+            .await
+        else {
             continue;
         };
         let download_id = outcome.download_id;

@@ -361,6 +361,77 @@ pub(crate) async fn persist_ignored_library_scan_item(
     persist_library_scan_unmatched_item(app, &item).await
 }
 
+/// Whether writing `item` over `stored` would change anything but the scan
+/// session and the timestamps, given how the upsert merges a row: a missing
+/// size keeps the stored one, and an ignored row stays ignored.
+fn unmatched_item_write_changes_row(
+    stored: &LibraryScanUnmatchedItem,
+    item: &LibraryScanUnmatchedItem,
+) -> bool {
+    let status = if stored.status == PendingImportStatus::Ignored
+        && item.status == PendingImportStatus::Pending
+    {
+        &stored.status
+    } else {
+        &item.status
+    };
+    stored.library_id != item.library_id
+        || stored.facet != item.facet
+        || stored.title_id != item.title_id
+        || stored.scan_root != item.scan_root
+        || stored.item_path != item.item_path
+        || stored.display_name != item.display_name
+        || stored.query != item.query
+        || stored.year_hint != item.year_hint
+        || stored.reason_code != item.reason_code
+        || stored.error_message != item.error_message
+        || stored.search_attempts != item.search_attempts
+        || stored.status != *status
+        || item
+            .size_bytes
+            .is_some_and(|size| stored.size_bytes != Some(size))
+}
+
+/// Record one scan root's rows together, skipping each row that already holds
+/// what would be written. A row that is unchanged keeps its scan session and
+/// `updated_at`. When the stored rows cannot be read, every row is written.
+pub(crate) async fn persist_changed_library_scan_unmatched_items(
+    app: &AppUseCase,
+    items: Vec<LibraryScanUnmatchedItem>,
+) -> AppResult<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let repo = &app.services.library.library_scan_unmatched_items;
+    let ids: Vec<String> = items.iter().map(|item| item.id.clone()).collect();
+    let changed: Vec<LibraryScanUnmatchedItem> =
+        match repo.get_library_scan_unmatched_items(&ids).await {
+            Ok(stored) => {
+                let stored: HashMap<String, LibraryScanUnmatchedItem> = stored
+                    .into_iter()
+                    .map(|item| (item.id.clone(), item))
+                    .collect();
+                items
+                    .into_iter()
+                    .filter(|item| {
+                        stored
+                            .get(&item.id)
+                            .is_none_or(|row| unmatched_item_write_changes_row(row, item))
+                    })
+                    .collect()
+            }
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    rows = items.len(),
+                    "could not read stored scan rows; writing all of them"
+                );
+                items
+            }
+        };
+    repo.upsert_library_scan_unmatched_items(&changed).await
+}
+
 pub(crate) async fn clear_library_scan_unmatched_item(
     app: &AppUseCase,
     facet: &MediaFacet,

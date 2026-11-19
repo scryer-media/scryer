@@ -1492,15 +1492,20 @@ impl AppUseCase {
             return Some(due);
         }
 
-        let pending_waiting = self
+        // A held release changes only when its delay runs out; until then a
+        // replay re-parks it as it was. Every cycle the feed cadence admits
+        // still replays every waiting and standby row, so a row is never
+        // stranded: between those cycles only an elapsed delay is a reason to
+        // run.
+        let now = self.runtime.environment.now().to_rfc3339();
+        let delay_elapsed = self
             .services
             .workflow
             .pending_releases
-            .list_waiting_pending_releases()
+            .has_expired_pending_releases(&now)
             .await
-            .map(|pending| !pending.is_empty())
             .unwrap_or(true);
-        if pending_waiting {
+        if delay_elapsed {
             return Some(due);
         }
         let age_unknown_pending = self
@@ -1563,9 +1568,8 @@ impl AppUseCase {
             .services
             .workflow
             .pending_releases
-            .list_waiting_pending_releases()
+            .has_waiting_pending_releases()
             .await
-            .map(|pending| !pending.is_empty())
             .unwrap_or(true);
         if waiting {
             return true;

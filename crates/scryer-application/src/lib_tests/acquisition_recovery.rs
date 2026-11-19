@@ -10036,6 +10036,77 @@ async fn a_cycle_with_nothing_due_and_nothing_pending_does_no_work() {
     );
 }
 
+/// Between the cycles the feed cadence admits, a held release is a reason to
+/// run only once its delay has run out. A row still inside its delay, or one
+/// on standby, would be re-parked exactly as it is, so it polls nothing.
+#[tokio::test]
+async fn a_held_release_inside_its_delay_does_not_open_a_cycle_early() {
+    let searches = Arc::new(Mutex::new(Vec::new()));
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        pending_releases.clone(),
+        wanted_items.clone(),
+        Arc::new(DeferredRssIndexerClient {
+            searches: searches.clone(),
+        }),
+    );
+    let (title, wanted_id) =
+        seed_movie_wanted_for_acquisition(&app, &user, &wanted_items, "Harbor Lights", 2031).await;
+    let future = (Utc::now() + chrono::Duration::hours(6)).to_rfc3339();
+
+    let mut waiting = pending_movie_release(
+        &wanted_id,
+        &title,
+        "Harbor.Lights.2031.1080p.WEB-DL-GRP",
+        PendingReleaseStatus::Waiting,
+    );
+    waiting.indexer_source = Some("nzbgeek".to_string());
+    waiting.delay_until = future.clone();
+    let waiting_id = waiting.id.clone();
+    pending_releases
+        .insert_pending_release(&waiting)
+        .await
+        .expect("seed waiting release");
+    let mut standby = pending_movie_release(
+        &wanted_id,
+        &title,
+        "Harbor.Lights.2031.720p.WEB-DL-GRP",
+        PendingReleaseStatus::Standby,
+    );
+    standby.indexer_source = Some("nzbgeek".to_string());
+    pending_releases
+        .insert_pending_release(&standby)
+        .await
+        .expect("seed standby release");
+
+    assert!(
+        !app.rss_sync_tick_has_work().await,
+        "rows still inside their delay must not admit the tick"
+    );
+    app.run_scheduled_rss_sync().await.expect("run RSS sync");
+    assert!(
+        searches.lock().await.is_empty(),
+        "rows still inside their delay must not poll a feed that is not due"
+    );
+
+    // Once the delay runs out the row is due, exactly as before.
+    let elapsed = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    pending_releases
+        .update_pending_release_delay_until(&waiting_id, &elapsed)
+        .await
+        .expect("delay elapses");
+    assert!(app.rss_sync_tick_has_work().await);
+    app.run_scheduled_rss_sync().await.expect("run RSS sync");
+    assert_eq!(
+        searches.lock().await.len(),
+        1,
+        "an elapsed delay re-evaluates the held release against a fresh feed"
+    );
+}
+
 #[tokio::test]
 async fn scheduled_rss_fetches_before_deciding_due_pending_releases() {
     let pending_title = "Scheduled.Pending.Movie.2024.720p.WEB-DL-GRP";
