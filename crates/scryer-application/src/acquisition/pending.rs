@@ -39,8 +39,10 @@ pub(crate) enum PendingGrabOutcome {
     /// grabbed for the same scope is equal or better, or is a worse one the
     /// client is still downloading, which no automatic grab is sent beside.
     /// Nothing is wrong with the release itself: the standby walk keeps it for
-    /// the queued release's failure, while the delay-expiry promoter treats it
-    /// as `Rejected`.
+    /// the queued release's failure. The delay-expiry promoter keeps it
+    /// untouched while a worse release is still downloading
+    /// (`QueuedItemBlocksUpgrade`), and treats an equal or better queued
+    /// release (`QueuedEqualOrBetter`, `QueuedSameRelease`) as `Rejected`.
     QueueCovered {
         queued_release: String,
         reason: crate::admission::AdmissionRejectionReason,
@@ -702,6 +704,22 @@ impl AppUseCase {
                             .await;
                         grabbed = true;
                         grabbed_count += 1;
+                        break;
+                    }
+                    Ok(PendingGrabOutcome::QueueCovered {
+                        reason:
+                            crate::admission::AdmissionRejectionReason::QueuedItemBlocksUpgrade {
+                                ..
+                            },
+                        ..
+                    }) => {
+                        // A worse release is still downloading for the scope.
+                        // That is no verdict on this one: it waits for the
+                        // download to settle, untouched, like a deferral.
+                        info!(
+                            release = pr.release_title.as_str(),
+                            "pending release: a queued download still blocks the upgrade, keeping release pending"
+                        );
                         break;
                     }
                     Ok(PendingGrabOutcome::Rejected | PendingGrabOutcome::QueueCovered { .. }) => {

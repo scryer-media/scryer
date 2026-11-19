@@ -441,6 +441,45 @@ struct ImportRejectionContext<'a> {
     episode_artifacts: &'a [scryer_domain::Episode],
 }
 
+/// A refusal that would block the release because it lost to the library,
+/// re-read against the files this download already placed.
+///
+/// Losing to a file an earlier pass of this same download placed says nothing
+/// against the release: it already imported. That refusal becomes the
+/// placed-by-this-download skip, with no block on the name. Every other refusal
+/// passes through unchanged, and only a refusal that carries a block reads the
+/// download's placed files.
+async fn refusal_against_own_placed_file(
+    app: &AppUseCase,
+    import_id: &str,
+    completed: &CompletedDownload,
+    source_video: &Path,
+    scope_label: &str,
+    better_library_copy: Option<&crate::import_decide::BetterLibraryCopy>,
+    refusal: (
+        crate::post_download_gate::ImportedFileRejection,
+        crate::import_decide::RejectionDisposition,
+        Option<crate::import_decide::BlocklistDirective>,
+    ),
+) -> AppResult<(
+    crate::post_download_gate::ImportedFileRejection,
+    crate::import_decide::RejectionDisposition,
+    Option<crate::import_decide::BlocklistDirective>,
+)> {
+    let (Some(copy), Some(_)) = (better_library_copy, refusal.2.as_ref()) else {
+        return Ok(refusal);
+    };
+    let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+    if !placed_files.placed_incumbent(Some(completed), source_video, &copy.file_id) {
+        return Ok(refusal);
+    }
+    Ok((
+        crate::import_decide::placed_by_this_download_rejection(scope_label, &copy.path),
+        crate::import_decide::RejectionDisposition::Skip,
+        None,
+    ))
+}
+
 struct CompletedImportTarget {
     title: scryer_domain::Title,
     is_series: bool,
@@ -2574,9 +2613,19 @@ async fn import_movie_download(
         crate::import_decide::ImportDecisionOutcome::Reject {
             rejection,
             disposition,
+            better_library_copy,
             blocklist,
-            ..
         } => {
+            let (rejection, disposition, blocklist) = refusal_against_own_placed_file(
+                app,
+                import_id,
+                completed,
+                &source_video,
+                "this title",
+                better_library_copy.as_ref(),
+                (rejection, disposition, blocklist),
+            )
+            .await?;
             return carry_out_import_rejection(
                 app,
                 actor,
@@ -3481,9 +3530,19 @@ async fn import_series_movie_download(
         crate::import_decide::ImportDecisionOutcome::Reject {
             rejection,
             disposition,
+            better_library_copy,
             blocklist,
-            ..
         } => {
+            let (rejection, disposition, blocklist) = refusal_against_own_placed_file(
+                app,
+                import_id,
+                completed,
+                &source_video,
+                "this series-movie link",
+                better_library_copy.as_ref(),
+                (rejection, disposition, blocklist),
+            )
+            .await?;
             return carry_out_import_rejection(
                 app,
                 actor,

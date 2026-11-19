@@ -1888,12 +1888,19 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             Box::pin(async move {
                 let id = transition.download_id.to_string();
                 super::import_store::guard_import_retry_tx(tx, &id).await?;
-                let previous = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT tracked_state FROM download_identity_states WHERE canonical_download_id = {} ORDER BY updated_at DESC, id DESC LIMIT 1",
-                    &[SqlArg::Text(id.clone())]).await?
-                    .map(|row| row.text("tracked_state")).transpose()?;
+                let previous_row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT tracked_state, reason FROM download_identity_states WHERE canonical_download_id = {} ORDER BY updated_at DESC, id DESC LIMIT 1",
+                    &[SqlArg::Text(id.clone())]).await?;
+                let previous = previous_row.as_ref().map(|row| row.text("tracked_state")).transpose()?;
+                let previous_reason = previous_row.as_ref().map(|row| row.opt_text("reason")).transpose()?.flatten();
+                // An `import_pending` row that only counts stalled passes is not
+                // an import outcome, so it may still go missing.
+                let counts_stalled_passes = transition.state == TrackedDownloadState::Missing
+                    && previous.as_deref() == Some("import_pending")
+                    && previous_reason.as_deref() == Some(scryer_application::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
                 if previous != transition.expected_state
-                    || previous.as_deref().is_some_and(|state| !matches!(state, "missing" | "downloading")) {
+                    || (previous.as_deref().is_some_and(|state| !matches!(state, "missing" | "downloading"))
+                        && !counts_stalled_passes) {
                     return Ok(false);
                 }
                 let submission = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
@@ -5965,6 +5972,37 @@ mod seed_goal_tests {
                 Some("missing")
             );
         }
+
+        // A row that only counts stalled import passes is no outcome: the job
+        // can still go missing from it, though it never reads as downloading.
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &transition.identity,
+                Some(&transition.source),
+                "import_pending",
+                Some(scryer_application::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON),
+                Some("2"),
+            )
+            .await
+            .unwrap();
+        transition.expected_state = Some("import_pending".into());
+        transition.scopes.clear();
+        assert!(!store.transition_client_presence(&transition).await.unwrap());
+        transition.state = TrackedDownloadState::Missing;
+        assert!(store.transition_client_presence(&transition).await.unwrap());
+        assert_eq!(
+            store
+                .get_identity_tracked_state_for_download(
+                    Some(&id),
+                    &transition.identity,
+                    Some(&transition.source)
+                )
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("missing")
+        );
     }
 
     #[tokio::test]

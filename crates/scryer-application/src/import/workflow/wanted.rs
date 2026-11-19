@@ -690,6 +690,44 @@ async fn execute_resolved_episode_import(
             better_library_copy,
             blocklist,
         } => {
+            // Losing to a file an earlier pass of this same download placed
+            // says nothing against the release: it already imported. Settle it
+            // the way the admitted path does, never with a block on the name.
+            if blocklist.is_some()
+                && let Some(own) = better_library_copy.as_ref().and_then(|copy| {
+                    existing_incumbents.iter().find(|incumbent| {
+                        incumbent.media_file.id == copy.file_id
+                            && placed_files.placed_incumbent(
+                                completed,
+                                source_video,
+                                &incumbent.media_file.id,
+                            )
+                    })
+                })
+            {
+                let rejection = crate::import_decide::placed_by_this_download_rejection(
+                    "this episode",
+                    &own.media_file.file_path,
+                );
+                tracing::info!(
+                    title_id = %title.id,
+                    file_id = %own.media_file.id,
+                    source = %source_video.display(),
+                    "import source lost to a library file this download placed; leaving the library file in place"
+                );
+                let covers_every_target = target_episode_ids
+                    .iter()
+                    .all(|episode_id| own.episode_ids.contains(episode_id));
+                return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist: None,
+                    message: rejection.message,
+                    reason_code: Some(rejection.recycle_reason.to_string()),
+                    skip_reason: rejection.skip_reason,
+                    episode_ids: target_episode_ids.clone(),
+                    already_present_destination: covers_every_target
+                        .then(|| (own.media_file.file_path.clone(), own.media_file.id.clone())),
+                });
+            }
             tracing::info!(
                 title_id = %title.id,
                 code = rejection.recycle_reason,

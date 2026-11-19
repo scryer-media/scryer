@@ -418,12 +418,19 @@ async fn verify_import_outcome_with_mode(
             }
 
             // Retry reads the same evidence as the automatic import; its source
-            // units also carry what its artifacts recorded (see above).
-            if let Some(source_units_complete) = source_video_expected_units_are_complete(
-                &source_video_units,
-                &successful_units,
-                &expected_episode_units,
-            ) {
+            // units also carry what its artifacts recorded (see above). With no
+            // video left in the folder its units are those artifacts alone, and
+            // a retry interrupted after moving part of the pack must not let
+            // them narrow the advertised set.
+            let source_units_can_narrow =
+                !matches!(mode, ImportVerificationMode::Retry) || current_visible_files > 0;
+            if source_units_can_narrow
+                && let Some(source_units_complete) = source_video_expected_units_are_complete(
+                    &source_video_units,
+                    &successful_units,
+                    &expected_episode_units,
+                )
+            {
                 // Complete for the videos visible in the download folder, but
                 // only every expected unit imported is proof of the whole.
                 return Ok(if !source_units_complete {

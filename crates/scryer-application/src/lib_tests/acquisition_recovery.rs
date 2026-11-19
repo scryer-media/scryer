@@ -969,7 +969,7 @@ async fn an_upgrade_waits_while_the_queued_movie_download_is_live() {
                     && reason.reason_code()
                         == Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
         ),
-        "the delay-expiry lane settles the row rather than replaying it: {outcome:?}"
+        "admission refuses the upgrade with the coded queue reason: {outcome:?}"
     );
     assert!(client.submitted_release_titles.lock().await.is_empty());
     assert!(
@@ -986,6 +986,42 @@ async fn an_upgrade_waits_while_the_queued_movie_download_is_live() {
             .status,
         PendingReleaseStatus::Standby
     );
+
+    // The same upgrade parked behind a delay that has now elapsed waits for
+    // the live download instead of being expired, and the pass writes nothing.
+    let mut delayed =
+        pending_movie_release(&wanted.id, &title, upgrade, PendingReleaseStatus::Waiting);
+    delayed.id = "delayed-upgrade".into();
+    delayed.release_url = Some("https://example.invalid/delayed-upgrade.nzb".into());
+    delayed.release_guid = Some("delayed-upgrade-guid".into());
+    delayed.release_identity = "delayed-upgrade-guid".into();
+    pending
+        .insert_pending_release(&delayed)
+        .await
+        .expect("seed delayed row");
+    pending.reset_status_writes();
+    assert_eq!(app.process_expired_pending_releases().await.unwrap(), 0);
+    assert!(client.submitted_release_titles.lock().await.is_empty());
+    assert!(
+        pending.status_writes().is_empty(),
+        "a delayed upgrade blocked by a live download writes nothing: {:?}",
+        pending.status_writes()
+    );
+    assert_eq!(
+        pending
+            .get_pending_release(&delayed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        PendingReleaseStatus::Waiting,
+        "the delayed upgrade keeps waiting for the live download"
+    );
+    // Retire the delayed row so the rest of the test sees only the standby one.
+    pending
+        .expire_pending_release(&delayed.id, "test_cleanup")
+        .await
+        .expect("retire the delayed row");
 
     // The job finishes and waits for import: it no longer blocks submission,
     // so admission lets the strict upgrade through and it is grabbed.

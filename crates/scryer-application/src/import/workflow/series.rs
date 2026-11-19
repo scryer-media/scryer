@@ -434,6 +434,12 @@ pub(super) struct DownloadBlocklistLedger {
     /// Reason text from an imported-and-blocklisted member, used only when no
     /// member was refused outright.
     import_reason: Option<String>,
+    /// Reason from a member that lost to the library. It blocks the name only
+    /// when the download imported nothing: a pack that placed some of its
+    /// episodes is not a release that would only be fetched and refused again.
+    lost_to_library_reason: Option<String>,
+    /// Whether any member of the download imported.
+    imported_any: bool,
     episode_ids: Vec<String>,
     /// The members whose import was *refused* — the only scopes a reopen may
     /// touch. `episode_ids` above is the union the blocklist row is attributed
@@ -495,6 +501,25 @@ impl DownloadBlocklistLedger {
         }
     }
 
+    /// A member lost to the library and earned a block on the name, which
+    /// stands only if no member of the download imports.
+    fn record_lost_to_library(
+        &mut self,
+        release_title: &str,
+        source_path: &Path,
+        episode_ids: &[String],
+        reason: String,
+    ) {
+        self.note_release(release_title, source_path, episode_ids);
+        if self.lost_to_library_reason.is_none() {
+            self.lost_to_library_reason = Some(reason);
+        }
+    }
+
+    fn note_imported(&mut self) {
+        self.imported_any = true;
+    }
+
     /// The one write this download earned, or `None` if it earned none.
     ///
     /// Separated from carrying it out so the accumulation — one release, one
@@ -502,11 +527,19 @@ impl DownloadBlocklistLedger {
     fn planned_write(&self) -> Option<PlannedBlocklistWrite<'_>> {
         let release_title = self.release_title.as_deref()?;
         let source_path = self.source_path.as_deref()?;
+        let import_reason = self.import_reason.as_deref().or_else(|| {
+            (!self.imported_any)
+                .then_some(self.lost_to_library_reason.as_deref())
+                .flatten()
+        });
+        if self.rejection.is_none() && import_reason.is_none() {
+            return None;
+        }
         Some(PlannedBlocklistWrite {
             release_title,
             source_path,
             rejection: self.rejection.as_ref(),
-            import_reason: self.import_reason.as_deref(),
+            import_reason,
             attribution: crate::post_download_gate::BlocklistAttribution {
                 episode_ids: &self.episode_ids,
                 collection_id: self.collection_id.as_deref(),
@@ -1978,6 +2011,7 @@ async fn import_single_episode_file(
             source_cleanup,
             ..
         } => {
+            blocklist_ledger.note_imported();
             // Imported, but the release lied about its quality: burn it so the
             // next upgrade search cannot re-grab the same lie. Recorded, not
             // written — one row per download, not one per member.
@@ -2063,9 +2097,9 @@ async fn import_single_episode_file(
             ..
         } => {
             // Lost to the library: block the name once for the download,
-            // recycling and reopening nothing.
+            // recycling and reopening nothing, unless another member imports.
             if let Some(directive) = blocklist {
-                blocklist_ledger.record_import_blocklist(
+                blocklist_ledger.record_lost_to_library(
                     &release_evidence
                         .release_title(Some(parse_video))
                         .unwrap_or_default(),
@@ -2129,9 +2163,9 @@ async fn import_single_episode_file(
             ..
         } => {
             // Lost to the library: block the name once for the download,
-            // recycling and reopening nothing.
+            // recycling and reopening nothing, unless another member imports.
             if let Some(directive) = blocklist {
-                blocklist_ledger.record_import_blocklist(
+                blocklist_ledger.record_lost_to_library(
                     &release_evidence
                         .release_title(Some(parse_video))
                         .unwrap_or_default(),

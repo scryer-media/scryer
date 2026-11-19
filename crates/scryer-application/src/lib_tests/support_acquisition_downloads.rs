@@ -1096,10 +1096,24 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             )
             .await?;
         let submission_state = self.get_tracked_state(&change.source).await?;
+        // Mirrors the store: a row that only counts stalled passes may go
+        // missing.
+        let counts_stalled_passes = change.state == scryer_domain::TrackedDownloadState::Missing
+            && previous.as_deref() == Some("import_pending")
+            && self
+                .get_identity_tracked_state_reason_for_download(
+                    Some(&change.download_id),
+                    &change.identity,
+                    Some(&change.source),
+                )
+                .await?
+                .as_deref()
+                == Some(crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
         if previous != change.expected_state
-            || previous
+            || (previous
                 .as_deref()
                 .is_some_and(|state| !matches!(state, "missing" | "downloading"))
+                && !counts_stalled_passes)
             || submission_state
                 .as_deref()
                 .is_some_and(|state| !matches!(state, "missing" | "downloading"))
@@ -1636,6 +1650,27 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             }
         }
         self.get_identity_tracked_state_detail(identity, source_identity)
+            .await
+    }
+
+    async fn get_identity_tracked_state_reason_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        identity: &DownloadSubmissionIdentity,
+        source_identity: Option<&ClientJobLocator>,
+    ) -> AppResult<Option<String>> {
+        // Keyed like the state and detail reads above, as the store is.
+        if let Some(download_id) = canonical_download_id {
+            let mut canonical_identity = identity.clone();
+            canonical_identity.download_id = Some(download_id.to_wire());
+            if let Some(reason) = self
+                .get_identity_tracked_state_reason(&canonical_identity, source_identity)
+                .await?
+            {
+                return Ok(Some(reason));
+            }
+        }
+        self.get_identity_tracked_state_reason(identity, source_identity)
             .await
     }
 

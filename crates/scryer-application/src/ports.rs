@@ -9060,6 +9060,12 @@ mod import_retry_locator {
 
 pub const IMPORT_RETRY_TRACKED_STATE_REASON: &str = "import_retry_recovery";
 
+/// Reason stored with an `import_pending` identity state whose detail holds
+/// the download's stalled-pass count, so the count survives a restart. Such a
+/// row records a counter, not an import outcome: a client that drops the job
+/// still makes it missing.
+pub const STALLED_IMPORT_PASSES_TRACKED_STATE_REASON: &str = "import_stalled_passes";
+
 /// Import payload key recording why an import holds its sources, beside the
 /// `archive_processing_pending` flag. It only ever annotates a hold.
 pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reason";

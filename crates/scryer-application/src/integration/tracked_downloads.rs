@@ -3261,7 +3261,8 @@ pub(crate) async fn import_blocked_reason_for_tracked(
 
 /// Reason stored with an `import_pending` identity state whose detail holds
 /// the download's stalled-pass count, so the count survives a restart.
-pub(crate) const STALLED_IMPORT_PASSES_REASON: &str = "import_stalled_passes";
+pub(crate) const STALLED_IMPORT_PASSES_REASON: &str =
+    crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON;
 
 /// Records the stalled-pass count of a download awaiting an automatic retry.
 /// Called only when a pass changed the count. Only the identity state row is

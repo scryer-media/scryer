@@ -6811,6 +6811,129 @@ async fn repeat_pass_keeps_a_library_file_this_download_placed_after_its_bytes_c
     );
 }
 
+/// A repeat pass of a grab whose own library file now outranks it (its row
+/// was rewritten to a better tier after the first pass) loses the comparison
+/// to a file this same download placed. That says nothing against the
+/// release, which already imported: the pass settles as placed by this
+/// download and blocks nothing.
+#[tokio::test]
+async fn repeat_pass_losing_to_its_own_placed_file_blocks_nothing() {
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir: _library_dir,
+            ..
+        },
+        submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        title_name: "Lantern Cove".to_string(),
+        media_files: media_files.clone(),
+        ..Default::default()
+    })
+    .await;
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(source.path(), "Lantern.Cove.S01E01.720p.WEB-DL.mkv");
+    // Scryer's own automatic grab, so a lost comparison would block it.
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "own-file-outranks-1",
+        "Lantern.Cove.S01E01.720p.WEB-DL",
+        SubmissionScope::Episode {
+            episode_id: episode.id.clone(),
+        },
+    )
+    .await;
+    let completed = series_pack_completed_download(
+        "own-file-outranks-1",
+        &title.id,
+        "Lantern.Cove.S01E01.720p.WEB-DL",
+        source.path(),
+    );
+    let first = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("first import should run")
+    };
+    assert_eq!(
+        first.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{first:?}"
+    );
+    let library_path = import_completed_events_for_title(&app, &title.id).await[0].media_updates[0]
+        .path
+        .clone();
+
+    // The library copy is rewritten outside the import, and its row now
+    // describes a better tier than the release this download carries.
+    let rewritten = format!("{library_path}.retag");
+    std::fs::copy(&library_path, &rewritten).expect("copy library file for retagging");
+    stamp_fixture_identity(Path::new(&rewritten), "retagged-by-post-processing");
+    std::fs::rename(&rewritten, &library_path).expect("rename retagged file over library file");
+    for file in media_files.store.lock().await.iter_mut() {
+        file.grabbed_release_title = Some("Lantern.Cove.S01E01.1080p.WEB-DL".to_string());
+        file.quality_label = Some("1080p".to_string());
+        file.resolution = Some("1080p".to_string());
+        file.video_width = Some(1920);
+        file.video_height = Some(1080);
+    }
+
+    let repeat = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("repeat import should run")
+    };
+    assert_eq!(
+        repeat.decision,
+        scryer_domain::ImportDecision::Skipped,
+        "{repeat:?}"
+    );
+    assert!(!repeat.release_burned, "{repeat:?}");
+    let entries = app
+        .services
+        .workflow
+        .blocklist_repo
+        .list_for_title(&title.id, 50)
+        .await
+        .expect("list title blocklist");
+    assert!(
+        entries.is_empty(),
+        "a release that lost only to its own placed file is never blocked: {entries:?}"
+    );
+    let artifacts = app
+        .services
+        .workflow
+        .import_artifacts
+        .list_by_source_identity(&ClientJobLocator::for_import_artifact(
+            Some(completed.client_id.as_str()),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        ))
+        .await
+        .expect("list import artifacts");
+    assert!(
+        artifacts
+            .iter()
+            .any(|artifact| artifact.reason_code.as_deref()
+                == Some(crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD)),
+        "{artifacts:?}"
+    );
+    assert_eq!(
+        import_completed_events_for_title(&app, &title.id)
+            .await
+            .len(),
+        1
+    );
+}
+
 /// Every regular file under `root`, at any depth.
 fn walk_files(root: &Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
@@ -7699,7 +7822,7 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
             panic!("native import fixture was rejected: {name}");
         };
         let mut catalog = serde_json::to_value(catalog).unwrap();
-        let mut rule_file = serde_json::to_value(
+        let rule_file = serde_json::to_value(
             imported
                 .rule_file_doc
                 .expect("canonical facts must reach import rules"),
@@ -7709,15 +7832,31 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         // Runtime instrumentation may vary between probes; metadata may not.
         catalog["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
         imported["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
-        rule_file["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
         assert_eq!(
             catalog, imported,
             "canonical production paths diverged for {name}"
         );
-        assert_eq!(
-            catalog["details"], rule_file["details"],
-            "rule projection lost structured facts for {name}"
+        // `input.file` carries the flat facts rules read, never the internal
+        // details tree, and those facts are the catalog's own.
+        assert!(
+            rule_file.get("details").is_none(),
+            "rule projection must not carry the details tree for {name}"
         );
+        for fact in [
+            "video_width",
+            "video_height",
+            "video_bit_depth",
+            "video_hdr_format",
+            "duration_seconds",
+            "num_chapters",
+            "container_format",
+            "has_multiaudio",
+        ] {
+            assert_eq!(
+                rule_file[fact], catalog[fact],
+                "rule projection lost {fact} for {name}"
+            );
+        }
         assert_eq!(
             catalog["details"]["revision"],
             scryer_media_types::ANALYSIS_REVISION
@@ -10592,7 +10731,9 @@ async fn extra_video_beside_single_episode_is_ignored_and_the_download_settles()
         ]);
 
     // The episode lands, the extra is recorded as ignored, and the download
-    // settles as imported on the first pass.
+    // settles as imported on the first pass. Only the episode is probed; the
+    // agreement keeps the test the same in a build with media analysis.
+    let _probe = probe_agrees_with_the_name(1920, 1080);
     let imported =
         crate::import::completed_download::import_with_lookup(&app, &user, tracked, &lookup).await;
     assert!(imported, "the first pass verifies: {tracked:?}");
@@ -21086,6 +21227,163 @@ async fn automatic_import_maps_a_double_episode_through_an_alternate_order_bridg
             .any(|name| name.contains("S01E27") || name.contains("S01E28") || name.contains("E28")),
         "the literal alternate numbering must not reach the library: {library_files:?}"
     );
+}
+
+/// A persisted stalled-pass count is a counter, not an import outcome: a job
+/// the client dropped while it awaited a retry still goes missing, reopening
+/// its scope. An `import_pending` row with no such reason stays preserved.
+#[tokio::test]
+async fn a_stalled_pass_count_does_not_keep_a_dropped_download_grabbed() {
+    assert!(
+        missing_download_with_import_pending_reason(Some(
+            crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON
+        ))
+        .await,
+        "a stalled-pass count must not keep a dropped download grabbed"
+    );
+    assert!(
+        !missing_download_with_import_pending_reason(None).await,
+        "an import_pending outcome is still preserved"
+    );
+}
+
+/// Seeds a grabbed movie whose identity row is `import_pending` with
+/// `reason`, drops it from the client, and reports whether it went missing
+/// (missing state, a `DownloadMissing` event and the scope reopened).
+async fn missing_download_with_import_pending_reason(reason: Option<&str>) -> bool {
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let scopes = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    *download_submissions.presence_scopes.lock().await = Some(scopes.clone());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_domain_events(domain_events.clone())
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scopes.clone())
+    });
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone()])
+        .await;
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "stalled-job-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-stalled".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "stalled-job-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Fixture.Stalled.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("seed download submission");
+    let mut identity = download_submissions
+        .get_submission_identity(&source_identity)
+        .await
+        .expect("identity loads")
+        .unwrap_or_default();
+    identity.download_id = Some(download_id.to_wire());
+    download_submissions
+        .record_identity_tracked_state_for_download(
+            Some(&download_id),
+            &identity,
+            Some(&source_identity),
+            TrackedDownloadState::ImportPending.as_str(),
+            reason,
+            reason.map(|_| "2"),
+        )
+        .await
+        .expect("seed import_pending identity state");
+
+    let grabbed_at = Utc::now() - chrono::Duration::hours(1);
+    let grab_record = serde_json::json!({
+        "title": "Fixture.Stalled.2026.1080p.WEB-DL", "score": 100,
+        "grabbed_at": grabbed_at, "download_id": download_id,
+    });
+    let row = AcquisitionScopeState {
+        id: "stalled-movie-scope".into(),
+        title_id: "title-stalled".into(),
+        title_name: None,
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".into(),
+        last_search_at: Some(grabbed_at.to_rfc3339()),
+        status: AcquisitionScopeStatus::Grabbed,
+        grabbed_release: Some(grab_record.to_string()),
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: grabbed_at.to_rfc3339(),
+        updated_at: grabbed_at.to_rfc3339(),
+    };
+    scopes.upsert_acquisition_scope_state(&row).await.unwrap();
+
+    crate::app_usecase_integration::drop_source_removed_from_client(&app, &source_identity).await;
+
+    let missing_state = download_submissions
+        .get_tracked_state(&source_identity)
+        .await
+        .expect("tracked state should load")
+        == Some(TrackedDownloadState::Missing.as_str().to_string());
+    let missing_events = app
+        .services
+        .events
+        .domain_events
+        .list(&scryer_domain::DomainEventFilter::default())
+        .await
+        .expect("events load")
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.payload,
+                scryer_domain::DomainEventPayload::DownloadMissing(_)
+            )
+        })
+        .count();
+    let reopened = scopes
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&row.title_id))
+        .await
+        .unwrap()
+        .remove(0)
+        .status
+        == AcquisitionScopeStatus::Wanted;
+    assert_eq!(
+        (missing_state, missing_events == 1, reopened),
+        (missing_state, missing_state, missing_state),
+        "missing state, event and reopen go together"
+    );
+    missing_state
 }
 
 /// Absence is not an operator ignore or failure. The same attempt must be

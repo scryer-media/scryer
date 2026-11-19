@@ -1642,10 +1642,23 @@ async fn record_missing_client_download(
             Some(locator),
         )
         .await?;
+    // An `import_pending` row that only carries the stalled-pass count records
+    // a counter, not an import outcome: the dropped job still goes missing.
+    let existing_counts_stalled_passes = existing.as_deref()
+        == Some(TrackedDownloadState::ImportPending.as_str())
+        && repository
+            .get_identity_tracked_state_reason_for_download(
+                Some(&binding.download_id),
+                &identity,
+                Some(locator),
+            )
+            .await?
+            .as_deref()
+            == Some(crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
     let submission_state = repository.get_tracked_state(locator).await?;
     if existing
         .as_deref()
-        .is_some_and(|state| preserved.contains(&state))
+        .is_some_and(|state| preserved.contains(&state) && !existing_counts_stalled_passes)
         || submission_state
             .as_deref()
             .is_some_and(|state| preserved.contains(&state))
