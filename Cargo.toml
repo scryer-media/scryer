@@ -79,8 +79,8 @@ quick-xml = "0.42.0"
 # compatibility. `parallel-compilation` spreads Cranelift's per-function work
 # across cores; without it every cold plugin compile, at install and at startup
 # rehydration, runs on one thread.
-wasmtime = { version = "~50.0.0", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache", "parallel-compilation"] }
-wasmtime-wasi = { version = "~50.0.0", default-features = false, features = ["p2"] }
+wasmtime = { version = "~50.0.3", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache", "parallel-compilation"] }
+wasmtime-wasi = { version = "~50.0.3", default-features = false, features = ["p2"] }
 semver = "1"
 metrics = "0.24"
 security-framework = "3"
