@@ -142,6 +142,8 @@ pub async fn retry_failed_import(
         crate::import::archive_extraction::DownloadExtractionKey::for_completed(&completed)
     {
         crate::import::archive_extraction::reset_download_extraction(app, &key).await;
+    } else {
+        crate::import::archive_extraction::reset_keyless_reextraction(app, &completed);
     }
 
     // Finish reconciliation even if the requesting browser disconnects.

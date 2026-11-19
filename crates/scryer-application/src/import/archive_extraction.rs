@@ -603,6 +603,77 @@ pub(crate) struct ArchiveWorkspaceUpkeep {
     /// first pass with candidates tries them once.
     passwords_tried:
         Arc<std::sync::Mutex<std::collections::HashMap<DownloadExtractionKey, blake3::Hash>>>,
+    /// Re-extractions of each download that has no extraction key (it
+    /// extracts per pass), made because its archives matched a title and had
+    /// to be extracted again under it. Counted against [`MAX_ATTEMPTS`];
+    /// cleared by the operator's retry. Kept in memory: after a restart the
+    /// download gets its attempts again, and the import's own stalled-pass
+    /// limit still bounds the passes.
+    keyless_reextractions: Arc<std::sync::Mutex<std::collections::HashMap<KeylessDownload, u32>>>,
+}
+
+/// A download without an extraction key, as its re-extractions are counted.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct KeylessDownload {
+    client_type: String,
+    client_id: String,
+    client_item_id: String,
+    dest_dir: String,
+}
+
+impl KeylessDownload {
+    fn of(completed: &crate::CompletedDownload) -> Self {
+        Self {
+            client_type: completed.client_type.trim().to_ascii_lowercase(),
+            client_id: completed.client_id.trim().to_ascii_lowercase(),
+            client_item_id: completed.download_client_item_id.trim().to_string(),
+            dest_dir: completed.dest_dir.clone(),
+        }
+    }
+}
+
+/// Counts one re-extraction of a download that has no extraction key, and
+/// refuses it as blocked once the download used its [`MAX_ATTEMPTS`].
+pub(crate) fn begin_keyless_reextraction(
+    app: &AppUseCase,
+    completed: &crate::CompletedDownload,
+) -> AppResult<()> {
+    let mut counts = app
+        .runtime
+        .imports
+        .archive_workspace_upkeep
+        .keyless_reextractions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    count_keyless_reextraction(&mut counts, KeylessDownload::of(completed))
+}
+
+fn count_keyless_reextraction(
+    counts: &mut std::collections::HashMap<KeylessDownload, u32>,
+    download: KeylessDownload,
+) -> AppResult<()> {
+    let attempts = counts.entry(download).or_default();
+    if *attempts >= MAX_ATTEMPTS {
+        tracing::warn!(
+            attempts = *attempts,
+            "archive re-extraction blocked after its last allowed attempt"
+        );
+        return Err(blocked_error());
+    }
+    *attempts += 1;
+    Ok(())
+}
+
+/// An operator retry gives a download without an extraction key its
+/// re-extraction attempts back.
+pub(crate) fn reset_keyless_reextraction(app: &AppUseCase, completed: &crate::CompletedDownload) {
+    app.runtime
+        .imports
+        .archive_workspace_upkeep
+        .keyless_reextractions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&KeylessDownload::of(completed));
 }
 
 impl ArchiveWorkspaceUpkeep {
@@ -1707,6 +1778,33 @@ pub(crate) async fn owned_download_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyless_reextractions_are_blocked_after_the_attempt_limit() {
+        let download = KeylessDownload {
+            client_type: "sabnzbd".to_string(),
+            client_id: String::new(),
+            client_item_id: "keyless-item-1".to_string(),
+            dest_dir: "/downloads/keyless-item-1".to_string(),
+        };
+        let other = KeylessDownload {
+            client_item_id: "keyless-item-2".to_string(),
+            ..download.clone()
+        };
+        let mut counts = std::collections::HashMap::new();
+        for _ in 0..MAX_ATTEMPTS {
+            count_keyless_reextraction(&mut counts, download.clone()).expect("within the limit");
+        }
+        let blocked =
+            count_keyless_reextraction(&mut counts, download.clone()).expect_err("past the limit");
+        assert_eq!(
+            blocked.reason(),
+            Some(crate::error_reasons::archive_extraction::BLOCKED)
+        );
+        count_keyless_reextraction(&mut counts, other).expect("another download is counted apart");
+        counts.remove(&download);
+        count_keyless_reextraction(&mut counts, download).expect("a retry starts the count again");
+    }
 
     #[test]
     fn states_round_trip_through_their_stored_names() {

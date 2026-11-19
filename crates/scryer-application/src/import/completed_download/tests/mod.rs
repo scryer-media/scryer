@@ -2054,6 +2054,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,

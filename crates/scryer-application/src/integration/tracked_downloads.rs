@@ -41,6 +41,9 @@ pub enum TrackedStatusMessageKind {
     /// Blocked because no installed plugin extracts the download's archives;
     /// reopened when an archive extractor is installed.
     ArchiveExtractorRequired,
+    /// Blocked because repeated import passes made no progress; reopened only
+    /// by the operator's retry.
+    ImportRetryLimitReached,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +129,14 @@ pub struct TrackedDownload {
     /// failure as `Skipped` and re-attempts on its refresh cadence; this state
     /// gives Scryer's faster poller a capped backoff instead of a hot loop.
     pub import_execution_retry: Option<ImportExecutionRetryState>,
+    /// Consecutive import passes that ended in an outcome a retry cannot
+    /// change and imported nothing new. Reaching [`IMPORT_STALLED_PASS_LIMIT`]
+    /// blocks the download for the operator. Transient outcomes (the source
+    /// still being written or briefly unreadable, a full disk, a permission
+    /// denial) neither count nor reset it; a pass that imports a new unit, or
+    /// the operator's retry, resets it. Persisted with the download's identity
+    /// state while it awaits a retry, so a restart does not start it again.
+    pub stalled_import_passes: u32,
     /// Runtime-only reason this completed download is held back and hidden.
     /// Never persisted as a tracked-download outcome.
     pub import_hold: Option<ImportHold>,
@@ -188,9 +199,11 @@ pub struct NoVideoImportRetryState {
 }
 
 /// Backoff for an approved import whose execution failed (Sonarr's `Skipped`).
-/// Attempts are never capped: like Sonarr, the retry continues until the
-/// import succeeds or the operator removes/ignores/marks the download failed;
-/// only the delay between attempts grows (see `import_execution_retry_delay`).
+/// The delay between attempts grows (see `import_execution_retry_delay`).
+/// A transient failure retries until it clears. A pass whose outcome no retry
+/// can change, and which imported nothing new, also counts toward
+/// [`IMPORT_STALLED_PASS_LIMIT`]; reaching it blocks the download until the
+/// operator retries it (see `TrackedDownload::stalled_import_passes`).
 /// The same slot also carries the fixed 5-minute re-check of a completed
 /// download whose path is still missing after its grace window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +211,11 @@ pub struct ImportExecutionRetryState {
     pub attempts: u32,
     pub next_retry_at: DateTime<Utc>,
 }
+
+/// Consecutive passes that import nothing new, each ending in an outcome a
+/// retry cannot change, before a download stops retrying and waits for the
+/// operator.
+pub(crate) const IMPORT_STALLED_PASS_LIMIT: u32 = 6;
 
 /// Delay before the next automatic re-attempt of an import whose execution
 /// failed: 30 s, then 2 min, then 5 min, then 15 min for every later attempt.
@@ -300,6 +318,7 @@ impl TrackedDownload {
         self.path_missing_since = finished.path_missing_since;
         self.no_video_import_retry = finished.no_video_import_retry;
         self.import_execution_retry = finished.import_execution_retry;
+        self.stalled_import_passes = finished.stalled_import_passes;
         self.import_hold = finished.import_hold;
         self.completed_source = finished.completed_source;
         self.burned_by_import_gate = finished.burned_by_import_gate;
@@ -317,6 +336,7 @@ impl TrackedDownload {
         self.path_missing_since = None;
         self.no_video_import_retry = None;
         self.import_execution_retry = None;
+        self.stalled_import_passes = 0;
         self.import_hold = None;
         self.skip_reacquire_on_failure = false;
         self.manual_failure_cleanup = false;
@@ -364,6 +384,27 @@ impl TrackedDownload {
 
     pub(crate) fn clear_import_execution_retry(&mut self) {
         self.import_execution_retry = None;
+    }
+
+    /// Records a pass that imported nothing new and ended in an outcome a
+    /// retry cannot change. Returns `true` once the limit is reached.
+    pub(crate) fn record_stalled_import_pass(&mut self) -> bool {
+        self.stalled_import_passes = self.stalled_import_passes.saturating_add(1);
+        self.stalled_import_passes >= IMPORT_STALLED_PASS_LIMIT
+    }
+
+    /// Stops automatic retries after the stalled-pass limit: the download
+    /// waits for the operator's retry, with nothing cleaned up.
+    pub(crate) fn block_import_after_retry_limit(&mut self, message: impl Into<String>) {
+        self.import_execution_retry = None;
+        self.no_video_import_retry = None;
+        self.state = TrackedDownloadState::ImportBlocked;
+        self.waiting_for_completed_history = false;
+        self.status = TrackedDownloadStatus::Warning;
+        self.status_messages = vec![TrackedStatusMessage::new(
+            TrackedStatusMessageKind::ImportRetryLimitReached,
+            message,
+        )];
     }
 
     pub(crate) fn schedule_no_video_import_retry(
@@ -437,6 +478,9 @@ pub(crate) enum ImportBlockedReason {
     /// The import found archives no installed plugin extracts. Installing an
     /// extractor, or one already present at startup, reopens the download.
     ArchiveExtractorRequired,
+    /// Repeated import passes made no progress; only the operator's retry
+    /// reopens the download.
+    RetryLimitReached,
 }
 
 impl ImportBlockedReason {
@@ -451,6 +495,7 @@ impl ImportBlockedReason {
             Self::UnverifiedAlreadyImported => "unverified_already_imported",
             Self::BlocklistConfirmationFailed => "manual_blocklist_confirmation_failed",
             Self::ArchiveExtractorRequired => "archive_extractor_required",
+            Self::RetryLimitReached => "import_retry_limit_reached",
         }
     }
 
@@ -465,6 +510,7 @@ impl ImportBlockedReason {
             "unverified_already_imported" => Some(Self::UnverifiedAlreadyImported),
             "manual_blocklist_confirmation_failed" => Some(Self::BlocklistConfirmationFailed),
             "archive_extractor_required" => Some(Self::ArchiveExtractorRequired),
+            "import_retry_limit_reached" => Some(Self::RetryLimitReached),
             _ => None,
         }
     }
@@ -481,6 +527,12 @@ impl ImportBlockedReason {
             .any(|message| message.kind == TrackedStatusMessageKind::ArchiveExtractorRequired)
         {
             Self::ArchiveExtractorRequired
+        } else if td
+            .status_messages
+            .iter()
+            .any(|message| message.kind == TrackedStatusMessageKind::ImportRetryLimitReached)
+        {
+            Self::RetryLimitReached
         } else {
             Self::AfterImport
         }
@@ -973,6 +1025,7 @@ impl TrackedDownloadService {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -1832,7 +1885,7 @@ impl TrackedDownloadService {
         // the durable row is found by canonical download id, so a token-less
         // item (plugin download client) has one too and must be able to read
         // its own terminal state back on the first see after a restart.
-        if let Ok(Some(tracked_state)) = app
+        let persisted_tracked_state = app
             .services
             .workflow
             .download_submissions
@@ -1842,7 +1895,10 @@ impl TrackedDownloadService {
                 Some(&observed_source_identity),
             )
             .await
-            && let Some(state) = TrackedDownloadState::from_str_opt(&tracked_state)
+            .ok()
+            .flatten();
+        if let Some(tracked_state) = persisted_tracked_state.as_deref()
+            && let Some(state) = TrackedDownloadState::from_str_opt(tracked_state)
             // `ImportedSeeding` is not terminal but must still survive a
             // restart: re-deriving it would re-import the payload and then
             // remove a torrent that is still working off its seeding goal.
@@ -1946,9 +2002,26 @@ impl TrackedDownloadService {
                     == Some(ImportBlockedReason::ArchiveExtractorRequired.as_str())
                 {
                     restore_archive_extractor_block(app, td);
+                } else if terminal_failure_reason.as_deref()
+                    == Some(ImportBlockedReason::RetryLimitReached.as_str())
+                {
+                    // Keeps the reason when the block is persisted again.
+                    for message in &mut td.status_messages {
+                        message.kind = TrackedStatusMessageKind::ImportRetryLimitReached;
+                    }
                 }
             }
             return;
+        }
+        if persisted_tracked_state.as_deref() == Some(TrackedDownloadState::ImportPending.as_str())
+        {
+            td.stalled_import_passes = restored_stalled_import_passes(
+                app,
+                td,
+                &observed_identity,
+                &observed_source_identity,
+            )
+            .await;
         }
 
         let download_id_submission = download_id_submission_for_tracked_download_for_download(
@@ -3159,6 +3232,73 @@ pub(crate) async fn import_blocked_reason_for_tracked(
         .flatten()
         .as_deref()
         .and_then(ImportBlockedReason::parse)
+}
+
+/// Reason stored with an `import_pending` identity state whose detail holds
+/// the download's stalled-pass count, so the count survives a restart.
+pub(crate) const STALLED_IMPORT_PASSES_REASON: &str = "import_stalled_passes";
+
+/// Records the stalled-pass count of a download awaiting an automatic retry.
+/// Called only when a pass changed the count. Only the identity state row is
+/// written; the submission projection already reads `import_pending`.
+pub(crate) async fn persist_stalled_import_passes(app: &AppUseCase, td: &TrackedDownload) -> bool {
+    let observed_identity = observed_queue_item_identity(&td.client_item);
+    let detail = td.stalled_import_passes.to_string();
+    if let Err(error) = app
+        .services
+        .workflow
+        .download_submissions
+        .record_identity_tracked_state_for_download(
+            td.canonical_download_id(),
+            &observed_identity,
+            Some(&queue_item_source_identity(&td.client_item)),
+            TrackedDownloadState::ImportPending.as_str(),
+            Some(STALLED_IMPORT_PASSES_REASON),
+            Some(detail.as_str()),
+        )
+        .await
+    {
+        tracing::warn!(
+            %error,
+            id = %td.id,
+            passes = td.stalled_import_passes,
+            "failed to persist the stalled import pass count"
+        );
+        return false;
+    }
+    true
+}
+
+async fn restored_stalled_import_passes(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    observed_identity: &DownloadSubmissionIdentity,
+    source_identity: &ClientJobLocator,
+) -> u32 {
+    let submissions = &app.services.workflow.download_submissions;
+    let reason = submissions
+        .get_identity_tracked_state_reason_for_download(
+            td.canonical_download_id(),
+            observed_identity,
+            Some(source_identity),
+        )
+        .await
+        .ok()
+        .flatten();
+    if reason.as_deref() != Some(STALLED_IMPORT_PASSES_REASON) {
+        return 0;
+    }
+    submissions
+        .get_identity_tracked_state_detail_for_download(
+            td.canonical_download_id(),
+            observed_identity,
+            Some(source_identity),
+        )
+        .await
+        .ok()
+        .flatten()
+        .and_then(|detail| detail.trim().parse::<u32>().ok())
+        .unwrap_or(0)
 }
 
 pub(crate) fn tracked_client_type_is_excluded(
@@ -4698,6 +4838,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -5331,6 +5472,47 @@ mod tests {
             crate::tracked_downloads::status_texts(&tracked.status_messages),
             vec!["persisted import gate detail"]
         );
+    }
+
+    /// The stalled-pass count a download awaiting an automatic retry has
+    /// built up is read back when the tracker is rebuilt after a restart.
+    #[tokio::test]
+    async fn stalled_import_pass_count_survives_a_restart() {
+        let canonical_download_id = DownloadId::new();
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        let registry = Arc::new(TestDownloadRegistry {
+            ids: Mutex::new(HashMap::from([(
+                "stalled-job".to_string(),
+                canonical_download_id,
+            )])),
+            failing_item_ids: HashSet::new(),
+            conflicting_item_ids: HashMap::new(),
+            fallback_download_ids: HashMap::new(),
+        });
+        let app = build_app(download_submissions, Arc::new(TestImportRepo::default()))
+            .with_test_overrides(|services| services.with_download_registry(registry));
+        let mut item = build_client_item();
+        item.download_client_item_id = "stalled-job".to_string();
+        item.download_id = Some(canonical_download_id.to_wire());
+        let legacy_id = tracked_download_id_for_item(&item);
+
+        let mut before = TrackedDownloadService::new();
+        before.track(&app, item.clone()).await;
+        let mut tracked = before
+            .find(&legacy_id)
+            .expect("download should be tracked")
+            .clone();
+        tracked.state = TrackedDownloadState::ImportPending;
+        tracked.stalled_import_passes = 4;
+        assert!(persist_stalled_import_passes(&app, &tracked).await);
+
+        let mut after = TrackedDownloadService::new();
+        after.track(&app, item).await;
+        let restored = after
+            .find(&legacy_id)
+            .expect("restart state should reconstruct");
+        assert_eq!(restored.download_id, canonical_download_id);
+        assert_eq!(restored.stalled_import_passes, 4);
     }
 
     #[tokio::test]
@@ -7154,6 +7336,7 @@ mod tests {
                 path_missing_since: None,
                 no_video_import_retry: None,
                 import_execution_retry: None,
+                stalled_import_passes: 0,
                 import_hold: None,
                 skip_reacquire_on_failure: false,
                 manual_failure_cleanup: false,
@@ -7908,6 +8091,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -7960,6 +8144,7 @@ mod tests {
                 path_missing_since: None,
                 no_video_import_retry: None,
                 import_execution_retry: None,
+                stalled_import_passes: 0,
                 import_hold: None,
                 skip_reacquire_on_failure: false,
                 manual_failure_cleanup: false,
@@ -8166,6 +8351,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -8255,6 +8441,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -8474,6 +8661,7 @@ mod tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,

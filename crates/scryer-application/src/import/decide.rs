@@ -719,6 +719,23 @@ pub(crate) fn identical_incumbent_rejection(
     }
 }
 
+/// The settlement for a source whose would-be incumbent is a library file an
+/// earlier pass of the same download placed. The library file stays as it is,
+/// even when something outside the import has since rewritten its bytes.
+pub(crate) fn placed_by_this_download_rejection(
+    scope_label: &str,
+    incumbent_path: &str,
+) -> ImportedFileRejection {
+    ImportedFileRejection {
+        message: format!(
+            "existing file {incumbent_path} for {scope_label} was placed by this download"
+        ),
+        recycle_reason: crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD,
+        skip_reason: Some(ImportSkipReason::AlreadyImported),
+        blocking_rule_codes: Vec::new(),
+    }
+}
+
 /// Re-attach the full records, in the order admission ranked them.
 ///
 /// By id, against the caller's *unfiltered* list. A path-scoped lookup here is

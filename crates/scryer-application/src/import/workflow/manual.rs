@@ -247,7 +247,8 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
                 let retry_attempts = previous_result
                     .as_ref()
                     .map_or(1, |result| result.retry_attempts.saturating_add(1));
-                result.result_json = retry.pending_result_json(&record.id, &payload, retry_attempts);
+                (result.status, result.result_json) =
+                    retry.settle(&record.id, &payload, retry_attempts);
             }
             result
         }
@@ -2788,6 +2789,10 @@ pub struct ManualImportExecutionResult {
     pub status: ImportStatus,
     pub error_code: Option<ImportErrorCode>,
     pub error_message: Option<String>,
+    /// A stable import reason code, beside `error_code`, for a condition the
+    /// coarse error code cannot name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
     #[serde(default)]
     pub requires_reconciliation: bool,
     #[serde(default)]
@@ -2858,6 +2863,7 @@ pub(crate) fn manual_import_result_json(
         status,
         error_code,
         error_message,
+        reason_code: None,
         requires_reconciliation: false,
         retry_attempts: 0,
         next_retry_at: None,
@@ -2884,6 +2890,7 @@ fn manual_import_pending_result_json(
         status: ImportStatus::Pending,
         error_code: Some(ImportErrorCode::Unknown),
         error_message: Some(message),
+        reason_code: None,
         requires_reconciliation,
         retry_attempts,
         next_retry_at,
@@ -3229,9 +3236,41 @@ async fn execute_manual_series_movie_import(
         existing_files: &existing_files,
         content_qualified_video: content_qualified.is_some(),
     };
-    if let crate::import_checks::ImportVerdict::Reject { reason, .. } =
+    if let crate::import_checks::ImportVerdict::Reject { reason, code } =
         crate::import_checks::run_import_checks_and_report(app, &check_ctx, completed, title).await
     {
+        if code.is_duplicate_file() {
+            // The identical file already sits at the destination: the
+            // operator's mapping is satisfied, as on the episode path, so the
+            // import settles instead of failing on every retry.
+            if let Some(completed) = completed {
+                let present_file_id = existing_files
+                    .iter()
+                    .find(|file| Path::new(&file.file_path) == dest_path)
+                    .map(|file| file.id.as_str());
+                let linked_episode_artifacts = linked_episode.iter().cloned().collect::<Vec<_>>();
+                persist_file_import_artifact(
+                    app,
+                    import_id,
+                    completed,
+                    title.id.as_str(),
+                    source,
+                    "movie",
+                    "already_present",
+                    Some(code.as_str()),
+                    present_file_id,
+                    &linked_episode_artifacts,
+                )
+                .await?;
+            }
+            return Ok(manual_import_file_result(
+                mapping,
+                true,
+                Some(path_to_stored_string(&dest_path)),
+                None,
+                None,
+            ));
+        }
         return Ok(manual_import_file_result(
             mapping,
             false,
@@ -3820,6 +3859,8 @@ async fn execute_manual_import_with_release_evidence_inner(
     // Indexes into `results` of files whose importer already emitted Import
     // Complete for them; the manual-level event covers only the rest.
     let mut self_notified_results: HashSet<usize> = HashSet::new();
+    let placed_files =
+        DownloadPlacedFiles::load_for_manual_import(app, import_id, completed).await?;
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
@@ -4148,6 +4189,7 @@ async fn execute_manual_import_with_release_evidence_inner(
             release_evidence.release_listing_json(),
             false,
             mapping.disc_selection.as_ref(),
+            &placed_files,
         )
         .await
         {
@@ -4728,6 +4770,29 @@ struct ManualCleanupRetry {
 }
 
 impl ManualCleanupRetry {
+    /// The record's status and result after this many failed cleanup
+    /// attempts. The files are placed and cataloged; only the source cleanup
+    /// keeps failing, so once the limit is reached the import stops retrying
+    /// and is left failed, coded, for the operator to look at.
+    fn settle(
+        &self,
+        import_id: &str,
+        payload: &ManualImportRequestPayload,
+        retry_attempts: u32,
+    ) -> (ImportStatus, Option<String>) {
+        if retry_attempts >= MANUAL_IMPORT_CLEANUP_RETRY_LIMIT {
+            (
+                ImportStatus::Failed,
+                self.retry_limit_result_json(import_id, payload, retry_attempts),
+            )
+        } else {
+            (
+                ImportStatus::Pending,
+                self.pending_result_json(import_id, payload, retry_attempts),
+            )
+        }
+    }
+
     fn pending_result_json(
         &self,
         import_id: &str,
@@ -4744,7 +4809,40 @@ impl ManualCleanupRetry {
             self.file_results.clone(),
         )
     }
+
+    /// The settled result once cleanup has failed
+    /// [`MANUAL_IMPORT_CLEANUP_RETRY_LIMIT`] times: failed, never retried.
+    fn retry_limit_result_json(
+        &self,
+        import_id: &str,
+        payload: &ManualImportRequestPayload,
+        retry_attempts: u32,
+    ) -> Option<String> {
+        serde_json::to_string(&ManualImportExecutionResult {
+            import_id: import_id.to_string(),
+            client_type: payload.client_type.clone(),
+            download_client_item_id: payload.download_client_item_id.clone(),
+            title_id: payload.title_id.clone(),
+            status: ImportStatus::Failed,
+            error_code: Some(ImportErrorCode::IoFailed),
+            error_message: Some(format!(
+                "{} (gave up after {retry_attempts} attempts)",
+                self.message
+            )),
+            reason_code: Some(crate::error_reasons::import::RETRY_LIMIT_REACHED.to_string()),
+            requires_reconciliation: false,
+            retry_attempts,
+            next_retry_at: None,
+            file_results: self.file_results.clone(),
+            completed_at: Utc::now(),
+        })
+        .ok()
+    }
 }
+
+/// Source-cleanup failures a manual import is retried through before it is
+/// settled as failed.
+const MANUAL_IMPORT_CLEANUP_RETRY_LIMIT: u32 = 6;
 
 impl QueuedManualImportOutcome {
     fn source_unavailable(import_id: &str, payload: &ManualImportRequestPayload) -> Self {
@@ -5304,6 +5402,7 @@ mod manual_import_recovery_tests {
             status: ImportStatus::Completed,
             error_code: None,
             error_message: None,
+            reason_code: None,
             requires_reconciliation: false,
             retry_attempts: 0,
             next_retry_at: None,
@@ -5439,6 +5538,66 @@ mod manual_import_recovery_tests {
         .expect("result JSON");
         let value = serde_json::from_str::<serde_json::Value>(&json).expect("JSON");
         assert_eq!(value["requires_reconciliation"], serde_json::json!(true));
+    }
+
+    /// A manual import whose source cleanup keeps failing is retried until the
+    /// limit, then settled as failed with the retry-limit code, which the queue
+    /// overlay carries as the attention code.
+    #[test]
+    fn manual_cleanup_retries_stop_at_the_retry_limit() {
+        let payload = ManualImportRequestPayload {
+            requested_by_user_id: None,
+            title_id: Some("title-1".to_string()),
+            download_client_item_id: "download-1".to_string(),
+            client_id: None,
+            client_type: "weaver".to_string(),
+            files: Vec::new(),
+            selection_id: None,
+            release_evidence: None,
+            trusted_source_root: None,
+            archive_workspace_root: None,
+            requested_at: "2026-08-17T00:00:00Z".to_string(),
+        };
+        let retry = ManualCleanupRetry {
+            message: "Source cleanup could not finish: synthetic".to_string(),
+            file_results: Vec::new(),
+        };
+        for attempt in 1..MANUAL_IMPORT_CLEANUP_RETRY_LIMIT {
+            let (status, json) = retry.settle("manual-import-1", &payload, attempt);
+            assert_eq!(status, ImportStatus::Pending, "attempt {attempt}");
+            let result = serde_json::from_str::<ManualImportExecutionResult>(
+                json.as_deref().expect("result JSON"),
+            )
+            .expect("parse result JSON");
+            assert!(result.next_retry_at.is_some(), "attempt {attempt}");
+            assert_eq!(result.reason_code, None, "attempt {attempt}");
+        }
+
+        let (status, json) = retry.settle(
+            "manual-import-1",
+            &payload,
+            MANUAL_IMPORT_CLEANUP_RETRY_LIMIT,
+        );
+        assert_eq!(status, ImportStatus::Failed);
+        let result = serde_json::from_str::<ManualImportExecutionResult>(
+            json.as_deref().expect("result JSON"),
+        )
+        .expect("parse result JSON");
+        assert_eq!(result.status, ImportStatus::Failed);
+        assert_eq!(result.next_retry_at, None);
+        assert_eq!(result.retry_attempts, MANUAL_IMPORT_CLEANUP_RETRY_LIMIT);
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some(crate::error_reasons::import::RETRY_LIMIT_REACHED)
+        );
+
+        let mut record = completed_manual_import_record("weaver", true);
+        record.result_json = json;
+        let overlay = crate::import_record_result_overlay(&record);
+        assert_eq!(
+            overlay.reason_code.as_deref(),
+            Some(crate::error_reasons::import::RETRY_LIMIT_REACHED)
+        );
     }
 
     #[test]
