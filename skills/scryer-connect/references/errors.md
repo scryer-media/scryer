@@ -95,6 +95,6 @@ an item's `reason` or fact `code`. Facts never stop the run.
 | `RULE_IMPORT_FORMAT_UNSCORED` | fact | Every profile scores the format 0; the rule scores 0. |
 | `RULE_IMPORT_GROUP_UNTRANSLATABLE` | item | Maintainerr group could not be translated; saved as a disabled `(Maintainerr) FAILED - <name>` starter (`SAVED_FAILED_TRANSLATION`). Facts hold `maintainerr.*` diagnostics. |
 | `MAINTAINERR_IMPORT_JSON_TOO_LARGE`, `MAINTAINERR_IMPORT_GROUPS_JSON_INVALID`, `MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID`, `MAINTAINERR_IMPORT_GROUPS_TOO_MANY`, `MAINTAINERR_IMPORT_PROFILES_JSON_INVALID` | run | Maintainerr's answer was too large, unreadable or held too many groups. See `scryer-migrate-from-maintainerr/references/codes.md`. |
-| `RULE_IMPORT_USERNAMES_UNAVAILABLE`, `RULE_IMPORT_PROFILES_UNAVAILABLE`, `RULE_IMPORT_TOO_MANY_PROFILE_SOURCES` | run fact | Maintainerr import went on without user names or some Sonarr/Radarr profiles. |
+| `RULE_IMPORT_PROFILES_UNAVAILABLE`, `RULE_IMPORT_TOO_MANY_PROFILE_SOURCES` | run fact | Maintainerr import went on without some Sonarr/Radarr profiles. |
 | `LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED` | item | Maintainerr group reads facts about people; the account needs `MANAGE_PERMISSIONS`. `FAILED`, nothing saved. |
 

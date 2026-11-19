@@ -84,20 +84,28 @@ jq -c '.data.externalRuleImportStatus.items[] | {name: .sourceName, codes: [.fac
 By `state`:
 
 - `SAVED`: translated. Name `(Maintainerr) <group name>`. Warnings in the
-  facts (`maintainerr.fact.approximate`, `maintainerr.action.approximate`,
-  `maintainerr.username.unknown`) say where Scryer's fact or action differs
-  from Maintainerr's; tell the operator each one.
+  facts say where the rule differs from the group; tell the operator each one.
+  `maintainerr.fact.approximate` and `maintainerr.action.approximate`: Scryer's
+  fact or action differs from Maintainerr's, in a way that can only match
+  fewer titles. `maintainerr.username.unknown`: no Scryer user has that name,
+  so the rule matches nothing for that user until one does.
+  `maintainerr.scope.all_libraries`: the group was tied to one media-server
+  library, the rule applies to every library (step 4).
 - `SAVED_FAILED_TRANSLATION`, reason `RULE_IMPORT_GROUP_UNTRANSLATABLE`: the
   group could not be translated. Saved as a disabled starter rule named
   `(Maintainerr) FAILED - <group name>` whose description lists what did not
   translate; its source is the editor's starter, not the group's conditions.
   Facts with `details.severity` `ERROR` say why, `details.ruleIndex` (from 0)
-  which Maintainerr rule. Rewrite it with `scryer-write-rules`, or delete it
-  in the web UI, as the operator chooses.
+  which Maintainerr rule. A comparison that Scryer's facts could make match
+  more titles than Maintainerr's fails the group this way too (the
+  `*_widens` codes). Rewrite it with `scryer-write-rules`, or delete it in the
+  web UI, as the operator chooses.
 - `SKIPPED_EXISTS`, reason `RULE_IMPORT_ALREADY_EXISTS`: a rule named
   `(Maintainerr) <group name>` or `(Maintainerr) FAILED - <group name>` already
-  exists (a re-run). Nothing written; the existing rule untouched. To import
-  that group again the operator renames or deletes the old rule first.
+  exists. This covers a re-run, the same name twice in one source, and two
+  imports running at once (one saves, the other skips). Nothing written; the
+  existing rule untouched. To import that group again the operator renames or
+  deletes the old rule first.
 - `FAILED`: nothing saved. The item `reason` is the save's own refusal, such as
   `LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED` (prerequisites) or
   `LIFECYCLE_QUALITY_PROFILE_NOT_FOUND`; `RULE_IMPORT_INTERRUPTED` when Scryer
@@ -119,9 +127,10 @@ gql "$O/ImportedLifecycleRules.graphql" | jq -c '.data.lifecycleRuleSets[]
 gql "$O/Libraries.graphql" | jq -c '.data.libraries[] | {id, name, facet}'
 ```
 
-1. **Scope.** Every imported rule applies to every library. Maintainerr groups
-   were tied to one media-server library; if the operator wants that, they set
-   the rule's libraries in the web UI (lifecycle rules page, edit the rule).
+1. **Scope.** Every imported rule applies to every library. A group tied to one
+   media-server library carries a `maintainerr.scope.all_libraries` warning;
+   if the operator wants that scope, they set the rule's libraries in the web
+   UI (lifecycle rules page, edit the rule).
 2. **Preview** (read-only, acts on nothing) per rule and library:
 
    ```sh

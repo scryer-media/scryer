@@ -42,12 +42,37 @@ episode number. Plex IMDb and TMDB ratings. From Seerr, Overseerr, Jellyseerr
 and Ombi: request date, who requested, whether requested.
 
 Each binding that differs from Maintainerr in a stated way adds a
-`maintainerr.fact.approximate` warning with the difference.
+`maintainerr.fact.approximate` warning with the difference. Such a binding
+translates only where the difference can make the rule match fewer titles,
+never more; elsewhere the group fails:
+
+- **Lists Scryer holds only part of** (who watched, who favourited, who
+  requested; Radarr and Sonarr tags, which are Scryer's own tags because the
+  Sonarr and Radarr import does not carry tags over): contains, contains
+  partially, contains all and count bigger translate. Not contains, equals,
+  not equals, count equals, count not equals and count smaller fail
+  (`maintainerr.comparator.partial_list_widens`).
+- **Whether requested** (Scryer knows only requests made in Scryer): "is
+  requested" translates; "is not requested" fails
+  (`maintainerr.comparator.absence_widens`).
+- **Dates Scryer records later**: Radarr and Sonarr date added (when the
+  title was added to Scryer), the media servers' date added (Scryer's first
+  import) and Radarr's file date. Before, smaller and exists translate; after, bigger,
+  in the last and in the next fail (`maintainerr.comparator.date_drift_widens`).
+- **Dates that can differ either way**: Radarr release date and the request
+  date. Only "exists" translates.
+- **Not exists** on any binding that differs fails
+  (`maintainerr.comparator.absence_widens`).
+- **A user's play count** for a name no Scryer user has: Scryer reads zero
+  plays, so a comparison zero plays satisfy fails
+  (`maintainerr.username.unknown_widens`). Others translate with
+  `maintainerr.username.unknown` and match nothing for that user.
 
 ## Does not carry over
 
 - **Library scope**: every imported rule applies to every library, not to the
-  group's media-server library.
+  group's media-server library; such a group carries a
+  `maintainerr.scope.all_libraries` warning.
 - **Schedule**: rules run on Scryer's default schedule, not Maintainerr's.
 - **Active state**: every rule is disabled, whether or not the group was active.
 - **Collections, playlists and labels** of the media server

@@ -30,7 +30,6 @@ key), `RULE_IMPORT_QUEUE_FULL` (wait for a run to settle). Status:
 
 | code | Meaning |
 |---|---|
-| `RULE_IMPORT_USERNAMES_UNAVAILABLE` | Maintainerr predates its user list, so rule user names were not checked. |
 | `RULE_IMPORT_PROFILES_UNAVAILABLE` | Maintainerr could not list one Sonarr or Radarr server's quality profiles; groups changing to one of its profiles fail. |
 | `RULE_IMPORT_TOO_MANY_PROFILE_SOURCES` | Groups name more Sonarr or Radarr servers than one import reads profiles for. |
 
@@ -39,7 +38,7 @@ key), `RULE_IMPORT_QUEUE_FULL` (wait for a run to settle). Status:
 | reason | State | Meaning |
 |---|---|---|
 | `RULE_IMPORT_GROUP_UNTRANSLATABLE` | `SAVED_FAILED_TRANSLATION` | Saved as a disabled starter; `ERROR` facts say why. |
-| `RULE_IMPORT_ALREADY_EXISTS` | `SKIPPED_EXISTS` | A rule of either name exists; nothing written. |
+| `RULE_IMPORT_ALREADY_EXISTS` | `SKIPPED_EXISTS` | A rule of either name exists (a re-run, the same name twice in one source, or two imports at once); nothing written. |
 | `LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED` | `FAILED` | The group reads facts about people; the account needs `MANAGE_PERMISSIONS`. |
 | `LIFECYCLE_QUALITY_PROFILE_NOT_FOUND` | `FAILED` | The quality profile the rule sets is gone from Scryer. |
 | `RULE_IMPORT_ITEM_FAILED` | `FAILED` | Saving failed for another reason; item `message` says why. |
@@ -71,6 +70,10 @@ the whole group).
 | `maintainerr.property.level_unsupported` | ERROR | Scryer has the fact only for another media type. |
 | `maintainerr.comparator.unsupported` | ERROR | The comparison cannot be expressed exactly. |
 | `maintainerr.comparator.date_equality_unsupported` | ERROR | Date equality depends on Maintainerr's time zone. |
+| `maintainerr.comparator.partial_list_widens` | ERROR | Scryer holds only part of the list, and this comparison (not contains, a count at most, equals) could match more titles. |
+| `maintainerr.comparator.absence_widens` | ERROR | The comparison matches a value being absent or unset, which Scryer can be where Maintainerr is not. |
+| `maintainerr.comparator.date_drift_widens` | ERROR | Scryer's date can be later (or either way) than Maintainerr's, in the direction this comparison would match more titles. |
+| `maintainerr.username.unknown_widens` | ERROR | A per-user play count names no Scryer user, and zero plays satisfy the comparison. |
 | `maintainerr.custom_value.invalid` | ERROR | A value cannot be read as Maintainerr reads it. |
 | `maintainerr.action.missing` | ERROR | The group has no action. |
 | `maintainerr.action.unsupported` | ERROR | No Scryer action for this media type. |
@@ -78,6 +81,7 @@ the whole group).
 | `maintainerr.quality_profile.not_in_scryer` | ERROR | No Scryer profile has that name. |
 | `maintainerr.source.too_large` | ERROR | The translated rule is over the size limit. |
 | `maintainerr.source.invalid` | ERROR | The translated rule failed validation. |
-| `maintainerr.username.unknown` | WARNING | A rule names a user no Scryer user is called; it still translates. |
-| `maintainerr.fact.approximate` | WARNING | The Scryer fact differs from Maintainerr's as the message states. |
+| `maintainerr.username.unknown` | WARNING | A rule names a user no Scryer user is called; it translates and matches nothing for that user until one is. |
+| `maintainerr.fact.approximate` | WARNING | The Scryer fact differs from Maintainerr's as the message states; the comparison can only match fewer titles. |
+| `maintainerr.scope.all_libraries` | WARNING | The group was tied to one media-server library; the rule applies to every Scryer library. |
 | `maintainerr.action.approximate` | WARNING | The Scryer action differs from Maintainerr's as the message states. |
