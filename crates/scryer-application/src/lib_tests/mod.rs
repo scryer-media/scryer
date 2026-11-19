@@ -70,6 +70,7 @@ mod multilingual_title_matching;
 mod queueing;
 mod recycle_bin_roots;
 mod recycle_purge_selection;
+mod recycle_upgrade_purge;
 mod release_anchor_prefetch;
 mod rename_folder_record;
 mod request_rules;

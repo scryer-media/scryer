@@ -1750,14 +1750,16 @@ impl AppUseCase {
             let configs = self.recycle_bin_configs_for_recycling(media_roots).await;
             let mut purged = 0u32;
             for (media_root, config) in configs {
-                match crate::recycle_bin::list_committed_entries_for_title(
+                match crate::recycle_bin::list_committed_entries_for_title_with_upgrade_links(
                     &config,
                     title_id,
                     recycle_index,
                 )
                 .await
                 {
-                    Ok(entries) => {
+                    Ok((entries, upgrade_links)) => {
+                        let mut upgrades =
+                            crate::jobs::housekeeping::UpgradePurgeContext::listed(upgrade_links);
                         for entry in entries {
                             match self
                                 .purge_recycle_entry_after_validation(
@@ -1765,6 +1767,7 @@ impl AppUseCase {
                                     &config,
                                     &entry,
                                     actor.clone(),
+                                    &mut upgrades,
                                 )
                                 .await
                             {

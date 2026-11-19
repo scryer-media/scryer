@@ -91,6 +91,7 @@ impl PurgeFixture {
                 status: None,
                 replacement_file_id: None,
                 replacement_path: None,
+                episode_ids: None,
                 media_row: None,
             };
             let recycled = crate::recycle_bin::recycle_file(

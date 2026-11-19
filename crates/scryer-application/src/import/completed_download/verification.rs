@@ -280,9 +280,7 @@ async fn verify_import_outcome_with_mode(
     let mut rejected_units = HashSet::new();
 
     for artifact in &artifacts {
-        let logical_unit = artifact.episode_id.clone().unwrap_or_else(|| {
-            format!("{}:{}", artifact.media_kind, artifact.normalized_file_name)
-        });
+        let logical_unit = import_artifact_logical_unit(artifact);
 
         match artifact.result.as_str() {
             "imported" | "already_present" => {
@@ -1208,6 +1206,59 @@ fn episode_units_from_artifact_rows<'a>(
     }
 
     (!units.is_empty()).then_some(units)
+}
+
+/// The library unit an artifact accounts for: its episode when known,
+/// otherwise its media kind and file name.
+fn import_artifact_logical_unit(artifact: &crate::ImportArtifact) -> String {
+    artifact
+        .episode_id
+        .clone()
+        .unwrap_or_else(|| format!("{}:{}", artifact.media_kind, artifact.normalized_file_name))
+}
+
+/// One distinct success recorded for a download: a source file landing as a
+/// library unit.
+type SuccessfulImportUnit = (Option<ImportArtifactSourceKey>, String);
+
+/// Successes the artifacts record as imported or already present: every
+/// such row, and the distinct source-and-unit pairs those rows cover.
+pub(super) struct RecordedImportSuccesses {
+    success_rows: usize,
+    units: HashSet<SuccessfulImportUnit>,
+}
+
+impl RecordedImportSuccesses {
+    pub(super) fn from_artifacts(artifacts: &[crate::ImportArtifact]) -> Self {
+        let mut success_rows = 0;
+        let mut units = HashSet::new();
+        for artifact in artifacts
+            .iter()
+            .filter(|artifact| matches!(artifact.result.as_str(), "imported" | "already_present"))
+        {
+            success_rows += 1;
+            units.insert((
+                import_artifact_source_key(artifact),
+                import_artifact_logical_unit(artifact),
+            ));
+        }
+        Self {
+            success_rows,
+            units,
+        }
+    }
+
+    /// Success rows recorded since `before`, including another row for a
+    /// source and unit that had already succeeded. Verification reads this.
+    pub(super) fn success_rows_added_since(&self, before: &Self) -> usize {
+        self.success_rows.saturating_sub(before.success_rows)
+    }
+
+    /// Source-and-unit pairs whose first success was recorded since
+    /// `before`. Only this is progress for the execution backoff.
+    pub(super) fn new_units_since(&self, before: &Self) -> usize {
+        self.units.difference(&before.units).count()
+    }
 }
 
 /// The source file an artifact was recorded for: its path relative to the

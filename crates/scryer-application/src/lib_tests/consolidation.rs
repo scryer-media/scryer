@@ -430,6 +430,7 @@ impl ConsolidationFixture {
                 status: None,
                 replacement_file_id: None,
                 replacement_path: None,
+                episode_ids: None,
                 media_row: None,
             },
             crate::location::model::VerificationDepth::Full,

@@ -5826,8 +5826,11 @@ pub mod import {
     pub const DESTINATION_ALIAS_UNKNOWN: &str = "IMPORT_DESTINATION_ALIAS_UNKNOWN";
     /// A copy that failed was kept at its destination, named by [`KEPT_PATH_FACT`], because the source no longer holds the file.
     pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";
+    /// The library file an import would replace could not be compared with the source, so it was left in place and the import is retried.
+    pub const INCUMBENT_IDENTITY_UNDECIDED: &str = "IMPORT_INCUMBENT_IDENTITY_UNDECIDED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        INCUMBENT_IDENTITY_UNDECIDED,
         MEDIA_ROOT_REQUIRED,
         PATH_OUTSIDE_LIBRARY_ROOT,
         RECYCLE_BIN_CONFIG_REQUIRED,

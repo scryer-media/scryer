@@ -1,7 +1,8 @@
 use super::lookup::{
     find_completed_download, remap_completed_download_for_client, with_tracked_metadata,
 };
-use super::result_state::apply_import_result_with_completed;
+use super::result_state::{ImportPassProgress, apply_import_pass_result};
+use super::verification::RecordedImportSuccesses;
 use super::*;
 use crate::import_workflow::import_completed_download_for_tracked;
 use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
@@ -170,8 +171,8 @@ async fn import_inner(
         "import: starting import from completed download"
     );
 
-    let success_before = match total_successful_artifacts(app, td, Some(&completed)).await {
-        Ok(count) => count,
+    let success_before = match recorded_import_successes(app, td, Some(&completed)).await {
+        Ok(successes) => successes,
         Err(error) => {
             tracing::warn!(id = %td.id, error = %error, "import artifact evidence unavailable before import");
             td.schedule_import_execution_retry(Utc::now(), |_, next_retry_at| {
@@ -199,8 +200,8 @@ async fn import_inner(
     .await;
     match import {
         Ok(result) => {
-            let success_after = match total_successful_artifacts(app, td, Some(&completed)).await {
-                Ok(count) => count,
+            let success_after = match recorded_import_successes(app, td, Some(&completed)).await {
+                Ok(successes) => successes,
                 Err(error) => {
                     tracing::warn!(id = %td.id, error = %error, "import artifact evidence unavailable after import");
                     td.schedule_import_execution_retry(Utc::now(), |_, next_retry_at| {
@@ -212,20 +213,21 @@ async fn import_inner(
                     return false;
                 }
             };
-            let files_imported_this_pass = success_after.saturating_sub(success_before) as usize;
+            let progress = import_pass_progress(&success_before, &success_after);
             tracing::debug!(
                 id = %td.id,
                 decision = ?result.decision,
                 skip_reason = ?result.skip_reason,
                 error_message = ?result.error_message,
-                files_imported_this_pass,
+                success_rows_this_pass = progress.success_rows_this_pass,
+                new_units_this_pass = progress.new_units_this_pass,
                 "import: pipeline returned result"
             );
-            apply_import_result_with_completed(
+            apply_import_pass_result(
                 app,
                 td,
                 result,
-                files_imported_this_pass,
+                progress,
                 Some(&completed),
                 release_evidence.as_ref(),
             )
@@ -450,18 +452,24 @@ async fn prepare_completed_download_for_tracked_import(
     completed
 }
 
-/// Verify whether a download's import is complete by checking cumulative
-/// artifact history across all passes.
-///
-/// Returns true if all expected files are accounted for (imported or already_present).
-async fn total_successful_artifacts(
+/// The successes recorded for the download across all passes.
+pub(super) async fn recorded_import_successes(
     app: &AppUseCase,
     td: &TrackedDownload,
     completed: Option<&CompletedDownload>,
-) -> AppResult<u64> {
-    Ok(import_artifacts_for_completed_download(app, td, completed)
-        .await?
-        .into_iter()
-        .filter(|artifact| matches!(artifact.result.as_str(), "imported" | "already_present"))
-        .count() as u64)
+) -> AppResult<RecordedImportSuccesses> {
+    Ok(RecordedImportSuccesses::from_artifacts(
+        &import_artifacts_for_completed_download(app, td, completed).await?,
+    ))
+}
+
+/// What a pass recorded, from the successes read before and after it.
+pub(super) fn import_pass_progress(
+    before: &RecordedImportSuccesses,
+    after: &RecordedImportSuccesses,
+) -> ImportPassProgress {
+    ImportPassProgress {
+        success_rows_this_pass: after.success_rows_added_since(before),
+        new_units_this_pass: after.new_units_since(before),
+    }
 }

@@ -703,6 +703,22 @@ pub(crate) fn missing_incumbent_rejection(scope_label: &str) -> ImportedFileReje
     }
 }
 
+/// The library file this import would replace already holds the same bytes.
+/// Nothing is wrong with the release and nothing is left to import.
+pub(crate) fn identical_incumbent_rejection(
+    scope_label: &str,
+    incumbent_path: &str,
+) -> ImportedFileRejection {
+    ImportedFileRejection {
+        message: format!(
+            "existing file {incumbent_path} for {scope_label} already holds identical contents"
+        ),
+        recycle_reason: "already_imported",
+        skip_reason: Some(ImportSkipReason::AlreadyImported),
+        blocking_rule_codes: Vec::new(),
+    }
+}
+
 /// Re-attach the full records, in the order admission ranked them.
 ///
 /// By id, against the caller's *unfiltered* list. A path-scoped lookup here is

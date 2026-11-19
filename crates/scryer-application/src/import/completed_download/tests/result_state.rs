@@ -288,6 +288,195 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
     );
 }
 
+fn unverified_partial_pack_app() -> AppUseCase {
+    // One of three monitored episodes imported: the pack does not verify
+    // until the rest land.
+    build_app(
+        vec![build_title("title-1", "Quiet Harbour", MediaFacet::Series)],
+        vec![build_collection("season-1", "title-1", "1")],
+        vec![
+            build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+            build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+            build_episode("ep-3", "title-1", "season-1", "1", "3", None),
+        ],
+        vec![build_artifact("dl-1", "ep-1", "quiet.harbour.s01e01.mkv")],
+    )
+}
+
+fn pass_result(
+    decision: ImportDecision,
+    skip_reason: Option<ImportSkipReason>,
+    release_title: &str,
+    episode_ids: &[&str],
+) -> ImportResult {
+    ImportResult {
+        import_id: "import-1".to_string(),
+        decision,
+        skip_reason,
+        title_id: Some("title-1".to_string()),
+        source_system: Some("nzbget".to_string()),
+        source_ref: Some("dl-1".to_string()),
+        source_title: Some(release_title.to_string()),
+        source_path: format!("/downloads/{release_title}"),
+        dest_path: None,
+        quality: None,
+        episode_ids: episode_ids.iter().map(|id| id.to_string()).collect(),
+        file_size_bytes: None,
+        link_type: None,
+        error_message: None,
+        reason_code: None,
+        needs_reconciliation: false,
+        source_cleanup_failed: false,
+        release_burned: false,
+        started_at: Utc::now(),
+        completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
+    }
+}
+
+/// Runs one pass the way the executor measures it: successes read before and
+/// after the pass records `recorded`, then the pass result applied with that
+/// progress. Returns the progress and whether the download verified.
+async fn apply_pass_recording(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    recorded: ImportArtifact,
+    result: ImportResult,
+) -> (ImportPassProgress, bool) {
+    let before = recorded_import_successes(app, td, None)
+        .await
+        .expect("artifact evidence before the pass");
+    app.services
+        .workflow
+        .import_artifacts
+        .insert_artifact(recorded)
+        .await
+        .expect("record pass artifact");
+    let after = recorded_import_successes(app, td, None)
+        .await
+        .expect("artifact evidence after the pass");
+    let progress = import_pass_progress(&before, &after);
+    let verified = apply_import_pass_result(app, td, result, progress, None, None).await;
+    (progress, verified)
+}
+
+/// A repeat pass that writes another success row for a source and episode
+/// that had already landed is not progress: the execution backoff keeps
+/// growing instead of restarting at its first step.
+#[tokio::test]
+async fn repeat_success_row_for_the_same_source_does_not_reset_backoff() {
+    let app = unverified_partial_pack_app();
+    let release = "Quiet.Harbour.S01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    td.import_execution_retry = Some(crate::tracked_downloads::ImportExecutionRetryState {
+        attempts: 1,
+        next_retry_at: Utc::now(),
+    });
+
+    let scheduled_from = Utc::now();
+    let (progress, verified) = apply_pass_recording(
+        &app,
+        &mut td,
+        build_artifact_with_result(
+            "dl-1",
+            Some("ep-1"),
+            "quiet.harbour.s01e01.mkv",
+            "already_present",
+        ),
+        pass_result(ImportDecision::Imported, None, release, &["ep-1"]),
+    )
+    .await;
+    let scheduled_until = Utc::now();
+
+    assert!(!verified);
+    assert_eq!(progress.success_rows_this_pass, 1);
+    assert_eq!(progress.new_units_this_pass, 0);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    let retry = td
+        .import_execution_retry
+        .clone()
+        .expect("unverified import keeps its backoff");
+    assert_eq!(retry.attempts, 2);
+    let second_step = crate::tracked_downloads::import_execution_retry_delay(2);
+    assert!(retry.next_retry_at >= scheduled_from + second_step);
+    assert!(retry.next_retry_at <= scheduled_until + second_step);
+}
+
+/// A pass that lands a source file with no earlier success is progress and
+/// restarts the execution backoff.
+#[tokio::test]
+async fn success_for_a_new_source_resets_backoff() {
+    let app = unverified_partial_pack_app();
+    let release = "Quiet.Harbour.S01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    td.import_execution_retry = Some(crate::tracked_downloads::ImportExecutionRetryState {
+        attempts: 3,
+        next_retry_at: Utc::now(),
+    });
+
+    let (progress, verified) = apply_pass_recording(
+        &app,
+        &mut td,
+        build_artifact("dl-1", "ep-2", "quiet.harbour.s01e02.mkv"),
+        pass_result(ImportDecision::Imported, None, release, &["ep-2"]),
+    )
+    .await;
+
+    assert!(!verified);
+    assert_eq!(progress.success_rows_this_pass, 1);
+    assert_eq!(progress.new_units_this_pass, 1);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert_eq!(
+        td.import_execution_retry
+            .as_ref()
+            .map(|retry| retry.attempts),
+        Some(1)
+    );
+}
+
+/// When the expected episodes cannot be resolved, a pass that recorded a
+/// success row with no rejections is still accepted, even when that row only
+/// repeats an earlier success for the same source.
+#[tokio::test]
+async fn repeat_already_present_pass_keeps_unresolved_fallback_acceptance() {
+    let app = build_app(
+        vec![build_title("title-1", "Lantern Cove", MediaFacet::Series)],
+        vec![],
+        vec![],
+        vec![build_artifact_with_result(
+            "dl-1",
+            None,
+            "Lantern.Cove.S01E01.mkv",
+            "imported",
+        )],
+    );
+    let release = "Lantern.Cove.S01E01.1080p.WEB-DL";
+    let mut td = build_tracked_download("title-1", "series", release);
+    assert!(matches!(
+        expected_episode_units(&app, &td).await,
+        ExpectedEpisodeResolution::Unresolved
+    ));
+
+    let (progress, verified) = apply_pass_recording(
+        &app,
+        &mut td,
+        build_artifact_with_result("dl-1", None, "Lantern.Cove.S01E01.mkv", "already_present"),
+        pass_result(
+            ImportDecision::Skipped,
+            Some(ImportSkipReason::AlreadyImported),
+            release,
+            &[],
+        ),
+    )
+    .await;
+
+    assert_eq!(progress.success_rows_this_pass, 1);
+    assert_eq!(progress.new_units_this_pass, 0);
+    assert!(verified);
+    assert_eq!(td.state, TrackedDownloadState::Imported);
+}
+
 #[tokio::test(start_paused = true)]
 async fn verified_import_mark_retries_without_rolling_back_import() {
     let marker = Arc::new(MarkingDownloadClient::new(3));
