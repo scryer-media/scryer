@@ -200,6 +200,11 @@
           "descKey": "settings.refLifecycleFactsRequestedByUsernames"
         },
         {
+          "field": "requested_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestedAt"
+        },
+        {
           "field": "first_imported_at",
           "type": "string",
           "descKey": "settings.refLifecycleFactsFirstImportedAt"
@@ -263,6 +268,16 @@
           "field": "watched_by_user_ids",
           "type": "string[]",
           "descKey": "settings.refLifecycleFactsWatchedByUserIds"
+        },
+        {
+          "field": "watched_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchedByUsernames"
+        },
+        {
+          "field": "watched_by_users",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsWatchedByUsers"
         },
         {
           "field": "last_watched_at",
@@ -756,6 +771,32 @@
       ]
     },
     {
+      "titleKey": "settings.refLifecycleSectionWatchedByUsers",
+      "path": "input.facts.watched_by_users[]",
+      "fields": [
+        {
+          "field": "user_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleWatcherUserId"
+        },
+        {
+          "field": "username",
+          "type": "string",
+          "descKey": "settings.refLifecycleWatcherUsername"
+        },
+        {
+          "field": "last_played_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleWatcherLastPlayedAt"
+        },
+        {
+          "field": "play_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleWatcherPlayCount"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refLifecycleSectionObservations",
       "path": "input.observations",
       "fields": [
@@ -803,6 +844,11 @@
           "field": "requested_by_usernames",
           "type": "object",
           "descKey": "settings.refLifecycleFactsRequestedByUsernames"
+        },
+        {
+          "field": "requested_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestedAt"
         },
         {
           "field": "first_imported_at",
@@ -868,6 +914,16 @@
           "field": "watched_by_user_ids",
           "type": "object",
           "descKey": "settings.refLifecycleFactsWatchedByUserIds"
+        },
+        {
+          "field": "watched_by_usernames",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchedByUsernames"
+        },
+        {
+          "field": "watched_by_users",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchedByUsers"
         },
         {
           "field": "last_watched_at",
@@ -1421,6 +1477,32 @@
       ]
     },
     {
+      "titleKey": "settings.refLifecycleFactsRequestedAt",
+      "path": "input.observations.requested_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refLifecycleFactsFirstImportedAt",
       "path": "input.observations.first_imported_at",
       "fields": [
@@ -1745,6 +1827,58 @@
           "field": "value",
           "type": "string[]",
           "descKey": "settings.refLifecycleFactsWatchedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchedByUsernames",
+      "path": "input.observations.watched_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchedByUsers",
+      "path": "input.observations.watched_by_users",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsWatchedByUsersValue"
         },
         {
           "field": "observed_at",
@@ -3536,6 +3670,32 @@
           "field": "votes",
           "type": "number?",
           "descKey": "settings.refLifecycleRatingVotes"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObsWatchedByUsers",
+      "path": "input.observations.watched_by_users.value[]",
+      "fields": [
+        {
+          "field": "user_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleWatcherUserId"
+        },
+        {
+          "field": "username",
+          "type": "string",
+          "descKey": "settings.refLifecycleWatcherUsername"
+        },
+        {
+          "field": "last_played_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleWatcherLastPlayedAt"
+        },
+        {
+          "field": "play_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleWatcherPlayCount"
         }
       ]
     }

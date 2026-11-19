@@ -5,7 +5,7 @@ use scryer_application::{
     MediaRequestFingerprintSummary, MediaRequestOrder, MediaRequestQualityProfileReferenceCounts,
     MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
     MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
-    NewMediaRequest,
+    NewMediaRequest, TitleRequesters,
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
@@ -112,8 +112,8 @@ impl MediaRequestRepository for MediaRequestStore {
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
-        let mut by_title: std::collections::HashMap<String, Vec<String>> =
+    ) -> AppResult<std::collections::HashMap<String, TitleRequesters>> {
+        let mut by_title: std::collections::HashMap<String, TitleRequesters> =
             std::collections::HashMap::new();
         if title_ids.is_empty() {
             return Ok(by_title);
@@ -126,10 +126,12 @@ impl MediaRequestRepository for MediaRequestStore {
 
         // The submitter comes first for every request, so a title with a
         // request is a key here even when it has no extra requester rows.
+        // Rows arrive oldest first, so the first one per title carries the
+        // time the title was first requested.
         let submitters = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
-                "SELECT created_title_id, created_by_user_id
+                "SELECT created_title_id, created_by_user_id, created_at
                    FROM media_requests
                   WHERE created_title_id IN ({placeholders})
                     AND identity_fingerprint NOT LIKE 'list-movie:%'
@@ -139,10 +141,18 @@ impl MediaRequestRepository for MediaRequestStore {
         )
         .await?;
         for row in &submitters {
-            by_title
-                .entry(row.text("created_title_id")?)
-                .or_default()
-                .push(row.text("created_by_user_id")?);
+            let user_id = row.text("created_by_user_id")?;
+            match by_title.entry(row.text("created_title_id")?) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().user_ids.push(user_id);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(TitleRequesters {
+                        user_ids: vec![user_id],
+                        first_requested_at: row.timestamp("created_at")?,
+                    });
+                }
+            }
         }
 
         let requesters = SqlRuntime::fetch_all(
@@ -159,15 +169,18 @@ impl MediaRequestRepository for MediaRequestStore {
         )
         .await?;
         for row in &requesters {
-            by_title
-                .entry(row.text("created_title_id")?)
-                .or_default()
-                .push(row.text("user_id")?);
+            // Every joined request is also a submitter row above, so its
+            // title is already a key.
+            if let Some(entry) = by_title.get_mut(&row.text("created_title_id")?) {
+                entry.user_ids.push(row.text("user_id")?);
+            }
         }
 
-        for user_ids in by_title.values_mut() {
+        for entry in by_title.values_mut() {
             let mut seen = std::collections::HashSet::new();
-            user_ids.retain(|user_id| seen.insert(user_id.clone()));
+            entry
+                .user_ids
+                .retain(|user_id| seen.insert(user_id.clone()));
         }
         Ok(by_title)
     }

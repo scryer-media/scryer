@@ -887,7 +887,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<HashMap<String, Vec<String>>> {
+    ) -> AppResult<HashMap<String, crate::TitleRequesters>> {
         let wanted: HashSet<&String> = title_ids.iter().collect();
         let mut requests: Vec<MediaRequest> = self
             .requests
@@ -908,13 +908,19 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 .then_with(|| left.id.cmp(&right.id))
         });
 
-        let mut by_title: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_title: HashMap<String, crate::TitleRequesters> = HashMap::new();
         for request in requests {
             let title_id = request
                 .created_title_id
                 .clone()
                 .expect("filtered to requests with a created title");
-            let entry = by_title.entry(title_id).or_default();
+            let entry = &mut by_title
+                .entry(title_id)
+                .or_insert_with(|| crate::TitleRequesters {
+                    user_ids: Vec::new(),
+                    first_requested_at: request.created_at,
+                })
+                .user_ids;
             let mut requesters = request.requesters.clone();
             requesters.sort_by(|left, right| {
                 left.requested_at

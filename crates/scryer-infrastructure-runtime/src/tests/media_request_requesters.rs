@@ -225,7 +225,16 @@ async fn requester_ids_union_every_request_that_created_the_title() {
         vec![&"title-requested".to_string()],
         "only a title a request actually created may appear: {by_title:?}"
     );
-    let requesters = &by_title["title-requested"];
+    let first = store
+        .get("request-1")
+        .await
+        .expect("load the first request")
+        .expect("the first request exists");
+    assert_eq!(
+        by_title["title-requested"].first_requested_at, first.created_at,
+        "the title was first requested when the oldest request creating it was made"
+    );
+    let requesters = &by_title["title-requested"].user_ids;
     assert_eq!(
         requesters.len(),
         3,
@@ -252,7 +261,7 @@ async fn requester_ids_union_every_request_that_created_the_title() {
         .requester_user_ids_by_title_ids(&["title-requested".to_string()])
         .await
         .expect("second lookup");
-    assert_eq!(&again["title-requested"], requesters);
+    assert_eq!(&again["title-requested"].user_ids, requesters);
 
     let empty = store
         .requester_user_ids_by_title_ids(&[])

@@ -9911,6 +9911,7 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsRequestedByUserIds":
     "Users who requested the subject: the submitter plus any additional requesters",
   "settings.refLifecycleFactsRequestedByUsernames": "Names of those requesters",
+  "settings.refLifecycleFactsRequestedAt": "When the title was first requested",
   "settings.refLifecycleFactsFirstImportedAt":
     "When a file was first imported for the subject",
   "settings.refLifecycleFactsLastUpgradedAt":
@@ -9939,6 +9940,10 @@ const en: LocaleDictionary = {
     "Users who watched the subject. For a season or a whole show, only users who watched every aired episode in it, including episodes with missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. A season or show with no aired episodes is never completed.",
   "settings.refLifecycleFactsLastWatchedAt":
     "When the subject was last played by anyone",
+  "settings.refLifecycleFactsWatchedByUsernames":
+    "Names of the users who watched the subject",
+  "settings.refLifecycleFactsWatchedByUsers":
+    "Each user who watched the subject, with their latest play and how many times they played it",
   "settings.refLifecycleFactsWatchedByAnyRequester":
     "Whether at least one of the subject's requesters has played it",
   "settings.refLifecycleFactsWatchedByAllRequesters":
@@ -10013,6 +10018,8 @@ const en: LocaleDictionary = {
     "Requester identifiers, deduplicated; an empty list when the subject was not requested",
   "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Requester usernames; unknown with reason user_not_found when any of those accounts is gone",
+  "settings.refLifecycleFactsRequestedAtValue":
+    "RFC 3339 time of the oldest request that created the title; absent with reason title_not_requested when no request created it",
   "settings.refLifecycleFactsFirstImportedAtValue":
     "RFC3339 timestamp of the first import",
   "settings.refLifecycleFactsLastUpgradedAtValue":
@@ -10037,6 +10044,10 @@ const en: LocaleDictionary = {
     "Always unknown with reason not_yet_collected: download state is not read yet, so a rule that reads it is held",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. For a season or show, a person counts only after watching every aired episode in it, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
+  "settings.refLifecycleFactsWatchedByUsernamesValue":
+    "Usernames of watched_by_user_ids, in the same order; unknown whenever those ids are, and unknown with reason user_not_found when any of those accounts is gone",
+  "settings.refLifecycleFactsWatchedByUsersValue":
+    "One entry per user in watched_by_user_ids, in the same order, folded over every observed media server; unknown whenever watched_by_usernames is",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing when a play has no recorded time",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
@@ -10174,6 +10185,16 @@ const en: LocaleDictionary = {
     "— One entry per external rating in input.facts.ratings",
   "settings.refLifecycleSectionObsRatings":
     "— One entry per external rating in input.observations.ratings.value",
+  "settings.refLifecycleSectionWatchedByUsers":
+    "— One entry per watcher in input.facts.watched_by_users",
+  "settings.refLifecycleSectionObsWatchedByUsers":
+    "— One entry per watcher in input.observations.watched_by_users.value",
+  "settings.refLifecycleWatcherUserId": "Id of the Scryer user",
+  "settings.refLifecycleWatcherUsername": "Username of the Scryer user",
+  "settings.refLifecycleWatcherLastPlayedAt":
+    "When they last played the subject; null when one of their plays has no time",
+  "settings.refLifecycleWatcherPlayCount":
+    "How many times they played the subject, summed across media servers",
   "settings.refLifecycleRatingSource": "Source of the rating",
   "settings.refLifecycleRatingValue":
     "The rating on the source's own scale, when the source gives one",
