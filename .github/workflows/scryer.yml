@@ -367,13 +367,14 @@ jobs:
         with:
           version: v0.17.0
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-unknown-linux-musl/
 
       - name: Configure fork PR sccache
@@ -548,21 +549,20 @@ jobs:
         if: steps.scope.outputs.run == 'true'
         with:
           version: v0.17.0
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-pc-windows-msvc/
       - name: Configure compiler and linker
         if: steps.scope.outputs.run == 'true'
         shell: pwsh
         run: |
           "RUSTC_WRAPPER=sccache" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CC=sccache clang-cl" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CXX=sccache clang-cl" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "RUSTFLAGS=--remap-path-prefix=$env:GITHUB_WORKSPACE=. -C target-feature=+crt-static -Clinker=lld-link -W linker-messages" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "SCRYER_EMBED_UI_DIR=$env:GITHUB_WORKSPACE/scryer-web-out" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Install pinned NASM
@@ -682,13 +682,14 @@ jobs:
       - name: Install sccache
         uses: ./.github/actions/install-ci-sccache
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-unknown-linux-gnu/
 
       - name: Configure fork PR sccache
@@ -947,13 +948,14 @@ jobs:
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -1185,13 +1187,14 @@ jobs:
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -1492,13 +1495,14 @@ jobs:
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -1908,7 +1912,7 @@ jobs:
             artifact_name: scryer-windows-x86_64
             release_profile: release
             install_nasm: true
-            use_clang_cl: true
+            use_clang_cl: false
             use_lld_link: true
           - arch: arm64
             msi_arch: arm64
@@ -1921,7 +1925,7 @@ jobs:
             artifact_name: scryer-windows-arm64
             release_profile: release-thin
             install_nasm: false
-            use_clang_cl: true
+            use_clang_cl: false
             use_lld_link: true
     env:
       CARGO_INCREMENTAL: "0"
@@ -2004,13 +2008,14 @@ jobs:
           "RUSTC_WRAPPER=sccache" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "SCRYER_SCCACHE_ENABLED=true" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - name: Configure trusted internal PR sccache
+      - name: Configure internal PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/configure-sccache-r2
         with:
-          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
-          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
-          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          bucket: pr-sccache
+          endpoint: ${{ secrets.SCCACHE_PR_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_PR_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_PR_S3_SECRET }}
           key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
@@ -2106,12 +2111,9 @@ jobs:
           # our own cc::Build) only reaches sccache when CC/CXX name the wrapper
           # explicitly: cc-rs applies the RUSTC_WRAPPER fallback to its default
           # compiler, never to the vswhere-located cl.exe, so a plain MSVC lane
-          # compiles every native file uncached on every run. clang-cl is on PATH
-          # on the hosted Windows images (the LLVM install that also provides
-          # lld-link) and locates the MSVC SDK itself, so no developer shell is
-          # needed; the arm64 lane has run this exact wiring with C/C++ and
-          # assembler cache hits. cl.exe stays available as the escape hatch
-          # (use_clang_cl: false) but is deliberately left unwrapped: `sccache cl`
+          # compiles every native file uncached on every run. Use the MSVC cl.exe
+          # fallback while the hosted VS2026 headers require a newer clang-cl
+          # than the runner provides. Leave cl.exe unwrapped: `sccache cl`
           # would need INCLUDE/LIB/PATH from a vcvars shell that this job does
           # not set up. NASM-driven asm (aws-lc x86_64) is outside sccache either
           # way. The CMake launcher variables cover the aws-lc-sys cmake fallback
@@ -2503,18 +2505,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  docker-publish-pr-rc:
-    name: docker-publish-pr-rc
-    if: ${{ always() && needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
+  docker-prepare-pr-rc:
+    name: docker-prepare-pr-rc
+    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.changes.result == 'success' && needs.changes.outputs.full == 'true' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    needs: [changes, rust-clippy, rust-nextest, launcher-build, linux-build]
+    timeout-minutes: 10
+    needs: [changes, launcher-build, linux-build]
     permissions:
       contents: read
-      id-token: write
-      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Download linux amd64 portable artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -2543,130 +2545,13 @@ jobs:
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
 
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+      - name: Upload prepared PR build context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve PR RC tags
-        id: pr_rc_tags
-        shell: bash
-        run: |
-          set -euo pipefail
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          SHORT_SHA="${HEAD_SHA:0:7}"
-          echo "moving_tag=pr-${PR_NUMBER}-rc" >> "$GITHUB_OUTPUT"
-          echo "commit_tag=pr-${PR_NUMBER}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Docker meta
-        id: pr_meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/scryer
-          tags: |
-            type=raw,value=${{ steps.pr_rc_tags.outputs.moving_tag }}
-            type=raw,value=${{ steps.pr_rc_tags.outputs.commit_tag }}
-
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: docker-ctx
-          file: docker/scryer.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: mode=max,version=v1
-          sbom: true
-          tags: ${{ steps.pr_meta.outputs.tags }}
-          labels: ${{ steps.pr_meta.outputs.labels }}
-
-      - name: Resolve immutable image reference
-        id: image
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "name=ghcr.io/${{ github.repository_owner }}/scryer" >> "$GITHUB_OUTPUT"
-          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.3
-
-      - name: Keylessly sign immutable OCI index
-        shell: bash
-        run: |
-          set -euo pipefail
-          cosign sign --yes "${{ steps.image.outputs.name }}@${{ steps.image.outputs.digest }}"
-
-      # The signing identity is the PR merge ref (refs/pull/N/merge), not a tag,
-      # so it is read from github.workflow_ref instead of being spelled out.
-      - name: Verify keyless OCI signature
-        shell: bash
-        run: |
-          set -euo pipefail
-          cosign verify \
-            --certificate-identity "https://github.com/${{ github.workflow_ref }}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${{ steps.image.outputs.name }}@${{ steps.image.outputs.digest }}"
-
-    outputs:
-      image: ${{ steps.image.outputs.name }}
-      digest: ${{ steps.image.outputs.digest }}
-
-  oci-verify-pr-rc:
-    name: verify-oci-pr-rc-trust
-    needs: [docker-publish-pr-rc]
-    if: ${{ github.event_name == 'pull_request' && needs.docker-publish-pr-rc.result == 'success' }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.3
-
-      # Mirrors oci-verify, minus the slsa-verifier checks: the SLSA generator
-      # does not support pull_request, so RC images carry buildx's own
-      # provenance attestation rather than a generator-signed one.
-      - name: Verify OCI signature, provenance, and SBOM
-        shell: bash
-        env:
-          IMAGE: ${{ needs.docker-publish-pr-rc.outputs.image }}
-          DIGEST: ${{ needs.docker-publish-pr-rc.outputs.digest }}
-        run: |
-          set -euo pipefail
-          immutable_image="${IMAGE}@${DIGEST}"
-          cosign verify \
-            --certificate-identity "https://github.com/${{ github.workflow_ref }}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "$immutable_image"
-          index="$(docker buildx imagetools inspect --raw "$immutable_image")"
-          for platform in linux/amd64 linux/arm64; do
-            os="${platform%/*}"
-            architecture="${platform#*/}"
-            subject_digest="$(jq -r \
-              --arg os "$os" \
-              --arg architecture "$architecture" \
-              '.manifests[] | select(.platform.os == $os and .platform.architecture == $architecture) | .digest' \
-              <<< "$index")"
-            test -n "$subject_digest" && test "$subject_digest" != null
-            attestation_digest="$(jq -r \
-              --arg subject "$subject_digest" \
-              '.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest" and .annotations["vnd.docker.reference.digest"] == $subject) | .digest' \
-              <<< "$index")"
-            test -n "$attestation_digest" && test "$attestation_digest" != null
-            attestation="$(docker buildx imagetools inspect --raw "${IMAGE}@${attestation_digest}")"
-            jq -e 'any(.layers[]; .mediaType == "application/vnd.in-toto+json" and .annotations["in-toto.io/predicate-type"] == "https://spdx.dev/Document")' > /dev/null <<< "$attestation"
-            jq -e 'any(.layers[]; .mediaType == "application/vnd.in-toto+json" and (.annotations["in-toto.io/predicate-type"] | startswith("https://slsa.dev/provenance/")))' > /dev/null <<< "$attestation"
-          done
+          name: scryer-pr-docker-context-${{ github.run_id }}
+          path: docker-ctx/
+          if-no-files-found: error
+          retention-days: 1
 
   release-trust:
     name: verify-release-trust
