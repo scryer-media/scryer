@@ -238,6 +238,10 @@ pub struct SecuritySettingsPayload {
     pub skip_login_for_local_ips: bool,
     /// Whether API keys are restricted to users with system-settings permission.
     pub api_keys_restrict_to_system_settings_users: bool,
+    /// The saved MCP switch.
+    pub mcp_enabled: bool,
+    /// The value SCRYER_MCP_ENABLED forces over the saved switch; null when unset.
+    pub mcp_enabled_env_override: Option<bool>,
     /// Whether configuration changes require MFA step-up.
     pub mfa_require_config_step_up: bool,
     /// Whether password login is required alongside MFA.
@@ -1553,6 +1557,8 @@ pub struct UpdateSecuritySettingsInput {
     pub skip_login_for_local_ips: bool,
     /// Whether API keys are restricted to users with system-settings permission.
     pub api_keys_restrict_to_system_settings_users: Option<bool>,
+    /// Whether the built-in MCP endpoint answers. Needs system-settings permission; omission preserves the saved setting.
+    pub mcp_enabled: Option<bool>,
     /// Whether sensitive configuration changes require MFA step-up.
     pub mfa_require_config_step_up: bool,
     /// Whether password login requires MFA.

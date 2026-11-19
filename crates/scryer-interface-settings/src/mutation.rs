@@ -170,6 +170,8 @@ fn from_security_settings(
         skip_login_for_local_ips: settings.skip_login_for_local_ips,
         api_keys_restrict_to_system_settings_users: settings
             .api_keys_restrict_to_system_settings_users,
+        mcp_enabled: settings.mcp_enabled,
+        mcp_enabled_env_override: settings.mcp_enabled_env_override,
         mfa_require_config_step_up: settings.mfa_require_config_step_up,
         mfa_require_password_login: settings.mfa_require_password_login,
         mfa_require_jellyfin_login: settings.totp_require_jellyfin_login,
@@ -1278,7 +1280,8 @@ impl SettingsMutations {
         let auth_runtime = auth_runtime_from_ctx(ctx);
         let actor =
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageUsers).await?;
-        if input.api_keys_restrict_to_system_settings_users.is_some() {
+        if input.api_keys_restrict_to_system_settings_users.is_some() || input.mcp_enabled.is_some()
+        {
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
                 .await?;
         }
@@ -1310,6 +1313,7 @@ impl SettingsMutations {
                     skip_login_for_local_ips: input.skip_login_for_local_ips,
                     api_keys_restrict_to_system_settings_users: input
                         .api_keys_restrict_to_system_settings_users,
+                    mcp_enabled: input.mcp_enabled,
                     mfa_require_config_step_up: input.mfa_require_config_step_up,
                     mfa_require_password_login: input.mfa_require_password_login,
                     totp_require_jellyfin_login: jellyfin_mfa_requirement,

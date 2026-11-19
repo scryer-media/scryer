@@ -116,7 +116,7 @@ Counts and tallies only; names as pseudonyms such as `indexer-1(newznab)` or
 | `metrics` | enabled, renderable |
 | `logging` | file_logging_enabled, log_filter |
 | `time_and_locale` | utc_offset_seconds, locale |
-| `scryer_variables` | every `SCRYER_*` name; values shown only for SCRYER_LOG_FORMAT, SCRYER_METRICS, SCRYER_AUTH_ENABLED, SCRYER_PACKAGE, else `<set>` |
+| `scryer_variables` | every `SCRYER_*` name; values shown only for SCRYER_LOG_FORMAT, SCRYER_METRICS, SCRYER_AUTH_ENABLED, SCRYER_MCP_ENABLED, SCRYER_PACKAGE, else `<set>` |
 | `datastore` | engine, current_migration_key |
 | `setup_complete` | bool |
 | `smg_compatibility_notice` | present, status, minimum_version, your_version, has_upgrade_deadline |

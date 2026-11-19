@@ -4946,6 +4946,11 @@ const en: LocaleDictionary = {
   "settings.securitySkipLocalIps": "Skip for local IPs",
   "settings.securitySkipLocalIpsHelp":
     "When enabled, callers from 10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16 can access Scryer without signing in.",
+  "settings.securityMcpEnabled": "Allow the MCP server",
+  "settings.securityMcpEnabledHelp":
+    "Lets coding agents use Scryer's skills over MCP at /mcp with an API key. When off, every MCP request is refused; API keys keep working with the GraphQL API.",
+  "settings.securityMcpEnvOverride":
+    "SCRYER_MCP_ENABLED is set and decides whether the MCP server answers. The saved choice applies after the variable is removed.",
   "settings.securityMfaConfigStepUp":
     "Require MFA step-up for configuration changes",
   "settings.securityMfaConfigStepUpHelp":
@@ -7099,7 +7104,7 @@ const en: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Download diagnostics bundle",
   "system.diagnosticsBundle.preparing": "Preparing diagnostics…",
   "system.diagnosticsBundle.helper":
-    "Logs, metrics and a settings summary in one file for the maintainer. Names, addresses, paths and secrets are removed on a best-effort basis; review the bundle before sharing it.",
+    "Logs, metrics and a settings summary in one file for the maintainer. The bundle is sanitized on a best-effort basis and is safe to share in a Discord ticket, but sharing it in GitHub issues or public Discord channels is not recommended.",
   "system.diagnosticsBundle.failed":
     "Could not download the diagnostics bundle.",
   "system.diagnosticsBundle.refusal.authenticationRequired":

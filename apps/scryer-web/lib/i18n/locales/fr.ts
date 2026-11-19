@@ -1682,7 +1682,7 @@ const fr: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Télécharger le paquet de diagnostic",
   "system.diagnosticsBundle.preparing": "Préparation du diagnostic…",
   "system.diagnosticsBundle.helper":
-    "Journaux, métriques et un résumé des paramètres dans un seul fichier pour le mainteneur. Les noms, adresses, chemins et secrets sont retirés au mieux ; vérifiez le paquet avant de le partager.",
+    "Journaux, métriques et un résumé des paramètres dans un seul fichier pour le mainteneur. Le paquet est nettoyé au mieux et peut être partagé sans risque dans un ticket Discord, mais il est déconseillé de le partager dans des issues GitHub ou des salons Discord publics.",
   "system.diagnosticsBundle.failed":
     "Impossible de télécharger le paquet de diagnostic.",
   "system.diagnosticsBundle.refusal.authenticationRequired":

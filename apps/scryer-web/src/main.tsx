@@ -16,7 +16,11 @@ import { URL_PARAM_LANGUAGE } from "@/lib/constants/settings";
 import { loadLocaleDictionary } from "@/lib/i18n";
 import { readStoredLanguageCode } from "@/lib/hooks/use-language";
 import { parseLanguageFromParam } from "@/lib/utils/routing";
-import { claimViteImportRecovery } from "@/lib/utils/vite-import-recovery";
+import {
+  browserRecoveryEnvironment,
+  recoverFromViteImportError,
+} from "@/lib/utils/vite-import-recovery";
+import { buildAppUrl } from "@/lib/runtime-config";
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/space-grotesk";
@@ -29,13 +33,14 @@ import { router } from "./router";
 type VitePreloadErrorEvent = Event & { payload?: unknown };
 
 if (import.meta.env.PROD) {
+  // The failed import still rejects, so a route shows its error page while
+  // the recovery waits; the reload replaces it once the chunk can load.
   window.addEventListener("vite:preloadError", (event) => {
     const preloadEvent = event as VitePreloadErrorEvent;
-    if (!claimViteImportRecovery(preloadEvent.payload, window.sessionStorage)) {
-      return;
-    }
-    event.preventDefault();
-    window.location.reload();
+    recoverFromViteImportError(
+      preloadEvent.payload,
+      browserRecoveryEnvironment(buildAppUrl("/health")),
+    );
   });
 }
 

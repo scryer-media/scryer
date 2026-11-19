@@ -1,7 +1,8 @@
 use super::*;
 use crate::diagnostics_routes::DiagnosticsProcessFacts;
 use crate::error_reasons::{
-    HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_GRAPHQL_ERROR,
+    HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_CONFIRMATION_MISMATCH,
+    HTTP_MCP_CONFIRMATION_UNKNOWN, HTTP_MCP_DISABLED, HTTP_MCP_GRAPHQL_ERROR,
     HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_OPERATION_AMBIGUOUS, HTTP_MCP_OPERATION_KIND_MISMATCH,
     HTTP_MCP_OPERATION_UNKNOWN, HTTP_MCP_RESULT_TOO_LARGE, HTTP_MCP_SKILL_UNKNOWN,
     HTTP_MCP_TOOL_UNKNOWN,
@@ -303,6 +304,27 @@ fn tool_error(name: &str, body: &Value) -> Value {
     error
 }
 
+/// The `confirm_token` a first `run_mutation` call returned, checking that
+/// it ran nothing.
+fn confirm_token(body: &Value) -> String {
+    let pending = success("run_mutation", body);
+    assert_eq!(pending["status"], "confirmation_required", "{body}");
+    assert_eq!(pending["applied"], false, "{body}");
+    pending["confirm_token"]
+        .as_str()
+        .expect("a confirm token")
+        .to_string()
+}
+
+/// Runs a mutation that needs confirmation: the first call, then the same
+/// call with its token. Returns the second call's body.
+async fn confirmed(fixture: &Fixture, key: &str, arguments: Value) -> Value {
+    let token = confirm_token(&call(fixture, key, "run_mutation", arguments.clone()).await);
+    let mut arguments = arguments;
+    arguments["confirm_token"] = json!(token);
+    call(fixture, key, "run_mutation", arguments).await
+}
+
 /// A JSON-RPC protocol error's reason.
 fn protocol_error_reason(body: &Value) -> Value {
     assert!(body["error"]["code"].is_i64(), "{body}");
@@ -563,6 +585,67 @@ async fn mcp_refuses_a_revoked_key_and_an_expired_key() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(body["reason"], HTTP_MCP_API_KEY_INVALID);
+}
+
+/// Saves the security settings as they are, with the MCP switch set.
+async fn set_mcp_enabled(fixture: &Fixture, enabled: bool) {
+    let app = &fixture.context.app;
+    let current = app.security_settings().await.expect("security settings");
+    let saved = app
+        .update_security_settings(
+            &fixture.admin,
+            scryer_application::UpdateSecuritySettings {
+                form_login_enabled: current.form_login_enabled,
+                session_duration_days: None,
+                password_min_length: current.password_min_length,
+                skip_login_for_local_ips: current.skip_login_for_local_ips,
+                api_keys_restrict_to_system_settings_users: None,
+                mcp_enabled: Some(enabled),
+                mfa_require_config_step_up: current.mfa_require_config_step_up,
+                mfa_require_password_login: current.mfa_require_password_login,
+                totp_require_jellyfin_login: current.totp_require_jellyfin_login,
+                totp_require_emby_login: None,
+            },
+        )
+        .await
+        .expect("save security settings");
+    assert_eq!(saved.mcp_enabled, enabled);
+}
+
+#[tokio::test]
+async fn mcp_is_on_by_default_and_the_security_switch_turns_it_off_and_on() {
+    let fixture = fixture().await;
+    // The definitions a real start-up seeds, so the switch reads its seeded
+    // default and the security save can write it.
+    crate::settings_bootstrap::seed_service_setting_definitions(
+        fixture.context.settings_store.clone(),
+    )
+    .await
+    .expect("seed setting definitions");
+    let key = fixture.api_key.clone();
+    assert!(fixture.context.app.mcp_enabled().await.expect("setting"));
+    let (status, _, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    set_mcp_enabled(&fixture, false).await;
+    let (status, _, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["reason"], HTTP_MCP_DISABLED);
+    // Off means off for everyone: no key is needed to learn it, and a valid
+    // key does not get past it.
+    let (status, _, body) = send(&fixture.router, rpc_request(None, None, list_tools())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["reason"], HTTP_MCP_DISABLED);
+    // The API key itself keeps working on GraphQL.
+    let me = graphql_body(&fixture, &key, "query { me { username } }", json!({})).await;
+    assert!(me["errors"].is_null(), "{me}");
+
+    set_mcp_enabled(&fixture, true).await;
+    let (status, _, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
@@ -1264,8 +1347,8 @@ async fn the_tool_list_and_instructions_stay_within_their_token_budget() {
         .len();
     let (_, _, listed) = send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
     let tools = listed["result"].to_string().len();
-    // Measured at 244 + 2,945 characters, about 800 tokens together.
-    assert!(instructions + tools < 3_300, "{instructions} + {tools}");
+    // Measured at 244 + 3,078 characters, about 830 tokens together.
+    assert!(instructions + tools < 3_400, "{instructions} + {tools}");
 }
 
 #[tokio::test]
@@ -1670,10 +1753,9 @@ async fn run_mutation_saves_a_configuration_change_end_to_end() {
     seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
     let key = fixture.api_key.clone();
 
-    let body = call(
+    let body = confirmed(
         &fixture,
         &key,
-        "run_mutation",
         json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
     )
     .await;
@@ -1711,19 +1793,138 @@ async fn run_mutation_saves_a_configuration_change_end_to_end() {
     assert_eq!(entry["categories"], json!(["2000"]), "{read}");
 
     // A mutation over the cap still ran, and says so.
-    let mut request = rpc_request(
-        Some(&key),
-        None,
-        call_tool(
-            "run_mutation",
-            json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
-        ),
-    );
+    let arguments = json!({"name": "UpdateIndexerRouting", "variables": routing_input()});
+    let token = confirm_token(&call(&fixture, &key, "run_mutation", arguments.clone()).await);
+    let mut arguments = arguments;
+    arguments["confirm_token"] = json!(token);
+    let mut request = rpc_request(Some(&key), None, call_tool("run_mutation", arguments));
     request.extensions_mut().insert(server::ResultCap(16));
     let (_, _, body) = send(&fixture.router, request).await;
     let error = tool_error("run_mutation", &body);
     assert_eq!(error["reason"], HTTP_MCP_RESULT_TOO_LARGE);
     assert_eq!(error["applied"], true);
+}
+
+/// The saved priority of the fixture indexer for movies.
+async fn fixture_indexer_priority(fixture: &Fixture, key: &str) -> Value {
+    let read = success(
+        "run_query",
+        &call(
+            fixture,
+            key,
+            "run_query",
+            json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
+        )
+        .await,
+    );
+    read["indexerRouting"]
+        .as_array()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry["indexerId"] == "mcp-fixture-indexer")
+        })
+        .map_or(Value::Null, |entry| entry["priority"].clone())
+}
+
+#[tokio::test]
+async fn a_lasting_mutation_runs_only_on_a_confirmed_second_call() {
+    let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
+    seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
+    let key = fixture.api_key.clone();
+    let before = fixture_indexer_priority(&fixture, &key).await;
+    assert_ne!(before, json!(3), "the fixture starts elsewhere");
+    let arguments = json!({"name": "UpdateIndexerRouting", "variables": routing_input()});
+
+    // The first call runs nothing and describes the call.
+    let body = call(&fixture, &key, "run_mutation", arguments.clone()).await;
+    let pending = success("run_mutation", &body);
+    assert_eq!(pending["summary"]["operation"], "UpdateIndexerRouting");
+    assert_eq!(pending["summary"]["variables"], routing_input());
+    assert_eq!(pending["expires_in_seconds"], 300);
+    let token = confirm_token(&body);
+    assert_eq!(fixture_indexer_priority(&fixture, &key).await, before);
+
+    // Changed variables spend the token without running.
+    let mut changed = routing_input();
+    changed["input"]["entries"][0]["priority"] = json!(4);
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "UpdateIndexerRouting", "variables": changed, "confirm_token": token}),
+    )
+    .await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_MISMATCH,
+        "{body}"
+    );
+    let mut original = arguments.clone();
+    original["confirm_token"] = json!(token);
+    let body = call(&fixture, &key, "run_mutation", original).await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_UNKNOWN,
+        "{body}"
+    );
+    assert_eq!(fixture_indexer_priority(&fixture, &key).await, before);
+
+    // Another key cannot use this key's token, nor spend it.
+    let token = confirm_token(&call(&fixture, &key, "run_mutation", arguments.clone()).await);
+    let other = create_key(&fixture.context, &fixture.admin).await;
+    let mut with_token = arguments.clone();
+    with_token["confirm_token"] = json!(token);
+    let body = call(&fixture, &other, "run_mutation", with_token.clone()).await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_UNKNOWN,
+        "{body}"
+    );
+
+    // The same call with its token runs, once.
+    let body = call(&fixture, &key, "run_mutation", with_token.clone()).await;
+    assert!(success("run_mutation", &body)["updateIndexerRouting"].is_array());
+    assert_eq!(fixture_indexer_priority(&fixture, &key).await, json!(3));
+    let body = call(&fixture, &key, "run_mutation", with_token).await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_UNKNOWN,
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn no_effect_mutations_run_at_once_and_describe_says_which_need_a_yes() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "ValidateRuleSet", "skill": "scryer-write-rules", "variables": {"input": {"regoSource": "package fixture"}}}),
+    )
+    .await;
+    let result = result_value("run_mutation", &body);
+    assert!(result.get("status").is_none(), "{body}");
+    assert!(result["validateRuleSet"].is_object(), "{body}");
+    for (name, skill, needs) in [
+        ("ValidateRuleSet", "scryer-write-rules", false),
+        ("UpdateIndexerRouting", "scryer-configure-acquisition", true),
+    ] {
+        let described = success(
+            "describe_operation",
+            &call(
+                &fixture,
+                &key,
+                "describe_operation",
+                json!({"name": name, "skill": skill}),
+            )
+            .await,
+        );
+        assert_eq!(described.get("confirm").is_some(), needs, "{described}");
+    }
 }
 
 #[tokio::test]
@@ -1859,8 +2060,9 @@ async fn a_catalog_run_draws_on_its_operations_graphql_class() {
         ("run_mutation", json!({"name": mutation.name})),
     ];
     for (tool, arguments) in &runs {
+        // The mutation's first call returns a confirmation, still one charge.
         let body = call(&fixture, &key, tool, arguments.clone()).await;
-        assert_ne!(tool_error(tool, &body)["code"], "RATE_LIMITED", "{body}");
+        assert!(!body.to_string().contains("RATE_LIMITED"), "{body}");
     }
     // Each has spent its own one-request bucket.
     for (tool, arguments) in &runs {
@@ -2014,10 +2216,9 @@ async fn config_step_up_refuses_api_key_writes_with_the_graphql_code() {
 
     // The owner has no TOTP credential, so the write is refused for
     // enrollment, exactly as `/graphql` refuses it.
-    let body = call(
+    let body = confirmed(
         &fixture,
         &key,
-        "run_mutation",
         json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
     )
     .await;
@@ -2112,4 +2313,281 @@ async fn a_name_that_differs_between_skills_needs_its_skill() {
         )
         .await,
     );
+}
+
+/// Roots, download clients and indexers of one seeded arr source.
+struct ArrSourceShape {
+    kind: scryer_application::ExternalImportArrSourceKind,
+    source_key: &'static str,
+    titles: i32,
+    roots: usize,
+    /// Parent folders of titles outside every root; arr reports each one as
+    /// that title's root folder.
+    stray_parents: usize,
+    clients: usize,
+    direct_indexers: usize,
+    prowlarr_indexers: usize,
+}
+
+/// Seeds a completed arr warm-up session of `shape` owned by the admin and
+/// returns its id.
+async fn seed_arr_source(fixture: &Fixture, shape: &ArrSourceShape) -> String {
+    use scryer_application::external_import::{ArrDownloadClient, ArrIndexer, ArrRootFolder};
+    use scryer_application::{
+        ExternalImportArrSourceKind, ExternalImportArrSourceWarmupResult,
+        ExternalImportMonitorWarmupPhase, ExternalImportMonitorWarmupStatus,
+    };
+    let app = &fixture.context.app;
+    within(
+        "maintain import sessions",
+        app.maintain_external_import_arr_source_sessions(&fixture.admin),
+    )
+    .await
+    .expect("maintain import sessions");
+    let begin = within(
+        "begin warm-up",
+        app.begin_external_import_monitor_warmup(&fixture.admin, shape.source_key),
+    )
+    .await
+    .expect("begin warm-up");
+    let session_id = begin.snapshot.session_id.clone();
+    let movies = shape.kind == ExternalImportArrSourceKind::Radarr;
+    let base = if movies {
+        "/arr-data/films"
+    } else {
+        "/arr-data/shows"
+    };
+    let root_folders = (0..shape.roots)
+        .map(|id| ArrRootFolder {
+            id: id as i64 + 1,
+            path: format!("{base}-{id}"),
+        })
+        .collect::<Vec<_>>();
+    let mut title_root_paths = root_folders
+        .iter()
+        .map(|root| root.path.clone())
+        .collect::<Vec<_>>();
+    title_root_paths
+        .extend((0..shape.stray_parents).map(|id| format!("/arr-data/loose/shelf-{id:04}")));
+    let field = |value: Value| value;
+    let clients = (0..shape.clients)
+        .map(|id| {
+            let (implementation, port) = if id % 2 == 0 {
+                ("Sabnzbd", 8080)
+            } else {
+                ("QBittorrent", 8090)
+            };
+            ArrDownloadClient {
+                id: id as i64 + 1,
+                name: format!("Fixture client {id}"),
+                implementation: implementation.into(),
+                fields: [
+                    (
+                        "host".to_string(),
+                        field(json!(format!("client-{id}.fixture.test"))),
+                    ),
+                    ("port".to_string(), json!(port)),
+                    ("apiKey".to_string(), json!("********")),
+                    ("password".to_string(), json!("********")),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        })
+        .collect();
+    let mut indexers = (0..shape.direct_indexers)
+        .map(|id| ArrIndexer {
+            id: id as i64 + 1,
+            name: format!("Fixture indexer {id}"),
+            implementation: "Newznab".into(),
+            fields: [
+                (
+                    "baseUrl".to_string(),
+                    json!(format!("https://indexer-{id}.fixture.test")),
+                ),
+                ("apiPath".to_string(), json!("/api")),
+                ("apiKey".to_string(), json!("********")),
+            ]
+            .into_iter()
+            .collect(),
+        })
+        .collect::<Vec<_>>();
+    indexers.extend((0..shape.prowlarr_indexers).map(|id| {
+        ArrIndexer {
+            id: 1000 + id as i64,
+            name: format!("Fixture tracker {id} (Prowlarr)"),
+            implementation: "Torznab".into(),
+            fields: [
+                (
+                    "baseUrl".to_string(),
+                    json!(format!("http://prowlarr.fixture.test:9696/{}/", id + 1)),
+                ),
+                ("apiPath".to_string(), json!("/api")),
+                ("apiKey".to_string(), json!("********")),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }));
+    app.set_external_import_arr_source_warmup_result(
+        &session_id,
+        ExternalImportArrSourceWarmupResult {
+            source_key: shape.source_key.to_string(),
+            kind: shape.kind,
+            base_url: format!("http://{}.fixture.test", shape.source_key),
+            version: Some(if movies { "5.20.0" } else { "4.0.15" }.into()),
+            root_folders,
+            title_root_paths,
+            naming_config: None,
+            media_management_config: None,
+            metadata_providers: Vec::new(),
+            quality_profiles: Vec::new(),
+            signal_warnings: Vec::new(),
+            download_clients: clients,
+            indexers,
+        },
+    )
+    .await;
+    let mut snapshot = begin.snapshot.clone();
+    snapshot.status = ExternalImportMonitorWarmupStatus::Completed;
+    snapshot.phase = ExternalImportMonitorWarmupPhase::Ready;
+    if movies {
+        snapshot.movies_total_known = true;
+        snapshot.movies_progress.total = shape.titles;
+        snapshot.movies_progress.completed = shape.titles;
+        snapshot.matched_movie_count = shape.titles - shape.titles / 50;
+        snapshot.unmatched_movie_count = shape.titles / 50;
+    } else {
+        snapshot.series_total_known = true;
+        snapshot.series_progress.total = shape.titles;
+        snapshot.series_progress.completed = shape.titles;
+        snapshot.matched_series_count = shape.titles - shape.titles / 50;
+        snapshot.unmatched_series_count = shape.titles / 50;
+    }
+    snapshot.overall_total_known = true;
+    snapshot.overall_progress.total = shape.titles;
+    snapshot.overall_progress.completed = shape.titles;
+    app.update_external_import_monitor_warmup_progress(&session_id, snapshot)
+        .await;
+    session_id
+}
+
+/// The import's reads at 10,000 series and 50,000 movies, with 170 distinct
+/// roots, 8 download clients and Prowlarr-fed indexers. Each answer must fit
+/// the MCP result cap, and the read an agent polls must stay small.
+#[tokio::test]
+async fn arr_import_reads_fit_the_result_cap_for_ten_thousand_series_and_fifty_thousand_movies() {
+    use scryer_application::ExternalImportArrSourceKind;
+    let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
+    let key = fixture.api_key.clone();
+    let sonarr = seed_arr_source(
+        &fixture,
+        &ArrSourceShape {
+            kind: ExternalImportArrSourceKind::Sonarr,
+            source_key: "sonarr-fixture",
+            titles: 10_000,
+            roots: 4,
+            stray_parents: 40,
+            clients: 4,
+            direct_indexers: 8,
+            prowlarr_indexers: 30,
+        },
+    )
+    .await;
+    let radarr = seed_arr_source(
+        &fixture,
+        &ArrSourceShape {
+            kind: ExternalImportArrSourceKind::Radarr,
+            source_key: "radarr-fixture",
+            titles: 50_000,
+            roots: 6,
+            stray_parents: 120,
+            clients: 4,
+            direct_indexers: 8,
+            prowlarr_indexers: 30,
+        },
+    )
+    .await;
+    let preview_input = json!({"input": {
+        "sourceWarmupSessionIds": [sonarr, radarr], "prowlarrWarmupSessionId": null}});
+    let aggregate_input = json!({"input": {"sourceWarmupSessionIds": [sonarr, radarr]}});
+    let reads = [
+        (
+            "run_mutation",
+            "ExternalImportPreviewStatus",
+            preview_input.clone(),
+        ),
+        (
+            "run_mutation",
+            "ExternalImportPreviewRoots",
+            preview_input.clone(),
+        ),
+        (
+            "run_mutation",
+            "ExternalImportPreviewSources",
+            preview_input,
+        ),
+        (
+            "run_query",
+            "ExternalImportWarmupStatus",
+            json!({"sessionId": radarr}),
+        ),
+        (
+            "run_query",
+            "ExternalImportAggregateWarmupProgress",
+            aggregate_input,
+        ),
+        ("run_query", "QualityProfileChoices", json!({})),
+        ("run_query", "Libraries", json!({})),
+        ("run_query", "SetupStatus", json!({})),
+    ];
+    for (tool, name, variables) in reads {
+        let body = call(
+            &fixture,
+            &key,
+            tool,
+            json!({"name": name, "skill": "scryer-migrate-from-arr", "variables": variables}),
+        )
+        .await;
+        assert_eq!(body["result"]["isError"], false, "{name}: {body}");
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool result text");
+        assert!(
+            text.len() <= tools::RESULT_MAX_BYTES,
+            "{name} answered {} bytes",
+            text.len()
+        );
+        let data: Value = serde_json::from_str(text).expect("tool result JSON");
+        match name {
+            "ExternalImportPreviewStatus" => {
+                let sources = data["previewExternalImport"]["arrSources"]
+                    .as_array()
+                    .expect("arr sources");
+                assert_eq!(sources.len(), 2, "{data}");
+                assert!(
+                    text.len() <= 1024,
+                    "polled status answered {} bytes",
+                    text.len()
+                );
+            }
+            "ExternalImportPreviewRoots" => {
+                let roots = data["previewExternalImport"]["rootFolders"]
+                    .as_array()
+                    .expect("root folders");
+                assert_eq!(roots.len(), 170, "every configured and stray root");
+            }
+            "ExternalImportPreviewSources" => {
+                let preview = &data["previewExternalImport"];
+                assert_eq!(preview["downloadClients"].as_array().map(Vec::len), Some(4));
+                assert!(
+                    preview["indexers"]
+                        .as_array()
+                        .is_some_and(|i| !i.is_empty())
+                );
+            }
+            _ => {}
+        }
+    }
 }

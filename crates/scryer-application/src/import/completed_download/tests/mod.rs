@@ -301,9 +301,15 @@ impl ShowRepository for TestShowRepo {
 
     async fn find_series_movie_link_by_legacy_collection_id(
         &self,
-        _: &str,
+        collection_id: &str,
     ) -> AppResult<Option<scryer_domain::SeriesMovieLink>> {
-        Ok(None)
+        Ok(self
+            .series_movie_links
+            .lock()
+            .await
+            .iter()
+            .find(|link| link.legacy_collection_id.as_deref() == Some(collection_id))
+            .cloned())
     }
 
     async fn upsert_series_movie_link(

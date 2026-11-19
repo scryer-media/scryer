@@ -58,6 +58,7 @@ type SettingsSecuritySectionProps = {
   onSkipLocalIpsChange: (enabled: boolean) => void;
   onApiKeysRestrictionChange: (enabled: boolean) => void;
   canManageApiKeysRestriction: boolean;
+  onMcpEnabledChange: (enabled: boolean) => void;
   onMfaConfigStepUpChange: (enabled: boolean) => void;
   onMfaPasswordLoginChange: (enabled: boolean) => void;
   onTotpJellyfinLoginChange: (enabled: boolean) => void;
@@ -99,6 +100,7 @@ export function SettingsSecuritySection({
   onSkipLocalIpsChange,
   onApiKeysRestrictionChange,
   canManageApiKeysRestriction,
+  onMcpEnabledChange,
   onMfaConfigStepUpChange,
   onMfaPasswordLoginChange,
   onTotpJellyfinLoginChange,
@@ -253,6 +255,32 @@ export function SettingsSecuritySection({
                     className="w-full items-center py-3"
                     checkboxClassName="mt-0"
                   />
+                  <CheckboxField
+                    id="security-mcp-enabled"
+                    checked={settings.mcpEnabledEnvOverride ?? settings.mcpEnabled}
+                    disabled={
+                      busy ||
+                      !canManageApiKeysRestriction ||
+                      settings.mcpEnabledEnvOverride !== null
+                    }
+                    onCheckedChange={(checked) =>
+                      onMcpEnabledChange(checked === true)
+                    }
+                    label={t("settings.securityMcpEnabled")}
+                    labelAccessory={
+                      <InfoHelp
+                        ariaLabel={t("settings.securityMcpEnabled")}
+                        text={t("settings.securityMcpEnabledHelp")}
+                      />
+                    }
+                    className="w-full items-center py-3"
+                    checkboxClassName="mt-0"
+                  />
+                  {settings.mcpEnabledEnvOverride !== null ? (
+                    <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-xs text-muted-foreground">
+                      {t("settings.securityMcpEnvOverride")}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </section>

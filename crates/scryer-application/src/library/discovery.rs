@@ -4714,6 +4714,81 @@ mod tests {
         assert_eq!(verified, ([0, 2, 2, 0], [0, 2, 2, 0]));
     }
 
+    const PASS_WORKSPACE_NAME: &str = ".scryer-ax-0123456789abcdef";
+
+    /// A movie library with one title folder holding `hidden`, if any.
+    fn movie_library_with_hidden(hidden: Option<&str>) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        write_discovery_fixture(&root, "Harbor Lights (2001)/Harbor.Lights.2001.mkv");
+        let title = root.join("Harbor Lights (2001)");
+        if let Some(hidden) = hidden {
+            std::fs::create_dir(title.join(hidden)).unwrap();
+        }
+        (dir, root, title)
+    }
+
+    fn noted_under(root: &Path) -> Vec<PathBuf> {
+        crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root)
+    }
+
+    #[tokio::test]
+    async fn a_boundary_walk_notes_a_folder_holding_a_pass_workspace_and_returns_the_same_rows() {
+        let mut outcomes = Vec::new();
+        let mut workspace_library = None;
+        // Any subfolder ends a folder's reusable leaf evidence, so the walk
+        // is compared with one holding another hidden folder.
+        for hidden in [Some(".synthetic-hidden"), Some(PASS_WORKSPACE_NAME)] {
+            let (dir, root, title) = movie_library_with_hidden(hidden);
+            let rows = collect_nested_boundaries(&root, discovery_policy(MediaFacet::Movie)).await;
+            let verified =
+                scan_verify_outcome(&title, "Harbor Lights", MediaFacet::Movie, &[]).await;
+            outcomes.push((hidden, boundary_rows(&root, &rows), verified));
+            if hidden == Some(PASS_WORKSPACE_NAME) {
+                workspace_library = Some((dir, root, title));
+            } else {
+                assert!(noted_under(&root).is_empty(), "{hidden:?} notes nothing");
+            }
+        }
+        let (_, other_rows, other_verified) = &outcomes[0];
+        let (_, workspace_rows, workspace_verified) = &outcomes[1];
+        assert_eq!(workspace_rows, other_rows, "the walk returns the same rows");
+        assert_eq!(workspace_verified, other_verified);
+        let (_dir, root, title) = workspace_library.unwrap();
+        #[cfg(feature = "runtime-archives")]
+        assert_eq!(noted_under(&root), vec![title]);
+        #[cfg(not(feature = "runtime-archives"))]
+        {
+            let _ = title;
+            assert!(
+                noted_under(&root).is_empty(),
+                "without archive support nothing is noted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_probe_signature_notes_a_folder_holding_a_pass_workspace_and_stays_the_same() {
+        let (_dir, root, title) = movie_library_with_hidden(None);
+        let without = compute_library_probe_signature_blocking(title.clone()).unwrap();
+        assert!(noted_under(&root).is_empty());
+        std::fs::create_dir(title.join(PASS_WORKSPACE_NAME)).unwrap();
+
+        let with = compute_library_probe_signature_blocking(title.clone()).unwrap();
+
+        assert_eq!(with, without, "the workspace leaves the signature alone");
+        #[cfg(feature = "runtime-archives")]
+        assert_eq!(noted_under(&root), vec![title]);
+        #[cfg(not(feature = "runtime-archives"))]
+        {
+            let _ = title;
+            assert!(
+                noted_under(&root).is_empty(),
+                "without archive support nothing is noted"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn boundary_walk_movie_nfo_results_and_probes() {

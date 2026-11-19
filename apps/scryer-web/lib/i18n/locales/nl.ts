@@ -2009,7 +2009,7 @@ const nl: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Diagnosebundel downloaden",
   "system.diagnosticsBundle.preparing": "Diagnose voorbereiden…",
   "system.diagnosticsBundle.helper":
-    "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. Namen, adressen, paden en geheimen worden zo goed mogelijk verwijderd; controleer de bundel voordat je hem deelt.",
+    "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. De bundel wordt zo goed mogelijk opgeschoond en kan veilig in een Discord-ticket worden gedeeld, maar delen in GitHub-issues of openbare Discord-kanalen wordt afgeraden.",
   "system.diagnosticsBundle.failed": "Kan de diagnosebundel niet downloaden.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
     "Meld je opnieuw aan om de diagnose te downloaden.",

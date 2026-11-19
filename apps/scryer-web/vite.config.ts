@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { constants as zlibConstants } from "node:zlib";
@@ -26,6 +26,47 @@ function devServerPort(): string {
   return /^\d+$/.test(value ?? "") ? value! : "3000";
 }
 
+/**
+ * Writes `sw-precache.json`, the list of build chunks the service worker
+ * downloads in the background so lazy routes still load when the network
+ * drops. Locale dictionaries are left out: a page only needs its own, and the
+ * service worker caches that one when the page loads it. `files` lists every
+ * built asset so the service worker can drop cached files from older builds.
+ */
+function serviceWorkerPrecacheManifest(): Plugin {
+  return {
+    name: "scryer-sw-precache-manifest",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const precache: string[] = [];
+      const files: string[] = [];
+      for (const output of Object.values(bundle)) {
+        if (!output.fileName.startsWith("assets/")) {
+          continue;
+        }
+        files.push(output.fileName);
+        const isScriptOrStyle =
+          output.type === "chunk" || output.fileName.endsWith(".css");
+        const isLocale =
+          output.type === "chunk" &&
+          /\/locales\//.test(output.facadeModuleId ?? "");
+        if (isScriptOrStyle && !isLocale) {
+          precache.push(output.fileName);
+        }
+      }
+      this.emitFile({
+        type: "asset",
+        fileName: "sw-precache.json",
+        source: JSON.stringify({
+          version: 1,
+          precache: precache.sort(),
+          files: files.sort(),
+        }),
+      });
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => ({
   base: command === "serve" ? "/" : "./",
   // Each dev server prebundles into its own folder. Servers sharing one
@@ -37,6 +78,7 @@ export default defineConfig(({ command, mode }) => ({
       : "node_modules/.vite",
   plugins: [
     react(),
+    serviceWorkerPrecacheManifest(),
     ...(mode === "production"
       ? [babel({ presets: [reactCompilerPreset()] })]
       : []),

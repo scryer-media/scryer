@@ -1613,7 +1613,7 @@ const it: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Scarica pacchetto diagnostico",
   "system.diagnosticsBundle.preparing": "Preparazione della diagnostica…",
   "system.diagnosticsBundle.helper":
-    "Log, metriche e un riepilogo delle impostazioni in un unico file per il manutentore. Nomi, indirizzi, percorsi e segreti vengono rimossi al meglio delle possibilità; controlla il pacchetto prima di condividerlo.",
+    "Log, metriche e un riepilogo delle impostazioni in un unico file per il manutentore. Il pacchetto viene ripulito al meglio delle possibilità e si può condividere in sicurezza in un ticket Discord, ma è sconsigliato condividerlo nelle issue di GitHub o nei canali Discord pubblici.",
   "system.diagnosticsBundle.failed":
     "Impossibile scaricare il pacchetto diagnostico.",
   "system.diagnosticsBundle.refusal.authenticationRequired":

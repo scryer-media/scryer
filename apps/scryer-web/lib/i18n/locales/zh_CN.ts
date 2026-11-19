@@ -1449,7 +1449,7 @@ const zh_CN: LocaleDictionary = {
   "system.diagnosticsBundle.download": "下载诊断包",
   "system.diagnosticsBundle.preparing": "正在准备诊断…",
   "system.diagnosticsBundle.helper":
-    "将日志、指标和设置摘要打包成一个文件发给维护者。名称、地址、路径和密钥会尽力移除；分享前请检查诊断包。",
+    "将日志、指标和设置摘要打包成一个文件发给维护者。诊断包已尽力脱敏，可以安全地在 Discord 工单中分享，但不建议在 GitHub issue 或 Discord 公开频道中分享。",
   "system.diagnosticsBundle.failed": "无法下载诊断包。",
   "system.diagnosticsBundle.refusal.authenticationRequired":
     "请重新登录后下载诊断。",

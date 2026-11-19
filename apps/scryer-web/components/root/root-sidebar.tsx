@@ -508,6 +508,7 @@ const SETTINGS_NAV_GROUPS: Array<{
     itemIds: [
       "profile",
       "general",
+      "acquisition",
       "qualityProfiles",
       "delayProfiles",
       "titleTags",

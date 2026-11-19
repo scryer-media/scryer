@@ -816,7 +816,18 @@ async fn visible_source_files_have_terminal_dispositions_in_scope(
         filter_samples,
     )
     .ok()?;
-    if largest_video_only && files.len() > 1 {
+    // The import picks the largest video among the download's extracted
+    // archive contents and its loose files. When the recorded success came
+    // out of the extraction workspace, every loose video here was smaller and
+    // never a candidate, so one with no rows (a trailer, a sample) cannot
+    // block; one that does have rows must still be terminal. Decided from the
+    // rows alone: a success is required, so nothing settles without one.
+    let imported_from_workspace = largest_video_only
+        && artifacts.iter().any(|artifact| {
+            matches!(artifact.result.as_str(), "imported" | "already_present")
+                && artifact.workspace_relative_path.is_some()
+        });
+    if largest_video_only && !imported_from_workspace && files.len() > 1 {
         // The movie and series-movie import paths select exactly one video,
         // the largest, and record an artifact only for it. Samples, proofs,
         // and extras beside it never get a disposition, so demanding one for
@@ -866,7 +877,7 @@ async fn visible_source_files_have_terminal_dispositions_in_scope(
             artifacts,
             allow_filename_fallback,
         ) else {
-            if skip_unrecorded {
+            if skip_unrecorded || imported_from_workspace {
                 continue;
             }
             return Some(false);

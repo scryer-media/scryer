@@ -1,0 +1,12 @@
+# Every arr root folder and every folder titles live in, with the fields a
+# finalize mapping copies. Read-only. Variables: as ExternalImportPreviewStatus.
+mutation ExternalImportPreviewRoots($input: PreviewExternalImportInput!) {
+  previewExternalImport(input: $input) {
+    rootFolders {
+      sourceWarmupSessionId
+      sourceKey
+      kind
+      arrRootPath
+    }
+  }
+}

@@ -14,6 +14,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::{Map, Value, json};
 
+use super::confirm::Confirmations;
 use super::tools::{self, ToolContext};
 use crate::diagnostics_routes::DiagnosticsHost;
 use crate::error_reasons::{HTTP_MCP_GRAPHQL_ERROR, HTTP_MCP_TOOL_UNKNOWN};
@@ -29,11 +30,20 @@ const _: () = assert!(INSTRUCTIONS.len() < 400);
 pub(crate) struct ScryerMcpServer {
     auth: AuthState,
     diagnostics: Arc<DiagnosticsHost>,
+    confirmations: Arc<Confirmations>,
 }
 
 impl ScryerMcpServer {
-    pub(super) fn new(auth: AuthState, diagnostics: Arc<DiagnosticsHost>) -> Self {
-        Self { auth, diagnostics }
+    pub(super) fn new(
+        auth: AuthState,
+        diagnostics: Arc<DiagnosticsHost>,
+        confirmations: Arc<Confirmations>,
+    ) -> Self {
+        Self {
+            auth,
+            diagnostics,
+            confirmations,
+        }
     }
 }
 
@@ -102,6 +112,7 @@ impl ServerHandler for ScryerMcpServer {
             diagnostics: self.diagnostics.clone(),
             cancelled: Arc::new(AtomicBool::new(false)),
             result_max_bytes,
+            confirmations: self.confirmations.clone(),
         };
         // One call is one charge, whatever the tool runs inside it.
         if let Some(refused) = tools::charge_call(&tool_context, entry, &arguments) {

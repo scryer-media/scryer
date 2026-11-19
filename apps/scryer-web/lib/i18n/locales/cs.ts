@@ -2462,7 +2462,7 @@ const cs: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Stáhnout diagnostický balíček",
   "system.diagnosticsBundle.preparing": "Připravuje se diagnostika…",
   "system.diagnosticsBundle.helper":
-    "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Jména, adresy, cesty a tajné údaje se odstraňují podle možností; před sdílením balíček zkontrolujte.",
+    "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Balíček je podle možností očištěn a lze jej bezpečně sdílet v tiketu na Discordu, sdílení v issues na GitHubu nebo ve veřejných kanálech Discordu se však nedoporučuje.",
   "system.diagnosticsBundle.failed":
     "Diagnostický balíček se nepodařilo stáhnout.",
   "system.diagnosticsBundle.refusal.authenticationRequired":

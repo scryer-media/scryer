@@ -31006,6 +31006,14 @@ type SecuritySettingsPayload {
 	"""
 	apiKeysRestrictToSystemSettingsUsers: Boolean!
 	"""
+	The saved MCP switch.
+	"""
+	mcpEnabled: Boolean!
+	"""
+	The value SCRYER_MCP_ENABLED forces over the saved switch; null when unset.
+	"""
+	mcpEnabledEnvOverride: Boolean
+	"""
 	Whether configuration changes require MFA step-up.
 	"""
 	mfaRequireConfigStepUp: Boolean!
@@ -36588,6 +36596,10 @@ input UpdateSecuritySettingsInput {
 	Whether API keys are restricted to users with system-settings permission.
 	"""
 	apiKeysRestrictToSystemSettingsUsers: Boolean
+	"""
+	Whether the built-in MCP endpoint answers. Needs system-settings permission; omission preserves the saved setting.
+	"""
+	mcpEnabled: Boolean
 	"""
 	Whether sensitive configuration changes require MFA step-up.
 	"""

@@ -55,17 +55,26 @@ Prowlarr: validate with `kind: "PROWLARR"`, then `StartProwlarrWarmup` with
 
 ## 2. Libraries: preview, map every root, check paths
 
-Poll preview until every arr source has settled, as the wizard does:
+Poll the small status read until every arr source has settled, as the
+wizard does, then read roots once:
 
 ```sh
 jq -n --arg a "$SONARR_SESSION" --arg b "$RADARR_SESSION" --arg p "$PROWLARR_SESSION" \
   '{input: {sourceWarmupSessionIds: [$a, $b] | map(select(. != "")),
     prowlarrWarmupSessionId: (if $p == "" then null else $p end)}}' > p.json
-poll "$O/PreviewExternalImport.graphql" p.json \
-  '[.data.previewExternalImport.arrSources[].status] | length > 0 and all(IN("COMPLETED","FAILED","CANCELED"))' 5 > preview.json
-jq -c '.data.previewExternalImport | {sources: [.arrSources[] | {kind, status, error}],
-  roots: [.rootFolders[] | [.kind, .arrRootPath]]}' preview.json
+poll "$O/ExternalImportPreviewStatus.graphql" p.json \
+  '[.data.previewExternalImport.arrSources[].status] | length > 0 and all(IN("COMPLETED","FAILED","CANCELED"))' 5 > pstatus.json
+jq -c '.data.previewExternalImport | {prowlarrConnected, sources: [.arrSources[] | {kind, status, error}]}' pstatus.json
+gql "$O/ExternalImportPreviewRoots.graphql" p.json > roots.json
+jq -c '[.data.previewExternalImport.rootFolders[] | [.kind, .arrRootPath]]' roots.json
 ```
+
+Over MCP: `run_mutation` with the same names; poll every 10 s or slower.
+Warmups and preview reads run at once. `StartExternalImportSources`,
+`FinalizeExternalImport`, retries and skips need the operator's confirmation
+first (`scryer-connect` section 5).
+Each preview read costs the server a full preview build, so read roots and
+sources once each, never in the poll.
 
 `rootFolders` holds every arr root folder and every folder titles actually
 live in. Each needs a Scryer library and Scryer-side path (same path, or where
@@ -90,7 +99,7 @@ persona (`BALANCED` default; `AUDIOPHILE`, `EFFICIENT`, `COMPATIBLE`). Read
 choices:
 
 ```sh
-gql "$O/QualityProfileSettings.graphql" | jq -c '.data.qualityProfileSettings | {globalProfileId, profiles: [.profiles[] | {id, name}]}'
+gql "$O/QualityProfileChoices.graphql" | jq -c .data.qualityProfileSettings
 ```
 
 Wizard preselects the first profile. Ask operator per library. Sent in step 5
@@ -101,8 +110,7 @@ when a library is created.
 Wizard selects every `supported` client and indexer by default:
 
 ```sh
-jq -c '.data.previewExternalImport | {clients: [.downloadClients[] | {dedupKey, name, supported, requiresPasswordOverride, apiKeyPresent}],
-  indexers: [.indexers[] | {dedupKey, name, supported, requiresApiKeyOverride, apiKeyPresent}]}' preview.json
+gql "$O/ExternalImportPreviewSources.graphql" p.json | jq -c '.data.previewExternalImport | {clients: .downloadClients, indexers}'
 ```
 
 Show the list; say which need a secret again (`requiresPasswordOverride`,
@@ -182,7 +190,7 @@ poll "$O/ExternalImportWarmupStatus.graphql" fs.json \
 
 `mappings.json`: array of `{sourceWarmupSessionId, sourceKey, kind,
 arrRootPath, scryerRootPath, libraryId, facet}`, one per preview root, first
-four copied from `preview.json`. Refusals: `LOCATION_PLAN_REFUSED` or
+four copied from `roots.json`. Refusals: `LOCATION_PLAN_REFUSED` or
 `LOCATION_ROOT_REFUSED` with `extensions.refusalCode` (path unusable),
 `INTERFACE_IMPORT_MAPPING_INCOMPLETE` (a root has no mapping). `FAILED`: show
 `errorMessage`, finalize again.
