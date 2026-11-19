@@ -7051,7 +7051,7 @@ const en: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Download diagnostics bundle",
   "system.diagnosticsBundle.preparing": "Preparing diagnostics…",
   "system.diagnosticsBundle.helper":
-    "Logs, metrics and a settings summary in one file for the maintainer. Names, addresses, paths and secrets are removed on a best-effort basis; review the bundle before sharing it.",
+    "Logs, metrics and a settings summary in one file for the maintainer. The bundle is sanitized on a best-effort basis and is safe to share in a Discord ticket, but sharing it in GitHub issues or public Discord channels is not recommended.",
   "system.diagnosticsBundle.failed":
     "Could not download the diagnostics bundle.",
   "system.diagnosticsBundle.refusal.authenticationRequired":

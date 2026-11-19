@@ -2355,7 +2355,7 @@ const ru: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Скачать диагностический пакет",
   "system.diagnosticsBundle.preparing": "Подготовка диагностики…",
   "system.diagnosticsBundle.helper":
-    "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
+    "Журналы, метрики и сводка настроек в одном файле для разработчика. Пакет очищается по мере возможности, и его можно безопасно отправить в тикете Discord, но публиковать его в issues на GitHub или в публичных каналах Discord не рекомендуется.",
   "system.diagnosticsBundle.failed":
     "Не удалось скачать диагностический пакет.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
