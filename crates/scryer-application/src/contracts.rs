@@ -1493,6 +1493,15 @@ pub struct NewBlocklistEntry {
     pub reason: Option<String>,
 }
 
+/// The key of one blocklist row, as a search-time exclusion reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlocklistMatch {
+    /// Empty blocks the name on every indexer.
+    pub indexer_id: String,
+    pub normalized_release_name: String,
+    pub info_hash: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Interactive,

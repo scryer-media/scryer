@@ -243,6 +243,9 @@ pub(crate) enum ReleaseAutoDecisionCode {
     ProperForOldFile,
     AlreadyActive,
     QueuedBetterOrEqual,
+    /// The release beats the one downloading for its scope, but an automatic
+    /// grab is not submitted beside a download the client is still working.
+    QueuedItemBlocksUpgrade,
     DbBlocklisted,
     PendingDelay,
     MinimumAge,
@@ -302,6 +305,7 @@ impl ReleaseAutoDecisionCode {
             "proper_for_old_file" => Some(Self::ProperForOldFile),
             "already_active" => Some(Self::AlreadyActive),
             "queued_better_or_equal" => Some(Self::QueuedBetterOrEqual),
+            "queued_item_blocks_upgrade" => Some(Self::QueuedItemBlocksUpgrade),
             "db_blocklisted" => Some(Self::DbBlocklisted),
             "pending_delay" => Some(Self::PendingDelay),
             "minimum_age" => Some(Self::MinimumAge),
@@ -342,6 +346,7 @@ impl ReleaseAutoDecisionCode {
             Self::ProperForOldFile => "proper_for_old_file",
             Self::AlreadyActive => "already_active",
             Self::QueuedBetterOrEqual => "queued_better_or_equal",
+            Self::QueuedItemBlocksUpgrade => "queued_item_blocks_upgrade",
             Self::DbBlocklisted => "db_blocklisted",
             Self::PendingDelay => "pending_delay",
             Self::MinimumAge => "minimum_age",
@@ -400,6 +405,9 @@ impl ReleaseAutoDecisionCode {
             // different operator situations.
             Self::QueuedBetterOrEqual => {
                 "a release already downloading for this scope is equal or better"
+            }
+            Self::QueuedItemBlocksUpgrade => {
+                "a worse release is still downloading for this scope; this one waits until it leaves the queue"
             }
             Self::DbBlocklisted => "release is blocklisted from prior failures",
             Self::PendingDelay => "release is eligible but held by a delay profile",
@@ -2664,6 +2672,9 @@ fn evaluate_auto_candidate_recording(
             | crate::admission::AdmissionRejectionReason::QueuedSameRelease { .. } => {
                 ReleaseAutoDecisionCode::QueuedBetterOrEqual
             }
+            crate::admission::AdmissionRejectionReason::QueuedItemBlocksUpgrade { .. } => {
+                ReleaseAutoDecisionCode::QueuedItemBlocksUpgrade
+            }
             _ => ReleaseAutoDecisionCode::UpgradeRejected,
         };
     }
@@ -3025,7 +3036,10 @@ impl AppUseCase {
         // `DbBlocklisted` reads the per-title blocklist (the single, removable
         // exclusion source), never the failed-attempt history.
         let db_blocklist = self
-            .load_title_release_blocklist_signatures(&title.id)
+            .load_title_release_blocklist_signatures(
+                &title.id,
+                crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+            )
             .await;
 
         let dl_snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
@@ -8211,6 +8225,7 @@ mod tests {
                             AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![
                                 crate::admission::QueuedRelease {
                                     missing_history: true,
+                                    blocks_submission: false,
                                     history_cutoff_reached,
                                     release_group: Some("GRP".into()),
                                     title: "Sample.Title.2024.1080p.WEB-DL-GRP".to_string(),
@@ -8308,6 +8323,7 @@ mod tests {
             ] {
                 let mut grab = crate::admission::QueuedRelease {
                     missing_history: true,
+                    blocks_submission: false,
                     history_cutoff_reached: true,
                     release_group: Some("GRP".into()),
                     title: "Sample.Title.2024.1080p.WEB-DL-GRP".to_string(),

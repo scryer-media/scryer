@@ -11329,6 +11329,17 @@ pub trait BlocklistRepository: Send + Sync {
 
     async fn list_for_title(&self, title_id: &str, limit: usize) -> AppResult<Vec<BlocklistEntry>>;
 
+    /// The title's rows whose normalized release name is one of
+    /// `normalized_release_names` or whose infohash is one of `info_hashes`,
+    /// however old. Both lists arrive normalized; either may be empty, and
+    /// any length is accepted.
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>>;
+
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)>;
 
     /// One entry by id. The clear path resolves the entry this way for its

@@ -3101,6 +3101,14 @@ impl BlocklistRepository for NullBlocklistRepository {
     async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
         Ok(vec![])
     }
+    async fn list_matching_for_title(
+        &self,
+        _: &str,
+        _: &[String],
+        _: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        Ok(vec![])
+    }
     async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         Ok((vec![], 0))
     }

@@ -300,7 +300,8 @@ async fn run_import(
 ///   for this title and reopens the scope's search, so the retry seeks a
 ///   different candidate instead of the same lie.
 /// - [`RejectionDisposition::Skip`] records `already_present`: the release lost
-///   a fair comparison and there is nothing to look for.
+///   a fair comparison and there is nothing to look for. A grab's losing file
+///   also blocks the release name, so it is not fetched again.
 /// - [`RejectionDisposition::Hold`] records `skipped`: nobody can decide this
 ///   without an operator.
 ///
@@ -319,6 +320,7 @@ async fn carry_out_import_rejection(
     let ImportRejectionContext {
         rejection,
         disposition,
+        blocklist,
         release_title,
         source_title,
         source_video,
@@ -358,6 +360,15 @@ async fn carry_out_import_rejection(
             ("rejected", ImportDecision::Rejected)
         }
         crate::import_decide::RejectionDisposition::Skip => {
+            if let Some(directive) = blocklist.as_ref() {
+                crate::post_download_gate::blocklist_release_for_title(
+                    app,
+                    title,
+                    release_title,
+                    Some(directive.reason.clone()),
+                )
+                .await;
+            }
             ("already_present", ImportDecision::Skipped)
         }
         crate::import_decide::RejectionDisposition::Hold => ("skipped", ImportDecision::Skipped),
@@ -415,6 +426,8 @@ async fn carry_out_import_rejection(
 struct ImportRejectionContext<'a> {
     rejection: crate::post_download_gate::ImportedFileRejection,
     disposition: crate::import_decide::RejectionDisposition,
+    /// A block on the release name the decision earned beside a `Skip`.
+    blocklist: Option<crate::import_decide::BlocklistDirective>,
     release_title: &'a str,
     source_title: Option<&'a str>,
     source_video: &'a Path,
@@ -2560,6 +2573,7 @@ async fn import_movie_download(
         crate::import_decide::ImportDecisionOutcome::Reject {
             rejection,
             disposition,
+            blocklist,
             ..
         } => {
             return carry_out_import_rejection(
@@ -2571,6 +2585,7 @@ async fn import_movie_download(
                 ImportRejectionContext {
                     rejection,
                     disposition,
+                    blocklist,
                     release_title: &prepared.parsed.raw_title,
                     source_title: source_title.as_deref(),
                     source_video: &source_video,
@@ -2659,6 +2674,7 @@ async fn import_movie_download(
                     &existing_file.file_path,
                 ),
                 disposition: crate::import_decide::RejectionDisposition::Skip,
+                blocklist: None,
                 release_title: &prepared.parsed.raw_title,
                 source_title: source_title.as_deref(),
                 source_video: &source_video,
@@ -2810,6 +2826,7 @@ async fn import_movie_download(
                     ImportRejectionContext {
                         rejection,
                         disposition: crate::import_decide::RejectionDisposition::Hold,
+                        blocklist: None,
                         release_title: &prepared.parsed.raw_title,
                         source_title: source_title.as_deref(),
                         source_video: &source_video,
@@ -3462,6 +3479,7 @@ async fn import_series_movie_download(
         crate::import_decide::ImportDecisionOutcome::Reject {
             rejection,
             disposition,
+            blocklist,
             ..
         } => {
             return carry_out_import_rejection(
@@ -3473,6 +3491,7 @@ async fn import_series_movie_download(
                 ImportRejectionContext {
                     rejection,
                     disposition,
+                    blocklist,
                     release_title: &prepared.parsed.raw_title,
                     source_title: source_title.as_deref(),
                     source_video: &source_video,
@@ -3557,6 +3576,7 @@ async fn import_series_movie_download(
                     &existing_file.file_path,
                 ),
                 disposition: crate::import_decide::RejectionDisposition::Skip,
+                blocklist: None,
                 release_title: &prepared.parsed.raw_title,
                 source_title: source_title.as_deref(),
                 source_video: &source_video,

@@ -36,9 +36,11 @@ pub(crate) enum PendingGrabOutcome {
     SourceGone,
     Rejected,
     /// Admission refused the release because a release already queued or
-    /// grabbed for the same scope is equal or better. Nothing is wrong with the
-    /// release itself: the standby walk keeps it for the queued release's
-    /// failure, while the delay-expiry promoter treats it as `Rejected`.
+    /// grabbed for the same scope is equal or better, or is a worse one the
+    /// client is still downloading, which no automatic grab is sent beside.
+    /// Nothing is wrong with the release itself: the standby walk keeps it for
+    /// the queued release's failure, while the delay-expiry promoter treats it
+    /// as `Rejected`.
     QueueCovered {
         queued_release: String,
         reason: crate::admission::AdmissionRejectionReason,
@@ -1196,7 +1198,10 @@ impl AppUseCase {
 
         // Check the per-title blocklist (the single, removable exclusion source).
         let db_blocklist = self
-            .load_title_release_blocklist_signatures(&title.id)
+            .load_title_release_blocklist_signatures(
+                &title.id,
+                [(pr.release_title.as_str(), pr.info_hash.as_deref())],
+            )
             .await;
 
         // An operator override still honours the blocklist, like Sonarr's
@@ -1648,13 +1653,14 @@ impl AppUseCase {
                     queued_title,
                     ..
                 }
-                | crate::admission::AdmissionRejectionReason::QueuedSameRelease { queued_title } => {
-                    PendingGrabOutcome::QueueCovered {
-                        queued_release: queued_title.clone(),
-                        reason: rejection.reason.clone(),
-                        message: rejection.message.clone(),
-                    }
-                }
+                | crate::admission::AdmissionRejectionReason::QueuedSameRelease { queued_title }
+                | crate::admission::AdmissionRejectionReason::QueuedItemBlocksUpgrade {
+                    queued_title,
+                } => PendingGrabOutcome::QueueCovered {
+                    queued_release: queued_title.clone(),
+                    reason: rejection.reason.clone(),
+                    message: rejection.message.clone(),
+                },
                 _ => PendingGrabOutcome::Rejected,
             }));
         }

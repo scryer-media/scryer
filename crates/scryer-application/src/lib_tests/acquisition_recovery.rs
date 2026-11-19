@@ -864,6 +864,152 @@ async fn walk_saved_movie_result(
     .await
 }
 
+/// Admission and submission agree about a release still in the client's
+/// working queue. A strictly better saved release waits with a coded reason
+/// instead of being admitted and then turned away as a conflict on every
+/// pass; once the queued job leaves the working queue, both let it through.
+#[tokio::test]
+async fn an_upgrade_waits_while_the_queued_movie_download_is_live() {
+    use crate::acquisition::pending::{PendingGrabOutcome, PendingGrabTrigger};
+    use crate::acquisition_workflow::StandbyRecoveryOutcome;
+    let upgrade = "Lantern.Quay.2024.1080p.WEB-DL-GRP";
+    let queued_release = "Lantern.Quay.2024.720p.WEB-DL-GRP";
+    let (app, title, wanted, standby, client, pending) =
+        saved_movie_result_fixture("Lantern Quay", upgrade).await;
+    let submission = DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
+        title_id: title.id.clone(),
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        facet: "movie".to_string(),
+        download_client_id: Some("primary".to_string()),
+        download_client_type: "nzbget".to_string(),
+        download_client_item_id: "lantern-quay-live".to_string(),
+        source_hint: None,
+        source_provider_id: None,
+        source_provider_name: None,
+        source_kind: Some(DownloadSourceKind::NzbUrl),
+        source_title: Some(queued_release.to_string()),
+        info_hash: None,
+        release_size_bytes: None,
+        request_signature: None,
+        scope: SubmissionScope::Title,
+        release_listing_json: None,
+    };
+    let identity = ClientJobLocator::from_submission(&submission);
+    app.services
+        .workflow
+        .download_submissions
+        .record_submission(submission)
+        .await
+        .expect("record the live submission");
+    *client.queue_items.lock().await = vec![DownloadQueueItem {
+        id: "lantern-quay-live".to_string(),
+        title_id: Some(title.id.clone()),
+        episode_id: None,
+        title_name: queued_release.to_string(),
+        facet: Some("movie".to_string()),
+        category: None,
+        client_id: "primary".to_string(),
+        client_name: "Primary".to_string(),
+        client_type: "nzbget".to_string(),
+        state: DownloadQueueState::Downloading,
+        progress_percent: 10,
+        import_transfer_phase: None,
+        import_transfer_bytes: None,
+        import_transfer_total_bytes: None,
+        import_transfer_started_at: None,
+        import_transfer_updated_at: None,
+        size_bytes: None,
+        remaining_seconds: None,
+        queued_at: None,
+        last_updated_at: None,
+        attention_required: false,
+        attention_reason_code: None,
+        attention_reason: None,
+        download_client_item_id: "lantern-quay-live".to_string(),
+        download_id: None,
+        import_status: None,
+        import_type: None,
+        import_error_code: None,
+        import_error_message: None,
+        imported_at: None,
+        delete_status: None,
+        delete_error_message: None,
+        source_provider: None,
+        is_scryer_origin: true,
+        tracked_state: None,
+        tracked_status: None,
+        tracked_status_messages: Vec::new(),
+        tracked_match_type: None,
+        seeding: None,
+    }];
+
+    for _ in 0..2 {
+        let outcome = walk_saved_movie_result(&app, &wanted).await;
+        assert!(
+            !matches!(outcome, StandbyRecoveryOutcome::Deferred { .. }),
+            "admission must refuse what submission would refuse: {outcome:?}"
+        );
+    }
+    let outcome = app
+        .try_grab_pending_release(
+            &wanted,
+            &standby,
+            &Utc::now(),
+            PendingGrabTrigger::Automatic,
+            &crate::domain_events::DomainEventActor::system(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            &outcome,
+            PendingGrabOutcome::QueueCovered { queued_release, reason, .. }
+                if queued_release == "Lantern.Quay.2024.720p.WEB-DL-GRP"
+                    && reason.reason_code()
+                        == Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
+        ),
+        "the delay-expiry lane settles the row rather than replaying it: {outcome:?}"
+    );
+    assert!(client.submitted_release_titles.lock().await.is_empty());
+    assert!(
+        pending.status_writes().is_empty(),
+        "a refused upgrade writes nothing: {:?}",
+        pending.status_writes()
+    );
+    assert_eq!(
+        pending
+            .get_pending_release(&standby.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        PendingReleaseStatus::Standby
+    );
+
+    // The job finishes and waits for import: it no longer blocks submission,
+    // so admission lets the strict upgrade through and it is grabbed.
+    app.services
+        .workflow
+        .download_submissions
+        .update_tracked_state(&identity, TrackedDownloadState::ImportPending.as_str())
+        .await
+        .expect("track the finished job");
+    for item in client.queue_items.lock().await.iter_mut() {
+        item.state = DownloadQueueState::Completed;
+    }
+    app.runtime
+        .acquisition
+        .download_submission_guards
+        .forget_settled_download(&title.id);
+    let outcome = walk_saved_movie_result(&app, &wanted).await;
+    assert_eq!(
+        client.submitted_release_titles.lock().await.clone(),
+        vec![upgrade.to_string()],
+        "{outcome:?}"
+    );
+}
+
 #[tokio::test]
 async fn missing_grab_keeps_saved_candidates_until_expiry_or_explicit_search() {
     use crate::acquisition::pending::{PendingGrabOutcome, PendingGrabTrigger};
@@ -1333,6 +1479,7 @@ async fn acquisition_failure_fallback_skips_failed_submission_for_another_episod
     let old_outcome = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -1536,6 +1683,173 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         .expect("load wanted")
         .expect("wanted exists");
     assert_eq!(reopened.status, AcquisitionScopeStatus::Wanted);
+}
+
+/// How a grabbed download reached failure handling, for the indexer-scope
+/// tests below.
+#[derive(Clone, Copy)]
+enum FailedGrabKind {
+    /// Import found nothing but executables.
+    UnwantedExecutables,
+    /// Import's gate burned the download for another reason (the warning
+    /// timeout shares the flag).
+    OtherImportVerdict,
+    /// The download client reported the failure.
+    ClientReported,
+}
+
+/// Runs failure handling for a grab served by `indexer-a` and returns the
+/// app and title so the caller can probe the blocklist on other indexers.
+async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) {
+    const RELEASE: &str = "Harbor.Lights.2021.1080p.WEB-DL-GROUP";
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+        wanted_items,
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Harbor Lights".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "harbor-job".to_string(),
+            source_hint: None,
+            source_provider_id: Some("indexer-a".to_string()),
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some(RELEASE.to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("record submission");
+
+    let verdict = "unwanted executable 'Harbor.Lights.exe' — no video files";
+    let mut client_item = failed_history_item("harbor-job", RELEASE);
+    // The cached client item is the client's own report; import's verdict
+    // reaches failure handling only through the status messages.
+    client_item.attention_reason = None;
+    let (status_messages, burned_by_import_gate) = match kind {
+        FailedGrabKind::UnwantedExecutables => (
+            vec![crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables,
+                verdict,
+            )],
+            true,
+        ),
+        FailedGrabKind::OtherImportVerdict => (vec!["warning timed out".into()], true),
+        FailedGrabKind::ClientReported => {
+            client_item.attention_reason = Some("connection reset by server".to_string());
+            (Vec::new(), false)
+        }
+    };
+    let mut tracked = crate::tracked_downloads::TrackedDownload {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
+        id: "nzbget:harbor-job".to_string(),
+        client_id: "primary".to_string(),
+        client_type: "nzbget".to_string(),
+        client_item,
+        completed_source: None,
+        state: scryer_domain::TrackedDownloadState::FailedPending,
+        status: scryer_domain::TrackedDownloadStatus::Error,
+        status_messages,
+        title_id: Some(title.id.clone()),
+        facet: Some("movie".to_string()),
+        source_title: Some(RELEASE.to_string()),
+        indexer: None,
+        added_at: None,
+        notified_manual_interaction: false,
+        match_type: scryer_domain::TitleMatchType::Submission,
+        is_trackable: true,
+        import_attempted: true,
+        waiting_for_completed_history: false,
+        path_missing_since: None,
+        no_video_import_retry: None,
+        import_execution_retry: None,
+        import_hold: None,
+        skip_reacquire_on_failure: false,
+        manual_failure_cleanup: false,
+        blocklist_confirmation_failed: false,
+        burned_by_import_gate,
+        snapshot_missing_since: None,
+        retained_in_client_after_cleanup: false,
+    };
+    crate::failed_download_handler::process_failed(&app, &mut tracked).await;
+    assert_eq!(tracked.state, scryer_domain::TrackedDownloadState::Failed);
+    if matches!(kind, FailedGrabKind::UnwantedExecutables) {
+        let entries = title_blocklist_entries(&app, &title.id).await;
+        assert_eq!(
+            entries[0].reason.as_deref(),
+            Some(format!("import rejected: {verdict}").as_str()),
+            "the entry names import's verdict even though the client item has none"
+        );
+    }
+    (app, title.id)
+}
+
+async fn blocked_on(app: &AppUseCase, title_id: &str, indexer_id: &str) -> bool {
+    app.services
+        .workflow
+        .blocklist_repo
+        .is_blocked(
+            title_id,
+            indexer_id,
+            "Harbor.Lights.2021.1080p.WEB-DL-GROUP",
+            None,
+        )
+        .await
+        .expect("read blocklist")
+}
+
+#[tokio::test]
+async fn an_executables_failure_on_one_indexer_blocks_the_release_on_every_indexer() {
+    let (app, title_id) = fail_grab_from_indexer_a(FailedGrabKind::UnwantedExecutables).await;
+    let entries = title_blocklist_entries(&app, &title_id).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].indexer_id, "", "the block names no indexer");
+    assert!(blocked_on(&app, &title_id, "indexer-a").await);
+    assert!(blocked_on(&app, &title_id, "indexer-b").await);
+}
+
+#[tokio::test]
+async fn other_failures_stay_blocked_only_on_the_indexer_that_served_them() {
+    for kind in [
+        FailedGrabKind::OtherImportVerdict,
+        FailedGrabKind::ClientReported,
+    ] {
+        let (app, title_id) = fail_grab_from_indexer_a(kind).await;
+        let entries = title_blocklist_entries(&app, &title_id).await;
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].indexer_id, "indexer-a");
+        assert!(blocked_on(&app, &title_id, "indexer-a").await);
+        assert!(
+            !blocked_on(&app, &title_id, "indexer-b").await,
+            "another indexer's copy stays eligible"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1897,6 +2211,7 @@ async fn tracked_download_failure_keeps_standby_when_submit_unavailable() {
         .expect("record failed submission");
 
     let failure = || crate::acquisition_workflow::DownloadFailureContext {
+        failure_code: None,
         wanted_item: Some(wanted.clone()),
         title_id: Some(title.id.clone()),
         client_id: "primary".to_string(),
@@ -2117,6 +2432,7 @@ async fn process_download_failure_returns_already_handled_for_duplicate_failed_d
     let first = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: Some(wanted.clone()),
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -2159,6 +2475,7 @@ async fn process_download_failure_returns_already_handled_for_duplicate_failed_d
     let second = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: Some(wanted),
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -2330,6 +2647,7 @@ async fn operator_client_failure_is_recorded_without_reopening_scope() {
     let outcome = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: Some(wanted.clone()),
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -2440,6 +2758,7 @@ async fn process_download_failure_dedupes_same_release_title_across_client_item_
     let first = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -2461,6 +2780,7 @@ async fn process_download_failure_dedupes_same_release_title_across_client_item_
     let second = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -3050,6 +3370,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
     let first = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: Some(grabbed_wanted),
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -3335,6 +3656,7 @@ async fn episode_set_pack_failure_reopens_only_its_covered_wanted_items() {
     let outcome = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -7705,6 +8027,7 @@ async fn failed_season_pack_walks_the_saved_runner_up_without_an_indexer_query()
         crate::acquisition_workflow::process_download_failure(
             &app,
             crate::acquisition_workflow::DownloadFailureContext {
+                failure_code: None,
                 wanted_item: None,
                 title_id: Some(title.id.clone()),
                 client_id: failed_submission
@@ -7788,6 +8111,7 @@ async fn failed_season_pack_walks_the_saved_runner_up_without_an_indexer_query()
         crate::acquisition_workflow::process_download_failure(
             &app,
             crate::acquisition_workflow::DownloadFailureContext {
+                failure_code: None,
                 wanted_item: None,
                 title_id: Some(title.id.clone()),
                 client_id: failed_runner_up
@@ -8118,6 +8442,7 @@ async fn acquisition_cycle_skips_recently_failed_season_pack_from_submission_rel
     let outcome = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: Some(grabbed_wanted),
             title_id: Some(title.id.clone()),
             client_id: "primary".to_string(),
@@ -14419,10 +14744,12 @@ async fn assert_rss_title_visit_read_budget(facet: MediaFacet, block_later_scope
             .iter()
             .all(|(id, replay_ids)| id == &title.id && replay_ids.is_empty())
     );
+    // A scope whose every release the refreshed exclusion removed reaches its
+    // grab attempt with no candidate to look up, so it reads nothing.
     assert_eq!(
         blocklist.title_reads.load(Ordering::SeqCst) - blocklist_reads_before,
-        evaluated_scopes * 2,
-        "every scoring batch refreshes exclusions; every grab attempt checks them independently"
+        evaluated_scopes * 2 - usize::from(block_later_scopes),
+        "every scoring batch refreshes exclusions; every grab attempt with a candidate checks them independently"
     );
     assert_eq!(
         *submissions.active_unbound_title_calls.lock().await,
@@ -16041,7 +16368,14 @@ async fn a_walk_that_exhausts_its_grab_budget_retains_the_untried_remainder() {
         !standby.is_empty(),
         "a fired search that grabbed nothing must leave its remainder replayable"
     );
-    let blocklisted = app.load_title_release_blocklist_signatures(&title.id).await;
+    let blocklisted = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            standby
+                .iter()
+                .map(|release| (release.release_title.as_str(), release.info_hash.as_deref())),
+        )
+        .await;
     assert!(
         standby.iter().all(
             |release| !crate::app_usecase_discovery::is_release_blocklisted(

@@ -72,6 +72,60 @@ impl ListExclusionRepository for ListStore {
         .await
     }
 
+    async fn create_many(&self, exclusions: Vec<ListExclusion>) -> AppResult<()> {
+        if exclusions.is_empty() {
+            return Ok(());
+        }
+        let mut exclusion_rows = Vec::with_capacity(exclusions.len());
+        let mut id_rows = Vec::new();
+        for exclusion in &exclusions {
+            exclusion_rows.push(vec![
+                SqlArg::Text(exclusion.id.clone()),
+                SqlArg::Text(exclusion.kind.as_str().to_string()),
+                SqlArg::Text(exclusion.display_title.clone()),
+                SqlArg::OptI32(exclusion.year),
+                SqlArg::Text(exclusion.scope.as_str().to_string()),
+                SqlArg::OptText(exclusion.scope.subscription_id().map(str::to_string)),
+                SqlArg::OptText(exclusion.created_by_user_id.clone()),
+                SqlArg::Timestamp(exclusion.created_at),
+            ]);
+            for (source, kind, value) in dedupe_ids(&exclusion.external_ids) {
+                id_rows.push(vec![
+                    SqlArg::Text(exclusion.id.clone()),
+                    SqlArg::Text(source),
+                    SqlArg::Text(value),
+                    SqlArg::Text(kind),
+                ]);
+            }
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "create_list_exclusions", move |tx| {
+            let exclusion_rows = exclusion_rows.clone();
+            let id_rows = id_rows.clone();
+            Box::pin(async move {
+                SqlRuntime::execute_batch_insert(
+                    tx,
+                    &format!("INSERT INTO list_exclusions ({EXCLUSION_COLUMNS})"),
+                    8,
+                    exclusion_rows,
+                    "",
+                )
+                .await?;
+                if !id_rows.is_empty() {
+                    SqlRuntime::execute_batch_insert(
+                        tx,
+                        "INSERT INTO list_exclusion_external_ids (exclusion_id, source, value, external_kind)",
+                        4,
+                        id_rows,
+                        "",
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ListExclusion>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),

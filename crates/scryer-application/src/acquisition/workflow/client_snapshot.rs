@@ -117,6 +117,17 @@ pub(crate) struct DownloadFailureContext {
     /// download client reported; a failure Scryer's own import gate raised
     /// names itself here instead.
     pub blocklist_reason: Option<String>,
+    /// The typed kind of failure, from [`crate::error_reasons::download_failure`],
+    /// when Scryer classified it. `None` is a failure the client reported.
+    pub failure_code: Option<&'static str>,
+}
+impl DownloadFailureContext {
+    /// A release whose payload is itself bad is bad on every indexer that
+    /// carries it, so its block names no indexer. Every other failure stays
+    /// with the indexer that served it.
+    fn blocks_every_indexer(&self) -> bool {
+        self.failure_code == Some(crate::error_reasons::download_failure::UNWANTED_EXECUTABLES)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureHandlingOutcome {
@@ -1039,6 +1050,7 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
             let outcome = process_download_failure(
                 app,
                 DownloadFailureContext {
+                    failure_code: None,
                     wanted_item: Some(item.clone()),
                     title_id: Some(item.title_id.clone()),
                     client_id: failed_item.client_id.clone(),
@@ -1291,10 +1303,14 @@ async fn handle_download_failure_for_download(
     let normalized_source_hint = resolved_failed_release_hint(failed_submission.as_ref());
     // Both halves of the blocklist key come off the submission: source_provider_id
     // has carried the indexer id since 0150, info_hash since 0192.
-    let blocklist_indexer_id = failed_submission
-        .as_ref()
-        .and_then(|submission| submission.source_provider_id.clone())
-        .unwrap_or_default();
+    let blocklist_indexer_id = if context.blocks_every_indexer() {
+        String::new()
+    } else {
+        failed_submission
+            .as_ref()
+            .and_then(|submission| submission.source_provider_id.clone())
+            .unwrap_or_default()
+    };
     let blocklist_info_hash = failed_submission
         .as_ref()
         .and_then(|submission| submission.info_hash.clone());
@@ -2359,7 +2375,12 @@ pub(crate) async fn try_saved_candidates_with_trigger(
     // Standby candidates are re-checked against the per-title blocklist (the
     // single, removable exclusion source), never the failed-attempt history.
     let db_blocklist = app
-        .load_title_release_blocklist_signatures(&item.title_id)
+        .load_title_release_blocklist_signatures(
+            &item.title_id,
+            standby_releases
+                .iter()
+                .map(|standby| (standby.release_title.as_str(), standby.info_hash.as_deref())),
+        )
         .await;
     let mut stale_indexer_ids = HashSet::new();
     let mut covered_scopes: Vec<SubmissionScope> = Vec::new();
@@ -2623,8 +2644,9 @@ pub(crate) async fn try_saved_candidates_with_trigger(
                 reason,
                 message,
             }) => {
-                // Only a strict upgrade is fetched beside a queued release. This
-                // one is not, but it stays walkable: if the queued release fails,
+                // Nothing is fetched beside a release the client is still
+                // working, and only a strict upgrade beside one it is not. This
+                // one is neither, but it stays walkable: if the queued release fails,
                 // it is the next saved result for the scope. Every later row
                 // within this scope is skipped unjudged: a strict upgrade saved
                 // below this row waits until the queued release leaves the
@@ -2703,6 +2725,7 @@ fn log_saved_result_queue_covered(
         standby_release = standby.release_title.as_str(),
         queued_release,
         reason = ?reason,
+        reason_code = reason.reason_code(),
         detail = message,
         "saved search result not grabbed: a queued release already covers this scope"
     );

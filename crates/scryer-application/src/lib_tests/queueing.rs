@@ -6456,6 +6456,7 @@ async fn a_failed_grab_walks_the_saved_search_results_without_querying_an_indexe
     };
     let fail = |client_id: String, client_type: String, client_item_id: String, suffix: &str| {
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: Some(title.id.clone()),
             client_id,

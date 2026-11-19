@@ -260,6 +260,35 @@ impl BlocklistRepository for MockBlocklistRepo {
         Ok(entries)
     }
 
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        self.title_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter(|entry| entry.title_id == title_id)
+            .filter(|entry| {
+                normalized_release_names.contains(&entry.normalized_release_name)
+                    || entry
+                        .info_hash
+                        .as_ref()
+                        .is_some_and(|info_hash| info_hashes.contains(info_hash))
+            })
+            .map(|entry| crate::BlocklistMatch {
+                indexer_id: entry.indexer_id.clone(),
+                normalized_release_name: entry.normalized_release_name.clone(),
+                info_hash: entry.info_hash.clone(),
+            })
+            .collect())
+    }
+
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         let mut entries = self.entries.lock().await.clone();
         entries.sort_by(|left, right| right.created_at.cmp(&left.created_at));

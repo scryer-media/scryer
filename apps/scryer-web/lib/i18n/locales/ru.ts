@@ -3843,6 +3843,7 @@ const ru: LocaleDictionary = {
   "wanted.decision.upgradeRejected": "Обновление отклонено",
   "wanted.decision.pendingDelay": "Отложено",
   "wanted.decision.alreadyActive": "Уже активно",
+  "wanted.decision.queuedItemBlocksUpgrade": "Ожидает текущую загрузку",
   "wanted.decision.acceptInitial": "Первичное принятие",
   "wanted.decision.acceptUpgrade": "Обновление принято",
   "wanted.decision.rejectInsufficientDelta": "Недостаточная разница",
@@ -8233,6 +8234,8 @@ const ru: LocaleDictionary = {
     "Распаковка архивов загрузки заняла слишком много времени; импорт повторит попытку позже.",
   "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
     "Архивы загрузки не удалось распаковать ни с одной попытки; повторите импорт, чтобы попробовать снова.",
+  "error.reason.BLOCKLIST_IMPORT_NOT_AN_UPGRADE":
+    "Загружено, но файл оказался не лучше того, что уже есть в библиотеке. Заблокировано на всех индексаторах, чтобы не загружать его снова.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
     "Для извлечения архива нужно определить место назначения импорта до подготовки результата.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":

@@ -288,6 +288,10 @@ impl AppUseCase {
         .await?;
         let deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
 
+        // A list that added the title would add it again at its next sync,
+        // and the rule would delete it again. The exclusion goes first: if it
+        // cannot be written the title stays, and the next pass retries both.
+        self.exclude_title_from_lists_that_added_it(&title).await?;
         self.delete_title_logical_cleanup(
             &title,
             actor,

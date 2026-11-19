@@ -5435,6 +5435,35 @@ pub mod archive_extraction {
     }
 }
 
+/// The kinds of download failure Scryer classifies itself, rather than
+/// relaying the download client's report.
+pub mod download_failure {
+    /// The download holds nothing but executables. The release itself is bad,
+    /// so it is blocked on every indexer rather than only the one that
+    /// served it.
+    pub const UNWANTED_EXECUTABLES: &str = "DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES";
+    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES];
+}
+
+/// Why Scryer itself wrote a blocklist entry. Stored as the entry's reason.
+pub mod blocklist {
+    /// The grab finished, but import refused its file as no better than the
+    /// one the title already has, so grabbing it again would only repeat the
+    /// download. The entry names no indexer.
+    pub const IMPORT_NOT_AN_UPGRADE: &str = "BLOCKLIST_IMPORT_NOT_AN_UPGRADE";
+    pub const ALL: &[&str] = &[IMPORT_NOT_AN_UPGRADE];
+}
+
+/// Why automatic grab admission refused a candidate, where the refusal has a
+/// code of its own.
+pub mod admission {
+    /// The candidate beats the release already downloading for its scope, but
+    /// an automatic grab is never submitted beside a download the client is
+    /// still working, so it is refused before it is parked or sent.
+    pub const QUEUED_ITEM_BLOCKS_UPGRADE: &str = "ADMISSION_QUEUED_ITEM_BLOCKS_UPGRADE";
+    pub const ALL: &[&str] = &[QUEUED_ITEM_BLOCKS_UPGRADE];
+}
+
 /// What the archive workspace health check reports. Each result carries its
 /// counts as facts beside the sentence.
 pub mod archive_workspace_health {
@@ -6592,6 +6621,9 @@ mod tests {
             ("EVENTS_", events::ALL),
             ("IMPORT_", import::ALL),
             ("ARCHIVE_EXTRACTION_", archive_extraction::ALL),
+            ("DOWNLOAD_FAILURE_", download_failure::ALL),
+            ("BLOCKLIST_", blocklist::ALL),
+            ("ADMISSION_", admission::ALL),
             ("ARCHIVE_WORKSPACE_", archive_workspace_health::ALL),
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),

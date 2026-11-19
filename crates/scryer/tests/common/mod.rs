@@ -616,6 +616,17 @@ impl BlocklistRepository for TestLibraryStateStore {
         self.blocklist.list_for_title(title_id, limit).await
     }
 
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<scryer_application::BlocklistMatch>> {
+        self.blocklist
+            .list_matching_for_title(title_id, normalized_release_names, info_hashes)
+            .await
+    }
+
     async fn list_all(
         &self,
         limit: usize,

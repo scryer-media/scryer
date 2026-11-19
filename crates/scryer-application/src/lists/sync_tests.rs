@@ -1863,6 +1863,123 @@ async fn a_title_deleted_with_an_exclusion_stays_gone() {
     );
 }
 
+/// The exclusions a lifecycle delete of the list's `alpha` title writes.
+async fn lifecycle_delete_of_alpha(harness: &Harness) -> Vec<scryer_domain::ListExclusion> {
+    crate::lists::public::lifecycle_delete_exclusions(
+        &harness.store,
+        &harness.store,
+        crate::lists::public::LifecycleDeletedTitle {
+            id: "title-alpha",
+            name: "Lantern Cove",
+            year: Some(2026),
+            external_ids: &[],
+        },
+    )
+    .await
+    .expect("lifecycle exclusions")
+}
+
+#[tokio::test]
+async fn a_title_a_lifecycle_rule_deleted_is_not_added_again_until_its_exclusion_goes() {
+    use crate::lists::ports::ListExclusionRepository;
+    let harness = Harness::new(vec![subscription("list-a"), subscription("list-b")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.lists.serve("list-b", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    let added_by = |harness: &Harness| {
+        ["list-a", "list-b"]
+            .into_iter()
+            .filter(|id| harness.store.row(id, "alpha").added_by_list)
+            .collect::<Vec<_>>()
+    };
+    let owners = added_by(&harness);
+    assert!(!owners.is_empty(), "a list added alpha");
+
+    let exclusions = lifecycle_delete_of_alpha(&harness).await;
+    let mut scopes = exclusions
+        .iter()
+        .map(|exclusion| exclusion.scope.subscription_id().unwrap().to_string())
+        .collect::<Vec<_>>();
+    scopes.sort();
+    let mut holding = ["list-a", "list-b"]
+        .into_iter()
+        .filter(|id| harness.store.row(id, "alpha").state == ListMembershipState::Added)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    holding.sort();
+    assert_eq!(scopes, holding, "one exclusion per list that would add it");
+    for exclusion in &exclusions {
+        assert_eq!(exclusion.display_title, "Lantern Cove");
+        assert_eq!(
+            exclusion.external_ids,
+            vec![crate::lists::test_support::tmdb("alpha-id")]
+        );
+        assert_eq!(exclusion.created_by_user_id, None);
+    }
+    harness
+        .store
+        .create_many(exclusions)
+        .await
+        .expect("store the exclusions");
+    harness
+        .actions
+        .missing_titles
+        .lock()
+        .unwrap()
+        .insert("title-alpha".to_string());
+    let adds_before = add_calls(&harness.actions);
+
+    harness.sync_at(at(6 * 60)).await;
+    assert_eq!(add_calls(&harness.actions), adds_before, "nothing re-added");
+    for id in &holding {
+        let row = harness.store.row(id, "alpha");
+        assert_eq!(row.state, ListMembershipState::Excluded);
+        assert_eq!(row.title_id, None);
+    }
+
+    // Removing the exclusions, as an operator would, drops the lists'
+    // fingerprints so their next sync weighs alpha again.
+    harness.store.exclusions.lock().unwrap().clear();
+    for id in &holding {
+        let read = harness.store.subscription(id);
+        let forgotten = ListSyncStatus {
+            fetch_fingerprint: None,
+            ..read.sync.clone()
+        };
+        harness
+            .store
+            .record_sync(id, &forgotten, &read.counts)
+            .await
+            .expect("forget the fingerprint");
+    }
+    harness.actions.missing_titles.lock().unwrap().clear();
+    harness.sync_at(at(12 * 60)).await;
+    assert!(
+        add_calls(&harness.actions) > adds_before,
+        "the list adds alpha again"
+    );
+}
+
+#[tokio::test]
+async fn a_lifecycle_delete_writes_no_exclusion_for_a_list_that_did_not_add_the_title() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    // The list found alpha already in the library rather than adding it.
+    let mut row = harness.store.row("list-a", "alpha");
+    row.state = ListMembershipState::InLibrary;
+    row.added_by_list = false;
+    harness
+        .store
+        .memberships
+        .lock()
+        .unwrap()
+        .retain(|existing| !(existing.subscription_id == "list-a" && existing.item_key == "alpha"));
+    harness.store.insert_rows(vec![row]);
+
+    assert!(lifecycle_delete_of_alpha(&harness).await.is_empty());
+}
+
 #[tokio::test]
 async fn a_title_the_list_added_that_is_still_present_is_not_added_twice() {
     let harness = Harness::new(vec![subscription("list-a")]);

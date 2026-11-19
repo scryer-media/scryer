@@ -729,7 +729,8 @@ pub(super) async fn apply_import_pass_result(
             td.status = TrackedDownloadStatus::Error;
             td.client_item.attention_reason = Some(message.clone());
             td.client_item.attention_reason_code = None;
-            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables,
                 message,
             )];
             td.burned_by_import_gate = true;

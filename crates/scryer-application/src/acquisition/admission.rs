@@ -114,6 +114,11 @@ pub(crate) struct Incumbent {
 pub(crate) struct QueuedRelease {
     /// This claim is retained recent-grab history rather than a live client job.
     pub missing_history: bool,
+    /// The client is still working this job, so an automatic submission that
+    /// overlaps its scope is refused as a conflict. Admission refuses a
+    /// candidate beside it for the same reason rather than admit a grab that
+    /// cannot be submitted.
+    pub blocks_submission: bool,
     /// A recent missing grab has met both the quality and score cutoffs.
     /// Live client jobs do not use the history cutoff.
     pub history_cutoff_reached: bool,
@@ -478,6 +483,10 @@ pub(crate) enum AdmissionRejectionReason {
     /// name, still in flight or still unresolved. Never fetched twice, whatever
     /// the scores say: a second copy of the same bytes is never an upgrade.
     QueuedSameRelease { queued_title: String },
+    /// The candidate beats the release already downloading for this scope, but
+    /// an automatic grab is never submitted beside a download the client is
+    /// still working, so it is not admitted either.
+    QueuedItemBlocksUpgrade { queued_title: String },
     /// Every step ahead of `step` tied and what is held wins at `step`: the
     /// refusal of a preference step that does not raise a reason of its own
     /// (see [`crate::acquisition::decision_steps::PreferenceStep::refusal`]).
@@ -515,7 +524,18 @@ impl AdmissionRejectionReason {
             | Self::UpgradesDisabled
             | Self::SeasonIncomplete
             | Self::QueuedEqualOrBetter { .. }
-            | Self::QueuedSameRelease { .. } => None,
+            | Self::QueuedSameRelease { .. }
+            | Self::QueuedItemBlocksUpgrade { .. } => None,
+        }
+    }
+
+    /// The stable code of a refusal that has one of its own.
+    pub(crate) fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::QueuedItemBlocksUpgrade { .. } => {
+                Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
+            }
+            _ => None,
         }
     }
 }
@@ -824,6 +844,21 @@ fn queued_rejection(
         // The same pipeline an incumbent gets.
         let win = queued_candidate_win(candidate, queued, policy);
         match win {
+            // Winning does not make room: the submission that follows refuses
+            // any automatic grab whose scope overlaps a download the client is
+            // still working. Admitting it would park a grab that can never be
+            // sent, retried every pass.
+            Some(_) if queued.blocks_submission => Some(AdmissionRejection {
+                reason: AdmissionRejectionReason::QueuedItemBlocksUpgrade {
+                    queued_title: queued.title.clone(),
+                },
+                message: format!(
+                    "{} is still downloading for this scope; a better release is not fetched beside it",
+                    queued.title
+                ),
+                incumbent_file_id: String::new(),
+                incumbent_file_path: String::new(),
+            }),
             // A revision upgrade admits regardless of `allow_upgrades`, exactly
             // as it does over a file on disk.
             Some(step) if step.admits_despite_upgrade_guard() => None,

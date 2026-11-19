@@ -44,6 +44,10 @@ pub enum TrackedStatusMessageKind {
     /// Blocked because repeated import passes made no progress; reopened only
     /// by the operator's retry.
     ImportRetryLimitReached,
+    /// Import found nothing but executables. Failure handling reads this kind,
+    /// which survives the merge back from background work, to block the
+    /// release on every indexer.
+    UnwantedExecutables,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

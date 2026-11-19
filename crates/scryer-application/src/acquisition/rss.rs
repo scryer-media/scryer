@@ -3291,7 +3291,10 @@ impl AppUseCase {
         // `DbBlocklisted` reads the per-title blocklist (the single, removable
         // exclusion source), never the failed-attempt history.
         let db_blocklist = self
-            .load_title_release_blocklist_signatures(&title.id)
+            .load_title_release_blocklist_signatures(
+                &title.id,
+                crate::app_usecase_discovery::search_result_blocklist_keys(scored),
+            )
             .await;
         let episode = match wanted.episode_id.as_deref() {
             Some(episode_id) => self
