@@ -11,9 +11,10 @@ use super::decode::{
     Catalogue, CatalogueProperty, CustomValue, DecodedGroup, DecodedRule, MediaLevel, Operator,
 };
 use super::{
-    ArrKind, LIFECYCLE_STARTER_SOURCE, MAINTAINERR_DESTRUCTIVE_MAX_TITLES_PER_RUN,
-    MAX_MAINTAINERR_RULES_PER_GROUP, MaintainerrDiagnostic, MaintainerrDiagnosticSeverity,
-    MaintainerrRuleStatus, MaintainerrTranslateContext, MaintainerrTranslatedRule,
+    ArrKind, MAINTAINERR_DESTRUCTIVE_MAX_TITLES_PER_RUN, MAINTAINERR_FAILED_NAME_PREFIX,
+    MAINTAINERR_FAILED_SOURCE, MAINTAINERR_NAME_PREFIX, MAX_MAINTAINERR_RULES_PER_GROUP,
+    MaintainerrDiagnostic, MaintainerrDiagnosticSeverity, MaintainerrRuleStatus,
+    MaintainerrTranslateContext, MaintainerrTranslatedRule,
 };
 use crate::lifecycle_rules::LIFECYCLE_MAX_GRACE_DAYS;
 use scryer_rules::lifecycle::{PERSON_TARGETED_LIFECYCLE_FACTS, rewrite_package_declaration};
@@ -26,6 +27,10 @@ use std::collections::HashSet;
 const VALIDATION_RULE_ID: &str = "maintainerr_import";
 /// The longest comment text written into a source, in characters.
 const MAX_COMMENT_CHARS: usize = 200;
+/// Longest group name kept in a rule's name.
+const MAX_DISPLAY_NAME_CHARS: usize = 200;
+/// Longest group description kept in a rule's description.
+const MAX_OWN_DESCRIPTION_CHARS: usize = 2000;
 /// The most failed parts a description names before summarising the rest.
 const MAX_DESCRIBED_FAILURES: usize = 5;
 
@@ -265,7 +270,7 @@ pub(super) fn translate_group(
         source_group_name: group.name.clone(),
         source_library_id: group.library_id.clone(),
         source_is_active: group.is_active,
-        name: format!("(Maintainerr) {display}"),
+        name: format!("{MAINTAINERR_NAME_PREFIX}{display}"),
         description: with_group_description(
             format!("Imported from the Maintainerr rule group \"{display}\"."),
             group,
@@ -319,12 +324,12 @@ fn failed(
         source_group_name: group.name.clone(),
         source_library_id: group.library_id.clone(),
         source_is_active: group.is_active,
-        name: format!("(Maintainerr) FAILED - {display}"),
+        name: format!("{MAINTAINERR_FAILED_NAME_PREFIX}{display}"),
         description: with_group_description(
             format!("Could not translate from Maintainerr: {summary}."),
             group,
         ),
-        rego_source: LIFECYCLE_STARTER_SOURCE.to_string(),
+        rego_source: MAINTAINERR_FAILED_SOURCE.to_string(),
         grace_days,
         max_titles_per_run: None,
         status: MaintainerrRuleStatus::Failed,
@@ -337,16 +342,19 @@ fn with_group_description(sentence: String, group: &DecodedGroup) -> String {
     match group
         .description
         .as_deref()
-        .map(str::trim)
+        .map(multi_line)
         .filter(|text| !text.is_empty())
     {
-        Some(own) => format!("{sentence}\n\n{own}"),
+        Some(own) => format!(
+            "{sentence}\n\n{}",
+            truncated(&own, MAX_OWN_DESCRIPTION_CHARS)
+        ),
         None => sentence,
     }
 }
 
 fn display_name(group: &DecodedGroup) -> String {
-    let cleaned = single_line(&group.name);
+    let cleaned = truncated(&single_line(&group.name), MAX_DISPLAY_NAME_CHARS);
     if cleaned.is_empty() {
         format!("rule group {}", group.id)
     } else {
@@ -354,12 +362,48 @@ fn display_name(group: &DecodedGroup) -> String {
     }
 }
 
+/// `text` cut to `max` characters, marked with an ellipsis when cut.
+fn truncated(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text
+        .chars()
+        .take(max)
+        .collect::<String>()
+        .trim_end()
+        .to_string();
+    out.push('…');
+    out
+}
+
+/// Text that keeps its line breaks, with every other control or
+/// line-breaking character replaced by a space.
+fn multi_line(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .map(|c| {
+            if c == '\n' {
+                c
+            } else if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 fn grace_days(delete_after_days: Option<f64>) -> i64 {
     let days = delete_after_days.unwrap_or(0.0).trunc();
     days.clamp(0.0, LIFECYCLE_MAX_GRACE_DAYS as f64) as i64
 }
 
-/// Text with every control or line-breaking character replaced by a space.
+/// Text with every control or line-breaking character replaced by a space and
+/// runs of whitespace collapsed to one, as the Sonarr and Radarr import cleans
+/// remote names.
 fn single_line(text: &str) -> String {
     text.chars()
         .map(|c| {
@@ -370,8 +414,9 @@ fn single_line(text: &str) -> String {
             }
         })
         .collect::<String>()
-        .trim()
-        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn comment(text: &str) -> String {
@@ -646,6 +691,8 @@ fn compile_rule(
             return Err(unsupported());
         }
         let mut guards = first_operand.guard;
+        // A computed operand exists only once its value line binds.
+        guards.extend(first_operand.value);
         if matches!(
             first_operand.shape,
             Shape::Text | Shape::TextList | Shape::Instant | Shape::Day
@@ -893,6 +940,66 @@ fn operand(
                 format!("count({var}_played) > 0"),
             ],
             vec![format!("{var} := {var}_played[0]")],
+        ),
+        Source::TitleFact(fact) => (
+            vec![
+                format!("{var} := input.facts.{fact}"),
+                format!("{type_guard}({var})"),
+            ],
+            Vec::new(),
+        ),
+        Source::TitleTextIs(fact, expected) => (
+            vec![
+                format!("{var}_text := input.facts.{fact}"),
+                format!("is_string({var}_text)"),
+            ],
+            vec![format!(
+                "{var} := lower({var}_text) == {}",
+                literal(&expected.to_lowercase())
+            )],
+        ),
+        Source::TitleRating { source, votes } => {
+            let field = if votes { "votes" } else { "value" };
+            (
+                vec![
+                    format!("{var}_ratings := input.facts.ratings"),
+                    format!("is_array({var}_ratings)"),
+                    format!(
+                        "{var}_found := [r.{field} | some r in {var}_ratings; is_string(r.source); lower(r.source) == {}; is_number(r.{field})]",
+                        literal(source)
+                    ),
+                    format!("count({var}_found) > 0"),
+                ],
+                vec![format!("{var} := {var}_found[0]")],
+            )
+        }
+        Source::EarliestDay(facts_read) => {
+            let parts = facts_read
+                .iter()
+                .map(|fact| format!("[d | d := {facts}.{fact}; is_string(d)]"))
+                .collect::<Vec<_>>();
+            let mut joined = parts[0].clone();
+            for part in &parts[1..] {
+                joined = format!("array.concat({joined}, {part})");
+            }
+            (
+                vec![
+                    format!("{var}_days := {joined}"),
+                    format!("count({var}_days) > 0"),
+                ],
+                vec![format!("{var} := min({var}_days)")],
+            )
+        }
+        Source::LatestFileAddedAt => (
+            vec![
+                format!("{var}_files := {facts}.files"),
+                format!("is_array({var}_files)"),
+                format!(
+                    "{var}_added := [f.added_at | some f in {var}_files; is_string(f.added_at)]"
+                ),
+                format!("count({var}_added) > 0"),
+            ],
+            vec![format!("{var} := max({var}_added)")],
         ),
     };
     Operand {

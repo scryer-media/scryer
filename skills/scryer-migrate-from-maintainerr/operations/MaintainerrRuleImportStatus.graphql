@@ -1,0 +1,15 @@
+# Read one Maintainerr rule import run and its per-group report. Read-only.
+# Variables: {"runId": "<id from StartMaintainerrRuleImport>"}
+query MaintainerrRuleImportStatus($runId: ID!) {
+  externalRuleImportStatus(runId: $runId) {
+    runId
+    status
+    active
+    phase
+    reason
+    message
+    counts { total pending saved savedFailedTranslation skippedExists failed }
+    items { key sourceName savedName ruleSetId state reason facts { code details } }
+    facts { code details }
+  }
+}

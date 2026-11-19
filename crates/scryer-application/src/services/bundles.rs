@@ -185,6 +185,9 @@ pub struct AppCustomizationServices {
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
     pub(crate) user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
     pub(crate) rule_mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Held across each lifecycle rule set insert and rename, so a write that
+    /// checks names first never interleaves with another write.
+    pub(crate) lifecycle_rule_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -497,6 +500,7 @@ impl AppServices {
                     scryer_rules::UserRulesEngine::empty(),
                 )),
                 rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+                lifecycle_rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             notifications: AppNotificationServices::Disabled,
             lists: AppListServices::disabled(),

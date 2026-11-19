@@ -59,6 +59,7 @@ fn fetched(formats: Vec<Value>, profiles: Vec<ArrQualityProfileFormatScores>) ->
 fn scryer_profiles(names: &[&str]) -> RuleImportPlanContext {
     RuleImportPlanContext {
         quality_profile_names: names.iter().map(|name| name.to_string()).collect(),
+        ..RuleImportPlanContext::default()
     }
 }
 
@@ -477,6 +478,7 @@ fn a_format_is_imported_under_either_of_its_names() {
                 PlannedRuleImportTranslation::ArrScoringRule(rule) => {
                     stage_arr_scoring_rule(&mut context, index, rule)
                 }
+                other => panic!("not a scoring rule: {other:?}"),
             })
             .collect();
         assert_eq!(outcomes[0].state, RuleImportItemState::SkippedExists);
@@ -522,6 +524,7 @@ fn staging_skips_existing_and_repeated_names_and_saves_disabled() {
             PlannedRuleImportTranslation::ArrScoringRule(rule) => {
                 stage_arr_scoring_rule(&mut context, index, rule)
             }
+            other => panic!("not a scoring rule: {other:?}"),
         })
         .collect();
     let states: Vec<_> = outcomes.iter().map(|outcome| outcome.state).collect();

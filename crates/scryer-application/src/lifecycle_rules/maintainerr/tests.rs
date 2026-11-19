@@ -282,7 +282,7 @@ fn failed_with(data_type: &str, arr_action: i64, rules: &[Rule]) -> Vec<&'static
         "{}",
         rule.rego_source
     );
-    assert_eq!(rule.rego_source, LIFECYCLE_STARTER_SOURCE);
+    assert_eq!(rule.rego_source, MAINTAINERR_FAILED_SOURCE);
     assert!(
         rule.name.starts_with("(Maintainerr) FAILED - "),
         "{}",
@@ -390,7 +390,23 @@ fn diagnostic_codes_are_distinct_and_namespaced() {
 }
 
 #[test]
-fn failed_rules_carry_the_web_editors_starter_source() {
+fn failed_rules_carry_the_starter_with_a_notification_for_its_tag() {
+    let tagged = "add_tags := [\"needs-review\"] if unmonitored_with_files";
+    let notified = "notify := \"Unmonitored with files.\" if unmonitored_with_files";
+    assert!(LIFECYCLE_STARTER_SOURCE.contains(tagged));
+    assert_eq!(
+        MAINTAINERR_FAILED_SOURCE,
+        LIFECYCLE_STARTER_SOURCE.replace(tagged, notified)
+    );
+    let declared = prepare_source("maintainerr_test", MAINTAINERR_FAILED_SOURCE, 0)
+        .expect("the starter saves")
+        .declared;
+    assert!(declared.add_tags.is_empty() && declared.remove_tags.is_empty());
+    assert!(declared.quality_profiles.is_empty() && !declared.destructive);
+}
+
+#[test]
+fn the_starter_matches_the_web_editors_source() {
     let marker = "export const LIFECYCLE_STARTER_SOURCE = `";
     let start = WEB_RULE_SETS
         .find(marker)
@@ -487,11 +503,7 @@ fn the_live_shape_translates_group_by_group() {
         summary,
         vec![
             (1, Translated, vec![]),
-            (
-                2,
-                Failed,
-                vec![codes::PROPERTY_UNMAPPED, codes::PROPERTY_UNMAPPED]
-            ),
+            (2, Translated, vec![]),
             (3, Translated, vec![]),
             (4, Translated, vec![]),
             (5, Failed, vec![codes::PROPERTY_UNMAPPED]),
@@ -503,12 +515,8 @@ fn the_live_shape_translates_group_by_group() {
                     codes::PROPERTY_COLLECTION_UNSUPPORTED
                 ]
             ),
-            (7, Failed, vec![codes::PROPERTY_UNMAPPED]),
-            (
-                8,
-                Failed,
-                vec![codes::PROPERTY_UNMAPPED, codes::PROPERTY_UNMAPPED]
-            ),
+            (7, Translated, vec![]),
+            (8, Failed, vec![codes::PROPERTY_UNMAPPED]),
             (
                 9,
                 Failed,
@@ -529,7 +537,12 @@ fn the_live_shape_translates_group_by_group() {
     assert_eq!(rules[2].max_titles_per_run, None);
     assert_eq!(warnings(&rules[3]), vec![codes::ACTION_APPROXIMATE]);
     assert!(
-        rules[1]
+        rules[4]
+            .description
+            .starts_with("Could not translate from Maintainerr: ")
+    );
+    assert!(
+        !rules[1]
             .description
             .starts_with("Could not translate from Maintainerr: ")
     );
@@ -1392,7 +1405,7 @@ fn anything_without_a_faithful_equivalent_fails_the_group() {
     );
     for result in &results {
         assert_eq!(result.status, MaintainerrRuleStatus::Failed);
-        assert_eq!(result.rego_source, LIFECYCLE_STARTER_SOURCE);
+        assert_eq!(result.rego_source, MAINTAINERR_FAILED_SOURCE);
     }
 }
 
@@ -1491,4 +1504,313 @@ fn translation_is_deterministic() {
     let second = translate_maintainerr_rule_groups(LIVE_RULES, LIVE_CONSTANTS, &context())
         .expect("readable");
     assert_eq!(first, second);
+}
+
+// ── Bindings to metadata, ratings and file facts ───────────────────────────
+
+const PLEX: i64 = 0;
+const PLEX_RATING_IMDB: (i64, i64) = (PLEX, 31);
+const PLEX_RATING_TMDB: (i64, i64) = (PLEX, 34);
+const PLEX_RATING_IMDB_SHOW: (i64, i64) = (PLEX, 35);
+const PLEX_RATING_TMDB_SHOW: (i64, i64) = (PLEX, 38);
+const JELLYFIN_RATING_IMDB: (i64, i64) = (JELLYFIN, 44);
+const RADARR_RELEASE_DATE: (i64, i64) = (RADARR, 4);
+const RADARR_FILE_DATE: (i64, i64) = (RADARR, 10);
+const RADARR_IMDB_RATING: (i64, i64) = (RADARR, 16);
+const RADARR_IMDB_VOTES: (i64, i64) = (RADARR, 19);
+const SONARR_STATUS: (i64, i64) = (SONARR, 6);
+const SONARR_ENDED: (i64, i64) = (SONARR, 7);
+
+fn rating(
+    source: &str,
+    value: Option<f64>,
+    votes: Option<i64>,
+) -> scryer_rules::lifecycle::LifecycleRatingDoc {
+    scryer_rules::lifecycle::LifecycleRatingDoc {
+        source: source.to_string(),
+        value,
+        normalized: value.unwrap_or(0.0),
+        votes,
+    }
+}
+
+fn check_at(
+    data_type: &str,
+    input: &LifecycleInput,
+    first: (i64, i64),
+    action: i64,
+    with: With<'static>,
+    expected: bool,
+) {
+    let result = translated(data_type, 3, &[rule(None, first, action, with)]);
+    assert!(
+        warnings(&result).contains(&codes::FACT_APPROXIMATE),
+        "{:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        fires(&result.rego_source, input),
+        expected,
+        "{first:?} action {action}\n{}",
+        result.rego_source
+    );
+}
+
+#[test]
+fn imdb_and_tmdb_ratings_read_the_stored_rating_of_that_source() {
+    let mut input = movie();
+    input.facts.ratings = Observation::known(vec![
+        rating("tmdb", Some(6.1), Some(900)),
+        rating("IMDb", Some(7.4), Some(12_000)),
+    ]);
+    for first in [RADARR_IMDB_RATING, PLEX_RATING_IMDB] {
+        check_at("movie", &input, first, BIGGER, number("7"), true);
+        check_at("movie", &input, first, SMALLER, number("7"), false);
+        check_at("movie", &input, first, EXISTS, With::Nothing, true);
+    }
+    check_at(
+        "movie",
+        &input,
+        RADARR_IMDB_VOTES,
+        BIGGER,
+        number("10000"),
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_IMDB_VOTES,
+        SMALLER,
+        number("10000"),
+        false,
+    );
+    check_at(
+        "movie",
+        &input,
+        PLEX_RATING_TMDB,
+        SMALLER,
+        number("6.5"),
+        true,
+    );
+    let mut series = show();
+    series.facts.ratings = input.facts.ratings.clone();
+    check_at(
+        "show",
+        &series,
+        PLEX_RATING_TMDB,
+        SMALLER,
+        number("6.5"),
+        true,
+    );
+
+    // A season or an episode reads its show's rating.
+    for (data_type, mut narrow) in [("season", season()), ("episode", episode())] {
+        narrow.facts.ratings = input.facts.ratings.clone();
+        check_at(
+            data_type,
+            &narrow,
+            PLEX_RATING_IMDB_SHOW,
+            BIGGER,
+            number("7"),
+            true,
+        );
+        check_at(
+            data_type,
+            &narrow,
+            PLEX_RATING_TMDB_SHOW,
+            BIGGER,
+            number("7"),
+            false,
+        );
+    }
+
+    // No rating from that source, or one without a value, never matches.
+    input.facts.ratings = Observation::known(vec![rating("imdb", None, Some(3))]);
+    check_at(
+        "movie",
+        &input,
+        RADARR_IMDB_RATING,
+        SMALLER,
+        number("7"),
+        false,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_IMDB_RATING,
+        NOT_EXISTS,
+        With::Nothing,
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_IMDB_VOTES,
+        SMALLER,
+        number("7"),
+        true,
+    );
+    input.facts.ratings = Observation::known(Vec::new());
+    check_at(
+        "movie",
+        &input,
+        PLEX_RATING_IMDB,
+        NOT_EQUALS,
+        number("7"),
+        false,
+    );
+
+    // Jellyfin and Emby fill their IMDb rating from the community rating,
+    // and an episode's own rating is not stored: neither binds.
+    assert_eq!(
+        failed_with(
+            "movie",
+            3,
+            &[rule(None, JELLYFIN_RATING_IMDB, BIGGER, number("7"))]
+        ),
+        vec![codes::PROPERTY_UNMAPPED]
+    );
+    assert_eq!(
+        failed_with(
+            "episode",
+            3,
+            &[rule(None, PLEX_RATING_IMDB, BIGGER, number("7"))]
+        ),
+        vec![codes::PROPERTY_LEVEL_UNSUPPORTED]
+    );
+}
+
+#[test]
+fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
+    let mut input = movie();
+    input.facts.digital_release_date = Observation::known("2023-05-02".to_string());
+    input.facts.physical_release_date = Observation::known("2023-03-10".to_string());
+    let cutoff = "2023-04-01";
+    check_at(
+        "movie",
+        &input,
+        RADARR_RELEASE_DATE,
+        BEFORE,
+        date(cutoff),
+        true,
+    );
+    input.facts.physical_release_date = Observation::absent();
+    check_at(
+        "movie",
+        &input,
+        RADARR_RELEASE_DATE,
+        BEFORE,
+        date(cutoff),
+        false,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_RELEASE_DATE,
+        AFTER,
+        date(cutoff),
+        true,
+    );
+    input.facts.digital_release_date = Observation::absent();
+    check_at(
+        "movie",
+        &input,
+        RADARR_RELEASE_DATE,
+        AFTER,
+        date(cutoff),
+        false,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_RELEASE_DATE,
+        NOT_EXISTS,
+        With::Nothing,
+        true,
+    );
+}
+
+#[test]
+fn radarr_file_date_is_when_the_newest_file_was_recorded() {
+    let mut input = movie();
+    let Observation::Known {
+        value: mut files, ..
+    } = input.facts.files.clone()
+    else {
+        panic!("the synthetic movie has files");
+    };
+    files[0].added_at = Some(rfc3339(NOW - 200 * DAY));
+    let mut newer = files[0].clone();
+    newer.added_at = Some(rfc3339(NOW - 10 * DAY));
+    files.push(newer);
+    input.facts.files = Observation::known(files);
+    check_at(
+        "movie",
+        &input,
+        RADARR_FILE_DATE,
+        IN_LAST,
+        number("2592000"),
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_FILE_DATE,
+        BEFORE,
+        number("8640000"),
+        false,
+    );
+    input.facts.files = Observation::known(Vec::new());
+    check_at(
+        "movie",
+        &input,
+        RADARR_FILE_DATE,
+        IN_LAST,
+        number("2592000"),
+        false,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_FILE_DATE,
+        NOT_EXISTS,
+        With::Nothing,
+        true,
+    );
+}
+
+#[test]
+fn sonarr_status_and_ended_read_the_shows_status() {
+    let mut input = show();
+    input.facts.series_status = Observation::known("Ended".to_string());
+    check_at("show", &input, SONARR_STATUS, EQUALS, text("ended"), true);
+    check_at(
+        "show",
+        &input,
+        SONARR_STATUS,
+        NOT_EQUALS,
+        text("continuing"),
+        true,
+    );
+    check_at("show", &input, SONARR_ENDED, EQUALS, boolean("1"), true);
+    check_at("show", &input, SONARR_ENDED, EQUALS, boolean("0"), false);
+    input.facts.series_status = Observation::known("continuing".to_string());
+    check_at("show", &input, SONARR_ENDED, EQUALS, boolean("0"), true);
+    check_at("show", &input, SONARR_STATUS, EQUALS, text("ended"), false);
+    // A season reads its show's status.
+    let mut narrow = season();
+    narrow.facts.series_status = Observation::known("ended".to_string());
+    check_at("season", &narrow, SONARR_ENDED, EQUALS, boolean("1"), true);
+    // An unknown status never matches either way.
+    input.facts.series_status = Observation::absent();
+    check_at("show", &input, SONARR_ENDED, EQUALS, boolean("0"), false);
+    check_at("show", &input, SONARR_ENDED, EQUALS, boolean("1"), false);
+    assert_eq!(
+        failed_with(
+            "episode",
+            3,
+            &[rule(None, SONARR_ENDED, EQUALS, boolean("1"))]
+        ),
+        vec![codes::PROPERTY_LEVEL_UNSUPPORTED]
+    );
 }

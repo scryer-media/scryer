@@ -345,6 +345,8 @@ pub struct PlannedRuleImportItem {
 pub enum PlannedRuleImportTranslation {
     /// A disabled scoring rule set for one Sonarr or Radarr custom format.
     ArrScoringRule(crate::rule_import_arr::PlannedArrScoringRule),
+    /// A disabled lifecycle rule for one Maintainerr rule group.
+    MaintainerrLifecycleRule(crate::rule_import_maintainerr::PlannedMaintainerrLifecycleRule),
 }
 
 /// The outcome of saving one planned item.
@@ -365,6 +367,9 @@ pub struct RuleImportSaveContext {
     pub existing_names: std::collections::HashSet<String>,
     /// Scoring rule sets the run writes together once every item is decided.
     pub staged_rule_sets: Vec<StagedRuleImportRuleSet>,
+    /// Names of existing imported lifecycle rules, and of every name this run
+    /// claims.
+    pub existing_lifecycle_names: std::collections::HashSet<String>,
 }
 
 /// A scoring rule set an item saves, written with the run's batch.
@@ -384,6 +389,8 @@ pub struct StagedRuleImportRuleSet {
 pub struct RuleImportPlanContext {
     /// Names of Scryer's quality profiles, matched exactly.
     pub quality_profile_names: std::collections::HashSet<String>,
+    /// Usernames of Scryer's users.
+    pub usernames: std::collections::HashSet<String>,
 }
 
 impl RuleImportConnection {
@@ -588,14 +595,13 @@ pub fn plan_rule_import(
         RuleImportFetched::Radarr(arr) => {
             crate::rule_import_arr::plan_arr_rule_import(ArrSourceApplication::Radarr, arr, context)
         }
-        RuleImportFetched::Maintainerr(_) => Err(AppError::validation_refused(
-            refusal::TRANSLATOR_UNAVAILABLE,
-            "Scryer cannot translate rules from this source yet",
-        )),
+        RuleImportFetched::Maintainerr(maintainerr) => {
+            crate::rule_import_maintainerr::plan_maintainerr_rule_import(maintainerr, context)
+        }
     }
 }
 
-fn bounded_message(error: &AppError) -> String {
+pub(crate) fn bounded_message(error: &AppError) -> String {
     let message = crate::url_redaction::redact_url_credentials(&error.to_string());
     if message.chars().count() <= MAX_MESSAGE_CHARS {
         return message;
@@ -921,6 +927,7 @@ impl AppUseCase {
                         .map(|reason| {
                             if reason.starts_with("RULE_IMPORT_")
                                 || reason.starts_with("EXTERNAL_IMPORT_")
+                                || reason.starts_with("MAINTAINERR_IMPORT_")
                             {
                                 reason
                             } else {
@@ -953,7 +960,9 @@ impl AppUseCase {
         progress.phase = RuleImportPhase::Saving;
         self.publish_rule_import(&mut run, &mut progress).await?;
 
-        let mut context = self.load_rule_import_save_context(actor).await?;
+        let mut context = self
+            .load_rule_import_save_context(actor, progress.source)
+            .await?;
         let mut last_publish = std::time::Instant::now();
         for (index, item) in planned.into_iter().enumerate() {
             if shutdown.is_cancelled() {
@@ -963,8 +972,10 @@ impl AppUseCase {
                 .save_rule_import_item(actor, &mut context, index, item)
                 .await;
             let entry = &mut progress.items[index];
+            let mut wrote = false;
             match outcome {
                 Ok(outcome) => {
+                    wrote = outcome.rule_set_id.is_some();
                     entry.state = outcome.state;
                     entry.saved_name = outcome.saved_name;
                     entry.rule_set_id = outcome.rule_set_id;
@@ -977,7 +988,9 @@ impl AppUseCase {
                     entry.message = Some(bounded_message(&error));
                 }
             }
-            if last_publish.elapsed() >= PROGRESS_INTERVAL {
+            // A written rule is reported at once, so a stop before the
+            // finish never shows it as unsaved.
+            if wrote || last_publish.elapsed() >= PROGRESS_INTERVAL {
                 self.publish_rule_import(&mut run, &mut progress).await?;
                 last_publish = std::time::Instant::now();
             }
@@ -1005,18 +1018,23 @@ impl AppUseCase {
         fetched: &RuleImportFetched,
     ) -> AppResult<RuleImportPlanContext> {
         let mut context = RuleImportPlanContext::default();
-        if matches!(
-            fetched,
-            RuleImportFetched::Sonarr(_) | RuleImportFetched::Radarr(_)
-        ) {
-            context.quality_profile_names = self
+        context.quality_profile_names = self
+            .services
+            .config
+            .quality_profiles
+            .list_quality_profiles(crate::SETTINGS_SCOPE_SYSTEM, None)
+            .await?
+            .into_iter()
+            .map(|profile| profile.name)
+            .collect();
+        if matches!(fetched, RuleImportFetched::Maintainerr(_)) {
+            context.usernames = self
                 .services
-                .config
-                .quality_profiles
-                .list_quality_profiles(crate::SETTINGS_SCOPE_SYSTEM, None)
+                .identity
+                .users
+                .list_usernames()
                 .await?
                 .into_iter()
-                .map(|profile| profile.name)
                 .collect();
         }
         Ok(context)
@@ -1026,7 +1044,23 @@ impl AppUseCase {
     async fn load_rule_import_save_context(
         &self,
         _actor: &User,
+        source: RuleImportSource,
     ) -> AppResult<RuleImportSaveContext> {
+        if source == RuleImportSource::Maintainerr {
+            return Ok(RuleImportSaveContext {
+                existing_lifecycle_names: self
+                    .services
+                    .customization
+                    .lifecycle_rule_sets
+                    .list_rule_set_names_with_prefix(
+                        crate::lifecycle_rules::maintainerr::MAINTAINERR_NAME_PREFIX,
+                    )
+                    .await?
+                    .into_iter()
+                    .collect(),
+                ..RuleImportSaveContext::default()
+            });
+        }
         Ok(RuleImportSaveContext {
             existing_names: self
                 .services
@@ -1046,7 +1080,7 @@ impl AppUseCase {
     /// the last item.
     async fn save_rule_import_item(
         &self,
-        _actor: &User,
+        actor: &User,
         context: &mut RuleImportSaveContext,
         index: usize,
         item: PlannedRuleImportItem,
@@ -1055,6 +1089,9 @@ impl AppUseCase {
             PlannedRuleImportTranslation::ArrScoringRule(rule) => Ok(
                 crate::rule_import_arr::stage_arr_scoring_rule(context, index, rule),
             ),
+            PlannedRuleImportTranslation::MaintainerrLifecycleRule(rule) => Ok(self
+                .save_maintainerr_lifecycle_rule(actor, context, rule)
+                .await),
         }
     }
 
@@ -1262,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn every_source_without_a_translator_is_refused_with_a_code() {
+    fn an_unreadable_maintainerr_export_is_refused_with_its_code() {
         let maintainerr = FetchedMaintainerrRules {
             version: "2.19.0".into(),
             rule_groups: Vec::new(),
@@ -1271,14 +1308,15 @@ mod tests {
             radarr_profiles: Vec::new(),
             sonarr_profiles: Vec::new(),
         };
-        for fetched in [RuleImportFetched::Maintainerr(maintainerr)] {
-            assert_eq!(
-                plan_rule_import(&fetched, &RuleImportPlanContext::default())
-                    .expect_err("no translator yet")
-                    .validation_reason(),
-                Some(refusal::TRANSLATOR_UNAVAILABLE)
-            );
-        }
+        assert_eq!(
+            plan_rule_import(
+                &RuleImportFetched::Maintainerr(maintainerr),
+                &RuleImportPlanContext::default()
+            )
+            .expect_err("constants are not readable")
+            .validation_reason(),
+            Some(crate::error_reasons::maintainerr_import::CONSTANTS_JSON_INVALID)
+        );
     }
 
     #[test]

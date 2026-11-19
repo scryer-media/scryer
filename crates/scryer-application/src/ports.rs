@@ -4608,6 +4608,15 @@ pub trait UserRepository: Send + Sync {
         ))
     }
     async fn list_all(&self) -> AppResult<Vec<User>>;
+    /// The username of every user.
+    async fn list_usernames(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_all()
+            .await?
+            .into_iter()
+            .map(|user| user.username)
+            .collect())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
     async fn rotate_auth_session_version(
@@ -11411,6 +11420,38 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
         rule_set: &LifecycleRuleSet,
         revision: &LifecycleRuleRevision,
     ) -> AppResult<()>;
+
+    /// Like [`Self::create_rule_set`], but writes nothing and returns `false`
+    /// when a rule set already carries one of `taken_names`. The check and the
+    /// insert share one transaction.
+    async fn create_rule_set_unless_named(
+        &self,
+        rule_set: &LifecycleRuleSet,
+        revision: &LifecycleRuleRevision,
+        taken_names: &[String],
+    ) -> AppResult<bool> {
+        let existing = self.list_rule_sets().await?;
+        if existing
+            .iter()
+            .any(|existing| taken_names.contains(&existing.name))
+        {
+            return Ok(false);
+        }
+        self.create_rule_set(rule_set, revision).await?;
+        Ok(true)
+    }
+
+    /// The names of the rule sets whose name starts with `prefix`, matched
+    /// case-sensitively.
+    async fn list_rule_set_names_with_prefix(&self, prefix: &str) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .filter(|name| name.starts_with(prefix))
+            .collect())
+    }
 
     /// Append `revision`, repoint the rule set at it, drop an enabled rule to
     /// dry run flagged as edited since it was enabled, and clear its deletion
