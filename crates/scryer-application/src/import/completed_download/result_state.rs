@@ -401,6 +401,18 @@ pub(super) async fn apply_import_result(
     apply_import_result_with_completed(app, td, result, files_imported_this_pass, None, None).await
 }
 
+/// What one import pass recorded, as two counts that answer different
+/// questions.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ImportPassProgress {
+    /// Success rows the pass wrote, including another row for a source and
+    /// unit that had already succeeded. Verification reads this.
+    pub(super) success_rows_this_pass: usize,
+    /// Source-and-unit pairs that had no success before the pass. Only this
+    /// resets the execution backoff.
+    pub(super) new_units_this_pass: usize,
+}
+
 pub(crate) async fn apply_import_result_with_completed(
     app: &AppUseCase,
     td: &mut TrackedDownload,
@@ -409,6 +421,29 @@ pub(crate) async fn apply_import_result_with_completed(
     completed: Option<&CompletedDownload>,
     release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
 ) -> bool {
+    apply_import_pass_result(
+        app,
+        td,
+        result,
+        ImportPassProgress {
+            success_rows_this_pass: files_imported_this_pass,
+            new_units_this_pass: files_imported_this_pass,
+        },
+        completed,
+        release_evidence,
+    )
+    .await
+}
+
+pub(super) async fn apply_import_pass_result(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    result: ImportResult,
+    progress: ImportPassProgress,
+    completed: Option<&CompletedDownload>,
+    release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
+) -> bool {
+    let files_imported_this_pass = progress.success_rows_this_pass;
     if result.decision == ImportDecision::Imported
         && crate::import_workflow::scene_subtitle_hold_from_fields(
             None,
@@ -437,8 +472,9 @@ pub(crate) async fn apply_import_result_with_completed(
             // Only progress resets the execution backoff. A pass that imported
             // nothing new (a duplicate refusal, a re-verification) must keep
             // growing the delay, or an unverifiable download re-runs its import
-            // on every poll forever.
-            if files_imported_this_pass > 0 {
+            // on every poll forever. Another success row for a source and
+            // unit that had already succeeded is not progress.
+            if progress.new_units_this_pass > 0 {
                 td.clear_import_execution_retry();
             }
         }
