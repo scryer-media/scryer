@@ -1816,11 +1816,11 @@ impl AppUseCase {
 // ── Validation helpers ──────────────────────────────────────────────────────
 
 /// A matcher that passed every authoring-time check, ready to persist.
-struct PreparedSource {
+pub(crate) struct PreparedSource {
     rego_source: String,
     content_hash: String,
     declared_actions_json: String,
-    declared: LifecycleDeclaredActions,
+    pub(crate) declared: LifecycleDeclaredActions,
     scan: scryer_rules::lifecycle_actions::LifecycleActionScan,
 }
 
@@ -1828,7 +1828,11 @@ struct PreparedSource {
 /// must hold before a revision is written: the matcher compiles, reads only
 /// documented facts and defines at least one action head, and the grace
 /// period is a real duration. Where each head acts is its name.
-fn prepare_source(rule_id: &str, rego_source: &str, grace_days: i64) -> AppResult<PreparedSource> {
+pub(crate) fn prepare_source(
+    rule_id: &str,
+    rego_source: &str,
+    grace_days: i64,
+) -> AppResult<PreparedSource> {
     if grace_days < 0 {
         return Err(AppError::validation_refused(
             crate::error_reasons::lifecycle::GRACE_PERIOD_INVALID,

@@ -938,7 +938,7 @@ pub(crate) fn decode_decision(
 /// real path. Nothing is unknown here on purpose — validation is about whether
 /// the rule is well-formed, and a rule held for unobservable facts would prove
 /// nothing about that.
-pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
+pub fn synthetic_lifecycle_input() -> LifecycleInput {
     let mut input = synthetic_title_input();
     // Both narrow sections, so a season or episode head dry-runs its real
     // path too. Validation refuses a head that reads another level's
@@ -961,7 +961,7 @@ pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
 }
 
 /// The synthetic title alone, with no season or episode section.
-pub(crate) fn synthetic_title_input() -> LifecycleInput {
+pub fn synthetic_title_input() -> LifecycleInput {
     LifecycleInput {
         schema_version: LIFECYCLE_INPUT_SCHEMA_VERSION,
         evaluation_time: DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
