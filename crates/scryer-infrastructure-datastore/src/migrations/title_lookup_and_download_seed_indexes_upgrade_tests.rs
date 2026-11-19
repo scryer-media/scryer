@@ -95,9 +95,9 @@ async fn assert_sqlite_indexes(pool: &sqlx::SqlitePool) {
         pool,
         "EXPLAIN QUERY PLAN SELECT changed.canonical_download_id FROM download_identity_states changed \
          WHERE changed.updated_at >= '2026-01-01' \
-         UNION SELECT changed.id FROM download_submissions changed \
+         UNION ALL SELECT changed.id FROM download_submissions changed \
          WHERE changed.tracked_state_at >= '2026-01-01' \
-         UNION SELECT changed.id FROM downloads changed WHERE changed.created_at >= '2026-01-01'",
+         UNION ALL SELECT changed.id FROM downloads changed WHERE changed.created_at >= '2026-01-01'",
     )
     .await;
     for index in [

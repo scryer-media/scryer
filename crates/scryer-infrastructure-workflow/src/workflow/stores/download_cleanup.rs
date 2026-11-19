@@ -178,13 +178,16 @@ const CLEANUP_SEED_SQL_TEMPLATE: &str = "SELECT d.id, COALESCE(st.tracked_state,
      ORDER BY d.created_at, d.id LIMIT {}";
 
 /// Any identity state row changing moves the latest one's `updated_at` to at
-/// least that bound, so this covers the latest-state input exactly.
+/// least that bound, so this covers the latest-state input exactly. The
+/// branches are `UNION ALL`: `IN` ignores duplicates, and a plain `UNION`
+/// lets SQLite merge the branches in id order, scanning every table instead of
+/// searching each date index.
 const CLEANUP_SEED_CHANGED_FILTER: &str = "d.id IN (
            SELECT changed.canonical_download_id FROM download_identity_states changed
             WHERE changed.updated_at >= {}
-           UNION SELECT changed.id FROM download_submissions changed
+           UNION ALL SELECT changed.id FROM download_submissions changed
             WHERE changed.tracked_state_at >= {}
-           UNION SELECT changed.id FROM downloads changed
+           UNION ALL SELECT changed.id FROM downloads changed
             WHERE changed.created_at >= {})
        AND ";
 
