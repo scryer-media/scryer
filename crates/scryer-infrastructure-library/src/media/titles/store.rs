@@ -2552,7 +2552,7 @@ impl TitleRepository for TitleStore {
     async fn list_title_content_ratings(
         &self,
         title_ids: &[String],
-    ) -> AppResult<Vec<(String, Vec<scryer_application::ContentRating>)>> {
+    ) -> AppResult<Vec<(String, Option<Vec<scryer_application::ContentRating>>)>> {
         let mut by_title = crate::media::title_content_ratings::load_title_content_ratings(
             self.datastore.read_exec(),
             title_ids,
@@ -2560,7 +2560,20 @@ impl TitleRepository for TitleStore {
         .await?;
         Ok(title_ids
             .iter()
-            .map(|id| (id.clone(), by_title.remove(id).unwrap_or_default()))
+            .map(|id| (id.clone(), by_title.remove(id)))
+            .collect())
+    }
+
+    async fn list_title_awards(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Option<Vec<scryer_application::TitleAward>>)>> {
+        let mut by_title =
+            crate::media::title_awards::load_title_awards(self.datastore.read_exec(), title_ids)
+                .await?;
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), by_title.remove(id)))
             .collect())
     }
 
@@ -3595,6 +3608,7 @@ impl TitleRepository for TitleStore {
                 Box::pin(async move {
                     let ratings = metadata.ratings.clone();
                     let content_ratings = metadata.content_ratings.clone();
+                    let awards = metadata.awards.clone();
                     let credits = metadata.credits.clone();
                     let canonical_tags = metadata.canonical_tags.clone();
                     let mut title = load_title_canonical_tx_or_not_found(tx, &id, true).await?;
@@ -3631,6 +3645,10 @@ impl TitleRepository for TitleStore {
                             &content_ratings,
                         )
                         .await?;
+                    }
+                    if let Some(awards) = awards {
+                        crate::media::title_awards::replace_title_awards_tx(tx, &title.id, &awards)
+                            .await?;
                     }
                     load_title_tx_or_not_found(tx, &id, true).await
                 })
@@ -3696,12 +3714,11 @@ impl TitleRepository for TitleStore {
                 replace_title_metadata_ratings_tx(tx, &title.id, &TitleRatingSummary::default())
                     .await?;
                 replace_title_credits_tx(tx, &title.id, &[]).await?;
-                crate::media::title_content_ratings::replace_title_content_ratings_tx(
-                    tx,
-                    &title.id,
-                    &[],
-                )
-                .await?;
+                // A rematch leaves both sets not stored, so rules read them as
+                // unknown until the new match is hydrated.
+                crate::media::title_content_ratings::clear_title_content_ratings_tx(tx, &title.id)
+                    .await?;
+                crate::media::title_awards::clear_title_awards_tx(tx, &title.id).await?;
                 load_title_tx_or_not_found(tx, &id, true).await
             })
         })

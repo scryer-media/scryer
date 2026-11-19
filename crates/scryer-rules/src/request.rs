@@ -259,11 +259,33 @@ pub struct RequestListDoc {
 }
 
 /// One content-rating certification as the metadata source reported it.
-#[derive(Debug, Clone, Serialize)]
+/// Lifecycle rules read the same shape.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
 pub struct RequestCertificationDoc {
     pub country: String,
     pub value: String,
     pub source: String,
+}
+
+/// One award the title won, as the metadata gateway reports it from Wikidata.
+/// Lifecycle rules read the same shape.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+pub struct RequestAwardDoc {
+    /// The award's name, such as `Academy Award for Best Picture`.
+    pub award: String,
+    /// The award's Wikidata id, such as `Q102427`. Empty when unknown.
+    pub award_id: String,
+    /// The year it was given; absent when the source records none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i64>,
+    /// The recipient the source names, a person or the title itself. Empty
+    /// when it names none.
+    pub recipient: String,
+    /// The recipient's Wikidata id. Empty when unknown.
+    pub recipient_id: String,
+    /// `work` when the title won the award, `person` when someone won it for
+    /// their work on the title.
+    pub given_to: String,
 }
 
 /// The fact snapshot, and the single source of truth for both input namespaces.
@@ -311,7 +333,10 @@ pub struct RequestFactsDoc {
     pub first_aired: Observation<String>,
     /// Days between the release date and `evaluation_time`.
     pub release_age_days: Observation<i64>,
+    /// How many awards the title won; a known zero when it won none.
     pub award_count: Observation<i64>,
+    /// Every award the title won, in the gateway's order.
+    pub awards: Observation<Vec<RequestAwardDoc>>,
 
     // ── quality ──
     pub quality_profile_tiers: Observation<Vec<String>>,
@@ -921,6 +946,14 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             first_aired: Observation::known("2024-01-01T00:00:00Z".to_string()),
             release_age_days: Observation::known(30),
             award_count: Observation::known(2),
+            awards: Observation::known(vec![RequestAwardDoc {
+                award: "Fixture Prize".to_string(),
+                award_id: "Q1".to_string(),
+                year: Some(2025),
+                recipient: "Fixture Feature".to_string(),
+                recipient_id: "Q2".to_string(),
+                given_to: "work".to_string(),
+            }]),
             quality_profile_tiers: Observation::known(vec![
                 "1080P".to_string(),
                 "720P".to_string(),

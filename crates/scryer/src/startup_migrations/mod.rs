@@ -18,6 +18,7 @@ pub(crate) mod _0018_title_folder_recovery;
 pub(crate) mod _0019_show_tmdb_refresh;
 pub(crate) mod _0020_payload_blob_compression;
 pub(crate) mod _0021_title_content_ratings_refresh;
+pub(crate) mod _0022_title_awards_refresh;
 pub(crate) mod compatibility_journal;
 pub(crate) mod runner;
 pub(crate) mod versioning;

@@ -409,6 +409,19 @@ pub struct LifecycleFactsDoc {
     /// source rated the title.
     pub rating: Observation<f64>,
     pub ratings: Observation<Vec<LifecycleRatingDoc>>,
+    /// The stored content ratings, shaped as request rules see them. Unknown
+    /// until the title's metadata has been stored since Scryer began keeping
+    /// them, and again after a rematch until the new match is hydrated.
+    /// `age_rating` comes from the content ratings alone.
+    pub age_rating: Observation<i64>,
+    pub certifications: Observation<Vec<LifecycleCertificationDoc>>,
+    pub certification_label: Observation<String>,
+    pub certification_rank: Observation<i64>,
+    /// The stored award wins, shaped as request rules see them. Unknown on the
+    /// same terms as the content ratings; once stored, a title that won
+    /// nothing has a known zero and an empty list.
+    pub award_count: Observation<i64>,
+    pub awards: Observation<Vec<LifecycleAwardDoc>>,
     /// Plays of the subject by every account on every enabled media server,
     /// linked to a Scryer user or not, summed. Anonymous, and behind the same
     /// gate as `watched_by_anyone`.
@@ -481,6 +494,12 @@ pub struct LifecycleRatingDoc {
     pub votes: Option<i64>,
 }
 
+/// One certification as a rule sees it; the same shape request rules read.
+pub type LifecycleCertificationDoc = crate::request::RequestCertificationDoc;
+
+/// One award win as a rule sees it; the same shape request rules read.
+pub type LifecycleAwardDoc = crate::request::RequestAwardDoc;
+
 /// Facts that name, or are computed from, identifiable people.
 ///
 /// Authoring a matcher that reads one of these is a way of asking the instance
@@ -535,6 +554,19 @@ pub const WATCHLIST_LIFECYCLE_FACTS: [&str; 6] = [
 /// Facts read from the stored metadata tags and ratings. The host reads those
 /// stores only for a rule that reads one.
 pub const METADATA_LIFECYCLE_FACTS: [&str; 3] = ["genres", "rating", "ratings"];
+
+/// Facts read from the stored content ratings. The host reads that store only
+/// for a rule that reads one.
+pub const CONTENT_RATING_LIFECYCLE_FACTS: [&str; 4] = [
+    "age_rating",
+    "certifications",
+    "certification_label",
+    "certification_rank",
+];
+
+/// Facts read from the stored awards. The host reads that store only for a
+/// rule that reads one.
+pub const AWARD_LIFECYCLE_FACTS: [&str; 2] = ["award_count", "awards"];
 
 /// Facts read from one grouped count over a show's stored episodes. The host
 /// reads it only for a rule that reads one.
@@ -1096,6 +1128,23 @@ pub fn synthetic_title_input() -> LifecycleInput {
                 value: Some(7.4),
                 normalized: 7.4,
                 votes: Some(1200),
+            }]),
+            age_rating: Observation::known(13),
+            certifications: Observation::known(vec![LifecycleCertificationDoc {
+                country: "US".to_string(),
+                value: "PG-13".to_string(),
+                source: "mpa".to_string(),
+            }]),
+            certification_label: Observation::known("PG-13".to_string()),
+            certification_rank: Observation::known(2),
+            award_count: Observation::known(1),
+            awards: Observation::known(vec![LifecycleAwardDoc {
+                award: "Fixture Prize".to_string(),
+                award_id: "Q1".to_string(),
+                year: Some(2023),
+                recipient: "Fixture Feature".to_string(),
+                recipient_id: "Q2".to_string(),
+                given_to: "work".to_string(),
             }]),
             play_count_total: Observation::known(3),
             watchlisted_by_user_ids: Observation::known(vec!["user-1".to_string()]),

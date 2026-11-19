@@ -305,6 +305,7 @@ mod tests {
                         ratings: None,
                         credits: None,
                         content_ratings: None,
+                        awards: None,
                         extra_external_ids: Vec::new(),
                         extra_tags: Vec::new(),
                     },

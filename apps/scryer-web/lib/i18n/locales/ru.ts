@@ -5149,6 +5149,51 @@ const ru: LocaleDictionary = {
     "Сводный рейтинг; отсутствует, если ни один источник не оценил тайтл, неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
   "settings.refLifecycleFactsRatingsValue":
     "Одна запись на каждый внешний рейтинг; неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
+  "settings.refLifecycleFactsAgeRating":
+    "Минимальный возраст по сохранённым возрастным рейтингам тайтла",
+  "settings.refLifecycleFactsCertifications":
+    "Все сертификаты из сохранённых возрастных рейтингов тайтла; см. input.facts.certifications[] ниже",
+  "settings.refLifecycleFactsCertificationLabel":
+    "Метка сертификата США (например, G, PG, PG-13, R)",
+  "settings.refLifecycleFactsCertificationRank":
+    "Эта метка в виде числа, от младшей к старшей, чтобы правила сравнивали, а не перечисляли метки",
+  "settings.refLifecycleFactsAwardCount":
+    "Сколько наград получил тайтл, по сохранённым метаданным",
+  "settings.refLifecycleFactsAwards":
+    "Все награды, полученные тайтлом; см. input.facts.awards[] ниже",
+  "settings.refLifecycleFactsAgeRatingValue":
+    "Минимальный возраст по сохранённым возрастным рейтингам, в первую очередь по рейтингу США; отсутствует с причиной no_age_rating, если ни один его не указывает, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsCertificationsValue":
+    "По одной записи на сертификат; отсутствует с причиной no_certifications, если их нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsCertificationLabelValue":
+    "Метка сертификата США; отсутствует с причиной no_us_certification, если её нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsCertificationRankValue":
+    "Эта метка в виде числа, от младшей к старшей; отсутствует с причиной no_us_certification, если метки США нет, и unrankable_certification, если Scryer её не ранжирует, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsAwardCountValue":
+    "Число полученных наград; известный ноль, если наград нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleFactsAwardsValue":
+    "По одной записи на каждую полученную награду; известный пустой список, если наград нет, неизвестно с причиной metadata_not_stored, пока метаданные тайтла не сохранены с тех пор, как Scryer начал их хранить, или снова после повторного сопоставления, и с причиной metadata_unreadable, если хранилище не удалось прочитать",
+  "settings.refLifecycleSectionCertifications":
+    "— По одной записи на сертификат в input.facts.certifications",
+  "settings.refLifecycleSectionObsCertifications":
+    "— По одной записи на сертификат в input.observations.certifications.value",
+  "settings.refLifecycleSectionAwards":
+    "— По одной записи на каждую награду в input.facts.awards",
+  "settings.refLifecycleSectionObsAwards":
+    "— По одной записи на каждую награду в input.observations.awards.value",
+  "settings.refLifecycleCertCountry": "Страна, выдавшая сертификат",
+  "settings.refLifecycleCertValue": "Сам сертификат (например, PG-13)",
+  "settings.refLifecycleCertSource": "Откуда взят сертификат",
+  "settings.refLifecycleAwardName": "Название награды",
+  "settings.refLifecycleAwardId":
+    "Идентификатор награды в Wikidata (например, Q102427)",
+  "settings.refLifecycleAwardYear": "Год получения награды, если известен",
+  "settings.refLifecycleAwardRecipient":
+    "Кто получил награду: сам тайтл или человек, получивший её за этот тайтл",
+  "settings.refLifecycleAwardRecipientId":
+    "Идентификатор получателя в Wikidata",
+  "settings.refLifecycleAwardGivenTo":
+    "work, если награду получил тайтл, person, если её получил человек за этот тайтл",
   "settings.refLifecycleFactsPlayCountTotalValue":
     "Сумма воспроизведений всеми учётными записями на всех включённых медиасерверах, связанными с пользователем Scryer или нет. Неизвестно с причиной audience_not_read, пока все учётные записи не прочитаны недавно, и с обычными причинами, когда факты просмотра неизвестны.",
   "settings.refLifecycleFactsWatchlistedByUserIdsValue":
@@ -5799,7 +5844,7 @@ const ru: LocaleDictionary = {
   "settings.refReqSectionObsCertifications":
     "— По одной записи на каждый рейтинг в input.observations.certifications.value",
   "settings.refReqFactsAgeRatingValue":
-    "Минимальный возраст по рейтингу; absent с причиной no_certification, когда рейтинга в метаданных нет",
+    "Минимальный возраст по рейтингу; absent с причиной no_age_rating, когда метаданные его не указывают",
   "settings.refReqFactsCertificationsValue":
     "По одной записи на рейтинг; см. input.observations.certifications.value[] ниже",
   "settings.refReqFactsCertificationLabelValue":
@@ -5837,6 +5882,23 @@ const ru: LocaleDictionary = {
     "Целых дней с выхода или первого показа",
   "settings.refReqFactsAwardCountValue":
     "Число записанных наград; подтверждённый ноль, когда наград нет",
+  "settings.refReqFactsAwards":
+    "Все награды, полученные тайтлом; см. input.facts.awards[] ниже",
+  "settings.refReqFactsAwardsValue":
+    "По одной записи на каждую полученную награду; известный пустой список, если наград нет. См. input.observations.awards.value[] ниже",
+  "settings.refReqSectionAwards":
+    "— По одной записи на каждую награду в input.facts.awards",
+  "settings.refReqSectionObsAwards":
+    "— По одной записи на каждую награду в input.observations.awards.value",
+  "settings.refReqAwardName": "Название награды",
+  "settings.refReqAwardId":
+    "Идентификатор награды в Wikidata (например, Q102427)",
+  "settings.refReqAwardYear": "Год получения награды, если известен",
+  "settings.refReqAwardRecipient":
+    "Кто получил награду: сам тайтл или человек, получивший её за этот тайтл",
+  "settings.refReqAwardRecipientId": "Идентификатор получателя в Wikidata",
+  "settings.refReqAwardGivenTo":
+    "work, если награду получил тайтл, person, если её получил человек за этот тайтл",
   "settings.refReqFactsQualityProfileTiersValue":
     "Названия уровней выбранного профиля в порядке профиля",
   "settings.refReqFactsQualityProfileMaxResolutionValue":

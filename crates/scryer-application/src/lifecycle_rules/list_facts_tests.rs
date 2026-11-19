@@ -57,6 +57,8 @@ fn loaded(lists: ListFactsByTitle) -> LifecycleListFacts {
         metadata: MetadataLoad::default(),
         episode_shapes: EpisodeShapeLoad::default(),
         favorites: FavoriteLoad::NotLoaded,
+        content_ratings: StoredSetLoad::NotLoaded,
+        awards: StoredSetLoad::NotLoaded,
         lists: Some(lists),
         origins: Some(HashMap::new()),
     }
@@ -166,6 +168,8 @@ fn no_fact_names_a_personal_list() {
             metadata: MetadataLoad::default(),
             episode_shapes: EpisodeShapeLoad::default(),
             favorites: FavoriteLoad::NotLoaded,
+            content_ratings: StoredSetLoad::NotLoaded,
+            awards: StoredSetLoad::NotLoaded,
             lists: Some(list_facts_from_rows(&rows, &subscriptions)),
             origins: Some(origins),
         },
@@ -391,6 +395,8 @@ fn unread_list_facts_stay_unknown() {
             metadata: MetadataLoad::default(),
             episode_shapes: EpisodeShapeLoad::default(),
             favorites: FavoriteLoad::NotLoaded,
+            content_ratings: StoredSetLoad::NotLoaded,
+            awards: StoredSetLoad::NotLoaded,
             lists: None,
             origins: Some(HashMap::from([(
                 "title-alpha".to_string(),
@@ -436,6 +442,8 @@ fn an_unread_request_store_leaves_only_origin_facts_unknown() {
             metadata: MetadataLoad::default(),
             episode_shapes: EpisodeShapeLoad::default(),
             favorites: FavoriteLoad::NotLoaded,
+            content_ratings: StoredSetLoad::NotLoaded,
+            awards: StoredSetLoad::NotLoaded,
             lists: Some(facts),
             origins: None,
         },
@@ -479,6 +487,8 @@ fn request_origin_names_only_a_public_list_the_store_holds() {
         metadata: MetadataLoad::default(),
         episode_shapes: EpisodeShapeLoad::default(),
         favorites: FavoriteLoad::NotLoaded,
+        content_ratings: StoredSetLoad::NotLoaded,
+        awards: StoredSetLoad::NotLoaded,
         lists: Some(HashMap::new()),
         origins: Some(origins),
     };
@@ -603,6 +613,8 @@ fn with_watchlists(watchlists: WatchlistLoad) -> LifecycleListFacts {
         metadata: MetadataLoad::default(),
         episode_shapes: EpisodeShapeLoad::default(),
         favorites: FavoriteLoad::NotLoaded,
+        content_ratings: StoredSetLoad::NotLoaded,
+        awards: StoredSetLoad::NotLoaded,
         lists: Some(HashMap::new()),
         origins: Some(HashMap::new()),
     }
@@ -856,6 +868,8 @@ fn groups_a_batch_did_not_load_stay_unknown() {
     for fact in WATCHLIST_FACTS
         .iter()
         .chain(scryer_rules::lifecycle::METADATA_LIFECYCLE_FACTS.iter())
+        .chain(scryer_rules::lifecycle::CONTENT_RATING_LIFECYCLE_FACTS.iter())
+        .chain(scryer_rules::lifecycle::AWARD_LIFECYCLE_FACTS.iter())
     {
         assert_eq!(observations[*fact], unknown("not_yet_collected"), "{fact}");
     }
@@ -880,6 +894,8 @@ fn a_rule_loads_only_the_groups_it_reads() {
             metadata: false,
             episode_shapes: false,
             favorites: false,
+            content_ratings: false,
+            awards: false,
         }
     );
     assert_eq!(
@@ -889,6 +905,8 @@ fn a_rule_loads_only_the_groups_it_reads() {
             metadata: true,
             episode_shapes: false,
             favorites: false,
+            content_ratings: false,
+            awards: false,
         }
     );
     assert_eq!(
@@ -898,6 +916,22 @@ fn a_rule_loads_only_the_groups_it_reads() {
             metadata: false,
             episode_shapes: true,
             favorites: false,
+            content_ratings: false,
+            awards: false,
+        }
+    );
+    assert_eq!(
+        reads("input.facts.certification_rank >= 3"),
+        LifecycleFactLoads {
+            content_ratings: true,
+            ..LifecycleFactLoads::default()
+        }
+    );
+    assert_eq!(
+        reads("input.facts.award_count > 0"),
+        LifecycleFactLoads {
+            awards: true,
+            ..LifecycleFactLoads::default()
         }
     );
     assert_eq!(
@@ -987,6 +1021,181 @@ fn stored_genres_and_ratings_become_facts() {
     let observations = observations(&input);
     for fact in ["genres", "rating", "ratings"] {
         assert_eq!(observations[fact], unknown("metadata_unreadable"), "{fact}");
+    }
+}
+
+// ── Content ratings and awards ─────────────────────────────────────────────
+
+const CONTENT_RATING_FACTS: [&str; 4] = [
+    "age_rating",
+    "certifications",
+    "certification_label",
+    "certification_rank",
+];
+
+fn us_rating(value: &str, age: Option<i32>) -> ContentRating {
+    ContentRating {
+        country: "US".to_string(),
+        certifications: vec![crate::ContentCertification {
+            value: value.to_string(),
+            source: "mpa".to_string(),
+            release_type: None,
+        }],
+        age_rating: age,
+        age_rating_source: None,
+    }
+}
+
+fn fixture_award() -> TitleAward {
+    TitleAward {
+        award_qid: "Q1".to_string(),
+        award_label: "Fixture Prize".to_string(),
+        year: Some(2024),
+        recipient_qid: "Q2".to_string(),
+        recipient_label: "Fixture Feature".to_string(),
+        claim_side: "work".to_string(),
+    }
+}
+
+fn applied_with(
+    content_ratings: StoredSetLoad<ContentRating>,
+    awards: StoredSetLoad<TitleAward>,
+    title_id: &str,
+) -> serde_json::Value {
+    let lists = LifecycleListFacts {
+        content_ratings,
+        awards,
+        ..with_watchlists(WatchlistLoad::NotLoaded)
+    };
+    let names = usernames();
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(&mut input, &lists, title_id, people_with(None, &names));
+    observations(&input)
+}
+
+#[test]
+fn stored_content_ratings_and_awards_become_facts() {
+    let observations = applied_with(
+        StoredSetLoad::Loaded(HashMap::from([(
+            "title-alpha".to_string(),
+            Some(vec![us_rating("R", Some(17))]),
+        )])),
+        StoredSetLoad::Loaded(HashMap::from([(
+            "title-alpha".to_string(),
+            Some(vec![fixture_award()]),
+        )])),
+        "title-alpha",
+    );
+    assert_eq!(observations["age_rating"], known(17.into()));
+    assert_eq!(
+        observations["certifications"],
+        known(serde_json::json!([{"country": "US", "value": "R", "source": "mpa"}]))
+    );
+    assert_eq!(observations["certification_label"], known("R".into()));
+    assert_eq!(
+        observations["certification_rank"],
+        known(
+            scryer_rules::request::certification_rank_for_label("R")
+                .unwrap()
+                .into()
+        )
+    );
+    assert_eq!(observations["award_count"], known(1.into()));
+    assert_eq!(
+        observations["awards"],
+        known(serde_json::json!([{
+            "award": "Fixture Prize",
+            "award_id": "Q1",
+            "year": 2024,
+            "recipient": "Fixture Feature",
+            "recipient_id": "Q2",
+            "given_to": "work",
+        }]))
+    );
+}
+
+#[test]
+fn stored_empty_sets_are_absences_and_a_known_zero() {
+    let observations = applied_with(
+        StoredSetLoad::Loaded(HashMap::from([(
+            "title-alpha".to_string(),
+            Some(Vec::new()),
+        )])),
+        StoredSetLoad::Loaded(HashMap::from([(
+            "title-alpha".to_string(),
+            Some(Vec::new()),
+        )])),
+        "title-alpha",
+    );
+    assert_eq!(observations["age_rating"], absent("no_age_rating"));
+    assert_eq!(observations["certifications"], absent("no_certifications"));
+    assert_eq!(
+        observations["certification_label"],
+        absent("no_us_certification")
+    );
+    assert_eq!(
+        observations["certification_rank"],
+        absent("no_us_certification")
+    );
+    assert_eq!(observations["award_count"], known(0.into()));
+    assert_eq!(observations["awards"], known(serde_json::json!([])));
+}
+
+#[test]
+fn an_off_ladder_us_label_has_no_rank() {
+    let observations = applied_with(
+        StoredSetLoad::Loaded(HashMap::from([(
+            "title-alpha".to_string(),
+            Some(vec![us_rating("Fixture-Unrated", None)]),
+        )])),
+        StoredSetLoad::NotLoaded,
+        "title-alpha",
+    );
+    assert_eq!(
+        observations["certification_label"],
+        known("Fixture-Unrated".into())
+    );
+    assert_eq!(
+        observations["certification_rank"],
+        absent("unrankable_certification")
+    );
+    assert_eq!(observations["age_rating"], absent("no_age_rating"));
+}
+
+/// A set never stored for a title is unknown, never an empty set: a
+/// destructive rule must not read "won nothing" or "unrated" from it.
+#[test]
+fn sets_not_stored_or_unreadable_stay_unknown() {
+    let observations = applied_with(
+        StoredSetLoad::Loaded(HashMap::from([("title-alpha".to_string(), None)])),
+        StoredSetLoad::Loaded(HashMap::new()),
+        "title-alpha",
+    );
+    for fact in CONTENT_RATING_FACTS
+        .iter()
+        .chain(["award_count", "awards"].iter())
+    {
+        assert_eq!(
+            observations[*fact],
+            unknown("metadata_not_stored"),
+            "{fact}"
+        );
+    }
+
+    let observations = applied_with(
+        StoredSetLoad::Unreadable,
+        StoredSetLoad::Unreadable,
+        "title-alpha",
+    );
+    for fact in CONTENT_RATING_FACTS
+        .iter()
+        .chain(["award_count", "awards"].iter())
+    {
+        assert_eq!(
+            observations[*fact],
+            unknown("metadata_unreadable"),
+            "{fact}"
+        );
     }
 }
 

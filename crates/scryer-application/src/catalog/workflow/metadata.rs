@@ -626,8 +626,9 @@ impl AppUseCase {
         Ok(select_title_credits(credits, kinds, limit))
     }
 
-    /// Each viewable title's stored content ratings, in SMG's order. Titles the
-    /// actor cannot view are left out.
+    /// Each viewable title's stored content ratings, in SMG's order; empty for
+    /// a title whose ratings are not stored yet. Titles the actor cannot view
+    /// are left out.
     pub async fn list_title_content_ratings(
         &self,
         actor: &User,
@@ -645,6 +646,12 @@ impl AppUseCase {
             .titles
             .list_title_content_ratings(&title_ids)
             .await
+            .map(|ratings| {
+                ratings
+                    .into_iter()
+                    .map(|(title_id, ratings)| (title_id, ratings.unwrap_or_default()))
+                    .collect()
+            })
     }
 
     pub async fn list_title_ratings(

@@ -28,8 +28,8 @@ use scryer_domain::{
     MediaFacet, MediaRequestOrigin, MonitorSelection, User, UserAccountKind,
 };
 use scryer_rules::request::{
-    Observation, REQUEST_INPUT_SCHEMA_VERSION, RequestCertificationDoc, RequestClockDoc,
-    RequestDoc, RequestFactsDoc, RequestInput, RequestLibraryDoc, RequestListDoc,
+    Observation, REQUEST_INPUT_SCHEMA_VERSION, RequestAwardDoc, RequestCertificationDoc,
+    RequestClockDoc, RequestDoc, RequestFactsDoc, RequestInput, RequestLibraryDoc, RequestListDoc,
     RequestRequesterDoc, certification_rank_for_label, max_resolution_for_quality_tiers,
 };
 
@@ -290,20 +290,7 @@ fn build_facts(context: &RequestInputContext) -> RequestFactsDoc {
             snapshot_age_rating(snapshot).ok_or("no_age_rating")
         }),
         certifications: snapshot_fact(snapshot, GROUP_CONTENT_RATINGS, || {
-            let certifications: Vec<RequestCertificationDoc> = snapshot
-                .content_ratings
-                .iter()
-                .flat_map(|rating| {
-                    rating
-                        .certifications
-                        .iter()
-                        .map(|certification| RequestCertificationDoc {
-                            country: rating.country.clone(),
-                            value: certification.value.clone(),
-                            source: certification.source.clone(),
-                        })
-                })
-                .collect();
+            let certifications = certification_docs(&snapshot.content_ratings);
             if certifications.is_empty() {
                 Err("no_certifications")
             } else {
@@ -463,6 +450,7 @@ fn build_facts(context: &RequestInputContext) -> RequestFactsDoc {
             }
         },
         award_count: snapshot_fact(snapshot, GROUP_AWARDS, || Ok(snapshot.awards.len() as i64)),
+        awards: snapshot_fact(snapshot, GROUP_AWARDS, || Ok(award_docs(&snapshot.awards))),
 
         // ── quality ──
         quality_profile_tiers: match &context.quality {
@@ -729,6 +717,7 @@ fn empty_facts() -> RequestFactsDoc {
         first_aired,
         release_age_days,
         award_count,
+        awards,
         quality_profile_tiers,
         quality_profile_max_resolution,
         quality_profile_allows_upgrades,
@@ -830,13 +819,6 @@ fn history_fact<T: serde::Serialize, F: FnOnce() -> T>(
     }
 }
 
-/// The US content-rating row, if the snapshot has one.
-fn us_content_rating(
-    snapshot: &MediaRequestMetadataSnapshot,
-) -> Option<&crate::types::ContentRating> {
-    us_content_rating_in(&snapshot.content_ratings)
-}
-
 /// The US row of a list of content ratings, if there is one.
 fn us_content_rating_in(
     content_ratings: &[crate::types::ContentRating],
@@ -857,14 +839,7 @@ fn us_content_rating_in(
 /// Public because the GraphQL read model shows an approver the same number the
 /// `age_rating` fact reads, and deriving it twice would let the two drift.
 pub fn snapshot_age_rating(snapshot: &MediaRequestMetadataSnapshot) -> Option<i64> {
-    us_content_rating(snapshot)
-        .and_then(|rating| rating.age_rating)
-        .or_else(|| {
-            snapshot
-                .content_ratings
-                .iter()
-                .find_map(|rating| rating.age_rating)
-        })
+    content_ratings_age_rating(&snapshot.content_ratings)
         .or_else(|| {
             if snapshot.is_missing(GROUP_MDBLIST) {
                 None
@@ -876,6 +851,51 @@ pub fn snapshot_age_rating(snapshot: &MediaRequestMetadataSnapshot) -> Option<i6
             }
         })
         .map(i64::from)
+}
+
+/// The minimum age a list of content ratings implies: the US row's, else the
+/// first row that gives one. Lifecycle rules read a library title's stored
+/// ratings through it, so both rule kinds read the same age from the same
+/// ratings.
+pub fn content_ratings_age_rating(content_ratings: &[crate::types::ContentRating]) -> Option<i32> {
+    us_content_rating_in(content_ratings)
+        .and_then(|rating| rating.age_rating)
+        .or_else(|| content_ratings.iter().find_map(|rating| rating.age_rating))
+}
+
+/// Every certification of a list of content ratings, flattened in order, as
+/// both rule kinds read them.
+pub fn certification_docs(
+    content_ratings: &[crate::types::ContentRating],
+) -> Vec<RequestCertificationDoc> {
+    content_ratings
+        .iter()
+        .flat_map(|rating| {
+            rating
+                .certifications
+                .iter()
+                .map(|certification| RequestCertificationDoc {
+                    country: rating.country.clone(),
+                    value: certification.value.clone(),
+                    source: certification.source.clone(),
+                })
+        })
+        .collect()
+}
+
+/// A title's awards as both rule kinds read them.
+pub fn award_docs(awards: &[crate::types::TitleAward]) -> Vec<RequestAwardDoc> {
+    awards
+        .iter()
+        .map(|award| RequestAwardDoc {
+            award: award.award_label.clone(),
+            award_id: award.award_qid.clone(),
+            year: award.year.map(i64::from),
+            recipient: award.recipient_label.clone(),
+            recipient_id: award.recipient_qid.clone(),
+            given_to: award.claim_side.clone(),
+        })
+        .collect()
 }
 
 /// The US certification value, if there is one. Public for the same reason
