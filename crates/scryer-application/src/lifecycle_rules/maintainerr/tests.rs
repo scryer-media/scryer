@@ -38,9 +38,14 @@ const SONARR_SEASON_NUMBER: (i64, i64) = (SONARR, 18);
 const JELLYFIN_SEEN_BY: (i64, i64) = (JELLYFIN, 1);
 const JELLYFIN_VIEW_COUNT: (i64, i64) = (JELLYFIN, 5);
 const JELLYFIN_COLLECTIONS: (i64, i64) = (JELLYFIN, 6);
+const JELLYFIN_ADD_DATE: (i64, i64) = (JELLYFIN, 0);
+const JELLYFIN_LAST_VIEWED: (i64, i64) = (JELLYFIN, 7);
+const JELLYFIN_GENRE: (i64, i64) = (JELLYFIN, 11);
 const TAUTULLI_VIEWS_BY_USER: (i64, i64) = (TAUTULLI, 0);
 const TAUTULLI_LAST_VIEWED_BY_USER: (i64, i64) = (TAUTULLI, 1);
 const SEERR_ADD_USER: (i64, i64) = (SEERR, 0);
+const SEERR_REQUEST_DATE: (i64, i64) = (SEERR, 1);
+const SEERR_IS_REQUESTED: (i64, i64) = (SEERR, 2);
 
 const MIB: i64 = 1_048_576;
 /// The synthetic input's evaluation time.
@@ -205,7 +210,11 @@ fn catalogue() -> String {
     applications.push(json!({
         "id": SEERR,
         "name": "Seerr",
-        "props": [{ "id": 0, "name": "addUser", "type": { "key": "2" } }],
+        "props": [
+            { "id": 0, "name": "addUser", "type": { "key": "2" } },
+            { "id": 1, "name": "requestDate", "type": { "key": "1" } },
+            { "id": 2, "name": "isRequested", "type": { "key": "3" } },
+        ],
     }));
     constants.to_string()
 }
@@ -515,8 +524,18 @@ fn the_live_shape_translates_group_by_group() {
                     codes::PROPERTY_COLLECTION_UNSUPPORTED
                 ]
             ),
-            (7, Translated, vec![]),
-            (8, Failed, vec![codes::PROPERTY_UNMAPPED]),
+            // Radarr's file date before its release date: Scryer's release
+            // date can be later than Radarr's.
+            (7, Failed, vec![codes::COMPARATOR_DATE_DRIFT_WIDENS]),
+            // No watchers, where Scryer knows only some of them.
+            (
+                8,
+                Failed,
+                vec![
+                    codes::COMPARATOR_PARTIAL_LIST_WIDENS,
+                    codes::PROPERTY_UNMAPPED,
+                ],
+            ),
             (
                 9,
                 Failed,
@@ -535,7 +554,12 @@ fn the_live_shape_translates_group_by_group() {
         Some("sample-library-1")
     );
     assert_eq!(rules[2].max_titles_per_run, None);
-    assert_eq!(warnings(&rules[3]), vec![codes::ACTION_APPROXIMATE]);
+    assert_eq!(
+        warnings(&rules[3]),
+        vec![codes::ACTION_APPROXIMATE, codes::FACT_APPROXIMATE]
+    );
+    assert_eq!(rules[3].display_name, "Sample Rule Delta is \"quoted\"");
+    assert_eq!(rules[4].display_name, "Sample Rule Echo");
     assert!(
         rules[4]
             .description
@@ -1012,13 +1036,43 @@ fn boolean_comparators_match_maintainerr() {
 #[test]
 fn date_comparators_match_maintainerr() {
     let mut input = movie();
-    input.facts.added_at = Observation::known(rfc3339(NOW - 60 * DAY));
+    input.facts.last_watched_by_anyone_at = Observation::known(rfc3339(NOW - 60 * DAY));
     // A number of seconds on a date property counts from now.
-    check(RADARR_ADD_DATE, BEFORE, number("2592000"), &input, true);
-    check(RADARR_ADD_DATE, AFTER, number("2592000"), &input, false);
-    check(RADARR_ADD_DATE, IN_LAST, number("7776000"), &input, true);
-    check(RADARR_ADD_DATE, IN_LAST, number("2592000"), &input, false);
-    check(RADARR_ADD_DATE, IN_NEXT, number("2592000"), &input, false);
+    check(
+        JELLYFIN_LAST_VIEWED,
+        BEFORE,
+        number("2592000"),
+        &input,
+        true,
+    );
+    check(
+        JELLYFIN_LAST_VIEWED,
+        AFTER,
+        number("2592000"),
+        &input,
+        false,
+    );
+    check(
+        JELLYFIN_LAST_VIEWED,
+        IN_LAST,
+        number("7776000"),
+        &input,
+        true,
+    );
+    check(
+        JELLYFIN_LAST_VIEWED,
+        IN_LAST,
+        number("2592000"),
+        &input,
+        false,
+    );
+    check(
+        JELLYFIN_LAST_VIEWED,
+        IN_NEXT,
+        number("2592000"),
+        &input,
+        false,
+    );
     // Absolute dates: a day, an offset timestamp, epoch seconds.
     let cutoff = NOW - 30 * DAY;
     let day = chrono::DateTime::<chrono::Utc>::from_timestamp(cutoff, 0)
@@ -1027,34 +1081,52 @@ fn date_comparators_match_maintainerr() {
         .to_string();
     let day: &'static str = Box::leak(day.into_boxed_str());
     let epoch: &'static str = Box::leak(cutoff.to_string().into_boxed_str());
-    check(RADARR_ADD_DATE, BEFORE, date(day), &input, true);
-    check(RADARR_ADD_DATE, AFTER, date(day), &input, false);
-    check(RADARR_ADD_DATE, BEFORE, date(epoch), &input, true);
+    check(JELLYFIN_LAST_VIEWED, BEFORE, date(day), &input, true);
+    check(JELLYFIN_LAST_VIEWED, AFTER, date(day), &input, false);
+    check(JELLYFIN_LAST_VIEWED, BEFORE, date(epoch), &input, true);
     check(
-        RADARR_ADD_DATE,
+        JELLYFIN_LAST_VIEWED,
         BEFORE,
         date("2000-01-01T00:00:00+02:00"),
         &input,
         false,
     );
     check(
-        RADARR_ADD_DATE,
+        JELLYFIN_LAST_VIEWED,
         AFTER,
         date("2000-01-01T00:00:00+02:00"),
         &input,
         true,
     );
     // In the next thirty days.
-    input.facts.added_at = Observation::known(rfc3339(NOW + 10 * DAY));
-    check(RADARR_ADD_DATE, IN_NEXT, number("2592000"), &input, true);
-    check(RADARR_ADD_DATE, IN_LAST, number("2592000"), &input, false);
+    input.facts.last_watched_by_anyone_at = Observation::known(rfc3339(NOW + 10 * DAY));
+    check(
+        JELLYFIN_LAST_VIEWED,
+        IN_NEXT,
+        number("2592000"),
+        &input,
+        true,
+    );
+    check(
+        JELLYFIN_LAST_VIEWED,
+        IN_LAST,
+        number("2592000"),
+        &input,
+        false,
+    );
     // A date-only fact is midnight UTC.
     input.facts.theatrical_release_date = Observation::known("2023-01-01".to_string());
     check(RADARR_IN_CINEMAS, AFTER, date("2022-12-31"), &input, true);
     check(RADARR_IN_CINEMAS, BEFORE, date("2023-01-01"), &input, true);
     check(RADARR_IN_CINEMAS, BEFORE, date("2022-12-31"), &input, false);
-    input.facts.added_at = Observation::absent();
-    check(RADARR_ADD_DATE, BEFORE, number("2592000"), &input, false);
+    input.facts.last_watched_by_anyone_at = Observation::absent();
+    check(
+        JELLYFIN_LAST_VIEWED,
+        BEFORE,
+        number("2592000"),
+        &input,
+        false,
+    );
 
     // Unfaithful date comparisons fail.
     assert_eq!(
@@ -1089,9 +1161,283 @@ fn date_comparators_match_maintainerr() {
 }
 
 #[test]
+fn a_day_count_counts_back_only_for_before_and_in_last() {
+    // Maintainerr subtracts the count from now for "before" and "in last"
+    // and adds it for every other comparison, "after" included.
+    let five_days = number("432000");
+    let mut input = movie();
+    input.facts.last_watched_by_anyone_at = Observation::known(rfc3339(NOW - 2 * DAY));
+    // Against now - 5 days.
+    check(JELLYFIN_LAST_VIEWED, BEFORE, five_days, &input, false);
+    check(JELLYFIN_LAST_VIEWED, IN_LAST, five_days, &input, true);
+    // Against now + 5 days.
+    check(JELLYFIN_LAST_VIEWED, AFTER, five_days, &input, false);
+    check(JELLYFIN_LAST_VIEWED, SMALLER, five_days, &input, true);
+    check(JELLYFIN_LAST_VIEWED, BIGGER, five_days, &input, false);
+    input.facts.last_watched_by_anyone_at = Observation::known(rfc3339(NOW + 2 * DAY));
+    check(JELLYFIN_LAST_VIEWED, IN_NEXT, five_days, &input, true);
+    check(JELLYFIN_LAST_VIEWED, AFTER, five_days, &input, false);
+    input.facts.last_watched_by_anyone_at = Observation::known(rfc3339(NOW + 6 * DAY));
+    check(JELLYFIN_LAST_VIEWED, AFTER, five_days, &input, true);
+}
+
+#[test]
+fn a_date_scryer_records_later_translates_only_where_it_narrows() {
+    let mut input = movie();
+    input.facts.added_at = Observation::known(rfc3339(NOW - 60 * DAY));
+    input.facts.first_imported_at = Observation::known(rfc3339(NOW - 60 * DAY));
+    for first in [RADARR_ADD_DATE, JELLYFIN_ADD_DATE] {
+        check_at("movie", &input, first, BEFORE, number("2592000"), true);
+        check_at("movie", &input, first, BEFORE, number("7776000"), false);
+        check_at("movie", &input, first, SMALLER, date("2000-01-01"), false);
+        check_at("movie", &input, first, EXISTS, With::Nothing, true);
+    }
+    for first in [RADARR_ADD_DATE, JELLYFIN_ADD_DATE, RADARR_FILE_DATE] {
+        for (action, with) in [
+            (AFTER, number("2592000")),
+            (BIGGER, date("2000-01-01")),
+            (IN_LAST, number("2592000")),
+            (IN_NEXT, number("2592000")),
+        ] {
+            assert_eq!(
+                failed_with("movie", 3, &[rule(None, first, action, with)]),
+                vec![codes::COMPARATOR_DATE_DRIFT_WIDENS],
+                "{first:?} action {action}"
+            );
+        }
+        assert_eq!(
+            failed_with("movie", 3, &[rule(None, first, NOT_EXISTS, With::Nothing)]),
+            vec![codes::COMPARATOR_ABSENCE_WIDENS],
+            "{first:?}"
+        );
+    }
+    // Against another date: a later date on the right widens "before", on
+    // the left it widens "after".
+    let exact_before_later = rule(
+        None,
+        JELLYFIN_LAST_VIEWED,
+        BEFORE,
+        With::Last(RADARR_ADD_DATE),
+    );
+    assert_eq!(
+        failed_with("movie", 3, &[exact_before_later]),
+        vec![codes::COMPARATOR_DATE_DRIFT_WIDENS]
+    );
+    let later_after_exact = rule(None, RADARR_ADD_DATE, AFTER, With::Last(RADARR_IN_CINEMAS));
+    assert_eq!(
+        failed_with("movie", 3, &[later_after_exact]),
+        vec![codes::COMPARATOR_DATE_DRIFT_WIDENS]
+    );
+    translated(
+        "movie",
+        3,
+        &[rule(
+            None,
+            JELLYFIN_LAST_VIEWED,
+            AFTER,
+            With::Last(RADARR_ADD_DATE),
+        )],
+    );
+}
+
+#[test]
+fn a_date_that_can_differ_either_way_translates_only_its_presence() {
+    for first in [RADARR_RELEASE_DATE, SEERR_REQUEST_DATE] {
+        for (action, with) in [
+            (BEFORE, number("2592000")),
+            (SMALLER, date("2023-01-01")),
+            (AFTER, date("2023-01-01")),
+            (IN_LAST, number("2592000")),
+        ] {
+            assert_eq!(
+                failed_with("movie", 3, &[rule(None, first, action, with)]),
+                vec![codes::COMPARATOR_DATE_DRIFT_WIDENS],
+                "{first:?} action {action}"
+            );
+        }
+        assert_eq!(
+            failed_with("movie", 3, &[rule(None, first, NOT_EXISTS, With::Nothing)]),
+            vec![codes::COMPARATOR_ABSENCE_WIDENS],
+            "{first:?}"
+        );
+    }
+    let mut input = movie();
+    input.facts.requested_at = Observation::known(rfc3339(NOW - DAY));
+    check_at(
+        "movie",
+        &input,
+        SEERR_REQUEST_DATE,
+        EXISTS,
+        With::Nothing,
+        true,
+    );
+    input.facts.requested_at = Observation::absent();
+    check_at(
+        "movie",
+        &input,
+        SEERR_REQUEST_DATE,
+        EXISTS,
+        With::Nothing,
+        false,
+    );
+}
+
+#[test]
+fn is_requested_translates_only_when_it_asks_for_a_request() {
+    let mut input = movie();
+    input.facts.requested = Observation::known(true);
+    check_at(
+        "movie",
+        &input,
+        SEERR_IS_REQUESTED,
+        EQUALS,
+        boolean("1"),
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        SEERR_IS_REQUESTED,
+        NOT_EQUALS,
+        boolean("0"),
+        true,
+    );
+    input.facts.requested = Observation::known(false);
+    check_at(
+        "movie",
+        &input,
+        SEERR_IS_REQUESTED,
+        EQUALS,
+        boolean("1"),
+        false,
+    );
+    for (action, with) in [
+        (EQUALS, boolean("0")),
+        (NOT_EQUALS, boolean("1")),
+        (EQUALS, With::Last(RADARR_MONITORED)),
+        (NOT_EXISTS, With::Nothing),
+    ] {
+        assert_eq!(
+            failed_with("movie", 3, &[rule(None, SEERR_IS_REQUESTED, action, with)]),
+            vec![codes::COMPARATOR_ABSENCE_WIDENS],
+            "action {action}"
+        );
+    }
+    assert_eq!(
+        failed_with(
+            "movie",
+            3,
+            &[rule(
+                None,
+                RADARR_MONITORED,
+                EQUALS,
+                With::Last(SEERR_IS_REQUESTED)
+            )]
+        ),
+        vec![codes::COMPARATOR_ABSENCE_WIDENS]
+    );
+}
+
+#[test]
+fn lists_scryer_holds_only_part_of_translate_only_where_they_narrow() {
+    let mut input = movie();
+    input.facts.tags = Observation::known(vec!["alpha".to_string(), "beta".to_string()]);
+    input.facts.watched_by_usernames = Observation::known(vec!["sample-user".to_string()]);
+    check_at("movie", &input, RADARR_TAGS, CONTAINS, text("alpha"), true);
+    check_at(
+        "movie",
+        &input,
+        RADARR_TAGS,
+        CONTAINS_PARTIAL,
+        text("lph"),
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_TAGS,
+        CONTAINS_ALL,
+        text(r#"["alpha","beta"]"#),
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        RADARR_TAGS,
+        COUNT_BIGGER,
+        number("1"),
+        true,
+    );
+    check_at("movie", &input, RADARR_TAGS, EXISTS, With::Nothing, true);
+    check_at(
+        "movie",
+        &input,
+        JELLYFIN_SEEN_BY,
+        CONTAINS,
+        text("sample-user"),
+        true,
+    );
+    check_at(
+        "movie",
+        &input,
+        JELLYFIN_SEEN_BY,
+        COUNT_BIGGER,
+        number("0"),
+        true,
+    );
+    for first in [RADARR_TAGS, JELLYFIN_SEEN_BY, SEERR_ADD_USER] {
+        for (action, with) in [
+            (NOT_CONTAINS, text("alpha")),
+            (NOT_CONTAINS_PARTIAL, text("alp")),
+            (NOT_CONTAINS_ALL, text(r#"["alpha","beta"]"#)),
+            (EQUALS, text("alpha")),
+            (NOT_EQUALS, text("alpha")),
+            (COUNT_EQUALS, number("0")),
+            (COUNT_NOT_EQUALS, number("1")),
+            (COUNT_SMALLER, number("1")),
+        ] {
+            assert_eq!(
+                failed_with("movie", 3, &[rule(None, first, action, with)]),
+                vec![codes::COMPARATOR_PARTIAL_LIST_WIDENS],
+                "{first:?} action {action}"
+            );
+        }
+        assert_eq!(
+            failed_with("movie", 3, &[rule(None, first, NOT_EXISTS, With::Nothing)]),
+            vec![codes::COMPARATOR_ABSENCE_WIDENS],
+            "{first:?}"
+        );
+    }
+    // A partial list on the right narrows only "contains any".
+    translated(
+        "movie",
+        3,
+        &[rule(
+            None,
+            JELLYFIN_GENRE,
+            CONTAINS,
+            With::Last(RADARR_TAGS),
+        )],
+    );
+    assert_eq!(
+        failed_with(
+            "movie",
+            3,
+            &[rule(
+                None,
+                JELLYFIN_GENRE,
+                CONTAINS_ALL,
+                With::Last(RADARR_TAGS)
+            )]
+        ),
+        vec![codes::COMPARATOR_PARTIAL_LIST_WIDENS]
+    );
+}
+
+#[test]
 fn list_comparators_match_maintainerr() {
     let mut input = movie();
-    input.facts.tags = Observation::known(vec!["Alpha".to_string(), "beta-two".to_string()]);
+    input.facts.genres = Observation::known(vec!["Alpha".to_string(), "beta-two".to_string()]);
     let cases: &[(i64, With<'static>, bool)] = &[
         (CONTAINS, text("ALPHA"), true),
         (CONTAINS, text("beta"), false),
@@ -1117,13 +1463,25 @@ fn list_comparators_match_maintainerr() {
         (NOT_EXISTS, With::Nothing, false),
     ];
     for &(action, with, expected) in cases {
-        check(RADARR_TAGS, action, with, &input, expected);
+        check(JELLYFIN_GENRE, action, with, &input, expected);
     }
-    input.facts.tags = Observation::known(Vec::new());
-    check(RADARR_TAGS, EXISTS, With::Nothing, &input, false);
-    check(RADARR_TAGS, NOT_EXISTS, With::Nothing, &input, true);
-    check(RADARR_TAGS, COUNT_EQUALS, number("0"), &input, true);
-    check(RADARR_TAGS, CONTAINS, text(r#"["alpha"]"#), &input, false);
+    input.facts.genres = Observation::known(Vec::new());
+    check(JELLYFIN_GENRE, EXISTS, With::Nothing, &input, false);
+    check(JELLYFIN_GENRE, NOT_EXISTS, With::Nothing, &input, true);
+    check(JELLYFIN_GENRE, COUNT_EQUALS, number("0"), &input, true);
+    check(
+        JELLYFIN_GENRE,
+        CONTAINS,
+        text(r#"["alpha"]"#),
+        &input,
+        false,
+    );
+    // A single value equals a list of exactly that one value.
+    input.facts.genres = Observation::known(vec!["Alpha".to_string()]);
+    check(JELLYFIN_GENRE, EQUALS, text("alpha"), &input, true);
+    check(JELLYFIN_GENRE, NOT_EQUALS, text("alpha"), &input, false);
+    input.facts.genres = Observation::known(vec!["alpha".to_string(), "alpha".to_string()]);
+    check(JELLYFIN_GENRE, EQUALS, text("alpha"), &input, false);
 
     for (action, with) in [
         (BIGGER, number("1")),
@@ -1149,10 +1507,20 @@ fn list_comparators_match_maintainerr() {
 #[test]
 fn a_second_property_compares_like_a_custom_value() {
     let mut input = movie();
-    input.facts.added_at = Observation::known("2022-12-01T00:00:00Z".to_string());
+    input.facts.last_watched_by_anyone_at = Observation::known("2022-12-01T00:00:00Z".to_string());
     input.facts.theatrical_release_date = Observation::known("2023-01-01".to_string());
-    let earlier = rule(None, RADARR_ADD_DATE, BEFORE, With::Last(RADARR_IN_CINEMAS));
-    let later = rule(None, RADARR_ADD_DATE, AFTER, With::Last(RADARR_IN_CINEMAS));
+    let earlier = rule(
+        None,
+        JELLYFIN_LAST_VIEWED,
+        BEFORE,
+        With::Last(RADARR_IN_CINEMAS),
+    );
+    let later = rule(
+        None,
+        JELLYFIN_LAST_VIEWED,
+        AFTER,
+        With::Last(RADARR_IN_CINEMAS),
+    );
     let earlier = translated("movie", 3, &[earlier]);
     let later = translated("movie", 3, &[later]);
     assert!(fires(&earlier.rego_source, &input));
@@ -1239,14 +1607,22 @@ fn usernames_bind_and_unknown_ones_only_warn() {
         vec![codes::FACT_APPROXIMATE, codes::USERNAME_UNKNOWN]
     );
 
+    // Maintainerr reads a request's users as a list, so "contains" is
+    // membership, not a substring.
     let requested = translated(
         "movie",
         3,
-        &[rule(None, SEERR_ADD_USER, EQUALS, text("sample-user"))],
+        &[rule(None, SEERR_ADD_USER, CONTAINS, text("sample-user"))],
     );
     let mut input = movie();
     input.facts.requested_by_usernames = Observation::known(vec!["Sample-User".to_string()]);
     assert!(fires(&requested.rego_source, &input));
+    let substring = translated(
+        "movie",
+        3,
+        &[rule(None, SEERR_ADD_USER, CONTAINS, text("sample"))],
+    );
+    assert!(!fires(&substring.rego_source, &input));
 
     let monitored = translated("movie", 3, &[a(None)]);
     assert!(!monitored.reads_person_targeted_fact);
@@ -1287,6 +1663,49 @@ fn per_user_watch_properties_read_that_users_history() {
     assert_eq!(
         warnings(&translated("movie", 3, &[stranger])),
         vec![codes::FACT_APPROXIMATE, codes::USERNAME_UNKNOWN]
+    );
+
+    // Scryer reads no plays for a user it does not know, so any comparison
+    // that zero plays satisfy would match every title.
+    for (action, value) in [
+        (SMALLER, "1"),
+        (EQUALS, "0"),
+        (NOT_EQUALS, "5"),
+        (BIGGER, "-1"),
+    ] {
+        let rules =
+            [rule(None, TAUTULLI_VIEWS_BY_USER, action, number(value)).user("sample-stranger")];
+        assert_eq!(
+            failed_with("movie", 3, &rules),
+            vec![codes::USERNAME_UNKNOWN_WIDENS],
+            "action {action} {value}"
+        );
+    }
+    let few = rule(None, TAUTULLI_VIEWS_BY_USER, SMALLER, number("1")).user("sample-user");
+    let few = translated("movie", 3, &[few]);
+    input.facts.watched_by_users = Observation::known(vec![watcher("sample-other", None, 9)]);
+    assert!(fires(&few.rego_source, &input));
+    let stale = rule(
+        None,
+        TAUTULLI_LAST_VIEWED_BY_USER,
+        BEFORE,
+        number("2592000"),
+    )
+    .user("sample-stranger");
+    assert_eq!(
+        warnings(&translated("movie", 3, &[stale])),
+        vec![codes::FACT_APPROXIMATE, codes::USERNAME_UNKNOWN]
+    );
+    let against = rule(
+        None,
+        JELLYFIN_VIEW_COUNT,
+        BIGGER,
+        With::Last(TAUTULLI_VIEWS_BY_USER),
+    )
+    .user("sample-stranger");
+    assert_eq!(
+        failed_with("movie", 3, &[against]),
+        vec![codes::USERNAME_UNKNOWN_WIDENS]
     );
     assert_eq!(
         failed_with(
@@ -1634,13 +2053,15 @@ fn imdb_and_tmdb_ratings_read_the_stored_rating_of_that_source() {
         number("7"),
         false,
     );
-    check_at(
-        "movie",
-        &input,
-        RADARR_IMDB_RATING,
-        NOT_EXISTS,
-        With::Nothing,
-        true,
+    // Scryer's stored rating can be missing where Maintainerr's source has
+    // one, so its absence would match titles Maintainerr would not.
+    assert_eq!(
+        failed_with(
+            "movie",
+            3,
+            &[rule(None, RADARR_IMDB_RATING, NOT_EXISTS, With::Nothing)]
+        ),
+        vec![codes::COMPARATOR_ABSENCE_WIDENS]
     );
     check_at(
         "movie",
@@ -1685,13 +2106,12 @@ fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
     let mut input = movie();
     input.facts.digital_release_date = Observation::known("2023-05-02".to_string());
     input.facts.physical_release_date = Observation::known("2023-03-10".to_string());
-    let cutoff = "2023-04-01";
     check_at(
         "movie",
         &input,
         RADARR_RELEASE_DATE,
-        BEFORE,
-        date(cutoff),
+        EXISTS,
+        With::Nothing,
         true,
     );
     input.facts.physical_release_date = Observation::absent();
@@ -1699,16 +2119,8 @@ fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
         "movie",
         &input,
         RADARR_RELEASE_DATE,
-        BEFORE,
-        date(cutoff),
-        false,
-    );
-    check_at(
-        "movie",
-        &input,
-        RADARR_RELEASE_DATE,
-        AFTER,
-        date(cutoff),
+        EXISTS,
+        With::Nothing,
         true,
     );
     input.facts.digital_release_date = Observation::absent();
@@ -1716,18 +2128,34 @@ fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
         "movie",
         &input,
         RADARR_RELEASE_DATE,
-        AFTER,
-        date(cutoff),
+        EXISTS,
+        With::Nothing,
         false,
     );
-    check_at(
-        "movie",
-        &input,
-        RADARR_RELEASE_DATE,
-        NOT_EXISTS,
-        With::Nothing,
-        true,
-    );
+
+    // Scryer's release dates come from its own metadata and can be earlier or
+    // later than Radarr's, so only their presence translates.
+    for (action, value) in [
+        (BEFORE, date("2023-04-01")),
+        (AFTER, date("2023-04-01")),
+        (IN_LAST, number("2592000")),
+        (NOT_EXISTS, With::Nothing),
+    ] {
+        let code = if action == NOT_EXISTS {
+            codes::COMPARATOR_ABSENCE_WIDENS
+        } else {
+            codes::COMPARATOR_DATE_DRIFT_WIDENS
+        };
+        assert_eq!(
+            failed_with(
+                "movie",
+                3,
+                &[rule(None, RADARR_RELEASE_DATE, action, value)]
+            ),
+            vec![code],
+            "action {action}"
+        );
+    }
 }
 
 #[test]
@@ -1748,35 +2176,49 @@ fn radarr_file_date_is_when_the_newest_file_was_recorded() {
         "movie",
         &input,
         RADARR_FILE_DATE,
-        IN_LAST,
-        number("2592000"),
-        true,
+        BEFORE,
+        number("8640000"),
+        false,
     );
     check_at(
         "movie",
         &input,
         RADARR_FILE_DATE,
         BEFORE,
-        number("8640000"),
-        false,
+        number("777600"),
+        true,
     );
     input.facts.files = Observation::known(Vec::new());
     check_at(
         "movie",
         &input,
         RADARR_FILE_DATE,
-        IN_LAST,
-        number("2592000"),
+        BEFORE,
+        number("777600"),
         false,
     );
-    check_at(
-        "movie",
-        &input,
-        RADARR_FILE_DATE,
-        NOT_EXISTS,
-        With::Nothing,
-        true,
-    );
+
+    // Scryer records a file when it sees it, which can be later than Radarr
+    // did, so only "before" translates.
+    for (action, value, code) in [
+        (
+            IN_LAST,
+            number("2592000"),
+            codes::COMPARATOR_DATE_DRIFT_WIDENS,
+        ),
+        (
+            AFTER,
+            number("2592000"),
+            codes::COMPARATOR_DATE_DRIFT_WIDENS,
+        ),
+        (NOT_EXISTS, With::Nothing, codes::COMPARATOR_ABSENCE_WIDENS),
+    ] {
+        assert_eq!(
+            failed_with("movie", 3, &[rule(None, RADARR_FILE_DATE, action, value)]),
+            vec![code],
+            "action {action}"
+        );
+    }
 }
 
 #[test]

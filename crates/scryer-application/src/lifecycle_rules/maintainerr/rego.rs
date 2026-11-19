@@ -5,7 +5,7 @@
 //! them; where an OR is followed by an AND, the running result is named as a
 //! step helper so the source stays linear in the number of rules.
 
-use super::bind::{self, BindRefusal, Binding, Shape, Source};
+use super::bind::{self, BindRefusal, Binding, Fidelity, Shape, Source};
 use super::codes;
 use super::decode::{
     Catalogue, CatalogueProperty, CustomValue, DecodedGroup, DecodedRule, MediaLevel, Operator,
@@ -270,6 +270,7 @@ pub(super) fn translate_group(
         source_group_name: group.name.clone(),
         source_library_id: group.library_id.clone(),
         source_is_active: group.is_active,
+        display_name: display.clone(),
         name: format!("{MAINTAINERR_NAME_PREFIX}{display}"),
         description: with_group_description(
             format!("Imported from the Maintainerr rule group \"{display}\"."),
@@ -324,6 +325,7 @@ fn failed(
         source_group_name: group.name.clone(),
         source_library_id: group.library_id.clone(),
         source_is_active: group.is_active,
+        display_name: display.to_string(),
         name: format!("{MAINTAINERR_FAILED_NAME_PREFIX}{display}"),
         description: with_group_description(
             format!("Could not translate from Maintainerr: {summary}."),
@@ -685,10 +687,28 @@ fn compile_rule(
         )
     };
     let first_operand = operand(&first_binding, level, "value", username.as_deref());
+    let label = comparator_label(rule.action);
+    let widens = |code: &'static str, property: &str, why: &str| {
+        Failure::rule(
+            code,
+            index,
+            format!("\"{label}\" on {property}"),
+            format!("\"{label}\" on {property} could match titles Maintainerr would not: {why}."),
+        )
+    };
 
     let comparison = if matches!(rule.action, EXISTS | NOT_EXISTS) {
         if first_binding.source.is_per_user() {
             return Err(unsupported());
+        }
+        if rule.action == NOT_EXISTS
+            && (first_binding.fidelity != Fidelity::Exact || first_binding.caveat.is_some())
+        {
+            return Err(widens(
+                codes::COMPARATOR_ABSENCE_WIDENS,
+                &first_name,
+                "Scryer can have no value where Maintainerr has one",
+            ));
         }
         let mut guards = first_operand.guard;
         // A computed operand exists only once its value line binds.
@@ -708,9 +728,11 @@ fn compile_rule(
             negate: rule.action == NOT_EXISTS,
         }
     } else {
+        let mut other_found = None;
         let second = if let Some(last) = rule.last {
             let other = lookup(index, last, catalogue)?;
             let other_binding = bind_property(index, other, level)?;
+            other_found = Some((property_name(other), other_binding));
             if let Some(caveat) = other_binding.caveat {
                 warnings.push(warning(
                     codes::FACT_APPROXIMATE,
@@ -745,9 +767,9 @@ fn compile_rule(
                     format!("the value compared with {first_name} {why}."),
                 )
             })?;
-            if first_binding.usernames
-                && !matches!(rule.action, CONTAINS_PARTIAL | NOT_CONTAINS_PARTIAL)
-            {
+            // Only a membership test names users; the other forms either fail
+            // below or count.
+            if first_binding.usernames && matches!(rule.action, CONTAINS | CONTAINS_ALL) {
                 match &decoded {
                     Custom::Text(name) => {
                         check_username(index, name, known_usernames, &mut warnings)
@@ -779,7 +801,20 @@ fn compile_rule(
                 ),
             ));
         }
-        compare(first_operand, rule.action, second).ok_or_else(unsupported)?
+        let widening = widening(
+            rule,
+            &first_name,
+            &first_binding,
+            other_found.as_ref(),
+            &second,
+            known_usernames,
+            &widens,
+        );
+        let comparison = compare(first_operand, rule.action, second).ok_or_else(unsupported)?;
+        if let Some(failure) = widening {
+            return Err(failure);
+        }
+        comparison
     };
 
     let name = format!("maintainerr_condition_{}", index + 1);
@@ -809,12 +844,155 @@ fn check_username(
     warnings.push(warning(
         codes::USERNAME_UNKNOWN,
         format!(
-            "Rule {}: no Scryer user is named \"{}\"; the rule only matches once one is.",
+            "Rule {}: no Scryer user is named \"{}\", so this rule matches nothing for that user until one is.",
             index + 1,
             single_line(username)
         ),
         Some(index),
     ));
+}
+
+/// Why a comparison that otherwise translates could match titles Maintainerr
+/// would not, given how the Scryer facts it reads differ from Maintainerr's.
+fn widening(
+    rule: &DecodedRule,
+    first_name: &str,
+    first: &Binding,
+    other: Option<&(String, Binding)>,
+    second: &Second,
+    known_usernames: &HashSet<String>,
+    widens: &dyn Fn(&'static str, &str, &str) -> Failure,
+) -> Option<Failure> {
+    let action = rule.action;
+    let username = rule.username.as_deref().unwrap_or_default();
+    let user_unknown = {
+        let lowered = username.to_lowercase();
+        lowered.is_empty() || !known_usernames.contains(&lowered)
+    };
+    let no_plays = || {
+        format!(
+            "no Scryer user is named \"{}\", and no plays satisfy it",
+            single_line(username)
+        )
+    };
+    if first.source == Source::UserPlayCount && user_unknown && zero_plays_satisfy(action, second) {
+        return Some(widens(
+            codes::USERNAME_UNKNOWN_WIDENS,
+            first_name,
+            &no_plays(),
+        ));
+    }
+    if let Some((other_name, other)) = other
+        && other.source == Source::UserPlayCount
+        && user_unknown
+    {
+        return Some(widens(
+            codes::USERNAME_UNKNOWN_WIDENS,
+            other_name,
+            &no_plays(),
+        ));
+    }
+
+    match first.fidelity {
+        Fidelity::PartialList
+            if !matches!(
+                action,
+                CONTAINS | CONTAINS_PARTIAL | CONTAINS_ALL | COUNT_BIGGER
+            ) =>
+        {
+            return Some(widens(
+                codes::COMPARATOR_PARTIAL_LIST_WIDENS,
+                first_name,
+                "Scryer's list holds only some of the values Maintainerr's holds",
+            ));
+        }
+        Fidelity::PartialFlag => {
+            let only_when_set = matches!(
+                (action, second),
+                (EQUALS, Second::Custom(Custom::Number(n))) if *n == 1.0
+            ) || matches!(
+                (action, second),
+                (NOT_EQUALS, Second::Custom(Custom::Number(n))) if *n == 0.0
+            );
+            if !only_when_set {
+                return Some(widens(
+                    codes::COMPARATOR_ABSENCE_WIDENS,
+                    first_name,
+                    "Scryer sets it for only some of the titles Maintainerr does",
+                ));
+            }
+        }
+        _ => {}
+    }
+    if let Some((other_name, other)) = other {
+        match other.fidelity {
+            Fidelity::PartialList if action != CONTAINS => {
+                return Some(widens(
+                    codes::COMPARATOR_PARTIAL_LIST_WIDENS,
+                    other_name,
+                    "Scryer's list holds only some of the values Maintainerr's holds",
+                ));
+            }
+            Fidelity::PartialFlag => {
+                return Some(widens(
+                    codes::COMPARATOR_ABSENCE_WIDENS,
+                    other_name,
+                    "Scryer sets it for only some of the titles Maintainerr does",
+                ));
+            }
+            _ => {}
+        }
+    }
+    if first.shape.is_date() {
+        let other_fidelity = other.map_or(Fidelity::Exact, |(_, other)| other.fidelity);
+        if date_widens(action, first.fidelity, other_fidelity) {
+            let name = if is_drifting(first.fidelity) {
+                first_name
+            } else {
+                other.map_or(first_name, |(name, _)| name.as_str())
+            };
+            return Some(widens(
+                codes::COMPARATOR_DATE_DRIFT_WIDENS,
+                name,
+                "Scryer's date can differ from Maintainerr's in that direction",
+            ));
+        }
+    }
+    None
+}
+
+/// Whether a play count of zero satisfies the comparison: what Scryer reads
+/// for a user it does not know.
+fn zero_plays_satisfy(action: i64, second: &Second) -> bool {
+    let (action, negate) = positive(action);
+    let Second::Custom(Custom::Number(n)) = second else {
+        return true;
+    };
+    let holds = match action {
+        BIGGER => 0.0 > *n,
+        SMALLER => 0.0 < *n,
+        EQUALS => *n == 0.0,
+        _ => return true,
+    };
+    holds != negate
+}
+
+fn is_drifting(fidelity: Fidelity) -> bool {
+    matches!(fidelity, Fidelity::LaterDate | Fidelity::EitherDate)
+}
+
+/// Whether an ordering of `first` against `second` could hold in Scryer
+/// where it does not in Maintainerr. A date that can be later widens "at or
+/// after" on its own side and "at or before" on the other; a window widens
+/// whenever either side drifts.
+fn date_widens(action: i64, first: Fidelity, second: Fidelity) -> bool {
+    let can_be_later = is_drifting;
+    let can_be_earlier = |fidelity| fidelity == Fidelity::EitherDate;
+    match action {
+        BEFORE | SMALLER => can_be_earlier(first) || can_be_later(second),
+        AFTER | BIGGER => can_be_later(first) || can_be_earlier(second),
+        _ => is_drifting(first) || is_drifting(second),
+    }
 }
 
 fn lookup(

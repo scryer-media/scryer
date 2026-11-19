@@ -1,5 +1,6 @@
 //! Maintainerr rule groups imported as lifecycle rules: one disabled
 //! lifecycle rule per rule group, on the default schedule and every library.
+//! A group tied to one media-server library carries a warning saying so.
 //!
 //! A group the translator cannot express is still saved, as a disabled
 //! starter rule named `(Maintainerr) FAILED - <name>` whose description says
@@ -10,7 +11,7 @@
 use crate::lifecycle_rules::maintainerr::{
     ArrKind, MAINTAINERR_FAILED_NAME_PREFIX, MAINTAINERR_NAME_PREFIX, MaintainerrDiagnostic,
     MaintainerrDiagnosticSeverity, MaintainerrRuleStatus, MaintainerrTranslateContext,
-    MaintainerrTranslatedRule, translate_maintainerr_rule_group_values,
+    MaintainerrTranslatedRule, codes, translate_maintainerr_rule_group_values,
 };
 use crate::lifecycle_rules::service::LifecycleRuleDraft;
 use crate::rule_import::{
@@ -58,16 +59,35 @@ fn diagnostic_fact(diagnostic: MaintainerrDiagnostic) -> RuleImportFact {
     }))
 }
 
-/// The group's name as the rule names carry it.
-fn display_of(rule: &MaintainerrTranslatedRule) -> &str {
-    rule.name
-        .strip_prefix(MAINTAINERR_FAILED_NAME_PREFIX)
-        .or_else(|| rule.name.strip_prefix(MAINTAINERR_NAME_PREFIX))
-        .unwrap_or(&rule.name)
+/// The warning that a group tied to one media-server library imports as a
+/// rule on every Scryer library.
+fn scope_warning(library_id: &str) -> MaintainerrDiagnostic {
+    MaintainerrDiagnostic {
+        code: codes::SCOPE_ALL_LIBRARIES,
+        severity: MaintainerrDiagnosticSeverity::Warning,
+        message: format!(
+            "The group applies to media-server library \"{}\" in Maintainerr; the imported rule applies to every Scryer library.",
+            library_id
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(100)
+                .collect::<String>()
+        ),
+        rule_index: None,
+    }
 }
 
-fn planned_item(rule: MaintainerrTranslatedRule) -> PlannedRuleImportItem {
-    let display = display_of(&rule).to_string();
+fn planned_item(mut rule: MaintainerrTranslatedRule) -> PlannedRuleImportItem {
+    if let Some(library_id) = rule
+        .source_library_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        let warning = scope_warning(library_id);
+        rule.diagnostics.push(warning);
+    }
+    let display = rule.display_name.clone();
     let (state, reason) = match rule.status {
         MaintainerrRuleStatus::Translated => (RuleImportItemState::Saved, None),
         MaintainerrRuleStatus::Failed => (

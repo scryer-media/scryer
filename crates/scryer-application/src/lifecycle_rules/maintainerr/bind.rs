@@ -61,6 +61,23 @@ impl Source {
     }
 }
 
+/// How a Scryer fact can differ from the Maintainerr property it binds, in
+/// the ways that decide whether a comparison could match titles Maintainerr
+/// would not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Fidelity {
+    /// The fact holds what Maintainerr reads, or differs only as its caveat says.
+    Exact,
+    /// A list that holds only some of the values Maintainerr's list holds.
+    PartialList,
+    /// A flag Scryer sets for only some of the titles Maintainerr sets it for.
+    PartialFlag,
+    /// A date that can be later than Maintainerr's.
+    LaterDate,
+    /// A date that can be earlier or later than Maintainerr's.
+    EitherDate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Binding {
     pub source: Source,
@@ -69,6 +86,7 @@ pub(super) struct Binding {
     pub usernames: bool,
     /// How the Scryer fact differs from the Maintainerr property, if it does.
     pub caveat: Option<&'static str>,
+    pub fidelity: Fidelity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +129,11 @@ const FILE_RECORDED: &str =
     "Scryer uses when it recorded the newest file, not when Radarr imported it";
 const OWN_RELEASE_DATES: &str =
     "Scryer reads the digital and physical release dates from its own metadata";
+const ADDED_TO_SCRYER: &str =
+    "Scryer uses when the title was added to Scryer, not when it was added to Sonarr or Radarr";
+const OWN_TAGS: &str =
+    "Scryer reads its own tags; the Sonarr and Radarr import does not carry tags over";
+const SCRYER_REQUESTS: &str = "Scryer knows only the requests made in Scryer";
 
 struct Entry {
     apps: &'static [&'static str],
@@ -121,6 +144,7 @@ struct Entry {
     shape: Shape,
     usernames: bool,
     caveat: Option<&'static str>,
+    fidelity: Fidelity,
 }
 
 const fn entry(
@@ -140,11 +164,19 @@ const fn entry(
         shape,
         usernames: false,
         caveat: None,
+        fidelity: Fidelity::Exact,
     }
 }
 
+/// Scryer's lists hold only the accounts linked to a Scryer user.
 const fn users(mut entry: Entry) -> Entry {
     entry.usernames = true;
+    entry.fidelity = Fidelity::PartialList;
+    entry
+}
+
+const fn fidelity(mut entry: Entry, fidelity: Fidelity) -> Entry {
+    entry.fidelity = fidelity;
     entry
 }
 
@@ -225,16 +257,19 @@ const ENTRIES: &[Entry] = &[
         Source::Fact("genres"),
         Shape::TextList,
     ),
-    caveat(
-        entry(
-            &["plex", "jellyfin", "emby", "tautulli"],
-            "addDate",
-            DATE,
-            TITLES,
-            Source::Fact("first_imported_at"),
-            Shape::Instant,
+    fidelity(
+        caveat(
+            entry(
+                &["plex", "jellyfin", "emby", "tautulli"],
+                "addDate",
+                DATE,
+                TITLES,
+                Source::Fact("first_imported_at"),
+                Shape::Instant,
+            ),
+            FIRST_IMPORT,
         ),
-        FIRST_IMPORT,
+        Fidelity::LaterDate,
     ),
     caveat(
         users(entry(
@@ -270,21 +305,33 @@ const ENTRIES: &[Entry] = &[
         UNCONFIRMED_PER_USER,
     ),
     // Radarr.
-    entry(
-        &["radarr"],
-        "addDate",
-        DATE,
-        &[MediaLevel::Movie],
-        Source::Fact("added_at"),
-        Shape::Instant,
+    fidelity(
+        caveat(
+            entry(
+                &["radarr"],
+                "addDate",
+                DATE,
+                &[MediaLevel::Movie],
+                Source::Fact("added_at"),
+                Shape::Instant,
+            ),
+            ADDED_TO_SCRYER,
+        ),
+        Fidelity::LaterDate,
     ),
-    entry(
-        &["radarr"],
-        "tags",
-        LIST,
-        &[MediaLevel::Movie],
-        Source::Fact("tags"),
-        Shape::TextList,
+    fidelity(
+        caveat(
+            entry(
+                &["radarr"],
+                "tags",
+                LIST,
+                &[MediaLevel::Movie],
+                Source::Fact("tags"),
+                Shape::TextList,
+            ),
+            OWN_TAGS,
+        ),
+        Fidelity::PartialList,
     ),
     entry(
         &["radarr"],
@@ -310,27 +357,33 @@ const ENTRIES: &[Entry] = &[
         Source::MebibytesRounded("total_file_size_bytes"),
         Shape::Number,
     ),
-    caveat(
-        entry(
-            &["radarr"],
-            "releaseDate",
-            DATE,
-            &[MediaLevel::Movie],
-            Source::EarliestDay(&["digital_release_date", "physical_release_date"]),
-            Shape::Day,
+    fidelity(
+        caveat(
+            entry(
+                &["radarr"],
+                "releaseDate",
+                DATE,
+                &[MediaLevel::Movie],
+                Source::EarliestDay(&["digital_release_date", "physical_release_date"]),
+                Shape::Day,
+            ),
+            OWN_RELEASE_DATES,
         ),
-        OWN_RELEASE_DATES,
+        Fidelity::EitherDate,
     ),
-    caveat(
-        entry(
-            &["radarr"],
-            "fileDate",
-            DATE,
-            &[MediaLevel::Movie],
-            Source::LatestFileAddedAt,
-            Shape::Instant,
+    fidelity(
+        caveat(
+            entry(
+                &["radarr"],
+                "fileDate",
+                DATE,
+                &[MediaLevel::Movie],
+                Source::LatestFileAddedAt,
+                Shape::Instant,
+            ),
+            FILE_RECORDED,
         ),
-        FILE_RECORDED,
+        Fidelity::LaterDate,
     ),
     caveat(
         entry(
@@ -418,21 +471,33 @@ const ENTRIES: &[Entry] = &[
         OWN_RATING,
     ),
     // Sonarr.
-    entry(
-        &["sonarr"],
-        "addDate",
-        DATE,
-        &[MediaLevel::Show],
-        Source::Fact("added_at"),
-        Shape::Instant,
+    fidelity(
+        caveat(
+            entry(
+                &["sonarr"],
+                "addDate",
+                DATE,
+                &[MediaLevel::Show],
+                Source::Fact("added_at"),
+                Shape::Instant,
+            ),
+            ADDED_TO_SCRYER,
+        ),
+        Fidelity::LaterDate,
     ),
-    entry(
-        &["sonarr"],
-        "tags",
-        LIST,
-        SHOW_LEVELS,
-        Source::Fact("tags"),
-        Shape::TextList,
+    fidelity(
+        caveat(
+            entry(
+                &["sonarr"],
+                "tags",
+                LIST,
+                SHOW_LEVELS,
+                Source::Fact("tags"),
+                Shape::TextList,
+            ),
+            OWN_TAGS,
+        ),
+        Fidelity::PartialList,
     ),
     entry(
         &["sonarr"],
@@ -513,13 +578,19 @@ const ENTRIES: &[Entry] = &[
         Shape::Number,
     ),
     // Request managers.
-    entry(
-        REQUEST_APPS,
-        "requestDate",
-        DATE,
-        TITLES,
-        Source::Fact("requested_at"),
-        Shape::Instant,
+    fidelity(
+        caveat(
+            entry(
+                REQUEST_APPS,
+                "requestDate",
+                DATE,
+                TITLES,
+                Source::Fact("requested_at"),
+                Shape::Instant,
+            ),
+            SCRYER_REQUESTS,
+        ),
+        Fidelity::EitherDate,
     ),
     caveat(
         users(entry(
@@ -532,16 +603,19 @@ const ENTRIES: &[Entry] = &[
         )),
         LINKED_USERS_ONLY,
     ),
-    caveat(
-        entry(
-            REQUEST_APPS,
-            "isRequested",
-            BOOL,
-            TITLES,
-            Source::Fact("requested"),
-            Shape::Bool,
+    fidelity(
+        caveat(
+            entry(
+                REQUEST_APPS,
+                "isRequested",
+                BOOL,
+                TITLES,
+                Source::Fact("requested"),
+                Shape::Bool,
+            ),
+            REQUESTED,
         ),
-        REQUESTED,
+        Fidelity::PartialFlag,
     ),
 ];
 
@@ -582,6 +656,7 @@ pub(super) fn bind(
                 shape: entry.shape,
                 usernames: entry.usernames,
                 caveat: entry.caveat,
+                fidelity: entry.fidelity,
             });
         }
         matched_elsewhere = true;

@@ -22,7 +22,6 @@ fn fetched() -> FetchedMaintainerrRules {
             .expect("groups are an array")
             .clone(),
         constants: parsed(LIVE_CONSTANTS),
-        usernames: None,
         radarr_profiles: vec![(1, parsed(LIVE_RADARR_PROFILES))],
         sonarr_profiles: vec![(1, parsed(LIVE_SONARR_PROFILES))],
     }
@@ -68,7 +67,27 @@ fn every_group_plans_one_lifecycle_rule_matching_the_translator() {
         assert_eq!(plan.rego_source, rule.rego_source);
         assert_eq!(plan.grace_days, rule.grace_days);
         assert_eq!(plan.max_titles_per_run, rule.max_titles_per_run);
-        assert_eq!(plan.facts.len(), rule.diagnostics.len());
+        let scoped = rule
+            .source_library_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty());
+        assert_eq!(
+            plan.facts.len(),
+            rule.diagnostics.len() + usize::from(scoped)
+        );
+        let scope_warnings: Vec<_> = plan
+            .facts
+            .iter()
+            .filter(|fact| fact.code == codes::SCOPE_ALL_LIBRARIES)
+            .collect();
+        assert_eq!(scope_warnings.len(), usize::from(scoped));
+        for fact in scope_warnings {
+            assert_eq!(
+                fact.details.as_ref().expect("details")["severity"],
+                "WARNING"
+            );
+        }
+        assert_eq!(item.source_name, rule.display_name);
         let display = &item.source_name;
         assert_eq!(
             plan.taken_names,
@@ -169,6 +188,53 @@ fn remote_text_reaching_a_name_or_description_is_cleaned() {
             .description
             .chars()
             .any(|c| (c.is_control() && c != '\n') || matches!(c, '\u{2028}' | '\u{2029}'))
+    );
+}
+
+#[test]
+fn only_a_group_tied_to_a_library_warns_that_scope_widens() {
+    let mut source = fetched();
+    for value in [Value::Null, Value::String("  ".into())] {
+        source.rule_groups[0]
+            .as_object_mut()
+            .expect("group is an object")
+            .insert("libraryId".into(), value);
+        let planned = plan_maintainerr_rule_import(&source, &plan_context()).expect("plans");
+        assert!(
+            !lifecycle(&planned[0])
+                .facts
+                .iter()
+                .any(|fact| fact.code == codes::SCOPE_ALL_LIBRARIES)
+        );
+    }
+    let planned = plan_maintainerr_rule_import(&fetched(), &plan_context()).expect("plans");
+    let scope = lifecycle(&planned[0])
+        .facts
+        .iter()
+        .find(|fact| fact.code == codes::SCOPE_ALL_LIBRARIES)
+        .expect("a scope warning");
+    assert!(
+        scope.message.contains("\"sample-library-1\""),
+        "{}",
+        scope.message
+    );
+}
+
+#[test]
+fn a_group_named_like_a_failed_import_keeps_its_own_name() {
+    let mut source = fetched();
+    source.rule_groups[0]
+        .as_object_mut()
+        .expect("group is an object")
+        .insert("name".into(), Value::String("FAILED - Sample Rule".into()));
+    let planned = plan_maintainerr_rule_import(&source, &plan_context()).expect("plans");
+    assert_eq!(planned[0].source_name, "FAILED - Sample Rule");
+    assert_eq!(
+        lifecycle(&planned[0]).taken_names,
+        [
+            "(Maintainerr) FAILED - Sample Rule".to_string(),
+            "(Maintainerr) FAILED - FAILED - Sample Rule".to_string(),
+        ]
     );
 }
 

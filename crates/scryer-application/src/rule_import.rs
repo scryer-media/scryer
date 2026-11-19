@@ -45,8 +45,6 @@ pub mod refusal {
     pub const ITEM_FAILED: &str = "RULE_IMPORT_ITEM_FAILED";
     /// Maintainerr could not list the quality profiles of one Sonarr or Radarr server.
     pub const PROFILES_UNAVAILABLE: &str = "RULE_IMPORT_PROFILES_UNAVAILABLE";
-    /// Maintainerr predates its rule user list, so user names cannot be checked.
-    pub const USERNAMES_UNAVAILABLE: &str = "RULE_IMPORT_USERNAMES_UNAVAILABLE";
     /// Rule groups name more Sonarr or Radarr servers than one import reads profiles for.
     pub const TOO_MANY_PROFILE_SOURCES: &str = "RULE_IMPORT_TOO_MANY_PROFILE_SOURCES";
     /// Scryer could not prepare the import from its own data, such as its
@@ -65,7 +63,6 @@ pub mod refusal {
         ALREADY_EXISTS,
         ITEM_FAILED,
         PROFILES_UNAVAILABLE,
-        USERNAMES_UNAVAILABLE,
         TOO_MANY_PROFILE_SOURCES,
         PLAN_FAILED,
     ];
@@ -180,8 +177,6 @@ pub struct FetchedMaintainerrRules {
     pub rule_groups: Vec<Value>,
     /// `GET /api/rules/constants`.
     pub constants: Value,
-    /// `GET /api/rules/users`; `None` when this Maintainerr predates it.
-    pub usernames: Option<Value>,
     /// Quality profiles per Radarr settings id the rule groups name.
     pub radarr_profiles: Vec<(i64, Value)>,
     /// Quality profiles per Sonarr settings id the rule groups name.
@@ -496,20 +491,6 @@ async fn fetch_maintainerr(
     let version = client.test_connection().await?;
     let rule_groups = client.list_rule_groups().await?;
     let constants = client.rule_constants().await?;
-    let usernames = match client.rule_usernames().await {
-        Ok(usernames) => Some(usernames),
-        Err(error)
-            if error.reason()
-                == Some(crate::error_reasons::external_import::SOURCE_ENDPOINT_MISSING) =>
-        {
-            facts.push(RuleImportFact::new(
-                refusal::USERNAMES_UNAVAILABLE,
-                "this Maintainerr version does not list rule users",
-            ));
-            None
-        }
-        Err(error) => return Err(error),
-    };
     let (radarr_ids, sonarr_ids) = maintainerr_profile_sources(&rule_groups);
     let mut radarr_profiles = Vec::new();
     let mut sonarr_profiles = Vec::new();
@@ -555,7 +536,6 @@ async fn fetch_maintainerr(
             version,
             rule_groups,
             constants,
-            usernames,
             radarr_profiles,
             sonarr_profiles,
         },
@@ -1304,7 +1284,6 @@ mod tests {
             version: "2.19.0".into(),
             rule_groups: Vec::new(),
             constants: Value::Null,
-            usernames: None,
             radarr_profiles: Vec::new(),
             sonarr_profiles: Vec::new(),
         };

@@ -16,8 +16,8 @@ fn store(ctx: &TestContext) -> WorkflowOperationStore {
         .with_encryption_key(ctx.db.encryption_key_state())
 }
 
-/// A Maintainerr that answers everything a fetch reads. Its rule user list is
-/// missing, as on older versions, and one Radarr server's profiles fail.
+/// A Maintainerr that answers everything a fetch reads, except that one
+/// Radarr server's profiles fail.
 async fn maintainerr() -> MockServer {
     let server = MockServer::start().await;
     let routes = [
@@ -30,7 +30,6 @@ async fn maintainerr() -> MockServer {
             ])),
         ),
         ("/api/rules/constants", ResponseTemplate::new(200).set_body_json(json!({"applications": []}))),
-        ("/api/rules/users", ResponseTemplate::new(404).set_body_string("Cannot GET")),
         ("/api/servarr/radarr/2/profiles", ResponseTemplate::new(404)),
         (
             "/api/servarr/sonarr/3/profiles",
@@ -84,10 +83,17 @@ async fn rule_import_fetches_purges_the_connection_and_reports_source_facts() {
         // disabled starter rule.
         let states: Vec<_> = report.items.iter().map(|item| item.state).collect();
         assert_eq!(states, vec![RuleImportItemState::SavedFailedTranslation; 2]);
-        let fact_codes: Vec<_> = report.facts.iter().map(|fact| fact.code.as_str()).collect();
+        // The fetch reads only what the import uses.
+        let requested: Vec<String> = server
+            .received_requests()
+            .await
+            .expect("requests are recorded")
+            .iter()
+            .map(|request| request.url.path().to_string())
+            .collect();
         assert!(
-            fact_codes.contains(&refusal::USERNAMES_UNAVAILABLE),
-            "{fact_codes:?}"
+            !requested.iter().any(|path| path == "/api/rules/users"),
+            "{requested:?}"
         );
         let profiles = report
             .facts
@@ -846,10 +852,6 @@ async fn maintainerr_with_groups(with_person_fact: bool) -> MockServer {
         (
             "/api/rules/constants",
             ResponseTemplate::new(200).set_body_json(constants),
-        ),
-        (
-            "/api/rules/users",
-            ResponseTemplate::new(200).set_body_json(json!(["sample-user"])),
         ),
         (
             "/api/servarr/radarr/1/profiles",

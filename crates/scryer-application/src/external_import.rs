@@ -1192,12 +1192,6 @@ impl ExternalMaintainerrClient {
         self.get_json("api/rules/constants").await
     }
 
-    /// Media-server user names rules may compare against. Older Maintainerr
-    /// versions lack this endpoint and answer `SOURCE_ENDPOINT_MISSING`.
-    pub async fn rule_usernames(&self) -> AppResult<Value> {
-        self.get_json("api/rules/users").await
-    }
-
     /// Quality profiles of the Radarr server Maintainerr knows by `settings_id`.
     pub async fn radarr_profiles(&self, settings_id: i64) -> AppResult<Value> {
         self.get_json(&format!("api/servarr/radarr/{settings_id}/profiles"))
@@ -2255,12 +2249,6 @@ mod source_client_tests {
         .await;
         mount_json(
             &server,
-            "/maintainerr/api/rules/users",
-            json!(["synthetic-user"]),
-        )
-        .await;
-        mount_json(
-            &server,
             "/maintainerr/api/servarr/radarr/2/profiles",
             json!([{"id": 1, "name": "Any"}]),
         )
@@ -2281,10 +2269,6 @@ mod source_client_tests {
         assert_eq!(
             client.rule_constants().await.expect("constants")["applications"],
             json!([])
-        );
-        assert_eq!(
-            client.rule_usernames().await.expect("users"),
-            json!(["synthetic-user"])
         );
         assert_eq!(
             client.radarr_profiles(2).await.expect("radarr")[0]["name"],
@@ -2360,9 +2344,9 @@ mod source_client_tests {
         );
         assert_eq!(
             client
-                .rule_usernames()
+                .rule_constants()
                 .await
-                .expect_err("older version")
+                .expect_err("not served")
                 .reason(),
             Some(reasons::SOURCE_ENDPOINT_MISSING)
         );

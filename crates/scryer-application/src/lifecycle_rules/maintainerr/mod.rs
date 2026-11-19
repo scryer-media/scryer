@@ -8,7 +8,9 @@
 //!
 //! Each rule group becomes one lifecycle rule, in input order. A group
 //! translates only when every rule in it, and its action, has a faithful
-//! Scryer equivalent. Anything else yields a FAILED rule: the web editor's
+//! Scryer equivalent. A comparison on a fact that differs from
+//! Maintainerr's translates only when the difference can make it match
+//! fewer titles, never more. Anything else yields a FAILED rule: the web editor's
 //! starter source with a description saying what could not be translated,
 //! so the operator sees the group and decides what to do with it.
 //!
@@ -26,8 +28,9 @@
 //! - manual exclusions and the "list exclusions" setting of the collection;
 //! - notification settings.
 //!
-//! The group's library is carried through as `source_library_id` for the
-//! caller to map; the translated rule itself is not scoped to a library.
+//! The group's library is carried through as `source_library_id`; the
+//! translated rule itself is not scoped to a library, and the import warns
+//! about that with `maintainerr.scope.all_libraries`.
 //! The group's own `isActive` is carried through as `source_is_active`. A
 //! rule row's `isActive` is ignored, as Maintainerr's evaluator ignores it,
 //! and rules are evaluated in the order of their row ids, as Maintainerr
@@ -149,6 +152,18 @@ pub mod codes {
     /// Date equality depends on Maintainerr's local time zone.
     pub const COMPARATOR_DATE_EQUALITY_UNSUPPORTED: &str =
         "maintainerr.comparator.date_equality_unsupported";
+    /// A comparison on a list Scryer holds only part of, such as linked users
+    /// or Scryer's own tags, could match titles Maintainerr would not.
+    pub const COMPARATOR_PARTIAL_LIST_WIDENS: &str = "maintainerr.comparator.partial_list_widens";
+    /// A comparison that a missing value satisfies, on a fact Scryer may lack
+    /// where Maintainerr has a value, could match titles Maintainerr would not.
+    pub const COMPARATOR_ABSENCE_WIDENS: &str = "maintainerr.comparator.absence_widens";
+    /// A date comparison could match titles Maintainerr would not, because
+    /// Scryer's date can differ from Maintainerr's in that direction.
+    pub const COMPARATOR_DATE_DRIFT_WIDENS: &str = "maintainerr.comparator.date_drift_widens";
+    /// A per-user comparison names a user no Scryer user is called, and a
+    /// user with no plays satisfies it.
+    pub const USERNAME_UNKNOWN_WIDENS: &str = "maintainerr.username.unknown_widens";
     /// A rule's custom value cannot be read as Maintainerr reads it.
     pub const CUSTOM_VALUE_INVALID: &str = "maintainerr.custom_value.invalid";
     /// The group has no action.
@@ -169,6 +184,9 @@ pub mod codes {
     pub const FACT_APPROXIMATE: &str = "maintainerr.fact.approximate";
     /// The action maps to Scryer heads that differ from it in a stated way.
     pub const ACTION_APPROXIMATE: &str = "maintainerr.action.approximate";
+    /// The group is tied to one media-server library; the imported rule
+    /// applies to every Scryer library.
+    pub const SCOPE_ALL_LIBRARIES: &str = "maintainerr.scope.all_libraries";
 
     /// Every diagnostic code the translator emits.
     pub const ALL: &[&str] = &[
@@ -187,6 +205,10 @@ pub mod codes {
         PROPERTY_LEVEL_UNSUPPORTED,
         COMPARATOR_UNSUPPORTED,
         COMPARATOR_DATE_EQUALITY_UNSUPPORTED,
+        COMPARATOR_PARTIAL_LIST_WIDENS,
+        COMPARATOR_ABSENCE_WIDENS,
+        COMPARATOR_DATE_DRIFT_WIDENS,
+        USERNAME_UNKNOWN_WIDENS,
         CUSTOM_VALUE_INVALID,
         ACTION_MISSING,
         ACTION_UNSUPPORTED,
@@ -197,6 +219,7 @@ pub mod codes {
         USERNAME_UNKNOWN,
         FACT_APPROXIMATE,
         ACTION_APPROXIMATE,
+        SCOPE_ALL_LIBRARIES,
     ];
 }
 
@@ -294,6 +317,8 @@ pub struct MaintainerrTranslatedRule {
     pub source_library_id: Option<String>,
     /// Whether the group was active in Maintainerr.
     pub source_is_active: bool,
+    /// The group's name as the rule's name carries it, after the prefix.
+    pub display_name: String,
     pub name: String,
     pub description: String,
     pub rego_source: String,
