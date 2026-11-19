@@ -228,6 +228,7 @@ async fn execute_resolved_episode_import(
                 &prior.file.file_path,
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
                 skip_reason: rejection.skip_reason,
@@ -765,6 +766,7 @@ async fn execute_resolved_episode_import(
                 "import source would replace a library file this download placed; leaving the library file in place"
             );
             return Ok(EpisodeImportOutcome::Skipped {
+                blocklist: None,
                 message: rejection.message,
                 reason_code: Some(rejection.recycle_reason.to_string()),
                 skip_reason: rejection.skip_reason,

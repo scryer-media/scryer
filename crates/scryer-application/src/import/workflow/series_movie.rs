@@ -1874,6 +1874,7 @@ async fn import_additional_movie_download(
             import_id,
             completed,
             ImportRejectionContext {
+                blocklist: None,
                 rejection: crate::import_decide::placed_by_this_download_rejection(
                     "this title",
                     &prior.file.file_path,
@@ -2617,6 +2618,7 @@ async fn import_movie_download(
                 import_id,
                 completed,
                 ImportRejectionContext {
+                    blocklist: None,
                     rejection: crate::import_decide::placed_by_this_download_rejection(
                         "this title",
                         &own.file_path,
@@ -3523,6 +3525,7 @@ async fn import_series_movie_download(
                 import_id,
                 completed,
                 ImportRejectionContext {
+                    blocklist: None,
                     rejection: crate::import_decide::placed_by_this_download_rejection(
                         "this series-movie link",
                         &own.file_path,

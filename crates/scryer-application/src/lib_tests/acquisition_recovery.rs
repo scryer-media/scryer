@@ -1767,6 +1767,7 @@ async fn fail_grab_from_indexer_a(kind: FailedGrabKind) -> (AppUseCase, String) 
         }
     };
     let mut tracked = crate::tracked_downloads::TrackedDownload {
+        stalled_import_passes: 0,
         download_id: scryer_domain::download_identity::DownloadId::new(),
         id: "nzbget:harbor-job".to_string(),
         client_id: "primary".to_string(),
