@@ -66,6 +66,8 @@ export type RouteCommand = {
 type BuildRouteCommandsArgs = {
   t: Translate;
   user: AuthUser;
+  /** The member's own lists are not allowed, so Lists offers them nothing. */
+  personalListsRefused?: boolean;
   activityImportCount?: number;
   /**
    * Navigates to a canonical path. Panes that `onNavigate` has no section
@@ -110,6 +112,7 @@ function buildNavigate(
 export function buildRouteCommands({
   t,
   user,
+  personalListsRefused = false,
   activityImportCount = 0,
   onNavigatePath,
   onNavigate,
@@ -402,6 +405,7 @@ export function buildRouteCommands({
         hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) ||
         hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles),
       canManageLists || canManageSystemSettings,
+      personalListsRefused,
     )
       ? [
           {

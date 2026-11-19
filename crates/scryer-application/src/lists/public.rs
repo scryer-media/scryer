@@ -1436,6 +1436,19 @@ impl AppUseCase {
         Ok(())
     }
 
+    /// The actor's own list policy, or the default when an admin has never
+    /// set one.
+    pub async fn my_list_policy(&self, actor: &User) -> AppResult<ListPolicy> {
+        Ok(self
+            .services
+            .lists
+            .policies
+            .get(&actor.id)
+            .await?
+            .map(|policy| policy.policy)
+            .unwrap_or_default())
+    }
+
     /// Every member's list policy, with how many list requests they made in
     /// the last thirty days.
     pub async fn member_list_policies(&self, actor: &User) -> AppResult<Vec<MemberListPolicy>> {

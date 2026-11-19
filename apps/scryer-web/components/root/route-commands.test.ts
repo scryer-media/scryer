@@ -208,6 +208,28 @@ test("lists command reaches catalog viewers and list managers", () => {
   );
 });
 
+test("lists command is hidden from a viewer whose lists are not allowed", () => {
+  const viewer = user({
+    libraryPermissions: [
+      {
+        libraryId: "library-id",
+        permissions: [LIBRARY_PERMISSIONS.view],
+      },
+    ],
+  });
+  const listManager = user({ appPermissions: [APP_PERMISSIONS.manageLists] });
+  const hasLists = (authorizedUser: typeof viewer) =>
+    buildRouteCommands({
+      t,
+      user: authorizedUser,
+      personalListsRefused: true,
+      onNavigate: () => {},
+    }).some((command) => command.id === "lists");
+
+  assert.equal(hasLists(viewer), false);
+  assert.equal(hasLists(listManager), true);
+});
+
 test("list exclusions command is limited to list managers and opens its pane", () => {
   const viewer = user({
     libraryPermissions: [

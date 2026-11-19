@@ -124,6 +124,13 @@ test("catalog viewers and list managers both reach the Lists page", () => {
   assert.equal(canAccessListsPage(false, false), false);
 });
 
+test("a member whose lists are not allowed loses the Lists page unless they manage lists", () => {
+  assert.equal(canAccessListsPage(true, false, true), false);
+  assert.equal(canAccessListsPage(true, true, true), true);
+  assert.equal(canAccessListsPage(false, true, true), true);
+  assert.equal(canAccessListsPage(true, false, false), true);
+});
+
 test("Lists navigation depends on permissions rather than instance switches", () => {
   assert.equal(shouldLeaveListsPage(false), true);
   assert.equal(shouldLeaveListsPage(true), false);

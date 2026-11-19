@@ -27539,6 +27539,10 @@ type QueryRoot {
 	"""
 	listExclusions: [ListExclusionPayload!]!
 	"""
+	The signed-in member's own list policy.
+	"""
+	myListPolicy: ListPolicy!
+	"""
 	Every member's list policy and recent list requests. Requires list
 	management permission.
 	"""

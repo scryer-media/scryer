@@ -1389,6 +1389,7 @@ function AuthenticatedHomePage({
     canManageLibrarySettings,
     canManageLists,
     canAccessLists,
+    personalListsRefused,
   } = usePermissions(authenticatedUser);
   const discoveryAuthorizationSignature = useMemo(
     () => authorizationCacheSignature(authenticatedUser),
@@ -1438,6 +1439,7 @@ function AuthenticatedHomePage({
       buildRouteCommands({
         t,
         user: authenticatedUser,
+        personalListsRefused,
         activityImportCount: manualImportRequiredCount,
         onNavigate: navigateTo,
         onNavigatePath: (path: string) => navigate(path),
@@ -1447,6 +1449,7 @@ function AuthenticatedHomePage({
       manualImportRequiredCount,
       navigate,
       navigateTo,
+      personalListsRefused,
       t,
     ],
   );
@@ -1961,6 +1964,7 @@ function AuthenticatedHomePage({
                               activitySection={activitySection}
                               wantedSection={wantedSection}
                               user={authenticatedUser}
+                              personalListsRefused={personalListsRefused}
                               pendingImportCounts={pendingImportCounts}
                               pendingMediaRequestCounts={
                                 pendingMediaRequestCounts

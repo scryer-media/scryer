@@ -346,6 +346,8 @@ type RootSidebarProps = {
   activitySection: ActivitySection;
   wantedSection: WantedSection;
   user: AuthUser;
+  /** The member's own lists are not allowed, so Lists offers them nothing. */
+  personalListsRefused?: boolean;
   pendingImportCounts: PendingImportCounts | null;
   pendingMediaRequestCounts: PendingImportCounts | null;
   manualImportRequiredCount: number;
@@ -736,6 +738,7 @@ function RootSidebarContent({
   activitySection,
   wantedSection,
   user,
+  personalListsRefused = false,
   pendingImportCounts,
   pendingMediaRequestCounts,
   manualImportRequiredCount,
@@ -876,6 +879,7 @@ function RootSidebarContent({
                 hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) ||
                 canManageTitle,
               canManageLists || canManageSystemSettings,
+              personalListsRefused,
             )) &&
           (item.id !== "wanted" || canViewLibraryInternals) &&
           (item.id !== "dashboard" ||
@@ -891,6 +895,7 @@ function RootSidebarContent({
       canManageTitle,
       canResolveImports,
       canViewCatalog,
+      personalListsRefused,
       topNav,
       user,
     ],
@@ -1379,11 +1384,15 @@ function RootSidebarContent({
                             ) : null}
                             {item.id === "rules" &&
                             view === "settings" &&
-                            isSettingsNavEntryActive("rules", settingsSection) ? (
+                            isSettingsNavEntryActive(
+                              "rules",
+                              settingsSection,
+                            ) ? (
                               <SidebarGroupContent>
                                 <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
                                   {RULES_SECTIONS.map((section) => {
-                                    const rulesItem = RULES_SECTION_ITEMS[section];
+                                    const rulesItem =
+                                      RULES_SECTION_ITEMS[section];
                                     return (
                                       <SidebarMenuSubItem key={section}>
                                         <SidebarMenuSubButton

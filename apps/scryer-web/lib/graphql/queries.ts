@@ -3556,6 +3556,11 @@ export const indexerRoutingAllScopesQuery = `query IndexerRoutingAllScopes {
   }
 }`;
 
+/** The signed-in member's own list policy; NONE hides the Lists page. */
+export const myListPolicyQuery = `query MyListPolicy {
+  myListPolicy
+}`;
+
 export const meQuery = `query Me {
   me {
     id
