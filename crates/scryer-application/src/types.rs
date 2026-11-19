@@ -155,6 +155,9 @@ pub struct TitleMetadataUpdate {
     /// request rules read. `Some(vec![])` clears stale stored ratings; `None`
     /// leaves the stored rows untouched for callers that do not hydrate.
     pub content_ratings: Option<Vec<ContentRating>>,
+    /// Awards returned by SMG, in its order, under the same contract as
+    /// `content_ratings`.
+    pub awards: Option<Vec<TitleAward>>,
     /// Complete credit set returned by SMG. `Some(vec![])` clears the stale cache;
     /// `None` leaves the existing rows untouched for callers that do not hydrate.
     pub credits: Option<Vec<TitleCredit>>,

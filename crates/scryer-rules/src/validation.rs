@@ -3766,14 +3766,34 @@ mod tests {
 
         let lifecycle_reading_a_request_fact = validate_lifecycle_body(
             "request_fact",
-            "unmonitor if {\n  input.facts.certification_rank <= 2\n}\n",
+            "unmonitor if {\n  input.facts.previous_request_count > 2\n}\n",
         );
         assert!(!lifecycle_reading_a_request_fact.valid);
         assert!(
             lifecycle_reading_a_request_fact.errors[0]
-                .contains("Unknown rule input path 'input.facts.certification_rank'"),
+                .contains("Unknown rule input path 'input.facts.previous_request_count'"),
             "{:?}",
             lifecycle_reading_a_request_fact.errors
+        );
+
+        // Content ratings and awards are facts of both families.
+        let lifecycle_reading_shared_facts = validate_lifecycle_body(
+            "shared_facts",
+            "unmonitor if {\n  input.facts.certification_rank <= 2\n  input.facts.award_count == 0\n  some award in input.facts.awards\n  award.given_to == \"work\"\n}\n",
+        );
+        assert!(
+            lifecycle_reading_shared_facts.valid,
+            "{:?}",
+            lifecycle_reading_shared_facts.errors
+        );
+        let request_reading_awards = validate_request_body(
+            "request_awards",
+            "approve if {\n  some award in input.facts.awards\n  award.award_id == \"Q1\"\n}\n",
+        );
+        assert!(
+            request_reading_awards.valid,
+            "{:?}",
+            request_reading_awards.errors
         );
     }
 

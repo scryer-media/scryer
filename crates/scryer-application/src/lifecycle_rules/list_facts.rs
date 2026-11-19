@@ -28,9 +28,11 @@ use scryer_domain::{
     MediaServerSignalKind, Title,
 };
 use scryer_rules::lifecycle::{
-    EPISODE_SHAPE_LIFECYCLE_FACTS, FAVORITE_LIFECYCLE_FACTS, LifecycleInput, LifecycleRatingDoc,
-    LifecycleSubjectKind, METADATA_LIFECYCLE_FACTS, Observation, WATCHLIST_LIFECYCLE_FACTS,
+    AWARD_LIFECYCLE_FACTS, CONTENT_RATING_LIFECYCLE_FACTS, EPISODE_SHAPE_LIFECYCLE_FACTS,
+    FAVORITE_LIFECYCLE_FACTS, LifecycleInput, LifecycleRatingDoc, LifecycleSubjectKind,
+    METADATA_LIFECYCLE_FACTS, Observation, WATCHLIST_LIFECYCLE_FACTS,
 };
+use scryer_rules::request::certification_rank_for_label;
 
 use super::facts::{
     LifecycleTitlePeople, LifecycleWatchContext, WatchSignalFreshness, unknown_reason,
@@ -38,7 +40,13 @@ use super::facts::{
 use crate::discovery::discovery_watchlist_source_matches;
 use crate::lists::ListSubscriptionQuery;
 use crate::ports::AudienceFavorite;
-use crate::{AppResult, AppUseCase, TitleEpisodeShape, TitleRatingSummary};
+use crate::request_rules::{
+    award_docs, certification_docs, content_ratings_age_rating,
+    content_ratings_us_certification_label,
+};
+use crate::{
+    AppResult, AppUseCase, ContentRating, TitleAward, TitleEpisodeShape, TitleRatingSummary,
+};
 
 /// What the list store says about one title.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -88,6 +96,44 @@ pub(crate) struct LifecycleListFacts {
     pub episode_shapes: EpisodeShapeLoad,
     /// Every account's stored Jellyfin and Emby favourites.
     pub favorites: FavoriteLoad,
+    /// The stored content ratings and awards, read the same way.
+    pub content_ratings: StoredSetLoad<ContentRating>,
+    pub awards: StoredSetLoad<TitleAward>,
+}
+
+/// One per-title metadata set of a batch, such as its content ratings.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum StoredSetLoad<T> {
+    /// No rule being evaluated reads a fact of this set.
+    NotLoaded,
+    /// The store could not be read for this pass.
+    Unreadable,
+    /// Keyed by title id. `None`, or no entry, means the set is not stored
+    /// for that title, which is not the same as an empty set.
+    Loaded(HashMap<String, Option<Vec<T>>>),
+}
+
+impl<T> Default for StoredSetLoad<T> {
+    fn default() -> Self {
+        Self::NotLoaded
+    }
+}
+
+impl<T> StoredSetLoad<T> {
+    /// The title's stored set, or the reason its facts are unknown. `None`
+    /// when the set was not loaded, so its facts keep their defaults.
+    fn for_title(&self, title_id: &str) -> Option<Result<&[T], &'static str>> {
+        match self {
+            Self::NotLoaded => None,
+            Self::Unreadable => Some(Err(unknown_reason::METADATA_UNREADABLE)),
+            Self::Loaded(by_title) => Some(
+                by_title
+                    .get(title_id)
+                    .and_then(Option::as_deref)
+                    .ok_or(unknown_reason::METADATA_NOT_STORED),
+            ),
+        }
+    }
 }
 
 /// The favourite facts for a batch.
@@ -156,6 +202,8 @@ pub(crate) struct LifecycleFactLoads {
     pub metadata: bool,
     pub episode_shapes: bool,
     pub favorites: bool,
+    pub content_ratings: bool,
+    pub awards: bool,
 }
 
 impl LifecycleFactLoads {
@@ -165,6 +213,8 @@ impl LifecycleFactLoads {
         metadata: true,
         episode_shapes: true,
         favorites: true,
+        content_ratings: true,
+        awards: true,
     };
 
     /// The groups a rule's source names. A source whose facts cannot be
@@ -183,6 +233,12 @@ impl LifecycleFactLoads {
                     .iter()
                     .any(|fact| facts.contains(*fact)),
                 favorites: FAVORITE_LIFECYCLE_FACTS
+                    .iter()
+                    .any(|fact| facts.contains(*fact)),
+                content_ratings: CONTENT_RATING_LIFECYCLE_FACTS
+                    .iter()
+                    .any(|fact| facts.contains(*fact)),
+                awards: AWARD_LIFECYCLE_FACTS
                     .iter()
                     .any(|fact| facts.contains(*fact)),
             },
@@ -344,6 +400,8 @@ impl AppUseCase {
                 metadata: MetadataLoad::default(),
                 episode_shapes: EpisodeShapeLoad::default(),
                 favorites: FavoriteLoad::NotLoaded,
+                content_ratings: StoredSetLoad::NotLoaded,
+                awards: StoredSetLoad::NotLoaded,
             };
         }
         let favorites = if loads.favorites {
@@ -355,6 +413,30 @@ impl AppUseCase {
             self.lifecycle_metadata_rows(&title_ids).await
         } else {
             MetadataLoad::default()
+        };
+        let content_ratings = if loads.content_ratings {
+            stored_set_load(
+                self.services
+                    .catalog
+                    .titles
+                    .list_title_content_ratings(&title_ids)
+                    .await,
+                "content ratings",
+            )
+        } else {
+            StoredSetLoad::NotLoaded
+        };
+        let awards = if loads.awards {
+            stored_set_load(
+                self.services
+                    .catalog
+                    .titles
+                    .list_title_awards(&title_ids)
+                    .await,
+                "awards",
+            )
+        } else {
+            StoredSetLoad::NotLoaded
         };
         let episode_shapes = if loads.episode_shapes {
             self.lifecycle_episode_shape_rows(titles, now.date_naive())
@@ -406,6 +488,8 @@ impl AppUseCase {
             metadata,
             episode_shapes,
             favorites,
+            content_ratings,
+            awards,
             origins: origins.map(|origins| {
                 let subscriptions = store
                     .as_ref()
@@ -592,6 +676,24 @@ impl AppUseCase {
             .list(ListSubscriptionQuery::default())
             .await?;
         Ok((rows, subscriptions))
+    }
+}
+
+/// A batch's stored set, or unreadable when the read failed.
+fn stored_set_load<T>(
+    read: AppResult<Vec<(String, Option<Vec<T>>)>>,
+    what: &'static str,
+) -> StoredSetLoad<T> {
+    match read {
+        Ok(rows) => StoredSetLoad::Loaded(rows.into_iter().collect()),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                set = what,
+                "could not read stored title metadata; its facts are unknown for this batch"
+            );
+            StoredSetLoad::Unreadable
+        }
     }
 }
 
@@ -853,6 +955,8 @@ pub(crate) fn apply_watchlist_and_metadata_facts(
     people: LifecycleTitlePeople<'_>,
 ) {
     apply_metadata_facts(input, &loaded.metadata, title_id);
+    apply_content_rating_facts(input, &loaded.content_ratings, title_id);
+    apply_award_facts(input, &loaded.awards, title_id);
     apply_episode_shape_facts(input, &loaded.episode_shapes, title_id);
     apply_watchlist_facts(input, loaded, title_id, people);
     apply_favorite_facts(input, &loaded.favorites, title_id, people);
@@ -1102,6 +1206,74 @@ fn apply_metadata_facts(input: &mut LifecycleInput, loaded: &MetadataLoad, title
             })
             .unwrap_or_default(),
     );
+}
+
+/// The stored content ratings, read the way request rules read the gateway's.
+fn apply_content_rating_facts(
+    input: &mut LifecycleInput,
+    loaded: &StoredSetLoad<ContentRating>,
+    title_id: &str,
+) {
+    let Some(stored) = loaded.for_title(title_id) else {
+        return;
+    };
+    let facts = &mut input.facts;
+    let ratings = match stored {
+        Ok(ratings) => ratings,
+        Err(reason) => {
+            facts.age_rating = Observation::unknown(reason);
+            facts.certifications = Observation::unknown(reason);
+            facts.certification_label = Observation::unknown(reason);
+            facts.certification_rank = Observation::unknown(reason);
+            return;
+        }
+    };
+    facts.age_rating = content_ratings_age_rating(ratings).map_or_else(
+        || Observation::absent_because(unknown_reason::NO_AGE_RATING),
+        |age| Observation::known(i64::from(age)),
+    );
+    let certifications = certification_docs(ratings);
+    facts.certifications = if certifications.is_empty() {
+        Observation::absent_because(unknown_reason::NO_CERTIFICATIONS)
+    } else {
+        Observation::known(certifications)
+    };
+    let label = content_ratings_us_certification_label(ratings);
+    // A label off the ladder is an absence of a rank, as for request rules.
+    facts.certification_rank = match label.as_deref() {
+        None => Observation::absent_because(unknown_reason::NO_US_CERTIFICATION),
+        Some(label) => certification_rank_for_label(label).map_or_else(
+            || Observation::absent_because(unknown_reason::UNRANKABLE_CERTIFICATION),
+            Observation::known,
+        ),
+    };
+    facts.certification_label = label.map_or_else(
+        || Observation::absent_because(unknown_reason::NO_US_CERTIFICATION),
+        Observation::known,
+    );
+}
+
+/// The stored award wins. Once stored, a title that won nothing has a known
+/// zero and an empty list.
+fn apply_award_facts(
+    input: &mut LifecycleInput,
+    loaded: &StoredSetLoad<TitleAward>,
+    title_id: &str,
+) {
+    let Some(stored) = loaded.for_title(title_id) else {
+        return;
+    };
+    let facts = &mut input.facts;
+    match stored {
+        Ok(awards) => {
+            facts.award_count = Observation::known(awards.len() as i64);
+            facts.awards = Observation::known(award_docs(awards));
+        }
+        Err(reason) => {
+            facts.award_count = Observation::unknown(reason);
+            facts.awards = Observation::unknown(reason);
+        }
+    }
 }
 
 fn apply_watchlist_facts(

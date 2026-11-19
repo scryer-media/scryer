@@ -10,7 +10,19 @@ pub(crate) const DESCRIPTION: &str =
 /// pass only sets the due time. Titles already waiting on a retry keep their
 /// deadline, and titles never hydrated are already queued.
 pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
-    SqlRuntime::run_in_transaction(datastore, ID, |tx| {
+    queue_hydrated_titles_once(datastore, ID, DESCRIPTION, "").await
+}
+
+/// Claims `id` and queues every hydrated title that matches `also` (an extra
+/// `AND ...` clause over `titles`, or empty) and is not already waiting on a
+/// retry, in one transaction, so the pass runs at most once.
+pub(crate) async fn queue_hydrated_titles_once(
+    datastore: &StoreDatastore,
+    id: &'static str,
+    description: &'static str,
+    also: &'static str,
+) -> Result<(), String> {
+    SqlRuntime::run_in_transaction(datastore, id, move |tx| {
         Box::pin(async move {
             let now = Utc::now();
             // Claim and enqueue atomically, including when the outer runner's
@@ -21,8 +33,8 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
                  (migration_id, description, applied_at, execution_time_ms)
                  VALUES ({}, {}, {}, 0) ON CONFLICT (migration_id) DO NOTHING",
                 &[
-                    SqlArg::Text(ID.into()),
-                    SqlArg::Text(DESCRIPTION.into()),
+                    SqlArg::Text(id.into()),
+                    SqlArg::Text(description.into()),
                     SqlArg::Timestamp(now),
                 ],
             )
@@ -30,14 +42,12 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
             if claimed == 0 {
                 return Ok(());
             }
-            SqlRuntime::execute(
-                SqlExec::Tx(tx),
-                "UPDATE titles SET metadata_hydration_next_attempt_at = {}
+            let sql = format!(
+                "UPDATE titles SET metadata_hydration_next_attempt_at = {{}}
                  WHERE metadata_fetched_at IS NOT NULL
-                   AND metadata_hydration_next_attempt_at IS NULL",
-                &[SqlArg::Timestamp(now)],
-            )
-            .await?;
+                   AND metadata_hydration_next_attempt_at IS NULL {also}"
+            );
+            SqlRuntime::execute(SqlExec::Tx(tx), &sql, &[SqlArg::Timestamp(now)]).await?;
             Ok(())
         })
     })

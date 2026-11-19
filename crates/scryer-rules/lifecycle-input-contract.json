@@ -525,6 +525,36 @@
           "descKey": "settings.refLifecycleFactsRatings"
         },
         {
+          "field": "age_rating",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAgeRating"
+        },
+        {
+          "field": "certifications",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsCertifications"
+        },
+        {
+          "field": "certification_label",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsCertificationLabel"
+        },
+        {
+          "field": "certification_rank",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsCertificationRank"
+        },
+        {
+          "field": "award_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAwardCount"
+        },
+        {
+          "field": "awards",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsAwards"
+        },
+        {
           "field": "play_count_total",
           "type": "number",
           "descKey": "settings.refLifecycleFactsPlayCountTotal"
@@ -721,6 +751,63 @@
           "field": "votes",
           "type": "number?",
           "descKey": "settings.refLifecycleRatingVotes"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionCertifications",
+      "path": "input.facts.certifications[]",
+      "fields": [
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refLifecycleCertCountry"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleCertValue"
+        },
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refLifecycleCertSource"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionAwards",
+      "path": "input.facts.awards[]",
+      "fields": [
+        {
+          "field": "award",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardName"
+        },
+        {
+          "field": "award_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardId"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refLifecycleAwardYear"
+        },
+        {
+          "field": "recipient",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardRecipient"
+        },
+        {
+          "field": "recipient_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardRecipientId"
+        },
+        {
+          "field": "given_to",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardGivenTo"
         }
       ]
     },
@@ -1128,6 +1215,36 @@
           "field": "ratings",
           "type": "object",
           "descKey": "settings.refLifecycleFactsRatings"
+        },
+        {
+          "field": "age_rating",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAgeRating"
+        },
+        {
+          "field": "certifications",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsCertifications"
+        },
+        {
+          "field": "certification_label",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsCertificationLabel"
+        },
+        {
+          "field": "certification_rank",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsCertificationRank"
+        },
+        {
+          "field": "award_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAwardCount"
+        },
+        {
+          "field": "awards",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAwards"
         },
         {
           "field": "play_count_total",
@@ -3111,6 +3228,162 @@
       ]
     },
     {
+      "titleKey": "settings.refLifecycleFactsAgeRating",
+      "path": "input.observations.age_rating",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAgeRatingValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsCertifications",
+      "path": "input.observations.certifications",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsCertificationsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsCertificationLabel",
+      "path": "input.observations.certification_label",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsCertificationLabelValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsCertificationRank",
+      "path": "input.observations.certification_rank",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsCertificationRankValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAwardCount",
+      "path": "input.observations.award_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAwardCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAwards",
+      "path": "input.observations.awards",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsAwardsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refLifecycleFactsPlayCountTotal",
       "path": "input.observations.play_count_total",
       "fields": [
@@ -3536,6 +3809,63 @@
           "field": "votes",
           "type": "number?",
           "descKey": "settings.refLifecycleRatingVotes"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObsCertifications",
+      "path": "input.observations.certifications.value[]",
+      "fields": [
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refLifecycleCertCountry"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleCertValue"
+        },
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refLifecycleCertSource"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObsAwards",
+      "path": "input.observations.awards.value[]",
+      "fields": [
+        {
+          "field": "award",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardName"
+        },
+        {
+          "field": "award_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardId"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refLifecycleAwardYear"
+        },
+        {
+          "field": "recipient",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardRecipient"
+        },
+        {
+          "field": "recipient_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardRecipientId"
+        },
+        {
+          "field": "given_to",
+          "type": "string",
+          "descKey": "settings.refLifecycleAwardGivenTo"
         }
       ]
     }

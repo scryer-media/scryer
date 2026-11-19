@@ -266,6 +266,26 @@ pub mod unknown_reason {
     /// one is enabled beside Jellyfin or Emby.
     pub const AUDIENCE_FAVORITES_UNSUPPORTED: &str = "audience_favorites_unsupported";
 
+    /// The title's content ratings or awards are not stored: it has not been
+    /// hydrated since Scryer began keeping them, or it was rematched and the
+    /// new match has not been hydrated yet. Nothing says it has none.
+    pub const METADATA_NOT_STORED: &str = "metadata_not_stored";
+
+    /// No stored content rating gives a minimum age. An *absence* reason.
+    pub const NO_AGE_RATING: &str = "no_age_rating";
+
+    /// The stored content ratings carry no certification. An *absence*
+    /// reason.
+    pub const NO_CERTIFICATIONS: &str = "no_certifications";
+
+    /// No stored content rating gives a US certification. An *absence*
+    /// reason.
+    pub const NO_US_CERTIFICATION: &str = "no_us_certification";
+
+    /// The US certification is not on Scryer's certification ladder, so it
+    /// has no rank. An *absence* reason.
+    pub const UNRANKABLE_CERTIFICATION: &str = "unrankable_certification";
+
     /// Every code above. A released code is part of the rule-authoring
     /// contract, so none may be renamed, reused or repurposed.
     pub const ALL: &[&str] = &[
@@ -316,6 +336,11 @@ pub mod unknown_reason {
         AUDIENCE_FAVORITES_NOT_READ,
         FAVORITES_MEMBER_NOT_READ,
         AUDIENCE_FAVORITES_UNSUPPORTED,
+        METADATA_NOT_STORED,
+        NO_AGE_RATING,
+        NO_CERTIFICATIONS,
+        NO_US_CERTIFICATION,
+        UNRANKABLE_CERTIFICATION,
     ];
 }
 
@@ -710,6 +735,12 @@ fn build_facts(
         genres: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         rating: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         ratings: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        age_rating: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        certifications: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        certification_label: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        certification_rank: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        award_count: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        awards: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         play_count_total: if matches!(title.facet, MediaFacet::Movie) {
             play_count_total_observation(watch, |play| {
                 play.kind == scryer_domain::MediaServerSignalKind::Movie

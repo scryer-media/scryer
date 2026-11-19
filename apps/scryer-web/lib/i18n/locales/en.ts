@@ -10234,6 +10234,51 @@ const en: LocaleDictionary = {
     "Rating summary; absent when no source rated the title, unknown with reason metadata_unreadable when the rating store could not be read",
   "settings.refLifecycleFactsRatingsValue":
     "One entry per external rating; unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refLifecycleFactsAgeRating":
+    "Minimum age from the title's stored content ratings",
+  "settings.refLifecycleFactsCertifications":
+    "Every certification in the title's stored content ratings; see input.facts.certifications[] below",
+  "settings.refLifecycleFactsCertificationLabel":
+    "US certification label (for example G, PG, PG-13, R)",
+  "settings.refLifecycleFactsCertificationRank":
+    "That label as a number, lowest first, so rules can compare rather than list labels",
+  "settings.refLifecycleFactsAwardCount":
+    "How many awards the title won, from its stored metadata",
+  "settings.refLifecycleFactsAwards":
+    "Every award the title won; see input.facts.awards[] below",
+  "settings.refLifecycleFactsAgeRatingValue":
+    "Minimum age the stored content ratings give, the US rating first; absent with reason no_age_rating when none gives one, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsCertificationsValue":
+    "One entry per certification; absent with reason no_certifications when there are none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsCertificationLabelValue":
+    "The US certification label; absent with reason no_us_certification when there is none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsCertificationRankValue":
+    "That label as a number, lowest first; absent with reason no_us_certification when there is no US label and unrankable_certification when Scryer does not rank it, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsAwardCountValue":
+    "Number of awards won; a known zero when it won none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsAwardsValue":
+    "One entry per award won; a known empty list when it won none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleSectionCertifications":
+    "— One entry per certification in input.facts.certifications",
+  "settings.refLifecycleSectionObsCertifications":
+    "— One entry per certification in input.observations.certifications.value",
+  "settings.refLifecycleSectionAwards":
+    "— One entry per award won in input.facts.awards",
+  "settings.refLifecycleSectionObsAwards":
+    "— One entry per award won in input.observations.awards.value",
+  "settings.refLifecycleCertCountry": "Country the certification was issued in",
+  "settings.refLifecycleCertValue":
+    "The certification itself (for example PG-13)",
+  "settings.refLifecycleCertSource": "Where the certification came from",
+  "settings.refLifecycleAwardName": "Name of the award",
+  "settings.refLifecycleAwardId":
+    "Wikidata ID of the award (for example Q102427)",
+  "settings.refLifecycleAwardYear": "Year the award was won, when known",
+  "settings.refLifecycleAwardRecipient":
+    "Who won it: the title itself, or the person who won it for the title",
+  "settings.refLifecycleAwardRecipientId": "Wikidata ID of the recipient",
+  "settings.refLifecycleAwardGivenTo":
+    "work when the title won it, person when a person won it for the title",
   "settings.refLifecycleFactsPlayCountTotalValue":
     "Plays by every account on every enabled media server, linked to a Scryer user or not, summed. Unknown with reason audience_not_read until every account has been read recently, and with the usual watch-fact reasons whenever watch facts are unknown.",
   "settings.refLifecycleFactsWatchlistedByUserIdsValue":
@@ -10924,7 +10969,7 @@ const en: LocaleDictionary = {
   "settings.refReqSectionObsCertifications":
     "— One entry per certification in input.observations.certifications.value",
   "settings.refReqFactsAgeRatingValue":
-    "Minimum age implied by the certification; absent with reason no_certification when the metadata carries none",
+    "Minimum age implied by the certification; absent with reason no_age_rating when the metadata gives none",
   "settings.refReqFactsCertificationsValue":
     "One entry per certification; see input.observations.certifications.value[] below",
   "settings.refReqFactsCertificationLabelValue":
@@ -10962,6 +11007,22 @@ const en: LocaleDictionary = {
     "Whole days since release or first airing",
   "settings.refReqFactsAwardCountValue":
     "Number of awards recorded; a confirmed zero when there are none",
+  "settings.refReqFactsAwards":
+    "Every award the title won; see input.facts.awards[] below",
+  "settings.refReqFactsAwardsValue":
+    "One entry per award won; a known empty list when it won none. See input.observations.awards.value[] below",
+  "settings.refReqSectionAwards":
+    "— One entry per award won in input.facts.awards",
+  "settings.refReqSectionObsAwards":
+    "— One entry per award won in input.observations.awards.value",
+  "settings.refReqAwardName": "Name of the award",
+  "settings.refReqAwardId": "Wikidata ID of the award (for example Q102427)",
+  "settings.refReqAwardYear": "Year the award was won, when known",
+  "settings.refReqAwardRecipient":
+    "Who won it: the title itself, or the person who won it for the title",
+  "settings.refReqAwardRecipientId": "Wikidata ID of the recipient",
+  "settings.refReqAwardGivenTo":
+    "work when the title won it, person when a person won it for the title",
   "settings.refReqFactsQualityProfileTiersValue":
     "Tier names in the chosen profile, in profile order",
   "settings.refReqFactsQualityProfileMaxResolutionValue":

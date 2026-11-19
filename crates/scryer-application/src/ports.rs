@@ -2776,15 +2776,25 @@ pub trait TitleRepository: Send + Sync {
         Ok(ratings)
     }
     /// The stored content ratings of each title, in SMG's order, for a batch
-    /// of titles. A title with none has an empty list.
+    /// of titles.
+    ///
+    /// `None` means the title's content ratings have not been stored: it was
+    /// never hydrated, was rematched since, or was last hydrated before they
+    /// were stored. `Some(vec![])` means hydration stored that it has none.
     async fn list_title_content_ratings(
         &self,
         title_ids: &[String],
-    ) -> AppResult<Vec<(String, Vec<crate::types::ContentRating>)>> {
-        Ok(title_ids
-            .iter()
-            .map(|id| (id.clone(), Vec::new()))
-            .collect())
+    ) -> AppResult<Vec<(String, Option<Vec<crate::types::ContentRating>>)>> {
+        Ok(title_ids.iter().map(|id| (id.clone(), None)).collect())
+    }
+    /// The stored awards of each title, in SMG's order, for a batch of
+    /// titles, under the same `None` / `Some` contract as
+    /// [`Self::list_title_content_ratings`].
+    async fn list_title_awards(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Option<Vec<crate::types::TitleAward>>)>> {
+        Ok(title_ids.iter().map(|id| (id.clone(), None)).collect())
     }
     /// The stored genre names of each title, in tag order, for a batch of
     /// titles. A title with no stored genre has an empty list. The default

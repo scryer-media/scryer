@@ -110,7 +110,7 @@ fn full_snapshot() -> MediaRequestMetadataSnapshot {
             year: Some(2023),
             recipient_qid: "Q200".to_string(),
             recipient_label: "Fixture Subject".to_string(),
-            claim_side: "nominee".to_string(),
+            claim_side: "work".to_string(),
         }],
         is_adult: false,
         series_shape: None,
@@ -243,7 +243,7 @@ fn reason_of(document: &serde_json::Value, fact: &str) -> String {
 
 /// Every fact the contract declares, so a fact added without a builder entry
 /// fails here rather than silently reading unknown forever.
-const EVERY_FACT: [&str; 58] = [
+const EVERY_FACT: [&str; 59] = [
     "age_rating",
     "certifications",
     "certification_label",
@@ -268,6 +268,7 @@ const EVERY_FACT: [&str; 58] = [
     "first_aired",
     "release_age_days",
     "award_count",
+    "awards",
     "quality_profile_tiers",
     "quality_profile_max_resolution",
     "quality_profile_allows_upgrades",
@@ -338,6 +339,17 @@ fn a_full_snapshot_answers_every_group() {
     assert_eq!(document["facts"]["themes"], serde_json::json!(["Heist"]));
     assert_eq!(document["facts"]["is_adult"], false);
     assert_eq!(document["facts"]["award_count"], 1);
+    assert_eq!(
+        document["facts"]["awards"],
+        serde_json::json!([{
+            "award": "Fixture Prize",
+            "award_id": "Q100",
+            "year": 2023,
+            "recipient": "Fixture Subject",
+            "recipient_id": "Q200",
+            "given_to": "work",
+        }])
+    );
     assert_eq!(document["facts"]["release_age_days"], 10);
     assert_eq!(document["facts"]["days_since_last_request"], 4);
     assert_eq!(document["facts"]["quality_profile_max_resolution"], 1080);
