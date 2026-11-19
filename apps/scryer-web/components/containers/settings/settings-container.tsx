@@ -475,6 +475,12 @@ export const SettingsContainer = memo(function SettingsContainer({
       visible: canManageSystemSettings,
     },
     {
+      section: "acquisition" as const,
+      label: t("settings.acquisition"),
+      icon: Rss,
+      visible: canManageSystemSettings,
+    },
+    {
       section: "qualityProfiles" as const,
       label: t("settings.qualityProfiles"),
       icon: SlidersHorizontal,
@@ -513,8 +519,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   const usesAutomationHeader =
     isRulesSection ||
     settingsSection === "subtitles" ||
-    settingsSection === "post-processing" ||
-    settingsSection === "acquisition";
+    settingsSection === "post-processing";
   const usesIntegrationsHeader =
     settingsSection === "downloadClients" ||
     settingsSection === "indexers" ||
@@ -669,6 +674,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                     !usesSystemHeader &&
                     settingsSection !== "profile" &&
                     settingsSection !== "general" &&
+                    settingsSection !== "acquisition" &&
                     settingsSection !== "qualityProfiles" &&
                     settingsSection !== "delayProfiles" &&
                     settingsSection !== "titleTags" &&

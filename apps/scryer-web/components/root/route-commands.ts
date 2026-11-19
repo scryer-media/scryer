@@ -580,6 +580,22 @@ export function buildRouteCommands({
             onSelect: buildNavigate(onNavigate, "settings", "general"),
           } satisfies RouteCommand,
           {
+            id: "settings-acquisition",
+            label: `${settingsGroupLabel} / ${t("settings.acquisition")}`,
+            description: t("settings.acquisition"),
+            groupLabel: settingsGroupLabel,
+            keywords: [
+              "settings",
+              "acquisition",
+              "rss",
+              "backfill",
+              "search",
+              "pacing",
+            ],
+            icon: Settings,
+            onSelect: buildNavigate(onNavigate, "settings", "acquisition"),
+          } satisfies RouteCommand,
+          {
             id: "settings-backups",
             label: `${systemGroupLabel} / ${t("settings.backups")}`,
             description: t("settings.backups"),

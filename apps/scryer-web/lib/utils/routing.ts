@@ -44,7 +44,6 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
 const AUTOMATION_SETTINGS_SECTION_PATH: Partial<
   Record<SettingsSection, string>
 > = {
-  acquisition: "acquisition",
   subtitles: "subtitles",
   "post-processing": "post-processing",
 };
@@ -483,6 +482,8 @@ const MEDIA_SETTINGS_SECTIONS = new Set<ContentSettingsSection>([
   "routing",
 ]);
 const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
+  // Acquisition lived under Automation before it was listed in Settings; the
+  // old path redirects so existing links and the e2e harness keep reaching it.
   acquisition: "acquisition",
   subtitles: "subtitles",
   "post-processing": "post-processing",
@@ -523,6 +524,7 @@ const INTEGRATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
 const LOCAL_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   profile: "profile",
   general: "general",
+  acquisition: "acquisition",
   "quality-profiles": "qualityProfiles",
   qualityprofiles: "qualityProfiles",
   "delay-profiles": "delayProfiles",
