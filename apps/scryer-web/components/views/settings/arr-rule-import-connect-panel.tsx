@@ -100,15 +100,15 @@ function ReportItem({
         <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
           {diagnostics.map((diagnostic, diagnosticIndex) => (
             <li key={diagnosticIndex}>
-              {diagnostic.location
-                ? t("settings.arrImportDiagnosticAt", {
+              {diagnostic.specificationIndex !== null
+                ? t("settings.arrImportDiagnosticAtCondition", {
                     message: diagnostic.message,
-                    location: diagnostic.location,
+                    number: diagnostic.specificationIndex + 1,
                   })
-                : diagnostic.specificationIndex !== null
-                  ? t("settings.arrImportDiagnosticAtCondition", {
+                : diagnostic.location
+                  ? t("settings.arrImportDiagnosticAt", {
                       message: diagnostic.message,
-                      number: diagnostic.specificationIndex + 1,
+                      location: diagnostic.location,
                     })
                   : diagnostic.message}
             </li>
@@ -151,6 +151,21 @@ export function ArrRuleImportConnectPanel({
   const progress = running ? ruleImportProgress(run?.progressJson) : null;
   const counts = report?.counts ?? progress?.counts ?? null;
 
+  // A run that stopped before saving anything keeps the form, so the
+  // operator can correct the URL or key and start again.
+  const runFailure = report?.reason
+    ? ruleImportReasonMessage(
+        report.reason,
+        report.message,
+        t("settings.arrImportRunFailed"),
+        t,
+      )
+    : null;
+  // An interrupted save still has saved rules to report.
+  const finished =
+    Boolean(report) && (!runFailure || Boolean(report?.items.length));
+  const failure = error ?? runFailure;
+
   const begin = React.useCallback(() => {
     void start({
       source: source === "radarr" ? "RADARR" : "SONARR",
@@ -162,50 +177,54 @@ export function ArrRuleImportConnectPanel({
   return (
     <>
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          {t("settings.arrImportConnectDescription")}
-        </p>
-        <label className="block">
-          <Label
-            className="mb-2 block"
-            htmlFor="settings-rules-arr-connect-url"
-          >
-            {t("settings.arrImportBaseUrl")}
-          </Label>
-          <Input
-            id="settings-rules-arr-connect-url"
-            type="url"
-            value={baseUrl}
-            disabled={busy}
-            placeholder={
-              source === "radarr"
-                ? "http://localhost:7878"
-                : "http://localhost:8989"
-            }
-            onChange={(event) => setBaseUrl(event.target.value)}
-          />
-        </label>
-        <label className="block">
-          <Label
-            className="mb-2 block"
-            htmlFor="settings-rules-arr-connect-api-key"
-          >
-            {t("settings.arrImportApiKey")}
-          </Label>
-          <Input
-            id="settings-rules-arr-connect-api-key"
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            disabled={busy}
-            onChange={(event) => setApiKey(event.target.value)}
-          />
-        </label>
+        {finished ? null : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {t("settings.arrImportConnectDescription")}
+            </p>
+            <label className="block">
+              <Label
+                className="mb-2 block"
+                htmlFor="settings-rules-arr-connect-url"
+              >
+                {t("settings.arrImportBaseUrl")}
+              </Label>
+              <Input
+                id="settings-rules-arr-connect-url"
+                type="url"
+                value={baseUrl}
+                disabled={busy}
+                placeholder={
+                  source === "radarr"
+                    ? "http://localhost:7878"
+                    : "http://localhost:8989"
+                }
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              <Label
+                className="mb-2 block"
+                htmlFor="settings-rules-arr-connect-api-key"
+              >
+                {t("settings.arrImportApiKey")}
+              </Label>
+              <Input
+                id="settings-rules-arr-connect-api-key"
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                disabled={busy}
+                onChange={(event) => setApiKey(event.target.value)}
+              />
+            </label>
+          </>
+        )}
 
-        {error ? (
+        {failure ? (
           <div className="flex gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div className="whitespace-pre-wrap">{error}</div>
+            <div className="whitespace-pre-wrap">{failure}</div>
           </div>
         ) : null}
 
@@ -237,21 +256,11 @@ export function ArrRuleImportConnectPanel({
           </p>
         ) : null}
 
-        {report ? (
+        {report && finished ? (
           <div
             id="settings-rules-arr-connect-report"
             className="space-y-3 rounded border border-border p-3"
           >
-            {report.reason ? (
-              <p className="text-sm text-[var(--scry-danger-text)]">
-                {ruleImportReasonMessage(
-                  report.reason,
-                  report.message,
-                  t("settings.arrImportRunFailed"),
-                  t,
-                )}
-              </p>
-            ) : null}
             {counts ? (
               <p className="text-sm font-medium">
                 {t("settings.arrImportCounts", {
@@ -276,9 +285,9 @@ export function ArrRuleImportConnectPanel({
 
       <DialogFooter>
         <Button type="button" variant="secondary" onClick={onClose}>
-          {report || run ? t("label.close") : t("label.cancel")}
+          {run ? t("label.close") : t("label.cancel")}
         </Button>
-        {report || (run && !busy) ? (
+        {finished || (run && !report && !busy) ? (
           <Button
             id="settings-rules-arr-connect-again"
             type="button"

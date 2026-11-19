@@ -85,8 +85,13 @@ export default function ArrCustomFormatImportDialog({
   );
   // The connected run and its report belong to one source; the selector stays
   // locked while they are shown, and a switch from the paste tab clears them.
+  // A run that stopped before saving anything leaves nothing to protect.
+  const connectRunSavedNothing =
+    Boolean(connectImport.report?.reason) &&
+    !connectImport.report?.items.length;
   const sourceLocked =
-    tab === "connect" && (connectImport.run !== null || connectBusy);
+    tab === "connect" &&
+    (connectBusy || (connectImport.run !== null && !connectRunSavedNothing));
   const { reset: resetConnectImport } = connectImport;
   const [json, setJson] = React.useState("");
   const [inspection, setInspection] = React.useState<Review | null>(null);
@@ -328,7 +333,7 @@ export default function ArrCustomFormatImportDialog({
                 {t("settings.arrImportTabPaste")}
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="connect">
+            <TabsContent value="connect" className="space-y-4">
               <ArrRuleImportConnectPanel
                 source={source}
                 controller={connectImport}
