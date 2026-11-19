@@ -58,6 +58,7 @@ type SettingsSecuritySectionProps = {
   onSkipLocalIpsChange: (enabled: boolean) => void;
   onApiKeysRestrictionChange: (enabled: boolean) => void;
   canManageApiKeysRestriction: boolean;
+  onMcpEnabledChange: (enabled: boolean) => void;
   onMfaConfigStepUpChange: (enabled: boolean) => void;
   onMfaPasswordLoginChange: (enabled: boolean) => void;
   onTotpJellyfinLoginChange: (enabled: boolean) => void;
@@ -99,6 +100,7 @@ export function SettingsSecuritySection({
   onSkipLocalIpsChange,
   onApiKeysRestrictionChange,
   canManageApiKeysRestriction,
+  onMcpEnabledChange,
   onMfaConfigStepUpChange,
   onMfaPasswordLoginChange,
   onTotpJellyfinLoginChange,
@@ -248,6 +250,23 @@ export function SettingsSecuritySection({
                           "uiAttr.Restrict_API_keys_to_system_settings_users",
                         )}
                         text="Only users with Manage System Settings can create or use API keys. Existing keys are preserved and resume if permission is restored or this setting is disabled."
+                      />
+                    }
+                    className="w-full items-center py-3"
+                    checkboxClassName="mt-0"
+                  />
+                  <CheckboxField
+                    id="security-mcp-enabled"
+                    checked={settings.mcpEnabled}
+                    disabled={busy || !canManageApiKeysRestriction}
+                    onCheckedChange={(checked) =>
+                      onMcpEnabledChange(checked === true)
+                    }
+                    label={t("settings.securityMcpEnabled")}
+                    labelAccessory={
+                      <InfoHelp
+                        ariaLabel={t("settings.securityMcpEnabled")}
+                        text={t("settings.securityMcpEnabledHelp")}
                       />
                     }
                     className="w-full items-center py-3"

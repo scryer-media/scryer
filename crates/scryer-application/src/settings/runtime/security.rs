@@ -46,6 +46,8 @@ pub struct SecuritySettings {
     pub password_min_length: i32,
     pub skip_login_for_local_ips: bool,
     pub api_keys_restrict_to_system_settings_users: bool,
+    /// Whether the built-in MCP endpoint answers.
+    pub mcp_enabled: bool,
     pub mfa_require_config_step_up: bool,
     pub mfa_require_password_login: bool,
     pub totp_require_jellyfin_login: bool,
@@ -60,6 +62,8 @@ pub struct UpdateSecuritySettings {
     pub skip_login_for_local_ips: bool,
     /// When absent, preserve the current value without writing this protected setting.
     pub api_keys_restrict_to_system_settings_users: Option<bool>,
+    /// When absent, preserve the current value without writing this protected setting.
+    pub mcp_enabled: Option<bool>,
     pub mfa_require_config_step_up: bool,
     pub mfa_require_password_login: bool,
     pub totp_require_jellyfin_login: bool,
@@ -364,6 +368,7 @@ impl AppUseCase {
             .read_setting_bool_value(API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY, None)
             .await?
             .unwrap_or(false);
+        let mcp_enabled = self.mcp_enabled().await?;
         let mfa_require_config_step_up = self
             .load_mfa_setting_with_legacy_migration(
                 MFA_REQUIRE_CONFIG_STEP_UP_KEY,
@@ -391,11 +396,21 @@ impl AppUseCase {
             password_min_length,
             skip_login_for_local_ips,
             api_keys_restrict_to_system_settings_users,
+            mcp_enabled,
             mfa_require_config_step_up,
             mfa_require_password_login,
             totp_require_jellyfin_login,
             totp_require_emby_login,
         })
+    }
+
+    /// Whether the built-in MCP endpoint answers. On unless an operator
+    /// turned it off.
+    pub async fn mcp_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(MCP_ENABLED_KEY, None)
+            .await?
+            .unwrap_or(true))
     }
 }
 
@@ -501,7 +516,7 @@ impl AppUseCase {
     ) -> AppResult<SecuritySettings> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
             .await?;
-        if input.api_keys_restrict_to_system_settings_users.is_some() {
+        if input.api_keys_restrict_to_system_settings_users.is_some() || input.mcp_enabled.is_some() {
             self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
                 .await?;
         }
@@ -516,6 +531,7 @@ impl AppUseCase {
         let api_keys_restrict_to_system_settings_users = input
             .api_keys_restrict_to_system_settings_users
             .unwrap_or(current.api_keys_restrict_to_system_settings_users);
+        let mcp_enabled = input.mcp_enabled.unwrap_or(current.mcp_enabled);
         let totp_require_emby_login = input
             .totp_require_emby_login
             .unwrap_or(current.totp_require_emby_login);
@@ -600,6 +616,10 @@ impl AppUseCase {
             )
             .await?;
         }
+        if let Some(value) = input.mcp_enabled {
+            self.upsert_system_setting_json(MCP_ENABLED_KEY, &value, Some(actor.id.clone()))
+                .await?;
+        }
         self.upsert_system_setting_json(
             MFA_REQUIRE_CONFIG_STEP_UP_KEY,
             &input.mfa_require_config_step_up,
@@ -643,6 +663,9 @@ impl AppUseCase {
         if input.api_keys_restrict_to_system_settings_users.is_some() {
             saved_keys.push(API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY.to_string());
         }
+        if input.mcp_enabled.is_some() {
+            saved_keys.push(MCP_ENABLED_KEY.to_string());
+        }
         if input.totp_require_emby_login.is_some() {
             saved_keys.push(TOTP_REQUIRE_EMBY_LOGIN_KEY.to_string());
         }
@@ -658,6 +681,7 @@ impl AppUseCase {
             password_min_length: input.password_min_length,
             skip_login_for_local_ips: input.skip_login_for_local_ips,
             api_keys_restrict_to_system_settings_users,
+            mcp_enabled,
             mfa_require_config_step_up: input.mfa_require_config_step_up,
             mfa_require_password_login: input.mfa_require_password_login,
             totp_require_jellyfin_login: input.totp_require_jellyfin_login,

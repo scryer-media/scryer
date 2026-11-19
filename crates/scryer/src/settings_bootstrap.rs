@@ -509,6 +509,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SECURITY,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::MCP_ENABLED_KEY,
+            data_type: "boolean",
+            default_value_json: "true",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SECURITY,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: MFA_REQUIRE_CONFIG_STEP_UP_KEY,
             data_type: "boolean",
             default_value_json: "false",

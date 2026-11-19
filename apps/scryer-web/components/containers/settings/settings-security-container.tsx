@@ -29,6 +29,7 @@ const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   passwordMinLength: MIN_PASSWORD_LENGTH,
   skipLoginForLocalIps: false,
   apiKeysRestrictToSystemSettingsUsers: false,
+  mcpEnabled: true,
   mfaRequireConfigStepUp: false,
   mfaRequirePasswordLogin: false,
   mfaRequireJellyfinLogin: false,
@@ -173,6 +174,7 @@ export function SettingsSecurityContainer() {
       mfaRequireEmbyLogin: boolean = settingsRef.current.mfaRequireEmbyLogin,
       apiKeysRestrictToSystemSettingsUsers?: boolean,
       sessionDurationDays?: number,
+      mcpEnabled?: boolean,
     ) => {
       const { data, error } = await client
         .mutation(updateSecuritySettingsMutation, {
@@ -190,6 +192,7 @@ export function SettingsSecurityContainer() {
             ...(apiKeysRestrictToSystemSettingsUsers === undefined
               ? {}
               : { apiKeysRestrictToSystemSettingsUsers }),
+            ...(mcpEnabled === undefined ? {} : { mcpEnabled }),
           },
         })
         .toPromise();
@@ -714,6 +717,56 @@ export function SettingsSecurityContainer() {
     ],
   );
 
+  const handleMcpEnabledChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (
+        confirmBusy ||
+        saveBusy ||
+        enabled === settings.mcpEnabled
+      ) {
+        return;
+      }
+
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+          settings.mfaRequireEmbyLogin,
+          undefined,
+          undefined,
+          enabled,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.formLoginEnabled,
+      settings.mcpEnabled,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequireEmbyLogin,
+      settings.mfaRequireJellyfinLogin,
+      settings.mfaRequirePasswordLogin,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      t,
+    ],
+  );
+
   const handleMfaPasswordLoginChange = React.useCallback(
     async (enabled: boolean) => {
       if (
@@ -941,6 +994,7 @@ export function SettingsSecurityContainer() {
       onSkipLocalIpsChange={handleSkipLocalIpsChange}
       onApiKeysRestrictionChange={handleApiKeysRestrictionChange}
       canManageApiKeysRestriction={canManageOAuthApplications}
+      onMcpEnabledChange={handleMcpEnabledChange}
       onMfaConfigStepUpChange={handleMfaConfigStepUpChange}
       onMfaPasswordLoginChange={handleMfaPasswordLoginChange}
       onTotpJellyfinLoginChange={handleTotpJellyfinLoginChange}

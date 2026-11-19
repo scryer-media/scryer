@@ -206,13 +206,13 @@ pub(crate) use catalog::release_search as app_usecase_discovery;
 pub(crate) use events::activity;
 pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
-pub(crate) use import::archive_extractor;
-pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub use import::archive_extraction::{
     ARCHIVE_EXTRACTION_DIR_NAME, ArchiveExtractionRecord, ArchiveExtractionRepository,
     ArchiveExtractionState, ArchiveScratchSummary, InMemoryArchiveExtractionRepository,
     UnsettledArchiveExtraction, sweep_archive_workspaces_at_startup,
 };
+pub(crate) use import::archive_extractor;
+pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
@@ -828,8 +828,8 @@ pub use settings::keys::{
     IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CATEGORY_SETTING_KEY,
     LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY,
     LIFECYCLE_GATE_EVALUATION_KEY, LIFECYCLE_GATE_RESULT_DISPLAY_KEY,
-    LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY, METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY,
-    MFA_REQUIRE_PASSWORD_LOGIN_KEY, MINIMUM_SEEDERS_FLOOR_DEFAULT,
+    LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY, MCP_ENABLED_KEY, METADATA_LANGUAGE_KEY,
+    MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY, MINIMUM_SEEDERS_FLOOR_DEFAULT,
     MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON, MINIMUM_SEEDERS_FLOOR_SETTING_KEY,
     MOVIE_AVAILABILITY_DELAY_DAYS_KEY, MOVIE_DEFAULT_AVAILABILITY_KEY, MOVIE_RELEASE_MARKET_KEY,
     MOVIES_PATH_KEY, MOVIES_ROOT_FOLDERS_KEY, NFO_WRITE_ON_IMPORT_ANIME_KEY,

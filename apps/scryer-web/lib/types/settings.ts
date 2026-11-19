@@ -249,6 +249,7 @@ export type SecuritySettings = {
   passwordMinLength: number;
   skipLoginForLocalIps: boolean;
   apiKeysRestrictToSystemSettingsUsers: boolean;
+  mcpEnabled: boolean;
   mfaRequireConfigStepUp: boolean;
   mfaRequirePasswordLogin: boolean;
   mfaRequireJellyfinLogin: boolean;
