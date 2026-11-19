@@ -3614,6 +3614,27 @@ pub trait LibraryRepository: Send + Sync {
     /// title counts toward a root of its own library only. Roots with no
     /// titles are absent.
     async fn root_title_counts(&self) -> AppResult<std::collections::HashMap<String, i64>>;
+    /// Whether the background full-hash backfill reads each of these
+    /// libraries' files, keyed by library id. A library absent from the map
+    /// does not exist. Stores without the setting keep the job on.
+    async fn full_hash_backfill_enabled(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, bool>> {
+        Ok(library_ids.iter().map(|id| (id.clone(), true)).collect())
+    }
+    /// Turn the background full-hash backfill on or off for one library.
+    /// `false` when no such library exists.
+    async fn set_full_hash_backfill_enabled(
+        &self,
+        library_id: &str,
+        enabled: bool,
+    ) -> AppResult<bool> {
+        let _ = (library_id, enabled);
+        Err(AppError::Repository(
+            "this library store cannot change the full-hash backfill setting".to_string(),
+        ))
+    }
 }
 
 #[derive(Clone, Debug)]

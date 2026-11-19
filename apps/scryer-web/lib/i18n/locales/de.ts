@@ -2005,6 +2005,11 @@ const de: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "Als Füllmaterial eingestufte Filme in die Download-Warteschlange aufnehmen",
   "settings.sidecarFilesTitle": "Sidecar-Dateien",
+  "settings.libraryFullHashBackfillTitle": "Hashing im Hintergrund",
+  "settings.libraryFullHashBackfillLabel": "Dateien nachts hashen",
+  "settings.libraryFullHashBackfillDescription": "Liest jede Datei dieser Bibliothek einmal über Nacht, um ihren vollständigen Inhalts-Hash zu speichern. Schalte dies für Bibliotheken auf Festplatten aus, die du im Ruhezustand hältst; der Hash einer Datei wird dann nur gelesen, wenn ein Verschieben, Import oder eine Prüfung ihn braucht.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Nächtliches Hashing für diese Bibliothek eingeschaltet.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Nächtliches Hashing für diese Bibliothek ausgeschaltet.",
   "settings.nfoWriteOnImportLabel": "NFO beim Import schreiben",
   "settings.nfoWriteOnImportDescription":
     "Kodi/Jellyfin/Emby-kompatible .nfo-Metadaten-Dateien neben importierten Medien schreiben; eine vorhandene .nfo-Datei wird nie überschrieben",

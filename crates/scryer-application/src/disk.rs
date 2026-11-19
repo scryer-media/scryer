@@ -11,6 +11,9 @@ mod hash_store;
 pub mod placement;
 
 #[cfg(test)]
+pub(crate) use hash_store::MediaFileHashStore;
+
+#[cfg(test)]
 pub(crate) use scryer_disk::open_cache_bypassed;
 pub use scryer_disk::{
     Access, AsideRemoval, CannotLink, Disk, DiskError, Done, Doubt, Drift, EntryAlias, EntryKind,

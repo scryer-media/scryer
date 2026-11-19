@@ -3035,12 +3035,33 @@ impl MediaFileRepository for MediaFileStore {
         // `full_blake3 IS NULL` is exactly migration 0205's partial index
         // (`idx_media_files_full_hash_missing`), and ordering by id keeps the
         // cursor a single opaque value that survives a restart.
+        //
+        // A library with the backfill turned off is left out here, so the job
+        // never learns of its files and never touches its disks. Its title
+        // check is a primary-key lookup per queued row. A title without a
+        // library belongs to its facet's default library, as everywhere else.
         let mut sql = String::from(
             "SELECT mf.id, mf.title_id, mf.file_path, mf.size_bytes
                FROM media_files mf
-              WHERE mf.full_blake3 IS NULL",
+              WHERE mf.full_blake3 IS NULL
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM titles t
+                      JOIN libraries l
+                        ON l.id = COALESCE(
+                               t.library_id,
+                               CASE t.facet
+                                   WHEN 'movie' THEN 'movie_default_library'
+                                   WHEN 'series' THEN 'series_default_library'
+                                   WHEN 'anime' THEN 'anime_default_library'
+                                   ELSE 'movie_default_library'
+                               END
+                           )
+                     WHERE t.id = mf.title_id
+                       AND l.full_hash_backfill_enabled = {}
+                )",
         );
-        let mut args = Vec::new();
+        let mut args = vec![SqlArg::Bool(false)];
         if let Some(after_id) = after_id {
             sql.push_str(" AND mf.id > {}");
             args.push(SqlArg::Text(after_id.to_string()));
@@ -9864,5 +9885,123 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&shared[0], &shared[1]));
         assert!(std::sync::Arc::ptr_eq(&shared[0], &shared[2]));
         assert_eq!(shared[0].dovi_profile, Some(8));
+    }
+
+    /// A library with the full-hash backfill off contributes nothing to the
+    /// queue, including titles with no library of their own, which belong to
+    /// their facet's default library.
+    #[tokio::test]
+    async fn backfill_queue_omits_files_in_libraries_with_the_backfill_off() {
+        use crate::media::libraries::store::LibraryStore;
+        use scryer_application::LibraryRepository;
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_backfill_toggle_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        sqlx::query(
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ('spun-down', 'series', 'Archive', 'archive', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(services.pool())
+        .await
+        .unwrap();
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+        let libraries = LibraryStore::new(services.datastore());
+
+        let in_default = make_test_series_title("title-in-default");
+        let mut in_archive = make_test_series_title("title-in-archive");
+        in_archive.library_id = "spun-down".to_string();
+        let without_library = make_test_series_title("title-without-library");
+        for title in [&in_default, &in_archive, &without_library] {
+            titles.create(title.clone()).await.expect("insert title");
+        }
+        sqlx::query("UPDATE titles SET library_id = NULL WHERE id = 'title-without-library'")
+            .execute(services.pool())
+            .await
+            .unwrap();
+        for title in [&in_default, &in_archive, &without_library] {
+            media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/library/{}/file.mkv", title.id),
+                    size_bytes: 100,
+                    role: MediaFileRole::Primary,
+                    ..Default::default()
+                })
+                .await
+                .expect("insert media file");
+        }
+        let queued_titles = || async {
+            let mut queued: Vec<String> = media_files
+                .list_media_files_missing_full_hash(None, 10)
+                .await
+                .expect("read queue")
+                .into_iter()
+                .map(|row| row.title_id)
+                .collect();
+            queued.sort();
+            queued
+        };
+
+        // Every library starts with the job on, existing ones included.
+        let ids = vec![
+            "series_default_library".to_string(),
+            "spun-down".to_string(),
+        ];
+        let flags = libraries.full_hash_backfill_enabled(&ids).await.unwrap();
+        assert_eq!(flags.get("series_default_library"), Some(&true));
+        assert_eq!(flags.get("spun-down"), Some(&true));
+        assert_eq!(
+            queued_titles().await,
+            vec![
+                "title-in-archive",
+                "title-in-default",
+                "title-without-library"
+            ]
+        );
+
+        assert!(
+            libraries
+                .set_full_hash_backfill_enabled("spun-down", false)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            queued_titles().await,
+            vec!["title-in-default", "title-without-library"]
+        );
+
+        // A title with no library falls under its facet's default library.
+        assert!(
+            libraries
+                .set_full_hash_backfill_enabled("series_default_library", false)
+                .await
+                .unwrap()
+        );
+        assert!(queued_titles().await.is_empty());
+        let flags = libraries.full_hash_backfill_enabled(&ids).await.unwrap();
+        assert_eq!(flags.get("series_default_library"), Some(&false));
+        assert_eq!(flags.get("spun-down"), Some(&false));
+
+        // Turning it back on returns the library's files to the queue, and an
+        // unknown library is reported rather than silently accepted.
+        assert!(
+            libraries
+                .set_full_hash_backfill_enabled("spun-down", true)
+                .await
+                .unwrap()
+        );
+        assert_eq!(queued_titles().await, vec!["title-in-archive"]);
+        assert!(
+            !libraries
+                .set_full_hash_backfill_enabled("no-such-library", false)
+                .await
+                .unwrap()
+        );
     }
 }

@@ -760,6 +760,68 @@ impl AppUseCase {
         self.services.catalog.libraries.root_title_counts().await
     }
 
+    /// Whether the background full-hash backfill reads each library's files,
+    /// keyed by library id. Like [`Self::library_root_title_counts`], callers
+    /// pass libraries they already resolved for the actor.
+    pub async fn library_full_hash_backfill_enabled(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<HashMap<String, bool>> {
+        self.services
+            .catalog
+            .libraries
+            .full_hash_backfill_enabled(library_ids)
+            .await
+    }
+
+    /// Turn the background full-hash backfill on or off for one library.
+    /// Off, the job never reads that library's files; anything that needs a
+    /// file's full hash reads that one file when it needs it. A run already in
+    /// progress drops the page it holds before its next file.
+    pub async fn set_library_full_hash_backfill(
+        &self,
+        actor: &User,
+        library_id: &str,
+        enabled: bool,
+    ) -> AppResult<Library> {
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
+        self.require_library_management_permission(actor, &library.id)
+            .await?;
+        if !self
+            .services
+            .catalog
+            .libraries
+            .set_full_hash_backfill_enabled(&library.id, enabled)
+            .await?
+        {
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                format!("library {library_id}"),
+            ));
+        }
+        self.runtime
+            .jobs
+            .full_hash_library_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        tracing::info!(
+            library_id = %library.id,
+            enabled,
+            "library full-hash backfill setting changed"
+        );
+        Ok(library)
+    }
+
     pub async fn external_import_library(
         &self,
         actor: &User,

@@ -1132,3 +1132,192 @@ async fn a_scan_never_computes_a_full_hash() {
     // compute — and did.
     assert!(files[0].source_signature_value.is_some());
 }
+
+/// Writes one file per id under `dir` for `title_id` and seeds its row.
+async fn seed_title_files(
+    media_files: &Arc<MockMediaFileRepo>,
+    dir: &Path,
+    title_id: &str,
+    ids: &[&str],
+) {
+    for id in ids {
+        let path = dir.join(format!("{id}.mkv"));
+        std::fs::write(&path, format!("contents of {id}").as_bytes()).expect("write media file");
+        media_files
+            .store
+            .lock()
+            .await
+            .push(seed_row(id, &path, title_id));
+    }
+}
+
+/// A library with the backfill off is never visited: its files are not
+/// examined, so nothing stats or reads them, and once the libraries that are
+/// on are done an idle tick has no work, even with the off library's files
+/// still unhashed.
+#[tokio::test]
+async fn the_backfill_never_examines_files_in_a_library_with_it_off() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_title_files(
+        &media_files,
+        dir.path(),
+        "title-on",
+        &["file-000", "file-002"],
+    )
+    .await;
+    seed_title_files(
+        &media_files,
+        dir.path(),
+        "title-off",
+        &["file-001", "file-003"],
+    )
+    .await;
+    media_files
+        .full_hash_off_title_ids
+        .lock()
+        .await
+        .insert("title-off".to_string());
+
+    let app = bootstrap_backfill(media_files.clone());
+    assert!(app.full_hash_backfill_tick_has_work().await);
+    let summary = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .expect("backfill run");
+
+    assert_eq!(summary.examined, 2);
+    assert_eq!(summary.hashed, 2);
+    assert!(summary.completed_sweep);
+    assert_eq!(hashed_ids(&media_files).await, vec!["file-000", "file-002"]);
+    assert!(!app.full_hash_backfill_tick_has_work().await);
+
+    // Turned back on, the library's files are the queue again.
+    media_files.full_hash_off_title_ids.lock().await.clear();
+    assert!(app.full_hash_backfill_tick_has_work().await);
+    let summary = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .expect("second backfill run");
+    assert_eq!(summary.hashed, 2);
+    assert_eq!(hashed_ids(&media_files).await.len(), 4);
+}
+
+/// A library turned off while a run holds a page that includes its files
+/// stops the run from reaching them: the run asks the queue again before its
+/// next file instead of working through the page it already read.
+#[tokio::test]
+async fn a_library_turned_off_mid_run_is_left_before_its_next_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_title_files(
+        &media_files,
+        dir.path(),
+        "title-on",
+        &["file-000", "file-001"],
+    )
+    .await;
+    seed_title_files(
+        &media_files,
+        dir.path(),
+        "title-off",
+        &["file-002", "file-003"],
+    )
+    .await;
+
+    let app = bootstrap_backfill(media_files.clone());
+    let checkpoint = Arc::new(tokio::sync::Semaphore::new(0));
+    let running = app.clone();
+    let pause = checkpoint.clone();
+    let task = tokio::spawn(async move {
+        running
+            .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+                after_file: Some(pause),
+                ..FullHashBackfillOptions::unthrottled()
+            })
+            .await
+    });
+    within_deadline("first file hashed", async {
+        while hashed_ids(&media_files).await != vec!["file-000"] {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    // What `set_library_full_hash_backfill` does once the row is saved.
+    media_files
+        .full_hash_off_title_ids
+        .lock()
+        .await
+        .insert("title-off".to_string());
+    app.runtime
+        .jobs
+        .full_hash_library_generation
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    checkpoint.add_permits(16);
+
+    let summary = within_deadline("run after the toggle", task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary.examined, 2);
+    assert_eq!(hashed_ids(&media_files).await, vec!["file-000", "file-001"]);
+}
+
+/// With the backfill off, a file's hash is read when something asks for it,
+/// for that one file, and stored on its row; the next ask reads nothing.
+#[tokio::test]
+async fn a_missing_hash_is_read_on_demand_and_stored_on_its_row() {
+    use crate::disk::{FullHashAnswer, HashAsk, HashRow};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_title_files(
+        &media_files,
+        dir.path(),
+        "title-off",
+        &["file-000", "file-001"],
+    )
+    .await;
+    media_files
+        .full_hash_off_title_ids
+        .lock()
+        .await
+        .insert("title-off".to_string());
+    let path = dir.path().join("file-000.mkv");
+
+    let disk = crate::disk::test_support::standalone();
+    disk.count_whole_reads();
+    disk.install_hash_store(Arc::new(crate::disk::MediaFileHashStore::new(
+        media_files.clone(),
+    )));
+
+    let answer = disk
+        .full_hash(HashAsk::new(&path).of_row(HashRow::Id("file-000".into())))
+        .await;
+    let FullHashAnswer::Read(read) = answer else {
+        panic!("expected the file to be read, got {answer:?}");
+    };
+    assert_eq!(disk.whole_reads_of(&path), 1);
+    let stored = media_files
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|row| row.id == "file-000")
+        .and_then(|row| row.content_hashes.clone())
+        .expect("the hash is stored on the row");
+    assert_eq!(stored.full_blake3, read.blake3);
+    // Only the asked file was read and stored.
+    assert_eq!(hashed_ids(&media_files).await, vec!["file-000"]);
+    assert_eq!(disk.whole_reads_of(&dir.path().join("file-001.mkv")), 0);
+
+    let again = disk
+        .full_hash(HashAsk::new(&path).of_row(HashRow::Id("file-000".into())))
+        .await;
+    assert!(matches!(
+        again,
+        FullHashAnswer::Stored(_) | FullHashAnswer::Cached(_)
+    ));
+    assert_eq!(disk.whole_reads_of(&path), 1);
+}

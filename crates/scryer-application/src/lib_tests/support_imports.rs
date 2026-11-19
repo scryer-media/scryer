@@ -231,6 +231,9 @@ impl FileImporter for ProgressReportingFileImporter {
 pub(crate) struct MockMediaFileRepo {
     pub(super) score_evaluations: Arc<Mutex<HashMap<String, crate::FileScoreEvaluation>>>,
     pub(super) store: Arc<Mutex<Vec<TitleMediaFile>>>,
+    /// Titles in a library with the full-hash backfill off: the SQL queue
+    /// joins them out, so the double leaves them out too.
+    pub(super) full_hash_off_title_ids: Arc<Mutex<std::collections::HashSet<String>>>,
     pub(super) pending_analysis_ids: Arc<Mutex<Vec<String>>>,
     pub(super) analysis_attempts: Arc<Mutex<Vec<(String, MediaFileAnalysis)>>>,
     pub(super) delete_media_file_error: Arc<Mutex<Option<String>>>,
@@ -1330,10 +1333,12 @@ impl MediaFileRepository for MockMediaFileRepo {
         after_id: Option<&str>,
         limit: u32,
     ) -> AppResult<Vec<crate::MediaFileHashCandidate>> {
+        let off = self.full_hash_off_title_ids.lock().await.clone();
         let list = self.store.lock().await;
         let mut candidates: Vec<_> = list
             .iter()
             .filter(|entry| entry.content_hashes.is_none())
+            .filter(|entry| !off.contains(&entry.title_id))
             .filter(|entry| after_id.is_none_or(|cursor| entry.id.as_str() > cursor))
             .map(|entry| crate::MediaFileHashCandidate {
                 id: entry.id.clone(),
@@ -1345,6 +1350,45 @@ impl MediaFileRepository for MockMediaFileRepo {
         candidates.sort_by(|left, right| left.id.cmp(&right.id));
         candidates.truncate(limit as usize);
         Ok(candidates)
+    }
+
+    /// Rows by id only, as the store keys them; a title-and-path row is
+    /// left to the store tests.
+    async fn stored_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+    ) -> AppResult<Option<crate::location::model::PersistedContentHashes>> {
+        let crate::disk::HashRow::Id(id) = row else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .find(|entry| &entry.id == id)
+            .and_then(|entry| entry.content_hashes.clone()))
+    }
+
+    async fn record_media_file_full_hash(
+        &self,
+        row: &crate::disk::HashRow,
+        size_bytes: i64,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let crate::disk::HashRow::Id(id) = row else {
+            return Ok(false);
+        };
+        let mut list = self.store.lock().await;
+        let mut changed = false;
+        for entry in list
+            .iter_mut()
+            .filter(|entry| &entry.id == id && entry.size_bytes == size_bytes)
+        {
+            entry.content_hashes = Some(hashes.clone());
+            changed = true;
+        }
+        Ok(changed)
     }
 
     async fn update_media_file_content_hashes(

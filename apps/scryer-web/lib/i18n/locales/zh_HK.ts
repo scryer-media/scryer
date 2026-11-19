@@ -3091,6 +3091,11 @@ const zh_HK: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "所有人皆可寫入",
   "settings.chmodPresetCustom": "自訂",
   "settings.sidecarFilesTitle": "Sidecar 檔案",
+  "settings.libraryFullHashBackfillTitle": "背景雜湊",
+  "settings.libraryFullHashBackfillLabel": "每晚計算檔案雜湊",
+  "settings.libraryFullHashBackfillDescription": "每晚讀取此媒體庫中的每個檔案一次，記錄其完整內容雜湊。對於磁碟保持休眠的媒體庫，請關閉此項；之後只會在移動、匯入或檢查需要時才讀取檔案雜湊。",
+  "settings.libraryFullHashBackfillEnabledStatus": "已為此媒體庫開啟夜間雜湊。",
+  "settings.libraryFullHashBackfillDisabledStatus": "已為此媒體庫關閉夜間雜湊。",
   "settings.identityStorageTitle": "身份與儲存空間",
   "settings.mediaProfilesTitle": "媒體設定檔",
   "settings.mediaProfilesHelp":

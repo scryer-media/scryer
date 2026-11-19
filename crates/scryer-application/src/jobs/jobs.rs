@@ -1386,6 +1386,7 @@ impl AppUseCase {
             JobKey::ProwlarrSync => self.prowlarr_sync_tick_has_work().await,
             JobKey::StagedNzbPrune => self.staged_nzb_prune_tick_has_work().await,
             JobKey::ListSync => self.list_sync_tick_has_work().await,
+            JobKey::FullHashBackfill => self.full_hash_backfill_tick_has_work().await,
             _ => return true,
         };
         if !has_work {
@@ -1397,6 +1398,18 @@ impl AppUseCase {
                 .await;
         }
         has_work
+    }
+
+    /// Whether the full-hash queue holds any file the job may read. Files in
+    /// libraries with the backfill off are not in it. A failed read says yes,
+    /// so the run records the failure.
+    pub(crate) async fn full_hash_backfill_tick_has_work(&self) -> bool {
+        self.services
+            .library
+            .media_files
+            .list_media_files_missing_full_hash(None, 1)
+            .await
+            .map_or(true, |page| !page.is_empty())
     }
 
     /// Whether a Prowlarr sync would sync anything: the same parents the job

@@ -640,6 +640,15 @@ loader!(
     }
 );
 
+// One read for every library a query lists. The libraries were already
+// resolved for the actor by the field that listed them.
+loader!(LibraryFullHashBackfillLoader, String, bool, |ctx, keys| {
+    ctx.app
+        .library_full_hash_backfill_enabled(keys)
+        .await
+        .map_err(to_gql_error)
+});
+
 // Keyed by queue item: one import listing covers every row of the queue.
 loader!(
     HeldSourcesOfferLoader,
@@ -664,6 +673,7 @@ pub struct RequestLoaders {
     pub default_monitor_type: DataLoader<DefaultMonitorTypeLoader>,
     pub title_quality_profile_id: DataLoader<TitleQualityProfileIdLoader>,
     pub library_audio_language_defaults: DataLoader<LibraryAudioLanguageDefaultsLoader>,
+    pub library_full_hash_backfill: DataLoader<LibraryFullHashBackfillLoader>,
     pub collection: DataLoader<CollectionLoader>,
     pub episode: DataLoader<EpisodeLoader>,
     pub media_files_for_title: DataLoader<MediaFilesForTitleLoader>,
@@ -717,6 +727,7 @@ impl RequestLoaders {
             default_monitor_type: dl!(DefaultMonitorTypeLoader),
             title_quality_profile_id: dl!(TitleQualityProfileIdLoader),
             library_audio_language_defaults: dl!(LibraryAudioLanguageDefaultsLoader),
+            library_full_hash_backfill: dl!(LibraryFullHashBackfillLoader),
             collection: dl!(CollectionLoader),
             episode: dl!(EpisodeLoader),
             media_files_for_title: dl!(MediaFilesForTitleLoader),

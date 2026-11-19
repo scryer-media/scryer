@@ -386,6 +386,54 @@ impl LibraryRepository for LibraryStore {
             .map(|row| Ok((row.text("root_id")?, row.i64("title_count")?)))
             .collect()
     }
+
+    async fn full_hash_backfill_enabled(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<HashMap<String, bool>> {
+        if library_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = fetch_rows_for_user_ids(
+            &self.datastore,
+            library_ids,
+            "SELECT id, full_hash_backfill_enabled FROM libraries WHERE id IN ({user_ids})",
+        )
+        .await?;
+        rows.iter()
+            .map(|row| Ok((row.text("id")?, row.bool("full_hash_backfill_enabled")?)))
+            .collect()
+    }
+
+    async fn set_full_hash_backfill_enabled(
+        &self,
+        library_id: &str,
+        enabled: bool,
+    ) -> AppResult<bool> {
+        let library_id = library_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "set_library_full_hash_backfill_enabled",
+            move |tx| {
+                let library_id = library_id.clone();
+                Box::pin(async move {
+                    let updated = tx
+                        .execute(
+                            "UPDATE libraries SET full_hash_backfill_enabled = {}, updated_at = {}
+                              WHERE id = {}",
+                            &[
+                                SqlArg::Bool(enabled),
+                                SqlArg::Timestamp(Utc::now()),
+                                SqlArg::Text(library_id),
+                            ],
+                        )
+                        .await?;
+                    Ok(updated > 0)
+                })
+            },
+        )
+        .await
+    }
 }
 
 async fn list_libraries(

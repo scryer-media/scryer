@@ -3617,6 +3617,11 @@ const cs: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Všichni zápis",
   "settings.chmodPresetCustom": "Vlastní",
   "settings.sidecarFilesTitle": "Doprovodné soubory",
+  "settings.libraryFullHashBackfillTitle": "Hashování na pozadí",
+  "settings.libraryFullHashBackfillLabel": "Hashovat soubory v noci",
+  "settings.libraryFullHashBackfillDescription": "Jednou v noci přečte každý soubor této knihovny a uloží úplný hash jeho obsahu. Vypněte to u knihoven na discích, které necháváte uspané; hash souboru se pak přečte jen tehdy, když ho potřebuje přesun, import nebo kontrola.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Noční hashování pro tuto knihovnu zapnuto.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Noční hashování pro tuto knihovnu vypnuto.",
   "settings.identityStorageTitle": "Identita a úložiště",
   "settings.mediaProfilesTitle": "Mediální profily",
   "settings.mediaProfilesHelp":

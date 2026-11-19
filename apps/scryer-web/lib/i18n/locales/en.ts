@@ -8398,6 +8398,11 @@ const en: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Everyone write",
   "settings.chmodPresetCustom": "Custom",
   "settings.sidecarFilesTitle": "Sidecar Files",
+  "settings.libraryFullHashBackfillTitle": "Background hashing",
+  "settings.libraryFullHashBackfillLabel": "Hash files nightly",
+  "settings.libraryFullHashBackfillDescription": "Reads every file in this library once, overnight, to record its full content hash. Turn this off for libraries on disks you keep spun down; a file's hash is then read only when a move, import or check needs it.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Nightly hashing turned on for this library.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Nightly hashing turned off for this library.",
   "settings.identityStorageTitle": "Identity & storage",
   "settings.mediaProfilesTitle": "Media profiles",
   "settings.mediaProfilesHelp":
