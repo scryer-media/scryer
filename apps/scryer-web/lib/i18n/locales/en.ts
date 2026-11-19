@@ -7375,8 +7375,6 @@ const en: LocaleDictionary = {
   "settings.maintainerrImportTitle": "Migrate from Maintainerr",
   "settings.maintainerrImportDescription":
     "Scryer reads the rule groups of a running Maintainerr and saves each one as a lifecycle rule.",
-  "settings.maintainerrImportDisabledNote":
-    'Every rule is imported disabled and named "(Maintainerr) <name>". Preview each one before you enable it, above all a rule that deletes.',
   "settings.maintainerrImportBaseUrl": "Maintainerr URL",
   "settings.maintainerrImportStart": "Start import",
   "settings.maintainerrImportStartAnother": "Import again",
@@ -7390,7 +7388,7 @@ const en: LocaleDictionary = {
   "settings.maintainerrImportStateSaved": "Saved, disabled",
   "settings.maintainerrImportStateSavedFailedTranslation":
     "Saved untranslated, disabled",
-  "settings.maintainerrImportStateSkipped": "Skipped, already imported",
+  "settings.maintainerrImportStateSkipped": "Already exists, skipped",
   "settings.maintainerrImportStatePending": "Pending",
   "settings.maintainerrImportStateFailed": "Not imported",
   "settings.maintainerrImportSeverityError": "Not translated",

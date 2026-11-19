@@ -79,7 +79,9 @@ function ReportItem({
           <ItemStateLabel state={item.state} />
         </span>
       </div>
-      {item.reason ? (
+      {/* The state label already says skipped or untranslated; only a
+          failed save has a refusal of its own to show. */}
+      {item.state === "FAILED" && item.reason ? (
         <p className="mt-1 text-xs text-muted-foreground">
           {ruleImportReasonMessage(
             item.reason,
@@ -151,18 +153,25 @@ export function MaintainerrRuleImportDialog({
       run ? (runs.find((candidate) => candidate.id === run.id) ?? run) : null,
     [run, runs],
   );
-  // A run that finished but whose report did not load can be retried.
-  const reportFailed =
-    Boolean(run) &&
-    !running &&
-    !report &&
-    !loadingReport &&
-    Boolean(reportError);
   const busy = ruleImportBusy(controller);
-  const shownError = error ?? reportError;
 
   const progress = running ? ruleImportProgress(liveRun?.progressJson) : null;
   const counts = report?.counts ?? progress?.counts ?? null;
+
+  // A run that stopped before saving anything keeps the form and its URL, so
+  // the operator can correct it and start again.
+  const runFailure = report?.reason
+    ? ruleImportReasonMessage(
+        report.reason,
+        report.message,
+        t("settings.maintainerrImportRunFailed"),
+        t,
+      )
+    : null;
+  // An interrupted save still has saved rules to report.
+  const finished =
+    Boolean(report) && (!runFailure || Boolean(report?.items.length));
+  const failure = error ?? runFailure;
 
   const begin = React.useCallback(() => {
     void start({ source: "MAINTAINERR", baseUrl, apiKey: null });
@@ -176,39 +185,63 @@ export function MaintainerrRuleImportDialog({
       >
         <DialogHeader>
           <DialogTitle>{t("settings.maintainerrImportTitle")}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             {t("settings.maintainerrImportDescription")}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            {t("settings.maintainerrImportDisabledNote")}
-          </p>
-          <label className="block">
-            <Label
-              className="mb-2 block"
-              htmlFor="settings-lifecycle-rules-maintainerr-url"
-            >
-              {t("settings.maintainerrImportBaseUrl")}
-            </Label>
-            <Input
-              id="settings-lifecycle-rules-maintainerr-url"
-              type="url"
-              value={baseUrl}
-              disabled={busy || Boolean(report)}
-              placeholder="http://localhost:6246"
-              onChange={(event) => setBaseUrl(event.target.value)}
-            />
-          </label>
+        <div className="min-w-0 space-y-4">
+          {finished ? null : (
+            <>
+              <label className="block">
+                <Label
+                  className="mb-2 block"
+                  htmlFor="settings-lifecycle-rules-maintainerr-url"
+                >
+                  {t("settings.maintainerrImportBaseUrl")}
+                </Label>
+                <Input
+                  id="settings-lifecycle-rules-maintainerr-url"
+                  type="url"
+                  value={baseUrl}
+                  disabled={busy}
+                  placeholder="http://localhost:6246"
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                />
+              </label>
+            </>
+          )}
 
-          {shownError ? (
+          {failure ? (
             <div
               id="settings-lifecycle-rules-maintainerr-error"
               className="flex gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]"
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div className="whitespace-pre-wrap">{shownError}</div>
+              <div className="min-w-0 whitespace-pre-wrap break-words">
+                {failure}
+              </div>
+            </div>
+          ) : null}
+
+          {reportError && !loadingReport ? (
+            <div
+              id="settings-lifecycle-rules-maintainerr-report-error"
+              className="flex flex-wrap items-start gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="min-w-0 flex-1 whitespace-pre-wrap">
+                {reportError}
+              </div>
+              <Button
+                id="settings-lifecycle-rules-maintainerr-retry"
+                type="button"
+                variant="secondary"
+                className="h-7 px-2 text-xs"
+                onClick={() => void reloadReport()}
+              >
+                {t("label.retry")}
+              </Button>
             </div>
           ) : null}
 
@@ -227,19 +260,14 @@ export function MaintainerrRuleImportDialog({
             </p>
           ) : null}
 
-          {report ? (
+          {report && finished ? (
             <div
               id="settings-lifecycle-rules-maintainerr-report"
               className="space-y-3 rounded border border-border p-3"
             >
-              {report.reason ? (
+              {runFailure ? (
                 <p className="text-sm text-[var(--scry-danger-text)]">
-                  {ruleImportReasonMessage(
-                    report.reason,
-                    report.message,
-                    t("settings.maintainerrImportRunFailed"),
-                    t,
-                  )}
+                  {runFailure}
                 </p>
               ) : null}
               {counts ? (
@@ -271,17 +299,9 @@ export function MaintainerrRuleImportDialog({
             variant="secondary"
             onClick={() => onOpenChange(false)}
           >
-            {busy || run ? t("label.close") : t("label.cancel")}
+            {run ? t("label.close") : t("label.cancel")}
           </Button>
-          {reportFailed ? (
-            <Button
-              id="settings-lifecycle-rules-maintainerr-retry"
-              type="button"
-              onClick={() => void reloadReport()}
-            >
-              {t("label.retry")}
-            </Button>
-          ) : report ? (
+          {finished || (run && !report && !busy) ? (
             <Button
               id="settings-lifecycle-rules-maintainerr-again"
               type="button"

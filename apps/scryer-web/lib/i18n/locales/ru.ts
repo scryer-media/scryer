@@ -12077,8 +12077,6 @@ const ru: LocaleDictionary = {
   "settings.maintainerrImportTitle": "Перенос из Maintainerr",
   "settings.maintainerrImportDescription":
     "Scryer читает группы правил работающего Maintainerr и сохраняет каждую как правило жизненного цикла.",
-  "settings.maintainerrImportDisabledNote":
-    'Каждое правило импортируется отключённым и называется "(Maintainerr) <имя>". Проверьте каждое в предпросмотре перед включением, особенно правило, которое удаляет.',
   "settings.maintainerrImportBaseUrl": "URL Maintainerr",
   "settings.maintainerrImportStart": "Начать импорт",
   "settings.maintainerrImportStartAnother": "Импортировать снова",
@@ -12092,7 +12090,7 @@ const ru: LocaleDictionary = {
   "settings.maintainerrImportStateSaved": "Сохранено, отключено",
   "settings.maintainerrImportStateSavedFailedTranslation":
     "Сохранено без перевода, отключено",
-  "settings.maintainerrImportStateSkipped": "Пропущено, уже импортировано",
+  "settings.maintainerrImportStateSkipped": "Уже существует, пропущено",
   "settings.maintainerrImportStatePending": "Ожидает",
   "settings.maintainerrImportStateFailed": "Не импортировано",
   "settings.maintainerrImportSeverityError": "Не переведено",
