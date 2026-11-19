@@ -124,6 +124,10 @@ pub(crate) async fn download_workspace_presence(
     DownloadWorkspacePresence::Foreign
 }
 
+/// Without archive support ownership is never proven, so a workspace is never
+/// removed and its record is kept.
+pub(crate) const PROVES_WORKSPACE_OWNERSHIP: bool = false;
+
 pub(crate) async fn remove_download_workspace(_root: &Path, _owner_id: &str) -> bool {
     false
 }

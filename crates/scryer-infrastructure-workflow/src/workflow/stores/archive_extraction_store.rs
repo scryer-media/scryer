@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use scryer_application::{
     AppError, AppResult, ArchiveExtractionRecord, ArchiveExtractionRepository,
     ArchiveExtractionState,
@@ -11,7 +12,8 @@ const COLUMNS: &str = "client_id, client_item_id, state, workspace_path, archive
                        next_attempt_at, settled_at, created_at, updated_at";
 
 /// `archive_extractions` (migration 0357): one row per tracked download whose
-/// archive workspace is on disk. Every read and write is by primary key.
+/// archive workspace is on disk. Reads and writes are by primary key, except
+/// the settled scan, which `idx_archive_extractions_settled_at` serves.
 #[derive(Clone)]
 pub struct ArchiveExtractionStore {
     datastore: StoreDatastore,
@@ -20,6 +22,41 @@ pub struct ArchiveExtractionStore {
 impl ArchiveExtractionStore {
     pub fn new(datastore: StoreDatastore) -> Self {
         Self { datastore }
+    }
+
+    /// Set `settled_at` for the keyed rows the `condition` prefix admits, in
+    /// one transaction of bind-safe chunks. No statement runs for no keys.
+    async fn set_settled_at(
+        &self,
+        keys: &[(String, String)],
+        at: DateTime<Utc>,
+        condition: &'static str,
+        op_name: &'static str,
+    ) -> AppResult<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let keys = keys.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, op_name, move |tx| {
+            let keys = keys.clone();
+            Box::pin(async move {
+                for chunk in keys.chunks(KEY_CHUNK) {
+                    let mut args = vec![SqlArg::Timestamp(at), SqlArg::Timestamp(at)];
+                    let predicate = keys_predicate(chunk, &mut args);
+                    SqlRuntime::execute(
+                        SqlExec::Tx(&mut *tx),
+                        &format!(
+                            "UPDATE archive_extractions SET settled_at = {{}}, updated_at = {{}} \
+                             WHERE {condition}({predicate})"
+                        ),
+                        &args,
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
     }
 }
 
@@ -42,6 +79,31 @@ fn record_from_row(row: &SqlRow) -> AppResult<ArchiveExtractionRecord> {
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
     })
+}
+
+/// Keys per statement: two binds each, well inside either datastore's limit.
+const KEY_CHUNK: usize = 400;
+
+/// A `WHERE` fragment for a chunk of keys: one equality per client with its
+/// item ids in an `IN` list, which the primary key answers.
+fn keys_predicate(keys: &[(String, String)], args: &mut Vec<SqlArg>) -> String {
+    let mut groups: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for (client_id, client_item_id) in keys {
+        groups
+            .entry(client_id.as_str())
+            .or_default()
+            .push(client_item_id.as_str());
+    }
+    groups
+        .into_iter()
+        .map(|(client_id, items)| {
+            args.push(SqlArg::Text(client_id.to_string()));
+            let item_placeholders = vec!["{}"; items.len()].join(", ");
+            args.extend(items.into_iter().map(|item| SqlArg::Text(item.to_string())));
+            format!("(client_id = {{}} AND client_item_id IN ({item_placeholders}))")
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 fn key_args(client_id: &str, client_item_id: &str) -> [SqlArg; 2] {
@@ -112,6 +174,67 @@ impl ArchiveExtractionRepository for ArchiveExtractionStore {
                     ],
                 )
                 .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn settle(&self, keys: &[(String, String)], at: DateTime<Utc>) -> AppResult<()> {
+        self.set_settled_at(
+            keys,
+            at,
+            "settled_at IS NULL AND ",
+            "settle_archive_extractions",
+        )
+        .await
+    }
+
+    async fn defer_settled(&self, keys: &[(String, String)], at: DateTime<Utc>) -> AppResult<()> {
+        self.set_settled_at(keys, at, "", "defer_settled_archive_extractions")
+            .await
+    }
+
+    async fn list_settled_before(
+        &self,
+        before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<ArchiveExtractionRecord>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT {COLUMNS} FROM archive_extractions \
+                 WHERE settled_at <= {{}} ORDER BY settled_at LIMIT {{}}"
+            ),
+            &[
+                SqlArg::Timestamp(before),
+                SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)),
+            ],
+        )
+        .await?
+        .iter()
+        .map(record_from_row)
+        .collect()
+    }
+
+    async fn delete_many(&self, keys: &[(String, String)]) -> AppResult<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let keys = keys.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_archive_extractions", move |tx| {
+            let keys = keys.clone();
+            Box::pin(async move {
+                for chunk in keys.chunks(KEY_CHUNK) {
+                    let mut args = Vec::with_capacity(chunk.len() * 2);
+                    let predicate = keys_predicate(chunk, &mut args);
+                    SqlRuntime::execute(
+                        SqlExec::Tx(&mut *tx),
+                        &format!("DELETE FROM archive_extractions WHERE {predicate}"),
+                        &args,
+                    )
+                    .await?;
+                }
                 Ok(())
             })
         })
@@ -238,5 +361,182 @@ mod tests {
                 .is_some()
         );
         assert_eq!(store.get("client-beta", "item-2").await.expect("get"), None);
+    }
+
+    fn key(client: &str, item: &str) -> (String, String) {
+        (client.to_string(), item.to_string())
+    }
+
+    async fn settled_at(store: &ArchiveExtractionStore, item: &str) -> Option<DateTime<Utc>> {
+        store
+            .get("client-alpha", item)
+            .await
+            .expect("get")
+            .expect("row")
+            .settled_at
+    }
+
+    #[tokio::test]
+    async fn settle_marks_only_the_named_unsettled_downloads() {
+        let store = store().await;
+        for item in ["item-1", "item-2", "item-3"] {
+            store.save(&record(item)).await.expect("save");
+        }
+        store
+            .settle(&[key("client-alpha", "item-1")], at(10))
+            .await
+            .expect("first settle");
+
+        store
+            .settle(
+                &[
+                    key("client-alpha", "item-1"),
+                    key("client-alpha", "item-2"),
+                    key("client-beta", "item-3"),
+                    key("client-alpha", "item-missing"),
+                ],
+                at(20),
+            )
+            .await
+            .expect("second settle");
+
+        assert_eq!(
+            settled_at(&store, "item-1").await,
+            Some(at(10)),
+            "keeps its time"
+        );
+        assert_eq!(settled_at(&store, "item-2").await, Some(at(20)));
+        assert_eq!(
+            settled_at(&store, "item-3").await,
+            None,
+            "another client's item"
+        );
+        store.settle(&[], at(30)).await.expect("no keys");
+    }
+
+    #[tokio::test]
+    async fn defer_moves_the_settled_time_of_the_named_downloads() {
+        let store = store().await;
+        for item in ["item-1", "item-2"] {
+            store.save(&record(item)).await.expect("save");
+        }
+        let both = [key("client-alpha", "item-1"), key("client-alpha", "item-2")];
+        store.settle(&both, at(10)).await.expect("settle");
+
+        store
+            .defer_settled(&both[..1], at(50))
+            .await
+            .expect("defer");
+
+        assert_eq!(settled_at(&store, "item-1").await, Some(at(50)));
+        assert_eq!(settled_at(&store, "item-2").await, Some(at(10)));
+        let row = store.get("client-alpha", "item-1").await.unwrap().unwrap();
+        assert_eq!(row.updated_at, at(50));
+    }
+
+    #[tokio::test]
+    async fn the_settled_scan_returns_due_rows_oldest_first_up_to_its_limit() {
+        let store = store().await;
+        for (item, settled) in [
+            ("item-1", Some(30)),
+            ("item-2", Some(10)),
+            ("item-3", Some(20)),
+            ("item-4", Some(90)),
+            ("item-5", None),
+        ] {
+            let mut row = record(item);
+            row.settled_at = settled.map(at);
+            store.save(&row).await.expect("save");
+        }
+
+        let due = store.list_settled_before(at(30), 10).await.expect("list");
+        let items: Vec<_> = due.iter().map(|row| row.client_item_id.as_str()).collect();
+        assert_eq!(items, ["item-2", "item-3", "item-1"]);
+
+        let first = store.list_settled_before(at(30), 2).await.expect("list");
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].client_item_id, "item-2");
+        assert!(
+            store
+                .list_settled_before(at(5), 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_settled_scan_is_served_by_its_index() {
+        let store = store().await;
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            unreachable!("the fixture is SQLite");
+        };
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN SELECT client_id FROM archive_extractions \
+             WHERE settled_at <= ?1 ORDER BY settled_at LIMIT ?2",
+        )
+        .bind("2026-01-01T00:00:00Z")
+        .bind(100_i64)
+        .fetch_all(pool)
+        .await
+        .expect("plan");
+        let detail: Vec<_> = plan.iter().map(|row| row.3.as_str()).collect();
+        assert!(
+            detail
+                .iter()
+                .any(|line| line.contains("idx_archive_extractions_settled_at")),
+            "{detail:?}"
+        );
+        assert!(
+            !detail.iter().any(|line| line.contains("TEMP B-TREE")),
+            "{detail:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn batches_past_one_statement_settle_and_delete_every_named_row() {
+        let store = store().await;
+        let mut keys = Vec::new();
+        for index in 0..(KEY_CHUNK + 50) {
+            let client = if index % 2 == 0 {
+                "client-alpha"
+            } else {
+                "client-beta"
+            };
+            let item = format!("item-{index}");
+            let mut row = record(&item);
+            row.client_id = client.to_string();
+            store.save(&row).await.expect("save");
+            keys.push(key(client, &item));
+        }
+        let kept = record("item-kept");
+        store.save(&kept).await.expect("save kept");
+
+        store.settle(&keys, at(10)).await.expect("settle");
+        assert_eq!(
+            store
+                .list_settled_before(at(10), 10_000)
+                .await
+                .unwrap()
+                .len(),
+            keys.len()
+        );
+        store.delete_many(&keys).await.expect("delete");
+
+        assert!(
+            store
+                .list_settled_before(at(10), 10_000)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        for (client, item) in keys.iter().step_by(97) {
+            assert_eq!(store.get(client, item).await.unwrap(), None);
+        }
+        assert_eq!(
+            store.get("client-alpha", "item-kept").await.unwrap(),
+            Some(kept)
+        );
+        store.delete_many(&[]).await.expect("no keys");
     }
 }

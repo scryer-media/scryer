@@ -2110,30 +2110,71 @@ pub async fn begin_manual_import_selection(
             is_sample_named_file,
         )?;
 
-    if archive_extraction_needed && extract_archives {
-        let destination =
-            archive_extraction_destination_for_title(app, &selection_id, None, &authorized.title)
+    // A tracked download has one extraction, shared with its automatic
+    // imports: one already made is read again, and one running is waited for.
+    let download = crate::import::archive_extraction::DownloadExtractionKey::for_completed(&completed);
+    let extracted_for_download = match &download {
+        Some(download) if archive_extraction_needed => {
+            crate::import::archive_extraction::completed_download_extraction(app, download).await?
+        }
+        _ => None,
+    };
+
+    if archive_extraction_needed && (extract_archives || extracted_for_download.is_some()) {
+        let extracted_root = match extracted_for_download {
+            Some(extracted_root) => Some(extracted_root),
+            None => {
+                let destination = archive_extraction_destination_for_title(
+                    app,
+                    &selection_id,
+                    download.as_ref(),
+                    &authorized.title,
+                )
                 .await?;
-        let passwords = archive_password_candidates(app, &completed, &release_evidence, None).await;
-        let extracted_root = {
-            let _archive_extraction_permit = app
-                .runtime
-                .imports
-                .execution_coordinator
-                .acquire_archive_extraction()
-                .await;
-            crate::archive_extractor::extract_archives_if_needed(
-                &preview_root,
-                is_sample_named_file,
-                Some(destination),
-                &passwords,
-                app.services
+                let passwords =
+                    archive_password_candidates(app, &completed, &release_evidence, None).await;
+                let archive_provider = app
+                    .services
                     .integrations
                     .archive_extractor_plugin_provider
                     .available()
-                    .cloned(),
-            )
-            .await?
+                    .cloned();
+                let _archive_extraction_permit = app
+                    .runtime
+                    .imports
+                    .execution_coordinator
+                    .acquire_archive_extraction()
+                    .await;
+                match &download {
+                    Some(download) => {
+                        // The operator asked for this extraction, so it is an
+                        // operator retry: it runs now, whatever an earlier
+                        // failure's backoff or block said.
+                        crate::import::archive_extraction::reset_download_extraction(app, download)
+                            .await;
+                        crate::import::archive_extraction::extract_download_archives(
+                            app,
+                            download,
+                            &preview_root,
+                            is_sample_named_file,
+                            destination,
+                            &passwords,
+                            archive_provider,
+                        )
+                        .await?
+                    }
+                    None => {
+                        crate::archive_extractor::extract_archives_if_needed(
+                            &preview_root,
+                            is_sample_named_file,
+                            Some(destination),
+                            &passwords,
+                            archive_provider,
+                        )
+                        .await?
+                    }
+                }
+            }
         };
         if let Some(extracted_root) = extracted_root {
             trusted_root = Disk::process()
@@ -2265,6 +2306,12 @@ pub async fn begin_manual_import_selection(
         .as_ref()
         .and_then(|selection| selection.archive_workspace_root.as_deref())
         .filter(|workspace| Some(*workspace) != archive_workspace_root.as_deref())
+        // A download's own workspace outlives its selections.
+        .filter(|workspace| {
+            !crate::import::archive_extraction::is_download_workspace_path(
+                &stored_path_to_path_buf(workspace),
+            )
+        })
     {
         crate::archive_extractor::cleanup_extracted_dir(&stored_path_to_path_buf(
             previous_workspace,
@@ -4766,8 +4813,12 @@ async fn execute_queued_manual_import_with_outcome(
         && !preservation_pending
         && let Some(workspace_root) = payload.archive_workspace_root.as_deref()
     {
-        crate::archive_extractor::cleanup_extracted_dir(&stored_path_to_path_buf(workspace_root))
-            .await;
+        let workspace_root = stored_path_to_path_buf(workspace_root);
+        // A download's own workspace goes when the download settles, as an
+        // automatic import's does; a selection's own goes with its import.
+        if !crate::import::archive_extraction::is_download_workspace_path(&workspace_root) {
+            crate::archive_extractor::cleanup_extracted_dir(&workspace_root).await;
+        }
     }
     outcome
 }

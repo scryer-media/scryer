@@ -5380,6 +5380,12 @@ pub mod archive_extraction {
     pub const PASSWORD_REQUIRED: &str = "ARCHIVE_EXTRACTION_PASSWORD_REQUIRED";
     /// The extractor ran past its execution budget.
     pub const TIMED_OUT: &str = "ARCHIVE_EXTRACTION_TIMED_OUT";
+    /// An earlier attempt failed and the next one is not due yet; this pass
+    /// extracts nothing and is retried.
+    pub const WAITING: &str = "ARCHIVE_EXTRACTION_WAITING";
+    /// Every allowed attempt failed; no further attempt is made until an
+    /// operator retries the import.
+    pub const BLOCKED: &str = "ARCHIVE_EXTRACTION_BLOCKED";
     pub const ALL: &[&str] = &[
         IN_PROGRESS,
         INTERRUPTED,
@@ -5387,6 +5393,8 @@ pub mod archive_extraction {
         FAILED,
         PASSWORD_REQUIRED,
         TIMED_OUT,
+        WAITING,
+        BLOCKED,
     ];
 }
 

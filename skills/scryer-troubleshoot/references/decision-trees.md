@@ -64,6 +64,10 @@ operator's to do; describe them, do not run them.
      profile refused the file. Rules are covered by `scryer-write-rules`.
    - `passwordFailureCode` set: the archive needs a password.
    - `ARCHIVE_EXTRACTION_PLUGIN_REQUIRED`: no extraction plugin installed.
+   - `ARCHIVE_EXTRACTION_WAITING`: an extraction failed and the next of its
+     three attempts is not due yet. `ARCHIVE_EXTRACTION_BLOCKED`: all three
+     failed. The operator retries the import from the queue item once the
+     archive is fixed.
 3. `ImportHistory.graphql` with limit 25, then group by `decision` and
    `skipReason`. `UNRESOLVED_IDENTITY`, `UNPARSEABLE_EPISODE`: the file name
    did not map to a title or episode. The operator resolves it from the

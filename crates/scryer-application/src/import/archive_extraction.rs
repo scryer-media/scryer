@@ -9,6 +9,11 @@
 //!
 //! Nothing is written for a download without archives, or while no installed
 //! plugin can extract them.
+//!
+//! A download gets [`MAX_ATTEMPTS`] attempts, spaced by a backoff; after that
+//! it is blocked until an operator retries. The workspace lives as long as the
+//! download is unsettled: it goes when the download is imported, and a day
+//! after the download ends any other way.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -99,6 +104,19 @@ pub trait ArchiveExtractionRepository: Send + Sync {
     /// Insert or replace the download's row.
     async fn save(&self, record: &ArchiveExtractionRecord) -> AppResult<()>;
     async fn delete(&self, client_id: &str, client_item_id: &str) -> AppResult<()>;
+    /// Record that these downloads ended at `at`; one already settled keeps
+    /// its time.
+    async fn settle(&self, keys: &[(String, String)], at: DateTime<Utc>) -> AppResult<()>;
+    /// Move these downloads' settled time to `at`, so the removal is tried
+    /// again later.
+    async fn defer_settled(&self, keys: &[(String, String)], at: DateTime<Utc>) -> AppResult<()>;
+    /// Downloads settled at or before `before`, oldest first, at most `limit`.
+    async fn list_settled_before(
+        &self,
+        before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<ArchiveExtractionRecord>>;
+    async fn delete_many(&self, keys: &[(String, String)]) -> AppResult<()>;
 }
 
 /// The repository a service bundle starts with. Assembly replaces it with
@@ -138,7 +156,73 @@ impl ArchiveExtractionRepository for InMemoryArchiveExtractionRepository {
             .remove(&(client_id.to_string(), client_item_id.to_string()));
         Ok(())
     }
+
+    async fn settle(&self, keys: &[(String, String)], at: DateTime<Utc>) -> AppResult<()> {
+        let mut rows = self.rows.lock().await;
+        for key in keys {
+            if let Some(row) = rows.get_mut(key)
+                && row.settled_at.is_none()
+            {
+                row.settled_at = Some(at);
+                row.updated_at = at;
+            }
+        }
+        Ok(())
+    }
+
+    async fn defer_settled(&self, keys: &[(String, String)], at: DateTime<Utc>) -> AppResult<()> {
+        let mut rows = self.rows.lock().await;
+        for key in keys {
+            if let Some(row) = rows.get_mut(key) {
+                row.settled_at = Some(at);
+                row.updated_at = at;
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_settled_before(
+        &self,
+        before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<ArchiveExtractionRecord>> {
+        let rows = self.rows.lock().await;
+        let mut due: Vec<_> = rows
+            .values()
+            .filter(|row| row.settled_at.is_some_and(|at| at <= before))
+            .cloned()
+            .collect();
+        due.sort_by_key(|row| row.settled_at);
+        due.truncate(limit);
+        Ok(due)
+    }
+
+    async fn delete_many(&self, keys: &[(String, String)]) -> AppResult<()> {
+        let mut rows = self.rows.lock().await;
+        for key in keys {
+            rows.remove(key);
+        }
+        Ok(())
+    }
 }
+
+/// Extraction attempts a download gets before it is blocked.
+pub(crate) const MAX_ATTEMPTS: u32 = 3;
+
+/// How long after the `attempts`th failed attempt the next one may start.
+fn attempt_backoff(attempts: u32) -> chrono::Duration {
+    match attempts {
+        0 | 1 => chrono::Duration::minutes(5),
+        _ => chrono::Duration::minutes(20),
+    }
+}
+
+/// How long a download that ended without being imported keeps its
+/// workspace.
+pub(crate) const SETTLED_WORKSPACE_RETENTION: chrono::Duration = chrono::Duration::hours(24);
+
+/// Settled downloads one housekeeping pass handles.
+const SETTLED_SWEEP_LIMIT: usize = 100;
 
 /// A tracked download, as its extraction is keyed: the download client id
 /// and the client's item id, compared the way import sources are.
@@ -169,6 +253,31 @@ impl DownloadExtractionKey {
             .unwrap();
     }
 
+    /// A record of this download in `state` for `workspace`.
+    #[cfg(test)]
+    pub(crate) fn test_record(
+        &self,
+        workspace: &Path,
+        state: ArchiveExtractionState,
+        now: DateTime<Utc>,
+    ) -> ArchiveExtractionRecord {
+        ArchiveExtractionRecord {
+            client_id: self.client_id.clone(),
+            client_item_id: self.client_item_id.clone(),
+            state,
+            workspace_path: crate::stored_paths::path_to_stored_string(workspace),
+            archive_digest: None,
+            attempts: 1,
+            last_reason_code: None,
+            output_count: 0,
+            output_bytes: 0,
+            next_attempt_at: None,
+            settled_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     /// None when the client gave no item id, so the download has no identity
     /// to key a workspace on.
     pub(crate) fn new(client_id: Option<&str>, client_item_id: &str) -> Option<Self> {
@@ -188,6 +297,24 @@ impl DownloadExtractionKey {
 
     pub(crate) fn for_source(source: &ClientJobLocator) -> Option<Self> {
         Self::new(source.client_id.as_deref(), &source.item_id)
+    }
+
+    pub(crate) fn for_tracked(td: &crate::tracked_downloads::TrackedDownload) -> Option<Self> {
+        Self::new(
+            Some(td.client_id.as_str()),
+            &td.client_item.download_client_item_id,
+        )
+    }
+
+    fn of_record(record: &ArchiveExtractionRecord) -> Self {
+        Self {
+            client_id: record.client_id.clone(),
+            client_item_id: record.client_item_id.clone(),
+        }
+    }
+
+    fn pair(&self) -> (String, String) {
+        (self.client_id.clone(), self.client_item_id.clone())
     }
 
     /// 64 bits of an unkeyed hash, so the name is the same on every run and
@@ -221,6 +348,7 @@ impl DownloadExtractionKey {
     }
 
     /// Whether `root` is the path this download's workspace has.
+    #[cfg(test)]
     pub(crate) fn names_workspace(&self, root: &Path) -> bool {
         root.file_name()
             .and_then(|name| name.to_str())
@@ -230,6 +358,14 @@ impl DownloadExtractionKey {
                 .and_then(Path::file_name)
                 .is_some_and(|name| name == ARCHIVE_EXTRACTION_DIR_NAME)
     }
+}
+
+/// Whether `root` is a download's workspace, whichever download's: such a
+/// workspace goes only when its download settles.
+pub(crate) fn is_download_workspace_path(root: &Path) -> bool {
+    root.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == ARCHIVE_EXTRACTION_DIR_NAME)
 }
 
 /// Downloads whose extraction runs in this process. A record left
@@ -277,6 +413,20 @@ pub(crate) fn workspace_occupied_error() -> AppError {
         reasons::WORKSPACE_OCCUPIED,
         "the download's extraction folder is held by something Scryer did not create for it; \
          it is left in place",
+    )
+}
+
+fn waiting_error() -> AppError {
+    AppError::validation_refused(
+        reasons::WAITING,
+        "an earlier extraction of the download's archives failed; the next attempt is not due yet",
+    )
+}
+
+pub(crate) fn blocked_error() -> AppError {
+    AppError::validation_refused(
+        reasons::BLOCKED,
+        "the download's archives failed to extract on every attempt; retry the import to try again",
     )
 }
 
@@ -348,27 +498,42 @@ pub(crate) async fn extract_download_archives(
     };
     let owner_id = key.owner_id();
     let repository = &app.services.workflow.archive_extractions;
+    let now = app.runtime.environment.now();
     let mut previous = repository.get(&key.client_id, &key.client_item_id).await?;
 
     if let Some(record) = previous.as_mut() {
         let recorded = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
         match record.state {
             ArchiveExtractionState::Extracted => {
-                match archive_extractor::download_workspace_presence(&recorded, &owner_id).await {
-                    DownloadWorkspacePresence::Owned => return Ok(Some(recorded)),
-                    // Gone from disk: extracted again below.
-                    DownloadWorkspacePresence::Missing => {}
-                    DownloadWorkspacePresence::Foreign => return Err(workspace_occupied_error()),
+                // Gone from disk, or taken by something else: planned again
+                // below, where a taken path is refused.
+                if archive_extractor::download_workspace_presence(&recorded, &owner_id).await
+                    == DownloadWorkspacePresence::Owned
+                {
+                    return Ok(Some(recorded));
                 }
             }
             ArchiveExtractionState::Extracting => {
                 // Nothing in this process runs it, so the process that did
                 // stopped. That attempt counts, and its partial output goes.
                 archive_extractor::remove_download_workspace(&recorded, &owner_id).await;
-                record.state = ArchiveExtractionState::Failed;
+                record.state = if record.attempts >= MAX_ATTEMPTS {
+                    ArchiveExtractionState::Blocked
+                } else {
+                    ArchiveExtractionState::Failed
+                };
                 record.last_reason_code = Some(reasons::INTERRUPTED.to_string());
-                record.updated_at = Utc::now();
+                record.updated_at = now;
                 repository.save(record).await?;
+                if record.state == ArchiveExtractionState::Blocked {
+                    return Err(blocked_error());
+                }
+            }
+            ArchiveExtractionState::Blocked => return Err(blocked_error()),
+            ArchiveExtractionState::Failed
+                if record.next_attempt_at.is_some_and(|due| due > now) =>
+            {
+                return Err(waiting_error());
             }
             _ => {}
         }
@@ -384,42 +549,53 @@ pub(crate) async fn extract_download_archives(
         return Err(AppError::archive_extraction_plugin_required(None));
     };
 
-    match archive_extractor::download_workspace_presence(&root, &owner_id).await {
-        DownloadWorkspacePresence::Missing => {}
+    let occupied = match archive_extractor::download_workspace_presence(&root, &owner_id).await {
+        DownloadWorkspacePresence::Missing => false,
         // A recorded failure's leftover is this download's partial output.
         DownloadWorkspacePresence::Owned if previous.is_some() => {
-            if !archive_extractor::remove_download_workspace(&root, &owner_id).await {
-                return Err(workspace_occupied_error());
-            }
+            !archive_extractor::remove_download_workspace(&root, &owner_id).await
         }
         // An owned workspace with no record is not known to be partial, and
         // anything else is not Scryer's: both are left in place.
-        DownloadWorkspacePresence::Owned | DownloadWorkspacePresence::Foreign => {
-            return Err(workspace_occupied_error());
-        }
-    }
-
-    let now = Utc::now();
-    let extracting = ArchiveExtractionRecord {
+        DownloadWorkspacePresence::Owned | DownloadWorkspacePresence::Foreign => true,
+    };
+    // A completed extraction whose output went missing starts a fresh count.
+    let attempts = previous
+        .as_ref()
+        .filter(|record| record.state != ArchiveExtractionState::Extracted)
+        .map_or(0, |record| record.attempts)
+        .saturating_add(1);
+    let base = ArchiveExtractionRecord {
         client_id: key.client_id.clone(),
         client_item_id: key.client_item_id.clone(),
         state: ArchiveExtractionState::Extracting,
         workspace_path: crate::stored_paths::path_to_stored_string(&root),
         archive_digest: Some(plan.digest().to_string()),
-        attempts: previous
-            .as_ref()
-            .map_or(0, |record| record.attempts)
-            .saturating_add(1),
+        attempts,
         last_reason_code: previous
             .as_ref()
             .and_then(|record| record.last_reason_code.clone()),
         output_count: 0,
         output_bytes: 0,
         next_attempt_at: None,
-        settled_at: None,
+        settled_at: previous.as_ref().and_then(|record| record.settled_at),
         created_at: previous.as_ref().map_or(now, |record| record.created_at),
         updated_at: now,
     };
+    if occupied {
+        // Only an operator can clear the path, so a taken workspace counts
+        // as an attempt and ends blocked rather than being retried forever.
+        let error = workspace_occupied_error();
+        let saved = repository
+            .save(&failed_attempt(base, reasons::WORKSPACE_OCCUPIED, now))
+            .await;
+        if saved.is_err() {
+            tracing::warn!("archive extraction refusal could not be recorded");
+        }
+        return Err(error);
+    }
+
+    let extracting = base;
     repository.save(&extracting).await?;
 
     match archive_extractor::extract_planned_download(plan, &destination, passwords, &provider)
@@ -432,7 +608,7 @@ pub(crate) async fn extract_download_archives(
                     last_reason_code: None,
                     output_count: output.files,
                     output_bytes: output.bytes,
-                    updated_at: Utc::now(),
+                    updated_at: app.runtime.environment.now(),
                     ..extracting
                 })
                 .await?;
@@ -453,44 +629,216 @@ pub(crate) async fn extract_download_archives(
             Err(error)
         }
         Err(error) => {
-            let (state, reason) = if archive_extractor::is_password_required_error(&error) {
-                (
-                    ArchiveExtractionState::NeedsPassword,
-                    reasons::PASSWORD_REQUIRED,
-                )
-            } else if archive_extractor::is_timeout_error(&error) {
-                (ArchiveExtractionState::Failed, reasons::TIMED_OUT)
-            } else {
-                (ArchiveExtractionState::Failed, reasons::FAILED)
-            };
-            let saved = repository
-                .save(&ArchiveExtractionRecord {
-                    state,
-                    last_reason_code: Some(error.reason().unwrap_or(reason).to_string()),
-                    updated_at: Utc::now(),
+            let finished = app.runtime.environment.now();
+            let failure_reason =
+                error
+                    .reason()
+                    .unwrap_or(if archive_extractor::is_timeout_error(&error) {
+                        reasons::TIMED_OUT
+                    } else {
+                        reasons::FAILED
+                    });
+            let record = if archive_extractor::is_password_required_error(&error) {
+                // Waiting for a password is not a failed attempt: it costs
+                // none and sets no backoff. The operator's password retry
+                // runs it again.
+                ArchiveExtractionRecord {
+                    state: ArchiveExtractionState::NeedsPassword,
+                    attempts: attempts - 1,
+                    last_reason_code: Some(reasons::PASSWORD_REQUIRED.to_string()),
+                    updated_at: finished,
                     ..extracting
-                })
-                .await;
-            if saved.is_err() {
+                }
+            } else {
+                failed_attempt(extracting, failure_reason, finished)
+            };
+            let blocked = record.state == ArchiveExtractionState::Blocked;
+            if repository.save(&record).await.is_err() {
                 tracing::warn!("archive extraction failure could not be recorded");
+            }
+            if blocked {
+                tracing::warn!(
+                    reason = record.last_reason_code.as_deref().unwrap_or_default(),
+                    attempts = record.attempts,
+                    "archive extraction blocked after its last allowed attempt"
+                );
+                return Err(blocked_error());
+            }
+            if record.state == ArchiveExtractionState::Failed {
+                // Attempts remain, so the import retries after the backoff
+                // instead of stopping at the first failure.
+                return Err(AppError::validation_refused(
+                    failure_reason,
+                    error.to_string(),
+                ));
             }
             Err(error)
         }
     }
 }
 
-/// Remove a download's workspace once its import is done with it, and then
-/// its record. The record stays when the workspace could not be removed.
-pub(crate) async fn remove_download_extraction(
+/// A failed attempt: retried after its backoff, or blocked once it was the
+/// last allowed.
+fn failed_attempt(
+    record: ArchiveExtractionRecord,
+    reason: &str,
+    now: DateTime<Utc>,
+) -> ArchiveExtractionRecord {
+    let blocked = record.attempts >= MAX_ATTEMPTS;
+    ArchiveExtractionRecord {
+        state: if blocked {
+            ArchiveExtractionState::Blocked
+        } else {
+            ArchiveExtractionState::Failed
+        },
+        last_reason_code: Some(reason.to_string()),
+        next_attempt_at: (!blocked).then(|| now + attempt_backoff(record.attempts)),
+        updated_at: now,
+        ..record
+    }
+}
+
+/// An operator retry: a blocked, failed or password-waiting extraction is
+/// pending again with its attempts and backoff cleared. Nothing is written
+/// for a download with no such record.
+pub(crate) async fn reset_download_extraction(app: &AppUseCase, key: &DownloadExtractionKey) {
+    let repository = &app.services.workflow.archive_extractions;
+    let Ok(Some(record)) = repository.get(&key.client_id, &key.client_item_id).await else {
+        return;
+    };
+    if !matches!(
+        record.state,
+        ArchiveExtractionState::Blocked
+            | ArchiveExtractionState::Failed
+            | ArchiveExtractionState::NeedsPassword
+    ) {
+        return;
+    }
+    let reset = ArchiveExtractionRecord {
+        state: ArchiveExtractionState::Pending,
+        attempts: 0,
+        last_reason_code: None,
+        next_attempt_at: None,
+        updated_at: app.runtime.environment.now(),
+        ..record
+    };
+    if repository.save(&reset).await.is_err() {
+        tracing::warn!("archive extraction record could not be reset for the retry");
+    }
+}
+
+/// The download has settled. Imported: its workspace and record go now.
+/// Ended any other way: it is marked settled, and housekeeping removes the
+/// workspace [`SETTLED_WORKSPACE_RETENTION`] later. Nothing is written for a
+/// download without a record or one already settled.
+pub(crate) async fn settle_download_extraction(
     app: &AppUseCase,
     key: &DownloadExtractionKey,
-    root: &Path,
-) -> bool {
-    if !archive_extractor::remove_download_workspace(root, &key.owner_id()).await {
-        return false;
+    imported: bool,
+) {
+    let repository = &app.services.workflow.archive_extractions;
+    let record = match repository.get(&key.client_id, &key.client_item_id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(error = %error, "archive extraction record could not be read at settlement");
+            return;
+        }
+    };
+    if imported {
+        let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
+        if remove_settled_workspace(&root, key).await == SettledRemoval::Done {
+            forget_download_extraction(app, key).await;
+            return;
+        }
     }
-    forget_download_extraction(app, key).await;
-    true
+    if record.settled_at.is_none()
+        && repository
+            .settle(&[key.pair()], app.runtime.environment.now())
+            .await
+            .is_err()
+    {
+        tracing::warn!("archive extraction settlement could not be recorded");
+    }
+}
+
+/// Downloads that left their client: each is marked settled in one batch.
+pub(crate) async fn settle_download_extractions(app: &AppUseCase, keys: &[DownloadExtractionKey]) {
+    if keys.is_empty() {
+        return;
+    }
+    let pairs: Vec<_> = keys.iter().map(DownloadExtractionKey::pair).collect();
+    if app
+        .services
+        .workflow
+        .archive_extractions
+        .settle(&pairs, app.runtime.environment.now())
+        .await
+        .is_err()
+    {
+        tracing::warn!("archive extraction settlement could not be recorded");
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettledRemoval {
+    /// The workspace is gone, or what holds its path is not Scryer's and
+    /// stays; either way the record is done with.
+    Done,
+    /// The workspace is still there; try again later.
+    Retry,
+}
+
+async fn remove_settled_workspace(root: &Path, key: &DownloadExtractionKey) -> SettledRemoval {
+    let owner_id = key.owner_id();
+    if archive_extractor::remove_download_workspace(root, &owner_id).await {
+        return SettledRemoval::Done;
+    }
+    match archive_extractor::download_workspace_presence(root, &owner_id).await {
+        DownloadWorkspacePresence::Missing => SettledRemoval::Done,
+        DownloadWorkspacePresence::Foreign if archive_extractor::PROVES_WORKSPACE_OWNERSHIP => {
+            SettledRemoval::Done
+        }
+        // Owned but not removed, or a build that cannot tell whose it is.
+        _ => SettledRemoval::Retry,
+    }
+}
+
+/// What one settled-workspace sweep did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SettledSweep {
+    pub removed: usize,
+    pub deferred: usize,
+}
+
+/// Remove the workspaces of downloads settled more than
+/// [`SETTLED_WORKSPACE_RETENTION`] ago, oldest first and a bounded number per
+/// pass. A workspace that cannot be removed now is tried again after another
+/// retention period. A pass with nothing due only reads.
+pub(crate) async fn sweep_settled_download_extractions(
+    app: &AppUseCase,
+) -> AppResult<SettledSweep> {
+    let repository = &app.services.workflow.archive_extractions;
+    let now = app.runtime.environment.now();
+    let due = repository
+        .list_settled_before(now - SETTLED_WORKSPACE_RETENTION, SETTLED_SWEEP_LIMIT)
+        .await?;
+    let mut done = Vec::new();
+    let mut retry = Vec::new();
+    for record in &due {
+        let key = DownloadExtractionKey::of_record(record);
+        let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
+        match remove_settled_workspace(&root, &key).await {
+            SettledRemoval::Done => done.push(key.pair()),
+            SettledRemoval::Retry => retry.push(key.pair()),
+        }
+    }
+    repository.delete_many(&done).await?;
+    repository.defer_settled(&retry, now).await?;
+    Ok(SettledSweep {
+        removed: done.len(),
+        deferred: retry.len(),
+    })
 }
 
 /// Delete the record of a download whose workspace was removed.

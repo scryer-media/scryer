@@ -681,13 +681,17 @@ async fn finalize_completed_import_error(
     Ok(result)
 }
 
-fn completed_import_error_skip_reason(error: &AppError) -> Option<ImportSkipReason> {
+pub(crate) fn completed_import_error_skip_reason(error: &AppError) -> Option<ImportSkipReason> {
     if crate::archive_extractor::is_password_required_error(error) {
         Some(ImportSkipReason::PasswordRequired)
     } else if matches!(error, AppError::ArchiveExtractionPluginRequired { .. }) {
         Some(ImportSkipReason::ArchiveExtractionPluginRequired)
     } else if crate::archive_extractor::is_timeout_error(error) {
         Some(ImportSkipReason::ArchiveExtractionTimedOut)
+    } else if error.validation_reason()
+        == Some(crate::error_reasons::archive_extraction::BLOCKED)
+    {
+        Some(ImportSkipReason::ArchiveExtractionBlocked)
     } else if error
         .validation_reason()
         .is_some_and(title_folder_refusal_needs_operator)

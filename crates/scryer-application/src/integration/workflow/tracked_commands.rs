@@ -1296,8 +1296,15 @@ async fn process_tracked_download_snapshot(
     } else {
         first_tracked_download_id_by_source(runtime.tracker.get_all())
     };
+    let mut left_client = Vec::new();
     for source_identity in unavailable_sources {
         let recorded = drop_source_removed_from_client(app, &source_identity).await;
+        if recorded
+            && let Some(key) =
+                crate::import::archive_extraction::DownloadExtractionKey::for_source(&source_identity)
+        {
+            left_client.push(key);
+        }
         let cached_id = cached_ids_by_source.get(&source_identity).copied();
         if let Some(tracked) = cached_id.and_then(|id| runtime.tracker.get_mut_by_download_id(id)) {
             if !recorded {
@@ -1308,6 +1315,9 @@ async fn process_tracked_download_snapshot(
             }
         }
     }
+    // A download gone from its client has ended: its archive workspace goes a
+    // day later.
+    crate::import::archive_extraction::settle_download_extractions(app, &left_client).await;
 
     if full_authoritative_listing && let Some(authoritative_client_ids) = authoritative_client_ids {
         drop_submissions_never_listed_by_client(
@@ -1980,6 +1990,29 @@ async fn await_snapshot_servicing_commands<T>(
     }
 }
 
+/// One provider-catalog notice: when archive extractors may have changed, the
+/// downloads waiting for one go back to the ordinary import. False once the
+/// channel has closed.
+pub(crate) async fn handle_provider_catalog_change(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    changed: Result<Vec<crate::ProviderCatalogFamily>, tokio::sync::broadcast::error::RecvError>,
+) -> bool {
+    use tokio::sync::broadcast::error::RecvError;
+    let archive_extractors_changed = match changed {
+        Ok(families) => families.contains(&crate::ProviderCatalogFamily::ArchiveExtractor),
+        // A missed change may have been an extractor.
+        Err(RecvError::Lagged(_)) => true,
+        Err(RecvError::Closed) => return false,
+    };
+    if archive_extractors_changed && tracker.reopen_downloads_awaiting_archive_extractor() > 0 {
+        tracing::info!("archive extractors changed; reopened downloads waiting for one");
+        crate::tracked_downloads::publish_runtime_tracked_download_snapshot_cache(app, tracker)
+            .await;
+    }
+    true
+}
+
 pub async fn start_download_queue_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -2041,22 +2074,8 @@ pub async fn start_download_queue_poller_with_options(
                 break;
             }
             changed = provider_catalog_rx.recv(), if provider_catalog_open => {
-                use tokio::sync::broadcast::error::RecvError;
-                let archive_extractors_changed = match changed {
-                    Ok(families) => families.contains(&crate::ProviderCatalogFamily::ArchiveExtractor),
-                    // A missed change may have been an extractor.
-                    Err(RecvError::Lagged(_)) => true,
-                    Err(RecvError::Closed) => {
-                        provider_catalog_open = false;
-                        false
-                    }
-                };
-                if archive_extractors_changed
-                    && runtime.tracker.reopen_downloads_awaiting_archive_extractor() > 0
-                {
-                    tracing::info!("archive extractors changed; reopened downloads waiting for one");
-                    publish_runtime_tracked_download_snapshot_cache(&app, &runtime.tracker).await;
-                }
+                provider_catalog_open =
+                    handle_provider_catalog_change(&app, &mut runtime.tracker, changed).await;
             }
             maybe_command = command_rx.recv(), if commands_open => {
                 match maybe_command {
@@ -3958,7 +3977,7 @@ async fn handle_tracked_download_background_work_result(
         crate::tracked_downloads::persist_import_blocked_state_marker(
             app,
             td,
-            crate::tracked_downloads::ImportBlockedReason::AfterImport,
+            crate::tracked_downloads::ImportBlockedReason::after_import(td),
             td.status_messages.first().map(|message| message.text.as_str()),
         )
         .await;

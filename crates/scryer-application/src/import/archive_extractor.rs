@@ -712,6 +712,10 @@ pub(crate) async fn download_workspace_presence(
     .unwrap_or(DownloadWorkspacePresence::Foreign)
 }
 
+/// This build proves whose a workspace is, so a path held by anything else is
+/// known not to be Scryer's.
+pub(crate) const PROVES_WORKSPACE_OWNERSHIP: bool = true;
+
 /// Remove a download's workspace when `owner_id` owns it. True when it is
 /// gone.
 pub(crate) async fn remove_download_workspace(root: &Path, owner_id: &str) -> bool {
@@ -1558,6 +1562,16 @@ pub(crate) fn create_test_archive_workspace_owned_by(parent: &Path, owner_id: &s
         &ArchiveExtractionDestination::new(parent, owner_id),
     )
     .unwrap();
+    workspace.lease.published = true;
+    workspace.root
+}
+
+/// A download's owned workspace at the fixed path `destination` names.
+#[cfg(test)]
+pub(crate) fn create_test_download_workspace(
+    destination: &ArchiveExtractionDestination,
+) -> PathBuf {
+    let mut workspace = ArchiveExtractionWorkspace::create_sync(destination).unwrap();
     workspace.lease.published = true;
     workspace.root
 }

@@ -1847,6 +1847,32 @@ impl ImportRepository for TrackingImportRepo {
             }))
     }
 
+    async fn replace_manual_import_selection(
+        &self,
+        selection: crate::ManualImportSelection,
+    ) -> AppResult<()> {
+        *self.manual_import_selection.lock().await = Some(selection);
+        Ok(())
+    }
+
+    async fn find_manual_import_selection(
+        &self,
+        actor_user_id: &str,
+        title_id: &str,
+        source_identity: &ClientJobLocator,
+    ) -> AppResult<Option<crate::ManualImportSelection>> {
+        Ok(self
+            .manual_import_selection
+            .lock()
+            .await
+            .clone()
+            .filter(|selection| {
+                selection.actor_user_id == actor_user_id
+                    && selection.title_id == title_id
+                    && &selection.source_identity == source_identity
+            }))
+    }
+
     async fn consume_manual_import_selection(
         &self,
         selection_id: &str,

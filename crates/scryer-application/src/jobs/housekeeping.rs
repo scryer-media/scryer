@@ -1353,6 +1353,20 @@ impl AppUseCase {
             }
         };
 
+        // 7. Archive workspaces of downloads that ended without an import.
+        match crate::import::archive_extraction::sweep_settled_download_extractions(self).await {
+            Ok(sweep) if sweep.removed > 0 || sweep.deferred > 0 => info!(
+                removed = sweep.removed,
+                deferred = sweep.deferred,
+                "removed archive workspaces of settled downloads"
+            ),
+            Ok(_) => {}
+            Err(error) => warn!(
+                error = %error,
+                "failed to remove archive workspaces of settled downloads"
+            ),
+        }
+
         {
             let _title_image_maintenance_guard = self
                 .runtime

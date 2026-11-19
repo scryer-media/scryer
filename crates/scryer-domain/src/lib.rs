@@ -3565,6 +3565,8 @@ pub enum ImportSkipReason {
     PasswordRequired,
     ArchiveExtractionPluginRequired,
     ArchiveExtractionTimedOut,
+    /// Every allowed extraction attempt failed; the operator retries.
+    ArchiveExtractionBlocked,
     /// The title's folder cannot take the import until the operator resolves
     /// it (another title owns it, or it is not a valid title folder).
     TitleFolderConflict,
@@ -3590,6 +3592,7 @@ impl ImportSkipReason {
             Self::PasswordRequired => "password_required",
             Self::ArchiveExtractionPluginRequired => "archive_extraction_plugin_required",
             Self::ArchiveExtractionTimedOut => "archive_extraction_timed_out",
+            Self::ArchiveExtractionBlocked => "archive_extraction_blocked",
             Self::TitleFolderConflict => "title_folder_conflict",
         }
     }

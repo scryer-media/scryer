@@ -266,7 +266,10 @@ async fn run_import(
         }
     }
 
-    // Clean up extracted archive directory if we created one
+    // A pass-scoped extraction goes with the pass. A download's own workspace
+    // outlives it: a pack imported in part is retried by later passes of the
+    // same download, which reuse the workspace instead of extracting again.
+    // It goes when the download settles.
     if result
         .as_ref()
         .is_ok_and(|result| result.decision == ImportDecision::Imported)
@@ -274,23 +277,8 @@ async fn run_import(
         && let Some(ref dir) = target.extracted_dir
     {
         workspace_reference.retain();
-        match crate::import::archive_extraction::DownloadExtractionKey::for_completed(completed)
-            .filter(|download| download.names_workspace(dir))
-        {
-            // The download is imported, so its workspace and record go.
-            Some(download) => {
-                if !crate::import::archive_extraction::remove_download_extraction(
-                    app, &download, dir,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        import_id,
-                        "imported download's archive workspace could not be removed; it is kept"
-                    );
-                }
-            }
-            None => crate::archive_extractor::cleanup_extracted_dir(dir).await,
+        if !crate::import::archive_extraction::is_download_workspace_path(dir) {
+            crate::archive_extractor::cleanup_extracted_dir(dir).await;
         }
     }
 
