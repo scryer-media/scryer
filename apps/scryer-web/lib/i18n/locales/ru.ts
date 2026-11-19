@@ -414,6 +414,9 @@ const ru: LocaleDictionary = {
   "settings.securityLoginSettings": "Настройки входа",
   "settings.securityEnableFormLoginHelp":
     "Если параметр включён, Scryer требует аутентифицированный сеанс пользователя. Если параметр отключён, запросы выполняются от имени администратора по умолчанию.",
+  "settings.securityMcpEnabled": "Разрешить MCP-сервер",
+  "settings.securityMcpEnabledHelp":
+    "Позволяет агентам для программирования использовать навыки Scryer через MCP по адресу /mcp с ключом API. Если выключено, каждый запрос MCP отклоняется; ключи API продолжают работать с GraphQL API.",
   "settings.securityPasswordMinLength": "Минимальная длина пароля",
   "settings.securitySessionDuration": "Вход действителен",
   "settings.securitySessionDurationHelp":
@@ -2355,7 +2358,7 @@ const ru: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Скачать диагностический пакет",
   "system.diagnosticsBundle.preparing": "Подготовка диагностики…",
   "system.diagnosticsBundle.helper":
-    "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
+    "Журналы, метрики и сводка настроек в одном файле для разработчика. Пакет очищается по мере возможности, и его можно безопасно отправить в тикете Discord, но публиковать его в issues на GitHub или в публичных каналах Discord не рекомендуется.",
   "system.diagnosticsBundle.failed":
     "Не удалось скачать диагностический пакет.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
@@ -7928,7 +7931,9 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
     "Не удалось прочитать этот пользовательский формат, поэтому правило не сохранено.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
-    "Профили качества оценивают этот формат по-разному, и для некоторых нет профиля качества Scryer с тем же именем. Правило даёт 0, пока вы его не проверите.",
+    "Профили качества оценивают этот формат по-разному, и Scryer не может сопоставить некоторые из них с одним профилем качества Scryer. Правило даёт 0, пока вы его не проверите.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer не удалось подготовить импорт по собственным настройкам. Правила не сохранены.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
     "Оценка зависит от профиля качества Scryer с тем же именем.",
   "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
@@ -12066,6 +12071,8 @@ const ru: LocaleDictionary = {
   "settings.arrImportStateFailed": "Не импортировано",
   "settings.arrImportUnmatchedProfiles":
     "Профили качества без профиля Scryer с тем же именем: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Имена профилей качества, которые источник повторяет с разными оценками: {{names}}",
   "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
   "settings.maintainerrImportAction": "Перенести из Maintainerr",
   "settings.maintainerrImportTitle": "Перенос из Maintainerr",
@@ -12141,6 +12148,7 @@ const ru: LocaleDictionary = {
     "Правило читает факт Scryer, который немного отличается от факта Maintainerr. Проверьте в предпросмотре перед включением.",
   "settings.maintainerrImportCode.actionApproximate":
     "Действие группы соответствует действиям Scryer, которые немного отличаются от действий Maintainerr. Проверьте в предпросмотре перед включением.",
+  "settings.arrImportDiagnosticAtCondition": "{{message}} (условие {{number}})",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",
   "settings.refReleaseHasHdrFallback":

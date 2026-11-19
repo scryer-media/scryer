@@ -1,7 +1,8 @@
 //! The built-in MCP endpoint: Streamable HTTP, JSON responses only, no
 //! server-side sessions.
 //!
-//! Every request is admitted here before rmcp sees it: the browser Origin must
+//! Every request is admitted here before rmcp sees it: the endpoint must be
+//! turned on in the security settings (it is by default), the browser Origin must
 //! be one the GraphQL WebSocket would accept, and the caller must present an
 //! API key. Tools then run operations from the operator skills' catalog
 //! through GraphQL, or diagnostics reads that check the same permissions, as
@@ -16,6 +17,7 @@
 //! before any caller other than an API key is admitted here.
 
 mod catalog;
+mod confirm;
 mod schema_index;
 mod server;
 mod tools;
@@ -40,7 +42,8 @@ use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use crate::diagnostics_routes::DiagnosticsHost;
 use crate::error_reasons::{
     HTTP_AUTHORIZATION_HEADER_INVALID, HTTP_MCP_API_KEY_INVALID, HTTP_MCP_API_KEY_REQUIRED,
-    HTTP_MCP_ORIGIN_NOT_ALLOWED, HTTP_MCP_REQUEST_BODY_UNREADABLE, HTTP_MCP_REQUEST_TOO_LARGE,
+    HTTP_MCP_DISABLED, HTTP_MCP_ORIGIN_NOT_ALLOWED, HTTP_MCP_REQUEST_BODY_UNREADABLE,
+    HTTP_MCP_REQUEST_TOO_LARGE,
 };
 use crate::middleware::{
     ApiKeyCallerRefusal, AuthState, admit_api_key_caller, restore_maintenance_response,
@@ -74,6 +77,7 @@ impl McpState {
         // The catalog is parsed once, here at startup, not on a request.
         std::sync::LazyLock::force(&catalog::CATALOG);
         let factory_auth = auth.clone();
+        let confirmations = Arc::new(confirm::Confirmations::default());
         // Stateless mode answers every request, `initialize` included, on its
         // own; nothing is kept between requests. Host checks are off; see the
         // module notes for why that is safe only while every caller is an
@@ -89,6 +93,7 @@ impl McpState {
                 Ok(ScryerMcpServer::new(
                     factory_auth.clone(),
                     diagnostics.clone(),
+                    confirmations.clone(),
                 ))
             },
             Arc::new(NeverSessionManager::default()),
@@ -107,6 +112,20 @@ pub(crate) async fn mcp_handler(
     setup_admission: Option<axum::Extension<crate::initial_auth::SetupAdmission>>,
     request: Request<Body>,
 ) -> Response {
+    // The operator's switch comes first: a turned-off endpoint does no other
+    // work and reads no request.
+    match state.auth.app.mcp_enabled().await {
+        Ok(true) => {}
+        Ok(false) => {
+            return refusal(
+                StatusCode::FORBIDDEN,
+                "FORBIDDEN",
+                HTTP_MCP_DISABLED,
+                "The Scryer MCP endpoint is turned off in Settings > Security & Access.",
+            );
+        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
     let headers = request.headers();
     if let Err(error) = state.auth.ws_origin_policy.check(headers) {
         if state

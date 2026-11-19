@@ -224,13 +224,50 @@ fn profile_names_match_exactly() {
             profile(2, "Sample Profile B", &[(1, 10)]),
         ],
     );
-    // Case and spacing differences are not a match.
-    let context = scryer_profiles(&["sample profile a", "Sample Profile B ", "Sample Profile B"]);
+    // A case difference is not a match.
+    let context = scryer_profiles(&["sample profile a", "Sample Profile B"]);
     let planned = plan(&fetched, &context);
     let draft = draft(&planned[0]);
     assert_eq!(draft.state, RuleImportItemState::SavedNeedsReview);
     assert_eq!(
         draft.facts[0].details.as_ref().unwrap()["unmatchedProfiles"],
+        json!(["Sample Profile A"])
+    );
+}
+
+#[test]
+fn profile_names_match_once_trimmed_and_the_table_uses_the_scryer_spelling() {
+    let fetched = fetched(
+        vec![title_format(1, "Sample Format Alpha")],
+        vec![
+            profile(1, " Sample Profile A", &[(1, 25)]),
+            profile(2, "Sample Profile B", &[(1, 10)]),
+        ],
+    );
+    let context = scryer_profiles(&["  Sample Profile A ", "Sample Profile B"]);
+    let planned = plan(&fetched, &context);
+    let saved = draft(&planned[0]);
+    assert_eq!(saved.state, RuleImportItemState::Saved);
+    assert!(
+        saved
+            .rego_source
+            .contains("\"  Sample Profile A \": 25,\n  \"Sample Profile B\": 10\n}"),
+        "{}",
+        saved.rego_source
+    );
+    // The report names profiles as the source does.
+    assert_eq!(
+        saved.facts[0].details.as_ref().unwrap()["scores"][0]["profile"],
+        "Sample Profile A"
+    );
+    assert_valid(&saved.rego_source);
+
+    // Two Scryer profiles that trim to one name match neither.
+    let ambiguous =
+        scryer_profiles(&["Sample Profile A ", " Sample Profile A", "Sample Profile B"]);
+    let planned = plan(&fetched, &ambiguous);
+    assert_eq!(
+        draft(&planned[0]).facts[0].details.as_ref().unwrap()["unmatchedProfiles"],
         json!(["Sample Profile A"])
     );
 }
@@ -256,6 +293,7 @@ fn unmatched_disagreeing_profiles_save_a_review_rule_scoring_zero() {
         details["unmatchedProfiles"],
         json!(["Sample Profile B", "Sample Profile C"])
     );
+    assert_eq!(details["duplicateProfiles"], json!([]));
     assert_eq!(
         details["scores"],
         json!([
@@ -291,10 +329,10 @@ fn a_repeated_profile_name_with_another_score_needs_review() {
     let planned = plan(&fetched, &scryer_profiles(&["Sample Profile A"]));
     let draft = draft(&planned[0]);
     assert_eq!(draft.state, RuleImportItemState::SavedNeedsReview);
-    assert_eq!(
-        draft.facts[0].details.as_ref().unwrap()["unmatchedProfiles"],
-        json!(["Sample Profile A"])
-    );
+    let details = draft.facts[0].details.as_ref().unwrap();
+    // The profile exists in Scryer; the source repeating its name is the problem.
+    assert_eq!(details["unmatchedProfiles"], json!([]));
+    assert_eq!(details["duplicateProfiles"], json!(["Sample Profile A"]));
 }
 
 #[test]
@@ -364,6 +402,103 @@ fn hostile_names_and_versions_stay_inert() {
         for line in draft.rego_source.lines() {
             assert!(!line.starts_with("} "), "{line}\n{}", draft.rego_source);
         }
+    }
+}
+
+#[test]
+fn control_characters_from_the_source_never_reach_names_descriptions_or_source() {
+    let mut fetched = fetched(
+        vec![title_format(1, "Synthetic\u{0}Format\u{2028}Name\u{7f} ")],
+        vec![profile(1, "Sample Profile A", &[(1, 25)])],
+    );
+    fetched.version = "6.0\u{0}\u{2029}# early\u{1b}end".into();
+    let planned = plan(&fetched, &RuleImportPlanContext::default());
+    let draft = draft(&planned[0]);
+    assert_eq!(draft.name, "(Radarr) Synthetic Format Name");
+    assert_eq!(planned[0].source_name, "Synthetic Format Name");
+    assert_eq!(draft.description, "Imported from Radarr 6.0 # early end.");
+    let hostile = |text: &str| {
+        text.chars()
+            .any(|c| (c.is_control() && c != '\n') || c == '\u{2028}' || c == '\u{2029}')
+    };
+    for text in [&draft.name, &draft.description, &draft.rego_source] {
+        assert!(!hostile(text), "{text:?}");
+    }
+    assert!(draft.claimed_names.iter().all(|name| !hostile(name)));
+    assert_valid(&draft.rego_source);
+}
+
+#[test]
+fn a_format_is_imported_under_either_of_its_names() {
+    let fetched = fetched(
+        vec![
+            title_format(1, "Sample Format Alpha"),
+            title_format(2, "Sample Format Beta"),
+        ],
+        vec![
+            profile(1, "Sample Profile A", &[(1, 25), (2, 25)]),
+            profile(2, "Sample Profile Unmatched", &[(1, 5), (2, 5)]),
+        ],
+    );
+    // The profiles disagree and Scryer has neither: both formats plan for review.
+    let review = plan(&fetched, &RuleImportPlanContext::default());
+    assert_eq!(
+        draft(&review[0]).name,
+        "(Radarr) REVIEW - Sample Format Alpha"
+    );
+    // Profiles now match: both formats plan under their plain names.
+    let matched = plan(
+        &fetched,
+        &scryer_profiles(&["Sample Profile A", "Sample Profile Unmatched"]),
+    );
+    assert_eq!(draft(&matched[0]).name, "(Radarr) Sample Format Alpha");
+
+    for (planned, existing, expected) in [
+        // An earlier run saved the plain name; this one would save for review.
+        (
+            review,
+            "(Radarr) Sample Format Alpha",
+            "(Radarr) Sample Format Alpha",
+        ),
+        // An earlier run saved for review; this one would save the plain name.
+        (
+            matched,
+            "(Radarr) REVIEW - Sample Format Alpha",
+            "(Radarr) REVIEW - Sample Format Alpha",
+        ),
+    ] {
+        let mut context = RuleImportSaveContext {
+            existing_names: HashSet::from([existing.to_string()]),
+            ..Default::default()
+        };
+        let outcomes: Vec<RuleImportSaveOutcome> = planned
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| match item.translation {
+                PlannedRuleImportTranslation::ArrScoringRule(rule) => {
+                    stage_arr_scoring_rule(&mut context, index, rule)
+                }
+                other => panic!("not a scoring rule: {other:?}"),
+            })
+            .collect();
+        assert_eq!(outcomes[0].state, RuleImportItemState::SkippedExists);
+        assert_eq!(outcomes[0].saved_name.as_deref(), Some(expected));
+        assert_eq!(outcomes[1].state, RuleImportItemState::Pending);
+        assert_eq!(context.staged_rule_sets.len(), 1);
+        let staged = &context.staged_rule_sets[0];
+        assert_eq!(staged.claimed_names.len(), 2);
+        assert!(staged.claimed_names.contains(&staged.rule_set.name));
+        assert!(
+            staged
+                .claimed_names
+                .iter()
+                .any(|name| name.contains("REVIEW - Sample Format Beta"))
+        );
+        assert!(
+            staged
+                .claimed_names
+                .contains(&"(Radarr) Sample Format Beta".to_string())
+        );
     }
 }
 

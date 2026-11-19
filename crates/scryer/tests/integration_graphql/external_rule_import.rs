@@ -83,10 +83,7 @@ async fn rule_import_fetches_purges_the_connection_and_reports_source_facts() {
         // Groups without rules cannot be translated; each is kept as a
         // disabled starter rule.
         let states: Vec<_> = report.items.iter().map(|item| item.state).collect();
-        assert_eq!(
-            states,
-            vec![RuleImportItemState::SavedFailedTranslation; 2]
-        );
+        assert_eq!(states, vec![RuleImportItemState::SavedFailedTranslation; 2]);
         let fact_codes: Vec<_> = report.facts.iter().map(|fact| fact.code.as_str()).collect();
         assert!(
             fact_codes.contains(&refusal::USERNAMES_UNAVAILABLE),
@@ -838,11 +835,26 @@ async fn maintainerr_with_groups(with_person_fact: bool) -> MockServer {
     let server = MockServer::start().await;
     let constants: Value = serde_json::from_str(MAINTAINERR_CONSTANTS).expect("constants");
     let routes = [
-        ("/api/settings/version", ResponseTemplate::new(200).set_body_string("2.19.0")),
-        ("/api/rules", ResponseTemplate::new(200).set_body_json(Value::from(groups))),
-        ("/api/rules/constants", ResponseTemplate::new(200).set_body_json(constants)),
-        ("/api/rules/users", ResponseTemplate::new(200).set_body_json(json!(["sample-user"]))),
-        ("/api/servarr/radarr/1/profiles", ResponseTemplate::new(200).set_body_json(json!([]))),
+        (
+            "/api/settings/version",
+            ResponseTemplate::new(200).set_body_string("2.19.0"),
+        ),
+        (
+            "/api/rules",
+            ResponseTemplate::new(200).set_body_json(Value::from(groups)),
+        ),
+        (
+            "/api/rules/constants",
+            ResponseTemplate::new(200).set_body_json(constants),
+        ),
+        (
+            "/api/rules/users",
+            ResponseTemplate::new(200).set_body_json(json!(["sample-user"])),
+        ),
+        (
+            "/api/servarr/radarr/1/profiles",
+            ResponseTemplate::new(200).set_body_json(json!([])),
+        ),
     ];
     for (route, response) in routes {
         Mock::given(method("GET"))
@@ -906,7 +918,10 @@ async fn maintainerr_rule_import_saves_disabled_lifecycle_rules_and_skips_them_o
             .iter()
             .find(|fact| fact.code == "maintainerr.group.rules_empty")
             .expect("the untranslated group says why");
-        assert_eq!(empty.details.as_ref().expect("details")["severity"], "ERROR");
+        assert_eq!(
+            empty.details.as_ref().expect("details")["severity"],
+            "ERROR"
+        );
         let (stored, _) = ctx
             .app
             .rule_import_status(&actor, &run.id)
@@ -932,7 +947,10 @@ async fn maintainerr_rule_import_saves_disabled_lifecycle_rules_and_skips_them_o
         for rule in &saved {
             assert_eq!(rule.state, scryer_domain::LifecycleRuleState::Disabled);
             assert!(rule.library_ids.is_empty(), "every library");
-            assert_eq!(rule.schedule, scryer_domain::default_lifecycle_rule_schedule());
+            assert_eq!(
+                rule.schedule,
+                scryer_domain::default_lifecycle_rule_schedule()
+            );
             let item = report
                 .items
                 .iter()
@@ -1034,7 +1052,8 @@ async fn maintainerr_rule_reading_who_watched_needs_permission_management() {
             ]
         );
         let refused = &report.items[2];
-        let code = scryer_application::error_reasons::lifecycle::PERSON_TARGETING_PERMISSION_REQUIRED;
+        let code =
+            scryer_application::error_reasons::lifecycle::PERSON_TARGETING_PERMISSION_REQUIRED;
         assert_eq!(refused.reason.as_deref(), Some(code));
         assert!(refused.facts.iter().any(|fact| fact.code == code));
         assert_eq!(refused.rule_set_id, None);
@@ -1124,4 +1143,127 @@ async fn an_unreachable_maintainerr_fails_the_run_with_a_code_and_saves_nothing(
     })
     .await
     .expect("maintainerr unreachable scenario bound");
+}
+
+#[tokio::test]
+async fn overlapping_radarr_rule_imports_save_each_format_once() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        seed_scryer_profiles(&ctx, &["Sample Profile A"]).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-overlap"))
+            .await
+            .expect("operator");
+        let server = radarr(
+            json!([
+                arr_title_format(1, "Sample Format Alpha"),
+                arr_title_format(2, "Sample Format Beta"),
+            ]),
+            json!([
+                {"id": 1, "name": "Sample Profile A", "formatItems": [
+                    {"format": 1, "name": "Sample Format Alpha", "score": 25},
+                    {"format": 2, "name": "Sample Format Beta", "score": 10}
+                ]}
+            ]),
+        )
+        .await;
+
+        // Both runs are accepted before either settles, so their plans can
+        // both see no existing rule; the save must still write each once.
+        let first = ctx
+            .app
+            .start_rule_import(&actor, "radarr-overlap-a", radarr_connection(&server))
+            .await
+            .expect("first accepted");
+        let second = ctx
+            .app
+            .start_rule_import(&actor, "radarr-overlap-b", radarr_connection(&server))
+            .await
+            .expect("second accepted");
+        assert_ne!(first.id, second.id);
+        let (first, second) = tokio::join!(
+            ctx.app.wait_rule_import(&actor, &first.id),
+            ctx.app.wait_rule_import(&actor, &second.id),
+        );
+        let (first, second) = (
+            first.expect("first settles"),
+            second.expect("second settles"),
+        );
+
+        for index in 0..2 {
+            let states = [first.items[index].state, second.items[index].state];
+            assert!(
+                states.contains(&RuleImportItemState::Saved)
+                    && states.contains(&RuleImportItemState::SkippedExists),
+                "{states:?}"
+            );
+            let skipped = if first.items[index].state == RuleImportItemState::SkippedExists {
+                &first.items[index]
+            } else {
+                &second.items[index]
+            };
+            assert_eq!(skipped.reason.as_deref(), Some(refusal::ALREADY_EXISTS));
+            assert_eq!(skipped.rule_set_id, None);
+        }
+
+        let mut names: Vec<_> = ctx
+            .app
+            .list_rule_sets(&actor)
+            .await
+            .expect("rule sets")
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .filter(|name| name.starts_with("(Radarr) "))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "(Radarr) Sample Format Alpha",
+                "(Radarr) Sample Format Beta"
+            ]
+        );
+    })
+    .await
+    .expect("overlapping rule import scenario bound");
+}
+
+#[tokio::test]
+async fn a_radarr_response_over_the_rule_import_cap_fails_the_run_with_a_code() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        seed_scryer_profiles(&ctx, &["Sample Profile A"]).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-oversized"))
+            .await
+            .expect("operator");
+        let oversized =
+            "x".repeat(scryer_application::external_import::RULE_IMPORT_ARR_MAX_RESPONSE_BYTES);
+        let server = radarr(json!([oversized]), json!([])).await;
+        let run = ctx
+            .app
+            .start_rule_import(&actor, "radarr-oversized", radarr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(
+            report.reason.as_deref(),
+            Some(scryer_application::error_reasons::external_import::SOURCE_RESPONSE_TOO_LARGE)
+        );
+        assert!(report.items.is_empty());
+        let (stored, _) = ctx
+            .app
+            .rule_import_status(&actor, &run.id)
+            .await
+            .expect("status");
+        assert_eq!(stored.status, JobRunStatus::Failed);
+    })
+    .await
+    .expect("oversized rule import scenario bound");
 }

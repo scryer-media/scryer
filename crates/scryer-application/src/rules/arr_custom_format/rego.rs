@@ -325,7 +325,7 @@ fn quote(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            other if other.is_control() => {
+            other if other.is_control() || other == '\u{2028}' || other == '\u{2029}' => {
                 out.push_str(&format!("\\u{:04x}", u32::from(other)));
             }
             other => out.push(other),

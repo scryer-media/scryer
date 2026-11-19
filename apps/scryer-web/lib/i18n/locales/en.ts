@@ -1023,7 +1023,9 @@ const en: LocaleDictionary = {
   "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
     "This custom format could not be read, so no rule was saved.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
-    "Quality profiles score this format differently and some have no Scryer quality profile with the same name. The rule scores 0 until you review it.",
+    "Quality profiles score this format differently and Scryer cannot match some of them to one Scryer quality profile. The rule scores 0 until you review it.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer could not prepare the import from its own settings. No rules were saved.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
     "The score follows the Scryer quality profile with the same name.",
   "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
@@ -4956,6 +4958,11 @@ const en: LocaleDictionary = {
   "settings.securitySkipLocalIps": "Skip for local IPs",
   "settings.securitySkipLocalIpsHelp":
     "When enabled, callers from 10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16 can access Scryer without signing in.",
+  "settings.securityMcpEnabled": "Allow the MCP server",
+  "settings.securityMcpEnabledHelp":
+    "Lets coding agents use Scryer's skills over MCP at /mcp with an API key. When off, every MCP request is refused; API keys keep working with the GraphQL API.",
+  "settings.securityMcpEnvOverride":
+    "SCRYER_MCP_ENABLED is set and decides whether the MCP server answers. The saved choice applies after the variable is removed.",
   "settings.securityMfaConfigStepUp":
     "Require MFA step-up for configuration changes",
   "settings.securityMfaConfigStepUpHelp":
@@ -7109,7 +7116,7 @@ const en: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Download diagnostics bundle",
   "system.diagnosticsBundle.preparing": "Preparing diagnostics…",
   "system.diagnosticsBundle.helper":
-    "Logs, metrics and a settings summary in one file for the maintainer. Names, addresses, paths and secrets are removed on a best-effort basis; review the bundle before sharing it.",
+    "Logs, metrics and a settings summary in one file for the maintainer. The bundle is sanitized on a best-effort basis and is safe to share in a Discord ticket, but sharing it in GitHub issues or public Discord channels is not recommended.",
   "system.diagnosticsBundle.failed":
     "Could not download the diagnostics bundle.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
@@ -7363,6 +7370,8 @@ const en: LocaleDictionary = {
   "settings.arrImportStateFailed": "Not imported",
   "settings.arrImportUnmatchedProfiles":
     "Quality profiles with no Scryer profile of the same name: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Quality profile names the source repeats with different scores: {{names}}",
   "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
   "settings.maintainerrImportAction": "Migrate from Maintainerr",
   "settings.maintainerrImportTitle": "Migrate from Maintainerr",
@@ -7438,6 +7447,7 @@ const en: LocaleDictionary = {
     "A rule reads a Scryer fact that differs slightly from Maintainerr's. Preview before enabling.",
   "settings.maintainerrImportCode.actionApproximate":
     "The group's action maps to Scryer actions that differ slightly from Maintainerr's. Preview before enabling.",
+  "settings.arrImportDiagnosticAtCondition": "{{message}} (condition {{number}})",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":

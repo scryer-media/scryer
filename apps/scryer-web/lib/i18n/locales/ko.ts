@@ -1534,7 +1534,7 @@ const ko: LocaleDictionary = {
   "system.diagnosticsBundle.download": "진단 번들 다운로드",
   "system.diagnosticsBundle.preparing": "진단 준비 중…",
   "system.diagnosticsBundle.helper":
-    "로그, 메트릭, 설정 요약을 관리자에게 보낼 하나의 파일로 묶습니다. 이름, 주소, 경로, 비밀 값은 최선을 다해 제거되지만 공유하기 전에 번들을 검토하세요.",
+    "로그, 메트릭, 설정 요약을 관리자에게 보낼 하나의 파일로 묶습니다. 번들은 최선을 다해 정리되므로 Discord 티켓으로는 안전하게 공유할 수 있지만, GitHub 이슈나 Discord 공개 채널에 공유하는 것은 권장하지 않습니다.",
   "system.diagnosticsBundle.failed": "진단 번들을 다운로드하지 못했습니다.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
     "진단을 다운로드하려면 다시 로그인하세요.",

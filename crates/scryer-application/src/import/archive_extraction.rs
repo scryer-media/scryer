@@ -1478,15 +1478,30 @@ const NOTED_FOLDER_SWEEP_LIMIT: usize = 100;
 /// Folders a library scan saw holding a directory named like a per-pass
 /// workspace, held in memory for this process only, for housekeeping to
 /// sweep.
+#[derive(Default)]
+struct NotedPassWorkspaceFolders {
+    folders: std::collections::BTreeSet<PathBuf>,
+    /// The last folder taken. The next pass takes from after it.
+    cursor: Option<PathBuf>,
+}
+
 static NOTED_PASS_WORKSPACE_FOLDERS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::BTreeSet<PathBuf>>,
+    std::sync::Mutex<NotedPassWorkspaceFolders>,
 > = std::sync::LazyLock::new(Default::default);
 
-fn noted_pass_workspace_folders()
--> std::sync::MutexGuard<'static, std::collections::BTreeSet<PathBuf>> {
+fn noted_pass_workspace_folders() -> std::sync::MutexGuard<'static, NotedPassWorkspaceFolders> {
     NOTED_PASS_WORKSPACE_FOLDERS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether `folder` is a library root's extraction folder or lies inside
+/// one. Its workspaces belong to downloads and are never age-swept; a name
+/// test only.
+fn is_in_extraction_folder(folder: &Path) -> bool {
+    folder
+        .components()
+        .any(|part| part.as_os_str() == ARCHIVE_EXTRACTION_DIR_NAME)
 }
 
 /// Note `parent` for housekeeping when `child`, an entry a scan has just
@@ -1497,34 +1512,60 @@ pub(crate) fn note_pass_workspace_parent(parent: &Path, child: &Path) {
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(archive_extractor::is_pass_workspace_name)
+        || is_in_extraction_folder(parent)
     {
         return;
     }
     let mut noted = noted_pass_workspace_folders();
-    if noted.len() < NOTED_FOLDER_CAP && !noted.contains(parent) {
-        noted.insert(parent.to_path_buf());
+    if noted.folders.len() < NOTED_FOLDER_CAP && !noted.folders.contains(parent) {
+        noted.folders.insert(parent.to_path_buf());
     }
 }
 
+/// The noted folders inside `under`, so a test reads only its own.
 #[cfg(test)]
-pub(crate) fn noted_pass_workspace_folders_for_test() -> Vec<PathBuf> {
-    noted_pass_workspace_folders().iter().cloned().collect()
+pub(crate) fn noted_pass_workspace_folders_for_test(under: &Path) -> Vec<PathBuf> {
+    noted_pass_workspace_folders()
+        .folders
+        .iter()
+        .filter(|folder| folder.starts_with(under))
+        .cloned()
+        .collect()
 }
 
 /// Up to `limit` noted folders inside one of `roots`, taken out of the
 /// notes. A noted folder outside every root is dropped unswept, and a root
 /// itself is dropped since the root sweep covers it; neither counts against
-/// the limit.
+/// the limit. A folder inside an extraction folder is dropped as well.
+///
+/// Folders are taken in name order from after the last one taken, wrapping
+/// around: a folder noted again after it was taken sits behind the cursor,
+/// so every other noted folder is reached within `NOTED_FOLDER_CAP / limit`
+/// passes, however often earlier folders are noted again.
 fn take_noted_pass_workspace_folders(roots: &[PathBuf], limit: usize) -> Vec<PathBuf> {
+    use std::ops::Bound::{Excluded, Unbounded};
     let mut noted = noted_pass_workspace_folders();
+    let NotedPassWorkspaceFolders { folders, cursor } = &mut *noted;
     let mut taken = Vec::new();
     while taken.len() < limit {
-        let Some(folder) = noted.pop_first() else {
+        let next = cursor
+            .as_ref()
+            .and_then(|after| {
+                folders
+                    .range::<PathBuf, _>((Excluded(after), Unbounded))
+                    .next()
+            })
+            .or_else(|| folders.first())
+            .cloned();
+        let Some(folder) = next else {
             break;
         };
-        if roots
-            .iter()
-            .any(|root| folder.starts_with(root) && folder != *root)
+        folders.remove(&folder);
+        *cursor = Some(folder.clone());
+        if !is_in_extraction_folder(&folder)
+            && roots
+                .iter()
+                .any(|root| folder.starts_with(root) && folder != *root)
         {
             taken.push(folder);
         }
@@ -1537,7 +1578,7 @@ fn take_noted_pass_workspace_folders(roots: &[PathBuf], limit: usize) -> Vec<Pat
 /// nothing noted it reads nothing. Per folder swept: one listing, and only
 /// entries named like a workspace are opened.
 pub(crate) async fn sweep_noted_pass_workspaces(app: &AppUseCase) -> AppResult<usize> {
-    if noted_pass_workspace_folders().is_empty() {
+    if noted_pass_workspace_folders().folders.is_empty() {
         return Ok(0);
     }
     let roots = library_roots(app).await?;

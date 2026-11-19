@@ -1558,7 +1558,7 @@ const ja: LocaleDictionary = {
   "system.diagnosticsBundle.download": "診断バンドルをダウンロード",
   "system.diagnosticsBundle.preparing": "診断を準備しています…",
   "system.diagnosticsBundle.helper":
-    "ログ、メトリクス、設定の概要をメンテナー向けに1つのファイルにまとめます。名前、アドレス、パス、シークレットは可能な限り削除されますが、共有する前にバンドルを確認してください。",
+    "ログ、メトリクス、設定の概要をメンテナー向けに1つのファイルにまとめます。バンドルは可能な限りサニタイズされており、Discord のチケットでは安全に共有できますが、GitHub の Issue や Discord の公開チャンネルでの共有はおすすめしません。",
   "system.diagnosticsBundle.failed":
     "診断バンドルをダウンロードできませんでした。",
   "system.diagnosticsBundle.refusal.authenticationRequired":

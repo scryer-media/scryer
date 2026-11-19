@@ -1178,6 +1178,8 @@ export const updateSecuritySettingsMutation = `mutation UpdateSecuritySettings($
     sessionDurationDays
     skipLoginForLocalIps
     apiKeysRestrictToSystemSettingsUsers
+    mcpEnabled
+    mcpEnabledEnvOverride
     mfaRequireConfigStepUp
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin

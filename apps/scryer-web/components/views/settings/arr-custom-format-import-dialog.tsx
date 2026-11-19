@@ -34,6 +34,10 @@ import {
 } from "@/lib/utils/arr-custom-format-import-state";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { ArrRuleImportConnectPanel } from "@/components/views/settings/arr-rule-import-connect-panel";
+import {
+  type ExternalRuleImportController,
+  ruleImportBusy,
+} from "@/lib/hooks/use-external-rule-import";
 
 export type ArrCustomFormatDraft = {
   name: string;
@@ -47,8 +51,11 @@ type ArrCustomFormatImportDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onApply: (draft: ArrCustomFormatDraft) => void;
-  /** Called when a connected import has saved its rules. */
-  onImported: () => void;
+  /**
+   * The connected import, owned by the caller so a run and its report survive
+   * closing the dialog and switching tabs.
+   */
+  connectImport: ExternalRuleImportController;
 };
 
 type ImportTab = "connect" | "paste";
@@ -66,13 +73,21 @@ export default function ArrCustomFormatImportDialog({
   open,
   onOpenChange,
   onApply,
-  onImported,
+  connectImport,
 }: ArrCustomFormatImportDialogProps) {
   const t = useTranslate();
   const client = useClient();
   const [tab, setTab] = React.useState<ImportTab>("connect");
-  const [connectBusy, setConnectBusy] = React.useState(false);
-  const [source, setSource] = React.useState<ArrSource>("sonarr");
+  const connectBusy = ruleImportBusy(connectImport);
+  // A connected run is shown for the source it reads from.
+  const [source, setSource] = React.useState<ArrSource>(() =>
+    connectImport.source === "RADARR" ? "radarr" : "sonarr",
+  );
+  // The connected run and its report belong to one source; the selector stays
+  // locked while they are shown, and a switch from the paste tab clears them.
+  const sourceLocked =
+    tab === "connect" && (connectImport.run !== null || connectBusy);
+  const { reset: resetConnectImport } = connectImport;
   const [json, setJson] = React.useState("");
   const [inspection, setInspection] = React.useState<Review | null>(null);
   const [scores, setScores] = React.useState<Record<string, string>>({});
@@ -107,6 +122,14 @@ export default function ArrCustomFormatImportDialog({
       if (nextSource !== undefined) setSource(nextSource);
     },
     [cancelRequest],
+  );
+
+  const chooseSource = React.useCallback(
+    (next: ArrSource) => {
+      if (next !== source && !connectBusy) resetConnectImport();
+      resetReview(undefined, next);
+    },
+    [connectBusy, resetConnectImport, resetReview, source],
   );
 
   /**
@@ -264,8 +287,10 @@ export default function ArrCustomFormatImportDialog({
                   id={`settings-rules-arr-source-${option}`}
                   type="button"
                   variant={source === option ? "default" : "secondary"}
-                  disabled={reviewing || translating || connectBusy}
-                  onClick={() => resetReview(undefined, option)}
+                  disabled={
+                    reviewing || translating || connectBusy || sourceLocked
+                  }
+                  onClick={() => chooseSource(option)}
                 >
                   <img
                     src={
@@ -306,9 +331,8 @@ export default function ArrCustomFormatImportDialog({
             <TabsContent value="connect">
               <ArrRuleImportConnectPanel
                 source={source}
-                onBusyChange={setConnectBusy}
+                controller={connectImport}
                 onClose={close}
-                onImported={onImported}
               />
             </TabsContent>
             <TabsContent value="paste" className="space-y-4">

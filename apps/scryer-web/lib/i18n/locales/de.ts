@@ -1596,7 +1596,7 @@ const de: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Diagnosepaket herunterladen",
   "system.diagnosticsBundle.preparing": "Diagnose wird vorbereitet…",
   "system.diagnosticsBundle.helper":
-    "Protokolle, Metriken und eine Einstellungsübersicht in einer Datei für den Maintainer. Namen, Adressen, Pfade und Geheimnisse werden nach bestem Bemühen entfernt; prüfe das Paket, bevor du es teilst.",
+    "Protokolle, Metriken und eine Einstellungsübersicht in einer Datei für den Maintainer. Das Paket wird nach bestem Bemühen bereinigt und kann sicher in einem Discord-Ticket geteilt werden; in GitHub-Issues oder öffentlichen Discord-Kanälen wird das Teilen jedoch nicht empfohlen.",
   "system.diagnosticsBundle.failed":
     "Das Diagnosepaket konnte nicht heruntergeladen werden.",
   "system.diagnosticsBundle.refusal.authenticationRequired":

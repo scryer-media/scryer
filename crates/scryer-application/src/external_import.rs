@@ -519,7 +519,12 @@ pub struct ExternalArrClient {
     api_bucket: ExternalArrApiBucket,
     api_prefix: Arc<RwLock<Option<String>>>,
     system_status: Arc<RwLock<Option<ExternalArrSystemStatus>>>,
+    /// Bodies past this size are refused; `None` reads the whole body.
+    max_body_bytes: Option<usize>,
 }
+
+/// Largest Sonarr or Radarr response body a rule import reads.
+pub const RULE_IMPORT_ARR_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 impl ExternalArrClient {
     pub fn for_sonarr_v4(base_url: String, api_key: String) -> AppResult<Self> {
@@ -557,7 +562,15 @@ impl ExternalArrClient {
             api_bucket,
             api_prefix: Arc::new(RwLock::new(None)),
             system_status: Arc::new(RwLock::new(None)),
+            max_body_bytes: None,
         })
+    }
+
+    /// Refuses any response body larger than `limit` bytes with
+    /// `SOURCE_RESPONSE_TOO_LARGE`, before the whole body is buffered.
+    pub fn with_max_response_bytes(mut self, limit: usize) -> Self {
+        self.max_body_bytes = Some(limit);
+        self
     }
 
     /// Test connectivity and return (app_name, version).
@@ -1075,7 +1088,7 @@ impl ExternalArrClient {
                 display_url,
                 api_key: Some(&self.api_key),
                 unauthorized_message: "invalid API key",
-                max_body_bytes: None,
+                max_body_bytes: self.max_body_bytes,
             },
             |source| self.transport_error_message(display_url, url, source),
         )
@@ -2188,6 +2201,35 @@ mod source_client_tests {
             .expect("client");
         let error = client.test_connection().await.expect_err("refused");
         assert_eq!(error.reason(), Some(reasons::SOURCE_UNREACHABLE));
+    }
+
+    #[tokio::test]
+    async fn arr_source_client_with_a_size_cap_refuses_an_oversized_body() {
+        let server = radarr_server("Radarr").await;
+        let oversized = format!(
+            "[\"{}\"]",
+            "x".repeat(super::RULE_IMPORT_ARR_MAX_RESPONSE_BYTES)
+        );
+        Mock::given(method("GET"))
+            .and(path("/api/v3/customformat"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(oversized))
+            .mount(&server)
+            .await;
+        let error = radarr(&server)
+            .with_max_response_bytes(super::RULE_IMPORT_ARR_MAX_RESPONSE_BYTES)
+            .list_custom_formats()
+            .await
+            .expect_err("too large");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_RESPONSE_TOO_LARGE));
+        // Without a cap, as the import wizard reads, the same body is read whole.
+        assert_eq!(
+            radarr(&server)
+                .list_custom_formats()
+                .await
+                .expect("uncapped")
+                .len(),
+            1
+        );
     }
 
     async fn maintainerr_server(prefix: &str) -> MockServer {

@@ -25092,7 +25092,7 @@ mod held_sources {
                 .walk(download.library_root())
                 .unwrap();
             assert_eq!(
-                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(),
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()),
                 vec![title_folder.clone()]
             );
 
@@ -25105,7 +25105,7 @@ mod held_sources {
             assert!(unmarked.join("Operator.Copy.mkv").exists(), "unmarked");
             assert!(operator_file.exists());
             assert!(library_video.exists());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test().is_empty());
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()).is_empty());
         }
 
         #[tokio::test]
@@ -25127,7 +25127,8 @@ mod held_sources {
             assert_eq!(report.noted_pass_workspaces_removed, 0);
             assert_eq!(report.pass_workspaces_removed, 1);
             assert!(workspace.join("out").is_dir(), "outside every root: kept");
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test().is_empty());
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(outside.path()).is_empty());
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()).is_empty());
         }
 
         #[tokio::test]
@@ -25151,7 +25152,7 @@ mod held_sources {
             assert_eq!(first.noted_pass_workspaces_removed, 0);
             assert!(last.exists(), "the last folder waits for the next pass");
             assert_eq!(
-                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(),
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root),
                 vec![folders.last().unwrap().clone()]
             );
 
@@ -25159,7 +25160,84 @@ mod held_sources {
 
             assert_eq!(second.noted_pass_workspaces_removed, 1);
             assert!(!last.exists());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test().is_empty());
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root).is_empty());
+        }
+
+        #[tokio::test]
+        async fn folders_noted_again_every_pass_do_not_starve_later_noted_folders() {
+            let download = archive_download("Noted Rotation Movie").await;
+            let app = &download.fixture.app;
+            let root = download.library_root();
+            let folders: Vec<PathBuf> = (0..150)
+                .map(|index| root.join(format!("Noted Rotation Folder {index:03}")))
+                .collect();
+            for folder in &folders {
+                std::fs::create_dir_all(folder).unwrap();
+            }
+            // The first hundred by name hold a workspace that is never
+            // released, so a scan notes them again after every pass.
+            let stuck: Vec<PathBuf> = folders[..100]
+                .iter()
+                .map(|folder| create_test_archive_workspace_owned_by(folder, "stuck-rotation-pass"))
+                .collect();
+            let late = released_pass_workspace(folders.last().unwrap(), "late-rotation-pass", OVER_A_DAY);
+            let note_stuck = || {
+                for (folder, workspace) in folders.iter().zip(&stuck) {
+                    crate::import::archive_extraction::note_pass_workspace_parent(folder, workspace);
+                }
+            };
+            note_stuck();
+            for folder in &folders[100..] {
+                crate::import::archive_extraction::note_pass_workspace_parent(folder, &late);
+            }
+
+            let first = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            assert_eq!(first.noted_pass_workspaces_removed, 0);
+            assert!(late.exists(), "the first pass reaches the first hundred");
+            note_stuck();
+
+            let second = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+
+            assert_eq!(second.noted_pass_workspaces_removed, 1);
+            assert!(!late.exists(), "the next pass resumes after the folders already taken");
+            assert!(stuck.iter().all(|workspace| workspace.join("out").is_dir()), "never released");
+        }
+
+        #[tokio::test]
+        async fn a_noted_extraction_folder_is_dropped_unswept() {
+            let download = archive_download("Noted Extraction Folder Movie").await;
+            let app = &download.fixture.app;
+            let extraction = download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME);
+            let (_, download_workspace) = orphaned_workspace(&download, "noted-extraction-item");
+            crate::archive_extractor::release_test_archive_workspace_at(
+                &download_workspace,
+                std::time::SystemTime::now() - OVER_A_DAY,
+            );
+            let pass_workspace = released_pass_workspace(&extraction, "noted-extraction-pass", OVER_A_DAY);
+            crate::import::archive_extraction::note_pass_workspace_parent(&extraction, &pass_workspace);
+            let held = tempfile::tempdir().unwrap();
+            let held_workspace = released_pass_workspace(held.path(), "held-extraction-pass", OVER_A_DAY);
+            crate::import::archive_extraction::note_pass_workspace_parent(
+                &download_workspace,
+                &held_workspace,
+            );
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root())
+                    .is_empty()
+            );
+
+            let removed = crate::import::archive_extraction::sweep_noted_pass_workspaces(app)
+                .await
+                .unwrap();
+
+            assert_eq!(removed, 0);
+            assert!(download_workspace.join("Orphaned.Feature.mkv").exists());
+            assert!(pass_workspace.join("out").is_dir());
+            // Sweeping the folder itself would have taken both.
+            assert_eq!(
+                crate::archive_extractor::sweep_stale_archive_workspaces_in(&extraction).await,
+                2
+            );
         }
 
         #[tokio::test]

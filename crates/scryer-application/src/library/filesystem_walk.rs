@@ -730,10 +730,13 @@ mod tests {
         let title = title_folder_with_hidden(with_workspace.path(), ".scryer-ax-0123456789abcdef");
 
         let other_walk = relative_walk(&scan, other.path());
-        assert!(noted().is_empty(), "other hidden names note nothing");
+        assert!(
+            noted(other.path()).is_empty(),
+            "other hidden names note nothing"
+        );
         let unfiltered = relative_walk(&FilesystemWalker::new(), with_workspace.path());
         assert!(
-            noted().is_empty(),
+            noted(with_workspace.path()).is_empty(),
             "a walk that is not a scan notes nothing"
         );
 
@@ -748,12 +751,12 @@ mod tests {
             "the workspace is still skipped"
         );
         #[cfg(feature = "runtime-archives")]
-        assert_eq!(noted(), vec![title]);
+        assert_eq!(noted(with_workspace.path()), vec![title]);
         #[cfg(not(feature = "runtime-archives"))]
         {
             let _ = title;
             assert!(
-                noted().is_empty(),
+                noted(with_workspace.path()).is_empty(),
                 "without archive support nothing is noted"
             );
         }

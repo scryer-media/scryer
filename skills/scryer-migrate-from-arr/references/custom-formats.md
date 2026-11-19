@@ -39,10 +39,20 @@ PROGRESS_JQ='.data.externalRuleImportStatus | "\(.phase) \(.counts.total)"' \
 jq -c '.data.externalRuleImportStatus | {status, reason, counts}' rule-import.json
 ```
 
-Phases: `QUEUED`, `FETCHING`, `PLANNING`, `SAVING`, `FINISHED`. Run `status`
-is `COMPLETED` when every item is `SAVED` or `SKIPPED_EXISTS`, `WARNING` when
-some item needs review or failed, `FAILED` when the run stopped short. A
-non-null run `reason` means nothing more was saved; look it up in
+Phases: `QUEUED`, `FETCHING`, `PLANNING`, `SAVING`, `FINISHED`. Run `status`:
+
+- `COMPLETED`: the run reached the save step and every item is `SAVED` or
+  `SKIPPED_EXISTS`.
+- `WARNING`: the run reached the save step and at least one item is
+  `SAVED_NEEDS_REVIEW` or `FAILED`. This includes a run where every item
+  failed, and a save Scryer interrupted: items it did not reach are `FAILED`
+  with `RULE_IMPORT_INTERRUPTED`, and so is the run `reason`.
+- `FAILED`: the run stopped short. Either reading the source or planning was
+  refused or interrupted (nothing saved; the run `reason` says why), or an
+  internal error stopped it (rules already saved are kept; items it did not
+  reach read as `FAILED` with `RULE_IMPORT_INTERRUPTED`).
+
+A non-null run `reason` says why the run stopped short; look it up in
 `scryer-connect/references/errors.md` (for example
 `EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED`: wrong API key;
 `EXTERNAL_IMPORT_SOURCE_UNREACHABLE`: Scryer cannot reach that URL). Only
@@ -66,12 +76,13 @@ scores it 0):
 
 - every profile gives the same score (or there is one profile): that literal
   score;
-- profiles disagree and every arr profile name exactly matches a Scryer
-  quality profile name (case and spaces count): the rule scores by
+- profiles disagree and every arr profile name matches a Scryer quality
+  profile name (leading and trailing spaces are ignored; case and inner
+  spaces count): the rule scores by
   `input.profile.name` from a per-profile table; a Scryer profile not in the
   table, or one the arr profiles scored 0, gets no score entry at all;
-- profiles disagree and some arr profile has no Scryer profile of that name:
-  a REVIEW rule.
+- profiles disagree and some arr profile has no Scryer profile of that name,
+  or arr repeats a profile name with different scores: a REVIEW rule.
 
 By `state`:
 
@@ -82,18 +93,25 @@ By `state`:
 - `SAVED_NEEDS_REVIEW`, reason `RULE_IMPORT_PROFILE_SCORES_UNMATCHED`: the
   active rule scores 0. Below a `REVIEW:` comment the rule's source carries the
   per-profile table and lookup rule commented out (`# ...` lines). The fact's
-  `details.unmatchedProfiles` names the arr profiles with no Scryer match and
-  `details.scores` every profile's score. Show both to the operator. Ask how
+  `details.unmatchedProfiles` names the arr profiles with no Scryer match,
+  `details.duplicateProfiles` the arr profile names repeated with different
+  scores, and `details.scores` every profile's score. Show them to the
+  operator. Ask how
   those profiles map to Scryer profiles (rename one side, or edit the table
   names); then, with a yes, edit the rule with `scryer-write-rules`: uncomment
   the block, fix its names, and delete the `:= 0` rule it replaces.
-- `SKIPPED_EXISTS`, reason `RULE_IMPORT_ALREADY_EXISTS`: a rule with that
-  exact name already exists (a re-run, or the same name twice in one source).
-  Nothing was written; the existing rule was not touched. To re-import one
-  format, the operator renames or deletes the old rule themselves.
+- `SKIPPED_EXISTS`, reason `RULE_IMPORT_ALREADY_EXISTS`: a rule already
+  exists under either of the format's names, plain or `REVIEW - `; `savedName`
+  is the one found. This covers a re-run, a REVIEW rule the operator since
+  renamed to the plain name (or the reverse), the same name twice in one
+  source, and two imports running at once (one saves, the other skips).
+  Nothing was written; the existing rule was not touched. A re-run therefore
+  only adds formats that are new in arr. To re-import one format, the
+  operator renames or deletes the old rule themselves.
 - `FAILED`: nothing was saved, no placeholder rule. `RULE_IMPORT_FORMAT_UNTRANSLATABLE`:
   a specification Scryer cannot translate (facts carry the translator's
-  diagnostic `code`, `message`, `details.location` and `details.severity`, for
+  diagnostic `code`, `message`, `details.location`,
+  `details.specificationIndex` and `details.severity`, for
   example `arr.year.unmapped` or `regex.backreference_unsupported`).
   `RULE_IMPORT_FORMAT_UNREADABLE`: the format itself could not be read.
   List these formats to the operator by name; a hand-written rule

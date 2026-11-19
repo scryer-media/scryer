@@ -375,6 +375,8 @@ fn from_security_settings(
         skip_login_for_local_ips: settings.skip_login_for_local_ips,
         api_keys_restrict_to_system_settings_users: settings
             .api_keys_restrict_to_system_settings_users,
+        mcp_enabled: settings.mcp_enabled,
+        mcp_enabled_env_override: settings.mcp_enabled_env_override,
         mfa_require_config_step_up: settings.mfa_require_config_step_up,
         mfa_require_password_login: settings.mfa_require_password_login,
         mfa_require_jellyfin_login: settings.totp_require_jellyfin_login,

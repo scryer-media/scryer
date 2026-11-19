@@ -112,6 +112,9 @@ fn run(context: ToolContext, arguments: Arguments) -> ToolFuture {
         let mut result = Map::new();
         result.insert("name".into(), json!(operation.name));
         result.insert("kind".into(), json!(operation.kind.token()));
+        if crate::mcp::confirm::needs_confirmation(operation) {
+            result.insert("confirm".into(), json!(true));
+        }
         if !operation.notes.is_empty() {
             result.insert("notes".into(), json!(operation.notes.join("\n")));
         }

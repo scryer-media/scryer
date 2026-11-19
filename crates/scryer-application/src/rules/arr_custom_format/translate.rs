@@ -674,7 +674,9 @@ fn comments(lines: &[String]) -> String {
             let mut out = String::from("# ");
             let mut in_break = false;
             for c in line.chars() {
-                if c == '\r' || c == '\n' {
+                // Any control character, or a line or paragraph separator,
+                // could end the comment or the source early.
+                if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
                     if !in_break {
                         out.push(' ');
                     }

@@ -2132,7 +2132,7 @@ const zh_HK: LocaleDictionary = {
   "system.diagnosticsBundle.download": "下載診斷套件",
   "system.diagnosticsBundle.preparing": "正在準備診斷…",
   "system.diagnosticsBundle.helper":
-    "將日誌、指標和設定摘要打包成一個檔案給維護者。名稱、地址、路徑和密鑰會盡力移除；分享前請檢查診斷套件。",
+    "將日誌、指標和設定摘要打包成一個檔案給維護者。診斷套件已盡力去識別化，可以安全地在 Discord 工單中分享，但不建議在 GitHub issue 或 Discord 公開頻道中分享。",
   "system.diagnosticsBundle.failed": "無法下載診斷套件。",
   "system.diagnosticsBundle.refusal.authenticationRequired":
     "請重新登入後下載診斷。",

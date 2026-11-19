@@ -9,6 +9,7 @@
 //! per-item report, which survives a restart.
 use crate::external_import::{
     ArrQualityProfileFormatScores, ExternalArrClient, ExternalMaintainerrClient,
+    RULE_IMPORT_ARR_MAX_RESPONSE_BYTES,
 };
 use crate::{
     AppError, AppResult, AppUseCase, JobKey, JobRun, JobRunRecord, JobRunStatus, JobTriggerSource,
@@ -48,6 +49,9 @@ pub mod refusal {
     pub const USERNAMES_UNAVAILABLE: &str = "RULE_IMPORT_USERNAMES_UNAVAILABLE";
     /// Rule groups name more Sonarr or Radarr servers than one import reads profiles for.
     pub const TOO_MANY_PROFILE_SOURCES: &str = "RULE_IMPORT_TOO_MANY_PROFILE_SOURCES";
+    /// Scryer could not prepare the import from its own data, such as its
+    /// quality profiles; the source was read and is not at fault.
+    pub const PLAN_FAILED: &str = "RULE_IMPORT_PLAN_FAILED";
     pub const ALL: &[&str] = &[
         INVALID_REQUEST,
         REQUEST_CHANGED,
@@ -63,6 +67,7 @@ pub mod refusal {
         PROFILES_UNAVAILABLE,
         USERNAMES_UNAVAILABLE,
         TOO_MANY_PROFILE_SOURCES,
+        PLAN_FAILED,
     ];
     #[cfg(test)]
     mod tests {
@@ -133,7 +138,7 @@ impl RuleImportSource {
 
 /// What the operator submitted. Stored encrypted as the run's private input
 /// until the fetch finishes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleImportConnection {
     pub source: RuleImportSource,
@@ -141,6 +146,19 @@ pub struct RuleImportConnection {
     /// Required for Sonarr and Radarr; Maintainerr has no API key and ignores it.
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for RuleImportConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuleImportConnection")
+            .field("source", &self.source)
+            .field(
+                "base_url",
+                &crate::url_redaction::redact_url_credentials(&self.base_url),
+            )
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Data read from a Sonarr or Radarr instance.
@@ -360,6 +378,9 @@ pub struct StagedRuleImportRuleSet {
     pub item_index: usize,
     /// The item's state once the rule set is written.
     pub state: RuleImportItemState,
+    /// Names whose presence, checked again when the batch is written, means
+    /// the item was already imported. They include the rule set's own name.
+    pub claimed_names: Vec<String>,
     pub rule_set: crate::NewRuleSet,
 }
 
@@ -380,7 +401,8 @@ impl RuleImportConnection {
                 let client = ExternalArrClient::for_sonarr_v4(
                     self.base_url.clone(),
                     self.api_key.clone().unwrap_or_default(),
-                )?;
+                )?
+                .with_max_response_bytes(RULE_IMPORT_ARR_MAX_RESPONSE_BYTES);
                 Ok((
                     RuleImportFetched::Sonarr(fetch_arr(&client).await?),
                     Vec::new(),
@@ -390,7 +412,8 @@ impl RuleImportConnection {
                 let client = ExternalArrClient::for_radarr_v6(
                     self.base_url.clone(),
                     self.api_key.clone().unwrap_or_default(),
-                )?;
+                )?
+                .with_max_response_bytes(RULE_IMPORT_ARR_MAX_RESPONSE_BYTES);
                 Ok((
                     RuleImportFetched::Radarr(fetch_arr(&client).await?),
                     Vec::new(),
@@ -874,10 +897,17 @@ impl AppUseCase {
                         tokio::task::spawn_blocking(move || plan_rule_import(&fetched, &context))
                             .await
                             .unwrap_or_else(|_| {
-                                Err(AppError::Repository("rule import planning failed".into()))
+                                Err(AppError::RepositoryFailed {
+                                    message: "rule import planning failed".into(),
+                                    reason: refusal::PLAN_FAILED,
+                                })
                             })
                     }
-                    Err(error) => Err(error),
+                    // Scryer's own data failed to load; the source is not at fault.
+                    Err(error) => Err(AppError::RepositoryFailed {
+                        message: format!("Scryer could not prepare the import: {error}"),
+                        reason: refusal::PLAN_FAILED,
+                    }),
                 }
             }
         };
@@ -970,6 +1000,8 @@ impl AppUseCase {
         } else {
             self.save_staged_rule_import(actor, &mut context, &mut progress)
                 .await;
+            // Report the written rule sets before anything else can stop the run.
+            self.publish_rule_import(&mut run, &mut progress).await?;
         }
         let status = if progress.items.iter().all(|item| item.state.is_clean()) {
             JobRunStatus::Completed
@@ -1076,9 +1108,20 @@ impl AppUseCase {
         }
         let (targets, drafts): (Vec<_>, Vec<_>) = staged
             .into_iter()
-            .map(|staged| ((staged.item_index, staged.state), staged.rule_set))
+            .map(|staged| {
+                (
+                    (staged.item_index, staged.state),
+                    crate::ClaimedNewRuleSet {
+                        rule_set: staged.rule_set,
+                        claimed_names: staged.claimed_names,
+                    },
+                )
+            })
             .unzip();
-        let results = match self.create_rule_sets_batch(actor, drafts).await {
+        let results = match self
+            .create_rule_sets_batch_claiming_names(actor, drafts)
+            .await
+        {
             Ok(results) => results.into_iter().map(Some).collect(),
             Err(error) => {
                 for (index, _) in &targets {
@@ -1093,9 +1136,16 @@ impl AppUseCase {
         for ((index, state), result) in targets.into_iter().zip(results) {
             let entry = &mut progress.items[index];
             match result {
-                Some(Ok(rule_set)) => {
+                Some(Ok(crate::ClaimedRuleSetOutcome::Created(rule_set))) => {
                     entry.state = state;
                     entry.rule_set_id = Some(rule_set.id);
+                }
+                // Another run or an operator created the rule since this run
+                // read the names; nothing was written for this item.
+                Some(Ok(crate::ClaimedRuleSetOutcome::NameTaken { name })) => {
+                    entry.state = RuleImportItemState::SkippedExists;
+                    entry.saved_name = Some(name);
+                    entry.reason = Some(refusal::ALREADY_EXISTS.into());
                 }
                 Some(Err(error)) => {
                     entry.state = RuleImportItemState::Failed;
