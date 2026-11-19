@@ -90,6 +90,24 @@ pub const HTTP_MCP_LOG_PATTERN_INVALID: &str = "HTTP_MCP_LOG_PATTERN_INVALID";
 /// A diagnostics tool could not gather what it reports.
 pub const HTTP_MCP_DIAGNOSTICS_FAILED: &str = "HTTP_MCP_DIAGNOSTICS_FAILED";
 
+/// A run tool named an operation the catalog does not hold.
+pub const HTTP_MCP_OPERATION_UNKNOWN: &str = "HTTP_MCP_OPERATION_UNKNOWN";
+
+/// An operation name differs between skills and the call named no skill.
+pub const HTTP_MCP_OPERATION_AMBIGUOUS: &str = "HTTP_MCP_OPERATION_AMBIGUOUS";
+
+/// A query was sent to the mutation tool, or a mutation to the query tool.
+pub const HTTP_MCP_OPERATION_KIND_MISMATCH: &str = "HTTP_MCP_OPERATION_KIND_MISMATCH";
+
+/// An operation's result is larger than one tool result may carry.
+pub const HTTP_MCP_RESULT_TOO_LARGE: &str = "HTTP_MCP_RESULT_TOO_LARGE";
+
+/// The served schema could not be read to describe an operation.
+pub const HTTP_MCP_SCHEMA_UNREADABLE: &str = "HTTP_MCP_SCHEMA_UNREADABLE";
+
+/// The operation list was filtered by a skill that has no served operation.
+pub const HTTP_MCP_SKILL_UNKNOWN: &str = "HTTP_MCP_SKILL_UNKNOWN";
+
 #[cfg(test)]
 const ALL: &[&str] = &[
     HTTP_MCP_ORIGIN_NOT_ALLOWED,
@@ -102,6 +120,12 @@ const ALL: &[&str] = &[
     HTTP_MCP_ARGUMENTS_INVALID,
     HTTP_MCP_LOG_PATTERN_INVALID,
     HTTP_MCP_DIAGNOSTICS_FAILED,
+    HTTP_MCP_OPERATION_UNKNOWN,
+    HTTP_MCP_OPERATION_AMBIGUOUS,
+    HTTP_MCP_OPERATION_KIND_MISMATCH,
+    HTTP_MCP_RESULT_TOO_LARGE,
+    HTTP_MCP_SCHEMA_UNREADABLE,
+    HTTP_MCP_SKILL_UNKNOWN,
     HTTP_WEBSOCKET_API_KEY_UNSUPPORTED,
     HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED,
     HTTP_API_EXPLORER_DISABLED,

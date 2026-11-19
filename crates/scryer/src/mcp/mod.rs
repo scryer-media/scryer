@@ -3,9 +3,10 @@
 //!
 //! Every request is admitted here before rmcp sees it: the browser Origin must
 //! be one the GraphQL WebSocket would accept, and the caller must present an
-//! API key. Tools then run ordinary GraphQL operations, or application reads
-//! that check the same permissions, as that key's actor, so permissions,
-//! step-up and library grants match `/graphql` exactly.
+//! API key. Tools then run operations from the operator skills' catalog
+//! through GraphQL, or diagnostics reads that check the same permissions, as
+//! that key's actor, so permissions, step-up and library grants match
+//! `/graphql` exactly.
 //!
 //! rmcp's Host allow-list is off, because LAN and reverse-proxy deployments
 //! reach Scryer under any name. The Origin check does not stop DNS
@@ -14,6 +15,8 @@
 //! attach a bearer token it does not hold. A Host allow-list must come back
 //! before any caller other than an API key is admitted here.
 
+mod catalog;
+mod schema_index;
 mod server;
 mod tools;
 
@@ -68,6 +71,8 @@ pub(crate) struct McpState {
 
 impl McpState {
     pub(crate) fn new(auth: AuthState, diagnostics: Arc<DiagnosticsHost>) -> Self {
+        // The catalog is parsed once, here at startup, not on a request.
+        std::sync::LazyLock::force(&catalog::CATALOG);
         let factory_auth = auth.clone();
         // Stateless mode answers every request, `initialize` included, on its
         // own; nothing is kept between requests. Host checks are off; see the

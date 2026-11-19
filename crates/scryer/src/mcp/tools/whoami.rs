@@ -1,28 +1,33 @@
-use super::Effect;
-use super::{Args, ToolContext, ToolFuture, ToolSpec, graphql};
-use rmcp::model::CallToolResult;
+use super::{Arguments, ToolContext, ToolEntry, ToolFuture, api_class, execute, local_read, tool};
+use crate::mcp::catalog::CATALOG;
+use crate::mcp::server::tool_result;
+use serde_json::json;
 
-/// Shared with the scryer-connect skill.
-pub(super) const OPERATION: &str =
-    include_str!("../../../../../skills/scryer-connect/operations/Me.graphql");
+/// The catalog operation this tool runs, shared with the scryer-connect
+/// skill.
+const OPERATION: &str = "Me";
 
-pub(super) static TOOL: ToolSpec = ToolSpec {
-    name: "whoami",
-    title: "Who am I",
-    description: "Show the Scryer account this API key acts as: its username, account kind, app \
-permissions and whether it has MFA.",
-    params: &[],
-    effect: Effect::Read,
-    run,
-};
+pub(super) fn entry() -> ToolEntry {
+    ToolEntry {
+        tool: tool(
+            "whoami",
+            "The account this API key acts as, with its permissions.",
+            json!({"type": "object", "properties": {}}),
+            local_read(),
+        ),
+        accepts: &[],
+        run,
+        class: api_class,
+    }
+}
 
-fn run(context: ToolContext, _args: Args) -> ToolFuture {
+fn run(context: ToolContext, _arguments: Arguments) -> ToolFuture {
     Box::pin(async move {
-        Ok(
-            match graphql(&context, OPERATION, serde_json::Value::Null).await {
-                Ok(data) => CallToolResult::structured(data),
-                Err(error) => error,
-            },
-        )
+        let operation = CATALOG
+            .get(OPERATION)
+            .expect("the catalog serves one Me operation");
+        let request = async_graphql::Request::new(operation.text).operation_name(OPERATION);
+        let response = execute(&context, request).await;
+        Ok(tool_result(response))
     })
 }

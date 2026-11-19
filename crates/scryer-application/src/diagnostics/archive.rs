@@ -24,7 +24,7 @@ pub(crate) const MEMBER_FILE_LOG: &str = "logs/file.log";
 pub(crate) const MEMBER_METRICS: &str = "metrics.prom";
 
 /// The sanitizer layers, in the order they run, as the manifest lists them.
-pub(super) fn sanitization_passes() -> Vec<&'static str> {
+fn sanitization_passes() -> Vec<&'static str> {
     vec![
         "structured_field_names",
         "secret_patterns",

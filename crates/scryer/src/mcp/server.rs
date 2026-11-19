@@ -1,13 +1,14 @@
 //! The MCP protocol surface: the tool table from [`super::tools`], argument
-//! validation and the mapping of GraphQL responses to tool results.
+//! admission and the mapping of GraphQL responses to tool results.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_graphql::Response as GraphQLResponse;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, InitializeResult,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+    Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -18,16 +19,12 @@ use crate::diagnostics_routes::DiagnosticsHost;
 use crate::error_reasons::{HTTP_MCP_GRAPHQL_ERROR, HTTP_MCP_TOOL_UNKNOWN};
 use crate::middleware::{ApiKeyCaller, AuthState};
 
-const INSTRUCTIONS: &str = "Scryer tools act as the account that owns the API key, with exactly \
-that account's permissions and library access. No tool contacts an indexer, download client or \
-other service. Each tool's annotations say whether it changes saved state; write tools run the \
-same mutations and checks as the web UI. No call deletes a title, file or download; routing \
-writes replace a whole scope. Lists return counts first, then a bounded page with \
-next_offset or next_cursor. A failed call has isError set and structured content \
-{\"errors\": [...]}; each error carries a stable code, an optional reason and a message. Decide \
-on code and reason, never on the message text.";
+const INSTRUCTIONS: &str = "Calls act as the API key's account, with its permissions. \
+list_operations, then describe_operation for variables, then run_query or run_mutation. \
+Operations that can delete files, titles or download-client items are not served. \
+Errors: isError with errors[{code, reason, message}]; decide on code and reason, never on message.";
 
-const _: () = assert!(INSTRUCTIONS.len() < 700);
+const _: () = assert!(INSTRUCTIONS.len() < 400);
 
 #[derive(Clone)]
 pub(crate) struct ScryerMcpServer {
@@ -54,12 +51,15 @@ impl ServerHandler for ScryerMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(
-            tools::TOOLS.iter().map(|spec| tools::tool(spec)).collect(),
+            tools::TOOLS
+                .iter()
+                .map(|entry| entry.tool.clone())
+                .collect(),
         ))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        tools::find(name).map(tools::tool)
+        tools::find(name).map(|entry| entry.tool.clone())
     }
 
     async fn call_tool(
@@ -68,13 +68,13 @@ impl ServerHandler for ScryerMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         // The name the client sent is never echoed back.
-        let Some(spec) = tools::find(&request.name) else {
+        let Some(entry) = tools::find(&request.name) else {
             return Err(ErrorData::invalid_params(
                 "unknown tool",
                 Some(json!({"reason": HTTP_MCP_TOOL_UNKNOWN})),
             ));
         };
-        let args = tools::validate(spec, request.arguments)?;
+        let arguments = tools::Arguments::new(request.arguments, entry.accepts)?;
         // The route admits the caller and stores it on the HTTP request; rmcp
         // hands the request parts to the handler unchanged.
         let parts = context.extensions.get::<axum::http::request::Parts>();
@@ -91,14 +91,21 @@ impl ServerHandler for ScryerMcpServer {
         let probe = parts
             .and_then(|parts| parts.extensions.get::<ExecutionProbe>())
             .cloned();
+        #[cfg(test)]
+        let result_max_bytes = parts
+            .and_then(|parts| parts.extensions.get::<ResultCap>())
+            .map_or(tools::RESULT_MAX_BYTES, |cap| cap.0);
+        #[cfg(not(test))]
+        let result_max_bytes = tools::RESULT_MAX_BYTES;
         let tool_context = ToolContext {
             auth: self.auth.clone(),
             caller,
             diagnostics: self.diagnostics.clone(),
             cancelled: Arc::new(AtomicBool::new(false)),
+            result_max_bytes,
         };
         // One call is one charge, whatever the tool runs inside it.
-        if let Some(refused) = tools::charge_call(&tool_context) {
+        if let Some(refused) = tools::charge_call(&tool_context, entry, &arguments) {
             return Ok(refused.into());
         }
         // Blocking work cannot be dropped like a future; it polls this flag.
@@ -109,19 +116,18 @@ impl ServerHandler for ScryerMcpServer {
             if let Some(probe) = probe {
                 probe.hold().await;
             }
-            (spec.run)(tool_context, args).await
+            (entry.run)(tool_context, arguments).await
         };
         // A client that goes away cancels the request. The tool's future is
         // dropped at its next await, which ends its GraphQL and database
         // reads. Work already handed to `spawn_blocking` cannot be dropped,
         // so it checks the call's cancellation flag: the log search stops
-        // between lines and between log files, and the overview's log file
-        // read stops between files. These run to completion and their
-        // results are discarded: one log file's read already under way, the
-        // overview's line counting, and the section tool's host facts and
-        // metrics render, which are short, bounded reads. The restore lease
-        // is held until rmcp drops the request, which waits only for the
-        // handler, not for blocking work still finishing.
+        // between lines and between log files. These run to completion and
+        // their results are discarded: one log file's read already under
+        // way, the section tool's host facts and metrics render, which are
+        // short, bounded reads, and the one-time schema index build. The
+        // restore lease is held until rmcp drops the request, which waits
+        // only for the handler, not for blocking work still finishing.
         tokio::select! {
             result = execution => result.map(Into::into),
             () = context.ct.cancelled() => Err(ErrorData::internal_error(
@@ -166,16 +172,49 @@ impl ExecutionProbe {
     }
 }
 
-/// A GraphQL response as a tool result: the data on success, and on failure
-/// every error's code, reason, path and other extension facts from its
-/// extensions, never parsed out of its message, beside whatever data the
-/// operation still returned.
+/// A test hook that sets the run tools' result cap for one request.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) struct ResultCap(pub usize);
+
+/// A tool result carrying `text`, serialized JSON, as its one text block.
+/// No tool declares an output schema, so no structured copy is sent: every
+/// client reads the same block, and it travels once.
+pub(crate) fn text_result(text: String, is_error: bool) -> CallToolResult {
+    let content = vec![ContentBlock::text(text)];
+    if is_error {
+        CallToolResult::error(content)
+    } else {
+        CallToolResult::success(content)
+    }
+}
+
+/// A successful tool result of `value`, as compact JSON text.
+pub(crate) fn json_result(value: Value) -> CallToolResult {
+    text_result(value.to_string(), false)
+}
+
+/// A failed tool result of `value`, carried the same way as [`json_result`].
+pub(crate) fn json_error(value: Value) -> CallToolResult {
+    text_result(value.to_string(), true)
+}
+
+/// A GraphQL response as a tool result; see [`graphql_value`].
 pub(crate) fn tool_result(response: GraphQLResponse) -> CallToolResult {
+    let (value, is_error) = graphql_value(response);
+    text_result(value.to_string(), is_error)
+}
+
+/// A GraphQL response as a tool result's value and whether it failed: the
+/// data on success, and on failure every error's code, reason, path and
+/// other extension facts from its extensions, never parsed out of its
+/// message, beside whatever data the operation still returned.
+pub(crate) fn graphql_value(response: GraphQLResponse) -> (Value, bool) {
     let data = serde_json::to_value(&response.data).unwrap_or(Value::Null);
     if response.errors.is_empty() {
         return match data {
-            Value::Object(_) => CallToolResult::structured(data),
-            _ => CallToolResult::structured(json!({})),
+            Value::Object(_) => (data, false),
+            _ => (json!({}), false),
         };
     }
     let errors = response
@@ -219,5 +258,5 @@ pub(crate) fn tool_result(response: GraphQLResponse) -> CallToolResult {
     if matches!(&data, Value::Object(fields) if fields.values().any(|value| !value.is_null())) {
         content.insert("data".into(), data);
     }
-    CallToolResult::structured_error(Value::Object(content))
+    (Value::Object(content), true)
 }

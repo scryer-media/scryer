@@ -241,6 +241,17 @@ impl ScryerRateLimiter {
         limiter
     }
 
+    /// A limiter whose search, mutation and API buckets admit the given
+    /// requests an hour, with the authentication buckets generous.
+    #[cfg(test)]
+    pub(crate) fn for_class_test(search: u32, mutation: u32, api: u32) -> Self {
+        let mut limiter = Self::for_api_test(api);
+        let buckets = Arc::get_mut(&mut limiter.inner).expect("fresh limiter is unshared");
+        buckets.search = Bucket::for_test(search);
+        buckets.mutation = Bucket::for_test(mutation);
+        limiter
+    }
+
     #[cfg(test)]
     pub(crate) fn for_network_test(trusted_proxy_specs: &[&str], bypass_specs: &[&str]) -> Self {
         let mut limiter = Self::for_authentication_test(1, 1, 1, 10);

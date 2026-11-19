@@ -1,7 +1,7 @@
 //! Every operator-skill operation file must parse and validate against the
 //! schema this binary serves. The files are run by agents against live
-//! instances, and MCP tools embed them, so a schema change that breaks one
-//! fails here instead of in the field.
+//! instances, and the MCP catalog embeds them, so a schema change that breaks
+//! one fails here instead of in the field.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -81,7 +81,7 @@ async fn every_skill_operation_file_validates_against_the_served_schema() {
         files
             .iter()
             .any(|path| path.ends_with("scryer-connect/operations/Me.graphql")),
-        "the operation files the MCP tools embed must be found"
+        "the operation files the MCP catalog embeds must be found"
     );
 
     let mut failures = Vec::new();
@@ -119,14 +119,33 @@ fn validating_schema() -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     .finish()
 }
 
+/// Every catalog document, each variant of a name with differing texts
+/// included.
+fn catalog_documents() -> Vec<(&'static str, &'static str)> {
+    super::catalog::CATALOG
+        .operations()
+        .iter()
+        .map(|operation| (operation.name.as_str(), operation.text))
+        .collect()
+}
+
 #[tokio::test]
-async fn every_document_an_mcp_tool_runs_validates_against_the_served_schema() {
+async fn every_catalog_operation_validates_against_the_served_schema() {
     let schema = validating_schema();
-    let documents = super::tools::every_operation_document();
+    let documents = catalog_documents();
     assert!(!documents.is_empty());
+    for name in &super::catalog::CATALOG.varied {
+        let variants = documents
+            .iter()
+            .filter(|(document_name, _)| document_name == name)
+            .count();
+        assert!(variants > 1, "every variant of {name} is checked");
+    }
     let mut failures = Vec::new();
     for (name, document) in &documents {
-        let response = schema.execute(Request::new(*document)).await;
+        let response = schema
+            .execute(Request::new(*document).operation_name(*name))
+            .await;
         if !response.errors.is_empty() {
             let messages = response
                 .errors
@@ -139,7 +158,7 @@ async fn every_document_an_mcp_tool_runs_validates_against_the_served_schema() {
     }
     assert!(
         failures.is_empty(),
-        "{} of {} tool documents do not validate:\n{}",
+        "{} of {} catalog operations do not validate:\n{}",
         failures.len(),
         documents.len(),
         failures.join("\n")
@@ -147,15 +166,15 @@ async fn every_document_an_mcp_tool_runs_validates_against_the_served_schema() {
 }
 
 #[test]
-fn no_document_an_mcp_tool_runs_is_an_authentication_operation() {
+fn no_catalog_operation_is_an_authentication_operation() {
     // Tool calls are charged once, before the tool runs, and their operations
-    // run without the authentication limiter; that holds only while no tool
-    // document authenticates.
+    // run without the authentication limiter; that holds only while no
+    // catalog operation authenticates.
     let analyze =
         |document: &str| crate::rate_limit::analyze_authentication_request(&Request::new(document));
     let control = analyze("mutation Fixture { login(input: {}) { token } }");
     assert!(control.class.is_some(), "the check must see a login");
-    for (name, document) in super::tools::every_operation_document() {
+    for (name, document) in catalog_documents() {
         let analysis = analyze(document);
         assert!(
             analysis.class.is_none() && !analysis.rejected,

@@ -2,7 +2,9 @@ use super::*;
 use crate::diagnostics_routes::DiagnosticsProcessFacts;
 use crate::error_reasons::{
     HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_GRAPHQL_ERROR,
-    HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_TOOL_UNKNOWN,
+    HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_OPERATION_AMBIGUOUS, HTTP_MCP_OPERATION_KIND_MISMATCH,
+    HTTP_MCP_OPERATION_UNKNOWN, HTTP_MCP_RESULT_TOO_LARGE, HTTP_MCP_SKILL_UNKNOWN,
+    HTTP_MCP_TOOL_UNKNOWN,
 };
 use crate::log_buffer::LogRingBuffer;
 use crate::middleware::integration_test_common as common;
@@ -29,8 +31,6 @@ use tower::ServiceExt as _;
 const HOST: &str = "scryer.lan:8080";
 /// A failure bound for every await; a correct run never gets near it.
 const BOUND: Duration = Duration::from_secs(120);
-/// About 5,000 tokens of JSON text.
-const RESULT_TEXT_MAX_CHARS: usize = 20_000;
 
 /// Awaits `future`, failing the test instead of hanging it.
 async fn within<F: Future>(what: &str, future: F) -> F::Output {
@@ -272,32 +272,32 @@ async fn call(fixture: &Fixture, key: &str, name: &str, arguments: Value) -> Val
     body
 }
 
-/// A successful tool result's structured content, checked against the size
-/// budget and the text block.
-fn success(name: &str, body: &Value) -> Value {
+/// A tool result's value: the JSON object in its one text block. The
+/// result carries it once, with no structured copy.
+fn result_value(name: &str, body: &Value) -> Value {
     let result = &body["result"];
-    assert_eq!(result["isError"], false, "{name}: {body}");
-    let content = result["structuredContent"].clone();
-    assert!(content.is_object(), "{name}: {body}");
-    let text = result["content"][0]["text"].as_str().expect("text block");
-    assert!(
-        text.chars().count() <= RESULT_TEXT_MAX_CHARS,
-        "{name} returned {} characters",
-        text.chars().count()
-    );
-    assert_eq!(
-        serde_json::from_str::<Value>(text).expect("text block is JSON"),
-        content,
-        "{name}"
-    );
-    content
+    assert!(result.get("structuredContent").is_none(), "{name}: {body}");
+    let content = result["content"].as_array().expect("content");
+    assert_eq!(content.len(), 1, "{name}: {body}");
+    assert_eq!(content[0]["type"], "text", "{name}: {body}");
+    let text = content[0]["text"].as_str().expect("text");
+    let value: Value = serde_json::from_str(text).expect("JSON text");
+    assert!(value.is_object(), "{name}: {body}");
+    // Compact: serialized without whitespace.
+    assert_eq!(text, value.to_string(), "{name}");
+    value
+}
+
+/// A successful tool result's value.
+fn success(name: &str, body: &Value) -> Value {
+    assert_eq!(body["result"]["isError"], false, "{name}: {body}");
+    result_value(name, body)
 }
 
 /// A tool error's first error entry.
 fn tool_error(name: &str, body: &Value) -> Value {
-    let result = &body["result"];
-    assert_eq!(result["isError"], true, "{name}: {body}");
-    let error = result["structuredContent"]["errors"][0].clone();
+    assert_eq!(body["result"]["isError"], true, "{name}: {body}");
+    let error = result_value(name, body)["errors"][0].clone();
     assert!(error["code"].is_string(), "{name}: {body}");
     assert!(error["message"].is_string(), "{name}: {body}");
     error
@@ -416,113 +416,6 @@ async fn seed_title_with_decisions(context: &common::TestContext, codes: &[&str]
         .expect("seed decision");
     }
     title.id
-}
-
-const TOOL_NAMES: &[&str] = &[
-    "whoami",
-    "get_health_checks",
-    "list_download_clients",
-    "list_indexers",
-    "list_indexer_errors",
-    "get_system_health",
-    "list_job_runs",
-    "find_titles",
-    "get_title_decisions",
-    "list_pending_releases",
-    "get_title_history",
-    "list_download_queue",
-    "list_import_history",
-    "get_upgrade_status",
-    "get_diagnostics_overview",
-    "read_diagnostics_section",
-    "search_service_logs",
-    "list_rule_sets",
-    "get_rule_set",
-    "list_title_episodes",
-    "validate_rule_set",
-    "test_rule_set",
-    "create_rule_set",
-    "update_rule_set",
-    "set_rule_set_enabled",
-    "list_delay_profiles",
-    "get_quality_profile_settings",
-    "get_indexer_routing",
-    "get_download_client_routing",
-    "list_seeding_profiles",
-    "list_indexer_provider_types",
-    "list_download_client_provider_types",
-    "upsert_delay_profile",
-    "save_quality_profile_settings",
-    "update_indexer_routing",
-    "update_download_client_routing",
-    "reorder_download_clients",
-    "set_indexer_download_client_mapping",
-];
-
-/// The write tools and their `(destructiveHint, idempotentHint)`; every
-/// other tool is read-only.
-const WRITE_TOOLS: &[(&str, bool, bool)] = &[
-    ("create_rule_set", false, false),
-    ("update_rule_set", true, true),
-    ("set_rule_set_enabled", true, true),
-    ("upsert_delay_profile", true, true),
-    ("save_quality_profile_settings", true, true),
-    ("update_indexer_routing", true, true),
-    ("update_download_client_routing", true, true),
-    ("reorder_download_clients", true, true),
-    ("set_indexer_download_client_mapping", true, true),
-];
-
-/// A small valid rule module.
-const FIXTURE_REGO: &str = "package scryer.rules.user.fixture\nimport rego.v1\n\n\
-score_entry[\"fixture_web\"] := 50 if {\n\tinput.release.source == \"WEB-DL\"\n}\n";
-
-const DIAGNOSTICS_TOOLS: &[&str] = &[
-    "get_diagnostics_overview",
-    "read_diagnostics_section",
-    "search_service_logs",
-];
-
-/// One valid call per tool.
-fn minimal_calls(title_id: &str) -> Vec<(&'static str, Value)> {
-    vec![
-        ("whoami", json!({})),
-        ("get_health_checks", json!({})),
-        ("list_download_clients", json!({})),
-        ("list_indexers", json!({"include_stats": true})),
-        ("list_indexer_errors", json!({})),
-        ("get_system_health", json!({})),
-        ("list_job_runs", json!({})),
-        ("find_titles", json!({"query": "Fixture Probe"})),
-        ("get_title_decisions", json!({"title_id": title_id})),
-        ("list_pending_releases", json!({"title_id": title_id})),
-        ("get_title_history", json!({"title_id": title_id})),
-        ("list_download_queue", json!({})),
-        ("list_import_history", json!({})),
-        ("get_upgrade_status", json!({})),
-        ("get_diagnostics_overview", json!({})),
-        ("read_diagnostics_section", json!({"section": "build"})),
-        ("search_service_logs", json!({})),
-        ("list_rule_sets", json!({})),
-        ("get_rule_set", json!({"id": "mcp-fixture-missing-rule"})),
-        ("list_title_episodes", json!({"title_id": title_id})),
-        ("validate_rule_set", json!({"rego_source": FIXTURE_REGO})),
-        (
-            "test_rule_set",
-            json!({
-                "title_id": title_id,
-                "release_name": "Fixture.Probe.Film.2024.1080p.WEB-DL-GRP",
-                "rego_source": FIXTURE_REGO,
-            }),
-        ),
-        ("list_delay_profiles", json!({})),
-        ("get_quality_profile_settings", json!({})),
-        ("get_indexer_routing", json!({"scope": "MOVIE"})),
-        ("get_download_client_routing", json!({"scope": "SERIES"})),
-        ("list_seeding_profiles", json!({})),
-        ("list_indexer_provider_types", json!({})),
-        ("list_download_client_provider_types", json!({})),
-    ]
 }
 
 #[tokio::test]
@@ -798,245 +691,6 @@ async fn a_cancelled_call_stops_before_its_restore_lease_is_released() {
 }
 
 #[tokio::test]
-async fn mcp_serves_whoami_and_lists_every_tool_in_order() {
-    let fixture = fixture().await;
-    let key = fixture.api_key.clone();
-
-    let (status, headers, body) =
-        send(&fixture.router, rpc_request(Some(&key), None, initialize())).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(headers[header::CONTENT_TYPE], "application/json");
-    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
-    // Stateless: nothing is kept between requests, so no session is issued.
-    assert!(headers.get("mcp-session-id").is_none());
-    let result = &body["result"];
-    assert_eq!(result["serverInfo"]["name"], "scryer");
-    assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
-    assert!(result["capabilities"]["tools"].is_object());
-    assert!(result["capabilities"]["tools"]["listChanged"].is_null());
-    assert!(result["capabilities"]["prompts"].is_null());
-    assert!(result["capabilities"]["resources"].is_null());
-    assert!(
-        result["instructions"]
-            .as_str()
-            .is_some_and(|text| text.len() < 700)
-    );
-
-    for _ in 0..2 {
-        let (status, _, body) =
-            send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let tools = body["result"]["tools"].as_array().expect("tools");
-        let names = tools
-            .iter()
-            .map(|tool| tool["name"].as_str().expect("name"))
-            .collect::<Vec<_>>();
-        assert_eq!(names, TOOL_NAMES);
-        for tool in tools {
-            let name = &tool["name"];
-            assert!(tool["title"].is_string(), "{name}");
-            assert!(tool["description"].is_string(), "{name}");
-            let annotations = &tool["annotations"];
-            match WRITE_TOOLS
-                .iter()
-                .find(|(write, _, _)| tool["name"] == *write)
-            {
-                Some((_, destructive, idempotent)) => {
-                    assert_eq!(annotations["readOnlyHint"], false, "{name}");
-                    assert_eq!(annotations["destructiveHint"], *destructive, "{name}");
-                    assert_eq!(annotations["idempotentHint"], *idempotent, "{name}");
-                }
-                None => {
-                    assert_eq!(annotations["readOnlyHint"], true, "{name}");
-                    assert!(annotations.get("destructiveHint").is_none(), "{name}");
-                }
-            }
-            assert_eq!(annotations["openWorldHint"], false, "{name}");
-            let schema = &tool["inputSchema"];
-            assert_eq!(schema["type"], "object", "{name}");
-            assert_eq!(schema["additionalProperties"], false, "{name}");
-            assert!(schema["properties"].is_object(), "{name}");
-        }
-        assert_eq!(
-            tools[0]["inputSchema"],
-            json!({"type": "object", "properties": {}, "additionalProperties": false})
-        );
-    }
-
-    let body = call(&fixture, &key, "whoami", json!({})).await;
-    let content = success("whoami", &body);
-    assert_eq!(content["me"]["username"], "admin", "{body}");
-    assert!(content["me"]["appPermissions"].is_array(), "{body}");
-}
-
-#[tokio::test]
-async fn mcp_refuses_unknown_tools_and_bad_arguments_without_echoing_them() {
-    let fixture = fixture().await;
-    let key = fixture.api_key.clone();
-
-    let (_, _, body) = send(
-        &fixture.router,
-        rpc_request(
-            Some(&key),
-            None,
-            call_tool("mcp-fixture-not-a-tool", json!({})),
-        ),
-    )
-    .await;
-    assert_eq!(protocol_error_reason(&body), HTTP_MCP_TOOL_UNKNOWN);
-    assert!(
-        !body.to_string().contains("mcp-fixture-not-a-tool"),
-        "{body}"
-    );
-
-    for arguments in [
-        json!({"mcpfixtureextra": 1}),
-        json!({"query": 5}),
-        json!({"query": "Fixture", "limit": 11}),
-        json!({"query": "Fixture", "limit": "5"}),
-        json!({"query": "x".repeat(201)}),
-        json!({}),
-    ] {
-        let (_, _, body) = send(
-            &fixture.router,
-            rpc_request(
-                Some(&key),
-                None,
-                call_tool("find_titles", arguments.clone()),
-            ),
-        )
-        .await;
-        assert_eq!(
-            protocol_error_reason(&body),
-            HTTP_MCP_ARGUMENTS_INVALID,
-            "{arguments}"
-        );
-        assert!(!body.to_string().contains("mcpfixtureextra"), "{body}");
-    }
-    let (_, _, body) = send(
-        &fixture.router,
-        rpc_request(
-            Some(&key),
-            None,
-            call_tool("whoami", json!({"user": "someone"})),
-        ),
-    )
-    .await;
-    assert_eq!(protocol_error_reason(&body), HTTP_MCP_ARGUMENTS_INVALID);
-    let (_, _, body) = send(
-        &fixture.router,
-        rpc_request(
-            Some(&key),
-            None,
-            call_tool(
-                "get_title_history",
-                json!({"title_id": "t", "event_types": ["NOT_AN_EVENT"]}),
-            ),
-        ),
-    )
-    .await;
-    assert_eq!(protocol_error_reason(&body), HTTP_MCP_ARGUMENTS_INVALID);
-    let (_, _, body) = send(
-        &fixture.router,
-        rpc_request(
-            Some(&key),
-            None,
-            call_tool("read_diagnostics_section", json!({"section": "metrics"})),
-        ),
-    )
-    .await;
-    assert_eq!(protocol_error_reason(&body), HTTP_MCP_ARGUMENTS_INVALID);
-    let (_, _, body) = send(
-        &fixture.router,
-        rpc_request(
-            Some(&key),
-            None,
-            call_tool("search_service_logs", json!({"before": "not-a-cursor"})),
-        ),
-    )
-    .await;
-    assert_eq!(protocol_error_reason(&body), HTTP_MCP_ARGUMENTS_INVALID);
-}
-
-#[tokio::test]
-async fn every_tool_answers_an_administrator_within_the_size_budget() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let key = fixture.api_key.clone();
-    let title_id =
-        seed_title_with_decisions(&fixture.context, &["rejected", "accepted", "rejected"]).await;
-
-    for (name, arguments) in minimal_calls(&title_id) {
-        let body = call(&fixture, &key, name, arguments).await;
-        success(name, &body);
-    }
-
-    let found = success(
-        "find_titles",
-        &call(
-            &fixture,
-            &key,
-            "find_titles",
-            json!({"query": "Fixture Probe"}),
-        )
-        .await,
-    );
-    assert!(
-        found["total_count"]
-            .as_i64()
-            .is_some_and(|count| count >= 1),
-        "{found}"
-    );
-    assert!(
-        found["items"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|item| item["id"] == title_id.as_str())),
-        "{found}"
-    );
-
-    let decisions = success(
-        "get_title_decisions",
-        &call(
-            &fixture,
-            &key,
-            "get_title_decisions",
-            json!({"title_id": title_id}),
-        )
-        .await,
-    );
-    assert_eq!(decisions["tally_covers"], "newest_25", "{decisions}");
-    assert_eq!(decisions["returned"], 3, "{decisions}");
-
-    // Every section, through the section names the tool declares.
-    let (_, _, listed) = send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
-    let sections = listed["result"]["tools"]
-        .as_array()
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool["name"] == "read_diagnostics_section")
-        })
-        .and_then(|tool| tool["inputSchema"]["properties"]["section"]["enum"].as_array())
-        .cloned()
-        .expect("section names");
-    assert!(sections.len() > 10, "{sections:?}");
-    for section in sections {
-        let section = section.as_str().expect("section name");
-        let arguments = if section == "metrics" {
-            json!({"section": section, "metric_families": ["scryer_fixture_family"]})
-        } else {
-            json!({"section": section})
-        };
-        let body = call(&fixture, &key, "read_diagnostics_section", arguments).await;
-        let content = success(section, &body);
-        if section == "metrics" {
-            // The fixture host records no metrics.
-            assert_eq!(content["enabled"], false, "{content}");
-        }
-    }
-}
-
-#[tokio::test]
 async fn release_decision_tally_counts_only_the_newest_sample() {
     let fixture = fixture().await;
     seed_title_with_decisions(&fixture.context, &["rejected", "accepted", "accepted"]).await;
@@ -1052,194 +706,6 @@ async fn release_decision_tally_counts_only_the_newest_sample() {
     assert_eq!(tally.total_rows, 3);
     assert_eq!(tally.sampled, 2);
     assert_eq!(tally.by_code, vec![("accepted".to_string(), 2)]);
-}
-
-#[tokio::test]
-async fn tools_refuse_an_account_without_the_permission_they_need() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let limited = within(
-        "create limited user",
-        fixture.context.app.create_user(
-            &fixture.admin,
-            "mcp-fixture-limited".into(),
-            "mcp-fixture-limited-password".into(),
-            AppPermissionMask::NONE,
-            Vec::new(),
-        ),
-    )
-    .await
-    .expect("create limited user");
-    let limited_key = create_key(&fixture.context, &limited).await;
-    let title_id = seed_title_with_decisions(&fixture.context, &["rejected"]).await;
-
-    let mut refused = Vec::new();
-    for (name, arguments) in minimal_calls(&title_id) {
-        let body = call(&fixture, &limited_key, name, arguments).await;
-        if body["result"]["isError"] == true {
-            let error = tool_error(name, &body);
-            if DIAGNOSTICS_TOOLS.contains(&name) {
-                assert_eq!(error["code"], "UNAUTHORIZED", "{name}: {body}");
-                assert_eq!(
-                    error["reason"], HTTP_DIAGNOSTICS_PERMISSION_DENIED,
-                    "{name}: {body}"
-                );
-            }
-            refused.push(name);
-        } else {
-            success(name, &body);
-        }
-    }
-    for name in DIAGNOSTICS_TOOLS {
-        assert!(
-            refused.contains(name),
-            "{name} was not refused: {refused:?}"
-        );
-    }
-    // The account's own identity is always readable.
-    assert!(!refused.contains(&"whoami"), "{refused:?}");
-}
-
-#[tokio::test]
-async fn the_per_user_rate_limit_applies_inside_tool_calls() {
-    let fixture = fixture_with(Options {
-        auth_runtime: Some(form_login_runtime()),
-        rate_limiter: Some(ScryerRateLimiter::for_api_test(1)),
-        ..Options::default()
-    })
-    .await;
-    let key = fixture.api_key.clone();
-    success("whoami", &call(&fixture, &key, "whoami", json!({})).await);
-    // A GraphQL tool and an application-read tool draw on the same bucket.
-    for name in ["whoami", "list_download_queue", "get_diagnostics_overview"] {
-        let body = call(&fixture, &key, name, json!({})).await;
-        let error = tool_error(name, &body);
-        assert_eq!(error["code"], "RATE_LIMITED", "{name}: {body}");
-    }
-}
-
-#[tokio::test]
-async fn one_tool_call_is_one_rate_limit_charge_whatever_it_runs() {
-    let fixture = fixture_with(Options {
-        auth_runtime: Some(form_login_runtime()),
-        rate_limiter: Some(ScryerRateLimiter::for_api_test(1)),
-        ..Options::default()
-    })
-    .await;
-    let key = fixture.api_key.clone();
-    // The stats variant runs two GraphQL operations on the one unit.
-    let body = call(
-        &fixture,
-        &key,
-        "list_indexers",
-        json!({"include_stats": true}),
-    )
-    .await;
-    success("list_indexers", &body);
-    let body = call(&fixture, &key, "list_indexers", json!({})).await;
-    assert_eq!(
-        tool_error("list_indexers", &body)["code"],
-        "RATE_LIMITED",
-        "{body}"
-    );
-}
-
-#[tokio::test]
-async fn list_job_runs_refuses_arguments_that_do_not_apply() {
-    let fixture = fixture().await;
-    let key = fixture.api_key.clone();
-    let tool = tools::tool(tools::find("list_job_runs").expect("list_job_runs"));
-    let job_key = tool.input_schema["properties"]["job_key"]["enum"][0]
-        .as_str()
-        .expect("a job key")
-        .to_string();
-    for (arguments, argument) in [
-        (json!({"job_key": job_key, "offset": 0}), "offset"),
-        (json!({"include_summary": true}), "include_summary"),
-    ] {
-        let (_, _, body) = send(
-            &fixture.router,
-            rpc_request(Some(&key), None, call_tool("list_job_runs", arguments)),
-        )
-        .await;
-        assert_eq!(protocol_error_reason(&body), HTTP_MCP_ARGUMENTS_INVALID);
-        assert_eq!(body["error"]["data"]["argument"], argument, "{body}");
-    }
-    // The same arguments where they apply are served.
-    success(
-        "list_job_runs",
-        &call(&fixture, &key, "list_job_runs", json!({"offset": 0})).await,
-    );
-    success(
-        "list_job_runs",
-        &call(
-            &fixture,
-            &key,
-            "list_job_runs",
-            json!({"job_key": job_key, "include_summary": true}),
-        )
-        .await,
-    );
-}
-
-#[tokio::test]
-async fn the_overview_carries_no_registered_host_value() {
-    let fixture = fixture().await;
-    let key = fixture.api_key.clone();
-    let body = call(&fixture, &key, "get_diagnostics_overview", json!({})).await;
-    let overview = success("get_diagnostics_overview", &body);
-    // The database directory is a path the harvest registers.
-    let data_dir = fixture.data_dir.path().display().to_string();
-    assert!(!body.to_string().contains(&data_dir), "{body}");
-    assert!(
-        overview["host_sections"]
-            .as_array()
-            .is_some_and(|sections| sections.iter().all(Value::is_string)),
-        "{overview}"
-    );
-    // The section tool still serves the host facts, sanitized.
-    let body = call(
-        &fixture,
-        &key,
-        "read_diagnostics_section",
-        json!({"section": "installation"}),
-    )
-    .await;
-    success("read_diagnostics_section", &body);
-    assert!(!body.to_string().contains(&data_dir), "{body}");
-}
-
-#[tokio::test]
-async fn the_api_explorer_header_has_no_effect_on_mcp() {
-    let fixture = fixture().await;
-    let key = fixture.api_key.clone();
-    let plain = call(&fixture, &key, "whoami", json!({})).await;
-    for mode in ["oauth", "api-key", "mcp-fixture-unknown-mode"] {
-        let mut request = rpc_request(Some(&key), None, call_tool("whoami", json!({})));
-        request
-            .headers_mut()
-            .insert("x-scryer-api-explorer-mode", HeaderValue::from_static(mode));
-        let (status, _, body) = send(&fixture.router, request).await;
-        assert_eq!(status, StatusCode::OK, "{mode}: {body}");
-        assert_eq!(
-            success("whoami", &body),
-            success("whoami", &plain),
-            "{mode}"
-        );
-
-        // The OAuth explorer mode would drop the system settings permission.
-        let mut request = rpc_request(
-            Some(&key),
-            None,
-            call_tool("get_diagnostics_overview", json!({})),
-        );
-        request
-            .headers_mut()
-            .insert("x-scryer-api-explorer-mode", HeaderValue::from_static(mode));
-        let (status, _, body) = send(&fixture.router, request).await;
-        assert_eq!(status, StatusCode::OK, "{mode}: {body}");
-        success("get_diagnostics_overview", &body);
-    }
 }
 
 fn request_meta() -> Value {
@@ -1433,7 +899,7 @@ async fn log_search_stops_at_its_scan_budget_with_a_cursor_that_continues() {
         &call(&fixture, &key, "search_service_logs", arguments).await,
     );
     assert_eq!(second["returned"], 0, "{second}");
-    assert_eq!(second["scan_capped"], false, "{second}");
+    assert!(second.get("scan_capped").is_none(), "{second}");
     assert!(second["next_cursor"].is_null(), "{second}");
 }
 
@@ -1448,9 +914,8 @@ fn graphql_errors_become_tool_errors_built_from_extensions() {
     let uncoded = async_graphql::ServerError::new("Unknown field \"nope\"", None);
     let response = async_graphql::Response::from_errors(vec![coded, uncoded]);
 
-    let result = server::tool_result(response);
-    assert_eq!(result.is_error, Some(true));
-    let content = result.structured_content.expect("structured content");
+    let (content, failed) = server::graphql_value(response);
+    assert!(failed);
     assert_eq!(
         content,
         json!({"errors": [
@@ -1482,7 +947,12 @@ fn a_partial_graphql_result_keeps_its_data_and_error_paths() {
 
     let result = server::tool_result(response);
     assert_eq!(result.is_error, Some(true));
-    let content = result.structured_content.expect("structured content");
+    assert!(result.structured_content.is_none());
+    let [block] = result.content.as_slice() else {
+        panic!("one content block");
+    };
+    let content: Value =
+        serde_json::from_str(&block.as_text().expect("a text block").text).expect("JSON text");
     assert_eq!(
         content,
         json!({
@@ -1501,9 +971,7 @@ fn a_partial_graphql_result_keeps_its_data_and_error_paths() {
     response
         .errors
         .push(async_graphql::ServerError::new("fixture failure", None));
-    let content = server::tool_result(response)
-        .structured_content
-        .expect("structured content");
+    let (content, _) = server::graphql_value(response);
     assert!(content.get("data").is_none(), "{content}");
 }
 
@@ -1561,25 +1029,6 @@ async fn seed_quality_profiles(fixture: &Fixture) {
     .expect("save quality profiles");
 }
 
-/// A tool call's refused argument path, from a protocol error.
-async fn refused_argument(fixture: &Fixture, name: &str, arguments: Value) -> String {
-    let key = fixture.api_key.clone();
-    let (_, _, body) = send(
-        &fixture.router,
-        rpc_request(Some(&key), None, call_tool(name, arguments)),
-    )
-    .await;
-    assert_eq!(
-        protocol_error_reason(&body),
-        HTTP_MCP_ARGUMENTS_INVALID,
-        "{name}: {body}"
-    );
-    body["error"]["data"]["argument"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string()
-}
-
 /// Posts one operation to `/graphql` with `key` and returns the first
 /// error's extensions.
 async fn graphql_refusal(fixture: &Fixture, key: &str, document: &str, variables: Value) -> Value {
@@ -1617,86 +1066,6 @@ async fn graphql_body(fixture: &Fixture, key: &str, document: &str, variables: V
     .await
     .expect("GraphQL body");
     serde_json::from_slice(&bytes).expect("GraphQL JSON")
-}
-
-fn operation_document(name: &str) -> &'static str {
-    tools::every_operation_document()
-        .into_iter()
-        .find(|(document, _)| *document == name)
-        .map(|(_, document)| document)
-        .unwrap_or_else(|| panic!("no document {name}"))
-}
-
-/// Every write tool with valid arguments and the variables `/graphql` gets
-/// for the same call.
-fn write_calls(rule_id: &str) -> Vec<(&'static str, Value, Value)> {
-    let profile = json!({
-        "id": "mcp-fixture-delay",
-        "name": "Fixture Delay",
-        "usenetDelayMinutes": 0,
-        "torrentDelayMinutes": 30,
-        "enableUsenet": true,
-        "enableTorrent": true,
-        "preferredProtocol": "USENET",
-        "minAgeMinutes": 0,
-        "bypassIfHighestQuality": false,
-        "appliesToFacets": ["MOVIE"],
-        "tags": [],
-        "priority": 1,
-        "enabled": true,
-    });
-    vec![
-        (
-            "create_rule_set",
-            json!({"name": "Fixture Refused", "rego_source": FIXTURE_REGO}),
-            json!({"input": {"name": "Fixture Refused", "regoSource": FIXTURE_REGO, "enabled": false}}),
-        ),
-        (
-            "update_rule_set",
-            json!({"id": rule_id, "name": "Fixture Refused"}),
-            json!({"input": {"id": rule_id, "name": "Fixture Refused"}}),
-        ),
-        (
-            "set_rule_set_enabled",
-            json!({"id": rule_id, "enabled": true}),
-            json!({"input": {"id": rule_id, "enabled": true}}),
-        ),
-        (
-            "upsert_delay_profile",
-            json!({"profile": profile}),
-            json!({"input": profile}),
-        ),
-        (
-            "save_quality_profile_settings",
-            json!({}),
-            json!({"input": {
-                "profiles": [],
-                "categorySelections": [],
-                "categoryPersonaSelections": [],
-                "replaceExisting": false,
-            }}),
-        ),
-        (
-            "update_indexer_routing",
-            json!({"scope": "MOVIE", "entries": []}),
-            json!({"input": {"scope": "MOVIE", "entries": []}}),
-        ),
-        (
-            "update_download_client_routing",
-            json!({"scope": "MOVIE", "entries": []}),
-            json!({"input": {"scope": "MOVIE", "entries": []}}),
-        ),
-        (
-            "reorder_download_clients",
-            json!({"ids": ["mcp-fixture-client"]}),
-            json!({"input": {"ids": ["mcp-fixture-client"]}}),
-        ),
-        (
-            "set_indexer_download_client_mapping",
-            json!({"indexer_id": "mcp-fixture-indexer"}),
-            json!({"input": {"indexerId": "mcp-fixture-indexer", "downloadClientId": null}}),
-        ),
-    ]
 }
 
 fn fixture_indexer(id: &str) -> scryer_domain::IndexerConfig {
@@ -1780,784 +1149,22 @@ async fn seed_integrations(context: &common::TestContext, indexers: &[&str], cli
     }
 }
 
-/// Seeds season 1 with one episode for a series and returns the episode id.
-async fn seed_episode(context: &common::TestContext, title_id: &str) -> String {
-    use scryer_application::ShowRepository;
-    let season = within(
-        "create season",
-        context.shows.create_collection(scryer_domain::Collection {
-            id: Id::new().0,
-            title_id: title_id.to_string(),
-            collection_type: scryer_domain::CollectionType::Season,
-            collection_index: "1".to_string(),
-            label: Some("Season 1".to_string()),
-            ordered_path: None,
-            narrative_order: None,
-            first_episode_number: Some("1".to_string()),
-            last_episode_number: Some("1".to_string()),
-            monitored: true,
-            created_at: chrono::Utc::now(),
-        }),
-    )
-    .await
-    .expect("create season");
-    let episode = within(
-        "create episode",
-        context.shows.create_episode(scryer_domain::Episode {
-            id: Id::new().0,
-            title_id: title_id.to_string(),
-            collection_id: Some(season.id),
-            episode_type: scryer_domain::EpisodeType::Standard,
-            episode_number: Some("1".to_string()),
-            season_number: Some("1".to_string()),
-            episode_label: Some("S01E01".to_string()),
-            title: Some("Fixture Pilot".to_string()),
-            air_date: None,
-            duration_seconds: Some(1440),
-            has_multi_audio: false,
-            has_subtitle: false,
-            is_filler: false,
-            is_recap: false,
-            absolute_number: None,
-            contiguous_absolute_number: None,
-            overview: None,
-            tvdb_id: None,
-            tmdb_id: None,
-            image_url: None,
-            monitored: true,
-            created_at: chrono::Utc::now(),
-        }),
-    )
-    .await
-    .expect("create episode");
-    episode.id
+const TOOL_NAMES: &[&str] = &[
+    "whoami",
+    "list_operations",
+    "describe_operation",
+    "run_query",
+    "run_mutation",
+    "read_diagnostics_section",
+    "search_service_logs",
+];
+
+/// A catalog operation's document, as the run tools send it.
+fn catalog_text(name: &str) -> &'static str {
+    catalog::CATALOG.get(name).expect("catalog operation").text
 }
 
-/// What the rule and acquisition reads return, read as the administrator.
-async fn saved_acquisition_state(fixture: &Fixture) -> Value {
-    let key = fixture.api_key.clone();
-    let mut state = serde_json::Map::new();
-    for (name, arguments) in [
-        ("list_rule_sets", json!({})),
-        ("list_delay_profiles", json!({})),
-        ("get_quality_profile_settings", json!({"limit": 10})),
-        ("get_indexer_routing", json!({"scope": "MOVIE"})),
-        ("get_download_client_routing", json!({"scope": "MOVIE"})),
-        ("list_download_clients", json!({})),
-        ("list_indexers", json!({})),
-    ] {
-        let content = success(name, &call(fixture, &key, name, arguments).await);
-        state.insert(name.into(), content);
-    }
-    Value::Object(state)
-}
-
-fn item_with<'v>(content: &'v Value, key: &str, value: &str) -> &'v Value {
-    content["items"]
-        .as_array()
-        .and_then(|items| items.iter().find(|item| item[key] == value))
-        .unwrap_or_else(|| panic!("no item with {key} {value}: {content}"))
-}
-
-#[tokio::test]
-async fn rule_set_tools_create_update_and_toggle_through_the_reads() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let key = fixture.api_key.clone();
-
-    let created = success(
-        "create_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "create_rule_set",
-            json!({
-                "name": "Fixture Web Bonus",
-                "rego_source": FIXTURE_REGO,
-                "applied_facets": ["movie"],
-                "priority": 5,
-            }),
-        )
-        .await,
-    );
-    let rule = &created["createRuleSet"];
-    let id = rule["id"].as_str().expect("rule id").to_string();
-    assert_eq!(rule["enabled"], false, "{created}");
-
-    let read = success(
-        "get_rule_set",
-        &call(&fixture, &key, "get_rule_set", json!({"id": id})).await,
-    );
-    let saved = &read["ruleSet"];
-    assert_eq!(saved["name"], "Fixture Web Bonus", "{read}");
-    assert_eq!(saved["priority"], 5, "{read}");
-    assert_eq!(saved["appliedFacets"], json!(["movie"]), "{read}");
-    assert_eq!(saved["rego_source_omitted"], false, "{read}");
-    assert!(
-        saved["regoSource"]
-            .as_str()
-            .is_some_and(|source| source.contains("fixture_web")),
-        "{read}"
-    );
-    assert_eq!(
-        saved["rego_source_chars"],
-        saved["regoSource"].as_str().unwrap().chars().count(),
-        "{read}"
-    );
-
-    success(
-        "update_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "update_rule_set",
-            json!({"id": id, "name": "Fixture Web Bonus Two", "priority": 6}),
-        )
-        .await,
-    );
-    let read = success(
-        "get_rule_set",
-        &call(&fixture, &key, "get_rule_set", json!({"id": id})).await,
-    );
-    assert_eq!(read["ruleSet"]["name"], "Fixture Web Bonus Two", "{read}");
-    assert_eq!(read["ruleSet"]["priority"], 6, "{read}");
-    assert!(
-        read["ruleSet"]["regoSource"]
-            .as_str()
-            .is_some_and(|source| source.contains("fixture_web")),
-        "an update without a source keeps it: {read}"
-    );
-
-    success(
-        "set_rule_set_enabled",
-        &call(
-            &fixture,
-            &key,
-            "set_rule_set_enabled",
-            json!({"id": id, "enabled": true}),
-        )
-        .await,
-    );
-    let listed = success(
-        "list_rule_sets",
-        &call(&fixture, &key, "list_rule_sets", json!({})).await,
-    );
-    assert_eq!(item_with(&listed, "id", &id)["enabled"], true, "{listed}");
-    assert!(listed["enabled"].as_u64().is_some_and(|count| count >= 1));
-    let rule_count = listed["total"].clone();
-
-    // The saved rule scores a release.
-    let title_id = seed_title_with_decisions(&fixture.context, &[]).await;
-    success(
-        "test_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "test_rule_set",
-            json!({
-                "title_id": title_id,
-                "release_name": "Fixture.Probe.Film.2024.1080p.WEB-DL-GRP",
-                "rego_source": FIXTURE_REGO,
-            }),
-        )
-        .await,
-    );
-    let tested = success(
-        "test_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "test_rule_set",
-            json!({
-                "title_id": title_id,
-                "release_name": "Fixture.Probe.Film.2024.1080p.WEB-DL-GRP",
-                "rule_set_id": id,
-            }),
-        )
-        .await,
-    );
-    assert!(tested["score"].is_i64(), "{tested}");
-    assert!(tested["rule_set_count"].is_u64(), "{tested}");
-
-    // Diagnostics are fields, not prose.
-    let checked = success(
-        "validate_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "validate_rule_set",
-            json!({"rego_source": "package scryer.rules.user.fixture\nimport rego.v1\n\nscore_entry[\"x\"] := if {\n"}),
-        )
-        .await,
-    );
-    assert_eq!(checked["valid"], false, "{checked}");
-    let diagnostic = &checked["diagnostics"][0];
-    assert!(diagnostic["code"].is_string(), "{checked}");
-    assert!(
-        checked["diagnostic_count"]
-            .as_u64()
-            .is_some_and(|count| count >= 1)
-    );
-    let checked = success(
-        "validate_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "validate_rule_set",
-            json!({"rego_source": FIXTURE_REGO}),
-        )
-        .await,
-    );
-    assert_eq!(checked["valid"], true, "{checked}");
-
-    // The dry runs saved no rule set.
-    let listed = success(
-        "list_rule_sets",
-        &call(&fixture, &key, "list_rule_sets", json!({})).await,
-    );
-    assert_eq!(listed["total"], rule_count, "{listed}");
-
-    // A missing rule set is an empty answer.
-    let missing = success(
-        "get_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "get_rule_set",
-            json!({"id": "mcp-fixture-missing-rule"}),
-        )
-        .await,
-    );
-    assert!(missing["ruleSet"].is_null(), "{missing}");
-}
-
-#[tokio::test]
-async fn a_draft_tested_against_a_saved_rule_keeps_its_facets_and_priority() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let key = fixture.api_key.clone();
-    let created = success(
-        "create_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "create_rule_set",
-            json!({
-                "name": "Fixture Movie Only",
-                "rego_source": FIXTURE_REGO,
-                "applied_facets": ["movie"],
-                "priority": 4,
-            }),
-        )
-        .await,
-    );
-    let rule_id = created["createRuleSet"]["id"]
-        .as_str()
-        .expect("rule id")
-        .to_string();
-    let movie_id = seed_title_with_decisions(&fixture.context, &[]).await;
-    let mut series = fixture_title("Fixture Probe Show");
-    series.facet = MediaFacet::Series;
-    series.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
-    series.root_folder_id = scryer_domain::root_folder_id_for_path("/data/series");
-    let series = within("create series", fixture.context.titles.create(series))
-        .await
-        .expect("create series");
-    let episode_id = seed_episode(&fixture.context, &series.id).await;
-    let draft = "package scryer.rules.user.fixture\nimport rego.v1\n\n\
-score_entry[\"fixture_any\"] := 40\n";
-    let test = |title_id: String, extra: Value| {
-        let is_series = title_id == series.id;
-        let mut arguments = json!({
-            "title_id": title_id,
-            "release_name": "Fixture.Probe.2024.1080p.WEB-DL-GRP",
-            "rego_source": draft,
-        });
-        if is_series {
-            arguments["episode_id"] = json!(episode_id);
-            arguments["release_name"] = json!("Fixture.Probe.Show.S01E01.1080p.WEB-DL-GRP");
-        }
-        for (name, value) in extra.as_object().cloned().unwrap_or_default() {
-            arguments[name] = value;
-        }
-        arguments
-    };
-
-    // With the saved rule, the draft keeps its movie-only facets.
-    let tested = success(
-        "test_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "test_rule_set",
-            test(series.id.clone(), json!({"rule_set_id": rule_id})),
-        )
-        .await,
-    );
-    let contribution = &tested["draftContribution"];
-    assert_eq!(contribution["applies"], false, "{tested}");
-    assert_eq!(contribution["score"], 0, "{tested}");
-    // The same draft scores a movie, so the source itself contributes.
-    let tested = success(
-        "test_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "test_rule_set",
-            test(movie_id, json!({"rule_set_id": rule_id})),
-        )
-        .await,
-    );
-    assert_eq!(tested["draftContribution"]["applies"], true, "{tested}");
-    assert_eq!(tested["draftContribution"]["score"], 40, "{tested}");
-    assert_eq!(tested["draftContribution"]["enabled"], true, "{tested}");
-    // Facets given in the call win over the saved ones.
-    let tested = success(
-        "test_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "test_rule_set",
-            test(
-                series.id.clone(),
-                json!({"rule_set_id": rule_id, "applied_facets": ["series"]}),
-            ),
-        )
-        .await,
-    );
-    assert_eq!(tested["draftContribution"]["applies"], true, "{tested}");
-    // Without a saved rule, the draft applies to every facet.
-    let tested = success(
-        "test_rule_set",
-        &call(
-            &fixture,
-            &key,
-            "test_rule_set",
-            test(series.id.clone(), json!({})),
-        )
-        .await,
-    );
-    assert_eq!(tested["draftContribution"]["applies"], true, "{tested}");
-}
-
-#[tokio::test]
-async fn get_rule_set_omits_a_source_over_the_cap_and_states_its_length() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let key = fixture.api_key.clone();
-    // Saved through `/graphql`, which takes a longer source than the tool.
-    let source = format!("{FIXTURE_REGO}# {}\n", "x".repeat(30_500));
-    let created = graphql_body(
-        &fixture,
-        &key,
-        operation_document("create_rule_set"),
-        json!({"input": {"name": "Fixture Long Rule", "regoSource": source, "enabled": false}}),
-    )
-    .await;
-    let id = created["data"]["createRuleSet"]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("rule id: {created}"))
-        .to_string();
-    let read = success(
-        "get_rule_set",
-        &call(&fixture, &key, "get_rule_set", json!({"id": id})).await,
-    );
-    let saved = &read["ruleSet"];
-    assert!(saved["regoSource"].is_null(), "{read}");
-    assert_eq!(saved["rego_source_omitted"], true, "{read}");
-    // The count is of the source as saved, which `/graphql` returns whole.
-    let stored = graphql_body(
-        &fixture,
-        &key,
-        operation_document("get_rule_set"),
-        json!({"id": id}),
-    )
-    .await;
-    let stored = stored["data"]["ruleSet"]["regoSource"]
-        .as_str()
-        .unwrap_or_else(|| panic!("stored source: {stored}"));
-    assert!(stored.chars().count() > 30_000);
-    assert_eq!(saved["rego_source_chars"], stored.chars().count(), "{read}");
-}
-
-#[tokio::test]
-async fn quality_profile_fields_left_out_clear_or_keep_as_described() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let key = fixture.api_key.clone();
-    let settings = success(
-        "get_quality_profile_settings",
-        &call(&fixture, &key, "get_quality_profile_settings", json!({})).await,
-    );
-    let mut criteria = settings["items"][0]["criteria"].clone();
-    let tier = criteria["qualityTiers"][0].clone();
-    criteria["archivalQuality"] = tier.clone();
-    criteria["cutoffTier"] = tier;
-    criteria["minScoreToGrab"] = json!(10);
-    criteria["cutoffScore"] = json!(500);
-    criteria["minUpgradeScoreDelta"] = json!(7);
-    criteria["minMissingEpisodesForPack"] = json!(5);
-    criteria["minMissingPercentForSeriesPack"] = json!(60);
-    criteria["ignoreProperRepack"] = json!(true);
-    criteria["scoringOverrides"]["allowX265Non4K"] = json!(true);
-    criteria.as_object_mut().unwrap().remove("decisionPipeline");
-    let save = |criteria: &Value| {
-        json!({"profiles": [{
-            "id": "mcp-fixture-quality",
-            "name": "Fixture Quality",
-            "criteria": criteria,
-        }]})
-    };
-    let read =
-        |settings: &Value| item_with(settings, "id", "mcp-fixture-quality")["criteria"].clone();
-    success(
-        "save_quality_profile_settings",
-        &call(
-            &fixture,
-            &key,
-            "save_quality_profile_settings",
-            save(&criteria),
-        )
-        .await,
-    );
-    let first = read(&success(
-        "get_quality_profile_settings",
-        &call(
-            &fixture,
-            &key,
-            "get_quality_profile_settings",
-            json!({"limit": 10}),
-        )
-        .await,
-    ));
-    assert_eq!(first["cutoffScore"], 500, "{first}");
-    assert_eq!(first["minUpgradeScoreDelta"], 7, "{first}");
-    assert_eq!(first["ignoreProperRepack"], true, "{first}");
-
-    let mut omitted = criteria.clone();
-    let fields = omitted.as_object_mut().unwrap();
-    for name in [
-        "archivalQuality",
-        "cutoffTier",
-        "minScoreToGrab",
-        "cutoffScore",
-        "minUpgradeScoreDelta",
-        "minMissingEpisodesForPack",
-        "minMissingPercentForSeriesPack",
-        "ignoreProperRepack",
-    ] {
-        fields.remove(name);
-    }
-    fields["scoringOverrides"]
-        .as_object_mut()
-        .unwrap()
-        .remove("allowX265Non4K");
-    success(
-        "save_quality_profile_settings",
-        &call(
-            &fixture,
-            &key,
-            "save_quality_profile_settings",
-            save(&omitted),
-        )
-        .await,
-    );
-    let second = read(&success(
-        "get_quality_profile_settings",
-        &call(
-            &fixture,
-            &key,
-            "get_quality_profile_settings",
-            json!({"limit": 10}),
-        )
-        .await,
-    ));
-    // Read as sent: left out, these clear.
-    for name in [
-        "archivalQuality",
-        "cutoffTier",
-        "minScoreToGrab",
-        "cutoffScore",
-    ] {
-        assert!(second[name].is_null(), "{name} clears: {second}");
-    }
-    assert_ne!(
-        second["scoringOverrides"]["allowX265Non4K"], true,
-        "{second}"
-    );
-    // Left out, these keep the saved value.
-    for name in [
-        "minUpgradeScoreDelta",
-        "minMissingEpisodesForPack",
-        "minMissingPercentForSeriesPack",
-        "ignoreProperRepack",
-        "decisionPipeline",
-    ] {
-        assert_eq!(second[name], first[name], "{name} keeps: {second}");
-    }
-}
-
-#[tokio::test]
-async fn acquisition_writes_show_through_the_matching_reads() {
-    let fixture = fixture().await;
-    seed_quality_profiles(&fixture).await;
-    let key = fixture.api_key.clone();
-    seed_integrations(
-        &fixture.context,
-        &["mcp-fixture-indexer"],
-        &["mcp-fixture-client-a", "mcp-fixture-client-b"],
-    )
-    .await;
-
-    // Delay profile.
-    let (_, profile_args, _) = write_calls("unused")
-        .into_iter()
-        .find(|(name, _, _)| *name == "upsert_delay_profile")
-        .expect("delay profile call");
-    success(
-        "upsert_delay_profile",
-        &call(&fixture, &key, "upsert_delay_profile", profile_args.clone()).await,
-    );
-    let listed = success(
-        "list_delay_profiles",
-        &call(&fixture, &key, "list_delay_profiles", json!({})).await,
-    );
-    let saved = item_with(&listed, "id", "mcp-fixture-delay");
-    assert_eq!(saved["name"], "Fixture Delay", "{listed}");
-    assert_eq!(saved["torrentDelayMinutes"], 30, "{listed}");
-    let mut changed = profile_args;
-    changed["profile"]["torrentDelayMinutes"] = json!(45);
-    success(
-        "upsert_delay_profile",
-        &call(&fixture, &key, "upsert_delay_profile", changed).await,
-    );
-    let listed = success(
-        "list_delay_profiles",
-        &call(&fixture, &key, "list_delay_profiles", json!({})).await,
-    );
-    assert_eq!(
-        item_with(&listed, "id", "mcp-fixture-delay")["torrentDelayMinutes"],
-        45,
-        "{listed}"
-    );
-
-    // Quality profile: a copy of an existing profile's criteria, round-tripped
-    // from the read into the write.
-    let settings = success(
-        "get_quality_profile_settings",
-        &call(&fixture, &key, "get_quality_profile_settings", json!({})).await,
-    );
-    let template = settings["items"][0].clone();
-    assert!(template["criteria"].is_object(), "{settings}");
-    let profiles_before = settings["total"].as_u64().expect("total");
-    let saved = success(
-        "save_quality_profile_settings",
-        &call(
-            &fixture,
-            &key,
-            "save_quality_profile_settings",
-            json!({"profiles": [{
-                "id": "mcp-fixture-quality",
-                "name": "Fixture Quality",
-                "criteria": template["criteria"],
-            }]}),
-        )
-        .await,
-    );
-    assert!(saved["saveQualityProfileSettings"].is_object(), "{saved}");
-    let settings = success(
-        "get_quality_profile_settings",
-        &call(
-            &fixture,
-            &key,
-            "get_quality_profile_settings",
-            json!({"limit": 10}),
-        )
-        .await,
-    );
-    assert_eq!(
-        settings["total"],
-        profiles_before + 1,
-        "a save merges: {settings}"
-    );
-    let saved = item_with(&settings, "id", "mcp-fixture-quality");
-    assert_eq!(saved["name"], "Fixture Quality", "{settings}");
-    assert_eq!(saved["criteria"], template["criteria"], "{settings}");
-
-    // Indexer routing.
-    success(
-        "update_indexer_routing",
-        &call(
-            &fixture,
-            &key,
-            "update_indexer_routing",
-            json!({"scope": "MOVIE", "entries": [{
-                "indexerId": "mcp-fixture-indexer",
-                "enabled": true,
-                "categories": ["2000"],
-                "priority": 7,
-            }]}),
-        )
-        .await,
-    );
-    let routing = success(
-        "get_indexer_routing",
-        &call(
-            &fixture,
-            &key,
-            "get_indexer_routing",
-            json!({"scope": "MOVIE"}),
-        )
-        .await,
-    );
-    let entry = item_with(&routing, "indexerId", "mcp-fixture-indexer");
-    assert_eq!(entry["priority"], 7, "{routing}");
-    assert_eq!(entry["categories"], json!(["2000"]), "{routing}");
-
-    // What the read returns goes back through the write unchanged, with
-    // repeated categories and a priority at the edge of the `Int` range.
-    let mut entry = entry.clone();
-    entry["categories"] = json!(["2000", "2000"]);
-    entry["priority"] = json!(i32::MIN);
-    success(
-        "update_indexer_routing",
-        &call(
-            &fixture,
-            &key,
-            "update_indexer_routing",
-            json!({"scope": "MOVIE", "entries": [entry]}),
-        )
-        .await,
-    );
-    let routing = success(
-        "get_indexer_routing",
-        &call(
-            &fixture,
-            &key,
-            "get_indexer_routing",
-            json!({"scope": "MOVIE"}),
-        )
-        .await,
-    );
-    let read_back = item_with(&routing, "indexerId", "mcp-fixture-indexer").clone();
-    assert_eq!(read_back["priority"], i32::MIN, "{routing}");
-    assert_eq!(
-        read_back["categories"],
-        json!(["2000", "2000"]),
-        "{routing}"
-    );
-    success(
-        "update_indexer_routing",
-        &call(
-            &fixture,
-            &key,
-            "update_indexer_routing",
-            json!({"scope": "MOVIE", "entries": [read_back]}),
-        )
-        .await,
-    );
-
-    // Download-client routing.
-    success(
-        "update_download_client_routing",
-        &call(
-            &fixture,
-            &key,
-            "update_download_client_routing",
-            json!({"scope": "SERIES", "entries": [{
-                "clientId": "mcp-fixture-client-a",
-                "enabled": true,
-                "category": "fixture-tv",
-                "removeCompleted": false,
-                "removeFailed": true,
-            }]}),
-        )
-        .await,
-    );
-    let routing = success(
-        "get_download_client_routing",
-        &call(
-            &fixture,
-            &key,
-            "get_download_client_routing",
-            json!({"scope": "SERIES"}),
-        )
-        .await,
-    );
-    let entry = item_with(&routing, "clientId", "mcp-fixture-client-a");
-    assert_eq!(entry["category"], "fixture-tv", "{routing}");
-    assert_eq!(entry["removeFailed"], true, "{routing}");
-
-    // Client order.
-    success(
-        "reorder_download_clients",
-        &call(
-            &fixture,
-            &key,
-            "reorder_download_clients",
-            json!({"ids": ["mcp-fixture-client-b", "mcp-fixture-client-a"]}),
-        )
-        .await,
-    );
-    let clients = success(
-        "list_download_clients",
-        &call(&fixture, &key, "list_download_clients", json!({})).await,
-    );
-    let order = clients["items"]
-        .as_array()
-        .expect("clients")
-        .iter()
-        .filter_map(|client| client["id"].as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        ["mcp-fixture-client-b", "mcp-fixture-client-a"],
-        "{clients}"
-    );
-
-    // Indexer to client pin, then cleared.
-    success(
-        "set_indexer_download_client_mapping",
-        &call(
-            &fixture,
-            &key,
-            "set_indexer_download_client_mapping",
-            json!({"indexer_id": "mcp-fixture-indexer", "download_client_id": "mcp-fixture-client-b"}),
-        )
-        .await,
-    );
-    let indexers = success(
-        "list_indexers",
-        &call(&fixture, &key, "list_indexers", json!({})).await,
-    );
-    assert_eq!(
-        item_with(&indexers, "id", "mcp-fixture-indexer")["downloadClientId"],
-        "mcp-fixture-client-b",
-        "{indexers}"
-    );
-    success(
-        "set_indexer_download_client_mapping",
-        &call(
-            &fixture,
-            &key,
-            "set_indexer_download_client_mapping",
-            json!({"indexer_id": "mcp-fixture-indexer"}),
-        )
-        .await,
-    );
-    let indexers = success(
-        "list_indexers",
-        &call(&fixture, &key, "list_indexers", json!({})).await,
-    );
-    assert!(
-        item_with(&indexers, "id", "mcp-fixture-indexer")["downloadClientId"].is_null(),
-        "{indexers}"
-    );
-}
-
-#[tokio::test]
-async fn write_tools_refuse_a_low_permission_key_as_graphql_does() {
-    let fixture = fixture().await;
+async fn limited_key(fixture: &Fixture) -> String {
     let limited = within(
         "create limited user",
         fixture.context.app.create_user(
@@ -2570,116 +1177,784 @@ async fn write_tools_refuse_a_low_permission_key_as_graphql_does() {
     )
     .await
     .expect("create limited user");
-    let limited_key = create_key(&fixture.context, &limited).await;
-    seed_quality_profiles(&fixture).await;
-    seed_integrations(
-        &fixture.context,
-        &["mcp-fixture-indexer"],
-        &[
-            "mcp-fixture-client-y",
-            "mcp-fixture-client-z",
-            "mcp-fixture-client",
-        ],
+    create_key(&fixture.context, &limited).await
+}
+
+/// The indexer routing write the run tests save and read back.
+fn routing_input() -> Value {
+    json!({"input": {"scope": "MOVIE", "entries": [{
+        "indexerId": "mcp-fixture-indexer",
+        "enabled": true,
+        "categories": ["2000"],
+        "priority": 3,
+    }]}})
+}
+
+#[tokio::test]
+async fn mcp_serves_whoami_and_lists_every_tool_in_order() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+
+    let (status, headers, body) =
+        send(&fixture.router, rpc_request(Some(&key), None, initialize())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    // Stateless: nothing is kept between requests, so no session is issued.
+    assert!(headers.get("mcp-session-id").is_none());
+    let result = &body["result"];
+    assert_eq!(result["serverInfo"]["name"], "scryer");
+    assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+    assert!(result["capabilities"]["tools"].is_object());
+    assert!(result["capabilities"]["tools"]["listChanged"].is_null());
+    assert!(result["capabilities"]["prompts"].is_null());
+    assert!(result["capabilities"]["resources"].is_null());
+    assert!(result["instructions"].is_string());
+
+    for _ in 0..2 {
+        let (status, _, body) =
+            send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let tools = body["result"]["tools"].as_array().expect("tools");
+        let names = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("name"))
+            .collect::<Vec<_>>();
+        assert_eq!(names, TOOL_NAMES);
+        for tool in tools {
+            let name = &tool["name"];
+            assert!(tool.get("title").is_none(), "{name}");
+            assert!(tool["description"].is_string(), "{name}");
+            let annotations = &tool["annotations"];
+            if *name == "run_mutation" {
+                assert_eq!(annotations["readOnlyHint"], false, "{name}");
+                assert_eq!(annotations["destructiveHint"], true, "{name}");
+                assert_eq!(annotations["idempotentHint"], false, "{name}");
+            } else {
+                assert_eq!(annotations["readOnlyHint"], true, "{name}");
+                assert!(annotations.get("destructiveHint").is_none(), "{name}");
+            }
+            let open_world = *name == "run_query" || *name == "run_mutation";
+            assert_eq!(annotations["openWorldHint"], open_world, "{name}");
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["type"], "object", "{name}");
+            assert!(schema["properties"].is_object(), "{name}");
+        }
+        assert_eq!(
+            tools[0]["inputSchema"],
+            json!({"type": "object", "properties": {}})
+        );
+    }
+
+    let body = call(&fixture, &key, "whoami", json!({})).await;
+    let content = success("whoami", &body);
+    assert_eq!(content["me"]["username"], "admin", "{body}");
+    assert!(content["me"]["appPermissions"].is_array(), "{body}");
+}
+
+#[tokio::test]
+async fn the_tool_list_and_instructions_stay_within_their_token_budget() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    let (_, _, initialized) =
+        send(&fixture.router, rpc_request(Some(&key), None, initialize())).await;
+    let instructions = initialized["result"]["instructions"]
+        .as_str()
+        .expect("instructions")
+        .len();
+    let (_, _, listed) = send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    let tools = listed["result"].to_string().len();
+    // Measured at 326 + 2,945 characters, about 820 tokens together.
+    assert!(instructions + tools < 3_300, "{instructions} + {tools}");
+}
+
+#[tokio::test]
+async fn mcp_refuses_unknown_tools_and_bad_arguments_without_echoing_them() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+
+    let (_, _, body) = send(
+        &fixture.router,
+        rpc_request(
+            Some(&key),
+            None,
+            call_tool("mcp-fixture-not-a-tool", json!({})),
+        ),
     )
     .await;
-    // Saved state each refused write would change.
-    let admin_key = fixture.api_key.clone();
-    for (name, arguments) in [
-        (
-            "update_indexer_routing",
-            json!({"scope": "MOVIE", "entries": [{
-                "indexerId": "mcp-fixture-indexer",
-                "enabled": true,
-                "categories": ["2000"],
-                "priority": 3,
-            }]}),
-        ),
-        (
-            "update_download_client_routing",
-            json!({"scope": "MOVIE", "entries": [{
-                "clientId": "mcp-fixture-client",
-                "enabled": true,
-                "category": "fixture-movies",
-                "removeCompleted": false,
-                "removeFailed": false,
-            }]}),
-        ),
-        (
-            "set_indexer_download_client_mapping",
-            json!({"indexer_id": "mcp-fixture-indexer", "download_client_id": "mcp-fixture-client"}),
-        ),
-    ] {
-        success(name, &call(&fixture, &admin_key, name, arguments).await);
-    }
-    let before = saved_acquisition_state(&fixture).await;
+    assert_eq!(protocol_error_reason(&body), HTTP_MCP_TOOL_UNKNOWN);
+    assert!(
+        !body.to_string().contains("mcp-fixture-not-a-tool"),
+        "{body}"
+    );
 
-    for (name, arguments, variables) in write_calls("mcp-fixture-rule") {
-        let body = call(&fixture, &limited_key, name, arguments).await;
-        let error = tool_error(name, &body);
-        let expected =
-            graphql_refusal(&fixture, &limited_key, operation_document(name), variables).await;
-        assert_eq!(error["code"], expected["code"], "{name}: {body}");
-        assert_eq!(error["code"], "UNAUTHORIZED", "{name}: {body}");
-        assert_eq!(error["reason"], expected["reason"], "{name}: {body}");
+    for (name, arguments) in [
+        ("run_query", json!({"name": "Me", "mcpfixtureextra": 1})),
+        ("run_query", json!({"name": 5})),
+        ("run_query", json!({"name": "x".repeat(101)})),
+        ("run_query", json!({"variables": {}})),
+        ("run_query", json!({"name": "Me", "variables": [1]})),
+        (
+            "describe_operation",
+            json!({"name": "Me", "document": "yes"}),
+        ),
+        ("list_operations", json!({"skill": 5})),
+        ("whoami", json!({"user": "someone"})),
+        ("read_diagnostics_section", json!({"section": "metrics"})),
+        ("search_service_logs", json!({"before": "not-a-cursor"})),
+    ] {
+        let (_, _, body) = send(
+            &fixture.router,
+            rpc_request(Some(&key), None, call_tool(name, arguments.clone())),
+        )
+        .await;
+        assert_eq!(
+            protocol_error_reason(&body),
+            HTTP_MCP_ARGUMENTS_INVALID,
+            "{name} {arguments}"
+        );
+        assert!(!body.to_string().contains("mcpfixtureextra"), "{body}");
     }
-    for name in ["validate_rule_set", "test_rule_set"] {
-        let (_, arguments) = minimal_calls("mcp-fixture-title")
-            .into_iter()
-            .find(|(call, _)| *call == name)
-            .expect("dry-run call");
-        let body = call(&fixture, &limited_key, name, arguments).await;
-        assert_eq!(tool_error(name, &body)["code"], "UNAUTHORIZED", "{body}");
-    }
-    // Nothing was saved: rules, delay and quality profiles, both routings,
-    // the client order and the indexer's client pin read as before.
-    let after = saved_acquisition_state(&fixture).await;
-    assert_eq!(after, before);
-    let order = after["list_download_clients"]["items"]
-        .as_array()
-        .expect("clients")
+
+    // A skill is a plain string: one with no served operation is a coded
+    // refusal, and one that does not carry the name an unknown operation
+    // naming the skills that do. Neither echoes the skill sent.
+    let body = call(
+        &fixture,
+        &key,
+        "list_operations",
+        json!({"skill": "mcp-fixture-no-skill"}),
+    )
+    .await;
+    let error = tool_error("list_operations", &body);
+    assert_eq!(error["reason"], HTTP_MCP_SKILL_UNKNOWN, "{body}");
+    assert_eq!(error["skills"], json!(catalog::CATALOG.skills()), "{body}");
+    assert!(!body.to_string().contains("mcp-fixture-no-skill"), "{body}");
+
+    let me_skills = catalog::CATALOG
+        .variants("Me")
         .iter()
-        .filter_map(|client| client["id"].as_str())
+        .flat_map(|variant| variant.skills.iter().copied())
         .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        [
-            "mcp-fixture-client-y",
-            "mcp-fixture-client-z",
-            "mcp-fixture-client"
-        ]
+    for name in ["run_query", "describe_operation"] {
+        let body = call(
+            &fixture,
+            &key,
+            name,
+            json!({"name": "Me", "skill": "mcp-fixture-no-skill"}),
+        )
+        .await;
+        let error = tool_error(name, &body);
+        assert_eq!(error["reason"], HTTP_MCP_OPERATION_UNKNOWN, "{body}");
+        assert_eq!(error["skills"], json!(me_skills), "{body}");
+        assert!(!body.to_string().contains("mcp-fixture-no-skill"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn list_operations_groups_the_catalog_by_skill_and_filters_to_one() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    let all = success(
+        "list_operations",
+        &call(&fixture, &key, "list_operations", json!({})).await,
     );
+    let groups = all.as_object().expect("skill groups");
     assert_eq!(
-        item_with(&after["list_indexers"], "id", "mcp-fixture-indexer")["downloadClientId"],
-        "mcp-fixture-client"
+        groups.keys().map(String::as_str).collect::<Vec<_>>(),
+        catalog::CATALOG.skills()
     );
-    assert_eq!(
-        item_with(
-            &after["get_indexer_routing"],
-            "indexerId",
-            "mcp-fixture-indexer"
-        )["priority"],
-        3
+    let mut listed = 0;
+    for (skill, rows) in groups {
+        for row in rows.as_array().expect("rows") {
+            let row = row.as_array().expect("row");
+            let catalog::Resolution::Found(operation) =
+                catalog::CATALOG.resolve(row[0].as_str().expect("name"), Some(skill))
+            else {
+                panic!("{row:?} is not in the catalog under {skill}");
+            };
+            assert_eq!(row[1], operation.kind.token(), "{row:?}");
+            assert!(row.len() == 2 || row[2].as_str().is_some_and(|p| !p.is_empty()));
+            listed += 1;
+        }
+    }
+    let memberships = catalog::CATALOG
+        .operations()
+        .iter()
+        .map(|operation| operation.skills.len())
+        .sum::<usize>();
+    assert_eq!(listed, memberships);
+    for denied in catalog::DENIED {
+        assert!(
+            !all.to_string().contains(&format!("\"{denied}\"")),
+            "{denied}"
+        );
+    }
+
+    let one = success(
+        "list_operations",
+        &call(
+            &fixture,
+            &key,
+            "list_operations",
+            json!({"skill": "scryer-configure-acquisition"}),
+        )
+        .await,
     );
+    let groups = one.as_object().expect("one group");
+    assert_eq!(groups.len(), 1, "{one}");
     assert_eq!(
-        item_with(
-            &after["get_download_client_routing"],
-            "clientId",
-            "mcp-fixture-client"
-        )["category"],
-        "fixture-movies"
+        groups["scryer-configure-acquisition"],
+        all["scryer-configure-acquisition"]
     );
     assert!(
-        after["list_delay_profiles"]["items"]
+        groups["scryer-configure-acquisition"]
             .as_array()
-            .is_some_and(|items| items.iter().all(|item| item["id"] != "mcp-fixture-delay")),
-        "{after}"
+            .is_some_and(|rows| rows.iter().any(|row| row[0] == "IndexerRouting")),
+        "{one}"
+    );
+}
+
+#[tokio::test]
+async fn describe_operation_gives_variables_and_the_types_they_use() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+
+    let query = success(
+        "describe_operation",
+        &call(
+            &fixture,
+            &key,
+            "describe_operation",
+            json!({"name": "IndexerRouting"}),
+        )
+        .await,
+    );
+    assert_eq!(query["name"], "IndexerRouting");
+    assert_eq!(query["kind"], "q");
+    assert!(query["notes"].is_string(), "{query}");
+    assert_eq!(query["variables"], json!({"scope": "ContentScopeValue!"}));
+    let scopes = query["types"]["ContentScopeValue"]["enum"]
+        .as_array()
+        .expect("enum values");
+    assert!(scopes.contains(&json!("MOVIE")), "{query}");
+    assert!(query.get("document").is_none(), "{query}");
+
+    let mutation = success(
+        "describe_operation",
+        &call(
+            &fixture,
+            &key,
+            "describe_operation",
+            json!({"name": "UpdateIndexerRouting", "document": true}),
+        )
+        .await,
+    );
+    assert_eq!(mutation["kind"], "m");
+    assert_eq!(
+        mutation["variables"],
+        json!({"input": "UpdateIndexerRoutingInput!"})
+    );
+    let input = &mutation["types"]["UpdateIndexerRoutingInput"]["fields"];
+    assert!(
+        input["scope"].is_string() || input["scope"]["type"].is_string(),
+        "{mutation}"
     );
     assert!(
-        after["list_rule_sets"]["items"]
-            .as_array()
-            .is_some_and(|items| items.iter().all(|item| item["name"] != "Fixture Refused")),
-        "{after}"
+        input["entries"].is_string() || input["entries"]["type"].is_string(),
+        "{mutation}"
     );
+    assert!(
+        mutation["types"]["ContentScopeValue"]["enum"].is_array(),
+        "{mutation}"
+    );
+    assert_eq!(mutation["document"], catalog_text("UpdateIndexerRouting"));
+    for value in mutation["types"].as_object().expect("types").values() {
+        for (field, shown) in value.as_object().expect("type") {
+            assert!(!shown.is_null(), "{field}: {mutation}");
+            assert_ne!(*shown, json!([]), "{field}: {mutation}");
+            assert_ne!(*shown, json!({}), "{field}: {mutation}");
+        }
+    }
+
+    let unknown = call(
+        &fixture,
+        &key,
+        "describe_operation",
+        json!({"name": "McpFixtureNoOperation"}),
+    )
+    .await;
+    let error = tool_error("describe_operation", &unknown);
+    assert_eq!(error["reason"], HTTP_MCP_OPERATION_UNKNOWN);
+    assert!(error.get("skills").is_none(), "{unknown}");
+
+    // The description with the most expanded types still fits one result:
+    // its types stop at their byte budget and the rest are named.
+    let mut largest = (0, String::new(), Value::Null);
+    for operation in catalog::CATALOG.operations() {
+        let body = call(
+            &fixture,
+            &key,
+            "describe_operation",
+            json!({"name": operation.name, "skill": operation.skills[0], "document": true}),
+        )
+        .await;
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .expect("one text block");
+        assert!(
+            text.len() <= tools::RESULT_MAX_BYTES,
+            "{} is {} bytes",
+            operation.name,
+            text.len()
+        );
+        let types = success("describe_operation", &body)["types"]
+            .to_string()
+            .len();
+        if types > largest.0 {
+            largest = (types, operation.name.clone(), body);
+        }
+    }
+    let (types, name, body) = largest;
+    assert!(
+        types <= tools::RESULT_MAX_BYTES / 2,
+        "{name} types are {types} bytes"
+    );
+    let described = success("describe_operation", &body);
+    for unexpanded in described["unexpanded"].as_array().into_iter().flatten() {
+        let unexpanded = unexpanded.as_str().expect("a type name");
+        assert!(described["types"].get(unexpanded).is_none(), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn run_query_serves_catalog_queries_and_refuses_with_codes() {
+    let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
+    seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
+    let key = fixture.api_key.clone();
+
+    let body = call(
+        &fixture,
+        &key,
+        "run_query",
+        json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
+    )
+    .await;
+    let content = success("run_query", &body);
+    assert!(content["indexerRouting"].is_array(), "{body}");
+    let me = success(
+        "run_query",
+        &call(&fixture, &key, "run_query", json!({"name": "Me"})).await,
+    );
+    assert_eq!(me["me"]["username"], "admin");
+
+    // A key without the permission is refused with GraphQL's own code.
+    let limited = limited_key(&fixture).await;
+    let variables = json!({"scope": "MOVIE"});
+    let body = call(
+        &fixture,
+        &limited,
+        "run_query",
+        json!({"name": "IndexerRouting", "variables": variables}),
+    )
+    .await;
+    let error = tool_error("run_query", &body);
+    let expected = graphql_refusal(
+        &fixture,
+        &limited,
+        catalog_text("IndexerRouting"),
+        variables,
+    )
+    .await;
+    assert_eq!(error["code"], "UNAUTHORIZED", "{body}");
+    assert_eq!(error["code"], expected["code"], "{body}");
+    assert_eq!(error["reason"], expected["reason"], "{body}");
+
+    let body = call(
+        &fixture,
+        &key,
+        "run_query",
+        json!({"name": "McpFixtureNoOperation"}),
+    )
+    .await;
+    let error = tool_error("run_query", &body);
+    assert_eq!(error["code"], "BAD_USER_INPUT");
+    assert_eq!(error["reason"], HTTP_MCP_OPERATION_UNKNOWN);
+    assert!(
+        !body.to_string().contains("McpFixtureNoOperation"),
+        "{body}"
+    );
+
+    let body = call(
+        &fixture,
+        &key,
+        "run_query",
+        json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
+    )
+    .await;
+    let error = tool_error("run_query", &body);
+    assert_eq!(error["reason"], HTTP_MCP_OPERATION_KIND_MISMATCH);
+    assert_eq!(error["tool"], "run_mutation");
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
+    )
+    .await;
+    let error = tool_error("run_mutation", &body);
+    assert_eq!(error["reason"], HTTP_MCP_OPERATION_KIND_MISMATCH);
+    assert_eq!(error["tool"], "run_query");
+    // Neither refused call ran: the routing is still empty.
+    let routing = success(
+        "run_query",
+        &call(
+            &fixture,
+            &key,
+            "run_query",
+            json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
+        )
+        .await,
+    );
+    assert!(
+        routing["indexerRouting"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().all(|entry| entry["priority"] != 3)),
+        "{routing}"
+    );
+
+    // Variables reach GraphQL unchanged, and its validation error is coded.
+    let variables = json!({"scope": "MCP_FIXTURE_SCOPE"});
+    let body = call(
+        &fixture,
+        &key,
+        "run_query",
+        json!({"name": "IndexerRouting", "variables": variables}),
+    )
+    .await;
+    let error = tool_error("run_query", &body);
+    let expected = graphql_body(&fixture, &key, catalog_text("IndexerRouting"), variables).await;
+    assert!(expected["errors"][0].is_object(), "{expected}");
+    // GraphQL gives this validation error no code; the tool's own stands in.
+    let expected_code = expected["errors"][0]["extensions"]["code"]
+        .as_str()
+        .unwrap_or(HTTP_MCP_GRAPHQL_ERROR);
+    assert_eq!(error["code"], expected_code, "{body}");
+
+    // Over the cap: refused with both sizes, never cut.
+    let mut request = rpc_request(
+        Some(&key),
+        None,
+        call_tool("run_query", json!({"name": "Me"})),
+    );
+    request.extensions_mut().insert(server::ResultCap(16));
+    let (status, _, body) = send(&fixture.router, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let error = tool_error("run_query", &body);
+    assert_eq!(error["code"], "PAYLOAD_TOO_LARGE");
+    assert_eq!(error["reason"], HTTP_MCP_RESULT_TOO_LARGE);
+    assert_eq!(error["max_bytes"], 16);
+    assert!(error["result_bytes"].as_u64().is_some_and(|size| size > 16));
+    assert!(error.get("applied").is_none());
+    assert!(result_value("run_query", &body).get("data").is_none());
+    assert!(!body.to_string().contains("\"admin\""), "{body}");
+}
+
+#[tokio::test]
+async fn run_mutation_saves_a_configuration_change_end_to_end() {
+    let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
+    seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
+    let key = fixture.api_key.clone();
+
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
+    )
+    .await;
+    let saved = success("run_mutation", &body);
+    assert_eq!(
+        saved["updateIndexerRouting"]
+            .as_array()
+            .and_then(|entries| entries
+                .iter()
+                .find(|entry| entry["indexerId"] == "mcp-fixture-indexer"))
+            .map(|entry| entry["priority"].clone()),
+        Some(json!(3)),
+        "{body}"
+    );
+    let read = success(
+        "run_query",
+        &call(
+            &fixture,
+            &key,
+            "run_query",
+            json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
+        )
+        .await,
+    );
+    let entry = read["indexerRouting"]
+        .as_array()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry["indexerId"] == "mcp-fixture-indexer")
+        })
+        .cloned()
+        .expect("saved entry");
+    assert_eq!(entry["priority"], 3, "{read}");
+    assert_eq!(entry["categories"], json!(["2000"]), "{read}");
+
+    // A mutation over the cap still ran, and says so.
+    let mut request = rpc_request(
+        Some(&key),
+        None,
+        call_tool(
+            "run_mutation",
+            json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
+        ),
+    );
+    request.extensions_mut().insert(server::ResultCap(16));
+    let (_, _, body) = send(&fixture.router, request).await;
+    let error = tool_error("run_mutation", &body);
+    assert_eq!(error["reason"], HTTP_MCP_RESULT_TOO_LARGE);
+    assert_eq!(error["applied"], true);
+}
+
+#[tokio::test]
+async fn the_diagnostics_tools_refuse_an_account_without_system_settings() {
+    let fixture = fixture().await;
+    let limited = limited_key(&fixture).await;
+    for (name, arguments) in [
+        ("read_diagnostics_section", json!({"section": "build"})),
+        ("search_service_logs", json!({})),
+    ] {
+        let body = call(&fixture, &limited, name, arguments).await;
+        let error = tool_error(name, &body);
+        assert_eq!(error["code"], "UNAUTHORIZED", "{name}: {body}");
+        assert_eq!(
+            error["reason"], HTTP_DIAGNOSTICS_PERMISSION_DENIED,
+            "{name}: {body}"
+        );
+    }
+    // The account's own identity is always readable.
+    success(
+        "whoami",
+        &call(&fixture, &limited, "whoami", json!({})).await,
+    );
+}
+
+#[tokio::test]
+async fn every_diagnostics_section_answers_an_administrator() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    seed_title_with_decisions(&fixture.context, &["rejected", "accepted", "rejected"]).await;
+    let (_, _, listed) = send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
+    let sections = listed["result"]["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "read_diagnostics_section")
+        })
+        .and_then(|tool| tool["inputSchema"]["properties"]["section"]["enum"].as_array())
+        .cloned()
+        .expect("section names");
+    assert!(sections.len() > 10, "{sections:?}");
+    for section in sections {
+        let section = section.as_str().expect("section name");
+        let arguments = if section == "metrics" {
+            json!({"section": section, "metric_families": ["scryer_fixture_family"]})
+        } else {
+            json!({"section": section})
+        };
+        let body = call(&fixture, &key, "read_diagnostics_section", arguments).await;
+        let content = success(section, &body);
+        if section == "metrics" {
+            // The fixture host records no metrics.
+            assert_eq!(content["enabled"], false, "{content}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_installation_section_carries_no_registered_host_value() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    // The database directory is a path the harvest registers.
+    let data_dir = fixture.data_dir.path().display().to_string();
+    let body = call(
+        &fixture,
+        &key,
+        "read_diagnostics_section",
+        json!({"section": "installation"}),
+    )
+    .await;
+    success("read_diagnostics_section", &body);
+    assert!(!body.to_string().contains(&data_dir), "{body}");
+}
+
+#[tokio::test]
+async fn the_per_user_rate_limit_applies_inside_tool_calls() {
+    let fixture = fixture_with(Options {
+        auth_runtime: Some(form_login_runtime()),
+        rate_limiter: Some(ScryerRateLimiter::for_api_test(1)),
+        ..Options::default()
+    })
+    .await;
+    let key = fixture.api_key.clone();
+    success("whoami", &call(&fixture, &key, "whoami", json!({})).await);
+    // A GraphQL tool and an application-read tool draw on the same bucket.
+    for (name, arguments) in [
+        ("whoami", json!({})),
+        ("run_query", json!({"name": "Me"})),
+        ("read_diagnostics_section", json!({"section": "build"})),
+        ("list_operations", json!({})),
+    ] {
+        let body = call(&fixture, &key, name, arguments).await;
+        let error = tool_error(name, &body);
+        assert_eq!(error["code"], "RATE_LIMITED", "{name}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_catalog_run_draws_on_its_operations_graphql_class() {
+    let fixture = fixture_with(Options {
+        auth_runtime: Some(form_login_runtime()),
+        rate_limiter: Some(ScryerRateLimiter::for_class_test(1, 1, 1)),
+        ..Options::default()
+    })
+    .await;
+    let key = fixture.api_key.clone();
+    // A search-class query with a required variable: sent without it, the
+    // call is charged and GraphQL refuses it before any resolver runs.
+    let search = catalog::CATALOG
+        .operations()
+        .iter()
+        .find(|operation| {
+            operation.kind == catalog::OperationKind::Query
+                && operation.class == crate::rate_limit::GraphqlRateLimitClass::Search
+                && operation.skills.len() == 1
+                && catalog::CATALOG.variants(&operation.name).len() == 1
+                && operation
+                    .variables
+                    .iter()
+                    .any(|variable| variable.ty.ends_with('!') && variable.default.is_none())
+        })
+        .expect("a search-class catalog query with a required variable");
+    let mutation = catalog::CATALOG
+        .get("UpdateIndexerRouting")
+        .expect("a catalog mutation");
+    assert_eq!(
+        mutation.class,
+        crate::rate_limit::GraphqlRateLimitClass::Mutation
+    );
+    let runs = [
+        ("run_query", json!({"name": search.name})),
+        ("run_mutation", json!({"name": mutation.name})),
+    ];
+    for (tool, arguments) in &runs {
+        let body = call(&fixture, &key, tool, arguments.clone()).await;
+        assert_ne!(tool_error(tool, &body)["code"], "RATE_LIMITED", "{body}");
+    }
+    // Each has spent its own one-request bucket.
+    for (tool, arguments) in &runs {
+        let body = call(&fixture, &key, tool, arguments.clone()).await;
+        assert_eq!(tool_error(tool, &body)["code"], "RATE_LIMITED", "{body}");
+    }
+    // The API bucket is untouched; an unknown name is charged to it.
+    let body = call(
+        &fixture,
+        &key,
+        "run_query",
+        json!({"name": "McpFixtureNoOperation"}),
+    )
+    .await;
+    assert_eq!(
+        tool_error("run_query", &body)["reason"],
+        HTTP_MCP_OPERATION_UNKNOWN,
+        "{body}"
+    );
+    let body = call(&fixture, &key, "whoami", json!({})).await;
+    assert_eq!(
+        tool_error("whoami", &body)["code"],
+        "RATE_LIMITED",
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn every_withheld_operation_is_unknown_to_the_run_tools() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    assert!(!catalog::CATALOG.withheld.is_empty());
+    for name in &catalog::CATALOG.withheld {
+        let body = call(&fixture, &key, "run_mutation", json!({"name": name})).await;
+        assert_eq!(
+            tool_error("run_mutation", &body)["reason"],
+            HTTP_MCP_OPERATION_UNKNOWN,
+            "{name}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn one_tool_call_is_one_rate_limit_charge_whatever_it_runs() {
+    let fixture = fixture_with(Options {
+        auth_runtime: Some(form_login_runtime()),
+        rate_limiter: Some(ScryerRateLimiter::for_api_test(1)),
+        ..Options::default()
+    })
+    .await;
+    let key = fixture.api_key.clone();
+    // The call runs GraphQL, which draws on the same bucket, yet a one-unit
+    // budget serves it: the call is charged once, at its start.
+    success(
+        "run_query",
+        &call(&fixture, &key, "run_query", json!({"name": "Me"})).await,
+    );
+    let body = call(&fixture, &key, "run_query", json!({"name": "Me"})).await;
+    assert_eq!(
+        tool_error("run_query", &body)["code"],
+        "RATE_LIMITED",
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn the_api_explorer_header_has_no_effect_on_mcp() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    let plain = call(&fixture, &key, "whoami", json!({})).await;
+    for mode in ["oauth", "api-key", "mcp-fixture-unknown-mode"] {
+        let mut request = rpc_request(Some(&key), None, call_tool("whoami", json!({})));
+        request
+            .headers_mut()
+            .insert("x-scryer-api-explorer-mode", HeaderValue::from_static(mode));
+        let (status, _, body) = send(&fixture.router, request).await;
+        assert_eq!(status, StatusCode::OK, "{mode}: {body}");
+        assert_eq!(
+            success("whoami", &body),
+            success("whoami", &plain),
+            "{mode}"
+        );
+
+        // The OAuth explorer mode would drop the system settings permission.
+        let mut request = rpc_request(
+            Some(&key),
+            None,
+            call_tool("read_diagnostics_section", json!({"section": "build"})),
+        );
+        request
+            .headers_mut()
+            .insert("x-scryer-api-explorer-mode", HeaderValue::from_static(mode));
+        let (status, _, body) = send(&fixture.router, request).await;
+        assert_eq!(status, StatusCode::OK, "{mode}: {body}");
+        success("read_diagnostics_section", &body);
+    }
 }
 
 #[tokio::test]
@@ -2725,239 +2000,106 @@ async fn config_step_up_refuses_api_key_writes_with_the_graphql_code() {
         .auth_runtime
         .apply_saved_security_settings(true, false);
     seed_quality_profiles(&fixture).await;
+    seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
 
-    // The owner has no TOTP credential, so every configuration write and
-    // dry-run is refused for enrollment, exactly as `/graphql` refuses it.
-    for (name, arguments, variables) in write_calls("mcp-fixture-rule") {
-        let body = call(&fixture, &key, name, arguments).await;
-        let error = tool_error(name, &body);
-        let expected = graphql_refusal(&fixture, &key, operation_document(name), variables).await;
-        assert_eq!(error["code"], "TOTP_ENROLLMENT_REQUIRED", "{name}: {body}");
-        assert_eq!(error["code"], expected["code"], "{name}: {body}");
-        assert_eq!(error["reason"], expected["reason"], "{name}: {body}");
-    }
-    let title_id = seed_title_with_decisions(&fixture.context, &[]).await;
-    for name in ["validate_rule_set", "test_rule_set"] {
-        let (_, arguments) = minimal_calls(&title_id)
-            .into_iter()
-            .find(|(call, _)| *call == name)
-            .expect("dry-run call");
-        let body = call(&fixture, &key, name, arguments).await;
-        assert_eq!(
-            tool_error(name, &body)["code"],
-            "TOTP_ENROLLMENT_REQUIRED",
-            "{body}"
-        );
-    }
+    // The owner has no TOTP credential, so the write is refused for
+    // enrollment, exactly as `/graphql` refuses it.
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
+    )
+    .await;
+    let error = tool_error("run_mutation", &body);
+    let expected = graphql_refusal(
+        &fixture,
+        &key,
+        catalog_text("UpdateIndexerRouting"),
+        routing_input(),
+    )
+    .await;
+    assert_eq!(error["code"], "TOTP_ENROLLMENT_REQUIRED", "{body}");
+    assert_eq!(error["code"], expected["code"], "{body}");
+    assert_eq!(error["reason"], expected["reason"], "{body}");
     // Reads are not configuration changes.
-    for name in [
-        "list_rule_sets",
-        "list_delay_profiles",
-        "get_quality_profile_settings",
-    ] {
-        success(name, &call(&fixture, &key, name, json!({})).await);
-    }
-}
-
-#[tokio::test]
-async fn write_tool_arguments_are_checked_field_by_field() {
-    let fixture = fixture().await;
-    let (_, profile_args, _) = write_calls("unused")
-        .into_iter()
-        .find(|(name, _, _)| *name == "upsert_delay_profile")
-        .expect("delay profile call");
-
-    let mut missing = profile_args.clone();
-    missing["profile"].as_object_mut().unwrap().remove("name");
-    assert_eq!(
-        refused_argument(&fixture, "upsert_delay_profile", missing).await,
-        "profile.name"
-    );
-    let mut extra = profile_args.clone();
-    extra["profile"]["mcpfixtureextra"] = json!(1);
-    assert_eq!(
-        refused_argument(&fixture, "upsert_delay_profile", extra).await,
-        "profile"
-    );
-    let mut protocol = profile_args.clone();
-    protocol["profile"]["preferredProtocol"] = json!("CARRIER_PIGEON");
-    assert_eq!(
-        refused_argument(&fixture, "upsert_delay_profile", protocol).await,
-        "profile.preferredProtocol"
-    );
-    let entry = json!({"indexerId": "i", "enabled": true, "categories": [], "priority": 1});
-    let mut out_of_range = entry.clone();
-    out_of_range["priority"] = json!(i64::from(i32::MAX) + 1);
-    assert_eq!(
-        refused_argument(
+    success(
+        "run_query",
+        &call(
             &fixture,
-            "update_indexer_routing",
-            json!({"scope": "MOVIE", "entries": [entry, out_of_range]}),
+            &key,
+            "run_query",
+            json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
         )
         .await,
-        "entries[1].priority"
-    );
-    assert_eq!(
-        refused_argument(
-            &fixture,
-            "update_download_client_routing",
-            json!({"scope": "MOVIE", "entries": [{"clientId": "c", "enabled": true}]}),
-        )
-        .await,
-        "entries[0].removeCompleted"
-    );
-    assert_eq!(
-        refused_argument(
-            &fixture,
-            "save_quality_profile_settings",
-            json!({"profiles": [{"id": "q", "name": "Q", "criteria": {}}]}),
-        )
-        .await,
-        "profiles[0].criteria.qualityTiers"
-    );
-    assert_eq!(
-        refused_argument(&fixture, "reorder_download_clients", json!({"ids": []})).await,
-        "ids"
-    );
-    assert_eq!(
-        refused_argument(&fixture, "set_rule_set_enabled", json!({"id": "r"})).await,
-        "enabled"
-    );
-    assert_eq!(
-        refused_argument(&fixture, "update_rule_set", json!({"id": "r"})).await,
-        "rego_source"
-    );
-    assert_eq!(
-        refused_argument(
-            &fixture,
-            "create_rule_set",
-            json!({"name": "Fixture", "rego_source": FIXTURE_REGO, "applied_facets": ["tv"]}),
-        )
-        .await,
-        "applied_facets"
-    );
-    assert_eq!(
-        refused_argument(
-            &fixture,
-            "create_rule_set",
-            json!({"name": "Fixture", "rego_source": "x".repeat(30_001)}),
-        )
-        .await,
-        "rego_source"
-    );
-    assert_eq!(
-        refused_argument(
-            &fixture,
-            "test_rule_set",
-            json!({"title_id": "t", "release_name": "Fixture.Release"}),
-        )
-        .await,
-        "rego_source"
-    );
-    assert_eq!(
-        refused_argument(
-            &fixture,
-            "list_title_episodes",
-            json!({"title_id": "t", "collection_id": "c"}),
-        )
-        .await,
-        "collection_id"
-    );
-    assert_eq!(
-        refused_argument(&fixture, "get_indexer_routing", json!({"scope": "TV"})).await,
-        "scope"
     );
 }
 
 #[tokio::test]
-async fn list_tools_page_within_the_items_budget() {
+async fn a_name_that_differs_between_skills_needs_its_skill() {
     let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
     let key = fixture.api_key.clone();
-    let (_, profile_args, _) = write_calls("unused")
-        .into_iter()
-        .find(|(name, _, _)| *name == "upsert_delay_profile")
-        .expect("delay profile call");
-    let count = 60;
-    for index in 0..count {
-        let mut arguments = profile_args.clone();
-        arguments["profile"]["id"] = json!(format!("mcp-fixture-delay-{index:02}"));
-        arguments["profile"]["name"] = json!(format!("{index:02} {}", "Fixture Delay ".repeat(14)));
-        arguments["profile"]["tags"] = json!(
-            (0..20)
-                .map(|tag| format!("fixture-tag-{tag}"))
-                .collect::<Vec<_>>()
-        );
-        success(
-            "upsert_delay_profile",
-            &call(&fixture, &key, "upsert_delay_profile", arguments).await,
-        );
+    let name = "DelayProfiles";
+    let skills = ["scryer-configure-acquisition", "scryer-migrate-from-arr"];
+    assert!(catalog::CATALOG.varied.iter().any(|varied| varied == name));
+
+    for tool in ["describe_operation", "run_query"] {
+        let body = call(&fixture, &key, tool, json!({"name": name})).await;
+        let error = tool_error(tool, &body);
+        assert_eq!(error["code"], "BAD_USER_INPUT", "{body}");
+        assert_eq!(error["reason"], HTTP_MCP_OPERATION_AMBIGUOUS, "{body}");
+        assert_eq!(error["skills"], json!(skills), "{body}");
+
+        // A skill that does not carry the name finds nothing, and the
+        // refusal names the skills that do.
+        let body = call(
+            &fixture,
+            &key,
+            tool,
+            json!({"name": name, "skill": "scryer-connect"}),
+        )
+        .await;
+        let error = tool_error(tool, &body);
+        assert_eq!(error["reason"], HTTP_MCP_OPERATION_UNKNOWN, "{body}");
+        assert_eq!(error["skills"], json!(skills), "{body}");
     }
-    let mut seen = 0;
-    let mut offset = 0;
-    loop {
-        let page = success(
-            "list_delay_profiles",
+    for skill in skills {
+        let described = success(
+            "describe_operation",
             &call(
                 &fixture,
                 &key,
-                "list_delay_profiles",
-                json!({"offset": offset}),
+                "describe_operation",
+                json!({"name": name, "skill": skill, "document": true}),
             )
             .await,
         );
-        assert_eq!(page["total"], count, "{page}");
-        let returned = page["returned"].as_u64().expect("returned");
-        assert!(
-            returned >= 1 && returned < 50,
-            "the budget cuts the page: {returned}"
+        let catalog::Resolution::Found(variant) = catalog::CATALOG.resolve(name, Some(skill))
+        else {
+            panic!("{name} under {skill}");
+        };
+        assert_eq!(described["document"], variant.text, "{skill}");
+        success(
+            "run_query",
+            &call(
+                &fixture,
+                &key,
+                "run_query",
+                json!({"name": name, "skill": skill}),
+            )
+            .await,
         );
-        seen += returned;
-        match page["next_offset"].as_u64() {
-            Some(next) => offset = next,
-            None => break,
-        }
     }
-    assert_eq!(seen, count);
-}
-
-#[test]
-fn every_new_tool_document_is_covered_by_the_contract_list() {
-    // Tools whose documents carry another name, and tools that run no
-    // document of their own; every other tool's document is named after it.
-    const NAMED_OTHERWISE: &[(&str, &[&str])] = &[
-        ("get_health_checks", &["health_checks"]),
-        ("list_download_clients", &["download_clients"]),
-        ("list_indexers", &["indexers", "indexer_stats"]),
-        ("list_indexer_errors", &["indexer_errors"]),
-        ("get_system_health", &["system_health"]),
-        ("list_job_runs", &["latest_job_runs", "job_runs"]),
-        ("get_title_decisions", &["title_decisions"]),
-        ("list_pending_releases", &["pending_releases"]),
-        ("get_title_history", &["title_history"]),
-        ("list_download_queue", &[]),
-        ("list_import_history", &["import_history"]),
-        ("get_upgrade_status", &["upgrade_status"]),
-        ("get_diagnostics_overview", &[]),
-        ("read_diagnostics_section", &[]),
-        ("search_service_logs", &[]),
-        (
-            "list_title_episodes",
-            &["title_collections", "collection_episodes"],
-        ),
-    ];
-    let documents = tools::every_operation_document();
-    let has = |wanted: &str| documents.iter().any(|(document, _)| *document == wanted);
-    for name in TOOL_NAMES {
-        match NAMED_OTHERWISE.iter().find(|(tool, _)| tool == name) {
-            Some((_, named)) => {
-                for document in *named {
-                    assert!(has(document), "{name}: no document {document}");
-                }
-            }
-            None => assert!(has(name), "{name} has no document in the contract list"),
-        }
-    }
-    for (tool, _) in NAMED_OTHERWISE {
-        assert!(TOOL_NAMES.contains(tool), "{tool} is not a tool");
-    }
+    // A name with one text resolves with or without a skill that carries it.
+    success(
+        "run_query",
+        &call(
+            &fixture,
+            &key,
+            "run_query",
+            json!({"name": "Me", "skill": "scryer-connect"}),
+        )
+        .await,
+    );
 }

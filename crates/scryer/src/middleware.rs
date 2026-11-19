@@ -2271,14 +2271,15 @@ pub(crate) async fn admit_api_key_caller(
     })
 }
 
-/// Charges one MCP tool call to the GraphQL rate limits, as one API request
-/// on the peer and on the user, the same as one `/graphql` read. A call is
-/// charged once however many operations or application reads it runs.
+/// Charges one MCP tool call to the GraphQL rate limits in `class`, on the
+/// peer and on the user, the same keys one `/graphql` request of that class
+/// draws on. A call is charged once however many operations or application
+/// reads it runs.
 pub(crate) fn charge_api_key_call(
     state: &AuthState,
     caller: &ApiKeyCaller,
+    class: crate::rate_limit::GraphqlRateLimitClass,
 ) -> Result<(), GraphQLResponse> {
-    let class = crate::rate_limit::GraphqlRateLimitClass::Api;
     state
         .rate_limiter
         .check_graphql(class, &caller.provenance.key(None))

@@ -1,10 +1,9 @@
-use super::Effect;
 use super::{
-    Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, admit_diagnostics, diagnostics_error,
-    field, json_chars,
+    Arguments, ToolContext, ToolEntry, ToolFuture, admit_diagnostics, diagnostics_error,
+    invalid_argument, local_read, omit_empty, tool,
 };
 use crate::diagnostics_routes::{HostSection, host_identifying, host_sections};
-use crate::error_reasons::HTTP_MCP_ARGUMENTS_INVALID;
+use crate::mcp::server::json_result;
 use rmcp::model::CallToolResult;
 use scryer_application::AppError;
 use scryer_application::diagnostics::{
@@ -30,7 +29,7 @@ enum Section {
 }
 
 /// The host's `metrics` section only says whether metrics are on, which the
-/// overview already shows; the name means the exposition here.
+/// `metrics` section here also says; the name means the exposition here.
 fn host_sections_listed() -> impl Iterator<Item = HostSection> {
     HostSection::ALL
         .iter()
@@ -73,63 +72,48 @@ fn parse_section(name: &str) -> Option<Section> {
         })
 }
 
-pub(super) static TOOL: ToolSpec = ToolSpec {
-    name: "read_diagnostics_section",
-    title: "Diagnostics section",
-    description: "Read one section of the diagnostics bundle, sanitized the same way: a \
-settings or activity summary, an environment fact, or, for `metrics`, the Prometheus lines of up \
-to 10 named metric families. Only `filesystems` probes the library and download roots. Needs the \
-system settings permission and a full session.",
-    params: &[
-        Param {
-            name: "section",
-            description: "The section to read.",
-            required: true,
-            kind: Kind::Enum {
-                values: section_names,
-                default: None,
-            },
-        },
-        Param {
-            name: "metric_families",
-            description: "Metric family names; required for `metrics` and only for it.",
-            required: false,
-            kind: Kind::StrList {
-                min_items: 1,
-                max_items: MAX_METRIC_FAMILIES,
-                max_chars: 200,
-            },
-        },
-    ],
-    effect: Effect::Read,
-    run,
-};
-
-fn argument_error(message: &str) -> rmcp::ErrorData {
-    rmcp::ErrorData::invalid_params(
-        message.to_string(),
-        Some(json!({"reason": HTTP_MCP_ARGUMENTS_INVALID, "argument": "metric_families"})),
-    )
+pub(super) fn entry() -> ToolEntry {
+    ToolEntry {
+        tool: tool(
+            "read_diagnostics_section",
+            "One sanitized diagnostics bundle section; metrics takes up to 10 metric_families. Needs the system settings permission.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "section": {"enum": section_names()},
+                    "metric_families": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_METRIC_FAMILIES},
+                },
+                "required": ["section"],
+            }),
+            local_read(),
+        ),
+        accepts: &["section", "metric_families"],
+        run,
+        class: super::api_class,
+    }
 }
 
-fn run(context: ToolContext, args: Args) -> ToolFuture {
+fn run(context: ToolContext, arguments: Arguments) -> ToolFuture {
     Box::pin(async move {
-        let name = args.str("section").unwrap_or_default().to_string();
+        let name = arguments.required_str("section", 100)?.to_string();
         let Some(section) = parse_section(&name) else {
-            return Err(argument_error(
-                "argument `section` must be one of the listed values",
+            return Err(invalid_argument(
+                "section",
+                "must be one of the listed values",
             ));
         };
-        let families = args.list("metric_families");
+        let families = arguments.str_list("metric_families", MAX_METRIC_FAMILIES, 200)?;
         match (section, &families) {
             (Section::Metrics, None) => {
-                return Err(argument_error(
-                    "argument `metric_families` is required for the metrics section",
+                return Err(invalid_argument(
+                    "metric_families",
+                    "is required for the metrics section",
                 ));
             }
             (Section::App(_) | Section::Host(_), Some(_)) => {
-                return Err(argument_error(
-                    "argument `metric_families` is only accepted for the metrics section",
+                return Err(invalid_argument(
+                    "metric_families",
+                    "is only accepted for the metrics section",
                 ));
             }
             _ => {}
@@ -203,7 +187,7 @@ fn run(context: ToolContext, args: Args) -> ToolFuture {
                 );
             }
         }
-        Ok(CallToolResult::structured(Value::Object(result)))
+        Ok(json_result(Value::Object(omit_empty(result))))
     })
 }
 
@@ -225,7 +209,7 @@ async fn harvest(context: &ToolContext) -> Result<DiagnosticsHarvest, CallToolRe
 }
 
 fn insert_value(result: &mut Map<String, Value>, value: Value) {
-    let chars = json_chars(&value);
+    let chars = serde_json::to_string(&value).map_or(0, |text| text.chars().count());
     if chars > SECTION_BUDGET_CHARS {
         result.insert("value".into(), Value::Null);
         result.insert("withheld_for_size_chars".into(), json!(chars));
@@ -257,24 +241,25 @@ fn cap(section: DiagnosticsSection, mut value: Value) -> Value {
         }
         DiagnosticsSection::Summary(SummarySection::JobRuns) => {
             // The latest status, start and trigger per job only.
-            let by_job = field(&value, "by_job")
-                .as_object()
+            let by_job = value
+                .get("by_job")
+                .and_then(Value::as_object)
                 .map(|jobs| {
                     jobs.iter()
                         .map(|(key, job)| {
                             (
                                 key.clone(),
                                 json!({
-                                    "latest_status": field(job, "latest_status"),
-                                    "latest_started_at": field(job, "latest_started_at"),
-                                    "latest_trigger": field(job, "latest_trigger"),
+                                    "latest_status": job.get("latest_status"),
+                                    "latest_started_at": job.get("latest_started_at"),
+                                    "latest_trigger": job.get("latest_trigger"),
                                 }),
                             )
                         })
                         .collect::<Map<_, _>>()
                 })
                 .unwrap_or_default();
-            json!({"sampled": field(&value, "sampled"), "by_job": by_job})
+            json!({"sampled": value.get("sampled"), "by_job": by_job})
         }
         _ => value,
     }
@@ -343,7 +328,9 @@ async fn metrics(
     result.insert("families".into(), json!(families));
     result.insert("returned".into(), json!(lines.len()));
     result.insert("lines".into(), json!(lines));
-    result.insert("truncated".into(), json!(truncated));
+    if truncated > 0 {
+        result.insert("truncated".into(), json!(truncated));
+    }
     Ok(())
 }
 

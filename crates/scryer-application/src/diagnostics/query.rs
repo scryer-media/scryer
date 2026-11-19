@@ -1,17 +1,16 @@
 //! Reads the diagnostics material one piece at a time, for callers that ask a
 //! narrow question instead of downloading the whole bundle: one summary or
-//! environment section, the known-value harvest, log counts and a log search.
+//! environment section, the known-value harvest and a log search.
 //!
 //! Each piece is gathered on its own, with the same functions and the same
 //! sanitizer the bundle uses, so a pseudonym means the same thing in both.
 
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::sanitize::{KnownValues, PATH_POLICY, PathPolicy, Sanitizer};
-use super::{Omission, archive};
+use super::Omission;
+use super::sanitize::{KnownValues, Sanitizer};
 use crate::{AppError, AppResult, AppUseCase, User};
 
 /// The summary member's sections, in the order the bundle writes them.
@@ -238,19 +237,6 @@ impl AppUseCase {
     }
 }
 
-/// The sanitizer's layers and policy as the bundle manifest states them,
-/// without the counts that need a harvest.
-pub fn sanitization_facts() -> Value {
-    json!({
-        "best_effort": true,
-        "passes": archive::sanitization_passes(),
-        "path_policy": match PATH_POLICY {
-            PathPolicy::KeepFileName => "keep_file_name",
-            PathPolicy::RedactAll => "redact_all",
-        },
-    })
-}
-
 /// A log level, lowest first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
@@ -285,51 +271,6 @@ impl LogLevel {
             .into_iter()
             .find(|level| level.as_str().eq_ignore_ascii_case(value))
     }
-}
-
-/// Line counts of a set of log lines, as the troubleshooting log summary
-/// reports them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LogSummary {
-    pub lines: u64,
-    /// JSON lines by their `level`.
-    pub by_level: BTreeMap<String, u64>,
-    /// `"LEVEL target"` of WARN and ERROR lines, most frequent first, then by
-    /// name.
-    pub top_warn_error_targets: Vec<(String, u64)>,
-    /// Lines that are not a JSON object.
-    pub non_json_lines: u64,
-}
-
-/// WARN and ERROR targets the log summary lists.
-pub const LOG_SUMMARY_TOP_TARGETS: usize = 15;
-
-/// Counts lines by level and the most frequent WARN and ERROR targets. Only
-/// the level and the target are read, and the sanitizer leaves both as they
-/// are, so the raw lines give the same counts as the bundle's.
-pub fn summarize_log_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> LogSummary {
-    let mut summary = LogSummary::default();
-    let mut targets: BTreeMap<String, u64> = BTreeMap::new();
-    for line in lines {
-        summary.lines += 1;
-        let Some(record) = json_record(line) else {
-            summary.non_json_lines += 1;
-            continue;
-        };
-        let Some(level) = record.get("level").and_then(Value::as_str) else {
-            continue;
-        };
-        *summary.by_level.entry(level.to_string()).or_default() += 1;
-        if level == "WARN" || level == "ERROR" {
-            let target = record.get("target").and_then(Value::as_str).unwrap_or("");
-            *targets.entry(format!("{level} {target}")).or_default() += 1;
-        }
-    }
-    let mut targets = targets.into_iter().collect::<Vec<_>>();
-    targets.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    targets.truncate(LOG_SUMMARY_TOP_TARGETS);
-    summary.top_warn_error_targets = targets;
-    summary
 }
 
 fn json_record(line: &str) -> Option<serde_json::Map<String, Value>> {

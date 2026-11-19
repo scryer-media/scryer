@@ -1,122 +1,90 @@
-use super::Effect;
 use super::{
-    Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, admit_diagnostics, coded_error,
-    diagnostics_error,
+    Arguments, ToolContext, ToolEntry, ToolFuture, admit_diagnostics, coded_error,
+    diagnostics_error, invalid_argument, local_read, omit_empty, tool,
 };
 use crate::diagnostics_routes::{buffered_log_lines, host_identifying};
-use crate::error_reasons::{HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_LOG_PATTERN_INVALID};
-use rmcp::model::CallToolResult;
+use crate::error_reasons::HTTP_MCP_LOG_PATTERN_INVALID;
+use crate::mcp::server::json_result;
 use scryer_application::AppError;
 use scryer_application::diagnostics::{
     LOG_PATTERN_MAX_CHARS, LogCursor, LogFileRead, LogLevel, LogPattern, LogPatternRefusal,
     LogSearch, LogSource, read_log_files_unless_cancelled, search_log_lines,
 };
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 /// Characters of matching lines one result holds. With the line count cap
 /// this keeps a result near 5,000 tokens.
 const LINES_BUDGET_CHARS: usize = 16_000;
 
-/// Lines one call reads and sanitizes at most. The description states it.
+/// Lines one call reads and sanitizes at most.
 pub(crate) const MAX_LINES_SCANNED: usize = 20_000;
 
-fn levels() -> Vec<&'static str> {
-    LogLevel::ALL.iter().map(|level| level.as_str()).collect()
+const DEFAULT_MAX_LINES: i64 = 40;
+
+pub(super) fn entry() -> ToolEntry {
+    let levels = LogLevel::ALL
+        .iter()
+        .map(|level| level.as_str())
+        .collect::<Vec<_>>();
+    ToolEntry {
+        tool: tool(
+            "search_service_logs",
+            "Searches sanitized service logs newest first by regex and level; page with before: next_cursor. Needs the system settings permission.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "level": {"enum": levels},
+                    "source": {"enum": ["buffer", "file", "both"]},
+                    "max_lines": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "before": {"type": "string"},
+                },
+            }),
+            local_read(),
+        ),
+        accepts: &["pattern", "level", "source", "max_lines", "before"],
+        run,
+        class: super::api_class,
+    }
 }
 
-fn sources() -> Vec<&'static str> {
-    vec!["buffer", "file", "both"]
-}
-
-pub(super) static TOOL: ToolSpec = ToolSpec {
-    name: "search_service_logs",
-    title: "Search service logs",
-    description: "Search the in-memory log buffer and the log file newest first, as the \
-troubleshooting log search does: an optional case-insensitive regular expression over each \
-structured line's message and target (or a plain line's text), an optional minimum level, and a \
-before cursor for older pages. Lines are sanitized before they are matched or returned. One call \
-reads at most 20,000 lines; when it stops there before the page is full it returns scan_capped \
-true and a next_cursor that continues the search. The log keeps moving while you page, so a later \
-page can repeat or skip lines; a fresh search without a cursor gives the current newest lines. \
-Needs the system settings permission and a full session.",
-    params: &[
-        Param {
-            name: "pattern",
-            description: "A regular expression, matched case-insensitively.",
-            required: false,
-            kind: Kind::Str {
-                max_chars: LOG_PATTERN_MAX_CHARS,
-            },
-        },
-        Param {
-            name: "level",
-            description: "Only lines at this level or above.",
-            required: false,
-            kind: Kind::Enum {
-                values: levels,
-                default: None,
-            },
-        },
-        Param {
-            name: "source",
-            description: "Which logs to read; with both, the buffer is read first.",
-            required: false,
-            kind: Kind::Enum {
-                values: sources,
-                default: Some("both"),
-            },
-        },
-        Param {
-            name: "max_lines",
-            description: "Matching lines to return.",
-            required: false,
-            kind: Kind::Int {
-                default: Some(40),
-                min: 1,
-                max: 100,
-            },
-        },
-        Param {
-            name: "before",
-            description: "Continue from next_cursor.",
-            required: false,
-            kind: Kind::Str { max_chars: 40 },
-        },
-    ],
-    effect: Effect::Read,
-    run,
-};
-
-fn invalid(argument: &str, message: &str) -> rmcp::ErrorData {
-    rmcp::ErrorData::invalid_params(
-        message.to_string(),
-        Some(json!({"reason": HTTP_MCP_ARGUMENTS_INVALID, "argument": argument})),
-    )
-}
-
-fn run(context: ToolContext, args: Args) -> ToolFuture {
+fn run(context: ToolContext, arguments: Arguments) -> ToolFuture {
     Box::pin(async move {
-        let source = match args.str("source") {
+        let source = match arguments.str("source", 10)? {
+            None | Some("both") => LogSource::Both,
             Some("buffer") => LogSource::Buffer,
             Some("file") => LogSource::File,
-            _ => LogSource::Both,
+            Some(_) => return Err(invalid_argument("source", "must be buffer, file or both")),
         };
-        let before = match args.str("before") {
+        let min_level = match arguments.str("level", 20)? {
             None => None,
-            Some(cursor) => match LogCursor::parse(cursor) {
-                Some(cursor) => Some(cursor),
+            Some(level) => match LogLevel::parse(level) {
+                Some(level) => Some(level),
                 None => {
-                    return Err(invalid(
-                        "before",
-                        "argument `before` must be a next_cursor value",
+                    return Err(invalid_argument(
+                        "level",
+                        "must be one of the listed levels",
                     ));
                 }
             },
         };
+        let max_lines = arguments
+            .int("max_lines", 1, 100)?
+            .unwrap_or(DEFAULT_MAX_LINES) as usize;
+        let before = match arguments.str("before", 40)? {
+            None => None,
+            Some(cursor) => match LogCursor::parse(cursor) {
+                Some(cursor) => Some(cursor),
+                None => return Err(invalid_argument("before", "must be a next_cursor value")),
+            },
+        };
+        let pattern = arguments
+            .str("pattern", LOG_PATTERN_MAX_CHARS)?
+            .map(str::to_string);
         if let Some(refused) = admit_diagnostics(&context).await {
             return Ok(refused);
         }
-        let pattern = match args.str("pattern").map(LogPattern::new) {
+        let pattern = match pattern.as_deref().map(LogPattern::new) {
             None => None,
             Some(Ok(pattern)) => Some(pattern),
             Some(Err(refusal)) => {
@@ -135,9 +103,9 @@ once compiled."
         };
         let search = LogSearch {
             pattern,
-            min_level: args.str("level").and_then(LogLevel::parse),
+            min_level,
             source,
-            max_lines: args.count("max_lines"),
+            max_lines,
             max_chars: LINES_BUDGET_CHARS,
             max_scanned: MAX_LINES_SCANNED,
             before,
@@ -164,12 +132,9 @@ once compiled."
         };
         if let Some(reason) = harvest.incomplete_reason() {
             // A value the harvest missed would go unreplaced.
-            return Ok(CallToolResult::structured(json!({
-                "logs_unavailable": reason,
-                "returned": 0,
-                "lines": [],
-                "next_cursor": null,
-            })));
+            return Ok(json_result(
+                json!({"logs_unavailable": reason, "returned": 0}),
+            ));
         }
 
         let host = context.diagnostics.clone();
@@ -206,21 +171,32 @@ once compiled."
             .iter()
             .map(|hit| json!({"source": hit.source, "line": hit.line}))
             .collect::<Vec<_>>();
-        Ok(CallToolResult::structured(json!({
-            "scanned": result.scanned,
-            "file": {
-                "configured": file.configured,
-                "failures": file
-                    .failures
+        let mut file_facts = Map::new();
+        file_facts.insert("configured".into(), json!(file.configured));
+        file_facts.insert(
+            "failures".into(),
+            Value::Array(
+                file.failures
                     .iter()
                     .map(|(source, reason)| json!({"source": source, "reason": reason}))
-                    .collect::<Vec<_>>(),
-                "read_capped": file.read_capped,
-            },
-            "scan_capped": result.scan_capped,
-            "returned": lines.len(),
-            "lines": lines,
-            "next_cursor": result.next_cursor.map(LogCursor::render),
-        })))
+                    .collect(),
+            ),
+        );
+        if file.read_capped {
+            file_facts.insert("read_capped".into(), json!(true));
+        }
+        let mut found = Map::new();
+        found.insert("scanned".into(), json!(result.scanned));
+        found.insert("file".into(), Value::Object(omit_empty(file_facts)));
+        if result.scan_capped {
+            found.insert("scan_capped".into(), json!(true));
+        }
+        found.insert("returned".into(), json!(lines.len()));
+        found.insert("lines".into(), Value::Array(lines));
+        found.insert(
+            "next_cursor".into(),
+            json!(result.next_cursor.map(LogCursor::render)),
+        );
+        Ok(json_result(Value::Object(omit_empty(found))))
     })
 }

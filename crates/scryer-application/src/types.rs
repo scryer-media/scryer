@@ -1164,23 +1164,6 @@ pub struct DownloadQueuePage {
     pub stale: bool,
 }
 
-/// Counts over the caller's visible download queue, with one page of it.
-#[derive(Clone, Debug, Default)]
-pub struct DownloadQueueDiagnosis {
-    /// Visible rows, after the title filter.
-    pub total_count: usize,
-    pub by_display_state: Vec<(DownloadDisplayState, usize)>,
-    pub attention_count: usize,
-    pub by_import_error_code: Vec<(scryer_domain::ImportErrorCode, usize)>,
-    /// Rows the page is cut from: every visible row, or only those that need
-    /// attention.
-    pub matching_count: usize,
-    pub items: Vec<scryer_domain::DownloadQueueItem>,
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub ready: bool,
-    pub stale: bool,
-}
-
 #[derive(Clone, Debug)]
 pub struct DownloadImportPage {
     pub items: Vec<scryer_domain::DownloadQueueItem>,
