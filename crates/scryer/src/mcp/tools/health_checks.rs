@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, app_error, free_text, graphql,
     list_result, offset_page, tally,
@@ -39,6 +40,7 @@ Indexer, RootFolder, RecycleBin, DiskSpace, ReleaseAgeUnknown.",
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{Args, ToolContext, ToolFuture, ToolSpec, graphql};
 use rmcp::model::CallToolResult;
 
@@ -11,6 +12,7 @@ pub(super) static TOOL: ToolSpec = ToolSpec {
     description: "Show the Scryer account this API key acts as: its username, account kind, app \
 permissions and whether it has MFA.",
     params: &[],
+    effect: Effect::Read,
     run,
 };
 

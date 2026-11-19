@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, app_error, fit_budget, free_text,
     graphql_name, list_result, sorted_counts,
@@ -27,7 +28,9 @@ and import error. Read from the last client refresh; nothing contacts a download
             name: "attention_only",
             description: "Page only the items that need attention. The counts cover every item.",
             required: false,
-            kind: Kind::Bool { default: false },
+            kind: Kind::Bool {
+                default: Some(false),
+            },
         },
         Param {
             name: "limit",
@@ -50,6 +53,7 @@ and import error. Read from the last client refresh; nothing contacts a download
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

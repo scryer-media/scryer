@@ -1,0 +1,17 @@
+# The seasons and other collections of one title, without their episodes.
+query TitleCollections($id: ID!) {
+  title(id: $id) {
+    id
+    name
+    facet
+    collections {
+      id
+      collectionType
+      collectionIndex
+      label
+      firstEpisodeNumber
+      lastEpisodeNumber
+      monitored
+    }
+  }
+}

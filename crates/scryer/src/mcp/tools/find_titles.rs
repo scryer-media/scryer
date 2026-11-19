@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, field, fit_budget, graphql, list_result,
 };
@@ -30,6 +31,7 @@ quality profile. Use the id with the title tools.",
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

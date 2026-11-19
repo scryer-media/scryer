@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, field, fit_budget, graphql, list_result,
 };
@@ -19,6 +20,7 @@ decisions with their scores. Branch on decisionCode.",
         required: true,
         kind: Kind::Str { max_chars: 100 },
     }],
+    effect: Effect::Read,
     run,
 };
 

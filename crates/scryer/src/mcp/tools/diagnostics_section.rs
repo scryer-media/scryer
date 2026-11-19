@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, admit_diagnostics, diagnostics_error,
     field, json_chars,
@@ -94,11 +95,13 @@ system settings permission and a full session.",
             description: "Metric family names; required for `metrics` and only for it.",
             required: false,
             kind: Kind::StrList {
+                min_items: 1,
                 max_items: MAX_METRIC_FAMILIES,
                 max_chars: 200,
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, field, free_text_value, graphql,
     list_result, offset_page, pick, tally,
@@ -40,6 +41,7 @@ contacts the clients.",
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

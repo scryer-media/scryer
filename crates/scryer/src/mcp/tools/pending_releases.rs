@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, field, fit_budget, graphql, list_result,
     tally,
@@ -41,6 +42,7 @@ indexer, delay and last decision code, for one title or every title the key can 
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

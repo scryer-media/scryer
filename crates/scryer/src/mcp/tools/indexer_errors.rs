@@ -1,3 +1,4 @@
+use super::Effect;
 use std::collections::BTreeMap;
 
 use super::{
@@ -42,6 +43,7 @@ and message. Page with after = next_cursor.",
             kind: Kind::Str { max_chars: 512 },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

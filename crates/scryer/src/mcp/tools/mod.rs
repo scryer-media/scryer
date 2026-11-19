@@ -1,10 +1,15 @@
-//! The tool table. Every tool is read-only and talks to nothing outside this
-//! instance: no indexer, download client or other remote service is
-//! contacted, and no server state changes.
+//! The tool table. No tool talks to anything outside this instance: no
+//! indexer, download client or other remote service is contacted. Read and
+//! dry-run tools change no server state. Write tools change saved rules and
+//! acquisition configuration through the same GraphQL mutations, permission
+//! checks, MFA step-up and audit trail as `/graphql`. No call deletes a
+//! title, file or download, though a routing write replaces a whole scope and
+//! drops the entries it leaves out. None takes or returns a credential. Each
+//! tool's [`Effect`] sets the annotations `tools/list` advertises.
 //!
-//! Each tool declares its arguments once; the declaration is both the input
-//! schema `tools/list` advertises and the validation `tools/call` applies, so
-//! the two cannot disagree.
+//! Each tool declares its arguments once, nested object fields included; the
+//! declaration is both the input schema `tools/list` advertises and the
+//! validation `tools/call` applies, so the two cannot disagree.
 
 mod diagnostics_overview;
 mod diagnostics_section;
@@ -23,6 +28,17 @@ mod title_decisions;
 mod title_history;
 mod upgrade_status;
 mod whoami;
+
+mod acquisition_reads;
+mod delay_profile_write;
+mod provider_types;
+mod quality_profile_write;
+mod routing_writes;
+mod rule_sets;
+mod rule_test;
+mod rule_validation;
+mod rule_writes;
+mod title_episodes;
 
 use std::sync::{Arc, LazyLock};
 
@@ -69,7 +85,25 @@ pub(crate) struct ToolSpec {
     pub title: &'static str,
     pub description: &'static str,
     pub params: &'static [Param],
+    pub effect: Effect,
     pub run: fn(ToolContext, Args) -> ToolFuture,
+}
+
+/// What a call does to server state, as its annotations advertise it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// Reads and changes nothing.
+    Read,
+    /// Computes an answer from what it is given, such as a validation or a
+    /// scoring preview, and saves nothing.
+    DryRun,
+    /// Changes saved configuration.
+    Write {
+        /// Whether the call replaces or overwrites state that already exists.
+        destructive: bool,
+        /// Whether repeating the same call leaves the same state.
+        idempotent: bool,
+    },
 }
 
 /// Every tool, in the order `tools/list` returns them.
@@ -91,6 +125,27 @@ pub(crate) static TOOLS: &[&ToolSpec] = &[
     &diagnostics_overview::TOOL,
     &diagnostics_section::TOOL,
     &service_logs::TOOL,
+    &rule_sets::LIST_TOOL,
+    &rule_sets::GET_TOOL,
+    &title_episodes::TOOL,
+    &rule_validation::TOOL,
+    &rule_test::TOOL,
+    &rule_writes::CREATE_TOOL,
+    &rule_writes::UPDATE_TOOL,
+    &rule_writes::TOGGLE_TOOL,
+    &acquisition_reads::DELAY_PROFILES_TOOL,
+    &acquisition_reads::QUALITY_PROFILES_TOOL,
+    &acquisition_reads::INDEXER_ROUTING_TOOL,
+    &acquisition_reads::DOWNLOAD_CLIENT_ROUTING_TOOL,
+    &acquisition_reads::SEEDING_PROFILES_TOOL,
+    &provider_types::INDEXER_TOOL,
+    &provider_types::DOWNLOAD_CLIENT_TOOL,
+    &delay_profile_write::TOOL,
+    &quality_profile_write::TOOL,
+    &routing_writes::INDEXER_TOOL,
+    &routing_writes::DOWNLOAD_CLIENT_TOOL,
+    &routing_writes::REORDER_TOOL,
+    &routing_writes::MAPPING_TOOL,
 ];
 
 pub(crate) fn find(name: &str) -> Option<&'static ToolSpec> {
@@ -98,20 +153,27 @@ pub(crate) fn find(name: &str) -> Option<&'static ToolSpec> {
 }
 
 pub(crate) fn tool(spec: &ToolSpec) -> Tool {
+    let annotations = ToolAnnotations::with_title(spec.title).open_world(false);
+    let annotations = match spec.effect {
+        Effect::Read | Effect::DryRun => annotations.read_only(true),
+        Effect::Write {
+            destructive,
+            idempotent,
+        } => annotations
+            .read_only(false)
+            .destructive(destructive)
+            .idempotent(idempotent),
+    };
     Tool::new(
         spec.name,
         spec.description,
         Arc::new(input_schema(spec.params)),
     )
     .with_title(spec.title)
-    .with_annotations(
-        ToolAnnotations::with_title(spec.title)
-            .read_only(true)
-            .open_world(false),
-    )
+    .with_annotations(annotations)
 }
 
-/// One argument a tool accepts.
+/// One argument a tool accepts, or one field of an object argument.
 pub(crate) struct Param {
     pub name: &'static str,
     pub description: &'static str,
@@ -120,72 +182,119 @@ pub(crate) struct Param {
 }
 
 pub(crate) enum Kind {
-    Bool {
-        default: bool,
-    },
+    /// A boolean; without a default an omitted optional one is not sent.
+    Bool { default: Option<bool> },
     Int {
         default: Option<i64>,
         min: i64,
         max: i64,
     },
-    Str {
-        max_chars: usize,
-    },
+    /// A string that is not blank.
+    Str { max_chars: usize },
     Enum {
         values: fn() -> Vec<&'static str>,
         default: Option<&'static str>,
     },
     EnumList {
         values: fn() -> Vec<&'static str>,
+        min_items: usize,
         max_items: usize,
     },
+    /// Distinct non-blank strings.
     StrList {
+        min_items: usize,
         max_items: usize,
         max_chars: usize,
     },
+    /// Non-blank strings that may repeat, for a list the server stores as
+    /// sent, so whatever a read returns can be written back.
+    StrSeq {
+        min_items: usize,
+        max_items: usize,
+        max_chars: usize,
+    },
+    /// An object with exactly these fields.
+    Object { fields: &'static [Param] },
+    /// A list of objects with exactly these fields.
+    ObjectList {
+        fields: &'static [Param],
+        min_items: usize,
+        max_items: usize,
+    },
 }
 
-fn input_schema(params: &[Param]) -> JsonObject {
+fn kind_schema(kind: &Kind) -> Value {
+    match kind {
+        Kind::Bool { default } => {
+            let mut schema = json!({"type": "boolean"});
+            if let Some(default) = default {
+                schema["default"] = json!(default);
+            }
+            schema
+        }
+        Kind::Int { default, min, max } => {
+            let mut schema = json!({"type": "integer", "minimum": min, "maximum": max});
+            if let Some(default) = default {
+                schema["default"] = json!(default);
+            }
+            schema
+        }
+        Kind::Str { max_chars } => {
+            json!({"type": "string", "minLength": 1, "maxLength": max_chars})
+        }
+        Kind::Enum { values, default } => {
+            let mut schema = json!({"type": "string", "enum": values()});
+            if let Some(default) = default {
+                schema["default"] = json!(default);
+            }
+            schema
+        }
+        Kind::EnumList {
+            values,
+            min_items,
+            max_items,
+        } => json!({
+            "type": "array",
+            "items": {"type": "string", "enum": values()},
+            "minItems": min_items,
+            "maxItems": max_items,
+            "uniqueItems": true,
+        }),
+        Kind::StrList {
+            min_items,
+            max_items,
+            max_chars,
+        }
+        | Kind::StrSeq {
+            min_items,
+            max_items,
+            max_chars,
+        } => json!({
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": max_chars},
+            "minItems": min_items,
+            "maxItems": max_items,
+            "uniqueItems": matches!(kind, Kind::StrList { .. }),
+        }),
+        Kind::Object { fields } => Value::Object(object_schema(fields)),
+        Kind::ObjectList {
+            fields,
+            min_items,
+            max_items,
+        } => json!({
+            "type": "array",
+            "items": object_schema(fields),
+            "minItems": min_items,
+            "maxItems": max_items,
+        }),
+    }
+}
+
+fn object_schema(params: &[Param]) -> JsonObject {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for param in params {
-        let mut schema = match &param.kind {
-            Kind::Bool { default } => json!({"type": "boolean", "default": default}),
-            Kind::Int { default, min, max } => {
-                let mut schema = json!({"type": "integer", "minimum": min, "maximum": max});
-                if let Some(default) = default {
-                    schema["default"] = json!(default);
-                }
-                schema
-            }
-            Kind::Str { max_chars } => {
-                json!({"type": "string", "minLength": 1, "maxLength": max_chars})
-            }
-            Kind::Enum { values, default } => {
-                let mut schema = json!({"type": "string", "enum": values()});
-                if let Some(default) = default {
-                    schema["default"] = json!(default);
-                }
-                schema
-            }
-            Kind::EnumList { values, max_items } => json!({
-                "type": "array",
-                "items": {"type": "string", "enum": values()},
-                "minItems": 1,
-                "maxItems": max_items,
-                "uniqueItems": true,
-            }),
-            Kind::StrList {
-                max_items,
-                max_chars,
-            } => json!({
-                "type": "array",
-                "items": {"type": "string", "minLength": 1, "maxLength": max_chars},
-                "minItems": 1,
-                "maxItems": max_items,
-                "uniqueItems": true,
-            }),
-        };
+        let mut schema = kind_schema(&param.kind);
         schema["description"] = json!(param.description);
         properties.insert(param.name.to_string(), schema);
         if param.required {
@@ -200,6 +309,10 @@ fn input_schema(params: &[Param]) -> JsonObject {
     }
     schema.insert("additionalProperties".into(), json!(false));
     schema
+}
+
+fn input_schema(params: &[Param]) -> JsonObject {
+    object_schema(params)
 }
 
 /// Arguments that passed validation, with defaults filled in.
@@ -236,131 +349,203 @@ impl Args {
         })
     }
 
+    /// Whether the client sent the argument.
+    pub fn has(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+
     /// The validated value, for passing straight into GraphQL variables.
     pub fn value(&self, name: &str) -> Value {
         self.0.get(name).cloned().unwrap_or(Value::Null)
     }
 }
 
-fn argument_error(param: &Param, expected: &str) -> ErrorData {
+/// A refused argument. `argument` is the declared path, such as
+/// `entries[2].priority`: declared names and list positions only, never a
+/// value or name the client sent.
+pub(super) fn invalid_argument(argument: &str, message: &str) -> ErrorData {
     ErrorData::invalid_params(
-        format!("argument `{}` must be {expected}", param.name),
-        Some(json!({"reason": HTTP_MCP_ARGUMENTS_INVALID, "argument": param.name})),
+        message.to_string(),
+        Some(json!({"reason": HTTP_MCP_ARGUMENTS_INVALID, "argument": argument})),
     )
+}
+
+fn argument_error(path: &str, expected: &str) -> ErrorData {
+    invalid_argument(path, &format!("argument `{path}` must be {expected}"))
 }
 
 /// Checks a call's arguments against the tool's declaration. Messages name
 /// only the tool's own argument names, never a value or name the client sent.
 pub(crate) fn validate(spec: &ToolSpec, arguments: Option<JsonObject>) -> Result<Args, ErrorData> {
-    let mut arguments = arguments.unwrap_or_default();
+    validate_object(spec.params, arguments.unwrap_or_default(), None).map(Args)
+}
+
+fn validate_object(
+    params: &[Param],
+    mut arguments: JsonObject,
+    path: Option<&str>,
+) -> Result<Map<String, Value>, ErrorData> {
     if arguments
         .keys()
-        .any(|key| !spec.params.iter().any(|param| param.name == key))
+        .any(|key| !params.iter().any(|param| param.name == key))
     {
-        return Err(ErrorData::invalid_params(
-            "the arguments include a name this tool does not accept",
-            Some(json!({"reason": HTTP_MCP_ARGUMENTS_INVALID})),
-        ));
+        return Err(match path {
+            None => ErrorData::invalid_params(
+                "the arguments include a name this tool does not accept",
+                Some(json!({"reason": HTTP_MCP_ARGUMENTS_INVALID})),
+            ),
+            Some(path) => invalid_argument(
+                path,
+                &format!("argument `{path}` includes a field it does not accept"),
+            ),
+        });
     }
-    let mut args = Map::new();
-    for param in spec.params {
+    let mut checked = Map::new();
+    for param in params {
+        let param_path = match path {
+            None => param.name.to_string(),
+            Some(path) => format!("{path}.{}", param.name),
+        };
         // An explicit null is the same as leaving the argument out.
         let value = arguments
             .remove(param.name)
             .filter(|value| !value.is_null());
         let value = match (&param.kind, value) {
-            (_, None) if param.required => return Err(argument_error(param, "given")),
-            (Kind::Bool { default }, None) => Some(json!(default)),
+            (_, None) if param.required => return Err(argument_error(&param_path, "given")),
+            (Kind::Bool { default }, None) => default.map(|value| json!(value)),
             (Kind::Int { default, .. }, None) => default.map(|value| json!(value)),
             (Kind::Enum { default, .. }, None) => default.map(|value| json!(value)),
             (_, None) => None,
-            (Kind::Bool { .. }, Some(value)) => match value {
-                Value::Bool(_) => Some(value),
-                _ => return Err(argument_error(param, "a boolean")),
-            },
-            (Kind::Int { min, max, .. }, Some(value)) => match value.as_i64() {
-                Some(number) if (*min..=*max).contains(&number) && !value.is_f64() => {
-                    Some(json!(number))
-                }
-                _ => {
-                    return Err(argument_error(
-                        param,
-                        &format!("an integer from {min} to {max}"),
-                    ));
-                }
-            },
-            (Kind::Str { max_chars }, Some(value)) => match value.as_str() {
-                Some(text) if !text.trim().is_empty() && text.chars().count() <= *max_chars => {
-                    Some(value)
-                }
-                _ => {
-                    return Err(argument_error(
-                        param,
-                        &format!("a non-blank string of at most {max_chars} characters"),
-                    ));
-                }
-            },
-            (Kind::Enum { values, .. }, Some(value)) => match value.as_str() {
-                Some(text) if values().contains(&text) => Some(value),
-                _ => return Err(argument_error(param, "one of the listed values")),
-            },
-            (Kind::EnumList { values, max_items }, Some(value)) => {
-                let allowed = values();
-                let valid = value.as_array().is_some_and(|items| {
-                    !items.is_empty()
-                        && items.len() <= *max_items
-                        && items
-                            .iter()
-                            .all(|item| item.as_str().is_some_and(|text| allowed.contains(&text)))
-                        && items
-                            .iter()
-                            .enumerate()
-                            .all(|(index, item)| !items[..index].contains(item))
-                });
-                if !valid {
-                    return Err(argument_error(
-                        param,
-                        &format!("a list of 1 to {max_items} distinct listed values"),
-                    ));
-                }
-                Some(value)
-            }
-            (
-                Kind::StrList {
-                    max_items,
-                    max_chars,
-                },
-                Some(value),
-            ) => {
-                let valid = value.as_array().is_some_and(|items| {
-                    !items.is_empty()
-                        && items.len() <= *max_items
-                        && items.iter().all(|item| {
-                            item.as_str().is_some_and(|text| {
-                                !text.trim().is_empty() && text.chars().count() <= *max_chars
-                            })
-                        })
-                        && items
-                            .iter()
-                            .enumerate()
-                            .all(|(index, item)| !items[..index].contains(item))
-                });
-                if !valid {
-                    return Err(argument_error(
-                        param,
-                        &format!(
-                            "a list of 1 to {max_items} distinct strings of at most {max_chars} characters"
-                        ),
-                    ));
-                }
-                Some(value)
-            }
+            (kind, Some(value)) => Some(validate_value(kind, value, &param_path)?),
         };
         if let Some(value) = value {
-            args.insert(param.name.to_string(), value);
+            checked.insert(param.name.to_string(), value);
         }
     }
-    Ok(Args(args))
+    Ok(checked)
+}
+
+fn distinct(items: &[Value]) -> bool {
+    items
+        .iter()
+        .enumerate()
+        .all(|(index, item)| !items[..index].contains(item))
+}
+
+fn validate_value(kind: &Kind, value: Value, path: &str) -> Result<Value, ErrorData> {
+    match kind {
+        Kind::Bool { .. } => match value {
+            Value::Bool(_) => Ok(value),
+            _ => Err(argument_error(path, "a boolean")),
+        },
+        Kind::Int { min, max, .. } => match value.as_i64() {
+            Some(number) if (*min..=*max).contains(&number) && !value.is_f64() => Ok(json!(number)),
+            _ => Err(argument_error(
+                path,
+                &format!("an integer from {min} to {max}"),
+            )),
+        },
+        Kind::Str { max_chars } => match value.as_str() {
+            Some(text) if !text.trim().is_empty() && text.chars().count() <= *max_chars => {
+                Ok(value)
+            }
+            _ => Err(argument_error(
+                path,
+                &format!("a non-blank string of at most {max_chars} characters"),
+            )),
+        },
+        Kind::Enum { values, .. } => match value.as_str() {
+            Some(text) if values().contains(&text) => Ok(value),
+            _ => Err(argument_error(path, "one of the listed values")),
+        },
+        Kind::EnumList {
+            values,
+            min_items,
+            max_items,
+        } => {
+            let allowed = values();
+            let valid = value.as_array().is_some_and(|items| {
+                (*min_items..=*max_items).contains(&items.len())
+                    && items
+                        .iter()
+                        .all(|item| item.as_str().is_some_and(|text| allowed.contains(&text)))
+                    && distinct(items)
+            });
+            if valid {
+                Ok(value)
+            } else {
+                Err(argument_error(
+                    path,
+                    &format!("a list of {min_items} to {max_items} distinct listed values"),
+                ))
+            }
+        }
+        Kind::StrList {
+            min_items,
+            max_items,
+            max_chars,
+        }
+        | Kind::StrSeq {
+            min_items,
+            max_items,
+            max_chars,
+        } => {
+            let unique = matches!(kind, Kind::StrList { .. });
+            let valid = value.as_array().is_some_and(|items| {
+                (*min_items..=*max_items).contains(&items.len())
+                    && items.iter().all(|item| {
+                        item.as_str().is_some_and(|text| {
+                            !text.trim().is_empty() && text.chars().count() <= *max_chars
+                        })
+                    })
+                    && (!unique || distinct(items))
+            });
+            if valid {
+                Ok(value)
+            } else {
+                let distinct = if unique { "distinct " } else { "" };
+                Err(argument_error(
+                    path,
+                    &format!(
+                        "a list of {min_items} to {max_items} {distinct}strings of at most {max_chars} characters"
+                    ),
+                ))
+            }
+        }
+        Kind::Object { fields } => match value {
+            Value::Object(object) => validate_object(fields, object, Some(path)).map(Value::Object),
+            _ => Err(argument_error(path, "an object")),
+        },
+        Kind::ObjectList {
+            fields,
+            min_items,
+            max_items,
+        } => {
+            let Value::Array(items) = value else {
+                return Err(argument_error(path, "a list of objects"));
+            };
+            if !(*min_items..=*max_items).contains(&items.len()) {
+                return Err(argument_error(
+                    path,
+                    &format!("a list of {min_items} to {max_items} objects"),
+                ));
+            }
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let item_path = format!("{path}[{index}]");
+                    match item {
+                        Value::Object(object) => {
+                            validate_object(fields, object, Some(&item_path)).map(Value::Object)
+                        }
+                        _ => Err(argument_error(&item_path, "an object")),
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::Array)
+        }
+    }
 }
 
 pub(super) static PATTERN_SANITIZER: LazyLock<Sanitizer> = LazyLock::new(Sanitizer::patterns_only);
@@ -469,6 +654,65 @@ pub(super) fn list_result(
     head.insert("items".into(), Value::Array(items));
     head.insert(next_key.into(), next);
     CallToolResult::structured(Value::Object(head))
+}
+
+/// A `limit` argument: rows to return, defaulting to and capped at `max`.
+pub(super) const fn limit_param(description: &'static str, max: i64) -> Param {
+    Param {
+        name: "limit",
+        description,
+        required: false,
+        kind: Kind::Int {
+            default: Some(max),
+            min: 1,
+            max,
+        },
+    }
+}
+
+/// An `offset` argument: rows to skip, from `next_offset`.
+pub(super) const OFFSET_PARAM: Param = Param {
+    name: "offset",
+    description: "Rows to skip, from next_offset.",
+    required: false,
+    kind: Kind::Int {
+        default: Some(0),
+        min: 0,
+        max: 10_000,
+    },
+};
+
+/// The names of a GraphQL enum, for a declared argument.
+pub(super) fn content_scopes() -> Vec<&'static str> {
+    graphql_enum_names::<scryer_interface::types::ContentScopeValue>()
+}
+
+/// A content scope argument, required.
+pub(super) const SCOPE_PARAM: Param = Param {
+    name: "scope",
+    description: "The content scope: MOVIE, SERIES or ANIME.",
+    required: true,
+    kind: Kind::Enum {
+        values: content_scopes,
+        default: None,
+    },
+};
+
+/// Runs a mutation and returns its payload field as the tool result, or the
+/// mutation's own refusal unchanged.
+pub(super) async fn mutation_result(
+    context: &ToolContext,
+    document: &'static str,
+    variables: Value,
+    payload: &str,
+) -> Result<CallToolResult, ErrorData> {
+    let data = match graphql(context, document, variables).await {
+        Ok(data) => data,
+        Err(error) => return Ok(error),
+    };
+    let mut result = Map::new();
+    result.insert(payload.into(), field(&data, payload).clone());
+    Ok(CallToolResult::structured(Value::Object(result)))
 }
 
 /// Runs one GraphQL operation as the caller. `Ok` holds the data object;
@@ -593,6 +837,61 @@ pub(crate) fn every_operation_document() -> Vec<(&'static str, &'static str)> {
         ("title_history", title_history::OPERATION),
         ("import_history", import_history::OPERATION),
         ("upgrade_status", upgrade_status::OPERATION),
+        ("list_rule_sets", rule_sets::LIST_OPERATION),
+        ("get_rule_set", rule_sets::GET_OPERATION),
+        ("title_collections", title_episodes::COLLECTIONS_OPERATION),
+        ("collection_episodes", title_episodes::EPISODES_OPERATION),
+        ("validate_rule_set", rule_validation::OPERATION),
+        ("test_rule_set", rule_test::OPERATION),
+        ("create_rule_set", rule_writes::CREATE_OPERATION),
+        ("update_rule_set", rule_writes::UPDATE_OPERATION),
+        ("set_rule_set_enabled", rule_writes::TOGGLE_OPERATION),
+        (
+            "list_delay_profiles",
+            acquisition_reads::DELAY_PROFILES_OPERATION,
+        ),
+        (
+            "get_quality_profile_settings",
+            acquisition_reads::QUALITY_PROFILES_OPERATION,
+        ),
+        (
+            "get_indexer_routing",
+            acquisition_reads::INDEXER_ROUTING_OPERATION,
+        ),
+        (
+            "get_download_client_routing",
+            acquisition_reads::DOWNLOAD_CLIENT_ROUTING_OPERATION,
+        ),
+        (
+            "list_seeding_profiles",
+            acquisition_reads::SEEDING_PROFILES_OPERATION,
+        ),
+        (
+            "list_indexer_provider_types",
+            provider_types::INDEXER_OPERATION,
+        ),
+        (
+            "list_download_client_provider_types",
+            provider_types::DOWNLOAD_CLIENT_OPERATION,
+        ),
+        ("upsert_delay_profile", delay_profile_write::OPERATION),
+        (
+            "save_quality_profile_settings",
+            quality_profile_write::OPERATION,
+        ),
+        ("update_indexer_routing", routing_writes::INDEXER_OPERATION),
+        (
+            "update_download_client_routing",
+            routing_writes::DOWNLOAD_CLIENT_OPERATION,
+        ),
+        (
+            "reorder_download_clients",
+            routing_writes::REORDER_OPERATION,
+        ),
+        (
+            "set_indexer_download_client_mapping",
+            routing_writes::MAPPING_OPERATION,
+        ),
     ];
     documents.sort_by_key(|(name, _)| *name);
     documents

@@ -19,8 +19,10 @@ use crate::error_reasons::{HTTP_MCP_GRAPHQL_ERROR, HTTP_MCP_TOOL_UNKNOWN};
 use crate::middleware::{ApiKeyCaller, AuthState};
 
 const INSTRUCTIONS: &str = "Scryer tools act as the account that owns the API key, with exactly \
-that account's permissions and library access. Every tool is read-only and contacts no indexer, \
-download client or other service. Lists return counts first, then a bounded page with \
+that account's permissions and library access. No tool contacts an indexer, download client or \
+other service. Each tool's annotations say whether it changes saved state; write tools run the \
+same mutations and checks as the web UI. No call deletes a title, file or download; routing \
+writes replace a whole scope. Lists return counts first, then a bounded page with \
 next_offset or next_cursor. A failed call has isError set and structured content \
 {\"errors\": [...]}; each error carries a stable code, an optional reason and a message. Decide \
 on code and reason, never on the message text.";

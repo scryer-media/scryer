@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{Args, ToolContext, ToolFuture, ToolSpec, graphql};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
@@ -12,6 +13,7 @@ pub(super) static TOOL: ToolSpec = ToolSpec {
     description: "Show whether the service is ready, the datastore engine and its migration key, \
 and title counts by kind. Indexer statistics are in list_indexers.",
     params: &[],
+    effect: Effect::Read,
     run,
 };
 

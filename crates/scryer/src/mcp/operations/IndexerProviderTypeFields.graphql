@@ -1,0 +1,17 @@
+# Installed indexer providers and the fields each declares, without default
+# values, help text, options or base URLs.
+query IndexerProviderTypeFields {
+  indexerProviderTypes {
+    providerType
+    name
+    supportsTest
+    recommendedFacets
+    configFields {
+      key
+      label
+      fieldType
+      required
+      advanced
+    }
+  }
+}

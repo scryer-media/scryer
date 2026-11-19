@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, field, fit_budget, free_text_value,
     graphql, list_result, tally,
@@ -24,6 +25,7 @@ libraries the key can see are listed. Branch on decision and skipReason.",
             max: 100,
         },
     }],
+    effect: Effect::Read,
     run,
 };
 

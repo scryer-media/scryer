@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, ToolContext, ToolFuture, ToolSpec, admit_diagnostics, diagnostics_error, free_text,
 };
@@ -20,6 +21,7 @@ container and the rest) are in read_diagnostics_section, sanitized like the bund
 installation kind and upgrade owner are also in get_upgrade_status. Needs the system settings \
 permission and a full session.",
     params: &[],
+    effect: Effect::Read,
     run,
 };
 

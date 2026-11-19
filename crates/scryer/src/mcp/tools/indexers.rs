@@ -1,3 +1,4 @@
+use super::Effect;
 use std::collections::HashMap;
 
 use super::{
@@ -58,7 +59,9 @@ counts. No configuration values; nothing contacts the indexers.",
             name: "include_stats",
             description: "Join each indexer's 24-hour statistics.",
             required: false,
-            kind: Kind::Bool { default: true },
+            kind: Kind::Bool {
+                default: Some(true),
+            },
         },
         Param {
             name: "limit",
@@ -81,6 +84,7 @@ counts. No configuration values; nothing contacts the indexers.",
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

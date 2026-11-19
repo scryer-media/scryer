@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, admit_diagnostics, coded_error,
     diagnostics_error,
@@ -82,6 +83,7 @@ Needs the system settings permission and a full session.",
             kind: Kind::Str { max_chars: 40 },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

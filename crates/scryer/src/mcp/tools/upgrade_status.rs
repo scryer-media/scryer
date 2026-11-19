@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{Args, ToolContext, ToolFuture, ToolSpec, free_text_value, graphql};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
@@ -12,6 +13,7 @@ pub(super) static TOOL: ToolSpec = ToolSpec {
 installation is upgraded and by whom, whether a self-upgrade is allowed and why not, and the \
 latest upgrade run.",
     params: &[],
+    effect: Effect::Read,
     run,
 };
 

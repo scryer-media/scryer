@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, Param, ToolContext, ToolFuture, ToolSpec, field, fit_budget, free_text_value,
     graphql, graphql_enum_names, list_result, tally,
@@ -31,6 +32,7 @@ release, client, quality and skip, failure and blocklist reasons, tallied by eve
             required: false,
             kind: Kind::EnumList {
                 values: event_types,
+                min_items: 1,
                 max_items: 20,
             },
         },
@@ -45,6 +47,7 @@ release, client, quality and skip, failure and blocklist reasons, tallied by eve
             },
         },
     ],
+    effect: Effect::Read,
     run,
 };
 

@@ -1,3 +1,4 @@
+use super::Effect;
 use super::{
     Args, Kind, PATTERN_SANITIZER, Param, ToolContext, ToolFuture, ToolSpec, field, fit_budget,
     free_text_value, graphql, graphql_enum_names, list_result, offset_page, pick, tally,
@@ -70,33 +71,26 @@ job_key; refused with it.",
             description: "Add each run's summary text and JSON. Only with job_key; true is \
 refused without it.",
             required: false,
-            kind: Kind::Bool { default: false },
+            kind: Kind::Bool {
+                default: Some(false),
+            },
         },
     ],
+    effect: Effect::Read,
     run,
 };
-
-fn invalid(argument: &str, message: &str) -> rmcp::ErrorData {
-    rmcp::ErrorData::invalid_params(
-        message.to_string(),
-        Some(json!({
-            "reason": crate::error_reasons::HTTP_MCP_ARGUMENTS_INVALID,
-            "argument": argument,
-        })),
-    )
-}
 
 fn run(context: ToolContext, args: Args) -> ToolFuture {
     Box::pin(async move {
         let has_job_key = args.str("job_key").is_some();
         if has_job_key && args.int("offset").is_some() {
-            return Err(invalid(
+            return Err(super::invalid_argument(
                 "offset",
                 "argument `offset` is only accepted without job_key",
             ));
         }
         if !has_job_key && args.bool("include_summary") {
-            return Err(invalid(
+            return Err(super::invalid_argument(
                 "include_summary",
                 "argument `include_summary` is only accepted with job_key",
             ));
@@ -164,7 +158,7 @@ async fn one_job(
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     let limit = args.int("limit").unwrap_or(5);
     if limit > MAX_RUNS {
-        return Err(invalid(
+        return Err(super::invalid_argument(
             "limit",
             "argument `limit` must be an integer from 1 to 20 with job_key",
         ));
