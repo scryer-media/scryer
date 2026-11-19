@@ -126,6 +126,8 @@ type SettingsRulesSectionProps = {
     appliedFacets?: string[];
   }) => void;
   importCustomFormats: (draft: ArrCustomFormatDraft) => void;
+  /** Reloads the rule list, after a connected import saved rules. */
+  refreshRuleSets: () => Promise<void> | void;
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
@@ -945,6 +947,7 @@ export function SettingsRulesSection({
   validationResult,
   applyTemplate,
   importCustomFormats,
+  refreshRuleSets,
   translationDiagnostics,
   focusEditor,
   onEditorFocused,
@@ -1391,6 +1394,7 @@ export function SettingsRulesSection({
               importCustomFormats(draft);
               setIsArrImportOpen(false);
             }}
+            onImported={() => void refreshRuleSets()}
           />
         </React.Suspense>
       ) : null}

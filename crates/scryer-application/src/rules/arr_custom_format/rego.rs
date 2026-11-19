@@ -17,6 +17,8 @@ pub(super) enum Term {
     Call(Vec<Term>),
     Array(Vec<Term>),
     Set(Vec<Term>),
+    /// An object literal, printed one entry per line.
+    Object(Vec<(Term, Term)>),
     ArrayComprehension(Box<Term>, Vec<Expr>),
 }
 
@@ -133,6 +135,11 @@ pub(super) fn print_module(rules: &[Rule]) -> String {
     parts.join("\n")
 }
 
+/// Prints rules without the module import, one after another.
+pub(super) fn print_rules(rules: &[Rule]) -> String {
+    rules.iter().map(print_rule).collect::<Vec<_>>().join("\n")
+}
+
 fn print_rule(rule: &Rule) -> String {
     let mut out = rule.name.clone();
     if !rule.args.is_empty() {
@@ -239,6 +246,15 @@ pub(super) fn print_term(term: &Term) -> String {
         Term::Array(values) => format!("[{}]", join_terms(values)),
         Term::Set(values) if values.is_empty() => "set()".to_string(),
         Term::Set(values) => format!("{{{}}}", join_terms(values)),
+        Term::Object(entries) if entries.is_empty() => "{}".to_string(),
+        Term::Object(entries) => format!(
+            "{{\n{}\n}}",
+            entries
+                .iter()
+                .map(|(key, value)| format!("  {}: {}", print_term(key), print_term(value)))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        ),
         Term::ArrayComprehension(term, body) => format!(
             "[{} | {}]",
             print_term(term),
@@ -296,7 +312,9 @@ fn is_identifier(value: &str) -> bool {
 }
 
 /// Escapes backslash, quote, and the three whitespace controls, as the editor's
-/// deparser always has. Other control characters are refused before printing.
+/// deparser always has. Translated regexes refuse other control characters
+/// before printing; any that reach a string from elsewhere, such as an imported
+/// profile name, print as `\u` escapes so no string can end a line.
 fn quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -307,6 +325,9 @@ fn quote(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            other if other.is_control() => {
+                out.push_str(&format!("\\u{:04x}", u32::from(other)));
+            }
             other => out.push(other),
         }
     }

@@ -929,6 +929,7 @@ export function SettingsRulesContainer({
         validationResult={validationResult}
         applyTemplate={requestApplyTemplate}
         importCustomFormats={requestImportCustomFormats}
+        refreshRuleSets={refreshRuleSets}
         translationDiagnostics={translationDiagnostics}
         focusEditor={focusImportedEditor}
         onEditorFocused={() => setFocusImportedEditor(false)}

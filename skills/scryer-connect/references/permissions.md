@@ -28,6 +28,8 @@ permission check only.
 | Arr import: create indexers and clients | `startExternalImportSources`, `externalImportSourceStatus`, `retryExternalImportSources`, `skipExternalImportSource` | `MANAGE_SYSTEM_SETTINGS` | yes |
 | Notifications | `createNotificationChannel` | `MANAGE_SYSTEM_SETTINGS` | yes |
 | Arr import: finalize | `finalizeExternalImport` | `MANAGE_CATALOG_SETTINGS` | no |
+| Rule import from Sonarr or Radarr: start | `startExternalRuleImport` | `MANAGE_CATALOG_SETTINGS` | yes |
+| Rule import: report (own runs only) | `externalRuleImportStatus` | `MANAGE_CATALOG_SETTINGS` | yes |
 | Users, permissions, lists | user and list operations | `MANAGE_USERS`, `MANAGE_PERMISSIONS`, `MANAGE_LISTS` | varies |
 
 Library-scoped reads (titles, scans) respect per-library grants: an account
