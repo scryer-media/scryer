@@ -55,6 +55,81 @@ impl ArchiveExtractionDestination {
     pub fn staging_parent(&self) -> &Path {
         &self._staging_parent
     }
+
+    pub(crate) fn for_download(
+        library_root: impl Into<PathBuf>,
+        workspace_name: impl Into<String>,
+        owner_id: impl Into<String>,
+    ) -> Self {
+        let _ = workspace_name.into();
+        Self {
+            _staging_parent: library_root
+                .into()
+                .join(crate::import::archive_extraction::ARCHIVE_EXTRACTION_DIR_NAME),
+            _import_id: owner_id.into(),
+        }
+    }
+
+    pub(crate) fn workspace_root(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// Never constructed: without archive support no download has archives to
+/// plan.
+pub(crate) enum PlannedArchiveExtraction {}
+
+impl PlannedArchiveExtraction {
+    pub(crate) fn digest(&self) -> &str {
+        match *self {}
+    }
+}
+
+pub(crate) struct DownloadArchiveOutput {
+    pub(crate) files: u64,
+    pub(crate) bytes: u64,
+}
+
+pub(crate) async fn plan_download_extraction(
+    _dir: &Path,
+    _is_sample: fn(&Path) -> bool,
+    _archive_provider: Option<&Arc<dyn ArchiveExtractorPluginProvider>>,
+) -> AppResult<Option<PlannedArchiveExtraction>> {
+    Ok(None)
+}
+
+pub(crate) async fn extract_planned_download(
+    plan: PlannedArchiveExtraction,
+    _destination: &ArchiveExtractionDestination,
+    _passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
+    _archive_provider: &Arc<dyn ArchiveExtractorPluginProvider>,
+) -> AppResult<DownloadArchiveOutput> {
+    match plan {}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DownloadWorkspacePresence {
+    // Shared callers match on it; this build never reports it.
+    #[allow(dead_code)]
+    Missing,
+    Owned,
+    Foreign,
+}
+
+/// Without archive support nothing proves ownership, so nothing is removed.
+pub(crate) async fn download_workspace_presence(
+    _root: &Path,
+    _owner_id: &str,
+) -> DownloadWorkspacePresence {
+    DownloadWorkspacePresence::Foreign
+}
+
+pub(crate) async fn remove_download_workspace(_root: &Path, _owner_id: &str) -> bool {
+    false
+}
+
+pub(crate) fn download_workspace_name(hex: &str) -> String {
+    hex.to_string()
 }
 
 pub async fn extract_archives_if_needed(

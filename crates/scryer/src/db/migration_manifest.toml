@@ -4296,6 +4296,23 @@ file = "postgres/migrations/0356_location_verification_content_matched.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 357
+description = "archive extractions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0357_archive_extractions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0357_archive_extractions.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

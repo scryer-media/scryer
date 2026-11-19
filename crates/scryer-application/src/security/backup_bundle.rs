@@ -874,6 +874,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "download_client_status",
         classification: BackupTableClassification::Export,
     },
+    // Each row names scratch on this host's library roots; a restored
+    // instance starts with no extraction it did not make itself.
+    BackupTableCatalogEntry {
+        table: "archive_extractions",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "proxy_configs",
         classification: BackupTableClassification::Export,

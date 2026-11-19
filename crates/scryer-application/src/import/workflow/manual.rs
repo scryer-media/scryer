@@ -2112,7 +2112,8 @@ pub async fn begin_manual_import_selection(
 
     if archive_extraction_needed && extract_archives {
         let destination =
-            archive_extraction_destination_for_title(app, &selection_id, &authorized.title).await?;
+            archive_extraction_destination_for_title(app, &selection_id, None, &authorized.title)
+                .await?;
         let passwords = archive_password_candidates(app, &completed, &release_evidence, None).await;
         let extracted_root = {
             let _archive_extraction_permit = app

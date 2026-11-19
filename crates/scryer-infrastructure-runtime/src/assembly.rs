@@ -32,12 +32,12 @@ use crate::postgres::{
 };
 use crate::queries::sql_runtime::StoreDatastore;
 use crate::{
-    AcquisitionStore, BlocklistStore, DomainEventStore, DownloadClientConfigStore,
-    DownloadClientStatusStore, DownloadQueueCommandStore, DownloadRegistryStore,
-    DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
-    FileSystemStagedNzbStore, HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker,
-    IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, LifecycleClaimStore, LifecycleEvaluationStore,
+    AcquisitionStore, ArchiveExtractionStore, BlocklistStore, DomainEventStore,
+    DownloadClientConfigStore, DownloadClientStatusStore, DownloadQueueCommandStore,
+    DownloadRegistryStore, DownloadSubmissionStore, ExternalImportMonitorStore,
+    ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore, HousekeepingStore, ImportStore,
+    InMemoryIndexerStatsTracker, IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore,
+    LibraryProbeStore, LibraryScanUnmatchedStore, LifecycleClaimStore, LifecycleEvaluationStore,
     LifecycleRuleSetStore, ListStore, LocationOperationStore, MediaFileStore, MediaRequestStore,
     MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient, MigrationMode,
     NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
@@ -1445,6 +1445,11 @@ impl DatastoreAssembly {
         Arc::new(DownloadClientStatusStore::new(self.datastore()))
     }
 
+    /// One archive extraction per tracked download (migration 0357).
+    pub fn archive_extractions(&self) -> Arc<dyn scryer_application::ArchiveExtractionRepository> {
+        Arc::new(ArchiveExtractionStore::new(self.datastore()))
+    }
+
     pub fn download_registry(&self) -> Arc<dyn scryer_application::DownloadRegistryRepository> {
         match &self.stores {
             DatastoreStores::Sqlite {
@@ -1792,6 +1797,7 @@ impl DatastoreAssembly {
                 .with_domain_events(domain_event_store.clone())
                 .with_download_registry(download_registry_store.clone())
                 .with_download_client_status(self.download_client_status())
+                .with_archive_extractions(self.archive_extractions())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())
@@ -1926,6 +1932,7 @@ impl DatastoreAssembly {
                 .with_domain_events(domain_event_store.clone())
                 .with_download_registry(download_registry_store.clone())
                 .with_download_client_status(self.download_client_status())
+                .with_archive_extractions(self.archive_extractions())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())

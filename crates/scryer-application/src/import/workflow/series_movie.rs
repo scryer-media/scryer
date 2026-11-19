@@ -274,7 +274,24 @@ async fn run_import(
         && let Some(ref dir) = target.extracted_dir
     {
         workspace_reference.retain();
-        crate::archive_extractor::cleanup_extracted_dir(dir).await;
+        match crate::import::archive_extraction::DownloadExtractionKey::for_completed(completed)
+            .filter(|download| download.names_workspace(dir))
+        {
+            // The download is imported, so its workspace and record go.
+            Some(download) => {
+                if !crate::import::archive_extraction::remove_download_extraction(
+                    app, &download, dir,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        import_id,
+                        "imported download's archive workspace could not be removed; it is kept"
+                    );
+                }
+            }
+            None => crate::archive_extractor::cleanup_extracted_dir(dir).await,
+        }
     }
 
     result
@@ -435,9 +452,14 @@ enum CompletedImportTargetResolution {
     Finished(Box<ImportResult>),
 }
 
+/// Where the archives of an import for `title` are extracted: a tracked
+/// download's own workspace in the title's library root when `download` names
+/// one, else a fresh workspace in the title folder. Earlier workspaces left in
+/// the title folder and the library root are swept by their usual age rule.
 pub(super) async fn archive_extraction_destination_for_title(
     app: &AppUseCase,
     import_id: &str,
+    download: Option<&crate::import::archive_extraction::DownloadExtractionKey>,
     title: &scryer_domain::Title,
 ) -> AppResult<crate::archive_extractor::ArchiveExtractionDestination> {
     let title = &app.title_for_naming(title).await;
@@ -446,12 +468,18 @@ pub(super) async fn archive_extraction_destination_for_title(
         folder_template,
         ..
     } = resolve_import_paths(app, title).await?;
-    let staging_parent = effective_title_folder_path(&media_root, title, &folder_template, None);
-    ensure_import_title_folder_available(app, title, &staging_parent).await?;
-    Ok(
-        crate::archive_extractor::ArchiveExtractionDestination::new(staging_parent, import_id)
+    let title_folder = effective_title_folder_path(&media_root, title, &folder_template, None);
+    ensure_import_title_folder_available(app, title, &title_folder).await?;
+    Ok(match download {
+        Some(download) => download
+            .destination(Path::new(&media_root))
+            .with_stale_cleanup_parent(title_folder)
             .with_stale_cleanup_parent(media_root),
-    )
+        None => {
+            crate::archive_extractor::ArchiveExtractionDestination::new(title_folder, import_id)
+                .with_stale_cleanup_parent(media_root)
+        }
+    })
 }
 
 /// Require `ResolveImports` on the library of the title an import resolved to.
@@ -549,6 +577,7 @@ async fn relocate_titleless_archive_workspace_for_title(
 async fn archive_extraction_destination_for_completed_facet(
     app: &AppUseCase,
     import_id: &str,
+    download: Option<&crate::import::archive_extraction::DownloadExtractionKey>,
     completed: &CompletedDownload,
 ) -> AppResult<
     Option<(
@@ -578,10 +607,11 @@ async fn archive_extraction_destination_for_completed_facet(
         return Ok(None);
     };
 
-    Ok(Some((
-        crate::archive_extractor::ArchiveExtractionDestination::new(root_path, import_id),
-        facet,
-    )))
+    let destination = match download {
+        Some(download) => download.destination(Path::new(&root_path)),
+        None => crate::archive_extractor::ArchiveExtractionDestination::new(root_path, import_id),
+    };
+    Ok(Some((destination, facet)))
 }
 
 fn archive_probe_facet_from_completed(completed: &CompletedDownload) -> Option<MediaFacet> {
@@ -720,8 +750,15 @@ async fn try_match_titleless_archive_from_inner_video(
     if !archive_extraction_would_be_needed_best_effort(dest_dir, is_sample) {
         return Ok(None);
     }
-    let Some((destination, facet)) =
-        archive_extraction_destination_for_completed_facet(app, import_id, completed).await?
+    let download =
+        crate::import::archive_extraction::DownloadExtractionKey::for_completed(completed);
+    let Some((destination, facet)) = archive_extraction_destination_for_completed_facet(
+        app,
+        import_id,
+        download.as_ref(),
+        completed,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -742,23 +779,49 @@ async fn try_match_titleless_archive_from_inner_video(
         .imports
         .set_archive_processing_pending(import_id, true)
         .await?;
-    mark_import_extracting(app, import_id).await?;
-    let Some(extracted_dir) = ({
-        let _archive_extraction_permit = app
-            .runtime
-            .imports
-            .execution_coordinator
-            .acquire_archive_extraction()
-            .await;
-        crate::archive_extractor::extract_archives_if_needed(
-            dest_dir,
-            is_sample,
-            Some(destination),
-            &passwords,
-            archive_provider.clone(),
-        )
-        .await?
-    }) else {
+    let reused = match &download {
+        Some(download) => {
+            crate::import::archive_extraction::completed_download_extraction(app, download).await?
+        }
+        None => None,
+    };
+    let extracted = match reused {
+        Some(reused) => Some(reused),
+        None => {
+            mark_import_extracting(app, import_id).await?;
+            let _archive_extraction_permit = app
+                .runtime
+                .imports
+                .execution_coordinator
+                .acquire_archive_extraction()
+                .await;
+            match &download {
+                Some(download) => {
+                    crate::import::archive_extraction::extract_download_archives(
+                        app,
+                        download,
+                        dest_dir,
+                        is_sample,
+                        destination,
+                        &passwords,
+                        archive_provider.clone(),
+                    )
+                    .await?
+                }
+                None => {
+                    crate::archive_extractor::extract_archives_if_needed(
+                        dest_dir,
+                        is_sample,
+                        Some(destination),
+                        &passwords,
+                        archive_provider.clone(),
+                    )
+                    .await?
+                }
+            }
+        }
+    };
+    let Some(extracted_dir) = extracted else {
         return Ok(None);
     };
 
@@ -805,14 +868,28 @@ async fn try_match_titleless_archive_from_inner_video(
             // for) a title the actor cannot resolve imports for. The probe
             // workspace is left in the facet root rather than removed here.
             authorize_resolved_import_title(app, resolved_title_authorization, &title).await?;
-            let destination =
-                match archive_extraction_destination_for_title(app, import_id, &title).await {
-                    Ok(destination) => destination,
-                    Err(error) => {
-                        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-                        return Err(error);
-                    }
-                };
+            if download.is_some() {
+                // A download's workspace stays where it was extracted; the
+                // title folder is still checked before anything is placed.
+                archive_extraction_destination_for_title(app, import_id, download.as_ref(), &title)
+                    .await?;
+                workspace_reference.retain();
+                return Ok(Some(TitlelessArchiveMatch {
+                    title,
+                    extracted_dir,
+                }));
+            }
+            let destination = match archive_extraction_destination_for_title(
+                app, import_id, None, &title,
+            )
+            .await
+            {
+                Ok(destination) => destination,
+                Err(error) => {
+                    crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
+                    return Err(error);
+                }
+            };
             let relocation = relocate_titleless_archive_workspace_for_title(
                 &title.name,
                 destination,
@@ -824,7 +901,8 @@ async fn try_match_titleless_archive_from_inner_video(
                 TitlelessArchiveRelocation::ReextractUnderMatchedTitle => {
                     mark_import_extracting(app, import_id).await?;
                     let destination =
-                        archive_extraction_destination_for_title(app, import_id, &title).await?;
+                        archive_extraction_destination_for_title(app, import_id, None, &title)
+                            .await?;
                     ({
                         let _archive_extraction_permit = app
                             .runtime
@@ -1077,12 +1155,28 @@ async fn resolve_completed_import_target(
                 .set_archive_processing_pending(import_id, true)
                 .await?;
         }
-        let extraction_destination =
-            if needs_archives && !(loose_video_available && archive_provider.is_none()) {
-                Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
-            } else {
-                None
-            };
+        let download =
+            crate::import::archive_extraction::DownloadExtractionKey::for_completed(completed);
+        // An extraction an earlier pass of this download made is read again,
+        // never redone.
+        let reused = match &download {
+            Some(download) if needs_archives => {
+                crate::import::archive_extraction::completed_download_extraction(app, download)
+                    .await
+            }
+            _ => Ok(None),
+        };
+        let extraction_destination = if matches!(reused, Ok(None))
+            && needs_archives
+            && !(loose_video_available && archive_provider.is_none())
+        {
+            Some(
+                archive_extraction_destination_for_title(app, import_id, download.as_ref(), &title)
+                    .await?,
+            )
+        } else {
+            None
+        };
         let passwords = if extraction_destination.is_some() {
             archive_password_candidates(app, completed, release_evidence, archive_password).await
         } else {
@@ -1108,8 +1202,11 @@ async fn resolve_completed_import_target(
         } else {
             None
         };
-        drop(preparation_permit.take());
-        let extraction = async {
+        let extraction = if !matches!(reused, Ok(None)) {
+            reused
+        } else {
+            drop(preparation_permit.take());
+            let extraction = async {
             let acquire = app.runtime.imports.execution_coordinator.acquire_archive_extraction();
             let cancellation = extraction_stream.as_ref().map(|stream| stream.cancellation_token());
             let _archive_extraction_permit = if let Some(token) = &cancellation {
@@ -1125,25 +1222,43 @@ async fn resolve_completed_import_target(
             if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
                 return Err(AppError::Canceled("queued archive extraction was cancelled".into()));
             }
-            crate::archive_extractor::extract_archives_if_needed(
-                dest_dir,
-                automatic_scan_sample_rule(&title.facet),
-                extraction_destination,
-                &passwords,
-                archive_provider,
-            )
-            .await
+            match (&download, extraction_destination) {
+                (Some(download), Some(destination)) => {
+                    crate::import::archive_extraction::extract_download_archives(
+                        app,
+                        download,
+                        dest_dir,
+                        automatic_scan_sample_rule(&title.facet),
+                        destination,
+                        &passwords,
+                        archive_provider,
+                    )
+                    .await
+                }
+                (_, destination) => {
+                    crate::archive_extractor::extract_archives_if_needed(
+                        dest_dir,
+                        automatic_scan_sample_rule(&title.facet),
+                        destination,
+                        &passwords,
+                        archive_provider,
+                    )
+                    .await
+                }
+            }
         }.await;
-        if let Some(stream) = extraction_stream {
-            stream.finish().await;
-        }
-        *preparation_permit = Some(
-            app.runtime
-                .imports
-                .execution_coordinator
-                .acquire_preparation()
-                .await,
-        );
+            if let Some(stream) = extraction_stream {
+                stream.finish().await;
+            }
+            *preparation_permit = Some(
+                app.runtime
+                    .imports
+                    .execution_coordinator
+                    .acquire_preparation()
+                    .await,
+            );
+            extraction
+        };
         extracted_dir = match extraction {
             Ok(dir) => dir,
             Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),

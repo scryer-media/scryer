@@ -567,6 +567,7 @@ async fn locate_hashed_destination(
         for (path, ()) in entries {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name == ".scryer-recycle"
+                || name == crate::ARCHIVE_EXTRACTION_DIR_NAME
                 || crate::is_upgrade_replacement_name(&name)
                 || is_recovery_staging_name(&name)
             {

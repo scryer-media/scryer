@@ -38,6 +38,9 @@ pub enum TrackedStatusMessageKind {
     SceneSubtitlePending,
     SeedingHold,
     ManualReview,
+    /// Blocked because no installed plugin extracts the download's archives;
+    /// reopened when an archive extractor is installed.
+    ArchiveExtractorRequired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -503,6 +506,24 @@ impl TrackedDownloadService {
 
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Return downloads blocked only for want of an archive extractor to the
+    /// ordinary import, now that one may be installed. Runtime state only:
+    /// nothing is written. Returns how many were reopened.
+    pub(crate) fn reopen_downloads_awaiting_archive_extractor(&mut self) -> usize {
+        let mut reopened = 0;
+        for td in self.cache.values_mut() {
+            if td.state == TrackedDownloadState::ImportBlocked
+                && td.status_messages.iter().any(|message| {
+                    message.kind == TrackedStatusMessageKind::ArchiveExtractorRequired
+                })
+            {
+                td.reset_for_import_retry();
+                reopened += 1;
+            }
+        }
+        reopened
     }
 
     /// Create or update a tracked download from a client item snapshot.

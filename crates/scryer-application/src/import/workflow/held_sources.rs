@@ -537,8 +537,15 @@ async fn remove_released_workspaces(
     titles: &HashMap<String, Title>,
     settlement: HeldSourcesSettlement,
 ) -> (usize, Vec<HeldWorkspacePreserved>, bool) {
+    use crate::import::archive_extraction::DownloadExtractionKey;
+    /// Who a workspace belongs to: the imports whose marker it carries, or
+    /// the download itself, which every import of it reads.
+    enum WorkspaceOwners {
+        Imports(Vec<String>),
+        Download(DownloadExtractionKey),
+    }
     let mut lookup_incomplete = false;
-    let mut workspaces: Vec<(PathBuf, Vec<String>)> = Vec::new();
+    let mut workspaces: Vec<(PathBuf, WorkspaceOwners)> = Vec::new();
     for record in released {
         let Some(title) = held_import_title_id(record).and_then(|id| titles.get(&id)) else {
             lookup_incomplete = true;
@@ -548,9 +555,22 @@ async fn remove_released_workspaces(
         lookup_incomplete |= !lookup.complete;
         for workspace in lookup.workspaces {
             match workspaces.iter_mut().find(|(path, _)| *path == workspace) {
-                Some((_, owners)) => owners.push(record.id.clone()),
-                None => workspaces.push((workspace, vec![record.id.clone()])),
+                Some((_, WorkspaceOwners::Imports(owners))) => owners.push(record.id.clone()),
+                Some((_, WorkspaceOwners::Download(_))) => {}
+                None => {
+                    workspaces.push((workspace, WorkspaceOwners::Imports(vec![record.id.clone()])))
+                }
             }
+        }
+    }
+    // The download's own workspace is found by its record, never by a scan.
+    if let Some(download) = DownloadExtractionKey::for_source(source) {
+        match crate::import::archive_extraction::owned_download_workspace(app, &download).await {
+            Ok(Some(root)) if !workspaces.iter().any(|(path, _)| *path == root) => {
+                workspaces.push((root, WorkspaceOwners::Download(download)));
+            }
+            Ok(_) => {}
+            Err(_) => lookup_incomplete = true,
         }
     }
     if workspaces.is_empty() {
@@ -602,15 +622,26 @@ async fn remove_released_workspaces(
             preserved.insert(HeldWorkspacePreserved::InUse);
             continue;
         }
-        // One owner, and its artifacts readable, or nothing is proven.
-        let (Some(artifacts), [owner]) = (artifacts.as_ref(), owners.as_slice()) else {
+        let Some(artifacts) = artifacts.as_ref() else {
             preserved.insert(HeldWorkspacePreserved::Unverified);
             continue;
         };
+        // One owning import, or the download, or nothing is proven. A
+        // download's workspace is accounted for by every import of it.
+        let owned_by = |artifact: &&crate::ImportArtifact| match &owners {
+            WorkspaceOwners::Imports(owners) => {
+                matches!(owners.as_slice(), [owner] if artifact.import_id.as_deref() == Some(owner.as_str()))
+            }
+            WorkspaceOwners::Download(_) => true,
+        };
+        if matches!(&owners, WorkspaceOwners::Imports(owners) if owners.len() != 1) {
+            preserved.insert(HeldWorkspacePreserved::Unverified);
+            continue;
+        }
         let owner_imports: Vec<&crate::ImportArtifact> = artifacts
             .iter()
             .filter(|artifact| {
-                artifact.import_id.as_deref() == Some(owner.as_str())
+                owned_by(artifact)
                     && matches!(artifact.result.as_str(), "imported" | "already_present")
             })
             .collect();
@@ -631,7 +662,13 @@ async fn remove_released_workspaces(
         )
         .await
         {
-            Ok(()) => removed += 1,
+            Ok(()) => {
+                removed += 1;
+                if let WorkspaceOwners::Download(download) = &owners {
+                    crate::import::archive_extraction::forget_download_extraction(app, download)
+                        .await;
+                }
+            }
             Err(reason) => {
                 preserved.insert(reason);
             }

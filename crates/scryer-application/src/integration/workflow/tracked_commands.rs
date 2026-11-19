@@ -2028,11 +2028,35 @@ pub async fn start_download_queue_poller_with_options(
     let mut interval = tokio::time::interval(options.interval);
     let mut commands_open = true;
     let mut snapshots_open = true;
+    let mut provider_catalog_rx = app
+        .runtime
+        .events
+        .provider_catalog_changed_broadcast
+        .subscribe();
+    let mut provider_catalog_open = true;
     loop {
         tokio::select! {
             _ = token.cancelled() => {
                 tracing::info!("download queue poller shutting down");
                 break;
+            }
+            changed = provider_catalog_rx.recv(), if provider_catalog_open => {
+                use tokio::sync::broadcast::error::RecvError;
+                let archive_extractors_changed = match changed {
+                    Ok(families) => families.contains(&crate::ProviderCatalogFamily::ArchiveExtractor),
+                    // A missed change may have been an extractor.
+                    Err(RecvError::Lagged(_)) => true,
+                    Err(RecvError::Closed) => {
+                        provider_catalog_open = false;
+                        false
+                    }
+                };
+                if archive_extractors_changed
+                    && runtime.tracker.reopen_downloads_awaiting_archive_extractor() > 0
+                {
+                    tracing::info!("archive extractors changed; reopened downloads waiting for one");
+                    publish_runtime_tracked_download_snapshot_cache(&app, &runtime.tracker).await;
+                }
             }
             maybe_command = command_rx.recv(), if commands_open => {
                 match maybe_command {

@@ -5363,6 +5363,33 @@ pub mod events {
     ];
 }
 
+/// Conditions of the one extraction a tracked download's archives get.
+pub mod archive_extraction {
+    /// Another import pass of the same download is extracting its archives
+    /// now; this pass waits and is retried.
+    pub const IN_PROGRESS: &str = "ARCHIVE_EXTRACTION_IN_PROGRESS";
+    /// An extraction was found unfinished from an earlier run of Scryer; it
+    /// counts as a failed attempt and its partial output is removed.
+    pub const INTERRUPTED: &str = "ARCHIVE_EXTRACTION_INTERRUPTED";
+    /// The download's workspace path is taken by a folder Scryer cannot prove
+    /// it created for this extraction, so nothing is extracted there.
+    pub const WORKSPACE_OCCUPIED: &str = "ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED";
+    /// The archive extraction failed; the archives are untouched.
+    pub const FAILED: &str = "ARCHIVE_EXTRACTION_FAILED";
+    /// The archives need a password none of the candidates supplied.
+    pub const PASSWORD_REQUIRED: &str = "ARCHIVE_EXTRACTION_PASSWORD_REQUIRED";
+    /// The extractor ran past its execution budget.
+    pub const TIMED_OUT: &str = "ARCHIVE_EXTRACTION_TIMED_OUT";
+    pub const ALL: &[&str] = &[
+        IN_PROGRESS,
+        INTERRUPTED,
+        WORKSPACE_OCCUPIED,
+        FAILED,
+        PASSWORD_REQUIRED,
+        TIMED_OUT,
+    ];
+}
+
 pub mod import {
     /// Cannot safely upgrade this file because no configured media root could be resolved.
     pub const MEDIA_ROOT_REQUIRED: &str = "IMPORT_MEDIA_ROOT_REQUIRED";
@@ -6414,6 +6441,7 @@ mod tests {
             ("JOB_", jobs::ALL),
             ("EVENTS_", events::ALL),
             ("IMPORT_", import::ALL),
+            ("ARCHIVE_EXTRACTION_", archive_extraction::ALL),
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),

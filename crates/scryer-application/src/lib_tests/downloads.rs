@@ -23928,10 +23928,24 @@ mod held_sources {
             let workspace = output_dir
                 .parent()
                 .expect("the output sits in its workspace");
-            assert!(
-                workspace.starts_with(&fixture.title_folder),
-                "the workspace is staged under the title folder: {}",
+            let library_root = fixture.title_folder.parent().unwrap();
+            assert_eq!(
+                workspace.parent(),
+                Some(library_root.join(crate::ARCHIVE_EXTRACTION_DIR_NAME).as_path()),
+                "the workspace is staged in the library root's extraction folder: {}",
                 workspace.display()
+            );
+            assert!(
+                !workspace.exists(),
+                "a successful import removes the download's workspace"
+            );
+            let key = crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+                &fixture.completed,
+            )
+            .unwrap();
+            assert!(
+                key.record_in(&app).await.is_none(),
+                "the record goes with the workspace"
             );
             let expected = relative_to_workspace(workspace, &output_dir.join(&video_name));
             let recorded = artifacts.artifacts_for_file(&video_name).await;
@@ -23949,6 +23963,346 @@ mod held_sources {
                 "an extracted file did not come from the download folder"
             );
             assert!(download.join(format!("{release_title}.rar")).exists());
+        }
+
+        /// Stands in for an archive plugin that fails part way: it writes a
+        /// partial file into its output directory, then reports failure.
+        struct FailingArchiveClient {
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::ArchiveExtractorClient for FailingArchiveClient {
+            async fn process(
+                &self,
+                request: scryer_plugin_sdk::ArchivePluginProcessRequest,
+            ) -> AppResult<scryer_plugin_sdk::ArchivePluginProcessResponse> {
+                use scryer_plugin_sdk::{
+                    ArchivePluginOperation, ArchivePluginProcessResponse, ArchivePluginStatus,
+                };
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if let ArchivePluginOperation::ExtractArchive { output_dir, .. } =
+                    &request.operation
+                {
+                    let output_dir = PathBuf::from(output_dir);
+                    std::fs::create_dir_all(&output_dir).unwrap();
+                    std::fs::write(output_dir.join("partial.mkv"), b"partial").unwrap();
+                }
+                Ok(ArchivePluginProcessResponse {
+                    status: ArchivePluginStatus::Failed,
+                    files: Vec::new(),
+                    replaced_source_paths: Vec::new(),
+                    processed_recovery_paths: Vec::new(),
+                    expanded_bytes: None,
+                    copied_bytes: None,
+                    staged_bytes: None,
+                    error_code: Some("corrupt_archive".to_string()),
+                    message: None,
+                })
+            }
+        }
+
+        type OutputDirs = Arc<std::sync::Mutex<Vec<PathBuf>>>;
+
+        fn extracting_provider(
+            video_name: &str,
+            output_dirs: &OutputDirs,
+        ) -> Arc<dyn crate::ArchiveExtractorPluginProvider> {
+            Arc::new(ExtractingArchiveProvider {
+                client: Arc::new(ExtractingArchiveClient {
+                    video_name: video_name.to_string(),
+                    output_dirs: output_dirs.clone(),
+                }),
+            })
+        }
+
+        /// A download that delivered only an archive, next to an unrelated
+        /// file, and the key its extraction is recorded under.
+        struct ArchiveDownload {
+            fixture: DispositionFixture,
+            folder: PathBuf,
+            archive: PathBuf,
+            unrelated: PathBuf,
+            video_name: String,
+            key: crate::import::archive_extraction::DownloadExtractionKey,
+        }
+
+        impl ArchiveDownload {
+            fn library_root(&self) -> &Path {
+                self.fixture.title_folder.parent().unwrap()
+            }
+
+            fn workspace(&self) -> PathBuf {
+                self.library_root()
+                    .join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
+                    .join(self.key.workspace_name())
+            }
+
+            async fn extract(
+                &self,
+                app: &AppUseCase,
+                provider: Option<Arc<dyn crate::ArchiveExtractorPluginProvider>>,
+            ) -> AppResult<Option<PathBuf>> {
+                crate::import::archive_extraction::extract_download_archives(
+                    app,
+                    &self.key,
+                    &self.folder,
+                    crate::import::workflow::is_sample_file,
+                    self.key.destination(self.library_root()),
+                    &Default::default(),
+                    provider,
+                )
+                .await
+            }
+        }
+
+        async fn archive_download(name: &str) -> ArchiveDownload {
+            let release_title = format!("{name}.2026.1080p.WEB-DL.x264-GRP");
+            let fixture = disposition_fixture(name, &release_title).await;
+            let folder = PathBuf::from(&fixture.completed.dest_dir);
+            std::fs::remove_file(folder.join(format!("{release_title}.mkv"))).unwrap();
+            let archive = folder.join(format!("{release_title}.rar"));
+            std::fs::write(&archive, b"rar").unwrap();
+            let unrelated = folder.join("Synthetic.Notes.nfo");
+            std::fs::write(&unrelated, b"unrelated").unwrap();
+            let key =
+                crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+                    &fixture.completed,
+                )
+                .unwrap();
+            ArchiveDownload {
+                fixture,
+                folder,
+                archive,
+                unrelated,
+                video_name: format!("{release_title}.mkv"),
+                key,
+            }
+        }
+
+        #[tokio::test]
+        async fn a_download_s_archives_are_extracted_once_into_its_own_workspace() {
+            let download = archive_download("Extracted Once Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = &download.fixture.app;
+
+            let first = download.extract(app, Some(provider.clone())).await.unwrap();
+            let again = download.extract(app, Some(provider)).await.unwrap();
+            let read = crate::import::archive_extraction::completed_download_extraction(
+                app,
+                &download.key,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(first.as_deref(), Some(download.workspace().as_path()));
+            assert_eq!(again, first, "a later pass reuses the extraction");
+            assert_eq!(read, first, "an import pass reads it without extracting");
+            assert_eq!(output_dirs.lock().unwrap().len(), 1, "the plugin ran once");
+            let record = download.key.record_in(app).await.expect("recorded");
+            assert_eq!(
+                record.state,
+                crate::ArchiveExtractionState::Extracted
+            );
+            assert_eq!(record.attempts, 1);
+            assert_eq!(record.output_count, 1);
+            assert_eq!(record.output_bytes, 300 * 1024 * 1024);
+            let staged: Vec<_> = std::fs::read_dir(
+                download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
+            )
+            .unwrap()
+            .collect();
+            assert_eq!(staged.len(), 1, "one workspace for the download");
+            assert!(download.archive.exists());
+        }
+
+        #[tokio::test]
+        async fn a_failed_extraction_removes_its_workspace_and_keeps_the_download() {
+            let download = archive_download("Failed Extraction Movie").await;
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let provider: Arc<dyn crate::ArchiveExtractorPluginProvider> =
+                Arc::new(ExtractingArchiveProvider {
+                    client: Arc::new(FailingArchiveClient {
+                        calls: calls.clone(),
+                    }),
+                });
+            let app = &download.fixture.app;
+            let operator_file = download.library_root().join("Operator.Notes.txt");
+            std::fs::write(&operator_file, b"operator").unwrap();
+
+            for attempt in 1..=2u32 {
+                download
+                    .extract(app, Some(provider.clone()))
+                    .await
+                    .expect_err("the plugin failed");
+
+                assert!(!download.workspace().exists(), "attempt {attempt}");
+                let record = download.key.record_in(app).await.expect("recorded");
+                assert_eq!(record.state, crate::ArchiveExtractionState::Failed);
+                assert_eq!(record.attempts, attempt);
+                assert!(record.last_reason_code.is_some());
+            }
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert!(download.archive.exists(), "the download's archive stays");
+            assert!(download.unrelated.exists());
+            assert!(operator_file.exists());
+            assert!(download.fixture.title_folder.parent().unwrap().is_dir());
+        }
+
+        #[tokio::test]
+        async fn an_interrupted_extraction_counts_and_its_partial_output_is_replaced() {
+            let download = archive_download("Interrupted Extraction Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = &download.fixture.app;
+            let workspace = download
+                .extract(app, Some(provider.clone()))
+                .await
+                .unwrap()
+                .unwrap();
+            // As a process that stopped mid-extraction leaves it.
+            let partial = workspace.join("Partial.Leftover.mkv");
+            std::fs::write(&partial, b"partial").unwrap();
+            let mut record = download.key.record_in(app).await.unwrap();
+            record.state = crate::ArchiveExtractionState::Extracting;
+            download.key.save_in(app, &record).await;
+
+            let again = download.extract(app, Some(provider)).await.unwrap();
+
+            assert_eq!(again, Some(workspace));
+            assert!(!partial.exists(), "the interrupted output is gone");
+            assert_eq!(output_dirs.lock().unwrap().len(), 2);
+            let record = download.key.record_in(app).await.unwrap();
+            assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
+            assert_eq!(record.attempts, 2, "the interrupted attempt counted");
+            assert!(download.archive.exists());
+        }
+
+        #[tokio::test]
+        async fn a_folder_scryer_did_not_create_for_the_download_is_left_in_place() {
+            let download = archive_download("Occupied Workspace Movie").await;
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider(&download.video_name, &output_dirs);
+            let app = &download.fixture.app;
+            let occupant = download.workspace().join("Operator.Video.mkv");
+            write_video(&occupant);
+
+            let error = download
+                .extract(app, Some(provider))
+                .await
+                .expect_err("the path is occupied");
+
+            assert_eq!(
+                error.reason(),
+                Some(crate::error_reasons::archive_extraction::WORKSPACE_OCCUPIED)
+            );
+            assert!(occupant.exists());
+            assert!(output_dirs.lock().unwrap().is_empty());
+            assert!(download.key.record_in(app).await.is_none());
+        }
+
+        #[tokio::test]
+        async fn without_an_extractor_nothing_is_staged_or_recorded() {
+            let download = archive_download("No Extractor Movie").await;
+            let app = &download.fixture.app;
+
+            let error = download
+                .extract(app, None)
+                .await
+                .expect_err("no extractor");
+            assert!(
+                matches!(error, AppError::ArchiveExtractionPluginRequired { .. }),
+                "{error:?}"
+            );
+
+            let mut tracked = download.fixture.tracked_import_pending();
+            crate::completed_download_handler::import(app, &download.fixture.user, &mut tracked)
+                .await;
+
+            assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
+            assert!(
+                tracked.status_messages.iter().any(|message| message.kind
+                    == crate::tracked_downloads::TrackedStatusMessageKind::ArchiveExtractorRequired),
+                "{:?}",
+                tracked.status_messages
+            );
+            assert!(download.key.record_in(app).await.is_none());
+            assert!(
+                !download
+                    .library_root()
+                    .join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
+                    .exists(),
+                "no scratch folder"
+            );
+            assert!(download.archive.exists());
+
+            // An extractor arriving reopens the download for the ordinary import.
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            let id = tracker.insert_for_tests(tracked);
+            let mut unrelated = download.fixture.tracked_import_pending();
+            unrelated.id = format!("{}-other", unrelated.id);
+            unrelated.download_id = scryer_domain::download_identity::DownloadId::new();
+            unrelated.state = TrackedDownloadState::ImportBlocked;
+            unrelated.status_messages = vec!["blocked for another reason".into()];
+            let unrelated_id = tracker.insert_for_tests(unrelated);
+
+            assert_eq!(tracker.reopen_downloads_awaiting_archive_extractor(), 1);
+            assert_eq!(
+                tracker.get_by_download_id(id).unwrap().state,
+                TrackedDownloadState::ImportPending
+            );
+            assert_eq!(
+                tracker.get_by_download_id(unrelated_id).unwrap().state,
+                TrackedDownloadState::ImportBlocked
+            );
+        }
+
+        #[tokio::test]
+        async fn release_removes_the_download_s_workspace_and_its_record() {
+            let held = held_import().await;
+            std::fs::write(held.download_folder().join("Held.Source.rar"), b"rar").unwrap();
+            let key = crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+                &held.fixture.completed,
+            )
+            .unwrap();
+            let library_root = held.fixture.title_folder.parent().unwrap().to_path_buf();
+            let output_dirs = OutputDirs::default();
+            let provider = extracting_provider("Synthetic.Feature.mkv", &output_dirs);
+            let workspace = crate::import::archive_extraction::extract_download_archives(
+                &held.fixture.app,
+                &key,
+                &held.download_folder(),
+                crate::import::workflow::is_sample_file,
+                key.destination(&library_root),
+                &Default::default(),
+                Some(provider),
+            )
+            .await
+            .unwrap()
+            .expect("extracted");
+            let video = output_dirs.lock().unwrap()[0].join("Synthetic.Feature.mkv");
+            let app = with_artifacts(
+                &held,
+                vec![video_artifact(
+                    &held,
+                    &held.import_id,
+                    Some(relative_to_workspace(&workspace, &video)),
+                    None,
+                )],
+            )
+            .await;
+            let operator_file = library_root.join("Operator.Notes.txt");
+            std::fs::write(&operator_file, b"operator").unwrap();
+
+            let released = release_settled(&held, &app, imported()).await;
+
+            assert!(released.workspace_removed(), "{released:?}");
+            assert!(!workspace.exists());
+            assert!(key.record_in(&app).await.is_none(), "the record goes too");
+            assert!(held.video_source().exists(), "the download stays");
+            assert!(held.download_folder().join("Held.Source.rar").exists());
+            assert!(operator_file.exists());
         }
 
         #[tokio::test]
