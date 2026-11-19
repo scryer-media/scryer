@@ -8,26 +8,48 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useTrackedJobRuns } from "@/lib/hooks/use-tracked-job-runs";
 import type {
   ExternalRuleImportInput,
+  ExternalRuleImportSource,
   ExternalRuleImportStatus,
 } from "@/lib/types/external-import";
 import type { JobRun } from "@/lib/types/jobs";
 import { normalizeExternalRuleImportStatus } from "@/lib/utils/external-rule-import";
-import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 
 export type ExternalRuleImportController = {
   /** The run this view started, as the job-run stream last reported it. */
   run: JobRun | null;
+  /** The source the current run reads from. */
+  source: ExternalRuleImportSource | null;
+  /** True from acceptance until the run reaches a terminal state. */
+  running: boolean;
   /** The final per-item report, loaded once the run has finished. */
   report: ExternalRuleImportStatus | null;
   starting: boolean;
   loadingReport: boolean;
-  /** Display copy for the last start or report failure. */
+  /** Display copy for the last start failure. */
   error: string | null;
+  /** Display copy for the last report load failure; `reloadReport` retries. */
+  reportError: string | null;
   start: (input: ExternalRuleImportInput) => Promise<JobRun | null>;
   /** Reloads the report of the current run, for example after a reconnect. */
   reloadReport: () => Promise<void>;
   reset: () => void;
 };
+
+export type ExternalRuleImportOptions = {
+  /** Called once any run this controller started reaches a terminal state. */
+  onTerminal?: (run: JobRun) => void;
+};
+
+/** True while an import is starting, running or loading its report. */
+export function ruleImportBusy(
+  controller: Pick<
+    ExternalRuleImportController,
+    "starting" | "running" | "loadingReport"
+  >,
+): boolean {
+  return controller.starting || controller.running || controller.loadingReport;
+}
 
 function sameInput(
   left: ExternalRuleImportInput,
@@ -48,19 +70,31 @@ function newRequestKey(): string {
  * Starts an external rule import and follows it. Progress comes from the
  * job-run provider, which listens to the event stream, so this hook runs no
  * poller of its own; it reads the report once when the run reaches a terminal
- * state.
+ * state. Mount it above any dialog that shows the run, so closing the dialog
+ * neither drops the run nor its terminal callback.
  */
-export function useExternalRuleImport(): ExternalRuleImportController {
+export function useExternalRuleImport(
+  options: ExternalRuleImportOptions = {},
+): ExternalRuleImportController {
   const client = useClient();
   const t = useTranslate();
   const trackJobRun = useTrackedJobRuns();
+  const { onTerminal } = options;
+  const onTerminalRef = React.useRef(onTerminal);
+  React.useEffect(() => {
+    onTerminalRef.current = onTerminal;
+  }, [onTerminal]);
   const [run, setRun] = React.useState<JobRun | null>(null);
+  const [source, setSource] = React.useState<ExternalRuleImportSource | null>(
+    null,
+  );
   const [report, setReport] = React.useState<ExternalRuleImportStatus | null>(
     null,
   );
   const [starting, setStarting] = React.useState(false);
   const [loadingReport, setLoadingReport] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [reportError, setReportError] = React.useState<string | null>(null);
   // A start whose response was lost is resent with the same key, so the
   // server returns the run it already accepted instead of starting another.
   const pendingRequestRef = React.useRef<{
@@ -72,6 +106,7 @@ export function useExternalRuleImport(): ExternalRuleImportController {
   const loadReport = React.useCallback(
     async (runId: string) => {
       setLoadingReport(true);
+      setReportError(null);
       try {
         const { data, error: queryError } = await client
           .query<{ externalRuleImportStatus?: unknown }>(
@@ -87,11 +122,11 @@ export function useExternalRuleImport(): ExternalRuleImportController {
         if (!next) throw new Error(t("status.apiError"));
         if (currentRunIdRef.current === runId) {
           setReport(next);
-          setError(null);
+          setReportError(null);
         }
       } catch (loadError: unknown) {
         if (currentRunIdRef.current === runId) {
-          setError(
+          setReportError(
             userFacingGraphQlErrorMessage(loadError, t("status.apiError"), t),
           );
         }
@@ -136,8 +171,12 @@ export function useExternalRuleImport(): ExternalRuleImportController {
         pendingRequestRef.current = null;
         currentRunIdRef.current = accepted.id;
         setRun(accepted);
+        setSource(input.source);
         setReport(null);
+        setReportError(null);
         trackJobRun(accepted, (terminalRun) => {
+          // A run the viewer has since cleared may still have saved rules.
+          onTerminalRef.current?.(terminalRun);
           if (currentRunIdRef.current !== terminalRun.id) return;
           setRun(terminalRun);
           void loadReport(terminalRun.id);
@@ -164,17 +203,22 @@ export function useExternalRuleImport(): ExternalRuleImportController {
     currentRunIdRef.current = null;
     pendingRequestRef.current = null;
     setRun(null);
+    setSource(null);
     setReport(null);
     setError(null);
+    setReportError(null);
     setLoadingReport(false);
   }, []);
 
   return {
     run,
+    source,
+    running: run !== null && !isTerminalJobRunStatus(run.status),
     report,
     starting,
     loadingReport,
     error,
+    reportError,
     start,
     reloadReport,
     reset,

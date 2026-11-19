@@ -7928,7 +7928,9 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
     "Не удалось прочитать этот пользовательский формат, поэтому правило не сохранено.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
-    "Профили качества оценивают этот формат по-разному, и для некоторых нет профиля качества Scryer с тем же именем. Правило даёт 0, пока вы его не проверите.",
+    "Профили качества оценивают этот формат по-разному, и Scryer не может сопоставить некоторые из них с одним профилем качества Scryer. Правило даёт 0, пока вы его не проверите.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer не удалось подготовить импорт по собственным настройкам. Правила не сохранены.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
     "Оценка зависит от профиля качества Scryer с тем же именем.",
   "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
@@ -12054,7 +12056,10 @@ const ru: LocaleDictionary = {
   "settings.arrImportStateFailed": "Не импортировано",
   "settings.arrImportUnmatchedProfiles":
     "Профили качества без профиля Scryer с тем же именем: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Имена профилей качества, которые источник повторяет с разными оценками: {{names}}",
   "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.arrImportDiagnosticAtCondition": "{{message}} (условие {{number}})",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",
   "settings.refReleaseHasHdrFallback":

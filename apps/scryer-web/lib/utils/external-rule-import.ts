@@ -145,15 +145,34 @@ export function ruleImportReasonMessage(
 export const RULE_IMPORT_PROFILE_SCORES_UNMATCHED =
   "RULE_IMPORT_PROFILE_SCORES_UNMATCHED";
 
-/** The Arr profile names a review item could not match, in source order. */
-export function unmatchedProfileNames(item: ExternalRuleImportItem): string[] {
+/** Facts that describe an item's scoring rather than a translator finding. */
+const SCORING_FACT_CODES: ReadonlySet<string> = new Set([
+  RULE_IMPORT_PROFILE_SCORES_UNMATCHED,
+  "RULE_IMPORT_PROFILE_SCORES_APPLIED",
+  "RULE_IMPORT_FORMAT_UNSCORED",
+]);
+
+function profileNamesDetail(
+  item: ExternalRuleImportItem,
+  field: "unmatchedProfiles" | "duplicateProfiles",
+): string[] {
   const fact = item.facts.find(
     (candidate) => candidate.code === RULE_IMPORT_PROFILE_SCORES_UNMATCHED,
   );
-  const names = isRecord(fact?.details) ? fact.details.unmatchedProfiles : null;
+  const names = isRecord(fact?.details) ? fact.details[field] : null;
   return Array.isArray(names)
     ? names.filter((name): name is string => typeof name === "string")
     : [];
+}
+
+/** The Arr profile names a review item could not match, in source order. */
+export function unmatchedProfileNames(item: ExternalRuleImportItem): string[] {
+  return profileNamesDetail(item, "unmatchedProfiles");
+}
+
+/** Arr profile names the source repeats with different scores, in source order. */
+export function duplicateProfileNames(item: ExternalRuleImportItem): string[] {
+  return profileNamesDetail(item, "duplicateProfiles");
 }
 
 /** A translator finding attached to an item, with where in the format it is. */
@@ -161,23 +180,30 @@ export type RuleImportDiagnostic = {
   code: string;
   message: string;
   location: string | null;
+  /** Zero-based index of the condition the finding is about, if any. */
+  specificationIndex: number | null;
 };
 
-/** The translator findings among an item's facts: those that carry a location. */
+/** Every fact of an item except those describing its scoring. */
 export function ruleImportDiagnostics(
   item: ExternalRuleImportItem,
 ): RuleImportDiagnostic[] {
-  return item.facts.flatMap((fact) =>
-    isRecord(fact.details) && typeof fact.details.location === "string"
-      ? [
-          {
-            code: fact.code,
-            message: fact.message,
-            location: fact.details.location,
-          },
-        ]
-      : [],
-  );
+  return item.facts.flatMap((fact) => {
+    if (SCORING_FACT_CODES.has(fact.code)) return [];
+    const details = isRecord(fact.details) ? fact.details : {};
+    const index = details.specificationIndex;
+    return [
+      {
+        code: fact.code,
+        message: fact.message,
+        location: text(details.location),
+        specificationIndex:
+          typeof index === "number" && Number.isSafeInteger(index) && index >= 0
+            ? index
+            : null,
+      },
+    ];
+  });
 }
 
 /** Phase and counts from a running import's job-run progress. */

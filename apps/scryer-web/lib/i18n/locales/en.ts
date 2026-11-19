@@ -1023,7 +1023,9 @@ const en: LocaleDictionary = {
   "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
     "This custom format could not be read, so no rule was saved.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
-    "Quality profiles score this format differently and some have no Scryer quality profile with the same name. The rule scores 0 until you review it.",
+    "Quality profiles score this format differently and Scryer cannot match some of them to one Scryer quality profile. The rule scores 0 until you review it.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer could not prepare the import from its own settings. No rules were saved.",
   "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
     "The score follows the Scryer quality profile with the same name.",
   "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
@@ -7351,7 +7353,10 @@ const en: LocaleDictionary = {
   "settings.arrImportStateFailed": "Not imported",
   "settings.arrImportUnmatchedProfiles":
     "Quality profiles with no Scryer profile of the same name: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Quality profile names the source repeats with different scores: {{names}}",
   "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.arrImportDiagnosticAtCondition": "{{message}} (condition {{number}})",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":

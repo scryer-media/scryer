@@ -67,10 +67,16 @@ an item's `reason` or fact `code`. Facts never stop the run.
 | `EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED` | run | Arr rejected the API key. Operator checks the key in arr's Settings → General, then start again. |
 | `EXTERNAL_IMPORT_SOURCE_UNREACHABLE` | run | Refused, timed out or name did not resolve, from where Scryer runs. Fix `baseUrl` (container networking, base path). |
 | `EXTERNAL_IMPORT_SOURCE_RATE_LIMITED` | run | Arr kept rate limiting. Wait, start again. |
-| `EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING` | run | Arr version lacks an endpoint; usually too old. |
+| `EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING` | run | Arr answered 404 for an API path Scryer reads. Usually `baseUrl` lacks arr's URL base (Settings → General) or points at another service. |
 | `EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE` | run | Error status or wrong JSON shape; often `baseUrl` points at a proxy page or the other app. |
-| `EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE` | run | Arr answered with more data than Scryer reads. |
-| `EXTERNAL_IMPORT_SOURCE_URL_INVALID`, `EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT`, `EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH` | start or run | Bad URL, a `?…`/`#…` part, or the URL serves the other app. |
+| `EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE` | run | One arr response was over 16 MiB, more than Scryer reads. |
+| `EXTERNAL_IMPORT_SOURCE_URL_INVALID`, `EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT`, `EXTERNAL_IMPORT_INVALID_HOST` | start | Bad URL, a `?…`/`#…` part, or a host Scryer cannot use. Fix `baseUrl`. |
+| `EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH` | run | The URL does not identify itself as the chosen app (for example Radarr's URL sent as `SONARR`). |
+| `EXTERNAL_IMPORT_COULD_NOT_DETERMINE_VERSION` | run | Arr's status reported no version Scryer can read. |
+| `EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED` | run | Arr is too old: Sonarr 4 or newer, Radarr 6 or newer. Operator upgrades arr. |
+| `EXTERNAL_IMPORT_DID_NOT_REPORT_API_VERSION` | run | Arr did not report an API version; `baseUrl` likely is not arr. |
+| `EXTERNAL_IMPORT_API_VERSION_EXPECTED_ONE_UNSUPPORTED` | run | Arr's API version is not one Scryer reads (Sonarr `v3`, `v4`, `v5`; Radarr `v3`). |
+| `RULE_IMPORT_PLAN_FAILED` | run | Scryer could not load its own quality profiles to plan the import; nothing saved. Check Scryer's logs, then start again. |
 | `RULE_IMPORT_API_KEY_REQUIRED` | start | Sonarr and Radarr need `apiKey`. |
 | `RULE_IMPORT_INVALID_REQUEST` | start | Empty or invalid `requestKey`, URL or other field. |
 | `RULE_IMPORT_REQUEST_CHANGED` | start | `requestKey` reused with another source or URL. Use a new key. |
@@ -80,11 +86,11 @@ an item's `reason` or fact `code`. Facts never stop the run.
 | `RULE_IMPORT_TOO_MANY_ITEMS` | run | More than 1000 custom formats. |
 | `RULE_IMPORT_TRANSLATOR_UNAVAILABLE` | run | Source has no translator (Maintainerr today). |
 | `RULE_IMPORT_INTERRUPTED` | run, item | Scryer stopped mid-run; items not saved are `FAILED`. Start again: saved ones are skipped. |
-| `RULE_IMPORT_ALREADY_EXISTS` | item | Rule of that name exists; `SKIPPED_EXISTS`, nothing written. |
+| `RULE_IMPORT_ALREADY_EXISTS` | item | A rule exists under the format's plain or `REVIEW - ` name (`savedName` is the one found); `SKIPPED_EXISTS`, nothing written. |
 | `RULE_IMPORT_ITEM_FAILED` | item | Saving that rule failed; item `message` says why. |
-| `RULE_IMPORT_FORMAT_UNTRANSLATABLE` | item | A specification cannot be translated; `FAILED`, nothing saved. Facts hold translator diagnostics (`code`, `details.location`). |
+| `RULE_IMPORT_FORMAT_UNTRANSLATABLE` | item | A specification cannot be translated; `FAILED`, nothing saved. Facts hold translator diagnostics (`code`, `details.location`, `details.specificationIndex`). |
 | `RULE_IMPORT_FORMAT_UNREADABLE` | item | Format could not be read; `FAILED`, nothing saved. |
-| `RULE_IMPORT_PROFILE_SCORES_UNMATCHED` | item, fact | Profiles disagree and `details.unmatchedProfiles` have no Scryer profile of that name; `SAVED_NEEDS_REVIEW` rule scoring 0. |
+| `RULE_IMPORT_PROFILE_SCORES_UNMATCHED` | item, fact | Profiles disagree and some cannot be matched to one Scryer profile: `details.unmatchedProfiles` have no Scryer profile of that name, `details.duplicateProfiles` repeat in arr with different scores. `SAVED_NEEDS_REVIEW` rule scoring 0. |
 | `RULE_IMPORT_PROFILE_SCORES_APPLIED` | fact | Scores follow `input.profile.name`; `details.scores` lists them. |
 | `RULE_IMPORT_FORMAT_UNSCORED` | fact | Every profile scores the format 0; the rule scores 0. |
 

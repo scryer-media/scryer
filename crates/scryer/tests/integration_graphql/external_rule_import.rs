@@ -746,3 +746,126 @@ async fn radarr_rule_import_flags_profiles_scryer_does_not_have_for_review() {
     .await
     .expect("radarr review scenario bound");
 }
+
+#[tokio::test]
+async fn overlapping_radarr_rule_imports_save_each_format_once() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        seed_scryer_profiles(&ctx, &["Sample Profile A"]).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-overlap"))
+            .await
+            .expect("operator");
+        let server = radarr(
+            json!([
+                arr_title_format(1, "Sample Format Alpha"),
+                arr_title_format(2, "Sample Format Beta"),
+            ]),
+            json!([
+                {"id": 1, "name": "Sample Profile A", "formatItems": [
+                    {"format": 1, "name": "Sample Format Alpha", "score": 25},
+                    {"format": 2, "name": "Sample Format Beta", "score": 10}
+                ]}
+            ]),
+        )
+        .await;
+
+        // Both runs are accepted before either settles, so their plans can
+        // both see no existing rule; the save must still write each once.
+        let first = ctx
+            .app
+            .start_rule_import(&actor, "radarr-overlap-a", radarr_connection(&server))
+            .await
+            .expect("first accepted");
+        let second = ctx
+            .app
+            .start_rule_import(&actor, "radarr-overlap-b", radarr_connection(&server))
+            .await
+            .expect("second accepted");
+        assert_ne!(first.id, second.id);
+        let (first, second) = tokio::join!(
+            ctx.app.wait_rule_import(&actor, &first.id),
+            ctx.app.wait_rule_import(&actor, &second.id),
+        );
+        let (first, second) = (
+            first.expect("first settles"),
+            second.expect("second settles"),
+        );
+
+        for index in 0..2 {
+            let states = [first.items[index].state, second.items[index].state];
+            assert!(
+                states.contains(&RuleImportItemState::Saved)
+                    && states.contains(&RuleImportItemState::SkippedExists),
+                "{states:?}"
+            );
+            let skipped = if first.items[index].state == RuleImportItemState::SkippedExists {
+                &first.items[index]
+            } else {
+                &second.items[index]
+            };
+            assert_eq!(skipped.reason.as_deref(), Some(refusal::ALREADY_EXISTS));
+            assert_eq!(skipped.rule_set_id, None);
+        }
+
+        let mut names: Vec<_> = ctx
+            .app
+            .list_rule_sets(&actor)
+            .await
+            .expect("rule sets")
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .filter(|name| name.starts_with("(Radarr) "))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "(Radarr) Sample Format Alpha",
+                "(Radarr) Sample Format Beta"
+            ]
+        );
+    })
+    .await
+    .expect("overlapping rule import scenario bound");
+}
+
+#[tokio::test]
+async fn a_radarr_response_over_the_rule_import_cap_fails_the_run_with_a_code() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        seed_scryer_profiles(&ctx, &["Sample Profile A"]).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-oversized"))
+            .await
+            .expect("operator");
+        let oversized =
+            "x".repeat(scryer_application::external_import::RULE_IMPORT_ARR_MAX_RESPONSE_BYTES);
+        let server = radarr(json!([oversized]), json!([])).await;
+        let run = ctx
+            .app
+            .start_rule_import(&actor, "radarr-oversized", radarr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(
+            report.reason.as_deref(),
+            Some(scryer_application::error_reasons::external_import::SOURCE_RESPONSE_TOO_LARGE)
+        );
+        assert!(report.items.is_empty());
+        let (stored, _) = ctx
+            .app
+            .rule_import_status(&actor, &run.id)
+            .await
+            .expect("status");
+        assert_eq!(stored.status, JobRunStatus::Failed);
+    })
+    .await
+    .expect("oversized rule import scenario bound");
+}

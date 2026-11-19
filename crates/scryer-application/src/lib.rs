@@ -171,7 +171,7 @@ pub use rules::preview::{
     RuleSetTestRequest, RuleSetTestResult, RuleSetTestRuleSetResult,
 };
 pub use rules::tracked_packs::{RulePackPreviewChange, TrackedRulePackPreview};
-pub use rules::workflow::NewRuleSet;
+pub use rules::workflow::{ClaimedNewRuleSet, ClaimedRuleSetOutcome, NewRuleSet};
 mod scheduler;
 pub mod scripts;
 mod security;
