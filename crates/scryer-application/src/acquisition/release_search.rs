@@ -4267,6 +4267,34 @@ mod tests {
     }
 
     #[test]
+    fn a_number_in_the_show_name_does_not_refuse_its_releases() {
+        let mut title = spelling_title(
+            "The 140 Lanterns Who Really, Really, Really, Really, REALLY Glow",
+            "eng",
+        );
+        title.facet = MediaFacet::Anime;
+        title.year = Some(2023);
+        title.imdb_id = None;
+        let evidence = canonical_title_evidence(&title);
+        for raw in [
+            "The.140.Lanterns.Who.Really.Really.Really.Really.REALLY.Glow.S02E01.1080p.BluRay.Dual-Audio.Opus.2.0.x265-GroupTag",
+            "The 140 Lanterns Who Really, Really, Really, Really, REALLY Glow S02E01 1080p WEB H264-GroupTag",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_some(),
+                "{raw}"
+            );
+        }
+        assert!(
+            candidate_title_match(
+                &make_candidate("The.140.S02E01.1080p.BluRay.x265-GroupTag", None),
+                &evidence
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn movie_availability_preserves_non_overridable_refusals() {
         for code in [
             ReleaseAutoDecisionCode::MinimumSeeders,
