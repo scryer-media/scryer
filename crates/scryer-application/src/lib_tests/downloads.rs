@@ -6737,7 +6737,9 @@ async fn repeat_pass_keeps_a_library_file_this_download_placed_after_its_bytes_c
     std::fs::copy(&library_path, &rewritten).expect("copy library file for retagging");
     stamp_fixture_identity(Path::new(&rewritten), "retagged-by-post-processing");
     std::fs::rename(&rewritten, &library_path).expect("rename retagged file over library file");
-    let library_len = std::fs::metadata(&library_path).expect("library file").len();
+    let library_len = std::fs::metadata(&library_path)
+        .expect("library file")
+        .len();
     assert_eq!(
         library_len,
         std::fs::metadata(&source_file).expect("source file").len()
@@ -6760,7 +6762,11 @@ async fn repeat_pass_keeps_a_library_file_this_download_placed_after_its_bytes_c
         Some(scryer_domain::ImportSkipReason::AlreadyImported),
         "{repeat:?}"
     );
-    assert_eq!(events.len(), 1, "the repeat pass imported again: {events:?}");
+    assert_eq!(
+        events.len(),
+        1,
+        "the repeat pass imported again: {events:?}"
+    );
     let files = app
         .services
         .library
@@ -6782,8 +6788,10 @@ async fn repeat_pass_keeps_a_library_file_this_download_placed_after_its_bytes_c
         .await
         .expect("list import artifacts");
     assert!(
-        artifacts.iter().any(|artifact| artifact.reason_code.as_deref()
-            == Some(crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD)),
+        artifacts
+            .iter()
+            .any(|artifact| artifact.reason_code.as_deref()
+                == Some(crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD)),
         "{artifacts:?}"
     );
     let library_tail = {
@@ -10618,7 +10626,10 @@ async fn extra_video_beside_single_episode_is_ignored_and_the_download_settles()
             .expect("pass result"),
     )
     .expect("pass result json");
-    assert_eq!(last_result.decision, scryer_domain::ImportDecision::Imported);
+    assert_eq!(
+        last_result.decision,
+        scryer_domain::ImportDecision::Imported
+    );
     assert!(episode_file.exists() && extra_file.exists());
 }
 
@@ -10678,7 +10689,10 @@ async fn season_pack_missing_wanted_episodes_beside_an_extra_video_is_never_comp
 
     let imported =
         crate::import::completed_download::import_with_lookup(&app, &user, tracked, &lookup).await;
-    assert!(!imported, "a pack missing wanted episodes verified: {tracked:?}");
+    assert!(
+        !imported,
+        "a pack missing wanted episodes verified: {tracked:?}"
+    );
     assert_ne!(tracked.state, TrackedDownloadState::Imported, "{tracked:?}");
 }
 
@@ -24269,7 +24283,11 @@ mod held_sources {
             let library_root = fixture.title_folder.parent().unwrap();
             assert_eq!(
                 workspace.parent(),
-                Some(library_root.join(crate::ARCHIVE_EXTRACTION_DIR_NAME).as_path()),
+                Some(
+                    library_root
+                        .join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
+                        .as_path()
+                ),
                 "the workspace is staged in the library root's extraction folder: {}",
                 workspace.display()
             );
@@ -24292,7 +24310,11 @@ mod held_sources {
                 )
                 .await
             );
-            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            app.runtime
+                .imports
+                .archive_workspace_upkeep
+                .drain_removals()
+                .await;
             assert!(
                 !workspace.exists(),
                 "settling as imported removes the download's workspace"
@@ -24360,7 +24382,12 @@ mod held_sources {
 
         /// The video the latest extraction wrote.
         fn extracted_video(output_dirs: &OutputDirs, video_name: &str) -> PathBuf {
-            output_dirs.lock().unwrap().last().expect("extracted").join(video_name)
+            output_dirs
+                .lock()
+                .unwrap()
+                .last()
+                .expect("extracted")
+                .join(video_name)
         }
 
         fn extracting_provider(
@@ -24424,11 +24451,10 @@ mod held_sources {
             std::fs::write(&archive, b"rar").unwrap();
             let unrelated = folder.join("Synthetic.Notes.nfo");
             std::fs::write(&unrelated, b"unrelated").unwrap();
-            let key =
-                crate::import::archive_extraction::DownloadExtractionKey::for_completed(
-                    &fixture.completed,
-                )
-                .unwrap();
+            let key = crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+                &fixture.completed,
+            )
+            .unwrap();
             ArchiveDownload {
                 fixture,
                 folder,
@@ -24461,15 +24487,14 @@ mod held_sources {
             assert_eq!(read, first, "an import pass reads it without extracting");
             assert_eq!(output_dirs.lock().unwrap().len(), 1, "the plugin ran once");
             let record = download.key.record_in(app).await.expect("recorded");
-            assert_eq!(
-                record.state,
-                crate::ArchiveExtractionState::Extracted
-            );
+            assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
             assert_eq!(record.attempts, 1);
             assert_eq!(record.output_count, 1);
             assert_eq!(record.output_bytes, 300 * 1024 * 1024);
             let staged: Vec<_> = std::fs::read_dir(
-                download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
+                download
+                    .library_root()
+                    .join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
             )
             .unwrap()
             .collect();
@@ -24621,7 +24646,10 @@ mod held_sources {
             let provider = failing_provider(&calls);
             let app = &download.fixture.app;
             let clock = Clock::start(app);
-            download.extract(app, Some(provider.clone())).await.unwrap_err();
+            download
+                .extract(app, Some(provider.clone()))
+                .await
+                .unwrap_err();
             let failed = download.key.record_in(app).await.unwrap();
 
             clock.advance(app, chrono::Duration::minutes(4));
@@ -24654,7 +24682,10 @@ mod held_sources {
             let app = &download.fixture.app;
             let clock = Clock::start(app);
             for _ in 0..crate::import::archive_extraction::MAX_ATTEMPTS - 1 {
-                download.extract(app, Some(provider.clone())).await.unwrap_err();
+                download
+                    .extract(app, Some(provider.clone()))
+                    .await
+                    .unwrap_err();
                 clock.advance(app, chrono::Duration::minutes(21));
             }
 
@@ -24689,8 +24720,7 @@ mod held_sources {
             assert_eq!(download.key.record_in(app).await.unwrap(), blocked);
 
             // The operator's retry starts the count again.
-            crate::import::archive_extraction::reset_download_extraction(app, &download.key)
-                .await;
+            crate::import::archive_extraction::reset_download_extraction(app, &download.key).await;
             let reset = download.key.record_in(app).await.unwrap();
             assert_eq!(reset.state, crate::ArchiveExtractionState::Pending);
             assert_eq!(reset.attempts, 0);
@@ -24706,16 +24736,14 @@ mod held_sources {
         async fn a_retry_writes_nothing_for_a_download_without_a_record_or_one_extracted() {
             let download = archive_download("Retry Nothing Movie").await;
             let app = &download.fixture.app;
-            crate::import::archive_extraction::reset_download_extraction(app, &download.key)
-                .await;
+            crate::import::archive_extraction::reset_download_extraction(app, &download.key).await;
             assert!(download.key.record_in(app).await.is_none());
 
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
             download.extract(app, Some(provider)).await.unwrap();
             let extracted = download.key.record_in(app).await.unwrap();
-            crate::import::archive_extraction::reset_download_extraction(app, &download.key)
-                .await;
+            crate::import::archive_extraction::reset_download_extraction(app, &download.key).await;
             assert_eq!(download.key.record_in(app).await.unwrap(), extracted);
         }
 
@@ -24783,23 +24811,24 @@ mod held_sources {
                 });
             let (app, repository) = counted(&download);
             let _clock = Clock::start(&app);
-            let extract = |passwords: crate::import::archive_passwords::ArchivePasswordCandidates| {
-                let app = app.clone();
-                let provider = provider.clone();
-                let download = &download;
-                async move {
-                    crate::import::archive_extraction::extract_download_archives(
-                        &app,
-                        &download.key,
-                        &download.folder,
-                        crate::import::workflow::is_sample_file,
-                        download.key.destination(download.library_root()),
-                        &passwords,
-                        Some(provider),
-                    )
-                    .await
-                }
-            };
+            let extract =
+                |passwords: crate::import::archive_passwords::ArchivePasswordCandidates| {
+                    let app = app.clone();
+                    let provider = provider.clone();
+                    let download = &download;
+                    async move {
+                        crate::import::archive_extraction::extract_download_archives(
+                            &app,
+                            &download.key,
+                            &download.folder,
+                            crate::import::workflow::is_sample_file,
+                            download.key.destination(download.library_root()),
+                            &passwords,
+                            Some(provider),
+                        )
+                        .await
+                    }
+                };
             let with_operator = |value: &str| {
                 let mut passwords =
                     crate::import::archive_passwords::ArchivePasswordCandidates::default();
@@ -24820,28 +24849,46 @@ mod held_sources {
                 assert!(password_required(extract(Default::default()).await));
             }
             assert_eq!(calls_of(&calls), 1, "no candidate to try");
-            assert_eq!(repository.writes(), writes, "a repeat refusal writes nothing");
+            assert_eq!(
+                repository.writes(),
+                writes,
+                "a repeat refusal writes nothing"
+            );
 
             // A candidate the last attempt did not try runs it once. The
             // plugin is asked once per password tried, so calls are compared
             // before and after each pass.
-            assert!(password_required(extract(with_operator("synthetic-one")).await));
+            assert!(password_required(
+                extract(with_operator("synthetic-one")).await
+            ));
             let after_one = calls_of(&calls);
             assert!(after_one > 1, "a new candidate runs it");
-            assert!(password_required(extract(with_operator("synthetic-one")).await));
-            assert_eq!(calls_of(&calls), after_one, "the same candidates were tried");
-            assert!(password_required(extract(with_operator("synthetic-two")).await));
+            assert!(password_required(
+                extract(with_operator("synthetic-one")).await
+            ));
+            assert_eq!(
+                calls_of(&calls),
+                after_one,
+                "the same candidates were tried"
+            );
+            assert!(password_required(
+                extract(with_operator("synthetic-two")).await
+            ));
             let after_two = calls_of(&calls);
             assert!(after_two > after_one, "another candidate runs it again");
 
             // An operator retry runs it whatever was tried.
-            crate::import::archive_extraction::reset_download_extraction(&app, &download.key)
-                .await;
-            assert!(password_required(extract(with_operator("synthetic-two")).await));
+            crate::import::archive_extraction::reset_download_extraction(&app, &download.key).await;
+            assert!(password_required(
+                extract(with_operator("synthetic-two")).await
+            ));
             assert!(calls_of(&calls) > after_two);
             let record = download.key.record_in(&app).await.unwrap();
             assert_eq!(record.state, crate::ArchiveExtractionState::NeedsPassword);
-            assert_eq!(record.attempts, 0, "waiting for a password costs no attempt");
+            assert_eq!(
+                record.attempts, 0,
+                "waiting for a password costs no attempt"
+            );
         }
 
         /// The extraction records, counting every write that changes a row.
@@ -24940,10 +24987,9 @@ mod held_sources {
 
         fn counted(download: &ArchiveDownload) -> (AppUseCase, Arc<CountingExtractions>) {
             let repository = Arc::new(CountingExtractions::default());
-            let app = download
-                .fixture
-                .app
-                .with_test_overrides(|services| services.with_archive_extractions(repository.clone()));
+            let app = download.fixture.app.with_test_overrides(|services| {
+                services.with_archive_extractions(repository.clone())
+            });
             (app, repository)
         }
 
@@ -24974,7 +25020,10 @@ mod held_sources {
         async fn another_extracted_download(
             app: &AppUseCase,
             download: &ArchiveDownload,
-        ) -> (crate::import::archive_extraction::DownloadExtractionKey, PathBuf) {
+        ) -> (
+            crate::import::archive_extraction::DownloadExtractionKey,
+            PathBuf,
+        ) {
             let key = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some(&download.fixture.completed.client_id),
                 "another-synthetic-item",
@@ -25039,14 +25088,21 @@ mod held_sources {
                 let output_dirs = OutputDirs::default();
                 let provider = extracting_provider(&download.video_name, &output_dirs);
                 let app = &download.fixture.app;
-                let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
-                let (other_key, other_workspace) =
-                    another_extracted_download(app, &download).await;
+                let workspace = download
+                    .extract(app, Some(provider))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let (other_key, other_workspace) = another_extracted_download(app, &download).await;
                 let operator_file = workspace.parent().unwrap().join("Operator.Notes.txt");
                 std::fs::write(&operator_file, b"operator").unwrap();
 
                 settle_as(app, &download, state).await;
-                app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+                app.runtime
+                    .imports
+                    .archive_workspace_upkeep
+                    .drain_removals()
+                    .await;
 
                 assert!(!workspace.exists(), "{state:?}");
                 assert!(download.key.record_in(app).await.is_none(), "{state:?}");
@@ -25065,7 +25121,11 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let ended_at = clock.now();
 
             settle_as(&app, &download, TrackedDownloadState::ImportDismissed).await;
@@ -25082,15 +25142,20 @@ mod held_sources {
                 Some(ended_at)
             );
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
-            crate::import::archive_extraction::settle_download_extraction(
-                &app, &other_key, false,
-            )
-            .await;
+            crate::import::archive_extraction::settle_download_extraction(&app, &other_key, false)
+                .await;
 
-            clock.advance(&app, chrono::Duration::hours(22) + chrono::Duration::minutes(59));
+            clock.advance(
+                &app,
+                chrono::Duration::hours(22) + chrono::Duration::minutes(59),
+            );
             let writes = repository.writes();
             assert_eq!(sweep(&app).await, Default::default(), "not due yet");
-            assert_eq!(repository.writes(), writes, "a pass with nothing due writes nothing");
+            assert_eq!(
+                repository.writes(),
+                writes,
+                "a pass with nothing due writes nothing"
+            );
             assert!(workspace.is_dir());
 
             clock.advance(&app, chrono::Duration::minutes(2));
@@ -25163,7 +25228,11 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
             let unrecorded = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some(&download.fixture.completed.client_id),
@@ -25180,7 +25249,10 @@ mod held_sources {
 
             assert_eq!(repository.writes(), writes + 1, "one batch");
             for key in [&download.key, &other_key] {
-                assert_eq!(key.record_in(&app).await.unwrap().settled_at, Some(clock.now()));
+                assert_eq!(
+                    key.record_in(&app).await.unwrap().settled_at,
+                    Some(clock.now())
+                );
             }
             assert!(unrecorded.record_in(&app).await.is_none());
             assert!(workspace.is_dir());
@@ -25194,7 +25266,11 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = &download.fixture.app;
             let clock = Clock::start(app);
-            let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let claim = app
                 .runtime
                 .imports
@@ -25203,7 +25279,11 @@ mod held_sources {
                 .unwrap();
 
             settle_as(app, &download, TrackedDownloadState::Imported).await;
-            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            app.runtime
+                .imports
+                .archive_workspace_upkeep
+                .drain_removals()
+                .await;
 
             assert!(workspace.is_dir(), "a running extraction keeps it");
             assert_eq!(
@@ -25224,14 +25304,19 @@ mod held_sources {
 
         /// The extraction folder of the download's library root.
         fn extraction_folder(download: &ArchiveDownload) -> PathBuf {
-            download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
+            download
+                .library_root()
+                .join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
         }
 
         /// An owned workspace of a download no record names.
         fn orphaned_workspace(
             download: &ArchiveDownload,
             item_id: &str,
-        ) -> (crate::import::archive_extraction::DownloadExtractionKey, PathBuf) {
+        ) -> (
+            crate::import::archive_extraction::DownloadExtractionKey,
+            PathBuf,
+        ) {
             let key = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some(&download.fixture.completed.client_id),
                 item_id,
@@ -25294,7 +25379,10 @@ mod held_sources {
                     unmarked: 1,
                 }
             );
-            assert!(orphan.join("Orphaned.Feature.mkv").exists(), "inside its day");
+            assert!(
+                orphan.join("Orphaned.Feature.mkv").exists(),
+                "inside its day"
+            );
 
             clock.advance(&app, chrono::Duration::hours(2));
             let swept = sweep_orphans(&app).await;
@@ -25322,9 +25410,16 @@ mod held_sources {
             assert!(hex_file.exists());
             assert!(operator_file.exists());
             assert!(download.archive.exists());
-            assert_eq!(repository.writes(), writes, "the orphan sweep writes no record");
             assert_eq!(
-                app.runtime.imports.archive_workspace_upkeep.last_orphan_sweep(),
+                repository.writes(),
+                writes,
+                "the orphan sweep writes no record"
+            );
+            assert_eq!(
+                app.runtime
+                    .imports
+                    .archive_workspace_upkeep
+                    .last_orphan_sweep(),
                 Some(swept)
             );
         }
@@ -25374,10 +25469,14 @@ mod held_sources {
             let unreleased = create_test_archive_workspace_owned_by(root, "unreleased-pass-import");
             let operator_file = root.join("Operator.Notes.txt");
             std::fs::write(&operator_file, b"operator").unwrap();
-            let library_video = download.fixture.title_folder.join("Root Pass Workspace Movie.mkv");
+            let library_video = download
+                .fixture
+                .title_folder
+                .join("Root Pass Workspace Movie.mkv");
             write_video(&library_video);
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(report.pass_workspaces_removed, 1);
             assert!(!old.exists());
@@ -25388,7 +25487,11 @@ mod held_sources {
             assert!(download.archive.exists());
         }
 
-        fn released_pass_workspace(parent: &Path, owner: &str, ago: std::time::Duration) -> PathBuf {
+        fn released_pass_workspace(
+            parent: &Path,
+            owner: &str,
+            ago: std::time::Duration,
+        ) -> PathBuf {
             let workspace = create_test_archive_workspace_owned_by(parent, owner);
             crate::archive_extractor::release_test_archive_workspace_at(
                 &workspace,
@@ -25410,7 +25513,8 @@ mod held_sources {
                 "recent-title-pass",
                 std::time::Duration::from_secs(60 * 60),
             );
-            let unreleased = create_test_archive_workspace_owned_by(title_folder, "unreleased-title-pass");
+            let unreleased =
+                create_test_archive_workspace_owned_by(title_folder, "unreleased-title-pass");
             let unmarked = title_folder.join(".scryer-ax-fedcba9876543210");
             std::fs::create_dir_all(&unmarked).unwrap();
             std::fs::write(unmarked.join("Operator.Copy.mkv"), b"operator").unwrap();
@@ -25420,7 +25524,8 @@ mod held_sources {
             write_video(&library_video);
 
             // Nothing noted yet: the title folder is left as it is.
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
             assert_eq!(report.noted_pass_workspaces_removed, 0);
             assert!(old.exists());
 
@@ -25430,11 +25535,14 @@ mod held_sources {
                 .walk(download.library_root())
                 .unwrap();
             assert_eq!(
-                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()),
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                ),
                 vec![title_folder.clone()]
             );
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(report.noted_pass_workspaces_removed, 1);
             assert!(!old.exists());
@@ -25443,7 +25551,12 @@ mod held_sources {
             assert!(unmarked.join("Operator.Copy.mkv").exists(), "unmarked");
             assert!(operator_file.exists());
             assert!(library_video.exists());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()).is_empty());
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                )
+                .is_empty()
+            );
         }
 
         #[tokio::test]
@@ -25452,21 +25565,36 @@ mod held_sources {
             let app = &download.fixture.app;
             let outside = tempfile::tempdir().unwrap();
             let workspace = released_pass_workspace(outside.path(), "outside-pass", OVER_A_DAY);
-            crate::import::archive_extraction::note_pass_workspace_parent(outside.path(), &workspace);
+            crate::import::archive_extraction::note_pass_workspace_parent(
+                outside.path(),
+                &workspace,
+            );
             // A root itself is the root sweep's, and is not swept twice.
-            let root_workspace = released_pass_workspace(download.library_root(), "root-pass", OVER_A_DAY);
+            let root_workspace =
+                released_pass_workspace(download.library_root(), "root-pass", OVER_A_DAY);
             crate::import::archive_extraction::note_pass_workspace_parent(
                 download.library_root(),
                 &root_workspace,
             );
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(report.noted_pass_workspaces_removed, 0);
             assert_eq!(report.pass_workspaces_removed, 1);
             assert!(workspace.join("out").is_dir(), "outside every root: kept");
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(outside.path()).is_empty());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()).is_empty());
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    outside.path()
+                )
+                .is_empty()
+            );
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                )
+                .is_empty()
+            );
         }
 
         #[tokio::test]
@@ -25485,7 +25613,8 @@ mod held_sources {
                 crate::import::archive_extraction::note_pass_workspace_parent(folder, &last);
             }
 
-            let first = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let first =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(first.noted_pass_workspaces_removed, 0);
             assert!(last.exists(), "the last folder waits for the next pass");
@@ -25494,11 +25623,15 @@ mod held_sources {
                 vec![folders.last().unwrap().clone()]
             );
 
-            let second = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let second =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(second.noted_pass_workspaces_removed, 1);
             assert!(!last.exists());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root).is_empty());
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root)
+                    .is_empty()
+            );
         }
 
         #[tokio::test]
@@ -25518,10 +25651,13 @@ mod held_sources {
                 .iter()
                 .map(|folder| create_test_archive_workspace_owned_by(folder, "stuck-rotation-pass"))
                 .collect();
-            let late = released_pass_workspace(folders.last().unwrap(), "late-rotation-pass", OVER_A_DAY);
+            let late =
+                released_pass_workspace(folders.last().unwrap(), "late-rotation-pass", OVER_A_DAY);
             let note_stuck = || {
                 for (folder, workspace) in folders.iter().zip(&stuck) {
-                    crate::import::archive_extraction::note_pass_workspace_parent(folder, workspace);
+                    crate::import::archive_extraction::note_pass_workspace_parent(
+                        folder, workspace,
+                    );
                 }
             };
             note_stuck();
@@ -25529,39 +25665,56 @@ mod held_sources {
                 crate::import::archive_extraction::note_pass_workspace_parent(folder, &late);
             }
 
-            let first = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let first =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
             assert_eq!(first.noted_pass_workspaces_removed, 0);
             assert!(late.exists(), "the first pass reaches the first hundred");
             note_stuck();
 
-            let second = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let second =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(second.noted_pass_workspaces_removed, 1);
-            assert!(!late.exists(), "the next pass resumes after the folders already taken");
-            assert!(stuck.iter().all(|workspace| workspace.join("out").is_dir()), "never released");
+            assert!(
+                !late.exists(),
+                "the next pass resumes after the folders already taken"
+            );
+            assert!(
+                stuck.iter().all(|workspace| workspace.join("out").is_dir()),
+                "never released"
+            );
         }
 
         #[tokio::test]
         async fn a_noted_extraction_folder_is_dropped_unswept() {
             let download = archive_download("Noted Extraction Folder Movie").await;
             let app = &download.fixture.app;
-            let extraction = download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME);
+            let extraction = download
+                .library_root()
+                .join(crate::ARCHIVE_EXTRACTION_DIR_NAME);
             let (_, download_workspace) = orphaned_workspace(&download, "noted-extraction-item");
             crate::archive_extractor::release_test_archive_workspace_at(
                 &download_workspace,
                 std::time::SystemTime::now() - OVER_A_DAY,
             );
-            let pass_workspace = released_pass_workspace(&extraction, "noted-extraction-pass", OVER_A_DAY);
-            crate::import::archive_extraction::note_pass_workspace_parent(&extraction, &pass_workspace);
+            let pass_workspace =
+                released_pass_workspace(&extraction, "noted-extraction-pass", OVER_A_DAY);
+            crate::import::archive_extraction::note_pass_workspace_parent(
+                &extraction,
+                &pass_workspace,
+            );
             let held = tempfile::tempdir().unwrap();
-            let held_workspace = released_pass_workspace(held.path(), "held-extraction-pass", OVER_A_DAY);
+            let held_workspace =
+                released_pass_workspace(held.path(), "held-extraction-pass", OVER_A_DAY);
             crate::import::archive_extraction::note_pass_workspace_parent(
                 &download_workspace,
                 &held_workspace,
             );
             assert!(
-                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root())
-                    .is_empty()
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                )
+                .is_empty()
             );
 
             let removed = crate::import::archive_extraction::sweep_noted_pass_workspaces(app)
@@ -25583,10 +25736,12 @@ mod held_sources {
             let download = archive_download("Idle Housekeeping Movie").await;
             let (app, repository) = counted(&download);
             let (handle, _) = scripted_tracker(&[]);
-            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let app =
+                app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
             let _clock = Clock::start(&app);
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
 
             assert_eq!(report, Default::default());
             assert_eq!(repository.writes(), 0);
@@ -25594,10 +25749,15 @@ mod held_sources {
             // A tracked download with its fresh workspace: nothing to do.
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let writes = repository.writes();
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
 
             assert_eq!(repository.writes(), writes);
             assert_eq!(report.untracked_settled, 0);
@@ -25634,7 +25794,10 @@ mod held_sources {
                     );
                 }
             });
-            (crate::tracked_downloads::TrackedDownloadHandle::new(tx), asked)
+            (
+                crate::tracked_downloads::TrackedDownloadHandle::new(tx),
+                asked,
+            )
         }
 
         #[tokio::test]
@@ -25642,11 +25805,16 @@ mod held_sources {
             let download = archive_download("Untracked Settle Movie").await;
             let (app, repository) = counted(&download);
             let (handle, asked) = scripted_tracker(&["another-synthetic-item"]);
-            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let app =
+                app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
             let removed_client = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some("removed-synthetic-client"),
@@ -25670,17 +25838,19 @@ mod held_sources {
 
             // Changed within the day: a manual import may be using them.
             clock.advance(&app, chrono::Duration::hours(23));
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
             assert!(asked.lock().unwrap().is_empty(), "nothing to ask about");
 
             clock.advance(&app, chrono::Duration::hours(2));
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
 
             assert_eq!(settled, 2);
             assert_eq!(repository.writes(), writes + 1, "one batch");
@@ -25688,7 +25858,10 @@ mod held_sources {
             asked_keys.sort();
             let mut expected = vec![download.key.pair(), other_key.pair()];
             expected.sort();
-            assert_eq!(asked_keys, expected, "a removed client's downloads are not asked about");
+            assert_eq!(
+                asked_keys, expected,
+                "a removed client's downloads are not asked about"
+            );
             assert_eq!(download.key.record_in(&app).await.unwrap().settled_at, None);
             assert_eq!(
                 other_key.record_in(&app).await.unwrap().settled_at,
@@ -25699,14 +25872,18 @@ mod held_sources {
                 Some(clock.now())
             );
             assert!(workspace.is_dir());
-            assert!(other_workspace.is_dir(), "kept for the day of a settled download");
+            assert!(
+                other_workspace.is_dir(),
+                "kept for the day of a settled download"
+            );
             assert!(removed_workspace.is_dir());
 
             // The tracked one alone remains: asked again, nothing written.
             let writes = repository.writes();
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
             assert_eq!(*asked.lock().unwrap(), vec![download.key.pair()]);
@@ -25723,9 +25900,10 @@ mod held_sources {
             let writes = repository.writes();
             clock.advance(&app, chrono::Duration::days(3));
 
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
 
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
@@ -25740,11 +25918,16 @@ mod held_sources {
                 "another-synthetic-item",
                 &download.fixture.completed.download_client_item_id,
             ]);
-            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let app =
+                app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
             // The download's import keeps its sources for pending subtitles.
             download
@@ -25767,9 +25950,10 @@ mod held_sources {
             clock.advance(&app, chrono::Duration::hours(25));
             let writes = repository.writes();
 
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
 
             assert_eq!(settled, 1, "only the download nothing holds");
             assert_eq!(repository.writes(), writes + 1, "one batch");
@@ -25780,7 +25964,10 @@ mod held_sources {
             );
             clock.advance(&app, chrono::Duration::days(2));
             assert_eq!(sweep(&app).await.removed, 1);
-            assert!(extracted_video(&output_dirs, &download.video_name).exists(), "held: kept");
+            assert!(
+                extracted_video(&output_dirs, &download.video_name).exists(),
+                "held: kept"
+            );
             assert!(!other_workspace.exists());
         }
 
@@ -25791,9 +25978,21 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = with_provider(&download, provider.clone());
             let clock = Clock::start(&app);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             settle_as(&app, &download, TrackedDownloadState::ImportDismissed).await;
-            assert!(download.key.record_in(&app).await.unwrap().settled_at.is_some());
+            assert!(
+                download
+                    .key
+                    .record_in(&app)
+                    .await
+                    .unwrap()
+                    .settled_at
+                    .is_some()
+            );
 
             clock.advance(&app, chrono::Duration::hours(1));
             begin_manual(&app, &download, false).await.unwrap();
@@ -25812,11 +26011,18 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider.clone())).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider.clone()))
+                .await
+                .unwrap()
+                .unwrap();
             let writes = repository.writes();
             // A pass reusing a live download's extraction writes nothing.
             assert_eq!(
-                download.extract(&app, Some(provider.clone())).await.unwrap(),
+                download
+                    .extract(&app, Some(provider.clone()))
+                    .await
+                    .unwrap(),
                 Some(workspace.clone())
             );
             assert_eq!(repository.writes(), writes);
@@ -25857,7 +26063,11 @@ mod held_sources {
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = &download.fixture.app;
-            let workspace = download.extract(app, Some(provider.clone())).await.unwrap().unwrap();
+            let workspace = download
+                .extract(app, Some(provider.clone()))
+                .await
+                .unwrap()
+                .unwrap();
             let first_digest = download.key.record_in(app).await.unwrap().archive_digest;
             let leftover = workspace.join("Earlier.Output.mkv");
             std::fs::write(&leftover, b"earlier").unwrap();
@@ -25939,16 +26149,32 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = &download.fixture.app;
             let clock = Clock::start(app);
-            let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let in_flight = &app.runtime.imports.archive_extractions_in_flight;
 
             // Imported while a pass reads it: the removal waits, still due.
             let reader = in_flight.read(&download.key);
             let second_reader = in_flight.read(&download.key);
             settle_as(app, &download, TrackedDownloadState::Imported).await;
-            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            app.runtime
+                .imports
+                .archive_workspace_upkeep
+                .drain_removals()
+                .await;
             assert!(extracted_video(&output_dirs, &download.video_name).exists());
-            assert!(download.key.record_in(app).await.unwrap().settled_at.is_some());
+            assert!(
+                download
+                    .key
+                    .record_in(app)
+                    .await
+                    .unwrap()
+                    .settled_at
+                    .is_some()
+            );
             assert_eq!(sweep(app).await.deferred, 1, "read: deferred");
             drop(reader);
             assert_eq!(sweep(app).await.deferred, 1, "another reader remains");
@@ -25985,10 +26211,9 @@ mod held_sources {
             download: &ArchiveDownload,
             provider: Arc<dyn crate::ArchiveExtractorPluginProvider>,
         ) -> AppUseCase {
-            download
-                .fixture
-                .app
-                .with_test_overrides(|services| services.with_archive_extractor_plugin_provider(provider))
+            download.fixture.app.with_test_overrides(|services| {
+                services.with_archive_extractor_plugin_provider(provider)
+            })
         }
 
         async fn selection_workspace(download: &ArchiveDownload) -> Option<PathBuf> {
@@ -26004,8 +26229,12 @@ mod held_sources {
         }
 
         fn staged_workspaces(download: &ArchiveDownload) -> usize {
-            std::fs::read_dir(download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME))
-                .map_or(0, |entries| entries.count())
+            std::fs::read_dir(
+                download
+                    .library_root()
+                    .join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
+            )
+            .map_or(0, |entries| entries.count())
         }
 
         fn canonical(path: &Path) -> PathBuf {
@@ -26018,7 +26247,11 @@ mod held_sources {
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = with_provider(&download, provider.clone());
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
 
             // Even without being asked to extract, the download's extraction
             // is read again.
@@ -26035,7 +26268,11 @@ mod held_sources {
                     .iter()
                     .any(|file| file.file_name == download.video_name),
                 "{:?}",
-                preview.files.iter().map(|file| &file.file_name).collect::<Vec<_>>()
+                preview
+                    .files
+                    .iter()
+                    .map(|file| &file.file_name)
+                    .collect::<Vec<_>>()
             );
             assert_eq!(output_dirs.lock().unwrap().len(), 1, "extracted once");
             assert_eq!(staged_workspaces(&download), 1);
@@ -26051,7 +26288,10 @@ mod held_sources {
             begin_manual(&app, &download, true).await.unwrap();
             let record = download.key.record_in(&app).await.expect("recorded");
             assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
-            assert_eq!(record.attempts, 1, "the manual extraction counts its attempt");
+            assert_eq!(
+                record.attempts, 1,
+                "the manual extraction counts its attempt"
+            );
             assert_eq!(
                 selection_workspace(&download).await.as_deref(),
                 Some(canonical(&download.workspace()).as_path())
@@ -26204,10 +26444,7 @@ mod held_sources {
             let download = archive_download("No Extractor Movie").await;
             let app = &download.fixture.app;
 
-            let error = download
-                .extract(app, None)
-                .await
-                .expect_err("no extractor");
+            let error = download.extract(app, None).await.expect_err("no extractor");
             assert!(
                 matches!(error, AppError::ArchiveExtractionPluginRequired { .. }),
                 "{error:?}"
@@ -26219,8 +26456,10 @@ mod held_sources {
 
             assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
             assert!(
-                tracked.status_messages.iter().any(|message| message.kind
-                    == crate::tracked_downloads::TrackedStatusMessageKind::ArchiveExtractorRequired),
+                tracked.status_messages.iter().any(|message| {
+                    message.kind
+                    == crate::tracked_downloads::TrackedStatusMessageKind::ArchiveExtractorRequired
+                }),
                 "{:?}",
                 tracked.status_messages
             );
@@ -26329,9 +26568,10 @@ mod held_sources {
         let app = &fixture.app;
         let now = Utc::now();
         app.runtime.environment.set_fixed_now_for_tests(Some(now));
-        let key =
-            crate::import::archive_extraction::DownloadExtractionKey::for_completed(&fixture.completed)
-                .unwrap();
+        let key = crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+            &fixture.completed,
+        )
+        .unwrap();
         let workspace = fixture
             .title_folder
             .parent()
@@ -26358,7 +26598,11 @@ mod held_sources {
             )
             .await
         );
-        app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+        app.runtime
+            .imports
+            .archive_workspace_upkeep
+            .drain_removals()
+            .await;
         assert!(workspace.join("Synthetic.Feature.mkv").exists());
         assert_eq!(
             key.record_in(app).await.unwrap().settled_at,

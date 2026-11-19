@@ -150,9 +150,9 @@ pub(crate) use scryer_infrastructure_workflow::workflow::{
     release_store::ReleaseStore,
     stores::{
         AcquisitionStore, ArchiveExtractionStore, DomainEventStore, DownloadClientStatusStore,
-        DownloadQueueCommandStore,
-        DownloadRegistryStore, DownloadSubmissionStore, ExternalImportMonitorStore,
-        ExternalImportSetupSecretDraftStore, ImportStore, WorkflowOperationStore,
+        DownloadQueueCommandStore, DownloadRegistryStore, DownloadSubmissionStore,
+        ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, ImportStore,
+        WorkflowOperationStore,
     },
 };
 
