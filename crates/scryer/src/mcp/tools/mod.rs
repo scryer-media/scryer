@@ -49,6 +49,8 @@ pub(crate) struct ToolContext {
     /// The cap on a run tool's serialized result, [`RESULT_MAX_BYTES`] outside
     /// tests.
     pub result_max_bytes: usize,
+    /// Pending mutation confirmations, shared by every request.
+    pub confirmations: Arc<super::confirm::Confirmations>,
 }
 
 pub(super) type ToolFuture = BoxFuture<'static, Result<CallToolResult, ErrorData>>;
