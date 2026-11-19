@@ -414,6 +414,9 @@ const ru: LocaleDictionary = {
   "settings.securityLoginSettings": "Настройки входа",
   "settings.securityEnableFormLoginHelp":
     "Если параметр включён, Scryer требует аутентифицированный сеанс пользователя. Если параметр отключён, запросы выполняются от имени администратора по умолчанию.",
+  "settings.securityMcpEnabled": "Разрешить MCP-сервер",
+  "settings.securityMcpEnabledHelp":
+    "Позволяет агентам для программирования использовать навыки Scryer через MCP по адресу /mcp с ключом API. Если выключено, каждый запрос MCP отклоняется; ключи API продолжают работать с GraphQL API.",
   "settings.securityPasswordMinLength": "Минимальная длина пароля",
   "settings.securitySessionDuration": "Вход действителен",
   "settings.securitySessionDurationHelp":
