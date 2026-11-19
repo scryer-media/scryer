@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use filetime::{FileTime, set_file_mtime};
 use scryer_application::{AppError, AppResult, PendingStagedNzb, StagedNzbRef, StagedNzbStore};
 
 #[derive(Clone)]
@@ -97,16 +96,18 @@ impl FileSystemStagedNzbStore {
         staged_nzb: &StagedNzbRef,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
-        set_file_mtime(
-            &staged_nzb.compressed_path,
-            FileTime::from_unix_time(updated_at.timestamp(), 0),
-        )
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to set staged nzb mtime {}: {error}",
-                staged_nzb.compressed_path.display()
-            ))
-        })?;
+        let modified = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(updated_at.timestamp().max(0) as u64);
+        std::fs::File::options()
+            .write(true)
+            .open(&staged_nzb.compressed_path)
+            .and_then(|file| file.set_times(std::fs::FileTimes::new().set_modified(modified)))
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to set staged nzb mtime {}: {error}",
+                    staged_nzb.compressed_path.display()
+                ))
+            })?;
         Ok(())
     }
 
