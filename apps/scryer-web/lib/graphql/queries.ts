@@ -3338,6 +3338,7 @@ export const securitySettingsQuery = `query SecuritySettings {
     skipLoginForLocalIps
     apiKeysRestrictToSystemSettingsUsers
     mcpEnabled
+    mcpEnabledEnvOverride
     mfaRequireConfigStepUp
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin

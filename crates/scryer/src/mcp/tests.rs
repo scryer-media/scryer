@@ -1,10 +1,11 @@
 use super::*;
 use crate::diagnostics_routes::DiagnosticsProcessFacts;
 use crate::error_reasons::{
-    HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_DISABLED,
-    HTTP_MCP_GRAPHQL_ERROR, HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_OPERATION_AMBIGUOUS,
-    HTTP_MCP_OPERATION_KIND_MISMATCH, HTTP_MCP_OPERATION_UNKNOWN, HTTP_MCP_RESULT_TOO_LARGE,
-    HTTP_MCP_SKILL_UNKNOWN, HTTP_MCP_TOOL_UNKNOWN,
+    HTTP_DIAGNOSTICS_PERMISSION_DENIED, HTTP_MCP_ARGUMENTS_INVALID, HTTP_MCP_CONFIRMATION_MISMATCH,
+    HTTP_MCP_CONFIRMATION_UNKNOWN, HTTP_MCP_DISABLED, HTTP_MCP_GRAPHQL_ERROR,
+    HTTP_MCP_LOG_PATTERN_INVALID, HTTP_MCP_OPERATION_AMBIGUOUS, HTTP_MCP_OPERATION_KIND_MISMATCH,
+    HTTP_MCP_OPERATION_UNKNOWN, HTTP_MCP_RESULT_TOO_LARGE, HTTP_MCP_SKILL_UNKNOWN,
+    HTTP_MCP_TOOL_UNKNOWN,
 };
 use crate::log_buffer::LogRingBuffer;
 use crate::middleware::integration_test_common as common;
@@ -301,6 +302,27 @@ fn tool_error(name: &str, body: &Value) -> Value {
     assert!(error["code"].is_string(), "{name}: {body}");
     assert!(error["message"].is_string(), "{name}: {body}");
     error
+}
+
+/// The `confirm_token` a first `run_mutation` call returned, checking that
+/// it ran nothing.
+fn confirm_token(body: &Value) -> String {
+    let pending = success("run_mutation", body);
+    assert_eq!(pending["status"], "confirmation_required", "{body}");
+    assert_eq!(pending["applied"], false, "{body}");
+    pending["confirm_token"]
+        .as_str()
+        .expect("a confirm token")
+        .to_string()
+}
+
+/// Runs a mutation that needs confirmation: the first call, then the same
+/// call with its token. Returns the second call's body.
+async fn confirmed(fixture: &Fixture, key: &str, arguments: Value) -> Value {
+    let token = confirm_token(&call(fixture, key, "run_mutation", arguments.clone()).await);
+    let mut arguments = arguments;
+    arguments["confirm_token"] = json!(token);
+    call(fixture, key, "run_mutation", arguments).await
 }
 
 /// A JSON-RPC protocol error's reason.
@@ -1325,8 +1347,8 @@ async fn the_tool_list_and_instructions_stay_within_their_token_budget() {
         .len();
     let (_, _, listed) = send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
     let tools = listed["result"].to_string().len();
-    // Measured at 244 + 2,945 characters, about 800 tokens together.
-    assert!(instructions + tools < 3_300, "{instructions} + {tools}");
+    // Measured at 244 + 3,078 characters, about 830 tokens together.
+    assert!(instructions + tools < 3_400, "{instructions} + {tools}");
 }
 
 #[tokio::test]
@@ -1731,10 +1753,9 @@ async fn run_mutation_saves_a_configuration_change_end_to_end() {
     seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
     let key = fixture.api_key.clone();
 
-    let body = call(
+    let body = confirmed(
         &fixture,
         &key,
-        "run_mutation",
         json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
     )
     .await;
@@ -1772,19 +1793,138 @@ async fn run_mutation_saves_a_configuration_change_end_to_end() {
     assert_eq!(entry["categories"], json!(["2000"]), "{read}");
 
     // A mutation over the cap still ran, and says so.
-    let mut request = rpc_request(
-        Some(&key),
-        None,
-        call_tool(
-            "run_mutation",
-            json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
-        ),
-    );
+    let arguments = json!({"name": "UpdateIndexerRouting", "variables": routing_input()});
+    let token = confirm_token(&call(&fixture, &key, "run_mutation", arguments.clone()).await);
+    let mut arguments = arguments;
+    arguments["confirm_token"] = json!(token);
+    let mut request = rpc_request(Some(&key), None, call_tool("run_mutation", arguments));
     request.extensions_mut().insert(server::ResultCap(16));
     let (_, _, body) = send(&fixture.router, request).await;
     let error = tool_error("run_mutation", &body);
     assert_eq!(error["reason"], HTTP_MCP_RESULT_TOO_LARGE);
     assert_eq!(error["applied"], true);
+}
+
+/// The saved priority of the fixture indexer for movies.
+async fn fixture_indexer_priority(fixture: &Fixture, key: &str) -> Value {
+    let read = success(
+        "run_query",
+        &call(
+            fixture,
+            key,
+            "run_query",
+            json!({"name": "IndexerRouting", "variables": {"scope": "MOVIE"}}),
+        )
+        .await,
+    );
+    read["indexerRouting"]
+        .as_array()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry["indexerId"] == "mcp-fixture-indexer")
+        })
+        .map_or(Value::Null, |entry| entry["priority"].clone())
+}
+
+#[tokio::test]
+async fn a_lasting_mutation_runs_only_on_a_confirmed_second_call() {
+    let fixture = fixture().await;
+    seed_quality_profiles(&fixture).await;
+    seed_integrations(&fixture.context, &["mcp-fixture-indexer"], &[]).await;
+    let key = fixture.api_key.clone();
+    let before = fixture_indexer_priority(&fixture, &key).await;
+    assert_ne!(before, json!(3), "the fixture starts elsewhere");
+    let arguments = json!({"name": "UpdateIndexerRouting", "variables": routing_input()});
+
+    // The first call runs nothing and describes the call.
+    let body = call(&fixture, &key, "run_mutation", arguments.clone()).await;
+    let pending = success("run_mutation", &body);
+    assert_eq!(pending["summary"]["operation"], "UpdateIndexerRouting");
+    assert_eq!(pending["summary"]["variables"], routing_input());
+    assert_eq!(pending["expires_in_seconds"], 300);
+    let token = confirm_token(&body);
+    assert_eq!(fixture_indexer_priority(&fixture, &key).await, before);
+
+    // Changed variables spend the token without running.
+    let mut changed = routing_input();
+    changed["input"]["entries"][0]["priority"] = json!(4);
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "UpdateIndexerRouting", "variables": changed, "confirm_token": token}),
+    )
+    .await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_MISMATCH,
+        "{body}"
+    );
+    let mut original = arguments.clone();
+    original["confirm_token"] = json!(token);
+    let body = call(&fixture, &key, "run_mutation", original).await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_UNKNOWN,
+        "{body}"
+    );
+    assert_eq!(fixture_indexer_priority(&fixture, &key).await, before);
+
+    // Another key cannot use this key's token, nor spend it.
+    let token = confirm_token(&call(&fixture, &key, "run_mutation", arguments.clone()).await);
+    let other = create_key(&fixture.context, &fixture.admin).await;
+    let mut with_token = arguments.clone();
+    with_token["confirm_token"] = json!(token);
+    let body = call(&fixture, &other, "run_mutation", with_token.clone()).await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_UNKNOWN,
+        "{body}"
+    );
+
+    // The same call with its token runs, once.
+    let body = call(&fixture, &key, "run_mutation", with_token.clone()).await;
+    assert!(success("run_mutation", &body)["updateIndexerRouting"].is_array());
+    assert_eq!(fixture_indexer_priority(&fixture, &key).await, json!(3));
+    let body = call(&fixture, &key, "run_mutation", with_token).await;
+    assert_eq!(
+        tool_error("run_mutation", &body)["reason"],
+        HTTP_MCP_CONFIRMATION_UNKNOWN,
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn no_effect_mutations_run_at_once_and_describe_says_which_need_a_yes() {
+    let fixture = fixture().await;
+    let key = fixture.api_key.clone();
+    let body = call(
+        &fixture,
+        &key,
+        "run_mutation",
+        json!({"name": "ValidateRuleSet", "skill": "scryer-write-rules", "variables": {"input": {"regoSource": "package fixture"}}}),
+    )
+    .await;
+    let result = result_value("run_mutation", &body);
+    assert!(result.get("status").is_none(), "{body}");
+    assert!(result["validateRuleSet"].is_object(), "{body}");
+    for (name, skill, needs) in [
+        ("ValidateRuleSet", "scryer-write-rules", false),
+        ("UpdateIndexerRouting", "scryer-configure-acquisition", true),
+    ] {
+        let described = success(
+            "describe_operation",
+            &call(
+                &fixture,
+                &key,
+                "describe_operation",
+                json!({"name": name, "skill": skill}),
+            )
+            .await,
+        );
+        assert_eq!(described.get("confirm").is_some(), needs, "{described}");
+    }
 }
 
 #[tokio::test]
@@ -1920,8 +2060,9 @@ async fn a_catalog_run_draws_on_its_operations_graphql_class() {
         ("run_mutation", json!({"name": mutation.name})),
     ];
     for (tool, arguments) in &runs {
+        // The mutation's first call returns a confirmation, still one charge.
         let body = call(&fixture, &key, tool, arguments.clone()).await;
-        assert_ne!(tool_error(tool, &body)["code"], "RATE_LIMITED", "{body}");
+        assert!(!body.to_string().contains("RATE_LIMITED"), "{body}");
     }
     // Each has spent its own one-request bucket.
     for (tool, arguments) in &runs {
@@ -2075,10 +2216,9 @@ async fn config_step_up_refuses_api_key_writes_with_the_graphql_code() {
 
     // The owner has no TOTP credential, so the write is refused for
     // enrollment, exactly as `/graphql` refuses it.
-    let body = call(
+    let body = confirmed(
         &fixture,
         &key,
-        "run_mutation",
         json!({"name": "UpdateIndexerRouting", "variables": routing_input()}),
     )
     .await;

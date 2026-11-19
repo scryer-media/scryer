@@ -4898,6 +4898,8 @@ const en: LocaleDictionary = {
   "settings.securityMcpEnabled": "Allow the MCP server",
   "settings.securityMcpEnabledHelp":
     "Lets coding agents use Scryer's skills over MCP at /mcp with an API key. When off, every MCP request is refused; API keys keep working with the GraphQL API.",
+  "settings.securityMcpEnvOverride":
+    "SCRYER_MCP_ENABLED is set and decides whether the MCP server answers. The saved choice applies after the variable is removed.",
   "settings.securityMfaConfigStepUp":
     "Require MFA step-up for configuration changes",
   "settings.securityMfaConfigStepUpHelp":

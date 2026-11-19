@@ -30740,9 +30740,13 @@ type SecuritySettingsPayload {
 	"""
 	apiKeysRestrictToSystemSettingsUsers: Boolean!
 	"""
-	Whether the built-in MCP endpoint answers.
+	The saved MCP switch.
 	"""
 	mcpEnabled: Boolean!
+	"""
+	The value SCRYER_MCP_ENABLED forces over the saved switch; null when unset.
+	"""
+	mcpEnabledEnvOverride: Boolean
 	"""
 	Whether configuration changes require MFA step-up.
 	"""

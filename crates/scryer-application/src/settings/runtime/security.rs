@@ -46,12 +46,31 @@ pub struct SecuritySettings {
     pub password_min_length: i32,
     pub skip_login_for_local_ips: bool,
     pub api_keys_restrict_to_system_settings_users: bool,
-    /// Whether the built-in MCP endpoint answers.
+    /// The saved MCP switch.
     pub mcp_enabled: bool,
+    /// The value `SCRYER_MCP_ENABLED` forces, which wins over the saved one.
+    pub mcp_enabled_env_override: Option<bool>,
     pub mfa_require_config_step_up: bool,
     pub mfa_require_password_login: bool,
     pub totp_require_jellyfin_login: bool,
     pub totp_require_emby_login: bool,
+}
+
+/// Reads `SCRYER_MCP_ENABLED`. Unset or blank is `Ok(None)`; a value that is
+/// not a boolean is an error, which startup refuses.
+pub fn mcp_enabled_env_override() -> Result<Option<bool>, String> {
+    parse_mcp_enabled_env(std::env::var(MCP_ENABLED_ENV).ok().as_deref())
+}
+
+fn parse_mcp_enabled_env(raw: Option<&str>) -> Result<Option<bool>, String> {
+    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "n" | "off" => Ok(Some(false)),
+        _ => Err(format!("{MCP_ENABLED_ENV} must be a valid boolean")),
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateSecuritySettings {
@@ -368,7 +387,7 @@ impl AppUseCase {
             .read_setting_bool_value(API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY, None)
             .await?
             .unwrap_or(false);
-        let mcp_enabled = self.mcp_enabled().await?;
+        let mcp_enabled = self.saved_mcp_enabled().await?;
         let mfa_require_config_step_up = self
             .load_mfa_setting_with_legacy_migration(
                 MFA_REQUIRE_CONFIG_STEP_UP_KEY,
@@ -397,6 +416,7 @@ impl AppUseCase {
             skip_login_for_local_ips,
             api_keys_restrict_to_system_settings_users,
             mcp_enabled,
+            mcp_enabled_env_override: mcp_enabled_env_override().ok().flatten(),
             mfa_require_config_step_up,
             mfa_require_password_login,
             totp_require_jellyfin_login,
@@ -404,9 +424,17 @@ impl AppUseCase {
         })
     }
 
-    /// Whether the built-in MCP endpoint answers. On unless an operator
+    /// Whether the built-in MCP endpoint answers: `SCRYER_MCP_ENABLED` when
+    /// set, otherwise the saved switch, which is on unless an operator
     /// turned it off.
     pub async fn mcp_enabled(&self) -> AppResult<bool> {
+        if let Some(forced) = mcp_enabled_env_override().ok().flatten() {
+            return Ok(forced);
+        }
+        self.saved_mcp_enabled().await
+    }
+
+    async fn saved_mcp_enabled(&self) -> AppResult<bool> {
         Ok(self
             .read_setting_bool_value(MCP_ENABLED_KEY, None)
             .await?
@@ -682,6 +710,7 @@ impl AppUseCase {
             skip_login_for_local_ips: input.skip_login_for_local_ips,
             api_keys_restrict_to_system_settings_users,
             mcp_enabled,
+            mcp_enabled_env_override: current.mcp_enabled_env_override,
             mfa_require_config_step_up: input.mfa_require_config_step_up,
             mfa_require_password_login: input.mfa_require_password_login,
             totp_require_jellyfin_login: input.totp_require_jellyfin_login,
@@ -790,5 +819,31 @@ impl AppUseCase {
             .await;
 
         self.get_service_settings(actor).await
+    }
+}
+
+#[cfg(test)]
+mod mcp_enabled_env_tests {
+    use super::parse_mcp_enabled_env;
+
+    #[test]
+    fn unset_or_blank_leaves_the_saved_switch_in_charge() {
+        assert_eq!(parse_mcp_enabled_env(None), Ok(None));
+        assert_eq!(parse_mcp_enabled_env(Some("  ")), Ok(None));
+    }
+
+    #[test]
+    fn boolean_spellings_force_the_switch() {
+        for on in ["1", "true", "TRUE", " yes ", "y", "on"] {
+            assert_eq!(parse_mcp_enabled_env(Some(on)), Ok(Some(true)), "{on}");
+        }
+        for off in ["0", "false", "False", "no", "n", "off"] {
+            assert_eq!(parse_mcp_enabled_env(Some(off)), Ok(Some(false)), "{off}");
+        }
+    }
+
+    #[test]
+    fn anything_else_is_refused() {
+        assert!(parse_mcp_enabled_env(Some("disabled")).is_err());
     }
 }

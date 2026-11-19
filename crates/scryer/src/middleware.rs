@@ -2213,6 +2213,11 @@ impl ApiKeyCaller {
     pub(crate) fn full_session(&self) -> bool {
         self.actor.token_claims.session_scope == JwtSessionScope::Full
     }
+
+    /// The id of the API key the caller presented.
+    pub(crate) fn api_key_id(&self) -> Option<&str> {
+        self.actor.api_key_id.as_deref()
+    }
 }
 
 /// Why a request could not be admitted as an API-key caller.

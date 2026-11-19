@@ -17,6 +17,7 @@
 //! before any caller other than an API key is admitted here.
 
 mod catalog;
+mod confirm;
 mod schema_index;
 mod server;
 mod tools;
@@ -76,6 +77,7 @@ impl McpState {
         // The catalog is parsed once, here at startup, not on a request.
         std::sync::LazyLock::force(&catalog::CATALOG);
         let factory_auth = auth.clone();
+        let confirmations = Arc::new(confirm::Confirmations::default());
         // Stateless mode answers every request, `initialize` included, on its
         // own; nothing is kept between requests. Host checks are off; see the
         // module notes for why that is safe only while every caller is an
@@ -91,6 +93,7 @@ impl McpState {
                 Ok(ScryerMcpServer::new(
                     factory_auth.clone(),
                     diagnostics.clone(),
+                    confirmations.clone(),
                 ))
             },
             Arc::new(NeverSessionManager::default()),

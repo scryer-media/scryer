@@ -250,6 +250,8 @@ export type SecuritySettings = {
   skipLoginForLocalIps: boolean;
   apiKeysRestrictToSystemSettingsUsers: boolean;
   mcpEnabled: boolean;
+  /** The value SCRYER_MCP_ENABLED forces; null when unset. */
+  mcpEnabledEnvOverride: boolean | null;
   mfaRequireConfigStepUp: boolean;
   mfaRequirePasswordLogin: boolean;
   mfaRequireJellyfinLogin: boolean;

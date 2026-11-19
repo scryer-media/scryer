@@ -111,9 +111,19 @@ pub const HTTP_MCP_SCHEMA_UNREADABLE: &str = "HTTP_MCP_SCHEMA_UNREADABLE";
 /// The operation list was filtered by a skill that has no served operation.
 pub const HTTP_MCP_SKILL_UNKNOWN: &str = "HTTP_MCP_SKILL_UNKNOWN";
 
+/// A mutation's `confirm_token` is not one this key holds: never issued,
+/// expired, already used or another key's.
+pub const HTTP_MCP_CONFIRMATION_UNKNOWN: &str = "HTTP_MCP_CONFIRMATION_UNKNOWN";
+
+/// A mutation's `confirm_token` was issued for a different operation or
+/// variables; it is spent.
+pub const HTTP_MCP_CONFIRMATION_MISMATCH: &str = "HTTP_MCP_CONFIRMATION_MISMATCH";
+
 #[cfg(test)]
 const ALL: &[&str] = &[
     HTTP_MCP_ORIGIN_NOT_ALLOWED,
+    HTTP_MCP_CONFIRMATION_UNKNOWN,
+    HTTP_MCP_CONFIRMATION_MISMATCH,
     HTTP_MCP_DISABLED,
     HTTP_MCP_API_KEY_REQUIRED,
     HTTP_MCP_API_KEY_INVALID,

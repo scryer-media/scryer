@@ -70,6 +70,9 @@ jq -c '[.data.previewExternalImport.rootFolders[] | [.kind, .arrRootPath]]' root
 ```
 
 Over MCP: `run_mutation` with the same names; poll every 10 s or slower.
+Warmups and preview reads run at once. `StartExternalImportSources`,
+`FinalizeExternalImport`, retries and skips need the operator's confirmation
+first (`scryer-connect` section 5).
 Each preview read costs the server a full preview build, so read roots and
 sources once each, never in the poll.
 
