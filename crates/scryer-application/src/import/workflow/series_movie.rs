@@ -1498,8 +1498,32 @@ async fn hold_replacement_for_manual_resolution(
     Ok(result)
 }
 
-/// The library row an earlier additional import created from this exact source
-/// video, when that copy still exists and its sampled content proof matches
+/// The import source's size in bytes, read once. A source that is gone reads
+/// as zero, as before, and the later steps settle it; a source whose reading
+/// failed is a retryable error, never a zero that would skip the
+/// identical-incumbent guard.
+async fn import_source_size(source_video: &Path) -> AppResult<i64> {
+    match Disk::process().follow(source_video).await {
+        PathReading::Known { len, .. } => Ok(len.unwrap_or(0) as i64),
+        PathReading::Missing { .. } => Ok(0),
+        reading => {
+            let cause = reading
+                .unknown_reason()
+                .unwrap_or(reason::DISK_PATH_UNREACHABLE);
+            Err(AppError::temporary_unavailable_reason(
+                cause,
+                format!(
+                    "failed to read the size of import source {}: {cause}",
+                    source_video.display()
+                ),
+                None,
+            ))
+        }
+    }
+}
+
+/// The library row an earlier additional import created from these source
+/// bytes, when that copy still exists and its sampled content proof matches
 /// the source.
 ///
 /// `additional_import_dest_path` mints a fresh " (N)" name whenever the previous
@@ -1508,8 +1532,11 @@ async fn hold_replacement_for_manual_resolution(
 /// land as yet another numbered file every pass. Resolving the earlier copy as
 /// the destination lets the duplicate check reject the retry instead.
 ///
-/// Path and size alone would also match a later download that reuses the same
-/// source path with different bytes, so the head/tail sampled proof (never a
+/// The source path does not identify the bytes: an archived release is
+/// extracted into a freshly named workspace on every pass. Candidates are the
+/// title's additional copies of the same catalog size, those recorded from
+/// the same source path first so the common retry costs one proof. Size alone
+/// would also match different bytes, so the head/tail sampled proof (never a
 /// full read) has to agree too. A copy that is gone is simply no match; any
 /// other failure to read the evidence is an error, so the caller backs off
 /// instead of minting another destination on unverified state.
@@ -1520,7 +1547,7 @@ async fn existing_additional_import_media_file(
     source_size: i64,
 ) -> AppResult<Option<crate::TitleMediaFile>> {
     let source_key = path_to_stored_string(source_video);
-    let candidates = app
+    let mut candidates = app
         .services
         .library
         .media_files
@@ -1528,9 +1555,9 @@ async fn existing_additional_import_media_file(
         .await?
         .into_iter()
         .filter(|file| file.role == crate::MediaFileRole::Additional)
-        .filter(|file| file.original_file_path.as_deref() == Some(source_key.as_str()))
         .filter(|file| file.size_bytes == source_size)
         .collect::<Vec<_>>();
+    candidates.sort_by_key(|file| file.original_file_path.as_deref() != Some(source_key.as_str()));
     if candidates.is_empty() {
         return Ok(None);
     }
@@ -1959,10 +1986,7 @@ async fn import_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = match Disk::process().follow(&source_video).await {
-        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
-        _ => 0,
-    };
+    let source_size = import_source_size(&source_video).await?;
 
     let ImportPathSettings {
         media_root,
@@ -1979,8 +2003,7 @@ async fn import_movie_download(
         .library
         .media_files
         .list_media_files_for_title(&title.id)
-        .await
-        .unwrap_or_default()
+        .await?
         .into_iter()
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
@@ -2360,15 +2383,27 @@ async fn import_movie_download(
     };
     // A source that ties with its own earlier import is not an upgrade.
     // Replacing it would recycle the library copy and write the same bytes
-    // again on every retried pass.
-    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
-        && let Some(existing_file) = superseded.first()
-        && crate::upgrade::incumbent_holds_identical_source(
+    // again on every retried pass. Every superseded file is compared, and one
+    // that could not be compared is never replaced.
+    let superseded_identity = match &plan.superseded {
+        crate::import_decide::SupersededIncumbents::Title(superseded) => {
+            crate::upgrade::superseded_source_identity(
+                superseded.iter().collect(),
+                &source_video,
+                source_size,
+            )
+            .await
+        }
+        _ => crate::upgrade::SupersededSourceIdentity::NoneIdentical,
+    };
+    if let crate::upgrade::SupersededSourceIdentity::Undecided(existing_file) = superseded_identity
+    {
+        return Err(crate::upgrade::incumbent_identity_undecided_error(
             existing_file,
             &source_video,
-            source_size,
-        )
-        .await
+        ));
+    }
+    if let crate::upgrade::SupersededSourceIdentity::Identical(existing_file) = superseded_identity
     {
         return carry_out_import_rejection(
             app,
@@ -2864,10 +2899,7 @@ async fn import_series_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = match Disk::process().follow(&source_video).await {
-        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
-        _ => 0,
-    };
+    let source_size = import_source_size(&source_video).await?;
 
     let ImportPathSettings {
         media_root,
@@ -2933,8 +2965,7 @@ async fn import_series_movie_download(
         .library
         .media_files
         .list_media_files_for_title(&title.id)
-        .await
-        .unwrap_or_default();
+        .await?;
     let series_movie_files: Vec<_> = existing_files
         .iter()
         .filter(|file| file.file_path == path_to_stored_string(&dest_path))
@@ -3222,14 +3253,25 @@ async fn import_series_movie_download(
         }
     };
     // Same guard as the title path: identical bytes are never an upgrade.
-    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
-        && let Some(existing_file) = superseded.first()
-        && crate::upgrade::incumbent_holds_identical_source(
+    let superseded_identity = match &plan.superseded {
+        crate::import_decide::SupersededIncumbents::Title(superseded) => {
+            crate::upgrade::superseded_source_identity(
+                superseded.iter().collect(),
+                &source_video,
+                source_size,
+            )
+            .await
+        }
+        _ => crate::upgrade::SupersededSourceIdentity::NoneIdentical,
+    };
+    if let crate::upgrade::SupersededSourceIdentity::Undecided(existing_file) = superseded_identity
+    {
+        return Err(crate::upgrade::incumbent_identity_undecided_error(
             existing_file,
             &source_video,
-            source_size,
-        )
-        .await
+        ));
+    }
+    if let crate::upgrade::SupersededSourceIdentity::Identical(existing_file) = superseded_identity
     {
         return carry_out_import_rejection(
             app,

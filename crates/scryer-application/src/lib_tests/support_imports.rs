@@ -240,6 +240,8 @@ pub(crate) struct MockMediaFileRepo {
     pub(super) list_media_files_for_title_error: Arc<Mutex<Option<String>>>,
     /// Stands in for a store failure while looking a media file up by path.
     pub(super) get_media_file_by_path_error: Arc<Mutex<Option<String>>>,
+    /// Stands in for a store failure while listing the live files of episodes.
+    pub(super) list_live_media_files_for_episode_ids_error: Arc<Mutex<Option<String>>>,
     /// Optional bridge for the background acquisition cursor: when set, the
     /// derived missing-target sweep reads the seeded acquisition-state rows so a
     /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
@@ -782,6 +784,14 @@ impl MediaFileRepository for MockMediaFileRepo {
     ) -> AppResult<Vec<EpisodeScopedMediaFile>> {
         self.scoped_file_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(error) = self
+            .list_live_media_files_for_episode_ids_error
+            .lock()
+            .await
+            .clone()
+        {
+            return Err(AppError::Repository(error));
+        }
         let requested = episode_ids
             .iter()
             .map(String::as_str)

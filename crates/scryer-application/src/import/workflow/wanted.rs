@@ -99,10 +99,7 @@ async fn execute_resolved_episode_import(
     disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> AppResult<EpisodeImportOutcome> {
     let use_season_folders = app.resolve_use_season_folders(title).await?;
-    let source_size = match Disk::process().follow(source_video).await {
-        PathReading::Known { len, .. } => len.unwrap_or(0) as i64,
-        _ => 0,
-    };
+    let source_size = import_source_size(source_video).await?;
     let target_episode_ids = target_episodes
         .iter()
         .map(|episode| episode.id.clone())
@@ -124,8 +121,7 @@ async fn execute_resolved_episode_import(
         .library
         .media_files
         .list_live_media_files_for_episode_ids(&title.id, &target_episode_ids)
-        .await
-        .unwrap_or_default();
+        .await?;
     let existing_files = existing_incumbents
         .iter()
         .map(|incumbent| incumbent.media_file.clone())
@@ -697,25 +693,33 @@ async fn execute_resolved_episode_import(
     {
         // A source that ties with its own earlier import is not an upgrade.
         // Replacing it would recycle the library copy and write the same bytes
-        // again on every retried pass.
-        for incumbent in superseded {
-            if target_episode_ids
+        // again on every retried pass. Every superseded file is compared, and
+        // one that could not be compared is never replaced.
+        match crate::upgrade::superseded_source_identity(
+            superseded
                 .iter()
-                .all(|episode_id| incumbent.episode_ids.contains(episode_id))
-                && crate::upgrade::incumbent_holds_identical_source(
-                    &incumbent.media_file,
+                .map(|incumbent| &incumbent.media_file)
+                .collect(),
+            source_video,
+            source_size,
+        )
+        .await
+        {
+            crate::upgrade::SupersededSourceIdentity::NoneIdentical => {}
+            crate::upgrade::SupersededSourceIdentity::Undecided(existing_file) => {
+                return Err(crate::upgrade::incumbent_identity_undecided_error(
+                    existing_file,
                     source_video,
-                    source_size,
-                )
-                .await
-            {
+                ));
+            }
+            crate::upgrade::SupersededSourceIdentity::Identical(existing_file) => {
                 let rejection = crate::import_decide::identical_incumbent_rejection(
                     "this episode",
-                    &incumbent.media_file.file_path,
+                    &existing_file.file_path,
                 );
                 tracing::info!(
                     title_id = %title.id,
-                    file_id = %incumbent.media_file.id,
+                    file_id = %existing_file.id,
                     source = %source_video.display(),
                     "import source is identical to the library file it would replace; leaving the library file in place"
                 );
@@ -725,8 +729,8 @@ async fn execute_resolved_episode_import(
                     skip_reason: rejection.skip_reason,
                     episode_ids: target_episode_ids.clone(),
                     already_present_destination: Some((
-                        incumbent.media_file.file_path.clone(),
-                        incumbent.media_file.id.clone(),
+                        existing_file.file_path.clone(),
+                        existing_file.id.clone(),
                     )),
                 });
             }

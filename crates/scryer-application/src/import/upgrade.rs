@@ -157,29 +157,107 @@ fn configured_roots_match(left: &Path, right: &Path) -> bool {
 /// The catalog size gates the probe: a replacement of a different size, which
 /// is every real upgrade, reads nothing. Only an equal size costs the sampled
 /// content proof of both files (size plus first and last windows, never a
-/// full read). A file that cannot be read is no match.
-pub(crate) async fn incumbent_holds_identical_source(
+/// full read). A file that is gone holds nothing, so it is different; any
+/// other failure to read either file leaves the answer undecided, and the
+/// caller must not replace the library file on it.
+pub(crate) async fn incumbent_source_identity(
     existing_file: &TitleMediaFile,
     source_path: &Path,
     source_size: i64,
-) -> bool {
+) -> IncumbentIdentity {
     if source_size <= 0 || existing_file.size_bytes != source_size {
-        return false;
+        return IncumbentIdentity::Different;
     }
     let incumbent_path = stored_path_to_path_buf(&existing_file.file_path);
     let source_path = source_path.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let proof = |path: &Path| crate::fs_integrity::import_content_proof(path).ok();
-        match (proof(&source_path), proof(&incumbent_path)) {
-            (Some(source), Some(incumbent)) => {
-                source.size_bytes == incumbent.size_bytes
+        let source = crate::fs_integrity::import_content_proof(&source_path);
+        let incumbent = crate::fs_integrity::import_content_proof(&incumbent_path);
+        match (source, incumbent) {
+            (Ok(source), Ok(incumbent)) => {
+                if source.size_bytes == incumbent.size_bytes
                     && source.sample_blake3 == incumbent.sample_blake3
+                {
+                    IncumbentIdentity::Identical
+                } else {
+                    IncumbentIdentity::Different
+                }
             }
-            _ => false,
+            (Err(error), _) | (_, Err(error))
+                if error.reason() == Some(crate::error_reasons::import::FILE_NOT_FOUND) =>
+            {
+                IncumbentIdentity::Different
+            }
+            _ => IncumbentIdentity::Undecided,
         }
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(IncumbentIdentity::Undecided)
+}
+
+/// Whether a library file holds an import source's bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IncumbentIdentity {
+    /// The sampled proofs of both files agree.
+    Identical,
+    /// The sizes or the sampled proofs differ, or one of the files is gone.
+    Different,
+    /// A file could not be read, so nothing is known.
+    Undecided,
+}
+
+/// Which superseded library file, if any, already holds the source's bytes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SupersededSourceIdentity<'a> {
+    /// No superseded file holds them; the import may replace them.
+    NoneIdentical,
+    /// This superseded file holds them; the source is not imported over it.
+    Identical(&'a TitleMediaFile),
+    /// A same-size superseded file could not be compared; nothing is replaced.
+    Undecided(&'a TitleMediaFile),
+}
+
+/// Compares the source with every superseded library file. Only same-size
+/// files are read. Any identical file settles the answer; otherwise any
+/// file that could not be compared leaves it undecided.
+pub(crate) async fn superseded_source_identity<'a>(
+    superseded: Vec<&'a TitleMediaFile>,
+    source_path: &Path,
+    source_size: i64,
+) -> SupersededSourceIdentity<'a> {
+    let mut undecided = None;
+    for existing_file in superseded {
+        match incumbent_source_identity(existing_file, source_path, source_size).await {
+            IncumbentIdentity::Identical => {
+                return SupersededSourceIdentity::Identical(existing_file);
+            }
+            IncumbentIdentity::Undecided => {
+                undecided.get_or_insert(existing_file);
+            }
+            IncumbentIdentity::Different => {}
+        }
+    }
+    match undecided {
+        Some(existing_file) => SupersededSourceIdentity::Undecided(existing_file),
+        None => SupersededSourceIdentity::NoneIdentical,
+    }
+}
+
+/// The retryable failure for a source that could not be compared with the
+/// library file it would replace. The library file stays in place.
+pub(crate) fn incumbent_identity_undecided_error(
+    existing_file: &TitleMediaFile,
+    source_path: &Path,
+) -> AppError {
+    AppError::temporary_unavailable_reason(
+        crate::error_reasons::import::INCUMBENT_IDENTITY_UNDECIDED,
+        format!(
+            "could not compare {} with the library file {} it would replace; the library file was left in place and the import will be retried",
+            source_path.display(),
+            existing_file.file_path
+        ),
+        None,
+    )
 }
 
 /// Execute a guarded file upgrade: import and validate replacement, then retire old.
@@ -2249,5 +2327,152 @@ mod long_name_tests {
                 "{name}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod incumbent_identity_tests {
+    use super::*;
+
+    fn library_row(id: &str, path: &Path, size_bytes: i64) -> TitleMediaFile {
+        TitleMediaFile {
+            id: id.to_string(),
+            file_path: path.to_string_lossy().into_owned(),
+            size_bytes,
+            ..Default::default()
+        }
+    }
+
+    fn write_fixture(path: &Path, bytes: &[u8]) -> i64 {
+        std::fs::write(path, bytes).expect("write fixture");
+        bytes.len() as i64
+    }
+
+    #[tokio::test]
+    async fn identity_is_identical_only_when_the_sampled_proofs_agree() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let same = dir.path().join("same.mkv");
+        write_fixture(&same, b"quiet harbour episode bytes");
+        let other = dir.path().join("other.mkv");
+        write_fixture(&other, b"quiet harbour episode BYTES");
+
+        assert_eq!(
+            incumbent_source_identity(&library_row("same", &same, size), &source, size).await,
+            IncumbentIdentity::Identical
+        );
+        assert_eq!(
+            incumbent_source_identity(&library_row("other", &other, size), &source, size).await,
+            IncumbentIdentity::Different
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_of_a_gone_incumbent_is_different() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let gone = dir.path().join("gone.mkv");
+
+        assert_eq!(
+            incumbent_source_identity(&library_row("gone", &gone, size), &source, size).await,
+            IncumbentIdentity::Different
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_of_an_unreadable_incumbent_is_undecided() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        // A folder where the library file should be cannot be read as one.
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+
+        assert_eq!(
+            incumbent_source_identity(&library_row("unreadable", &unreadable, size), &source, size)
+                .await,
+            IncumbentIdentity::Undecided
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_of_a_different_catalog_size_reads_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        // Unreadable, so any read would make it undecided.
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+
+        assert_eq!(
+            incumbent_source_identity(
+                &library_row("unreadable", &unreadable, size + 1),
+                &source,
+                size
+            )
+            .await,
+            IncumbentIdentity::Different
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identical_second_ranked_incumbent_settles_the_superseded_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let first = dir.path().join("first.mkv");
+        write_fixture(&first, b"quiet harbour episode BYTES");
+        let second = dir.path().join("second.mkv");
+        write_fixture(&second, b"quiet harbour episode bytes");
+        let first_row = library_row("first", &first, size);
+        let second_row = library_row("second", &second, size);
+
+        match superseded_source_identity(vec![&first_row, &second_row], &source, size).await {
+            SupersededSourceIdentity::Identical(file) => assert_eq!(file.id, "second"),
+            other => panic!("expected the second incumbent to be identical, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_identical_incumbent_wins_over_an_undecided_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+        let same = dir.path().join("same.mkv");
+        write_fixture(&same, b"quiet harbour episode bytes");
+        let unreadable_row = library_row("unreadable", &unreadable, size);
+        let same_row = library_row("same", &same, size);
+
+        match superseded_source_identity(vec![&unreadable_row, &same_row], &source, size).await {
+            SupersededSourceIdentity::Identical(file) => assert_eq!(file.id, "same"),
+            other => panic!("expected the readable twin to settle it, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_undecided_incumbent_with_no_identical_one_is_undecided() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let other = dir.path().join("other.mkv");
+        write_fixture(&other, b"quiet harbour episode BYTES");
+        let unreadable = dir.path().join("unreadable.mkv");
+        std::fs::create_dir(&unreadable).expect("create folder in the file's place");
+        let other_row = library_row("other", &other, size);
+        let unreadable_row = library_row("unreadable", &unreadable, size);
+
+        match superseded_source_identity(vec![&other_row, &unreadable_row], &source, size).await {
+            SupersededSourceIdentity::Undecided(file) => assert_eq!(file.id, "unreadable"),
+            other => panic!("expected an undecided answer, got {other:?}"),
+        }
+        let error = incumbent_identity_undecided_error(&unreadable_row, &source);
+        assert_eq!(
+            error.reason(),
+            Some(crate::error_reasons::import::INCUMBENT_IDENTITY_UNDECIDED)
+        );
     }
 }

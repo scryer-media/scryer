@@ -5823,6 +5823,7 @@ struct FailClosedPackFixtureOptions {
     anime_root_at_library_dir: bool,
     facet: MediaFacet,
     title_name: String,
+    media_files: Arc<MockMediaFileRepo>,
 }
 
 impl Default for FailClosedPackFixtureOptions {
@@ -5833,6 +5834,7 @@ impl Default for FailClosedPackFixtureOptions {
             anime_root_at_library_dir: false,
             facet: MediaFacet::Series,
             title_name: "Fail Closed Pack".to_string(),
+            media_files: Arc::new(MockMediaFileRepo::default()),
         }
     }
 }
@@ -5851,12 +5853,13 @@ async fn build_fail_closed_pack_fixture(
     let import_repo = Arc::new(TrackingImportRepo::default());
     let import_artifacts = Arc::new(RecordingImportArtifactRepo::default());
     let file_importer = options.file_importer.clone();
+    let media_files = options.media_files.clone();
     let app = base_app.with_test_overrides(|services| {
         services
             .with_imports(import_repo.clone())
             .with_import_artifacts(import_artifacts.clone())
             .with_file_importer(file_importer)
-            .with_media_files(Arc::new(MockMediaFileRepo::default()))
+            .with_media_files(media_files)
     });
     app.services
         .identity
@@ -6631,6 +6634,191 @@ async fn automatic_episode_import_of_identical_bytes_leaves_the_library_file_in_
         .expect("list media files");
     assert_eq!(files.len(), 1, "{files:?}");
     assert_eq!(files[0].file_path, library_path);
+}
+
+/// Every regular file under `root`, at any depth.
+fn walk_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push(path),
+                Ok(kind) if kind.is_file() => files.push(path),
+                _ => {}
+            }
+        }
+    }
+    files
+}
+
+/// A library file of the source's size that cannot be read cannot be shown to
+/// differ from the source, so it is never replaced on that guess: the file is
+/// left in place and the import is retried.
+#[tokio::test]
+async fn automatic_episode_upgrade_over_an_unreadable_same_size_incumbent_leaves_it_in_place() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        ..Default::default()
+    })
+    .await;
+
+    let initial_source = tempfile::tempdir().expect("initial source tempdir");
+    write_pack_video(
+        initial_source.path(),
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
+    );
+    let initial = series_pack_completed_download(
+        "unreadable-incumbent-initial",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+        initial_source.path(),
+    );
+    let initial_result = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &initial)
+            .await
+            .expect("initial completed import should run")
+    };
+    assert_eq!(
+        initial_result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{initial_result:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    let library_path = std::path::PathBuf::from(&events[0].media_updates[0].path);
+
+    // The catalog still records the file at its size, but what is on disk
+    // there cannot be read as a file.
+    std::fs::remove_file(&library_path).expect("remove the library file");
+    std::fs::create_dir(&library_path).expect("put a folder in the library file's place");
+
+    let upgrade_source = tempfile::tempdir().expect("upgrade source tempdir");
+    write_pack_video(
+        upgrade_source.path(),
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL.mkv",
+    );
+    let upgrade = series_pack_completed_download(
+        "unreadable-incumbent-upgrade",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+        upgrade_source.path(),
+    );
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &upgrade)
+            .await
+            .expect("upgrade completed import should run")
+    };
+
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{result:?}"
+    );
+    assert!(
+        crate::import::import::completed_import_result_is_retryable(&result),
+        "{result:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "nothing may be imported: {events:?}");
+    assert!(
+        library_path.is_dir(),
+        "what sits at the library path must be left exactly where it is"
+    );
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(Path::new(&files[0].file_path), library_path);
+    let library_videos = walk_files(library_dir.path())
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "mkv"))
+        .collect::<Vec<_>>();
+    assert!(
+        library_videos.is_empty(),
+        "nothing may be written or recycled under the library: {library_videos:?}"
+    );
+}
+
+/// A failure to list the episode's library files is not "no library files":
+/// treating it so would skip the guards that compare against them. The file
+/// fails retryably and nothing is written.
+#[tokio::test]
+async fn automatic_episode_import_with_an_unreadable_library_listing_is_retried() {
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        media_files: media_files.clone(),
+        ..Default::default()
+    })
+    .await;
+    *media_files
+        .list_live_media_files_for_episode_ids_error
+        .lock()
+        .await = Some("episode file listing unavailable".to_string());
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(source.path(), "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv");
+    let completed = series_pack_completed_download(
+        "unreadable-listing",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+        source.path(),
+    );
+    let result = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("completed import should run")
+    };
+
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Failed,
+        "{result:?}"
+    );
+    assert!(
+        crate::import::import::completed_import_result_is_retryable(&result),
+        "{result:?}"
+    );
+    assert!(
+        import_completed_events_for_title(&app, &title.id)
+            .await
+            .is_empty()
+    );
+    let library_videos = walk_files(library_dir.path())
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "mkv"))
+        .collect::<Vec<_>>();
+    assert!(library_videos.is_empty(), "{library_videos:?}");
 }
 
 #[tokio::test]
@@ -12553,6 +12741,167 @@ async fn completed_import_retry_reuses_existing_additional_movie_file() {
             .count(),
         2,
         "changed content must produce a second additional row"
+    );
+}
+
+/// An archived release is extracted into a freshly named folder on every
+/// pass, so a retried additional-file import sees the same bytes at a new
+/// source path. It must still settle on the copy it already made.
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn completed_import_retry_from_a_new_source_folder_reuses_the_additional_copy() {
+    use std::io::Write as _;
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_imports(Arc::new(TrackingImportRepo::default()))
+            .with_file_importer(Arc::new(PreparedSourceImporter {
+                change_before_transfer: false,
+            }))
+            .with_media_files(media_files.clone())
+    });
+
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    let library_dir = tempfile::tempdir().expect("library tempdir");
+    register_import_fixture_root(&app, MediaFacet::Movie, library_dir.path()).await;
+    let title_folder = library_dir.path().join("Lantern Cove Extract (2026)");
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Lantern Cove Extract".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create movie title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, &title_folder.to_string_lossy())
+        .await
+        .expect("set title folder path");
+    std::fs::create_dir_all(&title_folder).expect("create title folder");
+    let primary_path = title_folder.join("Lantern Cove Extract (2026) - 2160p.mkv");
+    std::fs::File::create(&primary_path)
+        .expect("create existing primary")
+        .set_len(80 * 1024 * 1024)
+        .expect("size existing primary");
+    app.services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: primary_path.to_string_lossy().into_owned(),
+            size_bytes: 80 * 1024 * 1024,
+            role: MediaFileRole::Primary,
+            quality_label: Some("2160p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert existing primary file");
+
+    let item_id = "additional-movie-extract-1";
+    let release = "Lantern.Cove.Extract.2026.1080p.BluRay.x264-Group";
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::AdditionalFile,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: item_id.to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some(release.to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("record additional movie submission");
+
+    // Each pass extracts the same bytes into a folder of its own.
+    let extract_pass = |dir: &Path| {
+        let source = dir.join(format!("{release}.mkv"));
+        let mut file = std::fs::File::create(&source).expect("create extracted video");
+        file.write_all(b"lantern cove extracted bytes")
+            .expect("write extracted head");
+        file.set_len(51 * 1024 * 1024)
+            .expect("size extracted video above sample threshold");
+        let mut completed =
+            completed_download_fixture_item(item_id, &title.id, release, &dir.to_string_lossy());
+        completed.client_id = config.id.clone();
+        completed.parameters.clear();
+        completed
+    };
+    let first_dir = tempfile::tempdir().expect("first extraction tempdir");
+    let first_completed = extract_pass(first_dir.path());
+    *download_client.completed_downloads.lock().await = vec![first_completed.clone()];
+
+    let _probe = probe_agrees_with_the_name(1280, 720);
+    let first = crate::import_workflow::import_completed_download(&app, &user, &first_completed)
+        .await
+        .expect("first additional movie import");
+    assert_eq!(
+        first.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{first:?}"
+    );
+    let first_dest = first.dest_path.clone().expect("first import destination");
+
+    let second_dir = tempfile::tempdir().expect("second extraction tempdir");
+    let second_completed = extract_pass(second_dir.path());
+    *download_client.completed_downloads.lock().await = vec![second_completed.clone()];
+    let second = crate::import_workflow::import_completed_download(&app, &user, &second_completed)
+        .await
+        .expect("second additional movie import");
+    assert_eq!(
+        second.skip_reason,
+        Some(scryer_domain::ImportSkipReason::AlreadyImported),
+        "{second:?}"
+    );
+    assert_eq!(second.dest_path.as_deref(), Some(first_dest.as_str()));
+
+    let additional_rows = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files")
+        .into_iter()
+        .filter(|file| file.role == MediaFileRole::Additional)
+        .collect::<Vec<_>>();
+    assert_eq!(additional_rows.len(), 1, "{additional_rows:?}");
+    assert_eq!(additional_rows[0].file_path, first_dest);
+    let library_videos = std::fs::read_dir(&title_folder)
+        .expect("read title folder")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "mkv"))
+        .count();
+    assert_eq!(
+        library_videos, 2,
+        "title folder must hold the primary and exactly one additional copy"
     );
 }
 
