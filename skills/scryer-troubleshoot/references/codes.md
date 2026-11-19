@@ -1,7 +1,7 @@
 # Codes to branch on
 
-Branch on these codes. Never decide anything from an error sentence or a
-log message; use those only as context for the operator.
+Branch on these codes. Never decide anything from an error sentence or log
+message; use those only as context for the operator.
 
 ## GraphQL errors
 
@@ -12,50 +12,76 @@ Every GraphQL error has `extensions.code`; many also carry
 `REAUTHENTICATION_REQUIRED`, `PASSWORD_CHANGE_REQUIRED`,
 `LOCATION_PLAN_REFUSED`, `PUBLIC_URL_REJECTED`, `DOWNLOAD_SUBMIT_UNAVAILABLE`.
 
-`UNAUTHORIZED` on a read query usually means the key's user lacks a
-permission. Diagnostics, indexers, download clients and service logs need
-**Manage system settings**; quality, routing and delay
-settings need **Manage catalog settings**.
+`UNAUTHORIZED` on a read query usually = key's user lacks a permission.
+Diagnostics, indexers, download clients and service logs need **Manage
+system settings**; quality, routing and delay settings need **Manage catalog
+settings**.
 
 ## Release decision codes (`decisionCode`, `summary.release_decisions.by_code`)
 
-| code | meaning | usual next look |
-|---|---|---|
-| `eligible` | automatic search would grab it | if nothing grabbed: download client, queue |
-| `parse_ambiguous`, `parse_unparseable` | the release name could not be read reliably | likely naming issue; candidate for `scryer-report-bug` with the release name |
-| `numbering_pack_unresolved` | the pack's episode range could not be mapped | anime or absolute numbering |
-| `title_mismatch` | release title does not match the title | correct match? alias? |
-| `episode_mismatch` | numbering does not match the wanted episode | numbering scheme |
-| `episode_not_monitored` | covers an episode the library does not monitor | monitoring |
-| `acquisition_paused` | acquisition is paused for covered content | title or library pause |
-| `acquisition_state_unavailable` | state check failed; transient | retry later |
-| `category_mismatch` | indexer category contradicts the title (movie vs series) | indexer categories |
-| `ambiguous_identity` | title name is ambiguous and no year or id disambiguates | |
-| `title_year_mismatch` | year is more than a year off | |
-| `episodic_release_for_movie` | a pack or episode release for a movie | |
-| `pack_for_single_episode` | automatic single-episode search skips packs | expected; `minMissingEpisodesForPack` 1 lets one missing episode take a pack |
-| `anime_numbering_ambiguous` | several equally good episode readings | |
-| `quality_blocked` | quality profile blocked it | quality profile items, blocked codecs or sources |
-| `negative_score` | historical rows only; no longer emitted | |
-| `upgrade_rejected` | upgrade policy rejected it | `allowUpgrades`, `minUpgradeScoreDelta` |
-| `cutoff_reached` | the existing file meets the cutoff | expected |
-| `proper_for_old_file` | existing file too old to replace with a PROPER | expected |
-| `already_active` | same release already in the queue | queue |
-| `queued_better_or_equal` | a better or equal release is downloading | queue |
-| `db_blocklisted` | blocklisted after an earlier failure | title history `BLOCKLISTED` |
-| `pending_delay` | eligible but held by a delay profile | pending releases, delay profiles |
-| `minimum_age` | under the usenet minimum age | delay profile `minAgeMinutes` |
-| `release_age_unknown` | indexer gave no publish time and an age gate applies | indexer; health check `ReleaseAgeUnknown` |
-| `protocol_disabled` | delay profile disables this protocol | delay profile enableUsenet/enableTorrent |
-| `download_client_unavailable` | no usable client for the protocol | download clients |
-| `repack_group_mismatch` | repack is from a different group than the file | expected |
-| `minimum_seeders` | too few seeders for the seeding profile | seeding profile |
-| `movie_availability_blocked` | movie has not reached its availability setting | media settings |
-| `pack_below_missing_threshold` | pack does not cover enough missing episodes | expected; multi-season packs follow `minMissingPercentForSeriesPack` |
-| `subtitles_only` | subtitles, no video | expected |
+Format: code: meaning → usual next look.
 
-Stored rows can also show `manual_override`, `initial` and `upgrade`, which
-record how a grab was decided rather than a refusal.
+- `eligible`: automatic search would grab it → if nothing grabbed: download
+  client, queue
+- `parse_ambiguous`, `parse_unparseable`: release name could not be read
+  reliably → likely naming issue; candidate for `scryer-report-bug` with the
+  release name
+- `numbering_pack_unresolved`: pack's episode range could not be mapped →
+  anime or absolute numbering
+- `title_mismatch`: release title does not match the title → correct match?
+  alias?
+- `episode_mismatch`: numbering does not match the wanted episode →
+  numbering scheme
+- `episode_not_monitored`: covers an episode the library does not monitor →
+  monitoring
+- `acquisition_paused`: acquisition paused for covered content → title or
+  library pause
+- `acquisition_state_unavailable`: state check failed; transient → retry
+  later
+- `category_mismatch`: indexer category contradicts the title (movie vs
+  series) → indexer categories
+- `ambiguous_identity`: title name ambiguous, no year or id disambiguates
+- `title_year_mismatch`: year more than a year off
+- `episodic_release_for_movie`: pack or episode release for a movie
+- `pack_for_single_episode`: automatic single-episode search skips packs →
+  expected; `minMissingEpisodesForPack` 1 lets one missing episode take a
+  pack
+- `anime_numbering_ambiguous`: several equally good episode readings
+- `quality_blocked`: quality profile blocked it → quality profile items,
+  blocked codecs or sources
+- `negative_score`: historical rows only; no longer emitted
+- `upgrade_rejected`: upgrade policy rejected it → `allowUpgrades`,
+  `minUpgradeScoreDelta`
+- `cutoff_reached`: existing file meets the cutoff → expected
+- `proper_for_old_file`: existing file too old to replace with a PROPER →
+  expected
+- `already_active`: same release already in the queue → queue
+- `queued_better_or_equal`: better or equal release downloading → queue
+- `db_blocklisted`: blocklisted after an earlier failure → title history
+  `BLOCKLISTED`
+- `pending_delay`: eligible but held by a delay profile → pending releases,
+  delay profiles
+- `minimum_age`: under the usenet minimum age → delay profile
+  `minAgeMinutes`
+- `release_age_unknown`: indexer gave no publish time and an age gate
+  applies → indexer; health check `ReleaseAgeUnknown`
+- `protocol_disabled`: delay profile disables this protocol → delay profile
+  enableUsenet/enableTorrent
+- `download_client_unavailable`: no usable client for the protocol →
+  download clients
+- `repack_group_mismatch`: repack from a different group than the file →
+  expected
+- `minimum_seeders`: too few seeders for the seeding profile → seeding
+  profile
+- `movie_availability_blocked`: movie has not reached its availability
+  setting → media settings
+- `pack_below_missing_threshold`: pack does not cover enough missing
+  episodes → expected; multi-season packs follow
+  `minMissingPercentForSeriesPack`
+- `subtitles_only`: subtitles, no video → expected
+
+Stored rows can also show `manual_override`, `initial` and `upgrade`: how a
+grab was decided, not a refusal.
 
 ## Queue and import
 
@@ -69,34 +95,35 @@ IMPORTED_SEEDING, IMPORT_BLOCKED, FAILED_PENDING, FAILED, IGNORED.
 `attentionReasonCode`: `IMPORT_<importErrorCode>`, `IMPORT_FAILED`, or
 `download_password_retry`. A download blocked for manual reconciliation
 (`trackedState` IMPORT_BLOCKED) carries the import's refusal instead:
-`IMPORT_DESTINATION_IS_SOURCE` (the existing destination is the source's own
-file, and Scryer could not record that the client must keep its data) or
-`IMPORT_DESTINATION_ALIAS_UNKNOWN` (Scryer could not tell whether it is,
-either for an archive import that holds its sources, or because the source it
-set aside to find out could not be put back at its name; the `keptPath` fact
-then names where the source is).
-Nothing was removed in either case. When the destination is the source's own
-file and that is recorded, the import completes on that file and the client
-entry is later removed without its data. When Scryer could not tell for an
-import that holds no sources, the import fails and retries automatically; the
-download shows the failure and its retry time, not a block. After a client
-refresh or a restart the block keeps its code and its sentence; a kept path
-is named only in the sentence. `passwordFailureCode`:
-ARCHIVE_PASSWORD_REQUIRED, ARCHIVE_PASSWORD_OR_CORRUPTION.
 
-`importErrorCode`:
+- `IMPORT_DESTINATION_IS_SOURCE`: existing destination is the source's own
+  file, and Scryer could not record that the client must keep its data.
+- `IMPORT_DESTINATION_ALIAS_UNKNOWN`: Scryer could not tell whether it is,
+  either for an archive import that holds its sources, or because the source
+  it set aside to find out could not be put back at its name; the `keptPath`
+  fact then names where the source is.
 
-| code | likely cause |
-|---|---|
-| FILE_NOT_FOUND | Scryer cannot see the client's output path: remote path mapping or container volume |
-| PERMISSION_DENIED | file ownership or mount permissions |
-| DISK_FULL | target filesystem full |
-| IO_FAILED | filesystem or network share error |
-| EPISODE_NOT_FOUND, EPISODE_LOOKUP_FAILED | metadata does not have the episode yet |
-| POLICY_MISMATCH | file does not match the profile or rules |
-| SOURCE_JOB_FAILED | the client reported failure |
-| SCENE_SUBTITLE_PENDING | waiting for a subtitle file |
-| UNKNOWN | read the log lines around the import |
+Nothing was removed in either case. Destination is the source's own file and
+that is recorded: import completes on that file, client entry later removed
+without its data. Scryer could not tell, for an import holding no sources:
+import fails and retries automatically; download shows the failure and its
+retry time, not a block. After a client refresh or restart the block keeps
+its code and sentence; a kept path is named only in the sentence.
+`passwordFailureCode`: ARCHIVE_PASSWORD_REQUIRED,
+ARCHIVE_PASSWORD_OR_CORRUPTION.
+
+`importErrorCode` → likely cause:
+
+- FILE_NOT_FOUND: Scryer cannot see the client's output path: remote path
+  mapping or container volume
+- PERMISSION_DENIED: file ownership or mount permissions
+- DISK_FULL: target filesystem full
+- IO_FAILED: filesystem or network share error
+- EPISODE_NOT_FOUND, EPISODE_LOOKUP_FAILED: metadata lacks the episode yet
+- POLICY_MISMATCH: file does not match the profile or rules
+- SOURCE_JOB_FAILED: client reported failure
+- SCENE_SUBTITLE_PENDING: waiting for a subtitle file
+- UNKNOWN: read the log lines around the import
 
 Import `decision`: IMPORTED, REJECTED, SKIPPED, CONFLICT, UNMATCHED, FAILED.
 `skipReason`: ALREADY_IMPORTED, DUPLICATE_FILE, POST_DOWNLOAD_RULE_BLOCKED,
@@ -108,33 +135,42 @@ ARCHIVE_EXTRACTION_TIMED_OUT, ARCHIVE_EXTRACTION_BLOCKED, TITLE_FOLDER_CONFLICT.
 
 ## Indexer errors
 
-`classification`:
+`classification` groups (values → likely cause):
 
-| group | values | likely cause |
-|---|---|---|
-| key or account | NEWZNAB_INVALID_API_KEY, NEWZNAB_ACCOUNT_SUSPENDED, NEWZNAB_INSUFFICIENT_PRIVILEGES, NEWZNAB_API_DISABLED, HTTP_UNAUTHORIZED, HTTP_FORBIDDEN | wrong or expired key, account state; operator checks with the indexer |
-| limits | NEWZNAB_REQUEST_LIMIT_REACHED, NEWZNAB_DOWNLOAD_LIMIT_REACHED, HTTP_RATE_LIMITED | daily quota or rate; lower `maxQueriesPerMinute` or wait |
-| request shape | NEWZNAB_MISSING_PARAMETER, NEWZNAB_INCORRECT_PARAMETER, NEWZNAB_NO_SUCH_FUNCTION, NEWZNAB_FUNCTION_NOT_AVAILABLE, HTTP_BAD_REQUEST, HTTP_NOT_FOUND | wrong base URL or API path, or the indexer lacks a search type |
-| server | HTTP_SERVER_ERROR, HTTP_REQUEST_TIMEOUT, NEWZNAB_UNKNOWN_ERROR, UNKNOWN | indexer outage, proxy, DNS or network |
-| other | NEWZNAB_NO_SUCH_ITEM, NEWZNAB_REGISTRATION_DENIED, NEWZNAB_REGISTRATIONS_CLOSED, NEWZNAB_INVALID_REGISTRATION, NEWZNAB_INVALID_REGISTRATION_EMAIL, NEWZNAB_REGISTRATION_FAILED | item gone, or registration flows |
+- key or account: NEWZNAB_INVALID_API_KEY, NEWZNAB_ACCOUNT_SUSPENDED,
+  NEWZNAB_INSUFFICIENT_PRIVILEGES, NEWZNAB_API_DISABLED, HTTP_UNAUTHORIZED,
+  HTTP_FORBIDDEN → wrong or expired key, account state; operator checks with
+  the indexer
+- limits: NEWZNAB_REQUEST_LIMIT_REACHED, NEWZNAB_DOWNLOAD_LIMIT_REACHED,
+  HTTP_RATE_LIMITED → daily quota or rate; lower `maxQueriesPerMinute` or wait
+- request shape: NEWZNAB_MISSING_PARAMETER, NEWZNAB_INCORRECT_PARAMETER,
+  NEWZNAB_NO_SUCH_FUNCTION, NEWZNAB_FUNCTION_NOT_AVAILABLE, HTTP_BAD_REQUEST,
+  HTTP_NOT_FOUND → wrong base URL or API path, or indexer lacks a search type
+- server: HTTP_SERVER_ERROR, HTTP_REQUEST_TIMEOUT, NEWZNAB_UNKNOWN_ERROR,
+  UNKNOWN → indexer outage, proxy, DNS or network
+- other: NEWZNAB_NO_SUCH_ITEM, NEWZNAB_REGISTRATION_DENIED,
+  NEWZNAB_REGISTRATIONS_CLOSED, NEWZNAB_INVALID_REGISTRATION,
+  NEWZNAB_INVALID_REGISTRATION_EMAIL, NEWZNAB_REGISTRATION_FAILED → item gone,
+  or registration flows
 
 `operation`: CONNECTION_TEST, INTERACTIVE_SEARCH, AUTOMATIC_SEARCH, RSS_SYNC,
 INDEXER_ACTION, MANAGEMENT_SYNC, CAPS_REFRESH.
 
 Monthly limits (`maxRequestsPerMonth`, `maxGrabsPerMonth` in
 `IndexerStatus.graphql`) are refused by Scryer before anything is sent, so
-they never appear as an indexer error, a failed query or a backoff. The
-indexer is skipped, not failing: searches and RSS use the other indexers, and
-its releases stay eligible. It resumes on the 1st of the month (UTC) or when
-the limit is changed. The refusal carries one of these reason codes, on a
-manual grab or connection test and as `failureReasonCode` beside
-`skipReason: MONTHLY_LIMIT` on an interactive search:
+never appear as an indexer error, failed query or backoff. Indexer is
+skipped, not failing: searches and RSS use the other indexers, its releases
+stay eligible. Resumes on the 1st of the month (UTC) or when the limit
+changes. Refusal carries one of these reason codes, on a manual grab or
+connection test, and as `failureReasonCode` beside `skipReason: MONTHLY_LIMIT`
+on an interactive search:
 
-| code | meaning |
-|---|---|
-| `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED` | `maxRequestsPerMonth` is used up; searches, RSS and grabs from it wait |
-| `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED` | `maxGrabsPerMonth` is used up; it is still searched, its releases are not grabbed |
-| `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE` | usage could not be checked, so the request was refused; it is retried on the next pass |
+- `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED`: `maxRequestsPerMonth` used
+  up; searches, RSS and grabs from it wait
+- `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED`: `maxGrabsPerMonth` used up;
+  still searched, its releases not grabbed
+- `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE`: usage could not be checked,
+  so request refused; retried on the next pass
 
 ## Health checks
 
@@ -159,22 +195,21 @@ branch on `source` and `status` for the others.
 ## Upgrade
 
 `installationKind`: PORTABLE, DIRECT_MSI, MACOS_APP_BUNDLE, DOCKER, HOMEBREW,
-WINGET, WINDOWS_SUPERVISED, DISABLED, UNSUPPORTED. `managementOwner`:
-IN_APP (Scryer upgrades itself) or OPERATOR (image, package manager or
-installer).
+WINGET, WINDOWS_SUPERVISED, DISABLED, UNSUPPORTED. `managementOwner`: IN_APP
+(Scryer upgrades itself) or OPERATOR (image, package manager or installer).
 
 `eligibilityReason`:
 
-| value | meaning |
-|---|---|
-| eligible | in-app upgrade is available |
-| disabled_by_operator | self-upgrade turned off by environment |
-| managed_by_docker | pull a new image and recreate the container |
-| managed_by_homebrew | `brew upgrade` |
-| managed_by_winget | `winget upgrade` |
-| windows_supervised | the Windows installer or tray manages it |
-| unsupported_layout | install layout not recognised |
-| install_dir_not_writable | the process cannot write its install directory |
-| app_bundle_translocated | macOS runs the app from a quarantine copy; move it to Applications |
-| app_bundle_read_only_volume | the app bundle is on a read-only volume |
-| app_bundle_not_tray_supervised | the macOS app was not started by its tray supervisor |
+- eligible: in-app upgrade available
+- disabled_by_operator: self-upgrade turned off by environment
+- managed_by_docker: pull a new image and recreate the container
+- managed_by_homebrew: `brew upgrade`
+- managed_by_winget: `winget upgrade`
+- windows_supervised: Windows installer or tray manages it
+- unsupported_layout: install layout not recognised
+- install_dir_not_writable: process cannot write its install directory
+- app_bundle_translocated: macOS runs the app from a quarantine copy; move it
+  to Applications
+- app_bundle_read_only_volume: app bundle on a read-only volume
+- app_bundle_not_tray_supervised: macOS app not started by its tray
+  supervisor
