@@ -14,6 +14,7 @@ import {
   automaticSearchOutcomeKey,
   shouldRestoreAutomaticSearch,
 } from "@/lib/utils/automatic-search";
+import { ruleImportRunFailureText } from "@/lib/utils/external-rule-import";
 import {
   activeJobRunsQuery,
   jobRunsQuery,
@@ -515,6 +516,7 @@ export function JobRunProvider({
       const searchProgress = acquisitionProgress(run);
       const description =
         progressDescription ??
+        ruleImportRunFailureText(run, t) ??
         run.errorText ??
         (outcomeKey
           ? t(outcomeKey, {

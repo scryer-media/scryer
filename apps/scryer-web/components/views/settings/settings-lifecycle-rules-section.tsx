@@ -919,11 +919,11 @@ export function SettingsLifecycleRulesSection({
       >
         <div className="pb-2">{pageHead}</div>
         <div className="overflow-hidden rounded border border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
             <CardTitle className="text-base text-foreground">
               {t("settings.lifecycleRules")}
             </CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <RegoAiPromptDialog
                 id="settings-lifecycle-rules-ai-prompt"
                 ruleKind="lifecycle"

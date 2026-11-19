@@ -206,6 +206,22 @@ export function ruleImportDiagnostics(
   });
 }
 
+/**
+ * What a rule import's job toast says when the run stopped short: the
+ * translated reason, never the server's raw error.
+ */
+export function ruleImportRunFailureText(
+  run: { jobKey: string; progressJson?: unknown },
+  translate: ErrorTranslate,
+): string | null {
+  if (run.jobKey !== "EXTERNAL_RULE_IMPORT" || !isRecord(run.progressJson)) {
+    return null;
+  }
+  const reason = run.progressJson.reason;
+  const key = typeof reason === "string" ? ERROR_REASON_KEYS[reason] : undefined;
+  return key ? translate(key) : null;
+}
+
 /** Phase and counts from a running import's job-run progress. */
 export function ruleImportProgress(value: unknown): {
   phase: ExternalRuleImportPhase;

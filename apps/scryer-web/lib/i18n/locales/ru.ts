@@ -12138,11 +12138,11 @@ const ru: LocaleDictionary = {
   "settings.maintainerrImportCode.sourceInvalid":
     "Переведённое правило не прошло проверку правил жизненного цикла.",
   "settings.maintainerrImportCode.usernameUnknown":
-    "Правило называет пользователя, которого нет в Scryer. Правило всё равно переведено.",
+    "Правило называет пользователя, которого нет в Scryer.",
   "settings.maintainerrImportCode.factApproximate":
-    "Правило читает факт Scryer, который немного отличается от факта Maintainerr. Проверьте в предпросмотре перед включением.",
+    "Правило читает факт Scryer, который немного отличается от факта Maintainerr.",
   "settings.maintainerrImportCode.actionApproximate":
-    "Действие группы соответствует действиям Scryer, которые немного отличаются от действий Maintainerr. Проверьте в предпросмотре перед включением.",
+    "Действие группы соответствует действиям Scryer, которые немного отличаются от действий Maintainerr.",
   "settings.arrImportDiagnosticAtCondition": "{{message}} (условие {{number}})",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",

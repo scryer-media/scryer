@@ -66,7 +66,9 @@ function ReportItem({
   index: number;
 }) {
   const t = useTranslate();
-  const diagnostics = maintainerrDiagnostics(item);
+  // A skipped group wrote nothing, so it has nothing to check.
+  const diagnostics =
+    item.state === "SKIPPED_EXISTS" ? [] : maintainerrDiagnostics(item);
   return (
     <li
       id={`settings-lifecycle-rules-maintainerr-item-${index}`}

@@ -7436,11 +7436,11 @@ const en: LocaleDictionary = {
   "settings.maintainerrImportCode.sourceInvalid":
     "The translated rule did not pass lifecycle rule validation.",
   "settings.maintainerrImportCode.usernameUnknown":
-    "A rule names a user no Scryer user is called. The rule still translates.",
+    "A rule names a user no Scryer user is called.",
   "settings.maintainerrImportCode.factApproximate":
-    "A rule reads a Scryer fact that differs slightly from Maintainerr's. Preview before enabling.",
+    "A rule reads a Scryer fact that differs slightly from Maintainerr's.",
   "settings.maintainerrImportCode.actionApproximate":
-    "The group's action maps to Scryer actions that differ slightly from Maintainerr's. Preview before enabling.",
+    "The group's action maps to Scryer actions that differ slightly from Maintainerr's.",
   "settings.arrImportDiagnosticAtCondition":
     "{{message}} (condition {{number}})",
 
