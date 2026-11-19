@@ -29,6 +29,10 @@ export function registerServiceWorker(): void {
         scope: serviceWorkerScope,
         updateViaCache: "none",
       });
+      // Ask the worker to download this build's chunks in the background, so
+      // routes opened later still load if the network drops.
+      const registration = await navigator.serviceWorker.ready;
+      registration.active?.postMessage({ type: "scryer:precache-assets" });
     } catch {
       // Keep registration failure silent; installability should degrade gracefully.
     }
