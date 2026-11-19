@@ -756,3 +756,96 @@ mod scoring_history_tests {
         assert_eq!(upgrade.decision_code, "upgrade");
     }
 }
+
+pub fn to_rule_import_source(
+    source: ExternalRuleImportSource,
+) -> scryer_application::rule_import::RuleImportSource {
+    use scryer_application::rule_import::RuleImportSource;
+    match source {
+        ExternalRuleImportSource::Sonarr => RuleImportSource::Sonarr,
+        ExternalRuleImportSource::Radarr => RuleImportSource::Radarr,
+        ExternalRuleImportSource::Maintainerr => RuleImportSource::Maintainerr,
+    }
+}
+
+fn from_rule_import_fact(
+    fact: scryer_application::rule_import::RuleImportFact,
+) -> ExternalRuleImportFactPayload {
+    ExternalRuleImportFactPayload {
+        code: fact.code,
+        message: fact.message,
+        details: fact.details.map(async_graphql::Json),
+    }
+}
+
+/// The report of one rule import run, without its connection.
+pub fn from_rule_import_status(
+    run: scryer_application::JobRunRecord,
+    progress: scryer_application::rule_import::RuleImportProgress,
+) -> ExternalRuleImportStatusPayload {
+    use scryer_application::rule_import::{RuleImportItemState, RuleImportPhase, RuleImportSource};
+    let count = |value: usize| i32::try_from(value).unwrap_or(i32::MAX);
+    ExternalRuleImportStatusPayload {
+        run_id: run.id.into(),
+        status: JobRunStatusValue::from_application(run.status),
+        active: !run.status.is_terminal(),
+        revision: i64::try_from(progress.revision).unwrap_or(i64::MAX),
+        updated_at: run.updated_at,
+        source: match progress.source {
+            RuleImportSource::Sonarr => ExternalRuleImportSource::Sonarr,
+            RuleImportSource::Radarr => ExternalRuleImportSource::Radarr,
+            RuleImportSource::Maintainerr => ExternalRuleImportSource::Maintainerr,
+        },
+        base_url: progress.base_url,
+        phase: match progress.phase {
+            RuleImportPhase::Queued => ExternalRuleImportPhase::Queued,
+            RuleImportPhase::Fetching => ExternalRuleImportPhase::Fetching,
+            RuleImportPhase::Planning => ExternalRuleImportPhase::Planning,
+            RuleImportPhase::Saving => ExternalRuleImportPhase::Saving,
+            RuleImportPhase::Finished => ExternalRuleImportPhase::Finished,
+        },
+        reason: progress.reason,
+        message: progress.message,
+        counts: ExternalRuleImportCountsPayload {
+            total: count(progress.counts.total),
+            pending: count(progress.counts.pending),
+            saved: count(progress.counts.saved),
+            saved_needs_review: count(progress.counts.saved_needs_review),
+            saved_failed_translation: count(progress.counts.saved_failed_translation),
+            skipped_exists: count(progress.counts.skipped_exists),
+            failed: count(progress.counts.failed),
+        },
+        items: progress
+            .items
+            .into_iter()
+            .map(|item| ExternalRuleImportItemPayload {
+                key: item.key,
+                source_name: item.source_name,
+                saved_name: item.saved_name,
+                rule_set_id: item.rule_set_id.map(Into::into),
+                state: match item.state {
+                    RuleImportItemState::Pending => ExternalRuleImportItemState::Pending,
+                    RuleImportItemState::Saved => ExternalRuleImportItemState::Saved,
+                    RuleImportItemState::SavedNeedsReview => {
+                        ExternalRuleImportItemState::SavedNeedsReview
+                    }
+                    RuleImportItemState::SavedFailedTranslation => {
+                        ExternalRuleImportItemState::SavedFailedTranslation
+                    }
+                    RuleImportItemState::SkippedExists => {
+                        ExternalRuleImportItemState::SkippedExists
+                    }
+                    RuleImportItemState::Failed => ExternalRuleImportItemState::Failed,
+                },
+                reason: item.reason,
+                message: item.message,
+                facts: item.facts.into_iter().map(from_rule_import_fact).collect(),
+            })
+            .collect(),
+        facts: progress
+            .facts
+            .into_iter()
+            .map(from_rule_import_fact)
+            .collect(),
+    }
+}

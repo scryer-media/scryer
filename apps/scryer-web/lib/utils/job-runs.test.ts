@@ -41,6 +41,19 @@ test("source import retries replace terminal snapshots by durable revision", () 
   assert.equal(preferJobRunSnapshot(completed, retry), completed);
 });
 
+test("rule import snapshots arriving out of order keep the newer revision", () => {
+  const newer = jobRun({
+    id: "rule-run",
+    jobKey: "EXTERNAL_RULE_IMPORT",
+    status: "RUNNING",
+    progressJson: { revision: 4 },
+    startedAt: "2026-01-01T00:00:00Z",
+  });
+  const older = { ...newer, progressJson: { revision: 3 } };
+  assert.equal(preferJobRunSnapshot(newer, older), newer);
+  assert.equal(preferJobRunSnapshot(older, newer), newer);
+});
+
 test("full-hash backfill failures are read with their path and reason", () => {
   const parsed = parseFullHashBackfillFailures({
     jobKey: "FULL_HASH_BACKFILL",

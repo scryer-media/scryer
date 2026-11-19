@@ -2350,6 +2350,10 @@ impl AppUseCase {
                 crate::source_import::refusal::INVALID_REQUEST,
                 "source imports must be started from setup",
             )),
+            JobKey::ExternalRuleImport => Err(AppError::validation_refused(
+                crate::rule_import::refusal::INVALID_REQUEST,
+                "rule imports must be started from the rule import mutation",
+            )),
         }
     }
 

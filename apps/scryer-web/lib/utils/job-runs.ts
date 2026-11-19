@@ -307,7 +307,11 @@ export function preferJobRunSnapshot(
   if (!existing) {
     return incoming;
   }
-  if (existing.id === incoming.id && existing.jobKey === "SOURCE_IMPORT") {
+  if (
+    existing.id === incoming.id &&
+    (existing.jobKey === "SOURCE_IMPORT" ||
+      existing.jobKey === "EXTERNAL_RULE_IMPORT")
+  ) {
     const previous = isRecord(existing.progressJson)
       ? normalizeNumber(existing.progressJson.revision)
       : 0;

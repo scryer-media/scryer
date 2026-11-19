@@ -1207,7 +1207,7 @@ pub async fn reconcile_interrupted_job_runs(
         format!(
             "UPDATE workflow_operations
              SET status = '{}',
-                 progress_json = CASE WHEN job_key = 'source_import' THEN progress_json ELSE NULL END,
+                 progress_json = CASE WHEN job_key IN ('source_import', 'external_rule_import') THEN progress_json ELSE NULL END,
                  error_text = 'interrupted by restart',
                  completed_at = {{}},
                  updated_at = {{}}
@@ -1219,6 +1219,27 @@ pub async fn reconcile_interrupted_job_runs(
             JobRunStatus::Discovering.as_str(),
         ),
         args,
+    )
+    .await?;
+    // A rule import's connection never outlives its run; one stopped by the
+    // restart must not keep it, and a kept input would also block retention.
+    execute_write(
+        datastore,
+        "purge_interrupted_rule_import_inputs",
+        format!(
+            "UPDATE workflow_private_inputs
+             SET input_encrypted = NULL
+             WHERE input_encrypted IS NOT NULL
+               AND run_id IN (
+                   SELECT id FROM workflow_operations
+                   WHERE job_key = 'external_rule_import'
+                     AND status NOT IN ('{}', '{}', '{}')
+               )",
+            JobRunStatus::Queued.as_str(),
+            JobRunStatus::Running.as_str(),
+            JobRunStatus::Discovering.as_str(),
+        ),
+        Vec::new(),
     )
     .await?;
     Ok(rows)

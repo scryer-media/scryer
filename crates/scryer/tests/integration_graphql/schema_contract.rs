@@ -813,8 +813,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // A failed transfer title's reason code and facts add
     // `locationTransferTitleOutcome` beside its detail read: 202->203.
     assert!(query_field_names.contains(&"locationTransferTitleOutcome"));
+    // External rule imports report through `externalRuleImportStatus`:
+    // 204->205.
+    assert!(query_field_names.contains(&"externalRuleImportStatus"));
     assert_eq!(
-        query_field_count, 203,
+        query_field_count, 205,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -940,8 +943,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // status payload: 296->297.
     assert!(mutation_field_names.contains(&"dismissPluginRestoreWarnings"));
     // Background grabs add the startGrab mutation root: mutation 297->298.
+    // External rule imports start with `startExternalRuleImport`: 298->299.
+    assert!(mutation_field_names.contains(&"startExternalRuleImport"));
     assert_eq!(
-        mutation_field_count, 298,
+        mutation_field_count, 299,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1553,20 +1558,36 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // LocationTransferTitleOutcomePayload: OBJECT 572->573, public types
     // 1050->1051.
     assert!(public_type_names.contains(&"LocationTransferTitleOutcomePayload"));
+    // External rule imports add the status, item, fact and counts payloads,
+    // the ExternalRuleImportInput input, and the source, phase and item-state
+    // enums: OBJECT 573->577, INPUT_OBJECT 250->251, ENUM 216->219, public
+    // types 1051->1059. EXTERNAL_RULE_IMPORT joins the existing job key enum.
+    for name in [
+        "ExternalRuleImportStatusPayload",
+        "ExternalRuleImportItemPayload",
+        "ExternalRuleImportFactPayload",
+        "ExternalRuleImportCountsPayload",
+        "ExternalRuleImportInput",
+        "ExternalRuleImportSource",
+        "ExternalRuleImportPhase",
+        "ExternalRuleImportItemState",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1051,
+        1059,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 573);
+    assert_eq!(kind_count("OBJECT"), 577);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
-    assert_eq!(kind_count("INPUT_OBJECT"), 250);
+    assert_eq!(kind_count("INPUT_OBJECT"), 251);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 216);
+    assert_eq!(kind_count("ENUM"), 219);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

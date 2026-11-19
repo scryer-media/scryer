@@ -7883,6 +7883,46 @@ const ru: LocaleDictionary = {
     "Недопустимый URL источника.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
     "URL источника не должен содержать строку запроса или фрагмент.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNREACHABLE":
+    "Не удалось подключиться к приложению-источнику. Проверьте URL и что оно запущено.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED":
+    "Приложение-источник отклонило ключ API.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RATE_LIMITED":
+    "Слишком много запросов к приложению-источнику. Повторите попытку чуть позже.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING":
+    "Приложение-источник не предоставляет ожидаемый API. Проверьте URL и его базовый путь.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE":
+    "Приложение-источник вернуло ответ, который Scryer не смог прочитать.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE":
+    "Приложение-источник вернуло больше данных, чем принимает Scryer.",
+  "error.reason.RULE_IMPORT_INVALID_REQUEST":
+    "Этот запрос на импорт правил недопустим.",
+  "error.reason.RULE_IMPORT_REQUEST_CHANGED":
+    "Этот импорт уже запущен с другим источником. Начните новый импорт.",
+  "error.reason.RULE_IMPORT_NOT_OWNED":
+    "Этот импорт правил не существует или принадлежит другому пользователю.",
+  "error.reason.RULE_IMPORT_QUEUE_FULL":
+    "Выполняется слишком много импортов правил. Дождитесь завершения одного из них.",
+  "error.reason.RULE_IMPORT_API_KEY_REQUIRED":
+    "Для этого источника требуется ключ API.",
+  "error.reason.RULE_IMPORT_TRANSLATOR_UNAVAILABLE":
+    "Scryer пока не может преобразовать правила из этого источника.",
+  "error.reason.RULE_IMPORT_FETCH_FAILED":
+    "Не удалось прочитать правила из приложения-источника.",
+  "error.reason.RULE_IMPORT_TOO_MANY_ITEMS":
+    "В источнике больше правил, чем принимает один импорт.",
+  "error.reason.RULE_IMPORT_INTERRUPTED":
+    "Импорт правил был прерван до завершения.",
+  "error.reason.RULE_IMPORT_ALREADY_EXISTS":
+    "Правило с таким именем уже существует, поэтому оно пропущено.",
+  "error.reason.RULE_IMPORT_ITEM_FAILED":
+    "Не удалось импортировать это правило.",
+  "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
+    "Не удалось прочитать некоторые профили качества из источника.",
+  "error.reason.RULE_IMPORT_USERNAMES_UNAVAILABLE":
+    "Не удалось прочитать имена пользователей из источника.",
+  "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
+    "Источник ссылается на больше подключённых приложений, чем читает один импорт.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "Эта версия внешнего приложения не поддерживается; требуется более новая основная версия.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -13616,6 +13656,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.LocationOperation.name": "Перемещение контента",
   "jobs.builtin.LocationOperation.description":
     "Перемещение контента и записей каталога между корневыми папками или библиотеками.",
+  "jobs.builtin.ExternalRuleImport.name": "Импорт внешних правил",
+  "jobs.builtin.ExternalRuleImport.description":
+    "Импорт пользовательских форматов Sonarr или Radarr либо групп правил Maintainerr в виде отключённых правил.",
   "jobs.builtin.CustomJob.name": "Пользовательское задание",
   "jobs.builtin.CustomJob.description":
     "Запуск пользовательского скрипта по его собственному расписанию.",

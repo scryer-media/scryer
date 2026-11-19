@@ -53,6 +53,7 @@ export type JobKey =
   | "APPLICATION_UPGRADE"
   | "LOCATION_OPERATION"
   | "SOURCE_IMPORT"
+  | "EXTERNAL_RULE_IMPORT"
   | "CUSTOM_JOB";
 
 export type JobScheduleInfo = {

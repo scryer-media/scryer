@@ -979,6 +979,45 @@ const en: LocaleDictionary = {
     "The source URL is invalid.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
     "The source URL must not include a query string or fragment.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNREACHABLE":
+    "Could not reach the source application. Check the URL and that it is running.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED":
+    "The source application rejected the API key.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RATE_LIMITED":
+    "Too many requests to the source application. Try again shortly.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING":
+    "The source application does not offer the expected API. Check the URL and its base path.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE":
+    "The source application returned a response Scryer could not read.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE":
+    "The source application returned more data than Scryer accepts.",
+  "error.reason.RULE_IMPORT_INVALID_REQUEST":
+    "This rule import request is not valid.",
+  "error.reason.RULE_IMPORT_REQUEST_CHANGED":
+    "This import was already started with a different source. Start a new import.",
+  "error.reason.RULE_IMPORT_NOT_OWNED":
+    "This rule import does not exist or belongs to another user.",
+  "error.reason.RULE_IMPORT_QUEUE_FULL":
+    "Too many rule imports are running. Wait for one to finish.",
+  "error.reason.RULE_IMPORT_API_KEY_REQUIRED":
+    "An API key is required for this source.",
+  "error.reason.RULE_IMPORT_TRANSLATOR_UNAVAILABLE":
+    "Scryer cannot convert rules from this source yet.",
+  "error.reason.RULE_IMPORT_FETCH_FAILED":
+    "Could not read the rules from the source application.",
+  "error.reason.RULE_IMPORT_TOO_MANY_ITEMS":
+    "The source has more rules than one import accepts.",
+  "error.reason.RULE_IMPORT_INTERRUPTED":
+    "The rule import was interrupted before it finished.",
+  "error.reason.RULE_IMPORT_ALREADY_EXISTS":
+    "A rule with this name already exists, so it was skipped.",
+  "error.reason.RULE_IMPORT_ITEM_FAILED": "This rule could not be imported.",
+  "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
+    "Some quality profiles could not be read from the source.",
+  "error.reason.RULE_IMPORT_USERNAMES_UNAVAILABLE":
+    "User names could not be read from the source.",
+  "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
+    "The source refers to more connected applications than one import reads.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "This version of the external application is not supported; a newer major version is required.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -13018,6 +13057,9 @@ const en: LocaleDictionary = {
   "jobs.builtin.LocationOperation.name": "Location Operation",
   "jobs.builtin.LocationOperation.description":
     "Move title content and catalog placement between roots or libraries.",
+  "jobs.builtin.ExternalRuleImport.name": "External Rule Import",
+  "jobs.builtin.ExternalRuleImport.description":
+    "Import Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules.",
   "jobs.builtin.CustomJob.name": "Custom Job",
   "jobs.builtin.CustomJob.description":
     "Run a user-defined script on its own schedule.",

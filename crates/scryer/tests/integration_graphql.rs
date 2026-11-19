@@ -30,6 +30,8 @@ mod external_import_finalize;
 mod external_import_secret_drafts;
 #[path = "integration_graphql/external_import_sources.rs"]
 mod external_import_sources;
+#[path = "integration_graphql/external_rule_import.rs"]
+mod external_rule_import;
 #[path = "integration_graphql/folder_match.rs"]
 mod folder_match;
 #[path = "integration_graphql/indexer_configs.rs"]

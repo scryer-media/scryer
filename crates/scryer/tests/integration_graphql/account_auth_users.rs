@@ -1022,6 +1022,18 @@ async fn graphql_settings_mutations_require_config_step_up() {
             }),
         ),
         (
+            "startExternalRuleImport",
+            "startExternalRuleImport",
+            r#"mutation($requestKey: String!, $input: ExternalRuleImportInput!) { startExternalRuleImport(requestKey: $requestKey, input: $input) { id } }"#,
+            json!({
+                "requestKey": "step-up-rule-import",
+                "input": {
+                    "source": "MAINTAINERR",
+                    "baseUrl": "http://127.0.0.1:9"
+                }
+            }),
+        ),
+        (
             "clearExternalImportSetupSecretDraft",
             "clearExternalImportSetupSecretDraft",
             r#"mutation { clearExternalImportSetupSecretDraft { cleared } }"#,

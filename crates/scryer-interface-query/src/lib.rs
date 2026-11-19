@@ -1407,6 +1407,23 @@ impl ExternalImportQueries {
             .map_err(to_gql_error)
     }
 
+    /// Read one of the caller's external rule imports and its per-item report; requires catalog-settings management.
+    async fn external_rule_import_status(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Rule import job run identity.")] run_id: ID,
+    ) -> GqlResult<ExternalRuleImportStatusPayload> {
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let app = app_from_ctx(ctx)?;
+        app.rule_import_status(&actor, run_id.as_str())
+            .await
+            .map(|(run, progress)| {
+                scryer_interface_media::mappers::from_rule_import_status(run, progress)
+            })
+            .map_err(to_gql_error)
+    }
+
     /// Report whether an external import setup secret draft exists and whether the caller owns it.
     async fn external_import_setup_secret_draft_status(
         &self,
