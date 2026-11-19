@@ -650,7 +650,14 @@ impl AppUseCase {
                 Ok(Value::Array(
                     health
                         .iter()
-                        .map(|check| json!({ "kind": check.source, "severity": check.status.as_str() }))
+                        .map(|check| {
+                            json!({
+                                "kind": check.source,
+                                "severity": check.status.as_str(),
+                                "reason": check.reason,
+                                "facts": check.facts.iter().copied().collect::<std::collections::BTreeMap<_, _>>(),
+                            })
+                        })
                         .collect(),
                 ))
             }

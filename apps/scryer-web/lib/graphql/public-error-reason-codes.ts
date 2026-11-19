@@ -2356,6 +2356,17 @@ const GROUPS: readonly {
       "SOURCE_IMPORT_ITEM_FAILED",
     ],
   },
+  {
+    codes: ["VALIDATION_ERROR"],
+    reasons: [
+      "ARCHIVE_EXTRACTION_IN_PROGRESS",
+      "ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED",
+      "ARCHIVE_EXTRACTION_WAITING",
+      "ARCHIVE_EXTRACTION_BLOCKED",
+      "ARCHIVE_EXTRACTION_FAILED",
+      "ARCHIVE_EXTRACTION_TIMED_OUT",
+    ],
+  },
 ];
 export const PUBLIC_ERROR_REASON_CODES: ReadonlyMap<string, readonly string[]> =
   new Map(

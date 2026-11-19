@@ -738,9 +738,18 @@ pub(super) async fn apply_import_pass_result(
         ImportDecision::Failed => {
             td.state = TrackedDownloadState::ImportBlocked;
             td.status = TrackedDownloadStatus::Error;
-            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
-                import_result_message(&result, ImportStatus::Failed),
-            )];
+            let text = import_result_message(&result, ImportStatus::Failed);
+            // Installing an extractor reopens this download.
+            let message =
+                if result.skip_reason == Some(ImportSkipReason::ArchiveExtractionPluginRequired) {
+                    crate::tracked_downloads::TrackedStatusMessage::new(
+                    crate::tracked_downloads::TrackedStatusMessageKind::ArchiveExtractorRequired,
+                    text,
+                )
+                } else {
+                    crate::tracked_downloads::TrackedStatusMessage::from(text)
+                };
+            td.status_messages = vec![message];
             false
         }
         _ => {

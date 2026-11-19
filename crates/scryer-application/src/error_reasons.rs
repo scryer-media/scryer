@@ -5363,6 +5363,87 @@ pub mod events {
     ];
 }
 
+/// Conditions of the one extraction a tracked download's archives get.
+pub mod archive_extraction {
+    /// Another import pass of the same download is extracting its archives
+    /// now; this pass waits and is retried.
+    pub const IN_PROGRESS: &str = "ARCHIVE_EXTRACTION_IN_PROGRESS";
+    /// An extraction was found unfinished from an earlier run of Scryer; it
+    /// counts as a failed attempt and its partial output is removed.
+    pub const INTERRUPTED: &str = "ARCHIVE_EXTRACTION_INTERRUPTED";
+    /// The download's workspace path is taken by a folder Scryer cannot prove
+    /// it created for this extraction, so nothing is extracted there.
+    pub const WORKSPACE_OCCUPIED: &str = "ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED";
+    /// The archive extraction failed; the archives are untouched.
+    pub const FAILED: &str = "ARCHIVE_EXTRACTION_FAILED";
+    /// The archives need a password none of the candidates supplied.
+    pub const PASSWORD_REQUIRED: &str = "ARCHIVE_EXTRACTION_PASSWORD_REQUIRED";
+    /// The extractor ran past its execution budget.
+    pub const TIMED_OUT: &str = "ARCHIVE_EXTRACTION_TIMED_OUT";
+    /// An earlier attempt failed and the next one is not due yet; this pass
+    /// extracts nothing and is retried.
+    pub const WAITING: &str = "ARCHIVE_EXTRACTION_WAITING";
+    /// Every allowed attempt failed; no further attempt is made until an
+    /// operator retries the import.
+    pub const BLOCKED: &str = "ARCHIVE_EXTRACTION_BLOCKED";
+    pub const ALL: &[&str] = &[
+        IN_PROGRESS,
+        INTERRUPTED,
+        WORKSPACE_OCCUPIED,
+        FAILED,
+        PASSWORD_REQUIRED,
+        TIMED_OUT,
+        WAITING,
+        BLOCKED,
+    ];
+
+    #[cfg(test)]
+    #[test]
+    fn reasons_are_distinct_and_area_prefixed() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in ALL {
+            assert!(reason.starts_with("ARCHIVE_EXTRACTION_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+            assert!(seen.insert(reason));
+        }
+    }
+}
+
+/// What the archive workspace health check reports. Each result carries its
+/// counts as facts beside the sentence.
+pub mod archive_workspace_health {
+    /// Downloads' extraction workspaces hold scratch on disk; facts
+    /// `workspaces` and `bytes`.
+    pub const SCRATCH_IN_USE: &str = "ARCHIVE_WORKSPACE_SCRATCH_IN_USE";
+    /// Downloads whose extraction failed on every attempt and waits for an
+    /// operator retry; fact `blocked`.
+    pub const EXTRACTIONS_BLOCKED: &str = "ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED";
+    /// Entries in a library root's extraction folder that Scryer cannot
+    /// prove it made, found by the last sweep and left in place; fact
+    /// `unmarked`.
+    pub const UNMARKED_ENTRIES: &str = "ARCHIVE_WORKSPACE_UNMARKED_ENTRIES";
+    pub const ALL: &[&str] = &[SCRATCH_IN_USE, EXTRACTIONS_BLOCKED, UNMARKED_ENTRIES];
+
+    #[cfg(test)]
+    #[test]
+    fn reasons_are_distinct_and_area_prefixed() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in ALL {
+            assert!(reason.starts_with("ARCHIVE_WORKSPACE_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+            assert!(seen.insert(reason));
+        }
+    }
+}
+
 pub mod import {
     /// Cannot safely upgrade this file because no configured media root could be resolved.
     pub const MEDIA_ROOT_REQUIRED: &str = "IMPORT_MEDIA_ROOT_REQUIRED";
@@ -6414,6 +6495,8 @@ mod tests {
             ("JOB_", jobs::ALL),
             ("EVENTS_", events::ALL),
             ("IMPORT_", import::ALL),
+            ("ARCHIVE_EXTRACTION_", archive_extraction::ALL),
+            ("ARCHIVE_WORKSPACE_", archive_workspace_health::ALL),
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),

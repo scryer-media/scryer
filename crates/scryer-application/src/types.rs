@@ -4638,6 +4638,10 @@ pub struct HealthCheckResult {
     pub source: String,
     pub status: HealthCheckStatus,
     pub message: String,
+    /// The condition, as a stable code, for a check that reports one.
+    pub reason: Option<&'static str>,
+    /// Counts the reason names, beside the sentence.
+    pub facts: Vec<(&'static str, u64)>,
 }
 
 #[derive(Clone, Debug)]

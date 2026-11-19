@@ -65,6 +65,9 @@ pub struct ArchiveExtractionDestination {
     staging_parent: PathBuf,
     stale_cleanup_parents: Vec<PathBuf>,
     import_id: String,
+    /// The one name a download's workspace has. Without it every extraction
+    /// gets a fresh random name.
+    workspace_name: Option<String>,
 }
 
 impl ArchiveExtractionDestination {
@@ -73,6 +76,24 @@ impl ArchiveExtractionDestination {
             staging_parent: staging_parent.into(),
             stale_cleanup_parents: Vec::new(),
             import_id: import_id.into(),
+            workspace_name: None,
+        }
+    }
+
+    /// The workspace of one tracked download, at the fixed path
+    /// `<library root>/.scry-ex/<workspace name>`, owned by `owner_id`.
+    pub(crate) fn for_download(
+        library_root: impl Into<PathBuf>,
+        workspace_name: impl Into<String>,
+        owner_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            staging_parent: library_root
+                .into()
+                .join(crate::import::archive_extraction::ARCHIVE_EXTRACTION_DIR_NAME),
+            stale_cleanup_parents: Vec::new(),
+            import_id: owner_id.into(),
+            workspace_name: Some(workspace_name.into()),
         }
     }
 
@@ -83,6 +104,13 @@ impl ArchiveExtractionDestination {
 
     pub fn staging_parent(&self) -> &Path {
         &self.staging_parent
+    }
+
+    /// The fixed workspace path of a download's destination.
+    pub(crate) fn workspace_root(&self) -> Option<PathBuf> {
+        self.workspace_name
+            .as_ref()
+            .map(|name| self.staging_parent.join(name))
     }
 }
 
@@ -301,11 +329,20 @@ fn archive_release_proof(root: &Path, release: &ArchiveWorkspaceRelease) -> Opti
 }
 
 fn read_archive_marker<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    read_archive_marker_at(path).map(|(marker, _)| marker)
+}
+
+/// The marker and when it was last written, from the one reading taken
+/// before it is opened.
+fn read_archive_marker_at<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Option<(T, Option<SystemTime>)> {
     let disk = Disk::process();
     // Checked before opening, so a special file in its place is never opened.
     let PathReading::Known {
         kind: EntryKind::File,
         len: Some(len),
+        modified,
         ..
     } = disk.fresh_blocking(path)
     else {
@@ -318,10 +355,20 @@ fn read_archive_marker<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T>
         .open_blocking(path, Open::read().without_following_links())
         .ok()?;
     let mut bounded = std::io::Read::take(file, 4097);
-    serde_json::from_reader(&mut bounded).ok()
+    Some((serde_json::from_reader(&mut bounded).ok()?, modified))
 }
 
 fn release_archive_workspace(root: &Path) -> std::io::Result<()> {
+    release_archive_workspace_at(root, SystemTime::now())
+}
+
+/// A workspace released at `at`, as one released then leaves it.
+#[cfg(test)]
+pub(crate) fn release_test_archive_workspace_at(root: &Path, at: SystemTime) {
+    release_archive_workspace_at(root, at).unwrap();
+}
+
+fn release_archive_workspace_at(root: &Path, at: SystemTime) -> std::io::Result<()> {
     let owner = archive_workspace_owner(root).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -335,7 +382,7 @@ fn release_archive_workspace(root: &Path) -> std::io::Result<()> {
     let mut release = ArchiveWorkspaceRelease {
         schema: 2,
         owner_proof: owner.proof,
-        released_at: SystemTime::now()
+        released_at: at
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(std::io::Error::other)?
             .as_secs(),
@@ -391,25 +438,63 @@ pub(crate) fn is_owned_archive_workspace_handle(root: &Path, directory: &std::fs
 }
 
 fn archive_workspace_owner(root: &Path) -> Option<ArchiveWorkspaceOwner> {
-    archive_workspace_owner_for_identity(root, &archive_workspace_identity(root)?)
+    archive_workspace_marked_owner(root).map(|(owner, _)| owner)
+}
+
+/// The owner and when its marker was written. The name is checked first, so
+/// a folder that cannot be a workspace is never opened.
+fn archive_workspace_marked_owner(
+    root: &Path,
+) -> Option<(ArchiveWorkspaceOwner, Option<SystemTime>)> {
+    if !is_archive_workspace_root(root) {
+        return None;
+    }
+    archive_workspace_marked_owner_for_identity(root, &archive_workspace_identity(root)?)
 }
 
 fn archive_workspace_owner_for_identity(
     root: &Path,
     identity: &[u8],
 ) -> Option<ArchiveWorkspaceOwner> {
+    archive_workspace_marked_owner_for_identity(root, identity).map(|(owner, _)| owner)
+}
+
+fn archive_workspace_marked_owner_for_identity(
+    root: &Path,
+    identity: &[u8],
+) -> Option<(ArchiveWorkspaceOwner, Option<SystemTime>)> {
     let name = root.file_name()?.to_str()?;
-    if !is_archive_workspace_name(name) {
+    if !is_archive_workspace_root(root) {
         return None;
     }
-    let owner: ArchiveWorkspaceOwner =
-        read_archive_marker(&root.join(ARCHIVE_WORKSPACE_OWNER_FILE))?;
+    let (owner, marked_at): (ArchiveWorkspaceOwner, _) =
+        read_archive_marker_at(&root.join(ARCHIVE_WORKSPACE_OWNER_FILE))?;
     (owner.schema == 2
         && owner.workspace == name
         && !owner.import_id.is_empty()
         && blake3::Hash::from_hex(&owner.proof).ok()?
             == archive_owner_proof_for_identity(identity, &owner)?)
-    .then_some(owner)
+    .then_some((owner, marked_at))
+}
+
+/// When the workspace at `root` was made, by its ownership marker, which is
+/// written once as the workspace is created: `None` unless `owner_id` owns
+/// it and the time is known. One directory open, one reading of the marker
+/// and one read of it.
+pub(crate) async fn download_workspace_marked_at(
+    root: &Path,
+    owner_id: &str,
+) -> Option<SystemTime> {
+    let root = root.to_path_buf();
+    let owner_id = owner_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        archive_workspace_marked_owner(&root)
+            .filter(|(owner, _)| owner.import_id == owner_id)
+            .and_then(|(_, marked_at)| marked_at)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 struct ArchivePluginExtraction {
@@ -482,6 +567,13 @@ pub async fn extract_archives_if_needed(
             redact_archive_diagnostic(&dir.to_string_lossy())
         )));
     };
+    // Without an extractor nothing is staged, so no folder is made only to be
+    // removed again.
+    let Some(provider) = archive_provider else {
+        return Err(AppError::archive_extraction_plugin_required(Some(
+            redact_archive_diagnostic(&dir.to_string_lossy()),
+        )));
+    };
     let mut workspace = ArchiveExtractionWorkspace::create(&destination).await?;
 
     info!(
@@ -493,15 +585,10 @@ pub async fn extract_archives_if_needed(
     );
 
     let workspace_root = workspace.root.clone();
-    let Some(provider) = archive_provider else {
-        cleanup_extracted_dir(&workspace_root).await;
-        return Err(AppError::archive_extraction_plugin_required(Some(
-            redact_archive_diagnostic(&dir.to_string_lossy()),
-        )));
-    };
-
     let extraction =
-        extract_into_workspace(&workspace, &dir, sets, is_sample, passwords, &provider).await;
+        extract_into_workspace(&workspace, &dir, sets, is_sample, passwords, &provider)
+            .await
+            .map(|(has_media, _)| has_media);
 
     match extraction {
         Ok(true) => {
@@ -518,6 +605,211 @@ pub async fn extract_archives_if_needed(
             Err(classify_archive_failure(error))
         }
     }
+}
+
+/// The archive sets of one download, found and matched to an installed
+/// extractor before anything is written.
+pub(crate) struct PlannedArchiveExtraction {
+    dir: PathBuf,
+    sets: Vec<(PathBuf, ArchiveType)>,
+    is_sample: fn(&Path) -> bool,
+    digest: String,
+}
+
+impl PlannedArchiveExtraction {
+    /// See [`archive_set_digest`].
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+/// What one download's extraction produced.
+pub(crate) struct DownloadArchiveOutput {
+    pub(crate) files: u64,
+    pub(crate) bytes: u64,
+}
+
+/// Find the download's archive sets and the extractor for each, writing
+/// nothing. `None` when the download holds no archive the import needs. An
+/// archive no installed plugin extracts is refused here, before any folder
+/// exists.
+pub(crate) async fn plan_download_extraction(
+    dir: &Path,
+    is_sample: fn(&Path) -> bool,
+    archive_provider: Option<&Arc<dyn ArchiveExtractorPluginProvider>>,
+) -> AppResult<Option<PlannedArchiveExtraction>> {
+    let dir = dir.to_path_buf();
+    let sized = planned_archive_sets(&dir).await?;
+    if sized.is_empty() {
+        return Ok(None);
+    }
+    let digest = archive_set_digest(&dir, &sized)?;
+    let sets: Vec<_> = sized
+        .into_iter()
+        .map(|(path, archive_type, _)| (path, archive_type))
+        .collect();
+    let plugin_required = || {
+        AppError::archive_extraction_plugin_required(Some(redact_archive_diagnostic(
+            &dir.to_string_lossy(),
+        )))
+    };
+    let provider = archive_provider.ok_or_else(plugin_required)?;
+    let mut formats = Vec::new();
+    for (_, archive_type) in &sets {
+        let format = archive_plugin_format_for_type(*archive_type);
+        if !formats.contains(&format) {
+            provider
+                .select_for_format(format)?
+                .ok_or_else(plugin_required)?;
+            formats.push(format);
+        }
+    }
+    Ok(Some(PlannedArchiveExtraction {
+        dir,
+        sets,
+        is_sample,
+        digest,
+    }))
+}
+
+/// The download's archive sets with their first volumes' sizes, off the
+/// async runtime.
+async fn planned_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType, Option<u64>)>> {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || plan_archive_sets_sized(&dir))
+        .await
+        .map_err(|e| AppError::Repository(format!("archive detection task failed: {e}")))?
+        .map_err(classify_archive_failure)
+}
+
+/// A digest of each archive set's first volume: its name relative to the
+/// download folder, its type, and its size as the listing gave it.
+fn archive_set_digest(
+    dir: &Path,
+    sets: &[(PathBuf, ArchiveType, Option<u64>)],
+) -> AppResult<String> {
+    let mut names: Vec<(String, &'static str, Option<u64>)> = sets
+        .iter()
+        .map(|(path, archive_type, size)| {
+            (
+                path.strip_prefix(dir)
+                    .map(crate::stored_paths::path_to_stored_string)
+                    .unwrap_or_default(),
+                archive_type.as_str(),
+                *size,
+            )
+        })
+        .collect();
+    names.sort();
+    let bytes = serde_json::to_vec(&("archive-set-v2", names)).map_err(|error| {
+        AppError::Repository(format!("failed to encode archive set digest: {error}"))
+    })?;
+    Ok(blake3::hash(&bytes).to_hex()[..32].to_string())
+}
+
+/// The digest [`plan_download_extraction`] would record for the download,
+/// from the same listing and without an extractor; `None` when it holds no
+/// archive set.
+pub(crate) async fn download_archive_digest(dir: &Path) -> AppResult<Option<String>> {
+    let sets = planned_archive_sets(dir).await?;
+    if sets.is_empty() {
+        return Ok(None);
+    }
+    archive_set_digest(dir, &sets).map(Some)
+}
+
+/// Extract a planned download into its fixed workspace. Any failure removes
+/// the workspace at once: it is Scryer's own scratch and never the only copy,
+/// and the download's archives are never touched.
+pub(crate) async fn extract_planned_download(
+    plan: PlannedArchiveExtraction,
+    destination: &ArchiveExtractionDestination,
+    passwords: &ArchivePasswordCandidates,
+    archive_provider: &Arc<dyn ArchiveExtractorPluginProvider>,
+) -> AppResult<DownloadArchiveOutput> {
+    let mut workspace = ArchiveExtractionWorkspace::create(destination).await?;
+    info!(
+        archive_sets = plan.sets.len(),
+        workspace = %redact_archive_diagnostic(&workspace.root.to_string_lossy()),
+        "extracting download archives"
+    );
+    match extract_into_workspace(
+        &workspace,
+        &plan.dir,
+        plan.sets,
+        plan.is_sample,
+        passwords,
+        archive_provider,
+    )
+    .await
+    {
+        Ok((_, totals)) => {
+            workspace.lease.published = true;
+            Ok(DownloadArchiveOutput {
+                files: totals.files as u64,
+                bytes: totals.bytes,
+            })
+        }
+        Err(error) => {
+            if !remove_owned_workspace(&workspace.root).await {
+                tracing::warn!(
+                    "failed archive workspace could not be removed; a later pass removes it"
+                );
+            }
+            Err(classify_archive_failure(error))
+        }
+    }
+}
+
+/// Where a download's fixed workspace path stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DownloadWorkspacePresence {
+    Missing,
+    /// An owned workspace of this download.
+    Owned,
+    /// Anything else: another owner's workspace, an unmarked folder, a file.
+    /// It is never removed.
+    Foreign,
+}
+
+/// Ownership is checked first, so a present workspace costs no extra probe.
+pub(crate) async fn download_workspace_presence(
+    root: &Path,
+    owner_id: &str,
+) -> DownloadWorkspacePresence {
+    let root = root.to_path_buf();
+    let owner_id = owner_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        if archive_workspace_owned_by(&root, &owner_id) {
+            DownloadWorkspacePresence::Owned
+        } else if matches!(
+            Disk::process().uncached_blocking(&root),
+            PathReading::Missing { .. }
+        ) {
+            DownloadWorkspacePresence::Missing
+        } else {
+            DownloadWorkspacePresence::Foreign
+        }
+    })
+    .await
+    .unwrap_or(DownloadWorkspacePresence::Foreign)
+}
+
+/// This build proves whose a workspace is, so a path held by anything else is
+/// known not to be Scryer's.
+pub(crate) const PROVES_WORKSPACE_OWNERSHIP: bool = true;
+
+/// Remove a download's workspace when `owner_id` owns it. True when it is
+/// gone.
+pub(crate) async fn remove_download_workspace(root: &Path, owner_id: &str) -> bool {
+    let owned = {
+        let root = root.to_path_buf();
+        let owner_id = owner_id.to_string();
+        tokio::task::spawn_blocking(move || archive_workspace_owned_by(&root, &owner_id))
+            .await
+            .unwrap_or(false)
+    };
+    owned && remove_owned_workspace(root).await
 }
 
 fn classify_archive_failure(error: AppError) -> AppError {
@@ -553,7 +845,7 @@ async fn extract_into_workspace(
     is_sample: fn(&Path) -> bool,
     passwords: &ArchivePasswordCandidates,
     provider: &Arc<dyn ArchiveExtractorPluginProvider>,
-) -> AppResult<bool> {
+) -> AppResult<(bool, PluginOutputTotals)> {
     let source = if Disk::process().follow(source).await.kind() == Some(EntryKind::File) {
         source.parent().unwrap_or(Path::new("."))
     } else {
@@ -650,7 +942,7 @@ async fn extract_into_workspace(
         pass_outputs = next_outputs;
     }
 
-    Ok(archive_inventory(&workspace.root, 64)?.iter().any(|path| {
+    let has_media = archive_inventory(&workspace.root, 64)?.iter().any(|path| {
         (scryer_domain::is_video_file(path) && !is_sample(path))
             || path
                 .extension()
@@ -661,7 +953,8 @@ async fn extract_into_workspace(
                         "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx"
                     )
                 })
-    }))
+    });
+    Ok((has_media, totals))
 }
 
 /// The bytes of the regular files in a bounded inventory of `dir`, read on one
@@ -960,6 +1253,15 @@ fn plan_archive_extraction(
     dir: &Path,
     _is_sample: fn(&Path) -> bool,
 ) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
+    Ok(plan_archive_sets_sized(dir)?
+        .into_iter()
+        .map(|(path, archive_type, _)| (path, archive_type))
+        .collect())
+}
+
+/// [`plan_archive_extraction`], with each first volume's size as the
+/// listing (or the download's own reading) gave it.
+fn plan_archive_sets_sized(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType, Option<u64>)>> {
     let reading = Disk::process().fresh_blocking(dir);
     let Some(kind) = reading.kind() else {
         return Err(AppError::Repository(format!(
@@ -977,12 +1279,12 @@ fn plan_archive_extraction(
     }
     if kind == EntryKind::File {
         return Ok(archive_type_for_path(dir)
-            .map(|archive_type| (dir.to_path_buf(), archive_type))
+            .map(|archive_type| (dir.to_path_buf(), archive_type, reading.size()))
             .into_iter()
             .collect());
     }
 
-    let sets = find_archive_sets(dir)?;
+    let sets = find_archive_sets_sized(dir)?;
     if sets.len() > MAX_ARCHIVE_SETS {
         return Err(AppError::validation_refused(
             crate::error_reasons::import::DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS,
@@ -1230,7 +1532,11 @@ impl ArchiveExtractionWorkspace {
                     redact_archive_diagnostic(&destination.staging_parent.to_string_lossy())
                 ))
             })?;
-        cleanup_stale_archive_artifacts(&destination.staging_parent).await;
+        // A download's workspace lives as long as its download, so the folder
+        // of download workspaces is never swept by age.
+        if destination.workspace_name.is_none() {
+            cleanup_stale_archive_artifacts(&destination.staging_parent).await;
+        }
         for parent in &destination.stale_cleanup_parents {
             if parent != &destination.staging_parent {
                 cleanup_stale_archive_artifacts(parent).await;
@@ -1256,11 +1562,19 @@ impl ArchiveExtractionWorkspace {
             .map_err(|error| {
                 AppError::Repository(format!("failed to prepare archive staging parent: {error}"))
             })?;
-        for _ in 0..ARCHIVE_STAGING_CREATE_ATTEMPTS {
-            let root = destination.staging_parent.join(format!(
-                "{ARCHIVE_STAGING_PREFIX}{}",
-                short_staging_suffix()
-            ));
+        let fixed_root = destination.workspace_root();
+        let attempts = if fixed_root.is_some() {
+            1
+        } else {
+            ARCHIVE_STAGING_CREATE_ATTEMPTS
+        };
+        for _ in 0..attempts {
+            let root = fixed_root.clone().unwrap_or_else(|| {
+                destination.staging_parent.join(format!(
+                    "{ARCHIVE_STAGING_PREFIX}{}",
+                    short_staging_suffix()
+                ))
+            });
             match disk.create_dir_as_blocking(&root, Parents::MustExist, Access::OwnerOnly) {
                 Ok(()) => {
                     // This guard also runs when an abandoned spawn_blocking
@@ -1305,6 +1619,13 @@ impl ArchiveExtractionWorkspace {
                         lease,
                     });
                 }
+                // Whatever holds a download's own path is never replaced.
+                Err(error)
+                    if fixed_root.is_some()
+                        && error.reason() == reason::DISK_DESTINATION_EXISTS =>
+                {
+                    return Err(crate::import::archive_extraction::workspace_occupied_error());
+                }
                 Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => continue,
                 Err(error) => {
                     return Err(AppError::Repository(format!(
@@ -1337,6 +1658,16 @@ pub(crate) fn create_test_archive_workspace_owned_by(parent: &Path, owner_id: &s
     workspace.root
 }
 
+/// A download's owned workspace at the fixed path `destination` names.
+#[cfg(test)]
+pub(crate) fn create_test_download_workspace(
+    destination: &ArchiveExtractionDestination,
+) -> PathBuf {
+    let mut workspace = ArchiveExtractionWorkspace::create_sync(destination).unwrap();
+    workspace.lease.published = true;
+    workspace.root
+}
+
 fn short_staging_suffix() -> String {
     format!("{:016x}", uuid::Uuid::new_v4().as_u128() as u64)
 }
@@ -1345,12 +1676,22 @@ async fn cleanup_stale_archive_artifacts(parent: &Path) {
     cleanup_archive_artifacts_older_than(parent, STALE_ARCHIVE_STAGING_AFTER).await;
 }
 
-async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) {
+/// The cleanup a new workspace runs on the folders around it, run on its own
+/// over `parent`: owned workspaces released a day ago or more go, and
+/// nothing else is touched. One listing of `parent`; only entries named
+/// like a workspace are opened.
+pub(crate) async fn sweep_stale_archive_workspaces_in(parent: &Path) -> usize {
+    cleanup_archive_artifacts_older_than(parent, STALE_ARCHIVE_STAGING_AFTER).await
+}
+
+/// Returns how many workspaces it removed.
+async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) -> usize {
     let disk = Disk::process();
     let Ok(entries) = disk.list(parent).await else {
-        return;
+        return 0;
     };
     let now = SystemTime::now();
+    let mut removed = 0;
     for entry in entries {
         let path = entry.path;
         if archive_workspace_owner(&path).is_none() {
@@ -1365,10 +1706,12 @@ async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) 
         if now
             .duration_since(released_at)
             .is_ok_and(|age| age >= min_age)
+            && disk.remove(path, Remove::Tree).await.is_ok()
         {
-            let _ = disk.remove(path, Remove::Tree).await;
+            removed += 1;
         }
     }
+    removed
 }
 
 fn is_old_rar_volume_extension(ext: &str) -> bool {
@@ -1707,7 +2050,18 @@ fn has_importable_video_files(dir: &Path, is_sample: fn(&Path) -> bool) -> AppRe
 /// Every archive set of a download, each named by its first volume: the top
 /// level first, then subdirectories breadth-first in name order.
 fn find_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
-    let files = archive_inventory(dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
+    Ok(find_archive_sets_sized(dir)?
+        .into_iter()
+        .map(|(path, archive_type, _)| (path, archive_type))
+        .collect())
+}
+
+/// [`find_archive_sets`], with each first volume's size as the listing gave
+/// it.
+fn find_archive_sets_sized(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType, Option<u64>)>> {
+    let listed = archive_inventory_sized(dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
+    let sizes: std::collections::HashMap<PathBuf, Option<u64>> = listed.iter().cloned().collect();
+    let files = listed.into_iter().map(|(path, _)| path);
     let mut by_directory = std::collections::BTreeMap::<PathBuf, Vec<PathBuf>>::new();
     for path in files {
         if let Some(parent) = path.parent() {
@@ -1722,11 +2076,23 @@ fn find_archive_sets(dir: &Path) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
     Ok(directories
         .into_iter()
         .flat_map(|(_, paths)| archive_sets_in_paths(paths))
+        .map(|(path, archive_type)| {
+            let size = sizes.get(&path).copied().flatten();
+            (path, archive_type, size)
+        })
         .collect())
 }
 
 /// A bounded inventory that never follows links or silently truncates a source.
 fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
+    Ok(archive_inventory_sized(dir, max_depth)?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect())
+}
+
+/// [`archive_inventory`], with each file's size as its listing gave it.
+fn archive_inventory_sized(dir: &Path, max_depth: usize) -> AppResult<Vec<(PathBuf, Option<u64>)>> {
     let disk = Disk::process();
     let io_error = |error: &dyn std::fmt::Display| {
         AppError::Repository(format!("archive discovery failed: {error}"))
@@ -1773,7 +2139,7 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
                 }
                 children.push(path);
             } else if kind == EntryKind::File {
-                files.push(path);
+                files.push((path, entry.reading.size()));
             }
         }
         children.sort();
@@ -1983,8 +2349,12 @@ pub(crate) struct ArchiveWorkspaceReference {
 }
 
 impl ArchiveWorkspaceReference {
+    /// A download's workspace is never tracked: it lives as long as its
+    /// download, not as long as one import pass.
     pub(crate) fn track(&mut self, root: Option<&Path>) {
-        self.root = root.map(Path::to_path_buf);
+        self.root = root
+            .filter(|root| !is_download_workspace(root))
+            .map(Path::to_path_buf);
     }
 
     pub(crate) fn retain(&mut self) {
@@ -2101,8 +2471,12 @@ fn archive_workspace_inventory(root: &Path) -> ArchiveWorkspaceInventory {
 
 /// Let go of a workspace no video was imported from. A clean workspace is
 /// removed at once; one holding subtitles is only released, so the stale
-/// sweeper removes it later. An unsafe inventory is preserved.
+/// sweeper removes it later. An unsafe inventory is preserved. A download's
+/// workspace is kept for the download's next pass.
 pub(crate) async fn abandon_extracted_dir(dir: &Path) {
+    if is_download_workspace(dir) {
+        return;
+    }
     match archive_workspace_inventory(dir) {
         ArchiveWorkspaceInventory::Clean => cleanup_extracted_dir(dir).await,
         ArchiveWorkspaceInventory::HasSubtitles => {
@@ -2201,8 +2575,7 @@ pub(crate) async fn remove_released_held_workspace(
 /// never a name or pattern; a path in no owned workspace has none.
 pub(crate) fn owned_archive_workspace_relative_path(source: &Path) -> Option<String> {
     source.ancestors().skip(1).find_map(|ancestor| {
-        let name = ancestor.file_name()?.to_str()?;
-        if !is_archive_workspace_name(name) || archive_workspace_owner(ancestor).is_none() {
+        if !is_archive_workspace_root(ancestor) || archive_workspace_owner(ancestor).is_none() {
             return None;
         }
         archive_workspace_keyed_path(ancestor, source)
@@ -2271,21 +2644,76 @@ pub fn is_archive_workspace_output(source: &Path, dest: &Path) -> bool {
                 .is_ok_and(|output| canonical_source.starts_with(output))
             && output_dir.parent().is_some_and(|workspace| {
                 archive_workspace_owner(workspace).is_some()
-                    && workspace.parent().is_some_and(|staging_parent| {
-                        !staging_parent.as_os_str().is_empty() && dest.starts_with(staging_parent)
-                    })
+                    && workspace
+                        .parent()
+                        .map(|staging_parent| {
+                            // A download's workspace sits in the library
+                            // root's extraction folder; the root holds `dest`.
+                            if is_download_workspace(workspace) {
+                                staging_parent.parent().unwrap_or(Path::new(""))
+                            } else {
+                                staging_parent
+                            }
+                        })
+                        .is_some_and(|staging_parent| {
+                            !staging_parent.as_os_str().is_empty()
+                                && dest.starts_with(staging_parent)
+                        })
             })
     })
 }
 
+/// Lowercase hex digits in a workspace's generated name: after the prefix for
+/// a per-pass workspace, the whole name for a download's workspace.
+const WORKSPACE_HEX_LEN: usize = 16;
+
+fn is_workspace_hex(text: &str) -> bool {
+    text.len() == WORKSPACE_HEX_LEN
+        && text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Whether `name` is shaped like a download's workspace name. Shape only.
+pub(crate) fn is_download_workspace_name(name: &str) -> bool {
+    is_workspace_hex(name)
+}
+
 fn is_archive_workspace_name(name: &str) -> bool {
     name.strip_prefix(ARCHIVE_STAGING_PREFIX)
-        .is_some_and(|suffix| {
-            suffix.len() == 16
-                && suffix
-                    .bytes()
-                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        })
+        .is_some_and(is_workspace_hex)
+}
+
+/// Whether `name` is shaped like a per-pass workspace's name. Shape only;
+/// nothing is read, and ownership is still the marker's to prove.
+pub(crate) fn is_pass_workspace_name(name: &str) -> bool {
+    is_archive_workspace_name(name)
+}
+
+/// Whether `root` has the shape of a workspace: a per-pass name, or a
+/// download's name inside the library root's extraction folder. Shape only;
+/// ownership is still the marker's to prove.
+fn is_archive_workspace_root(root: &Path) -> bool {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_archive_workspace_name)
+        || is_download_workspace(root)
+}
+
+/// The name of a download's workspace, as a name only; ownership is still
+/// the marker's to prove.
+pub(crate) fn download_workspace_name(hex: &str) -> String {
+    hex.to_string()
+}
+
+fn is_download_workspace(root: &Path) -> bool {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_workspace_hex)
+        && root.parent().and_then(Path::file_name)
+            == Some(std::ffi::OsStr::new(
+                crate::import::archive_extraction::ARCHIVE_EXTRACTION_DIR_NAME,
+            ))
 }
 
 fn is_archive_staging_dir(dir: &Path) -> bool {

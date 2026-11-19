@@ -480,6 +480,11 @@ impl AppServicesBuilder {
         Arc<dyn DownloadRegistryRepository>
     );
     app_services_builder_setter!(
+        with_archive_extractions,
+        workflow.archive_extractions,
+        Arc<dyn crate::ArchiveExtractionRepository>
+    );
+    app_services_builder_setter!(
         with_download_client_status,
         integrations.download_client_status,
         Arc<dyn crate::ports::DownloadClientStatusRepository>

@@ -8907,6 +8907,10 @@ enum ImportSkipReasonValue {
 	"""
 	ARCHIVE_EXTRACTION_TIMED_OUT
 	"""
+	Archive extraction failed on every allowed attempt; retry the import to try again.
+	"""
+	ARCHIVE_EXTRACTION_BLOCKED
+	"""
 	The title's folder must be resolved before the import can run.
 	"""
 	TITLE_FOLDER_CONFLICT

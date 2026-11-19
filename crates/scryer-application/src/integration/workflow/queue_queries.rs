@@ -386,6 +386,7 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
     let reason_code = result.reason_code.as_deref().and_then(|code| {
         crate::error_reasons::import::ALL
             .iter()
+            .chain(crate::error_reasons::archive_extraction::ALL)
             .copied()
             .find(|known| *known == code)
             .map(str::to_owned)

@@ -38,6 +38,9 @@ pub enum TrackedStatusMessageKind {
     SceneSubtitlePending,
     SeedingHold,
     ManualReview,
+    /// Blocked because no installed plugin extracts the download's archives;
+    /// reopened when an archive extractor is installed.
+    ArchiveExtractorRequired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -431,6 +434,9 @@ pub(crate) enum ImportBlockedReason {
     CompletedTitleIdentityMismatch,
     UnverifiedAlreadyImported,
     BlocklistConfirmationFailed,
+    /// The import found archives no installed plugin extracts. Installing an
+    /// extractor, or one already present at startup, reopens the download.
+    ArchiveExtractorRequired,
 }
 
 impl ImportBlockedReason {
@@ -444,6 +450,7 @@ impl ImportBlockedReason {
             Self::CompletedTitleIdentityMismatch => "completed_title_identity_mismatch",
             Self::UnverifiedAlreadyImported => "unverified_already_imported",
             Self::BlocklistConfirmationFailed => "manual_blocklist_confirmation_failed",
+            Self::ArchiveExtractorRequired => "archive_extractor_required",
         }
     }
 
@@ -457,12 +464,26 @@ impl ImportBlockedReason {
             "completed_title_identity_mismatch" => Some(Self::CompletedTitleIdentityMismatch),
             "unverified_already_imported" => Some(Self::UnverifiedAlreadyImported),
             "manual_blocklist_confirmation_failed" => Some(Self::BlocklistConfirmationFailed),
+            "archive_extractor_required" => Some(Self::ArchiveExtractorRequired),
             _ => None,
         }
     }
 
     pub(crate) const fn reopens_for_verification(self) -> bool {
         matches!(self, Self::UnverifiedAlreadyImported)
+    }
+
+    /// The durable reason for a download an import pass left blocked.
+    pub(crate) fn after_import(td: &TrackedDownload) -> Self {
+        if td
+            .status_messages
+            .iter()
+            .any(|message| message.kind == TrackedStatusMessageKind::ArchiveExtractorRequired)
+        {
+            Self::ArchiveExtractorRequired
+        } else {
+            Self::AfterImport
+        }
     }
 }
 
@@ -493,6 +514,10 @@ pub struct TrackedDownloadService {
     /// The canonical download `track()` last resolved each tracked id string
     /// to: the poller's current mapping for a string several rows can share.
     current_download_for_id: HashMap<String, DownloadId>,
+    /// Clients (lowercased) that have delivered an authoritative listing
+    /// since startup. Until a client has, a download of it missing from the
+    /// cache may just not have been listed yet.
+    listed_clients: HashSet<String>,
 }
 
 impl TrackedDownloadService {
@@ -503,6 +528,24 @@ impl TrackedDownloadService {
 
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Return downloads blocked only for want of an archive extractor to the
+    /// ordinary import, now that one may be installed. Runtime state only:
+    /// nothing is written. Returns how many were reopened.
+    pub(crate) fn reopen_downloads_awaiting_archive_extractor(&mut self) -> usize {
+        let mut reopened = 0;
+        for td in self.cache.values_mut() {
+            if td.state == TrackedDownloadState::ImportBlocked
+                && td.status_messages.iter().any(|message| {
+                    message.kind == TrackedStatusMessageKind::ArchiveExtractorRequired
+                })
+            {
+                td.reset_for_import_retry();
+                reopened += 1;
+            }
+        }
+        reopened
     }
 
     /// Create or update a tracked download from a client item snapshot.
@@ -1291,6 +1334,10 @@ impl TrackedDownloadService {
         excluded_client_types: &[&str],
         authoritative_client_ids: Option<&HashSet<String>>,
     ) -> Vec<ClientJobLocator> {
+        if let Some(client_ids) = authoritative_client_ids {
+            self.listed_clients
+                .extend(client_ids.iter().map(|id| id.trim().to_ascii_lowercase()));
+        }
         let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
             if tracked_client_type_is_excluded(&td.client_type, excluded_client_types) {
@@ -1349,6 +1396,12 @@ impl TrackedDownloadService {
         else {
             return Vec::new();
         };
+        if let Some(client_id) = client_id.as_deref()
+            && authoritative_client_ids.is_none_or(|client_ids| client_ids.contains(client_id))
+        {
+            self.listed_clients
+                .insert(client_id.trim().to_ascii_lowercase());
+        }
 
         let now = Utc::now();
         let mut unavailable_sources = Vec::new();
@@ -1382,6 +1435,25 @@ impl TrackedDownloadService {
         self.clear_untracked_warning_clocks();
         self.prune_cache();
         unavailable_sources
+    }
+
+    /// The keys, of those given, of downloads this tracker no longer follows:
+    /// their client has delivered an authoritative listing since startup and
+    /// no cached download carries the key. A key of a client not yet listed
+    /// is never returned.
+    pub fn untracked_extraction_keys(&self, keys: Vec<(String, String)>) -> Vec<(String, String)> {
+        if keys.is_empty() || self.listed_clients.is_empty() {
+            return Vec::new();
+        }
+        let tracked: HashSet<(String, String)> = self
+            .cache
+            .values()
+            .filter_map(crate::import::archive_extraction::DownloadExtractionKey::for_tracked)
+            .map(|key| key.pair())
+            .collect();
+        keys.into_iter()
+            .filter(|key| self.listed_clients.contains(&key.0) && !tracked.contains(key))
+            .collect()
     }
 
     /// Remove a download from the cache (after terminal state).
@@ -1870,6 +1942,11 @@ impl TrackedDownloadService {
                     .ok()
                     .flatten();
                 set_import_blocked_status(td, detail);
+                if terminal_failure_reason.as_deref()
+                    == Some(ImportBlockedReason::ArchiveExtractorRequired.as_str())
+                {
+                    restore_archive_extractor_block(app, td);
+                }
             }
             return;
         }
@@ -2126,6 +2203,25 @@ fn import_blocked_fallback_message(td: &TrackedDownload) -> String {
             .to_string(),
         _ => "Automatic import needs operator review. Open Manual Import and confirm the file mapping to continue."
             .to_string(),
+    }
+}
+
+/// A download blocked for want of an archive extractor keeps that kind across
+/// a restart, so installing one reopens it; when an extractor is already
+/// installed it goes back to the ordinary import now.
+fn restore_archive_extractor_block(app: &AppUseCase, td: &mut TrackedDownload) {
+    let extractor_installed = app
+        .services
+        .integrations
+        .archive_extractor_plugin_provider
+        .available()
+        .is_some_and(|provider| !provider.available_provider_types().is_empty());
+    if extractor_installed {
+        td.reset_for_import_retry();
+        return;
+    }
+    for message in &mut td.status_messages {
+        message.kind = TrackedStatusMessageKind::ArchiveExtractorRequired;
     }
 }
 
@@ -2394,6 +2490,11 @@ pub enum TrackedDownloadCommand {
         ids: Vec<String>,
         reply: oneshot::Sender<HashMap<String, TrackedDownloadQueueMetadata>>,
     },
+    /// See [`TrackedDownloadService::untracked_extraction_keys`].
+    UntrackedExtractions {
+        keys: Vec<(String, String)>,
+        reply: oneshot::Sender<Vec<(String, String)>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2494,6 +2595,26 @@ impl TrackedDownloadHandle {
         self.tx
             .send(TrackedDownloadCommand::CompletedSource {
                 identity,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
+        reply_rx.await.map_err(|_| {
+            crate::AppError::Repository("tracked download service dropped reply".into())
+        })
+    }
+
+    /// The keys, of those given, of downloads the tracker no longer follows.
+    pub async fn untracked_extractions(
+        &self,
+        keys: Vec<(String, String)>,
+    ) -> AppResult<Vec<(String, String)>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(TrackedDownloadCommand::UntrackedExtractions {
+                keys,
                 reply: reply_tx,
             })
             .await
@@ -3001,6 +3122,19 @@ pub(crate) async fn persist_tracked_download_state_marker(
             "failed to persist tracked download submission state"
         );
         return false;
+    }
+
+    // A settled download's archive workspace goes: now when it was imported,
+    // a day later when it ended any other way.
+    if (state.is_terminal() || state.counts_as_imported())
+        && let Some(key) = crate::import::archive_extraction::DownloadExtractionKey::for_tracked(td)
+    {
+        crate::import::archive_extraction::settle_download_extraction(
+            app,
+            &key,
+            state.counts_as_imported(),
+        )
+        .await;
     }
 
     true
@@ -7201,6 +7335,50 @@ mod tests {
     }
 
     #[test]
+    fn extraction_keys_are_untracked_only_for_listed_clients_and_uncached_downloads() {
+        let mut tracker = TrackedDownloadService::new();
+        let mut cached = build_tracked_download("cached-item");
+        cached.client_id = "Client-1".to_string();
+        tracker.cache.insert(cached.download_id, cached);
+        let key = |client: &str, item: &str| (client.to_string(), item.to_string());
+        let asked = vec![
+            key("client-1", "cached-item"),
+            key("client-1", "gone-item"),
+            key("client-2", "gone-item"),
+        ];
+
+        assert!(
+            tracker.untracked_extraction_keys(asked.clone()).is_empty(),
+            "no client has listed yet"
+        );
+
+        tracker.update_trackable_excluding_client_types_for_authoritative_clients(
+            &HashSet::from(["cached-item".to_string()]),
+            &[],
+            Some(&HashSet::from(["Client-1".to_string()])),
+        );
+        assert_eq!(
+            tracker.untracked_extraction_keys(asked.clone()),
+            vec![key("client-1", "gone-item")],
+            "a cached download stays tracked, and a client not yet listed is not judged"
+        );
+
+        tracker.update_trackable_for_scope_for_authoritative_clients(
+            &HashSet::new(),
+            &TrackedDownloadSnapshotScope::AuthoritativeForClient {
+                client_id: Some("client-2".to_string()),
+                client_type: "weaver".to_string(),
+            },
+            None,
+        );
+        assert_eq!(
+            tracker.untracked_extraction_keys(asked),
+            vec![key("client-1", "gone-item"), key("client-2", "gone-item")]
+        );
+        assert!(tracker.untracked_extraction_keys(Vec::new()).is_empty());
+    }
+
+    #[test]
     fn authoritative_snapshot_preserves_post_queue_states_after_grace() {
         let mut tracker = TrackedDownloadService::new();
         let states = [
@@ -8605,6 +8783,228 @@ mod tests {
             Some(TrackedDownloadState::Failed.as_str())
         );
         assert_eq!(recovered.state, TrackedDownloadState::Failed);
+    }
+
+    struct InstalledArchiveExtractor;
+
+    impl crate::ArchiveExtractorPluginProvider for InstalledArchiveExtractor {
+        fn client_for_format(
+            &self,
+            _format: scryer_plugin_sdk::ArchivePluginFormat,
+        ) -> Option<Arc<dyn crate::ArchiveExtractorClient>> {
+            None
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["synthetic-archives".to_string()]
+        }
+    }
+
+    /// A download blocked for want of an archive extractor, restored by a
+    /// fresh tracker on `app`.
+    async fn archive_extractor_block_round_trip(
+        extractor_at_restart: bool,
+    ) -> (Arc<TestDownloadSubmissionRepo>, DownloadId, TrackedDownload) {
+        let canonical_download_id = DownloadId::new();
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        let registry = Arc::new(TestDownloadRegistry {
+            ids: Mutex::new(HashMap::from([(
+                "extractor-block-job".to_string(),
+                canonical_download_id,
+            )])),
+            failing_item_ids: HashSet::new(),
+            conflicting_item_ids: HashMap::new(),
+            fallback_download_ids: HashMap::new(),
+        });
+        let app = build_app(
+            download_submissions.clone(),
+            Arc::new(TestImportRepo::default()),
+        )
+        .with_test_overrides(|services| services.with_download_registry(registry));
+        let mut item = build_client_item();
+        item.download_client_item_id = "extractor-block-job".to_string();
+        let tracked_id = tracked_download_id_for_item(&item);
+        let mut tracker = TrackedDownloadService::new();
+        tracker.track(&app, item.clone()).await;
+        let mut tracked = tracker.find(&tracked_id).unwrap().clone();
+        tracked.status_messages = vec![TrackedStatusMessage::new(
+            TrackedStatusMessageKind::ArchiveExtractorRequired,
+            "Install an archive extractor to import this download.",
+        )];
+        let reason = ImportBlockedReason::after_import(&tracked);
+        assert_eq!(reason, ImportBlockedReason::ArchiveExtractorRequired);
+        assert!(
+            persist_tracked_download_state_marker(
+                &app,
+                &tracked,
+                TrackedDownloadState::ImportBlocked,
+                Some(reason.as_str()),
+                Some("Install an archive extractor to import this download."),
+            )
+            .await
+        );
+
+        let app = if extractor_at_restart {
+            app.with_test_overrides(|services| {
+                services.with_archive_extractor_plugin_provider(Arc::new(InstalledArchiveExtractor))
+            })
+        } else {
+            app
+        };
+        let mut restarted = TrackedDownloadService::new();
+        restarted.track(&app, item).await;
+        let recovered = restarted.find(&tracked_id).unwrap().clone();
+        (download_submissions, canonical_download_id, recovered)
+    }
+
+    #[tokio::test]
+    async fn an_extractor_block_keeps_its_kind_across_a_restart() {
+        let (download_submissions, canonical_download_id, recovered) =
+            archive_extractor_block_round_trip(false).await;
+
+        assert_eq!(
+            download_submissions
+                .canonical_identity_tracked_state_reasons
+                .lock()
+                .await
+                .get(&canonical_download_id)
+                .map(String::as_str),
+            Some("archive_extractor_required"),
+            "the condition is persisted as its own code"
+        );
+        assert_eq!(recovered.state, TrackedDownloadState::ImportBlocked);
+        assert!(!recovered.status_messages.is_empty());
+        assert!(
+            recovered
+                .status_messages
+                .iter()
+                .all(|message| message.kind == TrackedStatusMessageKind::ArchiveExtractorRequired),
+            "{:?}",
+            recovered.status_messages
+        );
+        // So an extractor installed later reopens it.
+        let mut tracker = TrackedDownloadService::new();
+        let id = tracker.insert_for_tests(recovered);
+        assert_eq!(tracker.reopen_downloads_awaiting_archive_extractor(), 1);
+        assert_eq!(
+            tracker.get_by_download_id(id).unwrap().state,
+            TrackedDownloadState::ImportPending
+        );
+    }
+
+    #[tokio::test]
+    async fn an_extractor_block_reopens_at_restart_when_one_is_installed() {
+        let (_, _, recovered) = archive_extractor_block_round_trip(true).await;
+
+        assert_eq!(recovered.state, TrackedDownloadState::ImportPending);
+    }
+
+    /// The poller's arm for provider-catalog notices, driven by notices sent
+    /// through the app's own broadcast.
+    #[tokio::test]
+    async fn an_archive_extractor_catalog_change_reopens_downloads_waiting_for_one() {
+        use tokio::sync::broadcast::error::RecvError;
+        let app = build_app(
+            Arc::new(TestDownloadSubmissionRepo::default()),
+            Arc::new(TestImportRepo::default()),
+        );
+        let mut rx = app
+            .runtime
+            .events
+            .provider_catalog_changed_broadcast
+            .subscribe();
+        let mut tracker = TrackedDownloadService::new();
+        let blocked = |id: &str, kind| {
+            let mut td = build_tracked_download(id);
+            td.download_id = DownloadId::new();
+            td.state = TrackedDownloadState::ImportBlocked;
+            td.status_messages = vec![TrackedStatusMessage::new(kind, "blocked")];
+            td
+        };
+        let waiting = tracker.insert_for_tests(blocked(
+            "waiting-for-extractor",
+            TrackedStatusMessageKind::ArchiveExtractorRequired,
+        ));
+        let other = tracker.insert_for_tests(blocked(
+            "blocked-for-another-reason",
+            TrackedStatusMessageKind::Informational,
+        ));
+        let state_of =
+            |tracker: &TrackedDownloadService, id| tracker.get_by_download_id(id).unwrap().state;
+
+        app.publish_provider_catalog_changed(vec![crate::ProviderCatalogFamily::Subtitle]);
+        let notice = rx.recv().await;
+        assert!(
+            crate::integration::workflow::handle_provider_catalog_change(
+                &app,
+                &mut tracker,
+                notice
+            )
+            .await
+        );
+        assert_eq!(
+            state_of(&tracker, waiting),
+            TrackedDownloadState::ImportBlocked
+        );
+
+        app.publish_provider_catalog_changed(vec![crate::ProviderCatalogFamily::ArchiveExtractor]);
+        let notice = rx.recv().await;
+        assert!(
+            crate::integration::workflow::handle_provider_catalog_change(
+                &app,
+                &mut tracker,
+                notice
+            )
+            .await
+        );
+        assert_eq!(
+            state_of(&tracker, waiting),
+            TrackedDownloadState::ImportPending
+        );
+        assert_eq!(
+            state_of(&tracker, other),
+            TrackedDownloadState::ImportBlocked
+        );
+
+        // A missed notice may have been an extractor; a closed channel stops.
+        let lagged = tracker.insert_for_tests(blocked(
+            "waiting-after-a-lag",
+            TrackedStatusMessageKind::ArchiveExtractorRequired,
+        ));
+        assert!(
+            crate::integration::workflow::handle_provider_catalog_change(
+                &app,
+                &mut tracker,
+                Err(RecvError::Lagged(3)),
+            )
+            .await
+        );
+        assert_eq!(
+            state_of(&tracker, lagged),
+            TrackedDownloadState::ImportPending
+        );
+        assert!(
+            !crate::integration::workflow::handle_provider_catalog_change(
+                &app,
+                &mut tracker,
+                Err(RecvError::Closed),
+            )
+            .await
+        );
+    }
+
+    #[test]
+    fn only_an_extractor_block_records_the_extractor_reason() {
+        let mut td = build_tracked_download("extractor-reason");
+        td.status_messages = vec!["blocked for another reason".into()];
+        assert_eq!(
+            ImportBlockedReason::after_import(&td),
+            ImportBlockedReason::AfterImport
+        );
+        assert_eq!(
+            ImportBlockedReason::parse("archive_extractor_required"),
+            Some(ImportBlockedReason::ArchiveExtractorRequired)
+        );
     }
 
     /// The ignore counterpart of the terminal-state round trip.

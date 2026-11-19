@@ -243,6 +243,8 @@ const en: LocaleDictionary = {
     "Archive extractor required",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Archive extraction timed out",
+  "importHistory.skipReason.ARCHIVE_EXTRACTION_BLOCKED":
+    "Archive extraction failed on every attempt",
   "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
     "Title folder needs attention",
 
@@ -1182,6 +1184,18 @@ const en: LocaleDictionary = {
     "Archive discovery entry limit exceeded.",
   "error.reason.IMPORT_ARCHIVE_ENTRY_ESCAPES_EXTRACTION_DIRECTORY":
     "Archive entry escapes extraction directory.",
+  "error.reason.ARCHIVE_EXTRACTION_IN_PROGRESS":
+    "The download's archives are being extracted; the import waits for them.",
+  "error.reason.ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED":
+    "The download's extraction folder holds something Scryer did not create for it; it is left in place.",
+  "error.reason.ARCHIVE_EXTRACTION_WAITING":
+    "An earlier extraction of the download's archives failed; the next attempt is not due yet.",
+  "error.reason.ARCHIVE_EXTRACTION_FAILED":
+    "The download's archives failed to extract; the import tries again later.",
+  "error.reason.ARCHIVE_EXTRACTION_TIMED_OUT":
+    "Extracting the download's archives took too long; the import tries again later.",
+  "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
+    "The download's archives failed to extract on every attempt; retry the import to try again.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
     "Archive extraction requires a resolved import destination before staging output.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
@@ -5378,6 +5392,12 @@ const en: LocaleDictionary = {
   "jobs.status.completed": "Completed",
   "jobs.status.warning": "Warning",
   "jobs.status.failed": "Failed",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_SCRATCH_IN_USE":
+    "{{workspaces}} download workspace(s) hold {{bytes}} bytes of extracted archives",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED":
+    "{{blocked}} download(s) failed to extract on every attempt; retry their import to try again",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_UNMARKED_ENTRIES":
+    "{{unmarked}} item(s) in the .scry-ex folders of library roots were not made by Scryer and are left in place",
   "jobs.triggerSource.manual": "Manual",
   "jobs.triggerSource.scheduledStartup": "Scheduled startup",
   "jobs.triggerSource.scheduledInterval": "Scheduled interval",

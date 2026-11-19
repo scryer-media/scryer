@@ -2491,6 +2491,18 @@ async fn bootstrap_application(
         app_use_case.clone(),
         restore_workers.shutdown_workers.child_token(),
     ));
+    restore_workers.spawn_worker({
+        // One pass over the library roots' archive workspaces; housekeeping
+        // repeats it daily.
+        let app = app_use_case.clone();
+        let shutdown = restore_workers.shutdown_workers.child_token();
+        async move {
+            tokio::select! {
+                () = scryer_application::sweep_archive_workspaces_at_startup(&app) => {}
+                () = shutdown.cancelled() => {}
+            }
+        }
+    });
     app_use_case.wake_title_image_loops();
 
     if let Err(error) = app_use_case

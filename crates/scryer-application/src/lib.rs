@@ -208,6 +208,11 @@ pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
 pub(crate) use import::archive_extractor;
 pub use import::archive_extractor::initialize_archive_workspace_ownership;
+pub use import::archive_extraction::{
+    ARCHIVE_EXTRACTION_DIR_NAME, ArchiveExtractionRecord, ArchiveExtractionRepository,
+    ArchiveExtractionState, ArchiveScratchSummary, InMemoryArchiveExtractionRepository,
+    UnsettledArchiveExtraction, sweep_archive_workspaces_at_startup,
+};
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;

@@ -345,6 +345,17 @@ impl FilesystemWalker {
     }
 
     fn apply_walk_filter(&self, root: &Path, listing: &mut WalkedDirectory) {
+        // A scan notes folders holding a per-pass archive workspace for
+        // housekeeping, from the names already listed, before hidden ones
+        // are dropped.
+        if self.filter_policy != WalkFilterPolicy::None {
+            for subdir in &listing.subdirs {
+                crate::import::archive_extraction::note_pass_workspace_parent(
+                    &listing.path,
+                    subdir,
+                );
+            }
+        }
         match self.filter_policy {
             WalkFilterPolicy::None => {}
             WalkFilterPolicy::LibraryScanJunkOnly => {
@@ -668,5 +679,83 @@ mod tests {
 
         assert_eq!(empty_count, 0);
         assert!(empty_listing.files.is_empty());
+    }
+
+    /// A title folder with a season, an episode, and one hidden directory.
+    fn title_folder_with_hidden(root: &Path, hidden: &str) -> PathBuf {
+        let title = root.join("Synthetic Walk Show");
+        fs::create_dir_all(title.join("Season 01")).expect("season");
+        fs::write(
+            title
+                .join("Season 01")
+                .join("Synthetic.Walk.Show.S01E01.mkv"),
+            b"video",
+        )
+        .expect("episode");
+        fs::create_dir_all(title.join(hidden).join("out")).expect("hidden");
+        fs::write(title.join(hidden).join("out").join("Inner.mkv"), b"video").expect("inner");
+        title
+    }
+
+    /// The walk relative to its root: each directory with its subdirectories
+    /// and files.
+    fn relative_walk(
+        walker: &FilesystemWalker,
+        root: &Path,
+    ) -> Vec<(PathBuf, Vec<PathBuf>, Vec<PathBuf>)> {
+        let relative = |path: &PathBuf| path.strip_prefix(root).unwrap().to_path_buf();
+        walker
+            .walk(root)
+            .expect("walk")
+            .iter()
+            .map(|dir| {
+                (
+                    relative(&dir.path),
+                    dir.subdirs.iter().map(relative).collect(),
+                    dir.files.iter().map(relative).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_scan_walk_notes_a_folder_holding_a_pass_workspace_and_returns_the_same_listing() {
+        let scan = FilesystemWalker::new()
+            .skip_episodic_scan_junk_and_trailers()
+            .supported_video_files_only();
+        let noted = crate::import::archive_extraction::noted_pass_workspace_folders_for_test;
+        let other = tempfile::tempdir().expect("tempdir");
+        title_folder_with_hidden(other.path(), ".synthetic-hidden");
+        let with_workspace = tempfile::tempdir().expect("tempdir");
+        let title = title_folder_with_hidden(with_workspace.path(), ".scryer-ax-0123456789abcdef");
+
+        let other_walk = relative_walk(&scan, other.path());
+        assert!(noted().is_empty(), "other hidden names note nothing");
+        let unfiltered = relative_walk(&FilesystemWalker::new(), with_workspace.path());
+        assert!(
+            noted().is_empty(),
+            "a walk that is not a scan notes nothing"
+        );
+
+        let workspace_walk = relative_walk(&scan, with_workspace.path());
+
+        assert_eq!(
+            workspace_walk, other_walk,
+            "the walk returns the same listing"
+        );
+        assert!(
+            unfiltered.len() > workspace_walk.len(),
+            "the workspace is still skipped"
+        );
+        #[cfg(feature = "runtime-archives")]
+        assert_eq!(noted(), vec![title]);
+        #[cfg(not(feature = "runtime-archives"))]
+        {
+            let _ = title;
+            assert!(
+                noted().is_empty(),
+                "without archive support nothing is noted"
+            );
+        }
     }
 }

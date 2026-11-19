@@ -892,6 +892,12 @@ const ru: LocaleDictionary = {
   "jobs.status.completed": "Завершено",
   "jobs.status.warning": "Предупреждение",
   "jobs.status.failed": "Ошибка",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_SCRATCH_IN_USE":
+    "Рабочие папки загрузок: {{workspaces}}, распакованные архивы занимают {{bytes}} байт",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED":
+    "Загрузок, архивы которых не удалось распаковать ни с одной попытки: {{blocked}}; повторите их импорт",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_UNMARKED_ENTRIES":
+    "Объектов в папках .scry-ex корней библиотек, созданных не Scryer и оставленных на месте: {{unmarked}}",
   "jobs.category.library": "Библиотека",
   "jobs.category.acquisition": "Получение",
   "jobs.category.maintenance": "Обслуживание",
@@ -7112,6 +7118,8 @@ const ru: LocaleDictionary = {
     "Требуется средство распаковки архивов",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Истекло время ожидания распаковки архива",
+  "importHistory.skipReason.ARCHIVE_EXTRACTION_BLOCKED":
+    "Распаковка архива не удалась ни с одной попытки",
   "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
     "Папка тайтла требует внимания",
   "error.reason.LIST_SOURCE_RATE_LIMITED":
@@ -8064,6 +8072,18 @@ const ru: LocaleDictionary = {
     "При поиске архивов превышено ограничение числа элементов.",
   "error.reason.IMPORT_ARCHIVE_ENTRY_ESCAPES_EXTRACTION_DIRECTORY":
     "Элемент архива выходит за пределы каталога распаковки.",
+  "error.reason.ARCHIVE_EXTRACTION_IN_PROGRESS":
+    "Архивы загрузки распаковываются; импорт ждёт их.",
+  "error.reason.ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED":
+    "Папка распаковки загрузки содержит то, что Scryer для неё не создавал; она оставлена как есть.",
+  "error.reason.ARCHIVE_EXTRACTION_WAITING":
+    "Предыдущая распаковка архивов загрузки не удалась; следующая попытка ещё не наступила.",
+  "error.reason.ARCHIVE_EXTRACTION_FAILED":
+    "Не удалось распаковать архивы загрузки; импорт повторит попытку позже.",
+  "error.reason.ARCHIVE_EXTRACTION_TIMED_OUT":
+    "Распаковка архивов загрузки заняла слишком много времени; импорт повторит попытку позже.",
+  "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
+    "Архивы загрузки не удалось распаковать ни с одной попытки; повторите импорт, чтобы попробовать снова.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
     "Для извлечения архива нужно определить место назначения импорта до подготовки результата.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":

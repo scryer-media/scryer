@@ -241,11 +241,19 @@ async fn verify_import_outcome_with_mode(
         return Ok(NotProven);
     }
 
+    let largest_video_only = imports_largest_video_only(app, td, release_evidence).await;
     let current_visible_files = match mode {
         ImportVerificationMode::Manual {
             expected_mapping_count: Some(count),
         } => count,
-        _ => current_visible_video_file_count(app, td, completed).await,
+        _ => {
+            let count = current_visible_video_file_count(app, td, completed).await;
+            if largest_video_only {
+                count.min(1)
+            } else {
+                count
+            }
+        }
     };
     // The reconcile reports one success per mapped file that landed, so when
     // the count reaches the mapping count, every file of this manual pass
@@ -270,6 +278,7 @@ async fn verify_import_outcome_with_mode(
         completed,
         matches!(mode, ImportVerificationMode::Manual { .. }),
         manual_pass_landed,
+        largest_video_only,
     )
     .await;
     if visible_sources_terminal == Some(false) {
@@ -750,8 +759,36 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
         completed,
         skip_unrecorded_episode_sources,
         false,
+        td.facet.as_deref() == Some("movie"),
     )
     .await
+}
+
+/// Whether the import of this download places only its largest video: a
+/// movie, or a film linked to a series special. The import picks the
+/// series-movie path from the grab's submission scope, and so does this.
+async fn imports_largest_video_only(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
+) -> bool {
+    if td.facet.as_deref() == Some("movie") {
+        return true;
+    }
+    match release_evidence.and_then(crate::import_workflow::ReleaseEvidence::scope) {
+        Some(crate::SubmissionScope::SeriesMovie { .. }) => true,
+        // A grab recorded before series-movie links names the film by a
+        // legacy collection id; the import resolves it to the link.
+        Some(crate::SubmissionScope::Collection { collection_id }) => matches!(
+            app.services
+                .catalog
+                .shows
+                .find_series_movie_link_by_legacy_collection_id(collection_id)
+                .await,
+            Ok(Some(_))
+        ),
+        _ => false,
+    }
 }
 
 async fn visible_source_files_have_terminal_dispositions_in_scope(
@@ -761,6 +798,7 @@ async fn visible_source_files_have_terminal_dispositions_in_scope(
     completed: Option<&CompletedDownload>,
     skip_unrecorded_episode_sources: bool,
     skip_rejected_episode_sources: bool,
+    largest_video_only: bool,
 ) -> Option<bool> {
     let completed_lookup;
     let completed = match completed {
@@ -778,13 +816,15 @@ async fn visible_source_files_have_terminal_dispositions_in_scope(
         filter_samples,
     )
     .ok()?;
-    if is_movie && files.len() > 1 {
-        // The movie import path selects exactly one video, the largest, and
-        // records an artifact only for it. Samples, proofs, and extras beside
-        // it never get a disposition, so demanding one for every visible video
-        // can never be satisfied and sent the download back to ImportPending on
-        // every poll, re-importing the same movie each time. Verify what the
-        // movie path could actually have imported.
+    if largest_video_only && files.len() > 1 {
+        // The movie and series-movie import paths select exactly one video,
+        // the largest, and record an artifact only for it. Samples, proofs,
+        // and extras beside it never get a disposition, so demanding one for
+        // every visible video can never be satisfied and sent the download
+        // back to ImportPending on every poll, re-importing the same movie
+        // each time. Verify what the import could actually have imported. A
+        // series movie lists its videos with the series sample filter, as its
+        // import does, so the largest here is the file it picked.
         if let Ok(largest) = crate::import_workflow::pick_largest_file(&files) {
             files.retain(|file| *file == largest);
         }

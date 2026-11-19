@@ -1353,6 +1353,25 @@ impl AppUseCase {
             }
         };
 
+        // 7. Archive workspaces: downloads no longer tracked settle, settled
+        // downloads' workspaces go, and so do orphaned and stale ones.
+        let workspaces =
+            crate::import::archive_extraction::archive_workspace_housekeeping(self).await;
+        if workspaces != Default::default() {
+            info!(
+                untracked_settled = workspaces.untracked_settled,
+                settled_removed = workspaces.settled.removed,
+                settled_left_foreign = workspaces.settled.left_foreign,
+                settled_deferred = workspaces.settled.deferred,
+                orphans_removed = workspaces.orphans.removed,
+                orphans_waiting = workspaces.orphans.waiting,
+                unmarked = workspaces.orphans.unmarked,
+                pass_workspaces_removed = workspaces.pass_workspaces_removed,
+                noted_pass_workspaces_removed = workspaces.noted_pass_workspaces_removed,
+                "archive workspace upkeep"
+            );
+        }
+
         {
             let _title_image_maintenance_guard = self
                 .runtime

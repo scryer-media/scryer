@@ -468,6 +468,10 @@ struct HealthCheckSummaryItem {
     source: String,
     status: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    facts: std::collections::BTreeMap<&'static str, u64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -2111,6 +2115,8 @@ impl AppUseCase {
                                 source: result.source.clone(),
                                 status: result.status.as_str().to_string(),
                                 message: result.message.clone(),
+                                reason: result.reason,
+                                facts: result.facts.iter().copied().collect(),
                             })
                             .collect(),
                     })

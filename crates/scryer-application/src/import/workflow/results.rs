@@ -136,6 +136,13 @@ pub async fn retry_failed_import(
             .set_password_candidates(&download_id, &candidates)
             .await?;
     }
+    // An operator retry gives the download's archive extraction its attempts
+    // back, and a password it was waiting for lets it run again.
+    if let Some(key) =
+        crate::import::archive_extraction::DownloadExtractionKey::for_completed(&completed)
+    {
+        crate::import::archive_extraction::reset_download_extraction(app, &key).await;
+    }
 
     // Finish reconciliation even if the requesting browser disconnects.
     let app = app.clone();
@@ -3315,6 +3322,7 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
                 ImportSkipReason::PasswordRequired
                     | ImportSkipReason::ArchiveExtractionPluginRequired
                     | ImportSkipReason::ArchiveExtractionTimedOut
+                    | ImportSkipReason::ArchiveExtractionBlocked
                     | ImportSkipReason::TitleFolderConflict
             )
         ),
