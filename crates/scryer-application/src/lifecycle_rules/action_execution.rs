@@ -1839,10 +1839,8 @@ impl AppUseCase {
         let (watch_context, audience_by_title) = self
             .lifecycle_audience_plays_for_titles(&watch_context, std::slice::from_ref(&title))
             .await;
-        let people = LifecycleTitlePeople {
-            requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
-            usernames: &usernames,
-        };
+        let people =
+            LifecycleTitlePeople::from_requesters(requesters_by_title.get(&title.id), &usernames);
         let watch = LifecycleTitleWatch {
             context: &watch_context,
             signals: signals_by_title.get(&title.id).map(Vec::as_slice),

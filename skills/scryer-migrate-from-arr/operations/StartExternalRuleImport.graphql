@@ -1,0 +1,12 @@
+# Start reading one Sonarr or Radarr instance's custom formats and quality
+# profile scores; each format is saved as its own DISABLED scoring rule set.
+# Variables: {"requestKey": "<uuid you keep>", "input": {"source": "SONARR"|"RADARR",
+#   "baseUrl": "...", "apiKey": "..."}}. Resending the same requestKey with the
+# same input returns the run it already started.
+mutation StartExternalRuleImport($requestKey: String!, $input: ExternalRuleImportInput!) {
+  startExternalRuleImport(requestKey: $requestKey, input: $input) {
+    id
+    jobKey
+    status
+  }
+}

@@ -2316,6 +2316,7 @@ pub struct AppRuntimeImportState {
     pub external_import_warmup_orchestrator: ExternalImportMonitorWarmupOrchestrator,
     pub external_import_apply_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) source_import: Arc<crate::source_import::SourceImportRuntime>,
+    pub(crate) rule_import: Arc<crate::rule_import::RuleImportRuntime>,
     pub external_import_source_chunk_cleanup_done: Arc<tokio::sync::Mutex<bool>>,
     pub(crate) same_path_upgrade_guard_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) archive_extractions_in_flight:
@@ -2745,6 +2746,7 @@ impl AppRuntimeState {
                     ExternalImportMonitorWarmupOrchestrator::default(),
                 external_import_apply_lock: Arc::new(tokio::sync::Mutex::new(())),
                 source_import: Default::default(),
+                rule_import: Default::default(),
                 external_import_source_chunk_cleanup_done: Arc::new(tokio::sync::Mutex::new(false)),
                 same_path_upgrade_guard_lock: Arc::new(tokio::sync::Mutex::new(())),
                 archive_extractions_in_flight: Default::default(),

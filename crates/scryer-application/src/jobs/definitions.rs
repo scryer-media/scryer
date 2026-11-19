@@ -201,6 +201,7 @@ pub enum JobKey {
     ListSync,
     LocationOperation,
     SourceImport,
+    ExternalRuleImport,
     /// A user-defined scheduled script. Every one shares this key and is told
     /// apart by its operation type, `custom_job:<script id>`; it is never in
     /// [`ALL_JOB_KEYS`] because its definitions come from the scripts table.
@@ -260,6 +261,7 @@ impl JobKey {
             Self::LocationOperation => "location_operation",
             Self::CustomJob => "custom_job",
             Self::SourceImport => "source_import",
+            Self::ExternalRuleImport => "external_rule_import",
         }
     }
 
@@ -300,6 +302,7 @@ impl JobKey {
             "location_operation" => Some(Self::LocationOperation),
             "custom_job" => Some(Self::CustomJob),
             "source_import" => Some(Self::SourceImport),
+            "external_rule_import" => Some(Self::ExternalRuleImport),
             _ => None,
         }
     }
@@ -341,6 +344,7 @@ impl JobKey {
             Self::LocationOperation => "Location Operation",
             Self::CustomJob => "Custom Job",
             Self::SourceImport => "Source Import",
+            Self::ExternalRuleImport => "External Rule Import",
         }
     }
 
@@ -415,6 +419,9 @@ impl JobKey {
             }
             Self::CustomJob => "Run a user-defined script on its own schedule.",
             Self::SourceImport => "Import selected indexers and download clients.",
+            Self::ExternalRuleImport => {
+                "Import Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules."
+            }
         }
     }
 
@@ -446,7 +453,8 @@ impl JobKey {
             | Self::ApplicationUpgrade
             | Self::LocationOperation
             | Self::CustomJob
-            | Self::SourceImport => JobCategory::System,
+            | Self::SourceImport
+            | Self::ExternalRuleImport => JobCategory::System,
             Self::Housekeeping
             | Self::PendingReleaseProcessing
             | Self::StagedNzbPrune
@@ -501,7 +509,8 @@ impl JobKey {
             | Self::ApplicationUpgrade
             | Self::LocationOperation
             | Self::CustomJob
-            | Self::SourceImport => JobScheduleKind::Manual,
+            | Self::SourceImport
+            | Self::ExternalRuleImport => JobScheduleKind::Manual,
         }
     }
 
@@ -541,7 +550,7 @@ impl JobKey {
             | Self::ApplicationUpgrade
             | Self::LocationOperation => "Manual only",
             Self::CustomJob => "User-defined schedule",
-            Self::SourceImport => "Manual only",
+            Self::SourceImport | Self::ExternalRuleImport => "Manual only",
         }
     }
 
@@ -595,6 +604,7 @@ impl JobKey {
                 | Self::ApplicationUpgrade
                 | Self::LocationOperation
                 | Self::SourceImport
+                | Self::ExternalRuleImport
         )
     }
 

@@ -483,6 +483,18 @@ impl RuleSetRepository for DatastoreCustomizationStore {
             .await
     }
 
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        self.rule_sets.list_rule_set_names().await
+    }
+
+    async fn create_rule_sets(
+        &self,
+        rule_sets: &[scryer_domain::RuleSet],
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        self.rule_sets.create_rule_sets(rule_sets, history).await
+    }
+
     async fn list_rule_pack_installations(
         &self,
     ) -> AppResult<Vec<scryer_domain::RulePackInstallation>> {

@@ -38,6 +38,7 @@ fn built_input_for(title: &Title) -> LifecycleInput {
         &[],
         super::super::facts::LifecycleTitlePeople {
             requester_user_ids: None,
+            requested_at: None,
             usernames: &usernames,
         },
         super::super::facts::LifecycleTitleWatch {
@@ -591,6 +592,7 @@ fn people_with<'a>(
 ) -> LifecycleTitlePeople<'a> {
     LifecycleTitlePeople {
         requester_user_ids: requesters,
+        requested_at: None,
         usernames,
     }
 }

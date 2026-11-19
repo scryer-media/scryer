@@ -74,6 +74,8 @@ pub enum JobKeyValue {
     LocationOperation,
     /// Background import of selected indexers and download clients.
     SourceImport,
+    /// Background import of rules from Sonarr, Radarr, or Maintainerr.
+    ExternalRuleImport,
     /// A user-defined scheduled script; each script is told apart by its
     /// `customJobId`.
     CustomJob,

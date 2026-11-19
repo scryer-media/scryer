@@ -1,0 +1,9 @@
+# Move one lifecycle rule to DRY_RUN: it evaluates and records candidates but never acts.
+# Variables: {"ruleSetId": "<ruleSetId>"}
+mutation SetImportedLifecycleRuleDryRun($ruleSetId: ID!) {
+  setLifecycleRuleState(ruleSetId: $ruleSetId, state: DRY_RUN) {
+    id
+    name
+    state
+  }
+}

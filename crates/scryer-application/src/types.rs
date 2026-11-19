@@ -1601,6 +1601,17 @@ pub struct MediaRequestCounts {
     pub anime: i64,
 }
 
+/// Everyone linked to one title through the media requests that created it,
+/// and when the earliest of those requests was made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleRequesters {
+    /// Submitters first, in request order, then everyone who joined them in
+    /// the order they did, deduped keeping the first appearance.
+    pub user_ids: Vec<String>,
+    /// `created_at` of the oldest request that created the title.
+    pub first_requested_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PendingImportStatus {

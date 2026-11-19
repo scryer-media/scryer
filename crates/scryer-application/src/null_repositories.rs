@@ -3511,7 +3511,7 @@ impl MediaRequestRepository for NullMediaRequestRepository {
     async fn requester_user_ids_by_title_ids(
         &self,
         _title_ids: &[String],
-    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
+    ) -> AppResult<std::collections::HashMap<String, crate::types::TitleRequesters>> {
         Ok(std::collections::HashMap::new())
     }
 

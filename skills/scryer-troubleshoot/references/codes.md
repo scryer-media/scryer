@@ -213,3 +213,31 @@ WINGET, WINDOWS_SUPERVISED, DISABLED, UNSUPPORTED. `managementOwner`: IN_APP
 - app_bundle_read_only_volume: app bundle on a read-only volume
 - app_bundle_not_tray_supervised: macOS app not started by its tray
   supervisor
+
+## Rule import (`EXTERNAL_RULE_IMPORT`)
+
+Sonarr or Radarr custom-format import runs as job key `EXTERNAL_RULE_IMPORT`.
+`JobRuns.graphql` shows its `status` and `summaryJson` counts (`saved`,
+`savedNeedsReview`, `skippedExists`, `failed`). `COMPLETED`: every format was
+saved or skipped as already present. `WARNING`: the run reached the save step
+and some format needs review or was not imported; this includes a run where
+every format failed and a save Scryer interrupted (unsaved formats and the run
+`reason` are `RULE_IMPORT_INTERRUPTED`). `FAILED`: the run stopped short,
+because reading the source or planning was refused or interrupted (nothing
+saved), or on an internal error (rules already saved are kept). A re-run skips (`SKIPPED_EXISTS`) every format already present under its
+plain or `REVIEW - ` name, so it only adds formats new in arr. The
+per-format report is `externalRuleImportStatus` (the migrate skill's
+`ExternalRuleImportStatus.graphql`), readable only by the account that started
+the run. Run and item reason codes (`EXTERNAL_IMPORT_SOURCE_*`,
+`RULE_IMPORT_*`) are in `scryer-connect/references/errors.md`. Imported rules
+are saved disabled, so a finished import never changes release decisions until
+the operator enables a rule.
+
+Maintainerr rule-group import runs under the same job key and report. Each
+group becomes one disabled lifecycle rule, so a finished import never acts on
+a title until the operator arms a rule. Its `summaryJson` adds
+`savedFailedTranslation` (groups saved as a `(Maintainerr) FAILED - <name>`
+starter, reason `RULE_IMPORT_GROUP_UNTRANSLATABLE`). A re-run skips a group
+whose rule exists under either name. Run reasons `MAINTAINERR_IMPORT_*` and
+the `maintainerr.*` diagnostic codes are in
+`scryer-migrate-from-maintainerr/references/codes.md`.

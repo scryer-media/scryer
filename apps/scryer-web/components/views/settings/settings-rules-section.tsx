@@ -65,6 +65,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useExternalRuleImport } from "@/lib/hooks/use-external-rule-import";
 import type { ArrCustomFormatDraft } from "@/components/views/settings/arr-custom-format-import-dialog";
 import type {
   RuleSetRecord,
@@ -126,6 +127,8 @@ type SettingsRulesSectionProps = {
     appliedFacets?: string[];
   }) => void;
   importCustomFormats: (draft: ArrCustomFormatDraft) => void;
+  /** Reloads the rule list, after a connected import saved rules. */
+  refreshRuleSets: () => Promise<void> | void;
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
@@ -945,6 +948,7 @@ export function SettingsRulesSection({
   validationResult,
   applyTemplate,
   importCustomFormats,
+  refreshRuleSets,
   translationDiagnostics,
   focusEditor,
   onEditorFocused,
@@ -962,6 +966,11 @@ export function SettingsRulesSection({
     close: closeSidePanel,
   } = useRuleSidePanels<ScoringSidePanel>();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
+  // Held here rather than in the lazy dialog, so a connected import keeps its
+  // run and refreshes the rule list even after the dialog closes.
+  const arrConnectImport = useExternalRuleImport({
+    onTerminal: () => void refreshRuleSets(),
+  });
   const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
     () => regoDiagnostics(ruleSetDraft.regoSource, validationResult, t),
@@ -1391,6 +1400,7 @@ export function SettingsRulesSection({
               importCustomFormats(draft);
               setIsArrImportOpen(false);
             }}
+            connectImport={arrConnectImport}
           />
         </React.Suspense>
       ) : null}

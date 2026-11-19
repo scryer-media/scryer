@@ -234,6 +234,10 @@ pub struct LifecycleFactsDoc {
     pub requested: Observation<bool>,
     pub requested_by_user_ids: Observation<Vec<String>>,
     pub requested_by_usernames: Observation<Vec<String>>,
+    /// When the title was first requested (RFC3339): the time of the oldest
+    /// request that created it. Absent for a title no request created.
+    /// Anonymous: it says when, never who.
+    pub requested_at: Observation<String>,
     pub first_imported_at: Observation<String>,
     pub last_upgraded_at: Observation<String>,
     pub has_file: Observation<bool>,
@@ -255,6 +259,14 @@ pub struct LifecycleFactsDoc {
     /// would make "nobody watched this" a lie, and these are the facts a rule
     /// deletes media on.
     pub watched_by_user_ids: Observation<Vec<String>>,
+    /// The usernames of `watched_by_user_ids`, in the same order. Unknown
+    /// whenever the ids are, and unknown (`user_not_found`) when any of them
+    /// no longer resolves to a user, rather than a shorter list.
+    pub watched_by_usernames: Observation<Vec<String>>,
+    /// One entry per user in `watched_by_user_ids`, in the same order: their
+    /// latest play of the subject and their plays of it summed, over every
+    /// observed connection. Unknown exactly when `watched_by_usernames` is.
+    pub watched_by_users: Observation<Vec<LifecycleWatcherDoc>>,
     pub last_watched_at: Observation<String>,
     pub watched_by_any_requester: Observation<bool>,
     pub watched_by_all_requesters: Observation<bool>,
@@ -448,6 +460,17 @@ pub struct LifecycleStorageRootDoc {
     pub available_percent: f64,
 }
 
+/// One user who watched a subject, as a rule sees them.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct LifecycleWatcherDoc {
+    pub user_id: String,
+    pub username: String,
+    /// RFC3339; null when one of the user's plays carries no time, because
+    /// the latest of the rest may be older than it.
+    pub last_played_at: Option<String>,
+    pub play_count: i64,
+}
+
 /// One external rating as a rule sees it: the source's own value, its value on
 /// Scryer's common scale, and its vote count when the source gives one.
 #[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
@@ -466,17 +489,19 @@ pub struct LifecycleRatingDoc {
 /// lives here, beside the fact document, because it is a property of the facts
 /// themselves rather than of any one caller.
 ///
-/// `requested`, `last_watched_at`, `watched_by_anyone`,
+/// `requested`, `requested_at`, `last_watched_at`, `watched_by_anyone`,
 /// `last_watched_by_anyone_at`, `play_count_total`, `watchlisted_by_anyone`,
 /// `watchlist_added_at`, `watchlist_origins` and `favorited_by_anyone` are
 /// deliberately absent: they are anonymous aggregates that say something
 /// happened, never who did it.
-pub const PERSON_TARGETED_LIFECYCLE_FACTS: [&str; 13] = [
+pub const PERSON_TARGETED_LIFECYCLE_FACTS: [&str; 15] = [
     "added_by_user_id",
     "added_by_username",
     "requested_by_user_ids",
     "requested_by_usernames",
     "watched_by_user_ids",
+    "watched_by_usernames",
+    "watched_by_users",
     "watched_by_any_requester",
     "watched_by_all_requesters",
     "watchlisted_by_user_ids",
@@ -530,8 +555,10 @@ pub const EPISODE_SHAPE_LIFECYCLE_FACTS: [&str; 8] = [
 /// executor reads the server again before acting on it: a play since that
 /// sweep is evidence the stored facts do not have yet. The favourites are in
 /// this group too: they come from the same sweep.
-pub const WATCH_LIFECYCLE_FACTS: [&str; 11] = [
+pub const WATCH_LIFECYCLE_FACTS: [&str; 13] = [
     "watched_by_user_ids",
+    "watched_by_usernames",
+    "watched_by_users",
     "last_watched_at",
     "watched_by_any_requester",
     "watched_by_all_requesters",
@@ -911,7 +938,7 @@ pub(crate) fn decode_decision(
 /// real path. Nothing is unknown here on purpose — validation is about whether
 /// the rule is well-formed, and a rule held for unobservable facts would prove
 /// nothing about that.
-pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
+pub fn synthetic_lifecycle_input() -> LifecycleInput {
     let mut input = synthetic_title_input();
     // Both narrow sections, so a season or episode head dry-runs its real
     // path too. Validation refuses a head that reads another level's
@@ -934,7 +961,7 @@ pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
 }
 
 /// The synthetic title alone, with no season or episode section.
-pub(crate) fn synthetic_title_input() -> LifecycleInput {
+pub fn synthetic_title_input() -> LifecycleInput {
     LifecycleInput {
         schema_version: LIFECYCLE_INPUT_SCHEMA_VERSION,
         evaluation_time: DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
@@ -964,6 +991,7 @@ pub(crate) fn synthetic_title_input() -> LifecycleInput {
             requested: Observation::known(true),
             requested_by_user_ids: Observation::known(vec!["user-1".to_string()]),
             requested_by_usernames: Observation::known(vec!["operator".to_string()]),
+            requested_at: Observation::known("2023-12-15T00:00:00Z".to_string()),
             first_imported_at: Observation::known("2024-01-02T00:00:00Z".to_string()),
             last_upgraded_at: Observation::known("2024-02-01T00:00:00Z".to_string()),
             has_file: Observation::known(true),
@@ -993,6 +1021,13 @@ pub(crate) fn synthetic_title_input() -> LifecycleInput {
             season_position_by_air_date: Observation::known(1),
             active_downloads: Observation::known(false),
             watched_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            watched_by_usernames: Observation::known(vec!["operator".to_string()]),
+            watched_by_users: Observation::known(vec![LifecycleWatcherDoc {
+                user_id: "user-1".to_string(),
+                username: "operator".to_string(),
+                last_played_at: Some("2024-03-01T00:00:00Z".to_string()),
+                play_count: 2,
+            }]),
             last_watched_at: Observation::known("2024-03-01T00:00:00Z".to_string()),
             watched_by_any_requester: Observation::known(true),
             watched_by_all_requesters: Observation::known(true),
