@@ -1577,6 +1577,78 @@ fn a_queued_single_episode_does_not_refuse_a_pack_that_fills_other_missing_membe
     );
 }
 
+/// The same pack, while the queued episode is still live on its client.
+/// Submission refuses any grab whose scope overlaps that job, whichever members
+/// the pack would fill, so admission refuses it first with a code instead of
+/// admitting a grab that is deferred on every pass.
+#[test]
+fn a_pack_overlapping_a_live_queued_episode_waits_for_it() {
+    let mut live_episode = queued("Show.S01E01.720p.WEB-DL-GRP", Some(2), 0, 500);
+    live_episode.covers = vec!["ep-01".to_string()];
+    live_episode.blocks_submission = true;
+    let subject = AdmissionSubject::new(episodes(&["ep-01", "ep-02"]), [])
+        .per_member()
+        .with_queued(vec![live_episode]);
+
+    // A pack that fills the missing ep-02 and one that also beats the live job.
+    for candidate in [
+        CandidateFacts::new(Some(1), 0, 900),
+        CandidateFacts::new(Some(0), 0, 2_000),
+    ] {
+        let verdict = evaluate_admission(&subject, candidate, &grab_policy_with_queue(200));
+        let rejection = verdict
+            .rejection()
+            .unwrap_or_else(|| panic!("a pack beside a live download must wait: {verdict:?}"));
+        assert!(
+            matches!(
+                &rejection.reason,
+                AdmissionRejectionReason::QueuedItemBlocksUpgrade { queued_title }
+                    if queued_title == "Show.S01E01.720p.WEB-DL-GRP"
+            ),
+            "{verdict:?}"
+        );
+        assert_eq!(
+            rejection.reason.reason_code(),
+            Some(crate::error_reasons::admission::QUEUED_ITEM_BLOCKS_UPGRADE)
+        );
+    }
+
+    // A refusal the members reach on their own keeps its more specific reason.
+    let mut live_pack = queued("Show.S01.1080p.WEB-DL-GRP", Some(1), 0, 900);
+    live_pack.covers = vec!["ep-01".to_string(), "ep-02".to_string()];
+    live_pack.blocks_submission = true;
+    let covered = AdmissionSubject::new(episodes(&["ep-01", "ep-02"]), [])
+        .per_member()
+        .with_queued(vec![live_pack]);
+    assert!(matches!(
+        evaluate_admission(
+            &covered,
+            CandidateFacts::new(Some(1), 0, 900),
+            &grab_policy_with_queue(200)
+        )
+        .rejection()
+        .map(|rejection| &rejection.reason),
+        Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+    ));
+
+    // An operator's pack grab and an import still ignore the queue.
+    let manual = AdmissionPolicy {
+        applies_to_queue: true,
+        ..AdmissionPolicy::manual()
+    };
+    assert!(
+        evaluate_admission(&subject, CandidateFacts::new(Some(1), 0, 900), &manual).is_admitted()
+    );
+    assert!(
+        evaluate_admission(
+            &subject,
+            CandidateFacts::new(Some(1), 0, 900),
+            &AdmissionPolicy::not_a_downgrade()
+        )
+        .is_admitted()
+    );
+}
+
 /// **N3.** A pack every member of which is held by a better *quality* file is
 /// refused on the tier, not on the score.
 ///

@@ -20064,10 +20064,11 @@ async fn saved_pack_one_tier_above_the_downloading_pack_is_grabbed() {
     .await;
 }
 
-/// A strict upgrade passes the queued comparison. While the queued pack still
-/// sits in the client queue the submission guard defers it without burning the
-/// row; once that pack has left the queue and only awaits import, it is
-/// grabbed.
+/// A strict upgrade wins the queued comparison, but while the queued pack still
+/// sits in the client queue submission would refuse it, so admission refuses it
+/// first: the walk reports the scope covered, never deferred, and submits
+/// nothing. Once that pack has left the queue and only awaits import, the
+/// upgrade is grabbed.
 async fn assert_upgrade_waits_for_the_client_queue_then_grabs(
     app: &AppUseCase,
     title: &Title,
@@ -20076,18 +20077,29 @@ async fn assert_upgrade_waits_for_the_client_queue_then_grabs(
     upgrade_pack: &str,
     standby_id: &str,
 ) {
-    let outcomes = walk_season_saved_results(app, title, "7").await;
-    assert!(
-        outcomes.iter().all(|outcome| matches!(
-            outcome,
-            crate::acquisition_workflow::StandbyRecoveryOutcome::Deferred { .. }
-        )),
-        "the queued comparison admits the upgrade; only the client queue defers it: {outcomes:?}"
-    );
-    assert_eq!(
-        pending_status(app, standby_id).await,
-        PendingReleaseStatus::Standby
-    );
+    for _ in 0..2 {
+        let outcomes = walk_season_saved_results(app, title, "7").await;
+        assert!(
+            outcomes.iter().all(|outcome| matches!(
+                outcome,
+                crate::acquisition_workflow::StandbyRecoveryOutcome::Active { .. }
+            )),
+            "the live pack covers the season; the upgrade waits without a deferral: {outcomes:?}"
+        );
+        assert_eq!(
+            download_client
+                .submitted_release_titles
+                .lock()
+                .await
+                .clone(),
+            vec![queued_pack.to_string()],
+            "nothing is submitted beside the live pack: {outcomes:?}"
+        );
+        assert_eq!(
+            pending_status(app, standby_id).await,
+            PendingReleaseStatus::Standby
+        );
+    }
 
     set_queued_pack_state(
         app,
@@ -20221,6 +20233,161 @@ async fn saved_proper_of_the_downloading_pack_is_grabbed() {
         &standby_id,
     )
     .await;
+}
+
+/// A single episode of the season is still downloading and a better season
+/// pack is saved. Submission refuses the pack while that job overlaps it, even
+/// though the pack would also fill the other, missing episode; admission
+/// refuses it first, so the walk neither submits nor defers it and writes no
+/// status. Once the episode job leaves the client's working queue, the pack is
+/// grabbed.
+#[tokio::test]
+async fn a_saved_pack_waits_while_an_episode_it_covers_is_downloading() {
+    let live_episode = "Recent.Failed.Season.Pack.S07E23.720p.WEB-DL-GroupA";
+    let better_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB";
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, title, _indexer, download_client) =
+        seed_recent_failed_season_pack_fixture_with_indexer_and_scope_states(
+            Arc::new(TrackingIndexerClient::default()),
+            Arc::new(TrackingAcquisitionScopeStateRepo::default()),
+            pending_releases.clone(),
+        )
+        .await;
+    let episode_id = season_scope_states(&app, &title, "7")
+        .await
+        .into_iter()
+        .next()
+        .and_then(|state| state.episode_id)
+        .expect("season seven has an episode scope");
+    let submission = DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
+        title_id: title.id.clone(),
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        facet: "anime".to_string(),
+        download_client_id: Some("primary".to_string()),
+        download_client_type: "nzbget".to_string(),
+        download_client_item_id: "season-seven-episode-live".to_string(),
+        source_hint: None,
+        source_provider_id: None,
+        source_provider_name: None,
+        source_kind: Some(DownloadSourceKind::NzbUrl),
+        source_title: Some(live_episode.to_string()),
+        info_hash: None,
+        release_size_bytes: None,
+        request_signature: None,
+        scope: SubmissionScope::Episode {
+            episode_id: episode_id.clone(),
+        },
+        release_listing_json: None,
+    };
+    let identity = ClientJobLocator::from_submission(&submission);
+    app.services
+        .workflow
+        .download_submissions
+        .record_submission(submission)
+        .await
+        .expect("record the live episode submission");
+    *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+        id: "season-seven-episode-live".to_string(),
+        title_id: Some(title.id.clone()),
+        episode_id: Some(episode_id),
+        title_name: live_episode.to_string(),
+        facet: Some("anime".to_string()),
+        category: None,
+        client_id: "primary".to_string(),
+        client_name: "Primary".to_string(),
+        client_type: "nzbget".to_string(),
+        state: DownloadQueueState::Downloading,
+        progress_percent: 10,
+        import_transfer_phase: None,
+        import_transfer_bytes: None,
+        import_transfer_total_bytes: None,
+        import_transfer_started_at: None,
+        import_transfer_updated_at: None,
+        size_bytes: None,
+        remaining_seconds: None,
+        queued_at: None,
+        last_updated_at: None,
+        attention_required: false,
+        attention_reason_code: None,
+        attention_reason: None,
+        download_client_item_id: "season-seven-episode-live".to_string(),
+        download_id: None,
+        import_status: None,
+        import_type: None,
+        import_error_code: None,
+        import_error_message: None,
+        imported_at: None,
+        delete_status: None,
+        delete_error_message: None,
+        source_provider: None,
+        is_scryer_origin: true,
+        tracked_state: None,
+        tracked_status: None,
+        tracked_status_messages: Vec::new(),
+        tracked_match_type: None,
+        seeding: None,
+    }];
+    let standby_id = save_season_standby(&app, &title, better_pack, 1_000).await;
+    pending_releases.reset_status_writes();
+
+    for _ in 0..2 {
+        let outcomes = walk_season_saved_results(&app, &title, "7").await;
+        assert!(
+            !outcomes.iter().any(|outcome| matches!(
+                outcome,
+                crate::acquisition_workflow::StandbyRecoveryOutcome::Deferred { .. }
+            )),
+            "admission must refuse what submission would refuse: {outcomes:?}"
+        );
+        assert!(
+            download_client
+                .submitted_release_titles
+                .lock()
+                .await
+                .is_empty(),
+            "nothing is submitted beside the live episode: {outcomes:?}"
+        );
+        assert!(
+            pending_releases.status_writes().is_empty(),
+            "a pass that changes nothing writes nothing: {:?}",
+            pending_releases.status_writes()
+        );
+        assert_eq!(
+            pending_status(&app, &standby_id).await,
+            PendingReleaseStatus::Standby
+        );
+    }
+
+    // The episode finishes and waits for import: it no longer blocks
+    // submission, so the pack is admitted and grabbed.
+    app.services
+        .workflow
+        .download_submissions
+        .update_tracked_state(&identity, TrackedDownloadState::ImportPending.as_str())
+        .await
+        .expect("track the finished episode");
+    for item in download_client.queue_items.lock().await.iter_mut() {
+        item.state = DownloadQueueState::Completed;
+    }
+    app.runtime
+        .acquisition
+        .download_submission_guards
+        .forget_settled_download(&title.id);
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+    assert_eq!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .clone(),
+        vec![better_pack.to_string()],
+        "{outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &standby_id).await,
+        PendingReleaseStatus::Grabbed
+    );
 }
 
 /// Add a monitored season eight (two wanted episodes) to the season-pack
