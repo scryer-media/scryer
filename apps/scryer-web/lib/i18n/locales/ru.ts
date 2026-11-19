@@ -7933,6 +7933,18 @@ const ru: LocaleDictionary = {
     "Оценка зависит от профиля качества Scryer с тем же именем.",
   "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
     "Все профили качества оценивают этот формат в 0, поэтому правило даёт 0.",
+  "error.reason.RULE_IMPORT_GROUP_UNTRANSLATABLE":
+    "Эту группу правил не удалось перевести, поэтому она сохранена как заготовка, которую нужно доработать вручную.",
+  "error.reason.MAINTAINERR_IMPORT_JSON_TOO_LARGE":
+    "Maintainerr вернул больше данных, чем читает один импорт.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_JSON_INVALID":
+    "Не удалось прочитать группы правил Maintainerr.",
+  "error.reason.MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID":
+    "Не удалось прочитать каталог правил Maintainerr.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_TOO_MANY":
+    "В Maintainerr больше групп правил, чем принимает один импорт.",
+  "error.reason.MAINTAINERR_IMPORT_PROFILES_JSON_INVALID":
+    "Не удалось прочитать профили качества Sonarr или Radarr, которые вернул Maintainerr.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "Эта версия внешнего приложения не поддерживается; требуется более новая основная версия.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -12055,6 +12067,80 @@ const ru: LocaleDictionary = {
   "settings.arrImportUnmatchedProfiles":
     "Профили качества без профиля Scryer с тем же именем: {{names}}",
   "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.maintainerrImportAction": "Перенести из Maintainerr",
+  "settings.maintainerrImportTitle": "Перенос из Maintainerr",
+  "settings.maintainerrImportDescription":
+    "Scryer читает группы правил работающего Maintainerr и сохраняет каждую как правило жизненного цикла.",
+  "settings.maintainerrImportDisabledNote":
+    'Каждое правило импортируется отключённым и называется "(Maintainerr) <имя>". Проверьте каждое в предпросмотре перед включением, особенно правило, которое удаляет.',
+  "settings.maintainerrImportBaseUrl": "URL Maintainerr",
+  "settings.maintainerrImportStart": "Начать импорт",
+  "settings.maintainerrImportStartAnother": "Импортировать снова",
+  "settings.maintainerrImportRunning": "Импорт групп правил…",
+  "settings.maintainerrImportRunningCount":
+    "Импорт групп правил… {{done}} из {{total}}",
+  "settings.maintainerrImportRunFailed":
+    "Импорт остановился до того, как были сохранены все группы правил.",
+  "settings.maintainerrImportCounts":
+    "Групп правил: {{total}}; сохранено: {{saved}}, сохранено без перевода: {{untranslated}}, пропущено: {{skipped}}, не импортировано: {{failed}}",
+  "settings.maintainerrImportStateSaved": "Сохранено, отключено",
+  "settings.maintainerrImportStateSavedFailedTranslation":
+    "Сохранено без перевода, отключено",
+  "settings.maintainerrImportStateSkipped": "Пропущено, уже импортировано",
+  "settings.maintainerrImportStatePending": "Ожидает",
+  "settings.maintainerrImportStateFailed": "Не импортировано",
+  "settings.maintainerrImportSeverityError": "Не переведено",
+  "settings.maintainerrImportSeverityWarning": "Проверьте",
+  "settings.maintainerrImportDiagnostic": "{{severity}}: {{message}}",
+  "settings.maintainerrImportDiagnosticAtRule":
+    "{{severity}}: {{message}} (правило {{rule}})",
+  "settings.maintainerrImportCode.groupInvalid":
+    "Правила группы в том виде, как их объединяет Maintainerr, никогда не совпадут.",
+  "settings.maintainerrImportCode.groupRulesDisabled":
+    "Группа не использует правила.",
+  "settings.maintainerrImportCode.groupRulesEmpty": "В группе нет правил.",
+  "settings.maintainerrImportCode.groupRulesTooMany":
+    "В группе больше правил, чем вмещает одно правило жизненного цикла.",
+  "settings.maintainerrImportCode.groupMediaTypeUnsupported":
+    "Тип медиа группы не тот, с которым работает Scryer.",
+  "settings.maintainerrImportCode.ruleInvalid": "Правило составлено неверно.",
+  "settings.maintainerrImportCode.ruleSecondValueMissing":
+    "Правило сравнивает с другим свойством, которого нет.",
+  "settings.maintainerrImportCode.ruleUsernameMissing":
+    "Правило для пользователя не называет пользователя.",
+  "settings.maintainerrImportCode.applicationUnknown":
+    "Правило читает приложение, которого нет в списке Maintainerr, обычно не подключённое к нему.",
+  "settings.maintainerrImportCode.propertyUnknown":
+    "Правило читает свойство, которого нет в списке Maintainerr.",
+  "settings.maintainerrImportCode.propertyUnmapped":
+    "Правило читает свойство, для которого у Scryer нет соответствующего факта.",
+  "settings.maintainerrImportCode.propertyCollectionUnsupported":
+    "Правило читает коллекции, плейлисты или метки медиасервера.",
+  "settings.maintainerrImportCode.propertyLevelUnsupported":
+    "Правило читает свойство, которое у Scryer есть только для другого типа медиа.",
+  "settings.maintainerrImportCode.comparatorUnsupported":
+    "Сравнение в правиле нельзя точно выразить в Scryer.",
+  "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
+    "Правило сравнивает даты на равенство, а это зависит от часового пояса Maintainerr.",
+  "settings.maintainerrImportCode.customValueInvalid":
+    "Значение правила нельзя прочитать так, как его читает Maintainerr.",
+  "settings.maintainerrImportCode.actionMissing": "У группы нет действия.",
+  "settings.maintainerrImportCode.actionUnsupported":
+    "У действия группы нет аналога в Scryer для её типа медиа.",
+  "settings.maintainerrImportCode.qualityProfileUnresolved":
+    "Профиля качества группы нет в списке Sonarr или Radarr.",
+  "settings.maintainerrImportCode.qualityProfileNotInScryer":
+    "Ни один профиль качества Scryer не называется как профиль качества группы.",
+  "settings.maintainerrImportCode.sourceTooLarge":
+    "Переведённое правило больше, чем допускается для правила жизненного цикла.",
+  "settings.maintainerrImportCode.sourceInvalid":
+    "Переведённое правило не прошло проверку правил жизненного цикла.",
+  "settings.maintainerrImportCode.usernameUnknown":
+    "Правило называет пользователя, которого нет в Scryer. Правило всё равно переведено.",
+  "settings.maintainerrImportCode.factApproximate":
+    "Правило читает факт Scryer, который немного отличается от факта Maintainerr. Проверьте в предпросмотре перед включением.",
+  "settings.maintainerrImportCode.actionApproximate":
+    "Действие группы соответствует действиям Scryer, которые немного отличаются от действий Maintainerr. Проверьте в предпросмотре перед включением.",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",
   "settings.refReleaseHasHdrFallback":

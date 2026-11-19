@@ -30,6 +30,10 @@ import {
 } from "@/components/views/settings/settings-lifecycle-rules-section";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
 import { useSessionUser } from "@/lib/hooks/use-auth";
+import { useExternalRuleImport } from "@/lib/hooks/use-external-rule-import";
+import { MaintainerrRuleImportDialog } from "@/components/views/settings/maintainerr-rule-import-dialog";
+import { TextActionButton } from "@/components/ui/text-action-button";
+import { FileInput } from "lucide-react";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
   loadListIdOptions,
@@ -466,6 +470,19 @@ export function SettingsLifecycleRulesContainer({
       );
     }
   }, [client, setGlobalStatus, t]);
+
+  // The import run belongs to the page rather than to its dialog, so closing
+  // the dialog mid-run still refreshes the list when the run ends, and
+  // reopening it shows that run.
+  const canImportRules =
+    sessionUser !== null &&
+    hasAppPermission(sessionUser, APP_PERMISSIONS.manageCatalogSettings);
+  const maintainerrImport = useExternalRuleImport();
+  const [isMaintainerrImportOpen, setIsMaintainerrImportOpen] = useState(false);
+  const importedRunId = maintainerrImport.report?.runId ?? null;
+  useEffect(() => {
+    if (importedRunId) void refreshRuleSets();
+  }, [importedRunId, refreshRuleSets]);
 
   const refreshCatalogs = useCallback(async () => {
     try {
@@ -1186,7 +1203,26 @@ export function SettingsLifecycleRulesContainer({
             />
           ) : null
         }
+        importActions={
+          canImportRules ? (
+            <TextActionButton
+              id="settings-lifecycle-rules-maintainerr-import"
+              tone="accentBright"
+              size="default"
+              onClick={() => setIsMaintainerrImportOpen(true)}
+              leadingIcon={<FileInput className="h-4 w-4" />}
+              label={t("settings.maintainerrImportAction")}
+            />
+          ) : null
+        }
       />
+      {canImportRules ? (
+        <MaintainerrRuleImportDialog
+          open={isMaintainerrImportOpen}
+          onOpenChange={setIsMaintainerrImportOpen}
+          controller={maintainerrImport}
+        />
+      ) : null}
       <ConfirmDialog
         open={pendingUnpause}
         contentId="settings-lifecycle-unpause-confirm"

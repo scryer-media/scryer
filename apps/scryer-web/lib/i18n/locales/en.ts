@@ -1028,6 +1028,18 @@ const en: LocaleDictionary = {
     "The score follows the Scryer quality profile with the same name.",
   "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
     "Every quality profile scores this format 0, so the rule scores 0.",
+  "error.reason.RULE_IMPORT_GROUP_UNTRANSLATABLE":
+    "This rule group could not be translated, so it was saved as a starter rule to finish by hand.",
+  "error.reason.MAINTAINERR_IMPORT_JSON_TOO_LARGE":
+    "Maintainerr returned more data than one import reads.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_JSON_INVALID":
+    "Maintainerr's rule groups could not be read.",
+  "error.reason.MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID":
+    "Maintainerr's rule catalogue could not be read.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_TOO_MANY":
+    "Maintainerr holds more rule groups than one import accepts.",
+  "error.reason.MAINTAINERR_IMPORT_PROFILES_JSON_INVALID":
+    "The Sonarr or Radarr quality profiles Maintainerr returned could not be read.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "This version of the external application is not supported; a newer major version is required.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -7352,6 +7364,80 @@ const en: LocaleDictionary = {
   "settings.arrImportUnmatchedProfiles":
     "Quality profiles with no Scryer profile of the same name: {{names}}",
   "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.maintainerrImportAction": "Migrate from Maintainerr",
+  "settings.maintainerrImportTitle": "Migrate from Maintainerr",
+  "settings.maintainerrImportDescription":
+    "Scryer reads the rule groups of a running Maintainerr and saves each one as a lifecycle rule.",
+  "settings.maintainerrImportDisabledNote":
+    'Every rule is imported disabled and named "(Maintainerr) <name>". Preview each one before you enable it, above all a rule that deletes.',
+  "settings.maintainerrImportBaseUrl": "Maintainerr URL",
+  "settings.maintainerrImportStart": "Start import",
+  "settings.maintainerrImportStartAnother": "Import again",
+  "settings.maintainerrImportRunning": "Importing rule groups…",
+  "settings.maintainerrImportRunningCount":
+    "Importing rule groups… {{done}} of {{total}}",
+  "settings.maintainerrImportRunFailed":
+    "The import stopped before every rule group was saved.",
+  "settings.maintainerrImportCounts":
+    "{{total}} rule group(s): {{saved}} saved, {{untranslated}} saved untranslated, {{skipped}} skipped, {{failed}} not imported",
+  "settings.maintainerrImportStateSaved": "Saved, disabled",
+  "settings.maintainerrImportStateSavedFailedTranslation":
+    "Saved untranslated, disabled",
+  "settings.maintainerrImportStateSkipped": "Skipped, already imported",
+  "settings.maintainerrImportStatePending": "Pending",
+  "settings.maintainerrImportStateFailed": "Not imported",
+  "settings.maintainerrImportSeverityError": "Not translated",
+  "settings.maintainerrImportSeverityWarning": "Check",
+  "settings.maintainerrImportDiagnostic": "{{severity}}: {{message}}",
+  "settings.maintainerrImportDiagnosticAtRule":
+    "{{severity}}: {{message}} (rule {{rule}})",
+  "settings.maintainerrImportCode.groupInvalid":
+    "The group's rules, as Maintainerr combines them, can never match.",
+  "settings.maintainerrImportCode.groupRulesDisabled":
+    "The group does not use rules.",
+  "settings.maintainerrImportCode.groupRulesEmpty": "The group has no rules.",
+  "settings.maintainerrImportCode.groupRulesTooMany":
+    "The group has more rules than one lifecycle rule holds.",
+  "settings.maintainerrImportCode.groupMediaTypeUnsupported":
+    "The group's media type is not one Scryer acts on.",
+  "settings.maintainerrImportCode.ruleInvalid": "A rule is malformed.",
+  "settings.maintainerrImportCode.ruleSecondValueMissing":
+    "A rule compares against another property that is missing.",
+  "settings.maintainerrImportCode.ruleUsernameMissing":
+    "A per-user rule names no user.",
+  "settings.maintainerrImportCode.applicationUnknown":
+    "A rule reads an application Maintainerr does not list, usually one it is not connected to.",
+  "settings.maintainerrImportCode.propertyUnknown":
+    "A rule reads a property Maintainerr does not list.",
+  "settings.maintainerrImportCode.propertyUnmapped":
+    "A rule reads a property Scryer has no matching fact for.",
+  "settings.maintainerrImportCode.propertyCollectionUnsupported":
+    "A rule reads media server collections, playlists or labels.",
+  "settings.maintainerrImportCode.propertyLevelUnsupported":
+    "A rule reads a property Scryer has only for another media type.",
+  "settings.maintainerrImportCode.comparatorUnsupported":
+    "A rule's comparison cannot be expressed exactly in Scryer.",
+  "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
+    "A rule compares dates for equality, which depends on Maintainerr's time zone.",
+  "settings.maintainerrImportCode.customValueInvalid":
+    "A rule's value cannot be read the way Maintainerr reads it.",
+  "settings.maintainerrImportCode.actionMissing": "The group has no action.",
+  "settings.maintainerrImportCode.actionUnsupported":
+    "The group's action has no Scryer equivalent for its media type.",
+  "settings.maintainerrImportCode.qualityProfileUnresolved":
+    "The group's quality profile is not one Sonarr or Radarr lists.",
+  "settings.maintainerrImportCode.qualityProfileNotInScryer":
+    "No Scryer quality profile has the name of the group's quality profile.",
+  "settings.maintainerrImportCode.sourceTooLarge":
+    "The translated rule is larger than a lifecycle rule may be.",
+  "settings.maintainerrImportCode.sourceInvalid":
+    "The translated rule did not pass lifecycle rule validation.",
+  "settings.maintainerrImportCode.usernameUnknown":
+    "A rule names a user no Scryer user is called. The rule still translates.",
+  "settings.maintainerrImportCode.factApproximate":
+    "A rule reads a Scryer fact that differs slightly from Maintainerr's. Preview before enabling.",
+  "settings.maintainerrImportCode.actionApproximate":
+    "The group's action maps to Scryer actions that differ slightly from Maintainerr's. Preview before enabling.",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":

@@ -282,7 +282,7 @@ fn failed_with(data_type: &str, arr_action: i64, rules: &[Rule]) -> Vec<&'static
         "{}",
         rule.rego_source
     );
-    assert_eq!(rule.rego_source, LIFECYCLE_STARTER_SOURCE);
+    assert_eq!(rule.rego_source, MAINTAINERR_FAILED_SOURCE);
     assert!(
         rule.name.starts_with("(Maintainerr) FAILED - "),
         "{}",
@@ -390,7 +390,23 @@ fn diagnostic_codes_are_distinct_and_namespaced() {
 }
 
 #[test]
-fn failed_rules_carry_the_web_editors_starter_source() {
+fn failed_rules_carry_the_starter_with_a_notification_for_its_tag() {
+    let tagged = "add_tags := [\"needs-review\"] if unmonitored_with_files";
+    let notified = "notify := \"Unmonitored with files.\" if unmonitored_with_files";
+    assert!(LIFECYCLE_STARTER_SOURCE.contains(tagged));
+    assert_eq!(
+        MAINTAINERR_FAILED_SOURCE,
+        LIFECYCLE_STARTER_SOURCE.replace(tagged, notified)
+    );
+    let declared = prepare_source("maintainerr_test", MAINTAINERR_FAILED_SOURCE, 0)
+        .expect("the starter saves")
+        .declared;
+    assert!(declared.add_tags.is_empty() && declared.remove_tags.is_empty());
+    assert!(declared.quality_profiles.is_empty() && !declared.destructive);
+}
+
+#[test]
+fn the_starter_matches_the_web_editors_source() {
     let marker = "export const LIFECYCLE_STARTER_SOURCE = `";
     let start = WEB_RULE_SETS
         .find(marker)
@@ -1389,7 +1405,7 @@ fn anything_without_a_faithful_equivalent_fails_the_group() {
     );
     for result in &results {
         assert_eq!(result.status, MaintainerrRuleStatus::Failed);
-        assert_eq!(result.rego_source, LIFECYCLE_STARTER_SOURCE);
+        assert_eq!(result.rego_source, MAINTAINERR_FAILED_SOURCE);
     }
 }
 

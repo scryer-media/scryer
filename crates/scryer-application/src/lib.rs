@@ -74,6 +74,7 @@ pub mod grabbed_file_names;
 pub mod nzb_text;
 pub mod rule_import;
 pub mod rule_import_arr;
+pub mod rule_import_maintainerr;
 pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;

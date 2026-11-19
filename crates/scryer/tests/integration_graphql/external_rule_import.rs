@@ -56,7 +56,7 @@ fn maintainerr_connection(server: &MockServer) -> RuleImportConnection {
 }
 
 #[tokio::test]
-async fn rule_import_fetches_purges_the_connection_and_refuses_an_untranslated_source() {
+async fn rule_import_fetches_purges_the_connection_and_reports_source_facts() {
     timeout(FAILURE_BOUND, async {
         let ctx = TestContext::new().await;
         let actor = ctx
@@ -79,11 +79,14 @@ async fn rule_import_fetches_purges_the_connection_and_refuses_an_untranslated_s
             .await
             .expect("settles");
         assert_eq!(report.phase, RuleImportPhase::Finished);
+        assert_eq!(report.reason, None);
+        // Groups without rules cannot be translated; each is kept as a
+        // disabled starter rule.
+        let states: Vec<_> = report.items.iter().map(|item| item.state).collect();
         assert_eq!(
-            report.reason.as_deref(),
-            Some(refusal::TRANSLATOR_UNAVAILABLE)
+            states,
+            vec![RuleImportItemState::SavedFailedTranslation; 2]
         );
-        assert!(report.items.is_empty());
         let fact_codes: Vec<_> = report.facts.iter().map(|fact| fact.code.as_str()).collect();
         assert!(
             fact_codes.contains(&refusal::USERNAMES_UNAVAILABLE),
@@ -101,7 +104,7 @@ async fn rule_import_fetches_purges_the_connection_and_refuses_an_untranslated_s
             .rule_import_status(&actor, &run.id)
             .await
             .expect("status");
-        assert_eq!(stored.status, JobRunStatus::Failed);
+        assert_eq!(stored.status, JobRunStatus::Warning);
         assert!(stored.completed_at.is_some());
         assert!(
             store(&ctx)
@@ -376,12 +379,13 @@ async fn graphql_starts_a_rule_import_and_reads_its_report() {
         assert_no_errors(&status);
         let report = &status["data"]["externalRuleImportStatus"];
         assert_eq!(report["runId"], run_id);
-        assert_eq!(report["status"], "FAILED");
+        assert_eq!(report["status"], "WARNING");
         assert_eq!(report["active"], false);
         assert_eq!(report["source"], "MAINTAINERR");
         assert_eq!(report["phase"], "FINISHED");
-        assert_eq!(report["reason"], refusal::TRANSLATOR_UNAVAILABLE);
-        assert_eq!(report["counts"]["total"], 0);
+        assert_eq!(report["reason"], Value::Null);
+        assert_eq!(report["counts"]["total"], 2);
+        assert_eq!(report["counts"]["savedFailedTranslation"], 2);
         assert!(
             report["facts"]
                 .as_array()
@@ -745,4 +749,379 @@ async fn radarr_rule_import_flags_profiles_scryer_does_not_have_for_review() {
     })
     .await
     .expect("radarr review scenario bound");
+}
+
+const MAINTAINERR_CONSTANTS: &str = include_str!(
+    "../../../scryer-application/src/lifecycle_rules/maintainerr/fixtures/live-shape-constants.json"
+);
+
+/// One rule row as Maintainerr's `GET /api/rules` serves it.
+fn maintainerr_rule(id: i64, group_id: i64, first: (i64, i64), action: i64, with: Value) -> Value {
+    let mut dto = json!({
+        "operator": null,
+        "action": action,
+        "firstVal": [first.0, first.1],
+        "section": 0,
+    });
+    if let Value::Object(extra) = with {
+        for (key, value) in extra {
+            dto[key] = value;
+        }
+    }
+    json!({
+        "id": id,
+        "ruleJson": dto.to_string(),
+        "ruleGroupId": group_id,
+        "section": 0,
+        "isActive": true,
+    })
+}
+
+fn maintainerr_group(id: i64, name: &str, arr_action: i64, rules: Vec<Value>) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "description": "Synthetic description",
+        "libraryId": "sample-library",
+        "isActive": true,
+        "useRules": true,
+        "dataType": "movie",
+        "rules": rules,
+        "collection": {
+            "id": id,
+            "title": name,
+            "arrAction": arr_action,
+            "deleteAfterDays": 21,
+            "type": "movie",
+            "radarrSettingsId": 1,
+            "manualCollection": false,
+        },
+    })
+}
+
+/// A Maintainerr with three groups: one that deletes large files, one with
+/// no rules (it cannot be translated), and, when `with_person_fact`, one that
+/// reads who watched a title.
+async fn maintainerr_with_groups(with_person_fact: bool) -> MockServer {
+    // Delete, and unmonitor, as Maintainerr numbers its actions.
+    const DELETE: i64 = 0;
+    const UNMONITOR: i64 = 3;
+    let mut groups = vec![
+        maintainerr_group(
+            1,
+            "Sample Rule Alpha",
+            DELETE,
+            vec![maintainerr_rule(
+                101,
+                1,
+                (1, 7),
+                0,
+                json!({"customVal": {"ruleTypeId": 0, "value": "100"}}),
+            )],
+        ),
+        maintainerr_group(2, "Sample Rule Bravo", UNMONITOR, Vec::new()),
+    ];
+    if with_person_fact {
+        groups.push(maintainerr_group(
+            3,
+            "Sample Rule Charlie",
+            UNMONITOR,
+            vec![maintainerr_rule(
+                301,
+                3,
+                (6, 1),
+                4,
+                json!({"customVal": {"ruleTypeId": 2, "value": "sample-user"}}),
+            )],
+        ));
+    }
+    let server = MockServer::start().await;
+    let constants: Value = serde_json::from_str(MAINTAINERR_CONSTANTS).expect("constants");
+    let routes = [
+        ("/api/settings/version", ResponseTemplate::new(200).set_body_string("2.19.0")),
+        ("/api/rules", ResponseTemplate::new(200).set_body_json(Value::from(groups))),
+        ("/api/rules/constants", ResponseTemplate::new(200).set_body_json(constants)),
+        ("/api/rules/users", ResponseTemplate::new(200).set_body_json(json!(["sample-user"]))),
+        ("/api/servarr/radarr/1/profiles", ResponseTemplate::new(200).set_body_json(json!([]))),
+    ];
+    for (route, response) in routes {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+    }
+    server
+}
+
+fn item_states(
+    report: &scryer_application::rule_import::RuleImportProgress,
+) -> Vec<(&str, RuleImportItemState)> {
+    report
+        .items
+        .iter()
+        .map(|item| (item.source_name.as_str(), item.state))
+        .collect()
+}
+
+#[tokio::test]
+async fn maintainerr_rule_import_saves_disabled_lifecycle_rules_and_skips_them_on_a_rerun() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("sample-user"))
+            .await
+            .expect("operator");
+        let server = maintainerr_with_groups(true).await;
+        let run = ctx
+            .app
+            .start_rule_import(&actor, "maintainerr-save", maintainerr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(report.reason, None, "{report:?}");
+        assert_eq!(
+            item_states(&report),
+            vec![
+                ("Sample Rule Alpha", RuleImportItemState::Saved),
+                (
+                    "Sample Rule Bravo",
+                    RuleImportItemState::SavedFailedTranslation
+                ),
+                ("Sample Rule Charlie", RuleImportItemState::Saved),
+            ]
+        );
+        assert_eq!(report.items[0].key, "rulegroup:1");
+        assert_eq!(
+            report.items[1].reason.as_deref(),
+            Some(scryer_application::rule_import_maintainerr::reasons::GROUP_UNTRANSLATABLE)
+        );
+        let empty = report.items[1]
+            .facts
+            .iter()
+            .find(|fact| fact.code == "maintainerr.group.rules_empty")
+            .expect("the untranslated group says why");
+        assert_eq!(empty.details.as_ref().expect("details")["severity"], "ERROR");
+        let (stored, _) = ctx
+            .app
+            .rule_import_status(&actor, &run.id)
+            .await
+            .expect("status");
+        assert_eq!(stored.status, JobRunStatus::Warning);
+
+        let mut saved = ctx
+            .app
+            .list_lifecycle_rule_sets(&actor)
+            .await
+            .expect("lifecycle rules");
+        saved.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<_> = saved.iter().map(|rule| rule.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "(Maintainerr) FAILED - Sample Rule Bravo",
+                "(Maintainerr) Sample Rule Alpha",
+                "(Maintainerr) Sample Rule Charlie",
+            ]
+        );
+        for rule in &saved {
+            assert_eq!(rule.state, scryer_domain::LifecycleRuleState::Disabled);
+            assert!(rule.library_ids.is_empty(), "every library");
+            assert_eq!(rule.schedule, scryer_domain::default_lifecycle_rule_schedule());
+            let item = report
+                .items
+                .iter()
+                .find(|item| item.saved_name.as_deref() == Some(rule.name.as_str()))
+                .expect("the report names the saved rule");
+            assert_eq!(item.rule_set_id.as_deref(), Some(rule.id.as_str()));
+            let detail = ctx
+                .app
+                .get_lifecycle_rule_set(&actor, &rule.id)
+                .await
+                .expect("read")
+                .expect("exists");
+            assert_eq!(detail.revision.grace_days, 21);
+        }
+        // Only the rule that deletes carries a per-run maximum.
+        assert_eq!(saved[1].max_titles_per_run, Some(10));
+        assert_eq!(saved[0].max_titles_per_run, None);
+        assert_eq!(saved[2].max_titles_per_run, None);
+
+        let rerun = ctx
+            .app
+            .start_rule_import(&actor, "maintainerr-rerun", maintainerr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &rerun.id)
+            .await
+            .expect("settles");
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|item| item.state == RuleImportItemState::SkippedExists
+                    && item.reason.as_deref() == Some(refusal::ALREADY_EXISTS)),
+            "{report:?}"
+        );
+        let (stored, _) = ctx
+            .app
+            .rule_import_status(&actor, &rerun.id)
+            .await
+            .expect("status");
+        assert_eq!(stored.status, JobRunStatus::Completed);
+        assert_eq!(
+            ctx.app
+                .list_lifecycle_rule_sets(&actor)
+                .await
+                .expect("lifecycle rules")
+                .len(),
+            3
+        );
+    })
+    .await
+    .expect("maintainerr save scenario bound");
+}
+
+#[tokio::test]
+async fn maintainerr_rule_reading_who_watched_needs_permission_management() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        let admin = ctx
+            .users
+            .create(User::new_admin("rule-import-admin"))
+            .await
+            .expect("admin");
+        let catalog = ctx
+            .app
+            .create_user(
+                &admin,
+                "sample-user".to_string(),
+                "catalog-pass1".to_string(),
+                AppPermissionMask::from_permission(
+                    scryer_domain::AppPermission::ManageCatalogSettings,
+                ),
+                vec![],
+            )
+            .await
+            .expect("catalog user");
+        let server = maintainerr_with_groups(true).await;
+        let run = ctx
+            .app
+            .start_rule_import(&catalog, "person-fact", maintainerr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&catalog, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(
+            item_states(&report),
+            vec![
+                ("Sample Rule Alpha", RuleImportItemState::Saved),
+                (
+                    "Sample Rule Bravo",
+                    RuleImportItemState::SavedFailedTranslation
+                ),
+                ("Sample Rule Charlie", RuleImportItemState::Failed),
+            ]
+        );
+        let refused = &report.items[2];
+        let code = scryer_application::error_reasons::lifecycle::PERSON_TARGETING_PERMISSION_REQUIRED;
+        assert_eq!(refused.reason.as_deref(), Some(code));
+        assert!(refused.facts.iter().any(|fact| fact.code == code));
+        assert_eq!(refused.rule_set_id, None);
+        assert_eq!(
+            ctx.app
+                .list_lifecycle_rule_sets(&catalog)
+                .await
+                .expect("lifecycle rules")
+                .len(),
+            2
+        );
+
+        // An administrator saves the refused group; the others already exist.
+        let run = ctx
+            .app
+            .start_rule_import(&admin, "person-fact-admin", maintainerr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&admin, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(
+            item_states(&report),
+            vec![
+                ("Sample Rule Alpha", RuleImportItemState::SkippedExists),
+                ("Sample Rule Bravo", RuleImportItemState::SkippedExists),
+                ("Sample Rule Charlie", RuleImportItemState::Saved),
+            ]
+        );
+    })
+    .await
+    .expect("maintainerr person fact scenario bound");
+}
+
+#[tokio::test]
+async fn an_unreachable_maintainerr_fails_the_run_with_a_code_and_saves_nothing() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-unreachable"))
+            .await
+            .expect("operator");
+        let server = MockServer::start().await;
+        let base_url = server.uri();
+        drop(server);
+        let run = ctx
+            .app
+            .start_rule_import(
+                &actor,
+                "maintainerr-unreachable",
+                RuleImportConnection {
+                    source: RuleImportSource::Maintainerr,
+                    base_url,
+                    api_key: None,
+                },
+            )
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(report.phase, RuleImportPhase::Finished);
+        let reason = report.reason.as_deref().expect("a run reason");
+        assert!(
+            scryer_application::error_reasons::external_import::ALL.contains(&reason),
+            "{reason}"
+        );
+        assert!(report.items.is_empty());
+        let (stored, _) = ctx
+            .app
+            .rule_import_status(&actor, &run.id)
+            .await
+            .expect("status");
+        assert_eq!(stored.status, JobRunStatus::Failed);
+        assert!(
+            ctx.app
+                .list_lifecycle_rule_sets(&actor)
+                .await
+                .expect("lifecycle rules")
+                .is_empty()
+        );
+    })
+    .await
+    .expect("maintainerr unreachable scenario bound");
 }

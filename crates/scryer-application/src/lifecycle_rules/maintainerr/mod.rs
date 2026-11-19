@@ -52,6 +52,10 @@ pub const MAX_MAINTAINERR_RULE_GROUPS: usize = 1000;
 pub const MAX_MAINTAINERR_RULES_PER_GROUP: usize = 100;
 /// The per-run maximum given to a translated rule that deletes.
 pub const MAINTAINERR_DESTRUCTIVE_MAX_TITLES_PER_RUN: u32 = 10;
+/// What the name of a translated rule starts with, before the group's name.
+pub const MAINTAINERR_NAME_PREFIX: &str = "(Maintainerr) ";
+/// What the name of an untranslated rule starts with, before the group's name.
+pub const MAINTAINERR_FAILED_NAME_PREFIX: &str = "(Maintainerr) FAILED - ";
 
 /// The web editor's source for a new rule, byte for byte. A group that cannot
 /// be translated is imported with this source.
@@ -77,6 +81,36 @@ unmonitored_with_files if {
 }
 
 add_tags := [\"needs-review\"] if unmonitored_with_files
+
+reasons contains \"unmonitored_with_files\" if unmonitored_with_files
+";
+
+/// The source a group that cannot be translated is imported with: the web
+/// editor's starter, except that it notifies instead of tagging. A tag must be
+/// registered before a rule may write it, and the import never creates one,
+/// so the starter's tag would refuse every untranslated group.
+pub const MAINTAINERR_FAILED_SOURCE: &str =
+    "# Lifecycle rule. Defining a rule named after an action declares that
+# action: unmonitor, monitor, search, fetch_subtitles, delete_files and
+# delete_title take `if { ... }`; set_quality_profile, move_to_library,
+# move_to_root and notify take a string, add_tags and remove_tags a list.
+# On a series, monitor_season, unmonitor_season, delete_season_files,
+# fetch_season_subtitles and notify_season act on the season at
+# `input.season`; the _episode heads act on the episode at `input.episode`.
+# Any other rule name is your own helper. `reasons` explains the choice.
+#
+# Facts are plain values: `input.facts.monitored` is the boolean itself. A
+# fact with nothing to report is simply missing, so `not input.facts.has_file`
+# is how you ask for \"no files\". If a fact Scryer could not observe is one this
+# rule reads, Scryer holds the subject for you — you never write that guard.
+# `days_since(ts)` turns a timestamp fact into whole days.
+
+unmonitored_with_files if {
+\tnot input.facts.monitored
+\tinput.facts.has_file
+}
+
+notify := \"Unmonitored with files.\" if unmonitored_with_files
 
 reasons contains \"unmonitored_with_files\" if unmonitored_with_files
 ";
@@ -195,14 +229,25 @@ impl MaintainerrTranslateContext {
         settings_id: i64,
         profiles_json: &str,
     ) -> Result<(), MaintainerrImportRefusal> {
-        let invalid = MaintainerrImportRefusal::ProfilesJsonInvalid;
         if profiles_json.len() > MAX_MAINTAINERR_JSON_BYTES {
             return Err(MaintainerrImportRefusal::JsonTooLarge);
         }
-        let profiles: Vec<serde_json::Value> =
-            serde_json::from_str(profiles_json).map_err(|_| invalid)?;
+        let profiles: serde_json::Value = serde_json::from_str(profiles_json)
+            .map_err(|_| MaintainerrImportRefusal::ProfilesJsonInvalid)?;
+        self.add_arr_profile_values(kind, settings_id, &profiles)
+    }
+
+    /// [`Self::add_arr_profiles`] for a body already parsed.
+    pub fn add_arr_profile_values(
+        &mut self,
+        kind: ArrKind,
+        settings_id: i64,
+        profiles: &serde_json::Value,
+    ) -> Result<(), MaintainerrImportRefusal> {
+        let invalid = MaintainerrImportRefusal::ProfilesJsonInvalid;
+        let profiles = profiles.as_array().ok_or(invalid)?;
         let mut found = Vec::with_capacity(profiles.len());
-        for profile in &profiles {
+        for profile in profiles {
             let id = profile
                 .get("id")
                 .and_then(serde_json::Value::as_i64)
@@ -339,13 +384,34 @@ pub fn translate_maintainerr_rule_groups(
     }
     let catalogue = decode::decode_catalogue(constants_json)?;
     let groups = decode::decode_groups(groups_json)?;
+    Ok(translate_decoded(&groups, &catalogue, ctx))
+}
+
+/// [`translate_maintainerr_rule_groups`] for bodies already parsed: `groups`
+/// is the array `GET /api/rules` returns and `constants` the body of
+/// `GET /api/rules/constants`.
+pub fn translate_maintainerr_rule_group_values(
+    groups: &[serde_json::Value],
+    constants: &serde_json::Value,
+    ctx: &MaintainerrTranslateContext,
+) -> Result<Vec<MaintainerrTranslatedRule>, MaintainerrImportRefusal> {
+    let catalogue = decode::decode_catalogue_value(constants)?;
+    let groups = decode::decode_group_values(groups)?;
+    Ok(translate_decoded(&groups, &catalogue, ctx))
+}
+
+fn translate_decoded(
+    groups: &[decode::DecodedGroup],
+    catalogue: &decode::Catalogue,
+    ctx: &MaintainerrTranslateContext,
+) -> Vec<MaintainerrTranslatedRule> {
     let known_usernames: HashSet<String> = ctx
         .scryer_usernames
         .iter()
         .map(|name| name.to_lowercase())
         .collect();
-    Ok(groups
+    groups
         .iter()
-        .map(|group| rego::translate_group(group, &catalogue, ctx, &known_usernames))
-        .collect())
+        .map(|group| rego::translate_group(group, catalogue, ctx, &known_usernames))
+        .collect()
 }

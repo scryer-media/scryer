@@ -170,6 +170,9 @@ type SettingsLifecycleRulesSectionProps = {
   /// rendered here so the container owns their queries and this view stays a
   /// pure rendering of what it is handed.
   operationsPanels: React.ReactNode;
+  /// Import actions beside the rules table title, rendered by the container,
+  /// which owns their permission check and their runs.
+  importActions?: React.ReactNode;
 };
 
 type RefField = { field: string; type: string; descKey: string };
@@ -811,6 +814,7 @@ export function SettingsLifecycleRulesSection({
   setRuleState,
   section,
   operationsPanels,
+  importActions,
   ...previewProps
 }: SettingsLifecycleRulesSectionProps) {
   const t = useTranslate();
@@ -919,14 +923,17 @@ export function SettingsLifecycleRulesSection({
             <CardTitle className="text-base text-foreground">
               {t("settings.lifecycleRules")}
             </CardTitle>
-            <RegoAiPromptDialog
-              id="settings-lifecycle-rules-ai-prompt"
-              ruleKind="lifecycle"
-              inputContract={lifecycleInputContract}
-              outputContract={
-                'Declare actions by defining rules with these names: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title as "name if { ... }"; set_quality_profile := "Profile name", move_to_library := "Library name", move_to_root := "/path/of/root" and notify := "message text" as plain string literals; add_tags := ["tag"] and remove_tags := ["tag"] as plain lists of string literals. delete_title, move_to_library and move_to_root act on whole titles. A series rule can also act on one season: monitor_season, unmonitor_season, delete_season_files and fetch_season_subtitles as "name if { ... }" and notify_season := "message text" act on the season at input.season; monitor_episode, unmonitor_episode, delete_episode_files, fetch_episode_subtitles and notify_episode do the same for the episode at input.episode. Any other rule name is a helper of your own. days_since(ts) returns whole days since an RFC3339 timestamp; do not define a rule with that name. You may add reasons contains "stable_reason" if { ... } and unknown if { ... } to hold a subject.'
-              }
-            />
+            <div className="flex items-center gap-2">
+              <RegoAiPromptDialog
+                id="settings-lifecycle-rules-ai-prompt"
+                ruleKind="lifecycle"
+                inputContract={lifecycleInputContract}
+                outputContract={
+                  'Declare actions by defining rules with these names: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title as "name if { ... }"; set_quality_profile := "Profile name", move_to_library := "Library name", move_to_root := "/path/of/root" and notify := "message text" as plain string literals; add_tags := ["tag"] and remove_tags := ["tag"] as plain lists of string literals. delete_title, move_to_library and move_to_root act on whole titles. A series rule can also act on one season: monitor_season, unmonitor_season, delete_season_files and fetch_season_subtitles as "name if { ... }" and notify_season := "message text" act on the season at input.season; monitor_episode, unmonitor_episode, delete_episode_files, fetch_episode_subtitles and notify_episode do the same for the episode at input.episode. Any other rule name is a helper of your own. days_since(ts) returns whole days since an RFC3339 timestamp; do not define a rule with that name. You may add reasons contains "stable_reason" if { ... } and unknown if { ... } to hold a subject.'
+                }
+              />
+              {importActions}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <Table className="min-w-[min(900px,100%)]">

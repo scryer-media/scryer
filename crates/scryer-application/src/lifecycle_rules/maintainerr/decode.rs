@@ -70,8 +70,13 @@ pub(super) struct Catalogue {
 }
 
 pub(super) fn decode_catalogue(json: &str) -> Result<Catalogue, MaintainerrImportRefusal> {
+    let root: Value =
+        serde_json::from_str(json).map_err(|_| MaintainerrImportRefusal::ConstantsJsonInvalid)?;
+    decode_catalogue_value(&root)
+}
+
+pub(super) fn decode_catalogue_value(root: &Value) -> Result<Catalogue, MaintainerrImportRefusal> {
     let invalid = MaintainerrImportRefusal::ConstantsJsonInvalid;
-    let root: Value = serde_json::from_str(json).map_err(|_| invalid)?;
     let applications = root
         .get("applications")
         .and_then(Value::as_array)
@@ -171,7 +176,13 @@ pub(super) struct DecodedGroup {
 pub(super) fn decode_groups(json: &str) -> Result<Vec<DecodedGroup>, MaintainerrImportRefusal> {
     let invalid = MaintainerrImportRefusal::GroupsJsonInvalid;
     let root: Value = serde_json::from_str(json).map_err(|_| invalid)?;
-    let groups = root.as_array().ok_or(invalid)?;
+    decode_group_values(root.as_array().ok_or(invalid)?)
+}
+
+pub(super) fn decode_group_values(
+    groups: &[Value],
+) -> Result<Vec<DecodedGroup>, MaintainerrImportRefusal> {
+    let invalid = MaintainerrImportRefusal::GroupsJsonInvalid;
     if groups.len() > MAX_MAINTAINERR_RULE_GROUPS {
         return Err(MaintainerrImportRefusal::GroupsTooMany);
     }

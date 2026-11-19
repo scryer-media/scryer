@@ -336,6 +336,23 @@ impl AppUseCase {
         builder_model: BuilderModelChange,
         schedule: Option<ScriptSchedule>,
     ) -> AppResult<LifecycleRuleSetDetail> {
+        self.create_lifecycle_rule_set_unless_named(actor, draft, builder_model, schedule, &[])
+            .await?
+            .ok_or_else(|| AppError::Repository("lifecycle rule set was not created".into()))
+    }
+
+    /// [`Self::create_lifecycle_rule_set_with_schedule`] that writes nothing and
+    /// returns `None` when a rule set already carries one of `taken_names`,
+    /// checked in the same transaction as the insert. Every other check runs
+    /// exactly as for an ordinary create.
+    pub(crate) async fn create_lifecycle_rule_set_unless_named(
+        &self,
+        actor: &User,
+        draft: LifecycleRuleDraft,
+        builder_model: BuilderModelChange,
+        schedule: Option<ScriptSchedule>,
+        taken_names: &[String],
+    ) -> AppResult<Option<LifecycleRuleSetDetail>> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
         let schedule = validated_rule_schedule(schedule)?
@@ -386,21 +403,33 @@ impl AppUseCase {
             builder_model_json,
         );
 
-        self.services
-            .customization
-            .lifecycle_rule_sets
-            .create_rule_set(&rule_set, &revision)
-            .await?;
+        let created = if taken_names.is_empty() {
+            self.services
+                .customization
+                .lifecycle_rule_sets
+                .create_rule_set(&rule_set, &revision)
+                .await?;
+            true
+        } else {
+            self.services
+                .customization
+                .lifecycle_rule_sets
+                .create_rule_set_unless_named(&rule_set, &revision, taken_names)
+                .await?
+        };
+        if !created {
+            return Ok(None);
+        }
         // A new rule starts disabled, so the scheduler has nothing to add
         // until it is enabled.
 
-        Ok(LifecycleRuleSetDetail {
+        Ok(Some(LifecycleRuleSetDetail {
             action_refusal: action_refusal_for(&rule_set, &prepared.declared),
             rule_set,
             revision,
             declared_actions: prepared.declared,
             load_refusal: None,
-        })
+        }))
     }
 
     /// Appends revision N+1. Revision N is left exactly as it was written, so a
