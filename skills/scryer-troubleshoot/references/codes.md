@@ -232,3 +232,12 @@ the run. Run and item reason codes (`EXTERNAL_IMPORT_SOURCE_*`,
 `RULE_IMPORT_*`) are in `scryer-connect/references/errors.md`. Imported rules
 are saved disabled, so a finished import never changes release decisions until
 the operator enables a rule.
+
+Maintainerr rule-group import runs under the same job key and report. Each
+group becomes one disabled lifecycle rule, so a finished import never acts on
+a title until the operator arms a rule. Its `summaryJson` adds
+`savedFailedTranslation` (groups saved as a `(Maintainerr) FAILED - <name>`
+starter, reason `RULE_IMPORT_GROUP_UNTRANSLATABLE`). A re-run skips a group
+whose rule exists under either name. Run reasons `MAINTAINERR_IMPORT_*` and
+the `maintainerr.*` diagnostic codes are in
+`scryer-migrate-from-maintainerr/references/codes.md`.

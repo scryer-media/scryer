@@ -1,0 +1,14 @@
+# List lifecycle rules with their state, scope, grace period and declared actions. Read-only.
+# Variables: none. Filter to names starting "(Maintainerr) " with jq.
+query ImportedLifecycleRules {
+  lifecycleRuleSets {
+    id
+    name
+    state
+    libraryIds
+    graceDays
+    currentRevisionNumber
+    loadRefusal
+    declaredActions { destructive heads qualityProfiles }
+  }
+}
