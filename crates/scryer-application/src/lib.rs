@@ -206,13 +206,13 @@ pub(crate) use catalog::release_search as app_usecase_discovery;
 pub(crate) use events::activity;
 pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
-pub(crate) use import::archive_extractor;
-pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub use import::archive_extraction::{
     ARCHIVE_EXTRACTION_DIR_NAME, ArchiveExtractionRecord, ArchiveExtractionRepository,
     ArchiveExtractionState, ArchiveScratchSummary, InMemoryArchiveExtractionRepository,
     UnsettledArchiveExtraction, sweep_archive_workspaces_at_startup,
 };
+pub(crate) use import::archive_extractor;
+pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
@@ -908,7 +908,7 @@ pub use types::{
     TitleImageBlob, TitleImageKind, TitleImageSourceResult, TitleImageSyncTask,
     TitleImageVariantRecord, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
     TitleMetadataUpdate, TitleMovieMediaSummary, TitleQualitySummary, TitleRatingSummary,
-    TitleReleaseBlocklistEntry, TitleReleaseDateWindow, TitleTagDefinitionSummary,
+    TitleReleaseBlocklistEntry, TitleReleaseDateWindow, TitleRequesters, TitleTagDefinitionSummary,
     TitleTagDefinitionUpdate, TitleTagMembershipCounts, TitleTagRewriteCounts,
     TotpCredentialRecord, TotpEnrollmentChallengeRecord, TotpEnrollmentComplete,
     TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus,

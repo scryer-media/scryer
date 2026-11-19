@@ -1098,6 +1098,7 @@ mod title_restore_tests {
             &[],
             crate::lifecycle_rules::facts::LifecycleTitlePeople {
                 requester_user_ids: None,
+                requested_at: None,
                 usernames: &usernames,
             },
             crate::lifecycle_rules::facts::LifecycleTitleWatch {

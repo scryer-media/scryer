@@ -4889,6 +4889,7 @@ const ru: LocaleDictionary = {
     "Пользователи, запросившие субъект: автор запроса и все дополнительные запросившие",
   "settings.refLifecycleFactsRequestedByUsernames":
     "Имена этих запросивших пользователей",
+  "settings.refLifecycleFactsRequestedAt": "Когда тайтл был впервые запрошен",
   "settings.refLifecycleFactsFirstImportedAt":
     "Когда для субъекта был впервые импортирован файл",
   "settings.refLifecycleFactsLastUpgradedAt":
@@ -4913,6 +4914,10 @@ const ru: LocaleDictionary = {
     "Пользователи, которые смотрели субъект. Для сезона или всего сериала — только пользователи, посмотревшие каждую вышедшую в нём серию, включая серии с отсутствующими файлами. Будущие серии исключаются; неустановленные даты выхода или неполные сигналы дают unknown. Сезон или сериал без вышедших серий никогда не считается завершённым.",
   "settings.refLifecycleFactsLastWatchedAt":
     "Когда субъект в последний раз кто-либо смотрел",
+  "settings.refLifecycleFactsWatchedByUsernames":
+    "Имена пользователей, которые смотрели субъект",
+  "settings.refLifecycleFactsWatchedByUsers":
+    "Каждый пользователь, который смотрел субъект, с его последним просмотром и числом просмотров",
   "settings.refLifecycleFactsWatchedByAnyRequester":
     "Смотрел ли субъект хотя бы один из запросивших его пользователей",
   "settings.refLifecycleFactsWatchedByAllRequesters":
@@ -4951,6 +4956,8 @@ const ru: LocaleDictionary = {
     "Идентификаторы запросивших без повторов; пустой список, если субъект не запрашивали",
   "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Имена запросивших; unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
+  "settings.refLifecycleFactsRequestedAtValue":
+    "Время RFC 3339 самого раннего запроса, создавшего тайтл; absent с причиной title_not_requested, если тайтл не создан запросом",
   "settings.refLifecycleFactsFirstImportedAtValue":
     "Метка времени RFC3339 первого импорта",
   "settings.refLifecycleFactsLastUpgradedAtValue":
@@ -4972,6 +4979,10 @@ const ru: LocaleDictionary = {
     "Всегда unknown с причиной not_yet_collected: состояние загрузок пока не считывается, поэтому правило, которое читает это значение, откладывается",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Для сезона или сериала человек учитывается только после просмотра каждой вышедшей в нём серии, включая отсутствующие файлы. Будущие серии исключаются; отсутствующая история серий или неустановленные даты выхода дают unknown. Факты о просмотрах неизвестны, когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
+  "settings.refLifecycleFactsWatchedByUsernamesValue":
+    "Имена пользователей из watched_by_user_ids в том же порядке; unknown, когда неизвестны эти идентификаторы, и unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
+  "settings.refLifecycleFactsWatchedByUsersValue":
+    "Одна запись на каждого пользователя из watched_by_user_ids в том же порядке, сведённая по всем наблюдаемым медиасерверам; unknown, когда неизвестно watched_by_usernames",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел, и unknown с причиной play_time_missing, если у просмотра нет записанного времени",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
@@ -5069,6 +5080,16 @@ const ru: LocaleDictionary = {
     "— Одна запись на каждый внешний рейтинг в input.facts.ratings",
   "settings.refLifecycleSectionObsRatings":
     "— Одна запись на каждый внешний рейтинг в input.observations.ratings.value",
+  "settings.refLifecycleSectionWatchedByUsers":
+    "— Одна запись на каждого зрителя в input.facts.watched_by_users",
+  "settings.refLifecycleSectionObsWatchedByUsers":
+    "— Одна запись на каждого зрителя в input.observations.watched_by_users.value",
+  "settings.refLifecycleWatcherUserId": "Идентификатор пользователя Scryer",
+  "settings.refLifecycleWatcherUsername": "Имя пользователя Scryer",
+  "settings.refLifecycleWatcherLastPlayedAt":
+    "Когда пользователь в последний раз смотрел субъект; null, если у одного из его просмотров нет времени",
+  "settings.refLifecycleWatcherPlayCount":
+    "Сколько раз пользователь смотрел субъект, суммарно по всем медиасерверам",
   "settings.refLifecycleRatingSource": "Источник рейтинга",
   "settings.refLifecycleRatingValue":
     "Рейтинг по собственной шкале источника, если источник её даёт",

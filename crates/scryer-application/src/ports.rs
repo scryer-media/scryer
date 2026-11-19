@@ -3858,13 +3858,16 @@ pub trait MediaRequestRepository: Send + Sync {
     /// calls: the facts document is compared between runs, so an order that
     /// drifted would read as a changed fact.
     ///
+    /// Each entry also carries the `created_at` of the oldest of those
+    /// requests, read by the same statement as the submitters.
+    ///
     /// Batched on purpose: lifecycle evaluation asks this for a whole chunk
     /// of titles at once, and a per-title query would make the pass scale with
     /// the library.
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<HashMap<String, Vec<String>>>;
+    ) -> AppResult<HashMap<String, crate::types::TitleRequesters>>;
 
     /// The origin of the oldest request that created each of `title_ids`,
     /// over the same requests [`Self::requester_user_ids_by_title_ids`] reads.
