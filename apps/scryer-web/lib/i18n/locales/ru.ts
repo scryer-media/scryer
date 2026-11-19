@@ -7923,8 +7923,6 @@ const ru: LocaleDictionary = {
     "Не удалось импортировать это правило.",
   "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
     "Не удалось прочитать некоторые профили качества из источника.",
-  "error.reason.RULE_IMPORT_USERNAMES_UNAVAILABLE":
-    "Не удалось прочитать имена пользователей из источника.",
   "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
     "Источник ссылается на больше подключённых приложений, чем читает один импорт.",
   "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
@@ -12124,6 +12122,16 @@ const ru: LocaleDictionary = {
     "Сравнение в правиле нельзя точно выразить в Scryer.",
   "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
     "Правило сравнивает даты на равенство, а это зависит от часового пояса Maintainerr.",
+  "settings.maintainerrImportCode.comparatorPartialListWidens":
+    "Правило читает список, который в Scryer хранится лишь частично, так что оно могло бы совпасть с тайтлами, с которыми не совпало бы в Maintainerr.",
+  "settings.maintainerrImportCode.comparatorAbsenceWidens":
+    "Правило срабатывает при отсутствии значения, а в Scryer его может не быть там, где в Maintainerr оно есть.",
+  "settings.maintainerrImportCode.comparatorDateDriftWidens":
+    "Правило сравнивает дату, которую Scryer может записать иначе, чем Maintainerr, в направлении, при котором оно могло бы совпасть с лишними тайтлами.",
+  "settings.maintainerrImportCode.usernameUnknownWidens":
+    "Правило называет пользователя, которого нет в Scryer, и совпало бы с каждым тайтлом без его просмотров.",
+  "settings.maintainerrImportCode.scopeAllLibraries":
+    "В Maintainerr группа относится к одной библиотеке медиасервера; импортированное правило относится ко всем библиотекам Scryer.",
   "settings.maintainerrImportCode.customValueInvalid":
     "Значение правила нельзя прочитать так, как его читает Maintainerr.",
   "settings.maintainerrImportCode.actionMissing": "У группы нет действия.",
@@ -12138,7 +12146,7 @@ const ru: LocaleDictionary = {
   "settings.maintainerrImportCode.sourceInvalid":
     "Переведённое правило не прошло проверку правил жизненного цикла.",
   "settings.maintainerrImportCode.usernameUnknown":
-    "Правило называет пользователя, которого нет в Scryer.",
+    "Правило называет пользователя, которого нет в Scryer, поэтому для этого пользователя оно ни с чем не совпадает.",
   "settings.maintainerrImportCode.factApproximate":
     "Правило читает факт Scryer, который немного отличается от факта Maintainerr.",
   "settings.maintainerrImportCode.actionApproximate":

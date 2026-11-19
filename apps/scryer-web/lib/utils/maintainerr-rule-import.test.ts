@@ -76,7 +76,7 @@ test("diagnostics use their translation and keep the server sentence for unknown
 
 test("every translator code has copy in English and Russian", () => {
   const entries = Object.entries(MAINTAINERR_DIAGNOSTIC_KEYS);
-  assert.equal(entries.length, 25);
+  assert.equal(entries.length, 30);
   for (const [code, key] of entries) {
     assert.ok(key in en, `no English copy for ${code}`);
     assert.ok(key in ru, `no Russian copy for ${code}`);

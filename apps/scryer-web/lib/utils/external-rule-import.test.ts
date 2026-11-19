@@ -28,7 +28,7 @@ test("a rule import report is read field by field", () => {
         key: "group:1",
         sourceName: "Synthetic Group",
         state: "SAVED_NEEDS_REVIEW",
-        facts: [{ code: "RULE_IMPORT_USERNAMES_UNAVAILABLE", message: "x" }],
+        facts: [{ code: "RULE_IMPORT_PROFILES_UNAVAILABLE", message: "x" }],
       },
       { key: "group:2", state: "SOMETHING_NEW" },
       { noKey: true },

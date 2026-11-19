@@ -37,6 +37,16 @@ export const MAINTAINERR_DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
     "settings.maintainerrImportCode.comparatorUnsupported",
   "maintainerr.comparator.date_equality_unsupported":
     "settings.maintainerrImportCode.comparatorDateEqualityUnsupported",
+  "maintainerr.comparator.partial_list_widens":
+    "settings.maintainerrImportCode.comparatorPartialListWidens",
+  "maintainerr.comparator.absence_widens":
+    "settings.maintainerrImportCode.comparatorAbsenceWidens",
+  "maintainerr.comparator.date_drift_widens":
+    "settings.maintainerrImportCode.comparatorDateDriftWidens",
+  "maintainerr.username.unknown_widens":
+    "settings.maintainerrImportCode.usernameUnknownWidens",
+  "maintainerr.scope.all_libraries":
+    "settings.maintainerrImportCode.scopeAllLibraries",
   "maintainerr.custom_value.invalid":
     "settings.maintainerrImportCode.customValueInvalid",
   "maintainerr.action.missing": "settings.maintainerrImportCode.actionMissing",

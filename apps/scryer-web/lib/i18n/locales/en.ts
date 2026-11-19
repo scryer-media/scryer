@@ -1014,8 +1014,6 @@ const en: LocaleDictionary = {
   "error.reason.RULE_IMPORT_ITEM_FAILED": "This rule could not be imported.",
   "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
     "Some quality profiles could not be read from the source.",
-  "error.reason.RULE_IMPORT_USERNAMES_UNAVAILABLE":
-    "User names could not be read from the source.",
   "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
     "The source refers to more connected applications than one import reads.",
   "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
@@ -7422,6 +7420,16 @@ const en: LocaleDictionary = {
     "A rule's comparison cannot be expressed exactly in Scryer.",
   "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
     "A rule compares dates for equality, which depends on Maintainerr's time zone.",
+  "settings.maintainerrImportCode.comparatorPartialListWidens":
+    "A rule reads a list Scryer holds only part of, in a way that could match titles Maintainerr would not.",
+  "settings.maintainerrImportCode.comparatorAbsenceWidens":
+    "A rule matches a value being absent, which Scryer can lack where Maintainerr has it.",
+  "settings.maintainerrImportCode.comparatorDateDriftWidens":
+    "A rule compares a date Scryer can record differently from Maintainerr, in a direction that could match titles Maintainerr would not.",
+  "settings.maintainerrImportCode.usernameUnknownWidens":
+    "A rule names a user no Scryer user is called, and it would match every title with no plays from them.",
+  "settings.maintainerrImportCode.scopeAllLibraries":
+    "The group applies to one media-server library in Maintainerr; the imported rule applies to every Scryer library.",
   "settings.maintainerrImportCode.customValueInvalid":
     "A rule's value cannot be read the way Maintainerr reads it.",
   "settings.maintainerrImportCode.actionMissing": "The group has no action.",
@@ -7436,7 +7444,7 @@ const en: LocaleDictionary = {
   "settings.maintainerrImportCode.sourceInvalid":
     "The translated rule did not pass lifecycle rule validation.",
   "settings.maintainerrImportCode.usernameUnknown":
-    "A rule names a user no Scryer user is called.",
+    "A rule names a user no Scryer user is called, so it matches nothing for that user.",
   "settings.maintainerrImportCode.factApproximate":
     "A rule reads a Scryer fact that differs slightly from Maintainerr's.",
   "settings.maintainerrImportCode.actionApproximate":
