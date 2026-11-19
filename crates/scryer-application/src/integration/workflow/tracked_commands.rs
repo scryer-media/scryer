@@ -3245,6 +3245,9 @@ async fn handle_tracked_download_command(
                 .collect();
             let _ = reply.send(snapshot);
         }
+        TrackedDownloadCommand::UntrackedExtractions { keys, reply } => {
+            let _ = reply.send(tracker.untracked_extraction_keys(keys));
+        }
     }
 }
 fn prepare_tracked_download_background_work_dispatch(

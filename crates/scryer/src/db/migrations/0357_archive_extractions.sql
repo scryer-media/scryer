@@ -23,8 +23,14 @@ CREATE TABLE IF NOT EXISTS archive_extractions (
     PRIMARY KEY (client_id, client_item_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_archive_extractions_state_next_attempt
-    ON archive_extractions(state, next_attempt_at);
-
+-- Settled rows due for removal, oldest first; and unsettled rows (settled_at
+-- IS NULL) in key order, for the pass that settles downloads no longer
+-- tracked.
 CREATE INDEX IF NOT EXISTS idx_archive_extractions_settled_at
-    ON archive_extractions(settled_at);
+    ON archive_extractions(settled_at, client_id, client_item_id);
+
+-- Whether a workspace found on disk still has a row, by the workspace's
+-- name: its last 16 characters, whichever spelling of the library root the
+-- row was written with.
+CREATE INDEX IF NOT EXISTS idx_archive_extractions_workspace_name
+    ON archive_extractions(substr(workspace_path, length(workspace_path) - 15));

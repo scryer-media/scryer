@@ -1353,18 +1353,22 @@ impl AppUseCase {
             }
         };
 
-        // 7. Archive workspaces of downloads that ended without an import.
-        match crate::import::archive_extraction::sweep_settled_download_extractions(self).await {
-            Ok(sweep) if sweep.removed > 0 || sweep.deferred > 0 => info!(
-                removed = sweep.removed,
-                deferred = sweep.deferred,
-                "removed archive workspaces of settled downloads"
-            ),
-            Ok(_) => {}
-            Err(error) => warn!(
-                error = %error,
-                "failed to remove archive workspaces of settled downloads"
-            ),
+        // 7. Archive workspaces: downloads no longer tracked settle, settled
+        // downloads' workspaces go, and so do orphaned and stale ones.
+        let workspaces =
+            crate::import::archive_extraction::archive_workspace_housekeeping(self).await;
+        if workspaces != Default::default() {
+            info!(
+                untracked_settled = workspaces.untracked_settled,
+                settled_removed = workspaces.settled.removed,
+                settled_left_foreign = workspaces.settled.left_foreign,
+                settled_deferred = workspaces.settled.deferred,
+                orphans_removed = workspaces.orphans.removed,
+                orphans_waiting = workspaces.orphans.waiting,
+                unmarked = workspaces.orphans.unmarked,
+                pass_workspaces_removed = workspaces.pass_workspaces_removed,
+                "archive workspace upkeep"
+            );
         }
 
         {

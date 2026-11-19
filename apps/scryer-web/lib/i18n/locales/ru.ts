@@ -892,6 +892,12 @@ const ru: LocaleDictionary = {
   "jobs.status.completed": "Завершено",
   "jobs.status.warning": "Предупреждение",
   "jobs.status.failed": "Ошибка",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_SCRATCH_IN_USE":
+    "Рабочие папки загрузок: {{workspaces}}, распакованные архивы занимают {{bytes}} байт",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED":
+    "Загрузок, архивы которых не удалось распаковать ни с одной попытки: {{blocked}}; повторите их импорт",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_UNMARKED_ENTRIES":
+    "Объектов в папках .scry-ex корней библиотек, созданных не Scryer и оставленных на месте: {{unmarked}}",
   "jobs.category.library": "Библиотека",
   "jobs.category.acquisition": "Получение",
   "jobs.category.maintenance": "Обслуживание",

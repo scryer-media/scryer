@@ -13,7 +13,12 @@
 //! A download gets [`MAX_ATTEMPTS`] attempts, spaced by a backoff; after that
 //! it is blocked until an operator retries. The workspace lives as long as the
 //! download is unsettled: it goes when the download is imported, and a day
-//! after the download ends any other way.
+//! after the download ends any other way. A download the tracker stopped
+//! following, or whose client is no longer configured, counts as ended.
+//!
+//! Housekeeping also removes an owned workspace in a library root's
+//! extraction folder that no record names, a day after it was made, and
+//! leaves and counts anything there it cannot prove it made.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -93,6 +98,26 @@ pub struct ArchiveExtractionRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// An unsettled download's record, as the pass that settles downloads no
+/// longer tracked reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsettledArchiveExtraction {
+    pub client_id: String,
+    pub client_item_id: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// The scratch the records account for.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveScratchSummary {
+    /// Downloads with a workspace on disk.
+    pub workspaces: u64,
+    /// Bytes their completed extractions wrote.
+    pub bytes: u64,
+    /// Downloads whose extraction is blocked until an operator retries.
+    pub blocked: u64,
+}
+
 /// One row per download whose workspace is on disk.
 #[async_trait]
 pub trait ArchiveExtractionRepository: Send + Sync {
@@ -117,6 +142,17 @@ pub trait ArchiveExtractionRepository: Send + Sync {
         limit: usize,
     ) -> AppResult<Vec<ArchiveExtractionRecord>>;
     async fn delete_many(&self, keys: &[(String, String)]) -> AppResult<()>;
+    /// Unsettled downloads whose key sorts after `after` (from the start
+    /// when `None`), in key order, at most `limit`.
+    async fn list_unsettled_after(
+        &self,
+        after: Option<(String, String)>,
+        limit: usize,
+    ) -> AppResult<Vec<UnsettledArchiveExtraction>>;
+    /// The workspace names, of those given, that end some record's
+    /// workspace path.
+    async fn recorded_workspace_names(&self, names: &[String]) -> AppResult<HashSet<String>>;
+    async fn scratch_summary(&self) -> AppResult<ArchiveScratchSummary>;
 }
 
 /// The repository a service bundle starts with. Assembly replaces it with
@@ -203,6 +239,54 @@ impl ArchiveExtractionRepository for InMemoryArchiveExtractionRepository {
             rows.remove(key);
         }
         Ok(())
+    }
+
+    async fn list_unsettled_after(
+        &self,
+        after: Option<(String, String)>,
+        limit: usize,
+    ) -> AppResult<Vec<UnsettledArchiveExtraction>> {
+        let rows = self.rows.lock().await;
+        let mut unsettled: Vec<_> = rows
+            .iter()
+            .filter(|(key, row)| {
+                row.settled_at.is_none() && after.as_ref().is_none_or(|after| *key > after)
+            })
+            .map(|(key, row)| UnsettledArchiveExtraction {
+                client_id: key.0.clone(),
+                client_item_id: key.1.clone(),
+                updated_at: row.updated_at,
+            })
+            .collect();
+        unsettled.sort_by(|a, b| {
+            (&a.client_id, &a.client_item_id).cmp(&(&b.client_id, &b.client_item_id))
+        });
+        unsettled.truncate(limit);
+        Ok(unsettled)
+    }
+
+    async fn recorded_workspace_names(&self, names: &[String]) -> AppResult<HashSet<String>> {
+        let rows = self.rows.lock().await;
+        Ok(names
+            .iter()
+            .filter(|name| {
+                rows.values()
+                    .any(|row| row.workspace_path.ends_with(name.as_str()))
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn scratch_summary(&self) -> AppResult<ArchiveScratchSummary> {
+        let rows = self.rows.lock().await;
+        Ok(ArchiveScratchSummary {
+            workspaces: rows.len() as u64,
+            bytes: rows.values().map(|row| row.output_bytes).sum(),
+            blocked: rows
+                .values()
+                .filter(|row| row.state == ArchiveExtractionState::Blocked)
+                .count() as u64,
+        })
     }
 }
 
@@ -313,7 +397,7 @@ impl DownloadExtractionKey {
         }
     }
 
-    fn pair(&self) -> (String, String) {
+    pub(crate) fn pair(&self) -> (String, String) {
         (self.client_id.clone(), self.client_item_id.clone())
     }
 
@@ -374,7 +458,7 @@ pub(crate) fn is_download_workspace_path(root: &Path) -> bool {
 pub(crate) struct ArchiveExtractionsInFlight(Arc<std::sync::Mutex<HashSet<DownloadExtractionKey>>>);
 
 impl ArchiveExtractionsInFlight {
-    fn claim(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
+    pub(crate) fn claim(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
         let mut keys = self
             .0
             .lock()
@@ -391,9 +475,61 @@ impl ArchiveExtractionsInFlight {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains(key)
     }
+
+    /// Whether a running extraction's workspace has this name.
+    fn holds_workspace(&self, name: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|key| key.workspace_name() == name)
+    }
 }
 
-struct InFlightClaim {
+/// Process-local state of workspace upkeep.
+#[derive(Clone, Default)]
+pub(crate) struct ArchiveWorkspaceUpkeep {
+    /// What the last orphan sweep found, for the health check.
+    last_orphan_sweep: Arc<std::sync::Mutex<Option<OrphanSweep>>>,
+    /// Where the pass settling untracked downloads resumes.
+    untracked_cursor: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    /// Removals of imported downloads' workspaces still running.
+    removals: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl ArchiveWorkspaceUpkeep {
+    pub(crate) fn last_orphan_sweep(&self) -> Option<OrphanSweep> {
+        *self
+            .last_orphan_sweep
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn track_removal(&self, removal: tokio::task::JoinHandle<()>) {
+        let mut removals = self
+            .removals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        removals.retain(|removal| !removal.is_finished());
+        removals.push(removal);
+    }
+
+    /// Wait for every removal started so far.
+    #[cfg(test)]
+    pub(crate) async fn drain_removals(&self) {
+        let removals = std::mem::take(
+            &mut *self
+                .removals
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        for removal in removals {
+            removal.await.expect("workspace removal task");
+        }
+    }
+}
+
+pub(crate) struct InFlightClaim {
     set: ArchiveExtractionsInFlight,
     key: DownloadExtractionKey,
 }
@@ -727,10 +863,12 @@ pub(crate) async fn reset_download_extraction(app: &AppUseCase, key: &DownloadEx
     }
 }
 
-/// The download has settled. Imported: its workspace and record go now.
-/// Ended any other way: it is marked settled, and housekeeping removes the
-/// workspace [`SETTLED_WORKSPACE_RETENTION`] later. Nothing is written for a
-/// download without a record or one already settled.
+/// The download has settled. Imported: it is marked due for removal at once
+/// and its workspace is removed off the caller's path; should that removal
+/// not finish, housekeeping's sweep removes it. Ended any other way: it is
+/// marked settled, and housekeeping removes the workspace
+/// [`SETTLED_WORKSPACE_RETENTION`] later. Nothing is written for a download
+/// without a record, or for one already settled that is not imported.
 pub(crate) async fn settle_download_extraction(
     app: &AppUseCase,
     key: &DownloadExtractionKey,
@@ -745,20 +883,54 @@ pub(crate) async fn settle_download_extraction(
             return;
         }
     };
+    let now = app.runtime.environment.now();
     if imported {
-        let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
-        if remove_settled_workspace(&root, key).await == SettledRemoval::Done {
-            forget_download_extraction(app, key).await;
+        let due = now - SETTLED_WORKSPACE_RETENTION;
+        if record.settled_at.is_none_or(|at| at > due)
+            && repository.defer_settled(&[key.pair()], due).await.is_err()
+        {
+            tracing::warn!("archive extraction settlement could not be recorded");
             return;
         }
+        let removal = tokio::spawn(remove_imported_workspace(app.clone(), key.clone()));
+        app.runtime
+            .imports
+            .archive_workspace_upkeep
+            .track_removal(removal);
+        return;
     }
-    if record.settled_at.is_none()
-        && repository
-            .settle(&[key.pair()], app.runtime.environment.now())
-            .await
-            .is_err()
-    {
+    if record.settled_at.is_none() && repository.settle(&[key.pair()], now).await.is_err() {
         tracing::warn!("archive extraction settlement could not be recorded");
+    }
+}
+
+/// Remove an imported download's workspace and forget its record, unless an
+/// extraction of it runs now or a new one has unsettled it. A workspace that
+/// stays is left to the sweep, where the record is already due.
+async fn remove_imported_workspace(app: AppUseCase, key: DownloadExtractionKey) {
+    let Some(_claim) = app
+        .runtime
+        .imports
+        .archive_extractions_in_flight
+        .claim(&key)
+    else {
+        return;
+    };
+    let Ok(Some(record)) = app
+        .services
+        .workflow
+        .archive_extractions
+        .get(&key.client_id, &key.client_item_id)
+        .await
+    else {
+        return;
+    };
+    if record.settled_at.is_none() {
+        return;
+    }
+    let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
+    if remove_settled_workspace(&root, &key).await != SettledRemoval::Retry {
+        forget_download_extraction(&app, &key).await;
     }
 }
 
@@ -782,9 +954,10 @@ pub(crate) async fn settle_download_extractions(app: &AppUseCase, keys: &[Downlo
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettledRemoval {
-    /// The workspace is gone, or what holds its path is not Scryer's and
-    /// stays; either way the record is done with.
-    Done,
+    /// The workspace is gone: removed now, or already missing.
+    Gone,
+    /// What holds the path is not Scryer's and stays where it is.
+    LeftForeign,
     /// The workspace is still there; try again later.
     Retry,
 }
@@ -792,22 +965,28 @@ enum SettledRemoval {
 async fn remove_settled_workspace(root: &Path, key: &DownloadExtractionKey) -> SettledRemoval {
     let owner_id = key.owner_id();
     if archive_extractor::remove_download_workspace(root, &owner_id).await {
-        return SettledRemoval::Done;
+        return SettledRemoval::Gone;
     }
     match archive_extractor::download_workspace_presence(root, &owner_id).await {
-        DownloadWorkspacePresence::Missing => SettledRemoval::Done,
+        DownloadWorkspacePresence::Missing => SettledRemoval::Gone,
         DownloadWorkspacePresence::Foreign if archive_extractor::PROVES_WORKSPACE_OWNERSHIP => {
-            SettledRemoval::Done
+            SettledRemoval::LeftForeign
         }
         // Owned but not removed, or a build that cannot tell whose it is.
         _ => SettledRemoval::Retry,
     }
 }
 
-/// What one settled-workspace sweep did.
+/// What one settled-workspace sweep did. The records of removed and foreign
+/// paths are deleted; a deferred one is tried again on a later pass.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SettledSweep {
+    /// Workspaces removed, or found already gone.
     pub removed: usize,
+    /// Paths held by something Scryer did not make, left in place.
+    pub left_foreign: usize,
+    /// Workspaces that stay for now: removal failed, or an extraction of
+    /// the download runs.
     pub deferred: usize,
 }
 
@@ -823,22 +1002,301 @@ pub(crate) async fn sweep_settled_download_extractions(
     let due = repository
         .list_settled_before(now - SETTLED_WORKSPACE_RETENTION, SETTLED_SWEEP_LIMIT)
         .await?;
+    let in_flight = &app.runtime.imports.archive_extractions_in_flight;
+    let mut sweep = SettledSweep::default();
     let mut done = Vec::new();
     let mut retry = Vec::new();
     for record in &due {
         let key = DownloadExtractionKey::of_record(record);
+        // A running extraction keeps its workspace; still due next pass.
+        let Some(_claim) = in_flight.claim(&key) else {
+            sweep.deferred += 1;
+            continue;
+        };
         let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
         match remove_settled_workspace(&root, &key).await {
-            SettledRemoval::Done => done.push(key.pair()),
-            SettledRemoval::Retry => retry.push(key.pair()),
+            SettledRemoval::Gone => {
+                sweep.removed += 1;
+                done.push(key.pair());
+            }
+            SettledRemoval::LeftForeign => {
+                sweep.left_foreign += 1;
+                done.push(key.pair());
+            }
+            SettledRemoval::Retry => {
+                sweep.deferred += 1;
+                retry.push(key.pair());
+            }
         }
     }
     repository.delete_many(&done).await?;
     repository.defer_settled(&retry, now).await?;
-    Ok(SettledSweep {
-        removed: done.len(),
-        deferred: retry.len(),
-    })
+    Ok(sweep)
+}
+
+/// Unsettled records the pass settling untracked downloads reads at a time,
+/// and pages it reads per pass; the next pass resumes where it stopped.
+const UNTRACKED_PAGE: usize = 500;
+const UNTRACKED_PAGES_PER_PASS: usize = 20;
+
+/// Settle downloads the tracker no longer follows, and downloads of clients
+/// no longer configured, as ended without an import, so their workspaces go
+/// [`SETTLED_WORKSPACE_RETENTION`] later. A record changed within that
+/// period is left: a manual import of a download the tracker never listed
+/// may be using it. Before a client has delivered a listing since startup,
+/// none of its downloads is settled. Returns how many were settled; a pass
+/// that settles none writes nothing.
+pub(crate) async fn settle_untracked_download_extractions(app: &AppUseCase) -> AppResult<usize> {
+    let Some(tracker) = app.runtime.acquisition.tracked_download_handle.clone() else {
+        return Ok(0);
+    };
+    let configured: HashSet<String> = app
+        .services
+        .integrations
+        .download_client_configs
+        .list(None)
+        .await?
+        .into_iter()
+        .map(|config| config.id.trim().to_ascii_lowercase())
+        .collect();
+    let repository = &app.services.workflow.archive_extractions;
+    let upkeep = &app.runtime.imports.archive_workspace_upkeep;
+    let now = app.runtime.environment.now();
+    let changed_before = now - SETTLED_WORKSPACE_RETENTION;
+    let mut after = upkeep
+        .untracked_cursor
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let mut settled = 0;
+    for _ in 0..UNTRACKED_PAGES_PER_PASS {
+        let page = repository
+            .list_unsettled_after(after.clone(), UNTRACKED_PAGE)
+            .await?;
+        after = page
+            .last()
+            .filter(|_| page.len() == UNTRACKED_PAGE)
+            .map(|last| (last.client_id.clone(), last.client_item_id.clone()));
+        let (mut ended, of_configured): (Vec<_>, Vec<_>) = page
+            .into_iter()
+            .filter(|row| row.updated_at <= changed_before)
+            .map(|row| (row.client_id, row.client_item_id))
+            .partition(|(client_id, _)| !configured.contains(client_id));
+        if !of_configured.is_empty() {
+            ended.extend(tracker.untracked_extractions(of_configured).await?);
+        }
+        if !ended.is_empty() {
+            repository.settle(&ended, now).await?;
+            settled += ended.len();
+        }
+        if after.is_none() {
+            break;
+        }
+    }
+    *upkeep
+        .untracked_cursor
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = after;
+    Ok(settled)
+}
+
+/// What one sweep of the library roots' extraction folders found.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OrphanSweep {
+    /// Owned workspaces no record names, made a day ago or more: removed.
+    pub removed: usize,
+    /// Owned workspaces kept for now: younger than a day (whether or not a
+    /// record names them), an extraction runs in them, or removal failed.
+    pub waiting: usize,
+    /// Entries Scryer cannot prove it made for the download their name
+    /// names. They are never removed.
+    pub unmarked: usize,
+}
+
+/// The library roots, each once, in configuration order.
+async fn library_roots(app: &AppUseCase) -> AppResult<Vec<PathBuf>> {
+    let mut seen = HashSet::new();
+    Ok(app
+        .services
+        .catalog
+        .libraries
+        .list(None)
+        .await?
+        .into_iter()
+        .flat_map(|library| library.roots)
+        .map(|root| PathBuf::from(root.path))
+        .filter(|root| !root.as_os_str().is_empty() && seen.insert(root.clone()))
+        .collect())
+}
+
+/// Remove owned download workspaces that no record names, a day after they
+/// were made, from each library root's extraction folder.
+///
+/// Per root: one listing of the extraction folder, and nothing more when it
+/// is missing or empty. Per entry named like a workspace: one directory
+/// open, one reading and one read of its marker; an entry named otherwise
+/// costs nothing. One batched lookup per root of the old ones' names, and
+/// for each one removed, the owner check and release of the removal itself.
+///
+/// It never races an extraction: a record is saved before its workspace is
+/// made and deleted only after the workspace is gone, a workspace being
+/// extracted is in the in-flight set and is skipped, and a fresh one is
+/// younger than the day of grace.
+pub(crate) async fn sweep_orphaned_download_workspaces(app: &AppUseCase) -> AppResult<OrphanSweep> {
+    let mut sweep = OrphanSweep::default();
+    if !archive_extractor::PROVES_WORKSPACE_OWNERSHIP {
+        return Ok(sweep);
+    }
+    let in_flight = &app.runtime.imports.archive_extractions_in_flight;
+    let made_before =
+        std::time::SystemTime::from(app.runtime.environment.now() - SETTLED_WORKSPACE_RETENTION);
+    for root in library_roots(app).await? {
+        let folder = root.join(ARCHIVE_EXTRACTION_DIR_NAME);
+        let Ok(entries) = crate::disk::Disk::process().list(&folder).await else {
+            continue;
+        };
+        let mut old = Vec::new();
+        for entry in entries {
+            let name = entry
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string);
+            let Some(name) =
+                name.filter(|name| archive_extractor::is_download_workspace_name(name))
+            else {
+                sweep.unmarked += 1;
+                continue;
+            };
+            if entry
+                .reading
+                .kind()
+                .is_some_and(|kind| kind != crate::disk::EntryKind::Directory)
+            {
+                sweep.unmarked += 1;
+                continue;
+            }
+            if in_flight.holds_workspace(&name) {
+                sweep.waiting += 1;
+                continue;
+            }
+            let owner_id = format!("download:{name}");
+            match archive_extractor::download_workspace_marked_at(&entry.path, &owner_id).await {
+                None => sweep.unmarked += 1,
+                Some(made) if made <= made_before => old.push((entry.path, name, owner_id)),
+                Some(_) => sweep.waiting += 1,
+            }
+        }
+        if old.is_empty() {
+            continue;
+        }
+        let names: Vec<_> = old.iter().map(|(_, name, _)| name.clone()).collect();
+        let recorded = app
+            .services
+            .workflow
+            .archive_extractions
+            .recorded_workspace_names(&names)
+            .await?;
+        for (path, name, owner_id) in old {
+            // A recorded workspace goes when its download settles.
+            if recorded.contains(&name) {
+                continue;
+            }
+            if !in_flight.holds_workspace(&name)
+                && archive_extractor::remove_download_workspace(&path, &owner_id).await
+            {
+                sweep.removed += 1;
+            } else {
+                sweep.waiting += 1;
+            }
+        }
+    }
+    *app.runtime
+        .imports
+        .archive_workspace_upkeep
+        .last_orphan_sweep
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sweep);
+    Ok(sweep)
+}
+
+/// Remove per-pass workspaces staged directly in each library root under
+/// their usual rule: owned, released, and released a day ago or more. One
+/// listing per root; entries not named like a workspace are not opened.
+pub(crate) async fn sweep_library_root_pass_workspaces(app: &AppUseCase) -> AppResult<usize> {
+    let mut removed = 0;
+    for root in library_roots(app).await? {
+        removed += archive_extractor::sweep_stale_archive_workspaces_in(&root).await;
+    }
+    Ok(removed)
+}
+
+/// What housekeeping's workspace upkeep did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ArchiveWorkspaceHousekeeping {
+    pub untracked_settled: usize,
+    pub settled: SettledSweep,
+    pub orphans: OrphanSweep,
+    pub pass_workspaces_removed: usize,
+}
+
+/// Housekeeping's workspace upkeep, each step on its own: a step that fails
+/// is logged and the rest still run.
+pub(crate) async fn archive_workspace_housekeeping(
+    app: &AppUseCase,
+) -> ArchiveWorkspaceHousekeeping {
+    let mut report = ArchiveWorkspaceHousekeeping::default();
+    match settle_untracked_download_extractions(app).await {
+        Ok(settled) => report.untracked_settled = settled,
+        Err(error) => {
+            tracing::warn!(error = %error, "untracked downloads' archive extractions could not be settled")
+        }
+    }
+    match sweep_settled_download_extractions(app).await {
+        Ok(sweep) => report.settled = sweep,
+        Err(error) => {
+            tracing::warn!(error = %error, "archive workspaces of settled downloads could not be swept")
+        }
+    }
+    match sweep_orphaned_download_workspaces(app).await {
+        Ok(sweep) => report.orphans = sweep,
+        Err(error) => {
+            tracing::warn!(error = %error, "orphaned archive workspaces could not be swept")
+        }
+    }
+    match sweep_library_root_pass_workspaces(app).await {
+        Ok(removed) => report.pass_workspaces_removed = removed,
+        Err(error) => {
+            tracing::warn!(error = %error, "stale archive workspaces in library roots could not be swept")
+        }
+    }
+    report
+}
+
+/// The startup sweep: orphaned download workspaces and stale per-pass
+/// workspaces in the library roots. Downloads are not settled here, since
+/// no client has been listed yet.
+pub async fn sweep_archive_workspaces_at_startup(app: &AppUseCase) {
+    let orphans = match sweep_orphaned_download_workspaces(app).await {
+        Ok(sweep) => sweep,
+        Err(error) => {
+            tracing::warn!(error = %error, "orphaned archive workspaces could not be swept at startup");
+            OrphanSweep::default()
+        }
+    };
+    let pass_workspaces_removed = sweep_library_root_pass_workspaces(app).await.unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "stale archive workspaces in library roots could not be swept at startup");
+        0
+    });
+    if orphans != OrphanSweep::default() || pass_workspaces_removed > 0 {
+        tracing::info!(
+            orphans_removed = orphans.removed,
+            orphans_waiting = orphans.waiting,
+            unmarked = orphans.unmarked,
+            pass_workspaces_removed,
+            "swept archive workspaces at startup"
+        );
+    }
 }
 
 /// Delete the record of a download whose workspace was removed.

@@ -329,11 +329,20 @@ fn archive_release_proof(root: &Path, release: &ArchiveWorkspaceRelease) -> Opti
 }
 
 fn read_archive_marker<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    read_archive_marker_at(path).map(|(marker, _)| marker)
+}
+
+/// The marker and when it was last written, from the one reading taken
+/// before it is opened.
+fn read_archive_marker_at<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Option<(T, Option<SystemTime>)> {
     let disk = Disk::process();
     // Checked before opening, so a special file in its place is never opened.
     let PathReading::Known {
         kind: EntryKind::File,
         len: Some(len),
+        modified,
         ..
     } = disk.fresh_blocking(path)
     else {
@@ -346,10 +355,20 @@ fn read_archive_marker<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T>
         .open_blocking(path, Open::read().without_following_links())
         .ok()?;
     let mut bounded = std::io::Read::take(file, 4097);
-    serde_json::from_reader(&mut bounded).ok()
+    Some((serde_json::from_reader(&mut bounded).ok()?, modified))
 }
 
 fn release_archive_workspace(root: &Path) -> std::io::Result<()> {
+    release_archive_workspace_at(root, SystemTime::now())
+}
+
+/// A workspace released at `at`, as one released then leaves it.
+#[cfg(test)]
+pub(crate) fn release_test_archive_workspace_at(root: &Path, at: SystemTime) {
+    release_archive_workspace_at(root, at).unwrap();
+}
+
+fn release_archive_workspace_at(root: &Path, at: SystemTime) -> std::io::Result<()> {
     let owner = archive_workspace_owner(root).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -363,7 +382,7 @@ fn release_archive_workspace(root: &Path) -> std::io::Result<()> {
     let mut release = ArchiveWorkspaceRelease {
         schema: 2,
         owner_proof: owner.proof,
-        released_at: SystemTime::now()
+        released_at: at
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(std::io::Error::other)?
             .as_secs(),
@@ -419,25 +438,63 @@ pub(crate) fn is_owned_archive_workspace_handle(root: &Path, directory: &std::fs
 }
 
 fn archive_workspace_owner(root: &Path) -> Option<ArchiveWorkspaceOwner> {
-    archive_workspace_owner_for_identity(root, &archive_workspace_identity(root)?)
+    archive_workspace_marked_owner(root).map(|(owner, _)| owner)
+}
+
+/// The owner and when its marker was written. The name is checked first, so
+/// a folder that cannot be a workspace is never opened.
+fn archive_workspace_marked_owner(
+    root: &Path,
+) -> Option<(ArchiveWorkspaceOwner, Option<SystemTime>)> {
+    if !is_archive_workspace_root(root) {
+        return None;
+    }
+    archive_workspace_marked_owner_for_identity(root, &archive_workspace_identity(root)?)
 }
 
 fn archive_workspace_owner_for_identity(
     root: &Path,
     identity: &[u8],
 ) -> Option<ArchiveWorkspaceOwner> {
+    archive_workspace_marked_owner_for_identity(root, identity).map(|(owner, _)| owner)
+}
+
+fn archive_workspace_marked_owner_for_identity(
+    root: &Path,
+    identity: &[u8],
+) -> Option<(ArchiveWorkspaceOwner, Option<SystemTime>)> {
     let name = root.file_name()?.to_str()?;
     if !is_archive_workspace_root(root) {
         return None;
     }
-    let owner: ArchiveWorkspaceOwner =
-        read_archive_marker(&root.join(ARCHIVE_WORKSPACE_OWNER_FILE))?;
+    let (owner, marked_at): (ArchiveWorkspaceOwner, _) =
+        read_archive_marker_at(&root.join(ARCHIVE_WORKSPACE_OWNER_FILE))?;
     (owner.schema == 2
         && owner.workspace == name
         && !owner.import_id.is_empty()
         && blake3::Hash::from_hex(&owner.proof).ok()?
             == archive_owner_proof_for_identity(identity, &owner)?)
-    .then_some(owner)
+    .then_some((owner, marked_at))
+}
+
+/// When the workspace at `root` was made, by its ownership marker, which is
+/// written once as the workspace is created: `None` unless `owner_id` owns
+/// it and the time is known. One directory open, one reading of the marker
+/// and one read of it.
+pub(crate) async fn download_workspace_marked_at(
+    root: &Path,
+    owner_id: &str,
+) -> Option<SystemTime> {
+    let root = root.to_path_buf();
+    let owner_id = owner_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        archive_workspace_marked_owner(&root)
+            .filter(|(owner, _)| owner.import_id == owner_id)
+            .and_then(|(_, marked_at)| marked_at)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 struct ArchivePluginExtraction {
@@ -1584,12 +1641,22 @@ async fn cleanup_stale_archive_artifacts(parent: &Path) {
     cleanup_archive_artifacts_older_than(parent, STALE_ARCHIVE_STAGING_AFTER).await;
 }
 
-async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) {
+/// The cleanup a new workspace runs on the folders around it, run on its own
+/// over `parent`: owned workspaces released a day ago or more go, and
+/// nothing else is touched. One listing of `parent`; only entries named
+/// like a workspace are opened.
+pub(crate) async fn sweep_stale_archive_workspaces_in(parent: &Path) -> usize {
+    cleanup_archive_artifacts_older_than(parent, STALE_ARCHIVE_STAGING_AFTER).await
+}
+
+/// Returns how many workspaces it removed.
+async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) -> usize {
     let disk = Disk::process();
     let Ok(entries) = disk.list(parent).await else {
-        return;
+        return 0;
     };
     let now = SystemTime::now();
+    let mut removed = 0;
     for entry in entries {
         let path = entry.path;
         if archive_workspace_owner(&path).is_none() {
@@ -1604,10 +1671,12 @@ async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) 
         if now
             .duration_since(released_at)
             .is_ok_and(|age| age >= min_age)
+            && disk.remove(path, Remove::Tree).await.is_ok()
         {
-            let _ = disk.remove(path, Remove::Tree).await;
+            removed += 1;
         }
     }
+    removed
 }
 
 fn is_old_rar_volume_extension(ext: &str) -> bool {
@@ -2545,6 +2614,11 @@ fn is_workspace_hex(text: &str) -> bool {
         && text
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Whether `name` is shaped like a download's workspace name. Shape only.
+pub(crate) fn is_download_workspace_name(name: &str) -> bool {
+    is_workspace_hex(name)
 }
 
 fn is_archive_workspace_name(name: &str) -> bool {

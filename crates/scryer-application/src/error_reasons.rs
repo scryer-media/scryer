@@ -5396,6 +5396,52 @@ pub mod archive_extraction {
         WAITING,
         BLOCKED,
     ];
+
+    #[cfg(test)]
+    #[test]
+    fn reasons_are_distinct_and_area_prefixed() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in ALL {
+            assert!(reason.starts_with("ARCHIVE_EXTRACTION_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+            assert!(seen.insert(reason));
+        }
+    }
+}
+
+/// What the archive workspace health check reports. Each result carries its
+/// counts as facts beside the sentence.
+pub mod archive_workspace_health {
+    /// Downloads' extraction workspaces hold scratch on disk; facts
+    /// `workspaces` and `bytes`.
+    pub const SCRATCH_IN_USE: &str = "ARCHIVE_WORKSPACE_SCRATCH_IN_USE";
+    /// Downloads whose extraction failed on every attempt and waits for an
+    /// operator retry; fact `blocked`.
+    pub const EXTRACTIONS_BLOCKED: &str = "ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED";
+    /// Entries in a library root's extraction folder that Scryer cannot
+    /// prove it made, found by the last sweep and left in place; fact
+    /// `unmarked`.
+    pub const UNMARKED_ENTRIES: &str = "ARCHIVE_WORKSPACE_UNMARKED_ENTRIES";
+    pub const ALL: &[&str] = &[SCRATCH_IN_USE, EXTRACTIONS_BLOCKED, UNMARKED_ENTRIES];
+
+    #[cfg(test)]
+    #[test]
+    fn reasons_are_distinct_and_area_prefixed() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in ALL {
+            assert!(reason.starts_with("ARCHIVE_WORKSPACE_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+            assert!(seen.insert(reason));
+        }
+    }
 }
 
 pub mod import {

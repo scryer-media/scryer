@@ -92,7 +92,7 @@ Counts and tallies only; names appear as pseudonyms such as
 | `proxies` | total, by_provider_type |
 | `lists` | total, enabled, by_scope |
 | `plugins` | [{plugin_id, version, plugin_type, provider_type, builtin, enabled, sdk_version, support_tier}] |
-| `health_checks` | [{kind, severity}] |
+| `health_checks` | [{kind, severity, reason, facts}] |
 | `job_runs` | sampled (last 500), by_job{key:{statuses, latest_status, latest_started_at, latest_trigger}} |
 | `titles` | total, monitored, movie, series, anime |
 | `download_queue` | items, by_state, by_client_type |

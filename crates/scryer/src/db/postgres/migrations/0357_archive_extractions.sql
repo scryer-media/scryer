@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS archive_extractions (
     PRIMARY KEY (client_id, client_item_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_archive_extractions_state_next_attempt
-    ON archive_extractions(state, next_attempt_at);
-
 CREATE INDEX IF NOT EXISTS idx_archive_extractions_settled_at
-    ON archive_extractions(settled_at);
+    ON archive_extractions(settled_at, client_id, client_item_id);
+
+CREATE INDEX IF NOT EXISTS idx_archive_extractions_workspace_name
+    ON archive_extractions((substr(workspace_path, length(workspace_path) - 15)));

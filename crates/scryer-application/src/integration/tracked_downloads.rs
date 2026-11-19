@@ -514,6 +514,10 @@ pub struct TrackedDownloadService {
     /// The canonical download `track()` last resolved each tracked id string
     /// to: the poller's current mapping for a string several rows can share.
     current_download_for_id: HashMap<String, DownloadId>,
+    /// Clients (lowercased) that have delivered an authoritative listing
+    /// since startup. Until a client has, a download of it missing from the
+    /// cache may just not have been listed yet.
+    listed_clients: HashSet<String>,
 }
 
 impl TrackedDownloadService {
@@ -1330,6 +1334,10 @@ impl TrackedDownloadService {
         excluded_client_types: &[&str],
         authoritative_client_ids: Option<&HashSet<String>>,
     ) -> Vec<ClientJobLocator> {
+        if let Some(client_ids) = authoritative_client_ids {
+            self.listed_clients
+                .extend(client_ids.iter().map(|id| id.trim().to_ascii_lowercase()));
+        }
         let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
             if tracked_client_type_is_excluded(&td.client_type, excluded_client_types) {
@@ -1388,6 +1396,12 @@ impl TrackedDownloadService {
         else {
             return Vec::new();
         };
+        if let Some(client_id) = client_id.as_deref()
+            && authoritative_client_ids.is_none_or(|client_ids| client_ids.contains(client_id))
+        {
+            self.listed_clients
+                .insert(client_id.trim().to_ascii_lowercase());
+        }
 
         let now = Utc::now();
         let mut unavailable_sources = Vec::new();
@@ -1421,6 +1435,25 @@ impl TrackedDownloadService {
         self.clear_untracked_warning_clocks();
         self.prune_cache();
         unavailable_sources
+    }
+
+    /// The keys, of those given, of downloads this tracker no longer follows:
+    /// their client has delivered an authoritative listing since startup and
+    /// no cached download carries the key. A key of a client not yet listed
+    /// is never returned.
+    pub fn untracked_extraction_keys(&self, keys: Vec<(String, String)>) -> Vec<(String, String)> {
+        if keys.is_empty() || self.listed_clients.is_empty() {
+            return Vec::new();
+        }
+        let tracked: HashSet<(String, String)> = self
+            .cache
+            .values()
+            .filter_map(crate::import::archive_extraction::DownloadExtractionKey::for_tracked)
+            .map(|key| key.pair())
+            .collect();
+        keys.into_iter()
+            .filter(|key| self.listed_clients.contains(&key.0) && !tracked.contains(key))
+            .collect()
     }
 
     /// Remove a download from the cache (after terminal state).
@@ -2457,6 +2490,11 @@ pub enum TrackedDownloadCommand {
         ids: Vec<String>,
         reply: oneshot::Sender<HashMap<String, TrackedDownloadQueueMetadata>>,
     },
+    /// See [`TrackedDownloadService::untracked_extraction_keys`].
+    UntrackedExtractions {
+        keys: Vec<(String, String)>,
+        reply: oneshot::Sender<Vec<(String, String)>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2557,6 +2595,26 @@ impl TrackedDownloadHandle {
         self.tx
             .send(TrackedDownloadCommand::CompletedSource {
                 identity,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
+        reply_rx.await.map_err(|_| {
+            crate::AppError::Repository("tracked download service dropped reply".into())
+        })
+    }
+
+    /// The keys, of those given, of downloads the tracker no longer follows.
+    pub async fn untracked_extractions(
+        &self,
+        keys: Vec<(String, String)>,
+    ) -> AppResult<Vec<(String, String)>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(TrackedDownloadCommand::UntrackedExtractions {
+                keys,
                 reply: reply_tx,
             })
             .await
@@ -7274,6 +7332,50 @@ mod tests {
             tracker.find(&retained_id).is_none_or(|td| !td.is_trackable),
             "the row is no longer trackable once the client stopped listing it"
         );
+    }
+
+    #[test]
+    fn extraction_keys_are_untracked_only_for_listed_clients_and_uncached_downloads() {
+        let mut tracker = TrackedDownloadService::new();
+        let mut cached = build_tracked_download("cached-item");
+        cached.client_id = "Client-1".to_string();
+        tracker.cache.insert(cached.download_id, cached);
+        let key = |client: &str, item: &str| (client.to_string(), item.to_string());
+        let asked = vec![
+            key("client-1", "cached-item"),
+            key("client-1", "gone-item"),
+            key("client-2", "gone-item"),
+        ];
+
+        assert!(
+            tracker.untracked_extraction_keys(asked.clone()).is_empty(),
+            "no client has listed yet"
+        );
+
+        tracker.update_trackable_excluding_client_types_for_authoritative_clients(
+            &HashSet::from(["cached-item".to_string()]),
+            &[],
+            Some(&HashSet::from(["Client-1".to_string()])),
+        );
+        assert_eq!(
+            tracker.untracked_extraction_keys(asked.clone()),
+            vec![key("client-1", "gone-item")],
+            "a cached download stays tracked, and a client not yet listed is not judged"
+        );
+
+        tracker.update_trackable_for_scope_for_authoritative_clients(
+            &HashSet::new(),
+            &TrackedDownloadSnapshotScope::AuthoritativeForClient {
+                client_id: Some("client-2".to_string()),
+                client_type: "weaver".to_string(),
+            },
+            None,
+        );
+        assert_eq!(
+            tracker.untracked_extraction_keys(asked),
+            vec![key("client-1", "gone-item"), key("client-2", "gone-item")]
+        );
+        assert!(tracker.untracked_extraction_keys(Vec::new()).is_empty());
     }
 
     #[test]

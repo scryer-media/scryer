@@ -128,6 +128,24 @@ pub(crate) async fn download_workspace_presence(
 /// removed and its record is kept.
 pub(crate) const PROVES_WORKSPACE_OWNERSHIP: bool = false;
 
+pub(crate) async fn download_workspace_marked_at(
+    _root: &Path,
+    _owner_id: &str,
+) -> Option<std::time::SystemTime> {
+    None
+}
+
+pub(crate) async fn sweep_stale_archive_workspaces_in(_parent: &Path) -> usize {
+    0
+}
+
+pub(crate) fn is_download_workspace_name(name: &str) -> bool {
+    name.len() == 16
+        && name
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 pub(crate) async fn remove_download_workspace(_root: &Path, _owner_id: &str) -> bool {
     false
 }

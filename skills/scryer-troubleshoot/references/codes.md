@@ -138,8 +138,9 @@ manual grab or connection test and as `failureReasonCode` beside
 
 ## Health checks
 
-From `HealthChecks.graphql`: `summaryJson.checks[] = {source, status, message}`.
-There is no per-check code; branch on `source` and `status` only.
+From `HealthChecks.graphql`: `summaryJson.checks[] = {source, status, message, reason?, facts?}`.
+Only `ArchiveWorkspaces` sends a `reason` code, with its counts in `facts`;
+branch on `source` and `status` for the others.
 
 | source | status | condition |
 |---|---|---|
@@ -151,6 +152,9 @@ There is no per-check code; branch on `source` and `status` only.
 | RecycleBin | error | recycle bin cleanup disabled |
 | DiskSpace | error / warning | under 100 MB / under 500 MB free |
 | ReleaseAgeUnknown | warning | an indexer returns releases with no publish time |
+| ArchiveWorkspaces | ok | `ARCHIVE_WORKSPACE_SCRATCH_IN_USE`: download workspaces hold extracted archives; facts `workspaces`, `bytes` |
+| ArchiveWorkspaces | warning | `ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED`: extractions failed on every attempt and wait for an import retry; fact `blocked` |
+| ArchiveWorkspaces | warning | `ARCHIVE_WORKSPACE_UNMARKED_ENTRIES`: items in a library root's `.scry-ex` folder that Scryer did not make, left in place; fact `unmarked` |
 
 ## Upgrade
 

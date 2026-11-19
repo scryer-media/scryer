@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
+
 use scryer_application::{
     AppError, AppResult, ArchiveExtractionRecord, ArchiveExtractionRepository,
-    ArchiveExtractionState,
+    ArchiveExtractionState, ArchiveScratchSummary, UnsettledArchiveExtraction,
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
@@ -13,7 +15,10 @@ const COLUMNS: &str = "client_id, client_item_id, state, workspace_path, archive
 
 /// `archive_extractions` (migration 0357): one row per tracked download whose
 /// archive workspace is on disk. Reads and writes are by primary key, except
-/// the settled scan, which `idx_archive_extractions_settled_at` serves.
+/// the settled and unsettled scans, which `idx_archive_extractions_settled_at`
+/// serves, the workspace-name lookup, which `idx_archive_extractions_workspace_name`
+/// serves, and the scratch summary, which reads the whole table: it holds only
+/// downloads with scratch on disk.
 #[derive(Clone)]
 pub struct ArchiveExtractionStore {
     datastore: StoreDatastore,
@@ -83,6 +88,17 @@ fn record_from_row(row: &SqlRow) -> AppResult<ArchiveExtractionRecord> {
 
 /// Keys per statement: two binds each, well inside either datastore's limit.
 const KEY_CHUNK: usize = 400;
+
+/// Workspace names per statement.
+const NAME_CHUNK: usize = 500;
+
+/// A workspace path's last 16 characters, its name; the expression
+/// `idx_archive_extractions_workspace_name` indexes, spelled the same.
+const WORKSPACE_NAME_EXPR: &str = "substr(workspace_path, length(workspace_path) - 15)";
+
+fn limit_arg(limit: usize) -> SqlArg {
+    SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX))
+}
 
 /// A `WHERE` fragment for a chunk of keys: one equality per client with its
 /// item ids in an `IN` list, which the primary key answers.
@@ -206,10 +222,7 @@ impl ArchiveExtractionRepository for ArchiveExtractionStore {
                 "SELECT {COLUMNS} FROM archive_extractions \
                  WHERE settled_at <= {{}} ORDER BY settled_at LIMIT {{}}"
             ),
-            &[
-                SqlArg::Timestamp(before),
-                SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)),
-            ],
+            &[SqlArg::Timestamp(before), limit_arg(limit)],
         )
         .await?
         .iter()
@@ -239,6 +252,83 @@ impl ArchiveExtractionRepository for ArchiveExtractionStore {
             })
         })
         .await
+    }
+
+    async fn list_unsettled_after(
+        &self,
+        after: Option<(String, String)>,
+        limit: usize,
+    ) -> AppResult<Vec<UnsettledArchiveExtraction>> {
+        let (after_predicate, mut args) = match after {
+            Some((client_id, client_item_id)) => (
+                "AND (client_id, client_item_id) > ({}, {}) ",
+                key_args(&client_id, &client_item_id).to_vec(),
+            ),
+            None => ("", Vec::new()),
+        };
+        args.push(limit_arg(limit));
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT client_id, client_item_id, updated_at FROM archive_extractions \
+                 WHERE settled_at IS NULL {after_predicate}\
+                 ORDER BY client_id, client_item_id LIMIT {{}}"
+            ),
+            &args,
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(UnsettledArchiveExtraction {
+                client_id: row.text("client_id")?,
+                client_item_id: row.text("client_item_id")?,
+                updated_at: row.timestamp("updated_at")?,
+            })
+        })
+        .collect()
+    }
+
+    async fn recorded_workspace_names(&self, names: &[String]) -> AppResult<HashSet<String>> {
+        let mut recorded = HashSet::new();
+        for chunk in names.chunks(NAME_CHUNK) {
+            let placeholders = vec!["{}"; chunk.len()].join(", ");
+            let args: Vec<_> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            for row in SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT DISTINCT {WORKSPACE_NAME_EXPR} AS workspace_name \
+                     FROM archive_extractions \
+                     WHERE {WORKSPACE_NAME_EXPR} IN ({placeholders})"
+                ),
+                &args,
+            )
+            .await?
+            {
+                recorded.insert(row.text("workspace_name")?);
+            }
+        }
+        Ok(recorded)
+    }
+
+    async fn scratch_summary(&self) -> AppResult<ArchiveScratchSummary> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(*) AS workspaces, \
+                    CAST(COALESCE(SUM(output_bytes), 0) AS BIGINT) AS bytes, \
+                    CAST(COALESCE(SUM(CASE WHEN state = 'blocked' THEN 1 ELSE 0 END), 0) \
+                         AS BIGINT) AS blocked \
+             FROM archive_extractions",
+            &[],
+        )
+        .await?;
+        let Some(row) = row else {
+            return Ok(ArchiveScratchSummary::default());
+        };
+        Ok(ArchiveScratchSummary {
+            workspaces: row.i64("workspaces")?.max(0) as u64,
+            bytes: row.i64("bytes")?.max(0) as u64,
+            blocked: row.i64("blocked")?.max(0) as u64,
+        })
     }
 
     async fn delete(&self, client_id: &str, client_item_id: &str) -> AppResult<()> {
@@ -490,6 +580,176 @@ mod tests {
         assert!(
             !detail.iter().any(|line| line.contains("TEMP B-TREE")),
             "{detail:?}"
+        );
+    }
+
+    async fn plan_details(
+        store: &ArchiveExtractionStore,
+        sql: &str,
+        binds: &[&str],
+    ) -> Vec<String> {
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            unreachable!("the fixture is SQLite");
+        };
+        let mut query =
+            sqlx::query_as::<_, (i64, i64, i64, String)>(sqlx::AssertSqlSafe(sql.to_string()));
+        for bind in binds {
+            query = query.bind(*bind);
+        }
+        query
+            .fetch_all(pool)
+            .await
+            .expect("plan")
+            .into_iter()
+            .map(|row| row.3)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_unsettled_scan_pages_in_key_order_past_settled_rows() {
+        let store = store().await;
+        for (client, item, settled) in [
+            ("client-beta", "item-1", None),
+            ("client-alpha", "item-3", None),
+            ("client-alpha", "item-1", None),
+            ("client-alpha", "item-2", Some(10)),
+            ("client-alpha", "item-4", None),
+        ] {
+            let mut row = record(item);
+            row.client_id = client.to_string();
+            row.settled_at = settled.map(at);
+            row.updated_at = at(7);
+            store.save(&row).await.expect("save");
+        }
+
+        let first = store.list_unsettled_after(None, 2).await.expect("first");
+        let keys: Vec<_> = first
+            .iter()
+            .map(|row| (row.client_id.as_str(), row.client_item_id.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [("client-alpha", "item-1"), ("client-alpha", "item-3")]
+        );
+        assert_eq!(first[0].updated_at, at(7));
+
+        let last = first.last().unwrap();
+        let rest = store
+            .list_unsettled_after(
+                Some((last.client_id.clone(), last.client_item_id.clone())),
+                10,
+            )
+            .await
+            .expect("rest");
+        let keys: Vec<_> = rest
+            .iter()
+            .map(|row| (row.client_id.as_str(), row.client_item_id.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [("client-alpha", "item-4"), ("client-beta", "item-1")]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_unsettled_scan_and_workspace_lookup_are_served_by_their_indexes() {
+        let store = store().await;
+        let unsettled = plan_details(
+            &store,
+            "EXPLAIN QUERY PLAN SELECT client_id, client_item_id, updated_at \
+             FROM archive_extractions WHERE settled_at IS NULL \
+             AND (client_id, client_item_id) > (?1, ?2) \
+             ORDER BY client_id, client_item_id LIMIT 500",
+            &["client-alpha", "item-1"],
+        )
+        .await;
+        assert!(
+            unsettled
+                .iter()
+                .any(|line| line.contains("idx_archive_extractions_settled_at")),
+            "{unsettled:?}"
+        );
+        assert!(
+            !unsettled.iter().any(|line| line.contains("TEMP B-TREE")),
+            "{unsettled:?}"
+        );
+
+        let names = plan_details(
+            &store,
+            &format!(
+                "EXPLAIN QUERY PLAN SELECT DISTINCT {WORKSPACE_NAME_EXPR} AS workspace_name \
+                 FROM archive_extractions WHERE {WORKSPACE_NAME_EXPR} IN (?1, ?2)"
+            ),
+            &["0123456789abcdef", "fedcba9876543210"],
+        )
+        .await;
+        assert!(
+            names
+                .iter()
+                .any(|line| line.contains("idx_archive_extractions_workspace_name")),
+            "{names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_workspace_lookup_names_only_recorded_workspaces() {
+        let store = store().await;
+        for (item, path) in [
+            ("item-1", "/library/.scry-ex/00000000000000a1"),
+            // Another spelling of the library root names the same workspace.
+            ("item-2", "/library//.scry-ex/00000000000000b2"),
+        ] {
+            let mut row = record(item);
+            row.workspace_path = path.to_string();
+            store.save(&row).await.expect("save");
+        }
+        let mut asked: Vec<String> = (0x1000..(0x1000 + NAME_CHUNK + 20))
+            .map(|index| format!("{index:016x}"))
+            .collect();
+        asked.push("00000000000000b2".to_string());
+
+        let recorded = store
+            .recorded_workspace_names(&asked)
+            .await
+            .expect("lookup");
+        assert_eq!(recorded, HashSet::from(["00000000000000b2".to_string()]));
+        assert!(
+            store
+                .recorded_workspace_names(&[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_scratch_summary_counts_workspaces_bytes_and_blocked() {
+        let store = store().await;
+        assert_eq!(
+            store.scratch_summary().await.expect("empty"),
+            ArchiveScratchSummary::default()
+        );
+        for (item, state, bytes) in [
+            (
+                "item-1",
+                ArchiveExtractionState::Extracted,
+                5_000_000_000_u64,
+            ),
+            ("item-2", ArchiveExtractionState::Blocked, 0),
+            ("item-3", ArchiveExtractionState::Extracted, 7),
+        ] {
+            let mut row = record(item);
+            row.state = state;
+            row.output_bytes = bytes;
+            store.save(&row).await.expect("save");
+        }
+        assert_eq!(
+            store.scratch_summary().await.expect("summary"),
+            ArchiveScratchSummary {
+                workspaces: 3,
+                bytes: 5_000_000_007,
+                blocked: 1,
+            }
         );
     }
 

@@ -5392,6 +5392,12 @@ const en: LocaleDictionary = {
   "jobs.status.completed": "Completed",
   "jobs.status.warning": "Warning",
   "jobs.status.failed": "Failed",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_SCRATCH_IN_USE":
+    "{{workspaces}} download workspace(s) hold {{bytes}} bytes of extracted archives",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED":
+    "{{blocked}} download(s) failed to extract on every attempt; retry their import to try again",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_UNMARKED_ENTRIES":
+    "{{unmarked}} item(s) in the .scry-ex folders of library roots were not made by Scryer and are left in place",
   "jobs.triggerSource.manual": "Manual",
   "jobs.triggerSource.scheduledStartup": "Scheduled startup",
   "jobs.triggerSource.scheduledInterval": "Scheduled interval",

@@ -63,6 +63,8 @@ fn download_client_status_health_results(
                 config_name,
                 unresolved_roots.join(", ")
             ),
+            reason: None,
+            facts: Vec::new(),
         });
     }
 
@@ -75,6 +77,8 @@ fn download_client_status_health_results(
                 config_name,
                 overlapping_roots.join(", ")
             ),
+            reason: None,
+            facts: Vec::new(),
         });
     }
 
@@ -107,9 +111,62 @@ fn release_age_unknown_health_results(
             message: format!(
                 "Indexer '{indexer}' has {count} pending release(s) with an unknown publication time (last observed {last_observed_at}). They will remain pending until a later feed observation supplies a valid publication time or they require review."
             ),
+            reason: None,
+            facts: Vec::new(),
         })
         .collect::<Vec<_>>();
     results.sort_by(|left, right| left.message.cmp(&right.message));
+    results
+}
+
+/// Archive workspace scratch, from the extraction records and the last
+/// orphan sweep; nothing on disk is read. Scratch in use is reported as
+/// `Ok`; blocked extractions and unmarked entries warn.
+fn archive_workspace_health_results(
+    scratch: crate::ArchiveScratchSummary,
+    last_sweep: Option<crate::import::archive_extraction::OrphanSweep>,
+) -> Vec<HealthCheckResult> {
+    use crate::error_reasons::archive_workspace_health as reasons;
+    let source = || "ArchiveWorkspaces".to_string();
+    let mut results = Vec::new();
+    if scratch.workspaces > 0 {
+        results.push(HealthCheckResult {
+            source: source(),
+            status: HealthCheckStatus::Ok,
+            message: format!(
+                "{} download workspace(s) hold {} byte(s) of extracted archives",
+                scratch.workspaces, scratch.bytes
+            ),
+            reason: Some(reasons::SCRATCH_IN_USE),
+            facts: vec![("workspaces", scratch.workspaces), ("bytes", scratch.bytes)],
+        });
+    }
+    if scratch.blocked > 0 {
+        results.push(HealthCheckResult {
+            source: source(),
+            status: HealthCheckStatus::Warning,
+            message: format!(
+                "{} download(s) failed to extract on every attempt; retry their import to try again",
+                scratch.blocked
+            ),
+            reason: Some(reasons::EXTRACTIONS_BLOCKED),
+            facts: vec![("blocked", scratch.blocked)],
+        });
+    }
+    if let Some(unmarked) = last_sweep
+        .map(|sweep| sweep.unmarked as u64)
+        .filter(|unmarked| *unmarked > 0)
+    {
+        results.push(HealthCheckResult {
+            source: source(),
+            status: HealthCheckStatus::Warning,
+            message: format!(
+                "{unmarked} entr(ies) in library roots' .scry-ex folders were not made by Scryer and are left in place"
+            ),
+            reason: Some(reasons::UNMARKED_ENTRIES),
+            facts: vec![("unmarked", unmarked)],
+        });
+    }
     results
 }
 
@@ -120,7 +177,8 @@ fn release_age_unknown_health_results(
 /// fine" and "the check never ran" would look identical on the scrape. A source
 /// added to the checks above without being added here is simply not exported;
 /// the unit tests below pin the roster against the checks.
-const HEALTH_CHECK_SOURCES: [&str; 6] = [
+const HEALTH_CHECK_SOURCES: [&str; 7] = [
+    "ArchiveWorkspaces",
     "DiskSpace",
     "DownloadClient",
     "Indexer",
@@ -201,8 +259,31 @@ impl AppUseCase {
         results.extend(self.check_recycle_bin_config().await);
         results.extend(self.check_disk_space_health().await);
         results.extend(self.check_release_age_unknown_pending().await);
+        results.extend(self.check_archive_workspaces().await);
         record_health_check_gauges(&results);
         results
+    }
+
+    async fn check_archive_workspaces(&self) -> Vec<HealthCheckResult> {
+        match self
+            .services
+            .workflow
+            .archive_extractions
+            .scratch_summary()
+            .await
+        {
+            Ok(scratch) => archive_workspace_health_results(
+                scratch,
+                self.runtime
+                    .imports
+                    .archive_workspace_upkeep
+                    .last_orphan_sweep(),
+            ),
+            Err(error) => {
+                warn!(error = %error, "health check: failed to summarize archive workspaces");
+                Vec::new()
+            }
+        }
     }
 
     async fn check_release_age_unknown_pending(&self) -> Vec<HealthCheckResult> {
@@ -246,6 +327,8 @@ impl AppUseCase {
                     source: "DownloadClient".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("Failed to query download clients: {e}"),
+                    reason: None,
+                    facts: Vec::new(),
                 }];
             }
         };
@@ -255,6 +338,8 @@ impl AppUseCase {
                 source: "DownloadClient".into(),
                 status: HealthCheckStatus::Error,
                 message: "No download client is configured".into(),
+                reason: None,
+                facts: Vec::new(),
             }];
         }
 
@@ -264,6 +349,8 @@ impl AppUseCase {
                 source: "DownloadClient".into(),
                 status: HealthCheckStatus::Warning,
                 message: "All download clients are disabled".into(),
+                reason: None,
+                facts: Vec::new(),
             }];
         }
 
@@ -280,6 +367,8 @@ impl AppUseCase {
                 source: "DownloadClient".into(),
                 status: HealthCheckStatus::Warning,
                 message: format!("Download client(s) reporting errors: {}", names.join(", ")),
+                reason: None,
+                facts: Vec::new(),
             }];
         }
 
@@ -295,6 +384,8 @@ impl AppUseCase {
                     source: "DownloadClient".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("Failed to resolve library roots: {error}"),
+                    reason: None,
+                    facts: Vec::new(),
                 });
                 Vec::new()
             }
@@ -311,6 +402,8 @@ impl AppUseCase {
                                 "Download client '{}' has invalid remote path mappings: {error}",
                                 config.name
                             ),
+                            reason: None,
+                            facts: Vec::new(),
                         });
                         continue;
                     }
@@ -347,6 +440,8 @@ impl AppUseCase {
                     source: "Indexer".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("Failed to query indexers: {e}"),
+                    reason: None,
+                    facts: Vec::new(),
                 }];
             }
         };
@@ -356,6 +451,8 @@ impl AppUseCase {
                 source: "Indexer".into(),
                 status: HealthCheckStatus::Warning,
                 message: "No indexer is configured".into(),
+                reason: None,
+                facts: Vec::new(),
             }];
         }
 
@@ -365,6 +462,8 @@ impl AppUseCase {
                 source: "Indexer".into(),
                 status: HealthCheckStatus::Warning,
                 message: "All indexers are disabled".into(),
+                reason: None,
+                facts: Vec::new(),
             }];
         }
 
@@ -378,6 +477,8 @@ impl AppUseCase {
                 source: "Indexer".into(),
                 status: HealthCheckStatus::Error,
                 message: "All indexers are failing".into(),
+                reason: None,
+                facts: Vec::new(),
             }];
         }
 
@@ -396,6 +497,8 @@ impl AppUseCase {
                     source: "RootFolder".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("Failed to resolve library roots: {error}"),
+                    reason: None,
+                    facts: Vec::new(),
                 }];
             }
         };
@@ -411,12 +514,16 @@ impl AppUseCase {
                     source: "RootFolder".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("{label} root folder does not exist: {}", root.path),
+                    reason: None,
+                    facts: Vec::new(),
                 }),
                 Ok(metadata) if metadata.permissions().readonly() => {
                     results.push(HealthCheckResult {
                         source: "RootFolder".into(),
                         status: HealthCheckStatus::Warning,
                         message: format!("{label} root folder is read-only: {}", root.path),
+                        reason: None,
+                        facts: Vec::new(),
                     });
                 }
                 Ok(_) => {}
@@ -438,6 +545,8 @@ impl AppUseCase {
                     message: format!(
                         "Failed to resolve library roots while validating recycle bin config: {error}"
                     ),
+                    reason: None,
+                    facts: Vec::new(),
                 }];
             }
         };
@@ -464,6 +573,8 @@ impl AppUseCase {
                             .as_deref()
                             .unwrap_or("invalid recycle bin configuration")
                     ),
+                    reason: None,
+                    facts: Vec::new(),
                 });
             }
         }
@@ -479,6 +590,8 @@ impl AppUseCase {
                     source: "DiskSpace".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("Failed to resolve library roots: {error}"),
+                    reason: None,
+                    facts: Vec::new(),
                 }];
             }
         };
@@ -534,6 +647,8 @@ impl AppUseCase {
                                 free / (1024 * 1024),
                                 root.path
                             ),
+                            reason: None,
+                            facts: Vec::new(),
                         });
                     } else if free < mb_500 {
                         results.push(HealthCheckResult {
@@ -545,6 +660,8 @@ impl AppUseCase {
                                 free / (1024 * 1024),
                                 root.path
                             ),
+                            reason: None,
+                            facts: Vec::new(),
                         });
                     }
                 }
@@ -770,6 +887,8 @@ mod tests {
             source: source.to_string(),
             status,
             message: String::new(),
+            reason: None,
+            facts: Vec::new(),
         }
     }
 
@@ -784,6 +903,68 @@ mod tests {
                 *series_source == source && *series_status == status
             })
             .map(|(_, _, value)| *value)
+    }
+
+    #[test]
+    fn archive_workspace_health_reports_scratch_blocked_and_unmarked_with_their_counts() {
+        use crate::error_reasons::archive_workspace_health as reasons;
+        assert!(
+            archive_workspace_health_results(crate::ArchiveScratchSummary::default(), None)
+                .is_empty()
+        );
+        let results = archive_workspace_health_results(
+            crate::ArchiveScratchSummary {
+                workspaces: 3,
+                bytes: 4_096,
+                blocked: 1,
+            },
+            Some(crate::import::archive_extraction::OrphanSweep {
+                removed: 2,
+                waiting: 0,
+                unmarked: 5,
+            }),
+        );
+        let summary: Vec<_> = results
+            .iter()
+            .map(|result| {
+                (
+                    result.source.as_str(),
+                    result.status.as_str(),
+                    result.reason,
+                    result.facts.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (
+                    "ArchiveWorkspaces",
+                    "ok",
+                    Some(reasons::SCRATCH_IN_USE),
+                    vec![("workspaces", 3), ("bytes", 4_096)]
+                ),
+                (
+                    "ArchiveWorkspaces",
+                    "warning",
+                    Some(reasons::EXTRACTIONS_BLOCKED),
+                    vec![("blocked", 1)]
+                ),
+                (
+                    "ArchiveWorkspaces",
+                    "warning",
+                    Some(reasons::UNMARKED_ENTRIES),
+                    vec![("unmarked", 5)]
+                ),
+            ]
+        );
+        assert!(
+            archive_workspace_health_results(
+                crate::ArchiveScratchSummary::default(),
+                Some(crate::import::archive_extraction::OrphanSweep::default()),
+            )
+            .is_empty()
+        );
     }
 
     #[test]
