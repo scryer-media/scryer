@@ -904,3 +904,220 @@ fn regex_nesting_is_bounded_before_any_pass_recurses_through_it() {
         );
     }
 }
+
+// ── One format per module ───────────────────────────────────────────────────
+
+const SINGLE_HEAD: &str = r#"import rego.v1
+
+_arr_0_spec_0 if {
+  regex.match("(?i)\\bsample\\b", regex.replace(input.release.raw_title, "\\s*(?:[<>?*|])", ""))
+}
+_arr_0_group_0 if {
+  _arr_0_spec_0
+}
+_arr_0_matches if {
+  _arr_0_group_0
+}
+"#;
+
+fn sample_format() -> Value {
+    json!({
+        "id": 7,
+        "name": "Sample Format Alpha",
+        "specifications": [title_spec("Sample", "\\bsample\\b", true, false)],
+    })
+}
+
+fn sample_table() -> Vec<(String, i32)> {
+    vec![
+        ("Sample Profile A".to_string(), 25),
+        ("Sample Profile B".to_string(), -10),
+    ]
+}
+
+fn translate_one(raw: &Value, scoring: &ArrFormatScoring) -> ArrSingleFormatTranslation {
+    translate_arr_custom_format(
+        ArrSourceApplication::Radarr,
+        raw,
+        scoring,
+        &["Imported from Radarr 6.0.4. Saved disabled; enable it once reviewed.".to_string()],
+        &["REVIEW: check it.".to_string()],
+    )
+}
+
+/// Builds an engine over one module, failing on any validator finding.
+fn single_engine(rego_source: &str) -> scryer_rules::UserRulesEngine {
+    let id = "arr_single_format".to_string();
+    let rewritten = scryer_rules::rewrite_package_declaration(rego_source, &id);
+    let validation = scryer_rules::validation::validate_user_rule(&rewritten, &id).unwrap();
+    assert!(validation.valid, "{validation:?}\n{rego_source}");
+    let policy = scryer_rules::UserPolicy {
+        rego_source: rewritten,
+        id,
+        name: "Arr single format".to_string(),
+        origin: scryer_rules::PolicyOrigin::User,
+        applied_facets: vec![],
+    };
+    scryer_rules::UserRulesEngine::build_with_baseline_rules(
+        &[policy],
+        &std::collections::HashSet::new(),
+    )
+    .unwrap_or_else(|error| panic!("{error}\n{rego_source}"))
+}
+
+/// The score entries one module yields for a matching release under `profile`.
+fn scores_under(engine: &scryer_rules::UserRulesEngine, profile: &str) -> Vec<i32> {
+    let mut input = synthetic_input();
+    input.release.raw_title = "Synthetic.Sample.2024.1080p.WEB-DL".to_string();
+    input.profile.name = profile.to_string();
+    let result = engine.evaluator().evaluate(&input, "movie").unwrap();
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    result.entries.iter().map(|entry| entry.delta).collect()
+}
+
+#[test]
+fn a_literal_score_keeps_the_paste_form() {
+    let result = translate_one(&sample_format(), &ArrFormatScoring::Literal(25));
+    assert_eq!(result.status, Some(ArrFormatStatus::Translated));
+    assert_eq!(result.name.as_deref(), Some("Sample Format Alpha"));
+    let expected = format!(
+        "{SINGLE_HEAD}score_entry[\"sample_format_alpha_1\"] := 25 if {{\n  _arr_0_matches\n}}\n\n\
+         # Imported from Radarr 6.0.4. Saved disabled; enable it once reviewed.\n"
+    );
+    assert_eq!(result.rego_source.as_deref(), Some(expected.as_str()));
+    let engine = single_engine(&expected);
+    assert_eq!(scores_under(&engine, "Sample Profile A"), [25]);
+    assert_eq!(scores_under(&engine, "Any Other Profile"), [25]);
+}
+
+#[test]
+fn a_profile_table_scores_by_profile_name_and_skips_unlisted_profiles() {
+    let result = translate_one(
+        &sample_format(),
+        &ArrFormatScoring::ProfileTable(sample_table()),
+    );
+    let expected = format!(
+        "{SINGLE_HEAD}_arr_0_scores := {{\n  \"Sample Profile A\": 25,\n  \"Sample Profile B\": -10\n}}\n\
+         score_entry[\"sample_format_alpha_1\"] := _arr_0_scores[input.profile.name] if {{\n  _arr_0_matches\n}}\n\n\
+         # Imported from Radarr 6.0.4. Saved disabled; enable it once reviewed.\n"
+    );
+    assert_eq!(result.rego_source.as_deref(), Some(expected.as_str()));
+    let engine = single_engine(&expected);
+    assert_eq!(scores_under(&engine, "Sample Profile A"), [25]);
+    assert_eq!(scores_under(&engine, "Sample Profile B"), [-10]);
+    // Not a 0 entry: an unlisted profile yields no entry at all.
+    assert_eq!(scores_under(&engine, "Sample Profile C"), Vec::<i32>::new());
+    assert_eq!(scores_under(&engine, "sample profile a"), Vec::<i32>::new());
+}
+
+#[test]
+fn a_review_table_scores_zero_and_keeps_the_table_commented_out() {
+    let result = translate_one(
+        &sample_format(),
+        &ArrFormatScoring::ReviewTable(sample_table()),
+    );
+    let expected = format!(
+        "{SINGLE_HEAD}score_entry[\"sample_format_alpha_1\"] := 0 if {{\n  _arr_0_matches\n}}\n\n\
+         # Imported from Radarr 6.0.4. Saved disabled; enable it once reviewed.\n\n\
+         # REVIEW: check it.\n#\n\
+         # _arr_0_scores := {{\n#   \"Sample Profile A\": 25,\n#   \"Sample Profile B\": -10\n# }}\n\
+         # score_entry[\"sample_format_alpha_1\"] := _arr_0_scores[input.profile.name] if {{\n\
+         #   _arr_0_matches\n# }}\n"
+    );
+    assert_eq!(result.rego_source.as_deref(), Some(expected.as_str()));
+    let engine = single_engine(&expected);
+    assert_eq!(scores_under(&engine, "Sample Profile A"), [0]);
+    assert_eq!(scores_under(&engine, "Sample Profile C"), [0]);
+}
+
+#[test]
+fn the_single_format_body_matches_the_paste_translation() {
+    let raw = sample_format();
+    let single = translate_one(&raw, &ArrFormatScoring::Literal(25))
+        .rego_source
+        .unwrap();
+    let pasted = translate_scored(raw["specifications"].clone(), 25).rego_source;
+    let rule = |source: &str| {
+        source
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.contains("score_entry"))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rule(&single), rule(&pasted));
+}
+
+#[test]
+fn hostile_names_stay_inert_in_strings_and_comments() {
+    let hostile = "Evil\"\n} allow := true # \\ \r\t\u{7}\u{2028}end";
+    let raw = json!({
+        "id": 9,
+        "name": hostile,
+        "specifications": [title_spec(hostile, "\\bsample\\b", true, false)],
+    });
+    let table = vec![
+        (hostile.to_string(), 5),
+        ("Sample Profile A".to_string(), 1),
+    ];
+    let notes = [format!("Imported from Radarr {hostile}.")];
+    for scoring in [
+        ArrFormatScoring::Literal(3),
+        ArrFormatScoring::ProfileTable(table.clone()),
+        ArrFormatScoring::ReviewTable(table.clone()),
+    ] {
+        let result = translate_arr_custom_format(
+            ArrSourceApplication::Radarr,
+            &raw,
+            &scoring,
+            &notes,
+            &notes,
+        );
+        let source = result.rego_source.expect("translates");
+        // The name reaches Rego only inside strings and whole-line comments.
+        for line in source.lines() {
+            let line = line.trim_start();
+            assert!(
+                line.starts_with('#') || !line.starts_with("} allow"),
+                "{line}\n{source}"
+            );
+            if !line.starts_with('#') && line.contains("allow :=") {
+                assert!(line.contains(r#""Evil\"\n} allow"#), "{line}\n{source}");
+            }
+        }
+        let engine = single_engine(&source);
+        match scoring {
+            ArrFormatScoring::Literal(_) => assert_eq!(scores_under(&engine, hostile), [3]),
+            ArrFormatScoring::ProfileTable(_) => {
+                assert_eq!(scores_under(&engine, hostile), [5]);
+                assert_eq!(scores_under(&engine, "Sample Profile A"), [1]);
+            }
+            ArrFormatScoring::ReviewTable(_) => assert_eq!(scores_under(&engine, hostile), [0]),
+        }
+    }
+}
+
+#[test]
+fn unreadable_and_disabled_formats_produce_no_module() {
+    let unreadable = translate_one(&json!("not an object"), &ArrFormatScoring::Literal(1));
+    assert_eq!(unreadable.status, None);
+    assert_eq!(unreadable.rego_source, None);
+    assert_eq!(unreadable.diagnostics[0].code, codes::FORMAT_INVALID);
+
+    let disabled = translate_one(
+        &json!({
+            "id": 3,
+            "name": "Sample Format Beta",
+            "specifications": [{
+                "name": "Year",
+                "implementation": "YearSpecification",
+                "required": true,
+                "negate": false,
+                "fields": { "min": 2000, "max": 2010 },
+            }],
+        }),
+        &ArrFormatScoring::Literal(1),
+    );
+    assert_eq!(disabled.status, Some(ArrFormatStatus::Disabled));
+    assert_eq!(disabled.rego_source, None);
+    assert!(!disabled.diagnostics.is_empty());
+}

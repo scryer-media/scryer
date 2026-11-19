@@ -1,8 +1,10 @@
-//! Translates pasted Sonarr and Radarr custom-format JSON into a Rego rule.
+//! Translates Sonarr and Radarr custom-format JSON into Rego rules.
 //!
-//! The translation is a pure function of the pasted text, its source
-//! application, and the operator's per-format scores. It stores nothing; the
-//! operator reviews the generated source in the rule editor before saving it.
+//! The translation is a pure function of the custom formats, their source
+//! application, and the scores to give them. It stores nothing. A paste
+//! becomes one module the operator reviews in the rule editor before saving;
+//! [`translate_arr_custom_format`] turns one format read from a running
+//! instance into a module of its own.
 
 mod inspection;
 mod js;
@@ -241,6 +243,94 @@ impl ArrImportRefusal {
 impl ArrImportRefusal {
     pub fn into_app_error(self) -> AppError {
         AppError::validation_refused_with_facts(self.reason(), self.message(), self.facts())
+    }
+}
+
+/// How a single translated format scores a release it matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArrFormatScoring {
+    /// The same score under every quality profile.
+    Literal(i32),
+    /// A score per Scryer quality profile name, read with
+    /// `input.profile.name`. A profile the table does not list scores nothing.
+    ProfileTable(Vec<(String, i32)>),
+    /// Scores 0. The per-profile table follows the module's notes as a
+    /// commented-out block for the operator to adapt.
+    ReviewTable(Vec<(String, i32)>),
+}
+
+/// One custom format translated into its own module.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrSingleFormatTranslation {
+    /// The format's name, when inspection could read one.
+    pub name: Option<String>,
+    /// `None` when inspection could not read the format at all.
+    pub status: Option<ArrFormatStatus>,
+    /// The module, present only when the format translated.
+    pub rego_source: Option<String>,
+    /// Everything inspection and translation found about the format.
+    pub diagnostics: Vec<ArrDiagnostic>,
+}
+
+/// The facets a rule translated from `source` applies to.
+pub fn arr_source_facets(source: ArrSourceApplication) -> Vec<String> {
+    let facets: &[&str] = match source {
+        ArrSourceApplication::Radarr => &["movie"],
+        ArrSourceApplication::Sonarr => &["series", "anime"],
+    };
+    facets.iter().map(|facet| facet.to_string()).collect()
+}
+
+/// Inspects and translates one custom format, as `GET /api/v3/customformat`
+/// lists it, into a module of its own. `notes` become the module's trailing
+/// comments; `review_notes` head the commented-out block of a
+/// [`ArrFormatScoring::ReviewTable`].
+pub fn translate_arr_custom_format(
+    source: ArrSourceApplication,
+    raw: &serde_json::Value,
+    scoring: &ArrFormatScoring,
+    notes: &[String],
+    review_notes: &[String],
+) -> ArrSingleFormatTranslation {
+    let unreadable = || ArrSingleFormatTranslation {
+        name: None,
+        status: None,
+        rego_source: None,
+        diagnostics: vec![ArrDiagnostic {
+            code: codes::FORMAT_INVALID,
+            severity: ArrDiagnosticSeverity::Error,
+            message: "A custom format must be an object.".to_string(),
+            location: Some("$".to_string()),
+            format_id: None,
+            specification_index: None,
+        }],
+    };
+    if !raw.is_object() {
+        return unreadable();
+    }
+    // One object is one format, so the batch refusals cannot occur.
+    let Ok(inspected) = inspection::inspect_document(raw, source) else {
+        return unreadable();
+    };
+    let Some(format) = inspected.formats.into_iter().next() else {
+        return ArrSingleFormatTranslation {
+            name: None,
+            status: None,
+            rego_source: None,
+            diagnostics: inspected.diagnostics,
+        };
+    };
+    let (rego_source, outcome) = translate::translate_single(&format, scoring, notes, review_notes);
+    let diagnostics = if outcome.status == ArrFormatStatus::Disabled {
+        outcome.diagnostics
+    } else {
+        format.inspection_diagnostics
+    };
+    ArrSingleFormatTranslation {
+        name: Some(format.name),
+        status: Some(outcome.status),
+        rego_source,
+        diagnostics,
     }
 }
 

@@ -62,6 +62,83 @@ impl LifecycleRuleSetRepository for LifecycleRuleSetStore {
         .await
     }
 
+    async fn create_rule_set_unless_named(
+        &self,
+        rule_set: &LifecycleRuleSet,
+        revision: &LifecycleRuleRevision,
+        taken_names: &[String],
+    ) -> AppResult<bool> {
+        if taken_names.is_empty() {
+            self.create_rule_set(rule_set, revision).await?;
+            return Ok(true);
+        }
+        let rule_set_args = rule_set_args(rule_set)?;
+        let revision_args = revision_args(revision);
+        let rule_set_id = rule_set.id.clone();
+        let library_ids = rule_set.library_ids.clone();
+        let taken_sql = format!(
+            "SELECT 1 AS taken FROM lifecycle_rule_sets WHERE name IN ({}) LIMIT 1",
+            vec!["{}"; taken_names.len()].join(", ")
+        );
+        let taken_args: Vec<SqlArg> = taken_names
+            .iter()
+            .map(|name| SqlArg::Text(name.clone()))
+            .collect();
+
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "create_lifecycle_rule_set_unless_named",
+            move |tx| {
+                let rule_set_args = rule_set_args.clone();
+                let revision_args = revision_args.clone();
+                let rule_set_id = rule_set_id.clone();
+                let library_ids = library_ids.clone();
+                let taken_sql = taken_sql.clone();
+                let taken_args = taken_args.clone();
+                Box::pin(async move {
+                    if SqlRuntime::fetch_optional(SqlExec::Tx(tx), &taken_sql, &taken_args)
+                        .await?
+                        .is_some()
+                    {
+                        return Ok(false);
+                    }
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, &rule_set_args)
+                        .await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
+                        .await?;
+                    replace_library_scope(tx, &rule_set_id, &library_ids).await?;
+                    Ok(true)
+                })
+            },
+        )
+        .await
+    }
+
+    async fn list_rule_set_names_with_prefix(&self, prefix: &str) -> AppResult<Vec<String>> {
+        let pattern = format!(
+            "{}%",
+            prefix
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT name FROM lifecycle_rule_sets WHERE name LIKE {} ESCAPE '\\'",
+            &[SqlArg::Text(pattern)],
+        )
+        .await?;
+        let mut names = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let name = row.text("name")?;
+            // LIKE ignores ASCII case on SQLite; the prefix is matched exactly.
+            if name.starts_with(prefix) {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
+
     async fn add_revision(
         &self,
         revision: &LifecycleRuleRevision,

@@ -15,7 +15,246 @@ fn format_rule_validation_errors(validation: &ValidationResult) -> String {
     )
 }
 
+/// Rewrites the package declaration to the system-assigned `id` and applies
+/// the validation every new rule set passes before it is written.
+fn validated_new_rule_source(rego_source: &str, id: &str) -> AppResult<String> {
+    let rewritten_source = scryer_rules::rewrite_package_declaration(rego_source, id);
+
+    if !retired_release_input_fields(&rewritten_source)
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::VALIDATION_FAILED,
+                format!("rule validation failed: {error}"),
+            )
+        })?
+        .is_empty()
+    {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::INPUT_RETIRED,
+            RETIRED_GUIDE_FACTS_REASON.to_string(),
+        ));
+    }
+
+    // Validate the rewritten Rego source
+    let validation = validate_user_rule(&rewritten_source, id).map_err(|e| {
+        AppError::validation_refused(
+            crate::error_reasons::rules::VALIDATION_FAILED,
+            format!("rule validation failed: {e}"),
+        )
+    })?;
+    if !validation.valid {
+        return Err(AppError::validation_refused_with_diagnostics(
+            crate::error_reasons::rules::SOURCE_INVALID,
+            format_rule_validation_errors(&validation),
+            validation.diagnostics,
+        ));
+    }
+    Ok(rewritten_source)
+}
+
+/// One rule set [`AppUseCase::create_rule_sets_batch`] creates.
+#[derive(Clone, Debug)]
+pub struct NewRuleSet {
+    pub name: String,
+    pub description: String,
+    pub rego_source: String,
+    pub applied_facets: Vec<MediaFacet>,
+    pub priority: i32,
+    pub enabled: bool,
+}
+
+/// A draft [`AppUseCase::create_rule_sets_batch_claiming_names`] writes only
+/// while no rule set holds any of its claimed names.
+#[derive(Clone, Debug)]
+pub struct ClaimedNewRuleSet {
+    pub rule_set: NewRuleSet,
+    /// Names that, once any rule set or an earlier draft of the same batch
+    /// holds one of them, skip this draft. The draft's own name is always one.
+    pub claimed_names: Vec<String>,
+}
+
+/// What [`AppUseCase::create_rule_sets_batch_claiming_names`] did with one draft.
+#[derive(Clone, Debug)]
+pub enum ClaimedRuleSetOutcome {
+    Created(RuleSet),
+    /// Nothing was written: a rule set, or an earlier draft of the batch,
+    /// already holds `name`.
+    NameTaken {
+        name: String,
+    },
+}
+
+fn prepared_rule_set(draft: NewRuleSet) -> AppResult<RuleSet> {
+    let id = Id::new_rego_safe().0;
+    let rego_source = validated_new_rule_source(&draft.rego_source, &id)?;
+    let now = Utc::now();
+    Ok(RuleSet {
+        id,
+        name: draft.name,
+        description: draft.description,
+        rego_source,
+        enabled: draft.enabled,
+        priority: draft.priority,
+        evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
+        exclusive_group: None,
+        disabled_reason_code: None,
+        disabled_reason: None,
+        applied_facets: draft.applied_facets,
+        created_at: now,
+        updated_at: now,
+        is_managed: false,
+        managed_key: None,
+        managed_tag_filter: None,
+    })
+}
+
 impl AppUseCase {
+    /// Creates several rule sets as [`Self::create_rule_set`] would, one result
+    /// per draft in order. Every source passes the same validation first.
+    /// The valid rule sets and their history are written in one transaction
+    /// under one acquisition of the rule mutation lock; only when that write
+    /// fails are they retried one row at a time, each row with its history in
+    /// its own transaction. The engine is rebuilt once, and only when an
+    /// enabled rule set was written: it is built from the enabled rule sets
+    /// alone, so disabled ones cannot change it.
+    pub async fn create_rule_sets_batch(
+        &self,
+        actor: &User,
+        drafts: Vec<NewRuleSet>,
+    ) -> AppResult<Vec<AppResult<RuleSet>>> {
+        let drafts = drafts
+            .into_iter()
+            .map(|rule_set| (rule_set, None))
+            .collect();
+        Ok(self
+            .create_rule_sets_batch_inner(actor, drafts)
+            .await?
+            .into_iter()
+            .map(|result| match result {
+                Ok(ClaimedRuleSetOutcome::Created(rule_set)) => Ok(rule_set),
+                // Unclaimed drafts are never skipped.
+                Ok(ClaimedRuleSetOutcome::NameTaken { name }) => {
+                    Err(AppError::Repository(format!("rule set {name} was skipped")))
+                }
+                Err(error) => Err(error),
+            })
+            .collect())
+    }
+
+    /// [`Self::create_rule_sets_batch`] that skips every draft whose claimed
+    /// names a rule set already holds, or an earlier draft of the batch
+    /// claimed. Names are read once, after the rule mutation lock is taken,
+    /// so no concurrent create can slip in between the check and the write.
+    pub async fn create_rule_sets_batch_claiming_names(
+        &self,
+        actor: &User,
+        drafts: Vec<ClaimedNewRuleSet>,
+    ) -> AppResult<Vec<AppResult<ClaimedRuleSetOutcome>>> {
+        let drafts = drafts
+            .into_iter()
+            .map(|draft| (draft.rule_set, Some(draft.claimed_names)))
+            .collect();
+        self.create_rule_sets_batch_inner(actor, drafts).await
+    }
+
+    async fn create_rule_sets_batch_inner(
+        &self,
+        actor: &User,
+        drafts: Vec<(NewRuleSet, Option<Vec<String>>)>,
+    ) -> AppResult<Vec<AppResult<ClaimedRuleSetOutcome>>> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        let (drafts, claims): (Vec<NewRuleSet>, Vec<Option<Vec<String>>>) =
+            drafts.into_iter().unzip();
+        let any_claims = claims.iter().any(Option::is_some);
+        // Validation compiles every module; keep it off the async workers.
+        let mut results: Vec<AppResult<ClaimedRuleSetOutcome>> =
+            tokio::task::spawn_blocking(move || {
+                drafts
+                    .into_iter()
+                    .map(|draft| prepared_rule_set(draft).map(ClaimedRuleSetOutcome::Created))
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|error| AppError::Repository(format!("rule validation failed: {error}")))?;
+        let repository = &self.services.customization.rule_sets;
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
+        if any_claims {
+            let mut taken: std::collections::HashSet<String> = repository
+                .list_rule_set_names()
+                .await?
+                .into_iter()
+                .collect();
+            // `taken` holds only names a rule set holds or this batch writes, so
+            // a skip always reports a name the operator can find.
+            for (result, claim) in results.iter_mut().zip(claims) {
+                let Ok(ClaimedRuleSetOutcome::Created(rule_set)) = result.as_ref() else {
+                    continue;
+                };
+                let held = claim.as_ref().and_then(|claim| {
+                    claim
+                        .iter()
+                        .chain(std::iter::once(&rule_set.name))
+                        .find(|name| taken.contains(*name))
+                        .cloned()
+                });
+                match held {
+                    Some(name) => *result = Ok(ClaimedRuleSetOutcome::NameTaken { name }),
+                    None => {
+                        taken.insert(rule_set.name.clone());
+                    }
+                }
+            }
+        }
+        let valid: Vec<RuleSet> = results
+            .iter()
+            .filter_map(|result| match result {
+                Ok(ClaimedRuleSetOutcome::Created(rule_set)) => Some(rule_set.clone()),
+                _ => None,
+            })
+            .collect();
+        if valid.is_empty() {
+            return Ok(results);
+        }
+        let history_of = |rule_set: &RuleSet| RuleSetHistoryChange {
+            rule_set_id: rule_set.id.clone(),
+            action: "created".to_string(),
+            rego_source: Some(rule_set.rego_source.clone()),
+            actor_id: Some(actor.id.clone()),
+        };
+        let history: Vec<RuleSetHistoryChange> = valid.iter().map(history_of).collect();
+        let mut wrote_enabled = false;
+        match repository.create_rule_sets(&valid, &history).await {
+            Ok(()) => wrote_enabled = valid.iter().any(|rule_set| rule_set.enabled),
+            Err(batch_error) => {
+                tracing::warn!(
+                    rule_sets = valid.len(),
+                    reason = batch_error.reason().unwrap_or("none"),
+                    error = %batch_error,
+                    "batched rule set write failed; writing rule sets one at a time"
+                );
+                // The batch rolled back as a whole; write what can be written,
+                // each row together with its history.
+                for result in &mut results {
+                    let Ok(ClaimedRuleSetOutcome::Created(rule_set)) = result.as_ref() else {
+                        continue;
+                    };
+                    match repository
+                        .create_rule_sets(std::slice::from_ref(rule_set), &[history_of(rule_set)])
+                        .await
+                    {
+                        Ok(()) => wrote_enabled |= rule_set.enabled,
+                        Err(error) => *result = Err(error),
+                    }
+                }
+            }
+        }
+        if wrote_enabled {
+            self.rebuild_user_rules_engine_unlocked().await?;
+        }
+        Ok(results)
+    }
+
     pub async fn list_rule_sets(&self, actor: &User) -> AppResult<Vec<RuleSet>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
@@ -103,38 +342,7 @@ impl AppUseCase {
         let id = Id::new_rego_safe().0;
         let _mutation = self.services.customization.rule_mutation_lock.lock().await;
 
-        // Rewrite the package declaration to match the system-assigned ID.
-        let rewritten_source = scryer_rules::rewrite_package_declaration(&rego_source, &id);
-
-        if !retired_release_input_fields(&rewritten_source)
-            .map_err(|error| {
-                AppError::validation_refused(
-                    crate::error_reasons::rules::VALIDATION_FAILED,
-                    format!("rule validation failed: {error}"),
-                )
-            })?
-            .is_empty()
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::rules::INPUT_RETIRED,
-                RETIRED_GUIDE_FACTS_REASON.to_string(),
-            ));
-        }
-
-        // Validate the rewritten Rego source
-        let validation = validate_user_rule(&rewritten_source, &id).map_err(|e| {
-            AppError::validation_refused(
-                crate::error_reasons::rules::VALIDATION_FAILED,
-                format!("rule validation failed: {e}"),
-            )
-        })?;
-        if !validation.valid {
-            return Err(AppError::validation_refused_with_diagnostics(
-                crate::error_reasons::rules::SOURCE_INVALID,
-                format_rule_validation_errors(&validation),
-                validation.diagnostics,
-            ));
-        }
+        let rewritten_source = validated_new_rule_source(&rego_source, &id)?;
 
         let now = Utc::now();
         let rule_set = RuleSet {
@@ -1089,6 +1297,8 @@ pub(crate) mod tests {
         packs: Mutex<Vec<scryer_domain::RulePackInstallation>>,
         fail_pack_apply: std::sync::atomic::AtomicBool,
         builder_models: Mutex<std::collections::HashMap<String, String>>,
+        /// A batched write holding a rule set of one of these names fails whole.
+        rejected_batch_names: std::sync::Mutex<std::collections::HashSet<String>>,
     }
 
     impl TestRuleSetRepo {
@@ -1098,6 +1308,7 @@ pub(crate) mod tests {
                 packs: Mutex::new(Vec::new()),
                 fail_pack_apply: std::sync::atomic::AtomicBool::new(false),
                 builder_models: Mutex::new(std::collections::HashMap::new()),
+                rejected_batch_names: std::sync::Mutex::new(std::collections::HashSet::new()),
             }
         }
 
@@ -1252,6 +1463,24 @@ pub(crate) mod tests {
 
         async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
             self.rules.lock().await.push(rule_set.clone());
+            Ok(())
+        }
+
+        async fn create_rule_sets(
+            &self,
+            rule_sets: &[RuleSet],
+            _history: &[RuleSetHistoryChange],
+        ) -> AppResult<()> {
+            let rejected = {
+                let names = self.rejected_batch_names.lock().unwrap();
+                rule_sets
+                    .iter()
+                    .any(|rule_set| names.contains(&rule_set.name))
+            };
+            if rejected {
+                return Err(AppError::Repository("injected batch failure".into()));
+            }
+            self.rules.lock().await.extend_from_slice(rule_sets);
             Ok(())
         }
 
@@ -1795,5 +2024,114 @@ pub(crate) mod tests {
             error.to_string().contains("only applies to managed"),
             "{error}"
         );
+    }
+
+    fn batch_draft(name: &str) -> NewRuleSet {
+        NewRuleSet {
+            name: name.to_string(),
+            description: String::new(),
+            rego_source: r#"score_entry["bonus"] := 10"#.to_string(),
+            applied_facets: vec![],
+            priority: 0,
+            enabled: false,
+        }
+    }
+
+    fn claimed(name: &str, other: &str) -> ClaimedNewRuleSet {
+        ClaimedNewRuleSet {
+            rule_set: batch_draft(name),
+            claimed_names: vec![name.to_string(), other.to_string()],
+        }
+    }
+
+    #[tokio::test]
+    async fn claimed_rule_set_batch_skips_names_taken_before_or_within_the_batch() {
+        let existing = |id: &str, name: &str| {
+            legacy_managed_rule(id, "", name, r#"score_entry["bonus"] := 1"#)
+        };
+        let (app, repo) = build_test_app_with_rule_repo(
+            vec![],
+            vec![
+                existing("existing-1", "(Sample) Existing"),
+                existing("existing-2", "(Sample) Prior"),
+            ],
+        );
+        let results = app
+            .create_rule_sets_batch_claiming_names(
+                &config_admin(),
+                vec![
+                    claimed("(Sample) Existing", "(Sample) REVIEW - Existing"),
+                    claimed("(Sample) REVIEW - Other", "(Sample) Other"),
+                    claimed("(Sample) Other", "(Sample) REVIEW - Other"),
+                    claimed("(Sample) REVIEW - Prior", "(Sample) Prior"),
+                    claimed("(Sample) Fresh", "(Sample) REVIEW - Fresh"),
+                ],
+            )
+            .await
+            .expect("batch");
+        let outcomes: Vec<Option<&str>> = results
+            .iter()
+            .map(|result| match result.as_ref().expect("no failure") {
+                ClaimedRuleSetOutcome::Created(_) => None,
+                ClaimedRuleSetOutcome::NameTaken { name } => Some(name.as_str()),
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                Some("(Sample) Existing"),
+                None,
+                Some("(Sample) REVIEW - Other"),
+                Some("(Sample) Prior"),
+                None,
+            ]
+        );
+        let mut names: Vec<String> = repo
+            .rules_snapshot()
+            .await
+            .into_iter()
+            .map(|rule| rule.name)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "(Sample) Existing",
+                "(Sample) Fresh",
+                "(Sample) Prior",
+                "(Sample) REVIEW - Other",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_rule_set_batch_writes_each_row_with_its_history_or_not_at_all() {
+        let (app, repo) = build_test_app_with_rule_repo(vec![], vec![]);
+        repo.rejected_batch_names
+            .lock()
+            .unwrap()
+            .insert("Sample Poison".to_string());
+        let results = app
+            .create_rule_sets_batch(
+                &config_admin(),
+                vec![
+                    batch_draft("Sample Good A"),
+                    batch_draft("Sample Poison"),
+                    batch_draft("Sample Good B"),
+                ],
+            )
+            .await
+            .expect("batch");
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
+        assert!(results[2].is_ok());
+        let mut names: Vec<String> = repo
+            .rules_snapshot()
+            .await
+            .into_iter()
+            .map(|rule| rule.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Sample Good A", "Sample Good B"]);
     }
 }

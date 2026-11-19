@@ -306,6 +306,66 @@ async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     assert_eq!(items[0].target_tier, "720P");
 }
 
+/// A profile with no cutoff tier upgrades to its top tier: a file below it
+/// is cutoff unmet with the top tier as its target, and a file at it is not.
+/// The profile here ranks 720P above 1080P, so 720P is the top.
+#[tokio::test]
+async fn list_cutoff_unmet_titles_targets_the_top_tier_without_a_cutoff() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            r#""no-cutoff""#,
+        )
+        .await;
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    let mut profile = cutoff_projection_test_profile("no-cutoff", "720P");
+    profile.criteria.cutoff_tier = None;
+    profile.criteria.quality_tiers = vec!["720P".to_string(), "1080P".to_string()];
+    quality_profiles.set_profiles(vec![profile]).await;
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (app, user, _) =
+        bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+
+    let mut title_ids = Vec::new();
+    for (name, quality) in [("Below Top", "1080p"), ("At Top", "720p")] {
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: name.into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/library/{name}.mkv"),
+                size_bytes: 1_000,
+                quality_label: Some(quality.to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        title_ids.push(title.id);
+    }
+
+    let items = app
+        .list_cutoff_unmet_titles(&user, Some(MediaFacet::Movie), None)
+        .await
+        .expect("cutoff unmet query should succeed");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title_id, title_ids[0]);
+    assert_eq!(items[0].current_tier, "1080P");
+    assert_eq!(items[0].target_tier, "720P");
+}
+
 /// A profile whose order has no quality tier step ignores its cutoff tier, so
 /// a file below that tier is not reported, or swept, as quality-cutoff unmet.
 #[tokio::test]

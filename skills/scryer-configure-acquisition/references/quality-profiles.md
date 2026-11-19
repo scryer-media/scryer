@@ -18,7 +18,10 @@ jq '.data.qualityProfileSettings | {globalProfileId, globalScoringPersona,
 "Omit keeps" = leaving the field out keeps the stored value.
 
 - `qualityTiers` ([string]): ordered, best first; only listed tiers wanted.
-- `cutoffTier` (string): stop upgrading once a file reaches this tier.
+- `cutoffTier` (string): stop upgrading once a file reaches this tier. Null
+  means the first tier in `qualityTiers`: searches upgrade a file until it
+  reaches that tier, and after that only a same-tier release that clears
+  `minUpgradeScoreDelta` replaces it.
 - `allowUpgrades` (bool).
 - `minUpgradeScoreDelta` (int ≥ 0): same-tier release must beat the current
   file by this much (default 120); omit keeps.

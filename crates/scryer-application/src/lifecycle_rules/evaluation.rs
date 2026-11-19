@@ -1258,10 +1258,10 @@ impl AppUseCase {
                     .get(&title.id)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let people = LifecycleTitlePeople {
-                    requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
-                    usernames: &usernames,
-                };
+                let people = LifecycleTitlePeople::from_requesters(
+                    requesters_by_title.get(&title.id),
+                    &usernames,
+                );
                 let watch = LifecycleTitleWatch {
                     context: &chunk_watch_context,
                     signals: signals_by_title.get(&title.id).map(Vec::as_slice),
@@ -2179,7 +2179,7 @@ impl AppUseCase {
     pub(crate) async fn lifecycle_requesters_for_titles(
         &self,
         titles: &[Title],
-    ) -> AppResult<HashMap<String, Vec<String>>> {
+    ) -> AppResult<HashMap<String, crate::types::TitleRequesters>> {
         let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
         if title_ids.is_empty() {
             return Ok(HashMap::new());

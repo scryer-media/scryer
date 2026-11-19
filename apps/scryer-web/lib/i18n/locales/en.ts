@@ -979,6 +979,67 @@ const en: LocaleDictionary = {
     "The source URL is invalid.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
     "The source URL must not include a query string or fragment.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNREACHABLE":
+    "Could not reach the source application. Check the URL and that it is running.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED":
+    "The source application rejected the API key.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RATE_LIMITED":
+    "Too many requests to the source application. Try again shortly.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING":
+    "The source application does not offer the expected API. Check the URL and its base path.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE":
+    "The source application returned a response Scryer could not read.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE":
+    "The source application returned more data than Scryer accepts.",
+  "error.reason.RULE_IMPORT_INVALID_REQUEST":
+    "This rule import request is not valid.",
+  "error.reason.RULE_IMPORT_REQUEST_CHANGED":
+    "This import was already started with a different source. Start a new import.",
+  "error.reason.RULE_IMPORT_NOT_OWNED":
+    "This rule import does not exist or belongs to another user.",
+  "error.reason.RULE_IMPORT_QUEUE_FULL":
+    "Too many rule imports are running. Wait for one to finish.",
+  "error.reason.RULE_IMPORT_API_KEY_REQUIRED":
+    "An API key is required for this source.",
+  "error.reason.RULE_IMPORT_TRANSLATOR_UNAVAILABLE":
+    "Scryer cannot convert rules from this source yet.",
+  "error.reason.RULE_IMPORT_FETCH_FAILED":
+    "Could not read the rules from the source application.",
+  "error.reason.RULE_IMPORT_TOO_MANY_ITEMS":
+    "The source has more rules than one import accepts.",
+  "error.reason.RULE_IMPORT_INTERRUPTED":
+    "The rule import was interrupted before it finished.",
+  "error.reason.RULE_IMPORT_ALREADY_EXISTS":
+    "A rule with this name already exists, so it was skipped.",
+  "error.reason.RULE_IMPORT_ITEM_FAILED": "This rule could not be imported.",
+  "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
+    "Some quality profiles could not be read from the source.",
+  "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
+    "The source refers to more connected applications than one import reads.",
+  "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
+    "This custom format uses conditions Scryer cannot convert, so no rule was saved.",
+  "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
+    "This custom format could not be read, so no rule was saved.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
+    "Quality profiles score this format differently and Scryer cannot match some of them to one Scryer quality profile. The rule scores 0 until you review it.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer could not prepare the import from its own settings. No rules were saved.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
+    "The score follows the Scryer quality profile with the same name.",
+  "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
+    "Every quality profile scores this format 0, so the rule scores 0.",
+  "error.reason.RULE_IMPORT_GROUP_UNTRANSLATABLE":
+    "This rule group could not be translated, so it was saved as a starter rule to finish by hand.",
+  "error.reason.MAINTAINERR_IMPORT_JSON_TOO_LARGE":
+    "Maintainerr returned more data than one import reads.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_JSON_INVALID":
+    "Maintainerr's rule groups could not be read.",
+  "error.reason.MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID":
+    "Maintainerr's rule catalogue could not be read.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_TOO_MANY":
+    "Maintainerr holds more rule groups than one import accepts.",
+  "error.reason.MAINTAINERR_IMPORT_PROFILES_JSON_INVALID":
+    "The Sonarr or Radarr quality profiles Maintainerr returned could not be read.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "This version of the external application is not supported; a newer major version is required.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -7236,8 +7297,6 @@ const en: LocaleDictionary = {
   "settings.ruleAiPromptCopy": "Copy prompt",
   "settings.ruleAiPromptCopied": "Copied",
   "settings.arrImportTitle": "Import Arr custom formats",
-  "settings.arrImportDescription":
-    "Paste a Sonarr or Radarr custom-format export to create a new Rego rule draft.",
   "settings.arrImportSource": "Source application",
   "settings.arrImportJson": "Custom-format JSON",
   "settings.arrImportJsonPlaceholder":
@@ -7284,6 +7343,114 @@ const en: LocaleDictionary = {
   "settings.arrImportDraftDescription": "Imported from Arr custom-format JSON.",
   "settings.arrImportDiagnostics": "Translation notes",
   "settings.arrImportApply": "Use imported draft",
+  "settings.arrImportDialogDescription":
+    "Import Sonarr or Radarr custom formats as scoring rules.",
+  "settings.arrImportTabConnect": "Connect",
+  "settings.arrImportTabPaste": "Paste JSON",
+  "settings.arrImportBaseUrl": "Base URL",
+  "settings.arrImportApiKey": "API key",
+  "settings.arrImportStart": "Start import",
+  "settings.arrImportStartAnother": "Import again",
+  "settings.arrImportRunning": "Importing custom formats…",
+  "settings.arrImportRunFailed":
+    "The import stopped before it could save any rules.",
+  "settings.arrImportCounts":
+    "{{total}} custom formats: {{saved}} saved, {{review}} to review, {{skipped}} skipped, {{failed}} failed",
+  "settings.arrImportStateSaved": "Saved, disabled",
+  "settings.arrImportStateNeedsReview": "Saved, disabled, needs review",
+  "settings.arrImportStateSavedFailedTranslation": "Saved without translation",
+  "settings.arrImportStateSkipped": "Already exists, skipped",
+  "settings.arrImportStatePending": "Pending",
+  "settings.arrImportStateFailed": "Not imported",
+  "settings.arrImportUnmatchedProfiles":
+    "Quality profiles with no Scryer profile of the same name: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Quality profile names the source repeats with different scores: {{names}}",
+  "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.maintainerrImportAction": "Migrate from Maintainerr",
+  "settings.maintainerrImportTitle": "Migrate from Maintainerr",
+  "settings.maintainerrImportDescription":
+    "Scryer reads the rule groups of a running Maintainerr and saves each one as a lifecycle rule.",
+  "settings.maintainerrImportBaseUrl": "Maintainerr URL",
+  "settings.maintainerrImportStart": "Start import",
+  "settings.maintainerrImportStartAnother": "Import again",
+  "settings.maintainerrImportRunning": "Importing rule groups…",
+  "settings.maintainerrImportRunningCount":
+    "Importing rule groups… {{done}} of {{total}}",
+  "settings.maintainerrImportRunFailed":
+    "The import stopped before every rule group was saved.",
+  "settings.maintainerrImportCounts":
+    "{{total}} rule group(s): {{saved}} saved, {{untranslated}} saved untranslated, {{skipped}} skipped, {{failed}} not imported",
+  "settings.maintainerrImportStateSaved": "Saved, disabled",
+  "settings.maintainerrImportStateSavedFailedTranslation":
+    "Saved untranslated, disabled",
+  "settings.maintainerrImportStateSkipped": "Already exists, skipped",
+  "settings.maintainerrImportStatePending": "Pending",
+  "settings.maintainerrImportStateFailed": "Not imported",
+  "settings.maintainerrImportSeverityError": "Not translated",
+  "settings.maintainerrImportSeverityWarning": "Check",
+  "settings.maintainerrImportDiagnostic": "{{severity}}: {{message}}",
+  "settings.maintainerrImportDiagnosticAtRule":
+    "{{severity}}: {{message}} (rule {{rule}})",
+  "settings.maintainerrImportCode.groupInvalid":
+    "The group's rules, as Maintainerr combines them, can never match.",
+  "settings.maintainerrImportCode.groupRulesDisabled":
+    "The group does not use rules.",
+  "settings.maintainerrImportCode.groupRulesEmpty": "The group has no rules.",
+  "settings.maintainerrImportCode.groupRulesTooMany":
+    "The group has more rules than one lifecycle rule holds.",
+  "settings.maintainerrImportCode.groupMediaTypeUnsupported":
+    "The group's media type is not one Scryer acts on.",
+  "settings.maintainerrImportCode.ruleInvalid": "A rule is malformed.",
+  "settings.maintainerrImportCode.ruleSecondValueMissing":
+    "A rule compares against another property that is missing.",
+  "settings.maintainerrImportCode.ruleUsernameMissing":
+    "A per-user rule names no user.",
+  "settings.maintainerrImportCode.applicationUnknown":
+    "A rule reads an application Maintainerr does not list, usually one it is not connected to.",
+  "settings.maintainerrImportCode.propertyUnknown":
+    "A rule reads a property Maintainerr does not list.",
+  "settings.maintainerrImportCode.propertyUnmapped":
+    "A rule reads a property Scryer has no matching fact for.",
+  "settings.maintainerrImportCode.propertyCollectionUnsupported":
+    "A rule reads media server collections, playlists or labels.",
+  "settings.maintainerrImportCode.propertyLevelUnsupported":
+    "A rule reads a property Scryer has only for another media type.",
+  "settings.maintainerrImportCode.comparatorUnsupported":
+    "A rule's comparison cannot be expressed exactly in Scryer.",
+  "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
+    "A rule compares dates for equality, which depends on Maintainerr's time zone.",
+  "settings.maintainerrImportCode.comparatorPartialListWidens":
+    "A rule reads a list Scryer holds only part of, in a way that could match titles Maintainerr would not.",
+  "settings.maintainerrImportCode.comparatorAbsenceWidens":
+    "A rule matches a value being absent, which Scryer can lack where Maintainerr has it.",
+  "settings.maintainerrImportCode.comparatorDateDriftWidens":
+    "A rule compares a date Scryer can record differently from Maintainerr, in a direction that could match titles Maintainerr would not.",
+  "settings.maintainerrImportCode.usernameUnknownWidens":
+    "A rule names a user no Scryer user is called, and it would match every title with no plays from them.",
+  "settings.maintainerrImportCode.scopeAllLibraries":
+    "The group applies to one media-server library in Maintainerr; the imported rule applies to every Scryer library.",
+  "settings.maintainerrImportCode.customValueInvalid":
+    "A rule's value cannot be read the way Maintainerr reads it.",
+  "settings.maintainerrImportCode.actionMissing": "The group has no action.",
+  "settings.maintainerrImportCode.actionUnsupported":
+    "The group's action has no Scryer equivalent for its media type.",
+  "settings.maintainerrImportCode.qualityProfileUnresolved":
+    "The group's quality profile is not one Sonarr or Radarr lists.",
+  "settings.maintainerrImportCode.qualityProfileNotInScryer":
+    "No Scryer quality profile has the name of the group's quality profile.",
+  "settings.maintainerrImportCode.sourceTooLarge":
+    "The translated rule is larger than a lifecycle rule may be.",
+  "settings.maintainerrImportCode.sourceInvalid":
+    "The translated rule did not pass lifecycle rule validation.",
+  "settings.maintainerrImportCode.usernameUnknown":
+    "A rule names a user no Scryer user is called, so it matches nothing for that user.",
+  "settings.maintainerrImportCode.factApproximate":
+    "A rule reads a Scryer fact that differs slightly from Maintainerr's.",
+  "settings.maintainerrImportCode.actionApproximate":
+    "The group's action maps to Scryer actions that differ slightly from Maintainerr's.",
+  "settings.arrImportDiagnosticAtCondition":
+    "{{message}} (condition {{number}})",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":
@@ -9916,6 +10083,7 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsRequestedByUserIds":
     "Users who requested the subject: the submitter plus any additional requesters",
   "settings.refLifecycleFactsRequestedByUsernames": "Names of those requesters",
+  "settings.refLifecycleFactsRequestedAt": "When the title was first requested",
   "settings.refLifecycleFactsFirstImportedAt":
     "When a file was first imported for the subject",
   "settings.refLifecycleFactsLastUpgradedAt":
@@ -9944,6 +10112,10 @@ const en: LocaleDictionary = {
     "Users who watched the subject. For a season or a whole show, only users who watched every aired episode in it, including episodes with missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. A season or show with no aired episodes is never completed.",
   "settings.refLifecycleFactsLastWatchedAt":
     "When the subject was last played by anyone",
+  "settings.refLifecycleFactsWatchedByUsernames":
+    "Names of the users who watched the subject",
+  "settings.refLifecycleFactsWatchedByUsers":
+    "Each user who watched the subject, with their latest play and how many times they played it",
   "settings.refLifecycleFactsWatchedByAnyRequester":
     "Whether at least one of the subject's requesters has played it",
   "settings.refLifecycleFactsWatchedByAllRequesters":
@@ -10018,6 +10190,8 @@ const en: LocaleDictionary = {
     "Requester identifiers, deduplicated; an empty list when the subject was not requested",
   "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Requester usernames; unknown with reason user_not_found when any of those accounts is gone",
+  "settings.refLifecycleFactsRequestedAtValue":
+    "RFC 3339 time of the oldest request that created the title; absent with reason title_not_requested when no request created it",
   "settings.refLifecycleFactsFirstImportedAtValue":
     "RFC3339 timestamp of the first import",
   "settings.refLifecycleFactsLastUpgradedAtValue":
@@ -10042,6 +10216,10 @@ const en: LocaleDictionary = {
     "Always unknown with reason not_yet_collected: download state is not read yet, so a rule that reads it is held",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. For a season or show, a person counts only after watching every aired episode in it, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
+  "settings.refLifecycleFactsWatchedByUsernamesValue":
+    "Usernames of watched_by_user_ids, in the same order; unknown whenever those ids are, and unknown with reason user_not_found when any of those accounts is gone",
+  "settings.refLifecycleFactsWatchedByUsersValue":
+    "One entry per user in watched_by_user_ids, in the same order, folded over every observed media server; unknown whenever watched_by_usernames is",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing when a play has no recorded time",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
@@ -10179,6 +10357,16 @@ const en: LocaleDictionary = {
     "— One entry per external rating in input.facts.ratings",
   "settings.refLifecycleSectionObsRatings":
     "— One entry per external rating in input.observations.ratings.value",
+  "settings.refLifecycleSectionWatchedByUsers":
+    "— One entry per watcher in input.facts.watched_by_users",
+  "settings.refLifecycleSectionObsWatchedByUsers":
+    "— One entry per watcher in input.observations.watched_by_users.value",
+  "settings.refLifecycleWatcherUserId": "Id of the Scryer user",
+  "settings.refLifecycleWatcherUsername": "Username of the Scryer user",
+  "settings.refLifecycleWatcherLastPlayedAt":
+    "When they last played the subject; null when one of their plays has no time",
+  "settings.refLifecycleWatcherPlayCount":
+    "How many times they played the subject, summed across media servers",
   "settings.refLifecycleRatingSource": "Source of the rating",
   "settings.refLifecycleRatingValue":
     "The rating on the source's own scale, when the source gives one",
@@ -13063,6 +13251,9 @@ const en: LocaleDictionary = {
   "jobs.builtin.LocationOperation.name": "Location Operation",
   "jobs.builtin.LocationOperation.description":
     "Move title content and catalog placement between roots or libraries.",
+  "jobs.builtin.ExternalRuleImport.name": "External Rule Import",
+  "jobs.builtin.ExternalRuleImport.description":
+    "Import Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules.",
   "jobs.builtin.CustomJob.name": "Custom Job",
   "jobs.builtin.CustomJob.description":
     "Run a user-defined script on its own schedule.",

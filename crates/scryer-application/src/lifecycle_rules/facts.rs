@@ -13,7 +13,7 @@
 //! on. `unknown` is a gap, and rules never see it at all on `input.facts`;
 //! they get held instead.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use scryer_domain::{
@@ -23,7 +23,7 @@ use scryer_domain::{
 use scryer_rules::lifecycle::{
     LIFECYCLE_INPUT_SCHEMA_VERSION, LifecycleFactsDoc, LifecycleFileDoc, LifecycleInput,
     LifecycleLibraryDoc, LifecycleSeriesMovieDoc, LifecycleSubjectDoc, LifecycleSubjectKind,
-    Observation,
+    LifecycleWatcherDoc, Observation,
 };
 
 use crate::ports::AudiencePlay;
@@ -520,9 +520,26 @@ pub struct LifecycleTitlePeople<'a> {
     /// `None` means no media request created this title, which is a confirmed
     /// answer and becomes `requested = false`, not an unknown.
     pub requester_user_ids: Option<&'a [String]>,
+    /// When the oldest of those requests was made. Read by the same batched
+    /// load as `requester_user_ids`, so it is `Some` exactly when they are.
+    pub requested_at: Option<DateTime<Utc>>,
     /// Username by user id for every user that existed when the run started.
     /// A missing id is a user that no longer exists, not a lookup that failed.
     pub usernames: &'a HashMap<String, String>,
+}
+
+impl<'a> LifecycleTitlePeople<'a> {
+    /// The people context for one title from the batched requester load.
+    pub fn from_requesters(
+        requesters: Option<&'a crate::types::TitleRequesters>,
+        usernames: &'a HashMap<String, String>,
+    ) -> Self {
+        Self {
+            requester_user_ids: requesters.map(|requesters| requesters.user_ids.as_slice()),
+            requested_at: requesters.map(|requesters| requesters.first_requested_at),
+            usernames,
+        }
+    }
 }
 
 /// The lifecycle claims on one title, resolved by the caller in batch.
@@ -633,7 +650,12 @@ fn build_facts(
         added_by_observations(title.created_by.as_deref(), people.usernames);
     let (requested, requested_by_user_ids, requested_by_usernames) =
         requested_observations(people.requester_user_ids, people.usernames);
-    let watched = watch_observations(&title.facet, people.requester_user_ids, watch);
+    let watched = watch_observations(
+        &title.facet,
+        people.requester_user_ids,
+        people.usernames,
+        watch,
+    );
     let claim_facts = claim_observations(evaluation_time, claims);
 
     LifecycleFactsDoc {
@@ -646,6 +668,7 @@ fn build_facts(
         requested,
         requested_by_user_ids,
         requested_by_usernames,
+        requested_at: requested_at_observation(people),
         first_imported_at: first_imported_observation(files),
         // Scryer records no distinct upgrade event. Approximating it with the
         // newest file timestamp would make "upgraded" and "imported" the same
@@ -667,6 +690,8 @@ fn build_facts(
         ),
         active_downloads: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         watched_by_user_ids: watched.watched_by_user_ids,
+        watched_by_usernames: watched.watched_by_usernames,
+        watched_by_users: watched.watched_by_users,
         last_watched_at: watched.last_watched_at,
         watched_by_any_requester: watched.watched_by_any_requester,
         watched_by_all_requesters: watched.watched_by_all_requesters,
@@ -1087,9 +1112,87 @@ fn requested_observations(
     )
 }
 
+/// When the title was first requested. Absent for a title no request
+/// created, like the requester rollups; unknown for a caller that supplied
+/// the requesters without the time, rather than a made-up one.
+fn requested_at_observation(people: LifecycleTitlePeople<'_>) -> Observation<String> {
+    match (people.requester_user_ids, people.requested_at) {
+        (None, _) => Observation::absent_because(unknown_reason::TITLE_NOT_REQUESTED),
+        (Some(_), Some(at)) => Observation::known(at.to_rfc3339()),
+        (Some(_), None) => Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+    }
+}
+
+/// One watcher's plays of a subject, folded across their rows.
+#[derive(Clone, Debug, Default)]
+struct WatcherPlays {
+    latest: Option<DateTime<Utc>>,
+    /// A played row with no time: the latest of the rest is then not known.
+    untimed: bool,
+    play_count: i64,
+}
+
+impl WatcherPlays {
+    fn add(&mut self, signal: &UserMediaSignal) {
+        match signal.last_played_at {
+            Some(at) => self.latest = self.latest.max(Some(at)),
+            None => self.untimed = true,
+        }
+        self.play_count = self.play_count.saturating_add(signal.play_count.max(0));
+    }
+}
+
+/// The attributed Scryer user of a played row, the way the watcher set reads
+/// it.
+fn signal_user_id(signal: &UserMediaSignal) -> Option<&str> {
+    signal
+        .scryer_user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|user_id| !user_id.is_empty())
+}
+
+/// `watched_by_usernames` and `watched_by_users` for a known watcher set.
+///
+/// All-or-nothing like `requested_by_usernames`: one watcher whose user row
+/// is gone makes both unknown, because a shorter list reads as complete.
+fn watcher_observations<'a>(
+    watchers: impl Iterator<Item = &'a str>,
+    plays: &BTreeMap<String, WatcherPlays>,
+    usernames: &HashMap<String, String>,
+) -> (
+    Observation<Vec<String>>,
+    Observation<Vec<LifecycleWatcherDoc>>,
+) {
+    let mut names = Vec::new();
+    let mut users = Vec::new();
+    for user_id in watchers {
+        let Some(username) = usernames.get(user_id) else {
+            return (
+                Observation::unknown(unknown_reason::USER_NOT_FOUND),
+                Observation::unknown(unknown_reason::USER_NOT_FOUND),
+            );
+        };
+        let played = plays.get(user_id).cloned().unwrap_or_default();
+        names.push(username.clone());
+        users.push(LifecycleWatcherDoc {
+            user_id: user_id.to_string(),
+            username: username.clone(),
+            last_played_at: (!played.untimed)
+                .then_some(played.latest)
+                .flatten()
+                .map(|at| at.to_rfc3339()),
+            play_count: played.play_count,
+        });
+    }
+    (Observation::known(names), Observation::known(users))
+}
+
 /// The watch facts for one subject.
 struct WatchObservations {
     watched_by_user_ids: Observation<Vec<String>>,
+    watched_by_usernames: Observation<Vec<String>>,
+    watched_by_users: Observation<Vec<LifecycleWatcherDoc>>,
     last_watched_at: Observation<String>,
     watched_by_any_requester: Observation<bool>,
     watched_by_all_requesters: Observation<bool>,
@@ -1103,6 +1206,8 @@ impl WatchObservations {
     fn all_unknown(reason: &'static str) -> Self {
         Self {
             watched_by_user_ids: Observation::unknown(reason),
+            watched_by_usernames: Observation::unknown(reason),
+            watched_by_users: Observation::unknown(reason),
             last_watched_at: Observation::unknown(reason),
             watched_by_any_requester: Observation::unknown(reason),
             watched_by_all_requesters: Observation::unknown(reason),
@@ -1221,6 +1326,7 @@ fn scoped_anyone_observations(
 fn watch_observations(
     facet: &MediaFacet,
     requester_user_ids: Option<&[String]>,
+    usernames: &HashMap<String, String>,
     watch: LifecycleTitleWatch<'_>,
 ) -> WatchObservations {
     if !matches!(facet, MediaFacet::Movie) {
@@ -1246,25 +1352,31 @@ fn watch_observations(
         .collect();
 
     let mut watchers: BTreeSet<&str> = BTreeSet::new();
+    let mut plays: BTreeMap<String, WatcherPlays> = BTreeMap::new();
     let mut unattributed = false;
     for signal in &played {
-        match signal
-            .scryer_user_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|user_id| !user_id.is_empty())
-        {
+        match signal_user_id(signal) {
             Some(user_id) => {
                 watchers.insert(user_id);
+                plays.entry(user_id.to_string()).or_default().add(signal);
             }
             None => unattributed = true,
         }
     }
 
-    let watched_by_user_ids = if unattributed {
-        Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING)
+    let (watched_by_user_ids, watched_by_usernames, watched_by_users) = if unattributed {
+        (
+            Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING),
+            Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING),
+            Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING),
+        )
     } else {
-        Observation::known(watchers.iter().map(|id| (*id).to_string()).collect())
+        let (names, users) = watcher_observations(watchers.iter().copied(), &plays, usernames);
+        (
+            Observation::known(watchers.iter().map(|id| (*id).to_string()).collect()),
+            names,
+            users,
+        )
     };
 
     // A play with no time is still a play: "never watched" would let a
@@ -1289,6 +1401,8 @@ fn watch_observations(
 
     WatchObservations {
         watched_by_user_ids,
+        watched_by_usernames,
+        watched_by_users,
         last_watched_at,
         watched_by_any_requester,
         watched_by_all_requesters,
@@ -1541,9 +1655,10 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
         } else {
             Observation::known(subject.episode_file_count)
         };
-        let watched =
-            scoped_watch_observations(evaluation_time, subject, people.requester_user_ids, watch);
+        let watched = scoped_watch_observations(evaluation_time, subject, people, watch);
         input.facts.watched_by_user_ids = watched.watched_by_user_ids;
+        input.facts.watched_by_usernames = watched.watched_by_usernames;
+        input.facts.watched_by_users = watched.watched_by_users;
         input.facts.last_watched_at = watched.last_watched_at;
         input.facts.watched_by_any_requester = watched.watched_by_any_requester;
         input.facts.watched_by_all_requesters = watched.watched_by_all_requesters;
@@ -1660,9 +1775,10 @@ pub(crate) fn air_date_has_aired(
 fn scoped_watch_observations(
     evaluation_time: DateTime<Utc>,
     subject: &super::subjects::LifecycleSubject,
-    requesters: Option<&[String]>,
+    people: LifecycleTitlePeople<'_>,
     watch: LifecycleTitleWatch<'_>,
 ) -> WatchObservations {
+    let requesters = people.requester_user_ids;
     let mut episodes = Vec::new();
     for episode in &subject.episodes {
         if matches!(
@@ -1697,6 +1813,8 @@ fn scoped_watch_observations(
     if episodes.is_empty() {
         return WatchObservations {
             watched_by_user_ids: Observation::known(vec![]),
+            watched_by_usernames: Observation::known(vec![]),
+            watched_by_users: Observation::known(vec![]),
             last_watched_at: Observation::absent_because(unknown_reason::NO_AIRED_EPISODE),
             watched_by_any_requester: Observation::known(false),
             watched_by_all_requesters: Observation::known(false),
@@ -1705,6 +1823,7 @@ fn scoped_watch_observations(
         };
     }
     let mut complete: Option<BTreeSet<String>> = None;
+    let mut plays: BTreeMap<String, WatcherPlays> = BTreeMap::new();
     let mut latest = None;
     let mut missing_play_time = false;
     for episode in episodes {
@@ -1725,6 +1844,7 @@ fn scoped_watch_observations(
         let observed = watch_observations(
             &MediaFacet::Movie,
             requesters,
+            people.usernames,
             LifecycleTitleWatch {
                 context: watch.context,
                 signals: Some(&signals),
@@ -1744,6 +1864,11 @@ fn scoped_watch_observations(
             Some(previous) => previous.intersection(&watchers).cloned().collect(),
         });
         for signal in &signals {
+            if signal.played
+                && let Some(user_id) = signal_user_id(signal)
+            {
+                plays.entry(user_id.to_string()).or_default().add(signal);
+            }
             missing_play_time |= signal.played && signal.last_played_at.is_none();
             if signal.played && signal.last_played_at > latest {
                 latest = signal.last_played_at;
@@ -1753,8 +1878,12 @@ fn scoped_watch_observations(
     let complete = complete.unwrap_or_default();
     let watchers: BTreeSet<&str> = complete.iter().map(String::as_str).collect();
     let (any, all) = requester_watch_observations(requesters, &watchers, false, watch.context);
+    let (watched_by_usernames, watched_by_users) =
+        watcher_observations(watchers.iter().copied(), &plays, people.usernames);
     WatchObservations {
-        watched_by_user_ids: Observation::known(complete.into_iter().collect()),
+        watched_by_user_ids: Observation::known(complete.iter().cloned().collect()),
+        watched_by_usernames,
+        watched_by_users,
         last_watched_at: if missing_play_time {
             Observation::unknown(unknown_reason::EPISODE_PLAY_TIME_MISSING)
         } else {
@@ -1773,6 +1902,17 @@ fn scoped_watch_observations(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// The people context for a scoped watch test that reads no names.
+    fn people_without_names(requester_user_ids: Option<&[String]>) -> LifecycleTitlePeople<'_> {
+        static NO_NAMES: std::sync::LazyLock<HashMap<String, String>> =
+            std::sync::LazyLock::new(HashMap::new);
+        LifecycleTitlePeople {
+            requester_user_ids,
+            requested_at: None,
+            usernames: &NO_NAMES,
+        }
+    }
 
     pub(crate) fn title(created_by: Option<&str>) -> Title {
         faceted_title(created_by, MediaFacet::Movie)
@@ -1866,6 +2006,7 @@ pub(crate) mod tests {
             &[],
             LifecycleTitlePeople {
                 requester_user_ids,
+                requested_at: None,
                 usernames,
             },
             LifecycleTitleWatch {
@@ -1895,6 +2036,7 @@ pub(crate) mod tests {
             &[],
             LifecycleTitlePeople {
                 requester_user_ids: None,
+                requested_at: None,
                 usernames: &usernames,
             },
             LifecycleTitleWatch {
@@ -1911,8 +2053,10 @@ pub(crate) mod tests {
         serde_json::to_value(input).expect("input serializes")
     }
 
-    const WATCH_FACTS: [&str; 6] = [
+    const WATCH_FACTS: [&str; 8] = [
         "watched_by_user_ids",
+        "watched_by_usernames",
+        "watched_by_users",
         "last_watched_at",
         "watched_by_any_requester",
         "watched_by_all_requesters",
@@ -2350,6 +2494,8 @@ pub(crate) mod tests {
 
         for fact in [
             "watched_by_user_ids",
+            "watched_by_usernames",
+            "watched_by_users",
             "watched_by_any_requester",
             "watched_by_all_requesters",
         ] {
@@ -2853,7 +2999,7 @@ pub(crate) mod tests {
         let observed = scoped_watch_observations(
             Utc::now(),
             &subject,
-            Some(&["alice".to_string()]),
+            people_without_names(Some(&["alice".to_string()])),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&[retired]),
@@ -2888,7 +3034,7 @@ pub(crate) mod tests {
         let incomplete = scoped_watch_observations(
             Utc::now(),
             &subject,
-            Some(&requesters),
+            people_without_names(Some(&requesters)),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -2908,7 +3054,7 @@ pub(crate) mod tests {
         let complete = scoped_watch_observations(
             Utc::now(),
             &subject,
-            Some(&requesters),
+            people_without_names(Some(&requesters)),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -2933,6 +3079,7 @@ pub(crate) mod tests {
             &subject,
             LifecycleTitlePeople {
                 requester_user_ids: Some(&requesters),
+                requested_at: None,
                 usernames: &usernames(&[("alice", "Alice")]),
             },
             LifecycleTitleWatch {
@@ -2970,7 +3117,7 @@ pub(crate) mod tests {
         let facts = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -2996,7 +3143,7 @@ pub(crate) mod tests {
         let facts = scoped_watch_observations(
             Utc::now(),
             &subject,
-            Some(&requesters),
+            people_without_names(Some(&requesters)),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3014,7 +3161,7 @@ pub(crate) mod tests {
         let facts = scoped_watch_observations(
             Utc::now(),
             &subject,
-            Some(&requesters),
+            people_without_names(Some(&requesters)),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3037,7 +3184,7 @@ pub(crate) mod tests {
         let unknown = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: None,
@@ -3052,7 +3199,7 @@ pub(crate) mod tests {
         let confirmed = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3066,7 +3213,7 @@ pub(crate) mod tests {
         let unknown = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3081,7 +3228,7 @@ pub(crate) mod tests {
         let empty = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3103,7 +3250,7 @@ pub(crate) mod tests {
         let unknown = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &fresh,
                 signals: Some(&signals),
@@ -3119,7 +3266,7 @@ pub(crate) mod tests {
         let unknown = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &stale,
                 signals: Some(&signals),
@@ -3133,7 +3280,7 @@ pub(crate) mod tests {
         let known = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &fresh,
                 signals: Some(&signals),
@@ -3184,6 +3331,7 @@ pub(crate) mod tests {
             &[],
             LifecycleTitlePeople {
                 requester_user_ids: None,
+                requested_at: None,
                 usernames: &usernames,
             },
             LifecycleTitleWatch {
@@ -3330,7 +3478,7 @@ pub(crate) mod tests {
         let observed = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3349,7 +3497,7 @@ pub(crate) mod tests {
         let only_unaired = scoped_watch_observations(
             Utc::now(),
             &subject,
-            None,
+            people_without_names(None),
             LifecycleTitleWatch {
                 context: &context,
                 signals: Some(&signals),
@@ -3455,5 +3603,302 @@ pub(crate) mod tests {
             doc["observations"]["play_count_total"]["reason"],
             unknown_reason::AUDIENCE_NOT_READ
         );
+    }
+
+    fn requested_document(
+        requester_user_ids: Option<&[String]>,
+        requested_at: Option<DateTime<Utc>>,
+    ) -> serde_json::Value {
+        let names = usernames(&[]);
+        let input = build_title_input(
+            instant("2025-06-01T00:00:00Z"),
+            &title(Some("user-1")),
+            &library(),
+            &[],
+            LifecycleTitlePeople {
+                requester_user_ids,
+                requested_at,
+                usernames: &names,
+            },
+            LifecycleTitleWatch {
+                context: &LifecycleWatchContext::default(),
+                signals: None,
+                audience: None,
+            },
+            LifecycleTitleClaims::none(),
+            &[],
+        );
+        serde_json::to_value(input).expect("input serializes")
+    }
+
+    #[test]
+    fn requested_at_is_the_first_request_time_and_absent_for_an_unrequested_title() {
+        let requesters = vec!["user-1".to_string()];
+        let requested =
+            requested_document(Some(&requesters), Some(instant("2025-02-03T04:05:06Z")));
+        assert_eq!(
+            requested["facts"]["requested_at"],
+            "2025-02-03T04:05:06+00:00"
+        );
+
+        let unrequested = requested_document(None, None);
+        assert!(unrequested["facts"].get("requested_at").is_none());
+        assert_eq!(
+            unrequested["observations"]["requested_at"]["status"],
+            "absent"
+        );
+        assert_eq!(
+            unrequested["observations"]["requested_at"]["reason"],
+            unknown_reason::TITLE_NOT_REQUESTED
+        );
+
+        // Requesters without their time is a caller gap, never a made-up time.
+        let gap = requested_document(Some(&requesters), None);
+        assert!(gap["facts"].get("requested_at").is_none());
+        assert_eq!(gap["observations"]["requested_at"]["status"], "unknown");
+    }
+
+    #[test]
+    fn people_from_the_batched_requester_load_carry_the_first_request_time() {
+        let requesters = crate::types::TitleRequesters {
+            user_ids: vec!["user-1".to_string(), "user-2".to_string()],
+            first_requested_at: instant("2025-02-03T04:05:06Z"),
+        };
+        let names = usernames(&[]);
+        let people = LifecycleTitlePeople::from_requesters(Some(&requesters), &names);
+        assert_eq!(
+            people.requester_user_ids,
+            Some(requesters.user_ids.as_slice())
+        );
+        assert_eq!(people.requested_at, Some(requesters.first_requested_at));
+
+        let none = LifecycleTitlePeople::from_requesters(None, &names);
+        assert!(none.requester_user_ids.is_none() && none.requested_at.is_none());
+    }
+
+    #[test]
+    fn watchers_resolve_to_usernames_and_fold_their_plays_across_connections() {
+        let mut context = fresh_context(&["viewer-a", "viewer-b"]);
+        context
+            .enabled_connection_ids
+            .insert("connection-2".to_string());
+        let mut first = signal(Some("viewer-b"), true, "2024-05-01T00:00:00Z");
+        first.play_count = 2;
+        let mut second = signal_from(
+            "connection-2",
+            Some("viewer-b"),
+            true,
+            "2024-06-01T00:00:00Z",
+        );
+        second.play_count = 3;
+        let mut ignored = signal_from(
+            "connection-off",
+            Some("viewer-b"),
+            true,
+            "2024-07-01T00:00:00Z",
+        );
+        ignored.play_count = 40;
+        let other = signal(Some("viewer-a"), true, "2024-04-01T00:00:00Z");
+
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[("viewer-a", "sample-alpha"), ("viewer-b", "sample-beta")]),
+            &context,
+            Some(&[first, second, ignored, other]),
+        );
+
+        assert_eq!(
+            doc["facts"]["watched_by_usernames"],
+            serde_json::json!(["sample-alpha", "sample-beta"])
+        );
+        assert_eq!(
+            doc["facts"]["watched_by_users"],
+            serde_json::json!([
+                {
+                    "user_id": "viewer-a",
+                    "username": "sample-alpha",
+                    "last_played_at": "2024-04-01T00:00:00+00:00",
+                    "play_count": 1
+                },
+                {
+                    "user_id": "viewer-b",
+                    "username": "sample-beta",
+                    "last_played_at": "2024-06-01T00:00:00+00:00",
+                    "play_count": 5
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn one_unresolvable_watcher_makes_both_named_watch_facts_unknown() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[("viewer-a", "sample-alpha")]),
+            &fresh_context(&["viewer-a", "viewer-gone"]),
+            Some(&[
+                signal(Some("viewer-a"), true, "2024-05-01T00:00:00Z"),
+                signal(Some("viewer-gone"), true, "2024-05-02T00:00:00Z"),
+            ]),
+        );
+
+        for fact in ["watched_by_usernames", "watched_by_users"] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"],
+                unknown_reason::USER_NOT_FOUND,
+                "{fact}"
+            );
+        }
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["viewer-a", "viewer-gone"]),
+            "the ids stay known"
+        );
+    }
+
+    #[test]
+    fn nobody_watching_is_a_known_empty_list_of_names_and_users() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &fresh_context(&["viewer-a"]),
+            Some(&[signal(Some("viewer-a"), false, "2024-05-01T00:00:00Z")]),
+        );
+        assert_eq!(doc["facts"]["watched_by_usernames"], serde_json::json!([]));
+        assert_eq!(doc["facts"]["watched_by_users"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_watcher_with_an_untimed_play_has_no_latest_play_time() {
+        let mut untimed = signal(Some("viewer-a"), true, "2024-05-01T00:00:00Z");
+        untimed.last_played_at = None;
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[("viewer-a", "sample-alpha")]),
+            &fresh_context(&["viewer-a"]),
+            Some(&[
+                untimed,
+                signal(Some("viewer-a"), true, "2024-04-01T00:00:00Z"),
+            ]),
+        );
+        assert_eq!(
+            doc["facts"]["watched_by_users"],
+            serde_json::json!([{
+                "user_id": "viewer-a",
+                "username": "sample-alpha",
+                "last_played_at": null,
+                "play_count": 2
+            }])
+        );
+    }
+
+    #[test]
+    fn named_watch_facts_follow_the_watcher_gate() {
+        let closed = LifecycleWatchContext {
+            freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),
+            ..fresh_context(&["viewer-a"])
+        };
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[("viewer-a", "sample-alpha")]),
+            &closed,
+            Some(&[signal(Some("viewer-a"), true, "2024-05-01T00:00:00Z")]),
+        );
+        for fact in [
+            "watched_by_user_ids",
+            "watched_by_usernames",
+            "watched_by_users",
+        ] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"],
+                unknown_reason::SIGNALS_STALE,
+                "{fact}"
+            );
+        }
+
+        let show = watch_document(
+            &faceted_title(Some("user-1"), MediaFacet::Series),
+            None,
+            &usernames(&[("viewer-a", "sample-alpha")]),
+            &fresh_context(&["viewer-a"]),
+            None,
+        );
+        for fact in ["watched_by_usernames", "watched_by_users"] {
+            assert_eq!(
+                show["observations"][fact]["reason"],
+                unknown_reason::SHOW_WATCH_ROLLUP_UNAVAILABLE,
+                "{fact}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_season_names_only_the_people_who_watched_every_aired_episode() {
+        let subject = scoped_season(&[Some("2024-01-01"), Some("2024-01-02"), Some("2099-01-01")]);
+        let context = fresh_context(&["viewer-a", "viewer-b"]);
+        let mut repeat = episode_signal(1, Some("viewer-a"), true);
+        repeat.play_count = 4;
+        repeat.last_played_at = Some(instant("2026-02-01T00:00:00Z"));
+        let signals = vec![
+            episode_signal(0, Some("viewer-a"), true),
+            repeat,
+            episode_signal(1, Some("viewer-b"), true),
+            // A future episode is out of scope, so its play counts for nothing.
+            episode_signal(2, Some("viewer-a"), true),
+        ];
+        let names = usernames(&[("viewer-a", "sample-alpha"), ("viewer-b", "sample-beta")]);
+        let observed = scoped_watch_observations(
+            instant("2025-06-01T00:00:00Z"),
+            &subject,
+            LifecycleTitlePeople {
+                requester_user_ids: None,
+                requested_at: None,
+                usernames: &names,
+            },
+            LifecycleTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+                audience: None,
+            },
+        );
+        assert!(matches!(
+            observed.watched_by_usernames,
+            Observation::Known { ref value, .. } if value == &vec!["sample-alpha".to_string()]
+        ));
+        let Observation::Known { value: users, .. } = observed.watched_by_users else {
+            panic!("watched_by_users is known: {:?}", observed.watched_by_users);
+        };
+        assert_eq!(
+            users,
+            vec![LifecycleWatcherDoc {
+                user_id: "viewer-a".to_string(),
+                username: "sample-alpha".to_string(),
+                last_played_at: Some("2026-02-01T00:00:00+00:00".to_string()),
+                play_count: 5,
+            }]
+        );
+
+        let missing_name = scoped_watch_observations(
+            instant("2025-06-01T00:00:00Z"),
+            &subject,
+            people_without_names(None),
+            LifecycleTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+                audience: None,
+            },
+        );
+        assert!(matches!(
+            missing_name.watched_by_users,
+            Observation::Unknown { ref reason, .. } if reason == unknown_reason::USER_NOT_FOUND
+        ));
     }
 }

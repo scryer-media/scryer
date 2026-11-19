@@ -2773,7 +2773,8 @@ const ru: LocaleDictionary = {
   "settings.refAudioStreamChannels":
     "Количество каналов отдельного аудиопотока",
   "settings.refAudioStreamLanguage": "Код языка отдельного аудиопотока",
-  "settings.refAudioStreamName": "Название отдельной звуковой дорожки, если доступно",
+  "settings.refAudioStreamName":
+    "Название отдельной звуковой дорожки, если доступно",
   "settings.refAudioStreamBitrateKbps":
     "Битрейт отдельного аудиопотока в кбит/с",
   "settings.refSectionSubtitleStreams": "— Вложенные записи потоков субтитров",
@@ -4892,6 +4893,7 @@ const ru: LocaleDictionary = {
     "Пользователи, запросившие субъект: автор запроса и все дополнительные запросившие",
   "settings.refLifecycleFactsRequestedByUsernames":
     "Имена этих запросивших пользователей",
+  "settings.refLifecycleFactsRequestedAt": "Когда тайтл был впервые запрошен",
   "settings.refLifecycleFactsFirstImportedAt":
     "Когда для субъекта был впервые импортирован файл",
   "settings.refLifecycleFactsLastUpgradedAt":
@@ -4916,6 +4918,10 @@ const ru: LocaleDictionary = {
     "Пользователи, которые смотрели субъект. Для сезона или всего сериала — только пользователи, посмотревшие каждую вышедшую в нём серию, включая серии с отсутствующими файлами. Будущие серии исключаются; неустановленные даты выхода или неполные сигналы дают unknown. Сезон или сериал без вышедших серий никогда не считается завершённым.",
   "settings.refLifecycleFactsLastWatchedAt":
     "Когда субъект в последний раз кто-либо смотрел",
+  "settings.refLifecycleFactsWatchedByUsernames":
+    "Имена пользователей, которые смотрели субъект",
+  "settings.refLifecycleFactsWatchedByUsers":
+    "Каждый пользователь, который смотрел субъект, с его последним просмотром и числом просмотров",
   "settings.refLifecycleFactsWatchedByAnyRequester":
     "Смотрел ли субъект хотя бы один из запросивших его пользователей",
   "settings.refLifecycleFactsWatchedByAllRequesters":
@@ -4954,6 +4960,8 @@ const ru: LocaleDictionary = {
     "Идентификаторы запросивших без повторов; пустой список, если субъект не запрашивали",
   "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Имена запросивших; unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
+  "settings.refLifecycleFactsRequestedAtValue":
+    "Время RFC 3339 самого раннего запроса, создавшего тайтл; absent с причиной title_not_requested, если тайтл не создан запросом",
   "settings.refLifecycleFactsFirstImportedAtValue":
     "Метка времени RFC3339 первого импорта",
   "settings.refLifecycleFactsLastUpgradedAtValue":
@@ -4975,6 +4983,10 @@ const ru: LocaleDictionary = {
     "Всегда unknown с причиной not_yet_collected: состояние загрузок пока не считывается, поэтому правило, которое читает это значение, откладывается",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Для сезона или сериала человек учитывается только после просмотра каждой вышедшей в нём серии, включая отсутствующие файлы. Будущие серии исключаются; отсутствующая история серий или неустановленные даты выхода дают unknown. Факты о просмотрах неизвестны, когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
+  "settings.refLifecycleFactsWatchedByUsernamesValue":
+    "Имена пользователей из watched_by_user_ids в том же порядке; unknown, когда неизвестны эти идентификаторы, и unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
+  "settings.refLifecycleFactsWatchedByUsersValue":
+    "Одна запись на каждого пользователя из watched_by_user_ids в том же порядке, сведённая по всем наблюдаемым медиасерверам; unknown, когда неизвестно watched_by_usernames",
   "settings.refLifecycleFactsLastWatchedAtValue":
     "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел, и unknown с причиной play_time_missing, если у просмотра нет записанного времени",
   "settings.refLifecycleFactsWatchedByAnyRequesterValue":
@@ -5072,6 +5084,16 @@ const ru: LocaleDictionary = {
     "— Одна запись на каждый внешний рейтинг в input.facts.ratings",
   "settings.refLifecycleSectionObsRatings":
     "— Одна запись на каждый внешний рейтинг в input.observations.ratings.value",
+  "settings.refLifecycleSectionWatchedByUsers":
+    "— Одна запись на каждого зрителя в input.facts.watched_by_users",
+  "settings.refLifecycleSectionObsWatchedByUsers":
+    "— Одна запись на каждого зрителя в input.observations.watched_by_users.value",
+  "settings.refLifecycleWatcherUserId": "Идентификатор пользователя Scryer",
+  "settings.refLifecycleWatcherUsername": "Имя пользователя Scryer",
+  "settings.refLifecycleWatcherLastPlayedAt":
+    "Когда пользователь в последний раз смотрел субъект; null, если у одного из его просмотров нет времени",
+  "settings.refLifecycleWatcherPlayCount":
+    "Сколько раз пользователь смотрел субъект, суммарно по всем медиасерверам",
   "settings.refLifecycleRatingSource": "Источник рейтинга",
   "settings.refLifecycleRatingValue":
     "Рейтинг по собственной шкале источника, если источник её даёт",
@@ -7927,6 +7949,68 @@ const ru: LocaleDictionary = {
     "Недопустимый URL источника.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
     "URL источника не должен содержать строку запроса или фрагмент.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNREACHABLE":
+    "Не удалось подключиться к приложению-источнику. Проверьте URL и что оно запущено.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED":
+    "Приложение-источник отклонило ключ API.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RATE_LIMITED":
+    "Слишком много запросов к приложению-источнику. Повторите попытку чуть позже.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING":
+    "Приложение-источник не предоставляет ожидаемый API. Проверьте URL и его базовый путь.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE":
+    "Приложение-источник вернуло ответ, который Scryer не смог прочитать.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE":
+    "Приложение-источник вернуло больше данных, чем принимает Scryer.",
+  "error.reason.RULE_IMPORT_INVALID_REQUEST":
+    "Этот запрос на импорт правил недопустим.",
+  "error.reason.RULE_IMPORT_REQUEST_CHANGED":
+    "Этот импорт уже запущен с другим источником. Начните новый импорт.",
+  "error.reason.RULE_IMPORT_NOT_OWNED":
+    "Этот импорт правил не существует или принадлежит другому пользователю.",
+  "error.reason.RULE_IMPORT_QUEUE_FULL":
+    "Выполняется слишком много импортов правил. Дождитесь завершения одного из них.",
+  "error.reason.RULE_IMPORT_API_KEY_REQUIRED":
+    "Для этого источника требуется ключ API.",
+  "error.reason.RULE_IMPORT_TRANSLATOR_UNAVAILABLE":
+    "Scryer пока не может преобразовать правила из этого источника.",
+  "error.reason.RULE_IMPORT_FETCH_FAILED":
+    "Не удалось прочитать правила из приложения-источника.",
+  "error.reason.RULE_IMPORT_TOO_MANY_ITEMS":
+    "В источнике больше правил, чем принимает один импорт.",
+  "error.reason.RULE_IMPORT_INTERRUPTED":
+    "Импорт правил был прерван до завершения.",
+  "error.reason.RULE_IMPORT_ALREADY_EXISTS":
+    "Правило с таким именем уже существует, поэтому оно пропущено.",
+  "error.reason.RULE_IMPORT_ITEM_FAILED":
+    "Не удалось импортировать это правило.",
+  "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
+    "Не удалось прочитать некоторые профили качества из источника.",
+  "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
+    "Источник ссылается на больше подключённых приложений, чем читает один импорт.",
+  "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
+    "Этот пользовательский формат использует условия, которые Scryer не может преобразовать, поэтому правило не сохранено.",
+  "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
+    "Не удалось прочитать этот пользовательский формат, поэтому правило не сохранено.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
+    "Профили качества оценивают этот формат по-разному, и Scryer не может сопоставить некоторые из них с одним профилем качества Scryer. Правило даёт 0, пока вы его не проверите.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer не удалось подготовить импорт по собственным настройкам. Правила не сохранены.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
+    "Оценка зависит от профиля качества Scryer с тем же именем.",
+  "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
+    "Все профили качества оценивают этот формат в 0, поэтому правило даёт 0.",
+  "error.reason.RULE_IMPORT_GROUP_UNTRANSLATABLE":
+    "Эту группу правил не удалось перевести, поэтому она сохранена как заготовка, которую нужно доработать вручную.",
+  "error.reason.MAINTAINERR_IMPORT_JSON_TOO_LARGE":
+    "Maintainerr вернул больше данных, чем читает один импорт.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_JSON_INVALID":
+    "Не удалось прочитать группы правил Maintainerr.",
+  "error.reason.MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID":
+    "Не удалось прочитать каталог правил Maintainerr.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_TOO_MANY":
+    "В Maintainerr больше групп правил, чем принимает один импорт.",
+  "error.reason.MAINTAINERR_IMPORT_PROFILES_JSON_INVALID":
+    "Не удалось прочитать профили качества Sonarr или Radarr, которые вернул Maintainerr.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "Эта версия внешнего приложения не поддерживается; требуется более новая основная версия.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -11975,8 +12059,6 @@ const ru: LocaleDictionary = {
   "settings.ruleAiPromptCopy": "Копировать запрос",
   "settings.ruleAiPromptCopied": "Скопировано",
   "settings.arrImportTitle": "Импортировать пользовательские форматы Arr",
-  "settings.arrImportDescription":
-    "Вставьте экспорт пользовательских форматов Sonarr или Radarr, чтобы создать новый черновик правила Rego.",
   "settings.arrImportSource": "Исходное приложение",
   "settings.arrImportJson": "JSON пользовательских форматов",
   "settings.arrImportJsonPlaceholder":
@@ -12024,6 +12106,114 @@ const ru: LocaleDictionary = {
     "Импортировано из JSON пользовательских форматов Arr.",
   "settings.arrImportDiagnostics": "Примечания к преобразованию",
   "settings.arrImportApply": "Использовать импортированный черновик",
+  "settings.arrImportDialogDescription":
+    "Импорт пользовательских форматов Sonarr или Radarr как правил оценки.",
+  "settings.arrImportTabConnect": "Подключение",
+  "settings.arrImportTabPaste": "Вставить JSON",
+  "settings.arrImportBaseUrl": "Базовый URL",
+  "settings.arrImportApiKey": "Ключ API",
+  "settings.arrImportStart": "Начать импорт",
+  "settings.arrImportStartAnother": "Импортировать снова",
+  "settings.arrImportRunning": "Импорт пользовательских форматов…",
+  "settings.arrImportRunFailed":
+    "Импорт остановился, не сохранив ни одного правила.",
+  "settings.arrImportCounts":
+    "Пользовательских форматов: {{total}}; сохранено: {{saved}}, на проверку: {{review}}, пропущено: {{skipped}}, с ошибкой: {{failed}}",
+  "settings.arrImportStateSaved": "Сохранено, отключено",
+  "settings.arrImportStateNeedsReview":
+    "Сохранено, отключено, требует проверки",
+  "settings.arrImportStateSavedFailedTranslation": "Сохранено без перевода",
+  "settings.arrImportStateSkipped": "Уже существует, пропущено",
+  "settings.arrImportStatePending": "Ожидает",
+  "settings.arrImportStateFailed": "Не импортировано",
+  "settings.arrImportUnmatchedProfiles":
+    "Профили качества без профиля Scryer с тем же именем: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Имена профилей качества, которые источник повторяет с разными оценками: {{names}}",
+  "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.maintainerrImportAction": "Перенести из Maintainerr",
+  "settings.maintainerrImportTitle": "Перенос из Maintainerr",
+  "settings.maintainerrImportDescription":
+    "Scryer читает группы правил работающего Maintainerr и сохраняет каждую как правило жизненного цикла.",
+  "settings.maintainerrImportBaseUrl": "URL Maintainerr",
+  "settings.maintainerrImportStart": "Начать импорт",
+  "settings.maintainerrImportStartAnother": "Импортировать снова",
+  "settings.maintainerrImportRunning": "Импорт групп правил…",
+  "settings.maintainerrImportRunningCount":
+    "Импорт групп правил… {{done}} из {{total}}",
+  "settings.maintainerrImportRunFailed":
+    "Импорт остановился до того, как были сохранены все группы правил.",
+  "settings.maintainerrImportCounts":
+    "Групп правил: {{total}}; сохранено: {{saved}}, сохранено без перевода: {{untranslated}}, пропущено: {{skipped}}, не импортировано: {{failed}}",
+  "settings.maintainerrImportStateSaved": "Сохранено, отключено",
+  "settings.maintainerrImportStateSavedFailedTranslation":
+    "Сохранено без перевода, отключено",
+  "settings.maintainerrImportStateSkipped": "Уже существует, пропущено",
+  "settings.maintainerrImportStatePending": "Ожидает",
+  "settings.maintainerrImportStateFailed": "Не импортировано",
+  "settings.maintainerrImportSeverityError": "Не переведено",
+  "settings.maintainerrImportSeverityWarning": "Проверьте",
+  "settings.maintainerrImportDiagnostic": "{{severity}}: {{message}}",
+  "settings.maintainerrImportDiagnosticAtRule":
+    "{{severity}}: {{message}} (правило {{rule}})",
+  "settings.maintainerrImportCode.groupInvalid":
+    "Правила группы в том виде, как их объединяет Maintainerr, никогда не совпадут.",
+  "settings.maintainerrImportCode.groupRulesDisabled":
+    "Группа не использует правила.",
+  "settings.maintainerrImportCode.groupRulesEmpty": "В группе нет правил.",
+  "settings.maintainerrImportCode.groupRulesTooMany":
+    "В группе больше правил, чем вмещает одно правило жизненного цикла.",
+  "settings.maintainerrImportCode.groupMediaTypeUnsupported":
+    "Тип медиа группы не тот, с которым работает Scryer.",
+  "settings.maintainerrImportCode.ruleInvalid": "Правило составлено неверно.",
+  "settings.maintainerrImportCode.ruleSecondValueMissing":
+    "Правило сравнивает с другим свойством, которого нет.",
+  "settings.maintainerrImportCode.ruleUsernameMissing":
+    "Правило для пользователя не называет пользователя.",
+  "settings.maintainerrImportCode.applicationUnknown":
+    "Правило читает приложение, которого нет в списке Maintainerr, обычно не подключённое к нему.",
+  "settings.maintainerrImportCode.propertyUnknown":
+    "Правило читает свойство, которого нет в списке Maintainerr.",
+  "settings.maintainerrImportCode.propertyUnmapped":
+    "Правило читает свойство, для которого у Scryer нет соответствующего факта.",
+  "settings.maintainerrImportCode.propertyCollectionUnsupported":
+    "Правило читает коллекции, плейлисты или метки медиасервера.",
+  "settings.maintainerrImportCode.propertyLevelUnsupported":
+    "Правило читает свойство, которое у Scryer есть только для другого типа медиа.",
+  "settings.maintainerrImportCode.comparatorUnsupported":
+    "Сравнение в правиле нельзя точно выразить в Scryer.",
+  "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
+    "Правило сравнивает даты на равенство, а это зависит от часового пояса Maintainerr.",
+  "settings.maintainerrImportCode.comparatorPartialListWidens":
+    "Правило читает список, который в Scryer хранится лишь частично, так что оно могло бы совпасть с тайтлами, с которыми не совпало бы в Maintainerr.",
+  "settings.maintainerrImportCode.comparatorAbsenceWidens":
+    "Правило срабатывает при отсутствии значения, а в Scryer его может не быть там, где в Maintainerr оно есть.",
+  "settings.maintainerrImportCode.comparatorDateDriftWidens":
+    "Правило сравнивает дату, которую Scryer может записать иначе, чем Maintainerr, в направлении, при котором оно могло бы совпасть с лишними тайтлами.",
+  "settings.maintainerrImportCode.usernameUnknownWidens":
+    "Правило называет пользователя, которого нет в Scryer, и совпало бы с каждым тайтлом без его просмотров.",
+  "settings.maintainerrImportCode.scopeAllLibraries":
+    "В Maintainerr группа относится к одной библиотеке медиасервера; импортированное правило относится ко всем библиотекам Scryer.",
+  "settings.maintainerrImportCode.customValueInvalid":
+    "Значение правила нельзя прочитать так, как его читает Maintainerr.",
+  "settings.maintainerrImportCode.actionMissing": "У группы нет действия.",
+  "settings.maintainerrImportCode.actionUnsupported":
+    "У действия группы нет аналога в Scryer для её типа медиа.",
+  "settings.maintainerrImportCode.qualityProfileUnresolved":
+    "Профиля качества группы нет в списке Sonarr или Radarr.",
+  "settings.maintainerrImportCode.qualityProfileNotInScryer":
+    "Ни один профиль качества Scryer не называется как профиль качества группы.",
+  "settings.maintainerrImportCode.sourceTooLarge":
+    "Переведённое правило больше, чем допускается для правила жизненного цикла.",
+  "settings.maintainerrImportCode.sourceInvalid":
+    "Переведённое правило не прошло проверку правил жизненного цикла.",
+  "settings.maintainerrImportCode.usernameUnknown":
+    "Правило называет пользователя, которого нет в Scryer, поэтому для этого пользователя оно ни с чем не совпадает.",
+  "settings.maintainerrImportCode.factApproximate":
+    "Правило читает факт Scryer, который немного отличается от факта Maintainerr.",
+  "settings.maintainerrImportCode.actionApproximate":
+    "Действие группы соответствует действиям Scryer, которые немного отличаются от действий Maintainerr.",
+  "settings.arrImportDiagnosticAtCondition": "{{message}} (условие {{number}})",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",
   "settings.refReleaseHasHdrFallback":
@@ -13660,6 +13850,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.LocationOperation.name": "Перемещение контента",
   "jobs.builtin.LocationOperation.description":
     "Перемещение контента и записей каталога между корневыми папками или библиотеками.",
+  "jobs.builtin.ExternalRuleImport.name": "Импорт внешних правил",
+  "jobs.builtin.ExternalRuleImport.description":
+    "Импорт пользовательских форматов Sonarr или Radarr либо групп правил Maintainerr в виде отключённых правил.",
   "jobs.builtin.CustomJob.name": "Пользовательское задание",
   "jobs.builtin.CustomJob.description":
     "Запуск пользовательского скрипта по его собственному расписанию.",

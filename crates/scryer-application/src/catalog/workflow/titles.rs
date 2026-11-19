@@ -707,30 +707,9 @@ impl AppUseCase {
                 continue;
             }
 
-            let Some(cutoff_tier) = profile
-                .criteria
-                .cutoff_tier
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
+            let Some(normalized_cutoff_tier) = profile.criteria.search_cutoff_tier() else {
                 continue;
             };
-
-            let Some(normalized_cutoff_tier) =
-                crate::quality_profile::normalize_quality_tier(Some(cutoff_tier))
-            else {
-                continue;
-            };
-
-            if !profile
-                .criteria
-                .quality_tiers
-                .iter()
-                .any(|tier| tier == &normalized_cutoff_tier)
-            {
-                continue;
-            }
 
             cutoff_profile_map.insert(
                 title.id.clone(),

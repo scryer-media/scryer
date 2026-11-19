@@ -539,8 +539,26 @@ pub mod external_import {
     pub const SOURCE_APPLICATION_MISMATCH: &str = "EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH";
     /// The source URL is invalid.
     pub const SOURCE_URL_INVALID: &str = "EXTERNAL_IMPORT_SOURCE_URL_INVALID";
+    /// The source could not be reached: refused, timed out, or the name did not resolve.
+    pub const SOURCE_UNREACHABLE: &str = "EXTERNAL_IMPORT_SOURCE_UNREACHABLE";
+    /// The source rejected the supplied API key.
+    pub const SOURCE_UNAUTHORIZED: &str = "EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED";
+    /// The source kept answering that requests were rate limited.
+    pub const SOURCE_RATE_LIMITED: &str = "EXTERNAL_IMPORT_SOURCE_RATE_LIMITED";
+    /// The source has no such endpoint, usually because its version predates it.
+    pub const SOURCE_ENDPOINT_MISSING: &str = "EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING";
+    /// The source answered with an error status, a body that is not JSON, or JSON of the wrong shape.
+    pub const SOURCE_UNEXPECTED_RESPONSE: &str = "EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE";
+    /// The source's response exceeded the size Scryer reads from it.
+    pub const SOURCE_RESPONSE_TOO_LARGE: &str = "EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        SOURCE_UNREACHABLE,
+        SOURCE_UNAUTHORIZED,
+        SOURCE_RATE_LIMITED,
+        SOURCE_ENDPOINT_MISSING,
+        SOURCE_UNEXPECTED_RESPONSE,
+        SOURCE_RESPONSE_TOO_LARGE,
         SESSION_GONE,
         COULD_NOT_DETERMINE_VERSION,
         VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED,
@@ -6453,6 +6471,60 @@ pub mod arr_custom_formats {
     }
 }
 
+pub mod maintainerr_import {
+    /// A Maintainerr export is larger than the import accepts.
+    pub const JSON_TOO_LARGE: &str = "MAINTAINERR_IMPORT_JSON_TOO_LARGE";
+    /// The Maintainerr rule groups are not valid JSON in the expected shape.
+    pub const GROUPS_JSON_INVALID: &str = "MAINTAINERR_IMPORT_GROUPS_JSON_INVALID";
+    /// The Maintainerr rule constants are not valid JSON in the expected shape.
+    pub const CONSTANTS_JSON_INVALID: &str = "MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID";
+    /// The export holds more rule groups than one import accepts.
+    pub const GROUPS_TOO_MANY: &str = "MAINTAINERR_IMPORT_GROUPS_TOO_MANY";
+    /// A Sonarr or Radarr quality profile list is not valid JSON in the
+    /// expected shape.
+    pub const PROFILES_JSON_INVALID: &str = "MAINTAINERR_IMPORT_PROFILES_JSON_INVALID";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        JSON_TOO_LARGE,
+        GROUPS_JSON_INVALID,
+        CONSTANTS_JSON_INVALID,
+        GROUPS_TOO_MANY,
+        PROFILES_JSON_INVALID,
+    ];
+
+    /// The largest accepted export document, in UTF-8 bytes.
+    pub const MAX_BYTES_FACT: &str = "maxBytes";
+    /// The most rule groups one import accepts.
+    pub const MAX_GROUPS_FACT: &str = "maxGroups";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[MAX_BYTES_FACT, MAX_GROUPS_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6501,6 +6573,7 @@ mod tests {
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),
             ("ARR_CUSTOM_FORMAT_", arr_custom_formats::ALL),
+            ("MAINTAINERR_IMPORT_", maintainerr_import::ALL),
         ];
         let mut distinct = std::collections::BTreeSet::new();
         for (prefix, codes) in areas {

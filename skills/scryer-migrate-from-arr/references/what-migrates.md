@@ -14,7 +14,7 @@ Tell the operator this before any change, counts filled from `summary.json`.
 
 ## Handled by this skill (each step asks first)
 
-- Custom formats and their scores: server translator into one rule set per decision (`custom-formats.md`)
+- Custom formats and their scores: Scryer reads them from arr and saves one disabled rule set per format, scored from the arr quality profiles; formats it cannot translate are listed, not saved (`custom-formats.md`)
 - Titles with no files: `AddTitle`, in a confirmed batch (`manual-areas.md`)
 - Quality profiles: copy a Scryer profile, set tiers, cutoff and score floors (`manual-areas.md`)
 - Delay profiles: `UpsertDelayProfile`

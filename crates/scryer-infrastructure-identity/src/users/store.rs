@@ -165,6 +165,16 @@ impl UserRepository for UserStore {
         rows.iter().map(row_to_user).collect()
     }
 
+    async fn list_usernames(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT username FROM users",
+            &[],
+        )
+        .await?;
+        rows.iter().map(|row| row.text("username")).collect()
+    }
+
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>> {
         load_user_by_id(self.datastore.read_exec(), id).await
     }

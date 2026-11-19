@@ -25,6 +25,7 @@ pub mod declared_actions;
 pub mod evaluation;
 pub mod facts;
 pub(crate) mod list_facts;
+pub mod maintainerr;
 pub mod safety;
 pub(crate) mod scoped_deletion;
 pub(crate) mod sequence_execution;

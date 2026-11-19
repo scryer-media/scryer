@@ -3868,13 +3868,16 @@ pub trait MediaRequestRepository: Send + Sync {
     /// calls: the facts document is compared between runs, so an order that
     /// drifted would read as a changed fact.
     ///
+    /// Each entry also carries the `created_at` of the oldest of those
+    /// requests, read by the same statement as the submitters.
+    ///
     /// Batched on purpose: lifecycle evaluation asks this for a whole chunk
     /// of titles at once, and a per-title query would make the pass scale with
     /// the library.
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<HashMap<String, Vec<String>>>;
+    ) -> AppResult<HashMap<String, crate::types::TitleRequesters>>;
 
     /// The origin of the oldest request that created each of `title_ids`,
     /// over the same requests [`Self::requester_user_ids_by_title_ids`] reads.
@@ -4615,6 +4618,15 @@ pub trait UserRepository: Send + Sync {
         ))
     }
     async fn list_all(&self) -> AppResult<Vec<User>>;
+    /// The username of every user.
+    async fn list_usernames(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_all()
+            .await?
+            .into_iter()
+            .map(|user| user.username)
+            .collect())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
     async fn rotate_auth_session_version(
@@ -11312,6 +11324,28 @@ pub trait RuleSetRepository: Send + Sync {
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
 
+    /// The name of every rule set.
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .collect())
+    }
+
+    /// Inserts new rule sets and their history in one transaction: all of them
+    /// are written, or none.
+    async fn create_rule_sets(
+        &self,
+        _rule_sets: &[RuleSet],
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "batched rule set writes are not configured".to_string(),
+        ))
+    }
+
     async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
         Ok(Vec::new())
     }
@@ -11396,6 +11430,38 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
         rule_set: &LifecycleRuleSet,
         revision: &LifecycleRuleRevision,
     ) -> AppResult<()>;
+
+    /// Like [`Self::create_rule_set`], but writes nothing and returns `false`
+    /// when a rule set already carries one of `taken_names`. The check and the
+    /// insert share one transaction.
+    async fn create_rule_set_unless_named(
+        &self,
+        rule_set: &LifecycleRuleSet,
+        revision: &LifecycleRuleRevision,
+        taken_names: &[String],
+    ) -> AppResult<bool> {
+        let existing = self.list_rule_sets().await?;
+        if existing
+            .iter()
+            .any(|existing| taken_names.contains(&existing.name))
+        {
+            return Ok(false);
+        }
+        self.create_rule_set(rule_set, revision).await?;
+        Ok(true)
+    }
+
+    /// The names of the rule sets whose name starts with `prefix`, matched
+    /// case-sensitively.
+    async fn list_rule_set_names_with_prefix(&self, prefix: &str) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .filter(|name| name.starts_with(prefix))
+            .collect())
+    }
 
     /// Append `revision`, repoint the rule set at it, drop an enabled rule to
     /// dry run flagged as edited since it was enabled, and clear its deletion

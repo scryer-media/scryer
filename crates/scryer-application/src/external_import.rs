@@ -73,6 +73,22 @@ pub struct ArrQualityProfile {
     pub language: Option<String>,
 }
 
+/// One custom-format score inside a quality profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArrProfileFormatScore {
+    pub format: i64,
+    pub name: String,
+    pub score: i64,
+}
+
+/// A quality profile's identity and its custom-format scores.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArrQualityProfileFormatScores {
+    pub id: i64,
+    pub name: String,
+    pub format_items: Vec<ArrProfileFormatScore>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedProwlarrIndexer {
     pub base_url: String,
@@ -293,7 +309,7 @@ struct ExternalArrBaseUrl {
     localhost_ipv4_hint: Option<String>,
 }
 
-fn normalize_external_arr_base_url(
+fn normalize_external_source_base_url(
     raw: &str,
     label: &'static str,
 ) -> AppResult<ExternalArrBaseUrl> {
@@ -337,6 +353,161 @@ fn normalize_external_arr_base_url(
     })
 }
 
+/// A failure talking to an external source, coded so callers never read the sentence.
+fn source_failure(reason: &'static str, message: impl Into<String>) -> AppError {
+    AppError::RepositoryFailed {
+        message: message.into(),
+        reason,
+    }
+}
+
+fn unexpected_source_response(message: &'static str) -> AppError {
+    source_failure(
+        crate::error_reasons::external_import::SOURCE_UNEXPECTED_RESPONSE,
+        message,
+    )
+}
+
+/// One GET against an external source.
+struct SourceRequest<'a> {
+    url: &'a str,
+    display_url: &'a str,
+    api_key: Option<&'a str>,
+    unauthorized_message: &'static str,
+    /// Bodies past this size are refused; `None` reads the whole body.
+    max_body_bytes: Option<usize>,
+}
+
+/// Sends one request and classifies the outcome. This is the only place an
+/// external source's transport, status or size failures become reason codes.
+async fn send_source_get(
+    outbound: &OutboundHttpClient,
+    policy: RequestPolicy,
+    request: SourceRequest<'_>,
+    transport_message: impl FnOnce(&reqwest::Error) -> String,
+) -> AppResult<String> {
+    use crate::error_reasons::external_import as reasons;
+    let SourceRequest {
+        url,
+        display_url,
+        api_key,
+        unauthorized_message,
+        max_body_bytes,
+    } = request;
+    let mut response = outbound
+        .send(policy, || {
+            let builder = outbound.client().get(url);
+            match api_key {
+                Some(key) => builder.header("X-Api-Key", key),
+                None => builder,
+            }
+        })
+        .await
+        .map_err(|error| match error {
+            OutboundHttpError::DispatchRejected => {
+                AppError::canceled("external API dispatch rejected")
+            }
+            OutboundHttpError::RateLimited(rate_limited) => source_failure(
+                reasons::SOURCE_RATE_LIMITED,
+                match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
+                    Some(delay) => format!(
+                        "external api call to {display_url} was rate limited; retry after {}s",
+                        delay.as_secs()
+                    ),
+                    None => format!("external api call to {display_url} was rate limited"),
+                },
+            ),
+            OutboundHttpError::Transport { source, .. } => {
+                source_failure(reasons::SOURCE_UNREACHABLE, transport_message(&source))
+            }
+        })?;
+
+    let status = response.status();
+    let too_large = |limit: usize| {
+        source_failure(
+            reasons::SOURCE_RESPONSE_TOO_LARGE,
+            format!("external api response from {display_url} exceeded {limit} bytes"),
+        )
+    };
+    let read_failed = |err: reqwest::Error| {
+        source_failure(
+            reasons::SOURCE_UNREACHABLE,
+            format!("external api response from {display_url} read failed: {err}"),
+        )
+    };
+    let body = match max_body_bytes {
+        None => response.text().await.map_err(read_failed)?,
+        Some(limit) => {
+            if response
+                .content_length()
+                .is_some_and(|length| length > limit as u64)
+            {
+                return Err(too_large(limit));
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(read_failed)? {
+                if bytes.len() + chunk.len() > limit {
+                    return Err(too_large(limit));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+    };
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(source_failure(
+            reasons::SOURCE_UNAUTHORIZED,
+            unauthorized_message,
+        ));
+    }
+    if !status.is_success() {
+        let preview = body.chars().take(400).collect::<String>();
+        let reason = if status == reqwest::StatusCode::NOT_FOUND {
+            reasons::SOURCE_ENDPOINT_MISSING
+        } else {
+            reasons::SOURCE_UNEXPECTED_RESPONSE
+        };
+        return Err(source_failure(
+            reason,
+            format!("external api call to {display_url} returned status {status}: {preview}"),
+        ));
+    }
+    Ok(body)
+}
+
+fn source_transport_message(
+    display_url: &str,
+    effective_url: &str,
+    source: &reqwest::Error,
+    localhost_ipv4_hint: Option<&str>,
+    application: &str,
+) -> String {
+    let mut message = format!("external api call to {display_url}");
+    if display_url != effective_url {
+        message.push_str(&format!(" via {effective_url}"));
+    }
+    message.push_str(&format!(" failed: {source}"));
+    if let Some(hint) = localhost_ipv4_hint {
+        message.push_str(&format!(
+            "; try {hint} if {application} only listen on IPv4"
+        ));
+    }
+    message
+}
+
+fn parse_source_json<T>(body: &str, display_url: &str) -> AppResult<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_str(body).map_err(|err| {
+        source_failure(
+            crate::error_reasons::external_import::SOURCE_UNEXPECTED_RESPONSE,
+            format!("external api call to {display_url} returned non-json: {err}"),
+        )
+    })
+}
+
 /// HTTP client for Sonarr/Radarr APIs pinned to supported product-major buckets.
 #[derive(Clone)]
 pub struct ExternalArrClient {
@@ -348,7 +519,12 @@ pub struct ExternalArrClient {
     api_bucket: ExternalArrApiBucket,
     api_prefix: Arc<RwLock<Option<String>>>,
     system_status: Arc<RwLock<Option<ExternalArrSystemStatus>>>,
+    /// Bodies past this size are refused; `None` reads the whole body.
+    max_body_bytes: Option<usize>,
 }
+
+/// Largest Sonarr or Radarr response body a rule import reads.
+pub const RULE_IMPORT_ARR_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 impl ExternalArrClient {
     pub fn for_sonarr_v4(base_url: String, api_key: String) -> AppResult<Self> {
@@ -375,7 +551,7 @@ impl ExternalArrClient {
         api_bucket: ExternalArrApiBucket,
         label: &'static str,
     ) -> AppResult<Self> {
-        let base_url = normalize_external_arr_base_url(&base_url, label)?;
+        let base_url = normalize_external_source_base_url(&base_url, label)?;
         let http_client = external_arr_reqwest_client();
         Ok(Self {
             configured_base_url: base_url.configured,
@@ -386,7 +562,15 @@ impl ExternalArrClient {
             api_bucket,
             api_prefix: Arc::new(RwLock::new(None)),
             system_status: Arc::new(RwLock::new(None)),
+            max_body_bytes: None,
         })
+    }
+
+    /// Refuses any response body larger than `limit` bytes with
+    /// `SOURCE_RESPONSE_TOO_LARGE`, before the whole body is buffered.
+    pub fn with_max_response_bytes(mut self, limit: usize) -> Self {
+        self.max_body_bytes = Some(limit);
+        self
     }
 
     /// Test connectivity and return (app_name, version).
@@ -400,7 +584,7 @@ impl ExternalArrClient {
         let json = self.api_get("rootfolder").await?;
         let arr = json
             .as_array()
-            .ok_or_else(|| AppError::Repository("rootfolder response was not an array".into()))?;
+            .ok_or_else(|| unexpected_source_response("rootfolder response was not an array"))?;
         Ok(arr
             .iter()
             .filter_map(|item| {
@@ -422,7 +606,7 @@ impl ExternalArrClient {
     pub async fn list_download_clients(&self) -> AppResult<Vec<ArrDownloadClient>> {
         let json = self.api_get("downloadclient").await?;
         let arr = json.as_array().ok_or_else(|| {
-            AppError::Repository("downloadclient response was not an array".into())
+            unexpected_source_response("downloadclient response was not an array")
         })?;
 
         let mut results = Vec::new();
@@ -472,7 +656,7 @@ impl ExternalArrClient {
         let json = self.api_get("indexer").await?;
         let arr = json
             .as_array()
-            .ok_or_else(|| AppError::Repository("indexer response was not an array".into()))?;
+            .ok_or_else(|| unexpected_source_response("indexer response was not an array"))?;
 
         let mut results = Vec::new();
         for item in arr {
@@ -551,7 +735,7 @@ impl ExternalArrClient {
         let json = self.api_get("metadata").await?;
         let arr = json
             .as_array()
-            .ok_or_else(|| AppError::Repository("metadata response was not an array".into()))?;
+            .ok_or_else(|| unexpected_source_response("metadata response was not an array"))?;
 
         Ok(arr
             .iter()
@@ -574,7 +758,7 @@ impl ExternalArrClient {
     pub async fn list_quality_profiles(&self) -> AppResult<Vec<ArrQualityProfile>> {
         let json = self.api_get("qualityprofile").await?;
         let arr = json.as_array().ok_or_else(|| {
-            AppError::Repository("qualityprofile response was not an array".into())
+            unexpected_source_response("qualityprofile response was not an array")
         })?;
 
         Ok(arr
@@ -589,11 +773,65 @@ impl ExternalArrClient {
             .collect())
     }
 
+    /// Quality profiles with the custom-format score each one assigns.
+    pub async fn list_quality_profile_format_scores(
+        &self,
+    ) -> AppResult<Vec<ArrQualityProfileFormatScores>> {
+        let json = self.api_get("qualityprofile").await?;
+        let arr = json.as_array().ok_or_else(|| {
+            unexpected_source_response("qualityprofile response was not an array")
+        })?;
+        Ok(arr
+            .iter()
+            .filter_map(|item| {
+                Some(ArrQualityProfileFormatScores {
+                    id: item.get("id").and_then(Value::as_i64)?,
+                    name: value_trimmed_string(item.get("name"))?,
+                    format_items: item
+                        .get("formatItems")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|entry| {
+                                    Some(ArrProfileFormatScore {
+                                        format: entry.get("format").and_then(Value::as_i64)?,
+                                        name: entry
+                                            .get("name")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or_default()
+                                            .trim()
+                                            .to_string(),
+                                        score: entry
+                                            .get("score")
+                                            .and_then(Value::as_i64)
+                                            .unwrap_or(0),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+            })
+            .collect())
+    }
+
+    /// Custom formats exactly as the source returns them.
+    pub async fn list_custom_formats(&self) -> AppResult<Vec<Value>> {
+        let json = self.api_get("customformat").await?;
+        match json {
+            Value::Array(formats) => Ok(formats),
+            _ => Err(unexpected_source_response(
+                "customformat response was not an array",
+            )),
+        }
+    }
+
     pub async fn list_movies(&self) -> AppResult<Vec<ArrMovie>> {
         let json = self.api_get("movie").await?;
         let arr = json
             .as_array()
-            .ok_or_else(|| AppError::Repository("movie response was not an array".into()))?;
+            .ok_or_else(|| unexpected_source_response("movie response was not an array"))?;
 
         Ok(arr
             .iter()
@@ -638,7 +876,7 @@ impl ExternalArrClient {
         let json = self.api_get("series").await?;
         let arr = json
             .as_array()
-            .ok_or_else(|| AppError::Repository("series response was not an array".into()))?;
+            .ok_or_else(|| unexpected_source_response("series response was not an array"))?;
 
         Ok(arr
             .iter()
@@ -725,7 +963,7 @@ impl ExternalArrClient {
         let json = self.api_get_with_prefix(&api_prefix, &path).await?;
         let arr = json
             .as_array()
-            .ok_or_else(|| AppError::Repository("episode response was not an array".into()))?;
+            .ok_or_else(|| unexpected_source_response("episode response was not an array"))?;
 
         Ok(arr
             .iter()
@@ -842,55 +1080,20 @@ impl ExternalArrClient {
     where
         T: for<'de> Deserialize<'de>,
     {
-        let response = self
-            .outbound_http
-            .send(self.request_policy(path), || {
-                self.outbound_http
-                    .client()
-                    .get(url)
-                    .header("X-Api-Key", &self.api_key)
-            })
-            .await
-            .map_err(|error| match error {
-                OutboundHttpError::DispatchRejected => {
-                    AppError::canceled("external API dispatch rejected")
-                }
-                OutboundHttpError::RateLimited(rate_limited) => AppError::Repository(
-                    match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
-                        Some(delay) => format!(
-                            "external api call to {display_url} was rate limited; retry after {}s",
-                            delay.as_secs()
-                        ),
-                        None => format!("external api call to {display_url} was rate limited"),
-                    },
-                ),
-                OutboundHttpError::Transport { source, .. } => {
-                    AppError::Repository(self.transport_error_message(display_url, url, &source))
-                }
-            })?;
-
-        let status = response.status();
-        let body = response.text().await.map_err(|err| {
-            AppError::Repository(format!(
-                "external api response from {display_url} read failed: {err}"
-            ))
-        })?;
-
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(AppError::Repository("invalid API key".into()));
-        }
-        if !status.is_success() {
-            let preview = body.chars().take(400).collect::<String>();
-            return Err(AppError::Repository(format!(
-                "external api call to {display_url} returned status {status}: {preview}"
-            )));
-        }
-
-        serde_json::from_str(&body).map_err(|err| {
-            AppError::Repository(format!(
-                "external api call to {display_url} returned non-json: {err}"
-            ))
-        })
+        let body = send_source_get(
+            &self.outbound_http,
+            self.request_policy(path),
+            SourceRequest {
+                url,
+                display_url,
+                api_key: Some(&self.api_key),
+                unauthorized_message: "invalid API key",
+                max_body_bytes: self.max_body_bytes,
+            },
+            |source| self.transport_error_message(display_url, url, source),
+        )
+        .await?;
+        parse_source_json(&body, display_url)
     }
 
     fn transport_error_message(
@@ -899,17 +1102,13 @@ impl ExternalArrClient {
         effective_url: &str,
         source: &reqwest::Error,
     ) -> String {
-        let mut message = format!("external api call to {display_url}");
-        if display_url != effective_url {
-            message.push_str(&format!(" via {effective_url}"));
-        }
-        message.push_str(&format!(" failed: {source}"));
-        if let Some(hint) = &self.localhost_ipv4_hint {
-            message.push_str(&format!(
-                "; try {hint} if Sonarr/Radarr only listen on IPv4"
-            ));
-        }
-        message
+        source_transport_message(
+            display_url,
+            effective_url,
+            source,
+            self.localhost_ipv4_hint.as_deref(),
+            "Sonarr/Radarr",
+        )
     }
 
     fn request_policy(&self, path: &str) -> RequestPolicy {
@@ -932,6 +1131,141 @@ impl ExternalArrClient {
         )
         .without_redirects()
     }
+}
+
+/// Largest Maintainerr response body Scryer reads.
+pub const MAINTAINERR_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// HTTP client for a Maintainerr instance. Maintainerr has no API authentication,
+/// so requests carry no credential. A `BASE_PATH` prefix belongs in the base URL.
+#[derive(Clone)]
+pub struct ExternalMaintainerrClient {
+    configured_base_url: String,
+    effective_base_url: String,
+    localhost_ipv4_hint: Option<String>,
+    outbound_http: OutboundHttpClient,
+}
+
+impl ExternalMaintainerrClient {
+    pub fn new(base_url: String) -> AppResult<Self> {
+        let base_url = normalize_external_source_base_url(&base_url, "Maintainerr base URL")?;
+        Ok(Self {
+            configured_base_url: base_url.configured,
+            effective_base_url: base_url.effective,
+            localhost_ipv4_hint: base_url.localhost_ipv4_hint,
+            outbound_http: OutboundHttpClient::new(
+                external_arr_reqwest_client(),
+                RateLimitRegistry::new(),
+            ),
+        })
+    }
+
+    /// Confirms the URL serves Maintainerr and returns its version.
+    pub async fn test_connection(&self) -> AppResult<String> {
+        let body = self.get_text("api/settings/version").await?;
+        let trimmed = body.trim();
+        // Nest sends a bare string as text; a JSON-quoted string is accepted too.
+        let version =
+            serde_json::from_str::<String>(trimmed).unwrap_or_else(|_| trimmed.to_string());
+        let version = version.trim().trim_start_matches('v');
+        if !maintainerr_version_looks_valid(version) {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::external_import::SOURCE_APPLICATION_MISMATCH,
+                "base_url responded but did not identify itself as Maintainerr",
+            ));
+        }
+        Ok(version.to_string())
+    }
+
+    /// Rule groups with their rules, exactly as Maintainerr returns them.
+    pub async fn list_rule_groups(&self) -> AppResult<Vec<Value>> {
+        match self.get_json("api/rules").await? {
+            Value::Array(groups) => Ok(groups),
+            _ => Err(unexpected_source_response(
+                "rules response was not an array",
+            )),
+        }
+    }
+
+    /// The rule application and property catalogue rule ids refer to.
+    pub async fn rule_constants(&self) -> AppResult<Value> {
+        self.get_json("api/rules/constants").await
+    }
+
+    /// Quality profiles of the Radarr server Maintainerr knows by `settings_id`.
+    pub async fn radarr_profiles(&self, settings_id: i64) -> AppResult<Value> {
+        self.get_json(&format!("api/servarr/radarr/{settings_id}/profiles"))
+            .await
+    }
+
+    /// Quality profiles of the Sonarr server Maintainerr knows by `settings_id`.
+    pub async fn sonarr_profiles(&self, settings_id: i64) -> AppResult<Value> {
+        self.get_json(&format!("api/servarr/sonarr/{settings_id}/profiles"))
+            .await
+    }
+
+    async fn get_json(&self, path: &str) -> AppResult<Value> {
+        let body = self.get_text(path).await?;
+        parse_source_json(&body, &format!("{}/{path}", self.configured_base_url))
+    }
+
+    async fn get_text(&self, path: &str) -> AppResult<String> {
+        let url = format!("{}/{path}", self.effective_base_url);
+        let display_url = format!("{}/{path}", self.configured_base_url);
+        let route = path
+            .split('/')
+            .map(|segment| {
+                if segment.bytes().all(|byte| byte.is_ascii_digit()) {
+                    ":id"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        send_source_get(
+            &self.outbound_http,
+            RequestPolicy::safe_read(
+                format!("external_maintainerr:{}", self.configured_base_url),
+                format!("external_maintainerr:{route}"),
+            )
+            .with_max_retries(2)
+            .with_backoff(Duration::from_secs(1), Duration::from_secs(15))
+            .with_host_rps_limit(
+                EXTERNAL_IMPORT_HOST_RPS_LANE,
+                EXTERNAL_IMPORT_HOST_RPS_PROFILE,
+            )
+            .without_redirects(),
+            SourceRequest {
+                url: &url,
+                display_url: &display_url,
+                api_key: None,
+                unauthorized_message: "Maintainerr refused the request as unauthorized",
+                max_body_bytes: Some(MAINTAINERR_MAX_RESPONSE_BYTES),
+            },
+            |source| {
+                source_transport_message(
+                    &display_url,
+                    &url,
+                    source,
+                    self.localhost_ipv4_hint.as_deref(),
+                    "Maintainerr",
+                )
+            },
+        )
+        .await
+    }
+}
+
+/// `major.minor.patch`, optionally with a pre-release or build suffix.
+fn maintainerr_version_looks_valid(version: &str) -> bool {
+    let core = version.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<_> = core.split('.').collect();
+    version.len() <= 64
+        && (2..=4).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Map the Sonarr/Radarr implementation name to a Scryer download client type.
@@ -1726,6 +2060,324 @@ mod tests {
                 ]),
             })
             .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_client_tests {
+    use super::{ExternalArrClient, ExternalMaintainerrClient, MAINTAINERR_MAX_RESPONSE_BYTES};
+    use crate::error_reasons::external_import as reasons;
+    use serde_json::json;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn mount_json(server: &MockServer, route: &str, body: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    async fn radarr_server(app_name: &str) -> MockServer {
+        let server = MockServer::start().await;
+        mount_json(&server, "/api", json!({"current": "v3"})).await;
+        mount_json(
+            &server,
+            "/api/v3/system/status",
+            json!({"appName": app_name, "version": "6.0.4.10291"}),
+        )
+        .await;
+        server
+    }
+
+    fn radarr(server: &MockServer) -> ExternalArrClient {
+        ExternalArrClient::for_radarr_v6(server.uri(), "synthetic-key".into()).expect("client")
+    }
+
+    fn unreachable_url() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[tokio::test]
+    async fn arr_reads_custom_formats_and_profile_scores() {
+        let server = radarr_server("Radarr").await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/customformat"))
+            .and(header("X-Api-Key", "synthetic-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"id": 4, "name": "Synthetic Format", "specifications": [{"implementation": "ReleaseTitleSpecification"}]}
+            ])))
+            .mount(&server)
+            .await;
+        mount_json(
+            &server,
+            "/api/v3/qualityprofile",
+            json!([{
+                "id": 1, "name": "Synthetic Profile",
+                "formatItems": [{"format": 4, "name": "Synthetic Format", "score": 25}, {"name": "no id"}]
+            }]),
+        )
+        .await;
+        let client = radarr(&server);
+        let formats = client.list_custom_formats().await.expect("formats");
+        assert_eq!(formats.len(), 1);
+        assert_eq!(
+            formats[0]["specifications"][0]["implementation"],
+            "ReleaseTitleSpecification"
+        );
+        let profiles = client
+            .list_quality_profile_format_scores()
+            .await
+            .expect("profiles");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "Synthetic Profile");
+        assert_eq!(profiles[0].format_items.len(), 1);
+        assert_eq!(profiles[0].format_items[0].format, 4);
+        assert_eq!(profiles[0].format_items[0].score, 25);
+        // The existing profile read keeps working beside the new one.
+        assert_eq!(
+            client.list_quality_profiles().await.expect("legacy").len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn arr_failures_carry_reason_codes_and_keep_their_sentences() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let error = radarr(&server).test_connection().await.expect_err("401");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_UNAUTHORIZED));
+        assert!(error.to_string().contains("invalid API key"));
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>login</html>"))
+            .mount(&server)
+            .await;
+        let error = radarr(&server).test_connection().await.expect_err("html");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_UNEXPECTED_RESPONSE));
+        assert!(error.to_string().contains("returned non-json"));
+
+        let server = radarr_server("Sonarr").await;
+        let error = radarr(&server)
+            .test_connection()
+            .await
+            .expect_err("wrong app");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_APPLICATION_MISMATCH));
+
+        let server = radarr_server("Radarr").await;
+        let error = radarr(&server)
+            .list_custom_formats()
+            .await
+            .expect_err("404");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_ENDPOINT_MISSING));
+        assert!(error.to_string().contains("returned status 404"));
+
+        let server = radarr_server("Radarr").await;
+        mount_json(&server, "/api/v3/customformat", json!({"not": "an array"})).await;
+        let error = radarr(&server)
+            .list_custom_formats()
+            .await
+            .expect_err("shape");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_UNEXPECTED_RESPONSE));
+
+        let client = ExternalArrClient::for_sonarr_v4(unreachable_url(), "synthetic-key".into())
+            .expect("client");
+        let error = client.test_connection().await.expect_err("refused");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_UNREACHABLE));
+    }
+
+    #[tokio::test]
+    async fn arr_source_client_with_a_size_cap_refuses_an_oversized_body() {
+        let server = radarr_server("Radarr").await;
+        let oversized = format!(
+            "[\"{}\"]",
+            "x".repeat(super::RULE_IMPORT_ARR_MAX_RESPONSE_BYTES)
+        );
+        Mock::given(method("GET"))
+            .and(path("/api/v3/customformat"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(oversized))
+            .mount(&server)
+            .await;
+        let error = radarr(&server)
+            .with_max_response_bytes(super::RULE_IMPORT_ARR_MAX_RESPONSE_BYTES)
+            .list_custom_formats()
+            .await
+            .expect_err("too large");
+        assert_eq!(error.reason(), Some(reasons::SOURCE_RESPONSE_TOO_LARGE));
+        // Without a cap, as the import wizard reads, the same body is read whole.
+        assert_eq!(
+            radarr(&server)
+                .list_custom_formats()
+                .await
+                .expect("uncapped")
+                .len(),
+            1
+        );
+    }
+
+    async fn maintainerr_server(prefix: &str) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/api/settings/version")))
+            .respond_with(ResponseTemplate::new(200).set_body_string("2.19.0"))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn maintainerr_reads_every_endpoint_under_a_base_path_without_credentials() {
+        let server = maintainerr_server("/maintainerr").await;
+        let groups = json!([{"id": 3, "name": "Synthetic group", "rules": [], "collection": {"radarrSettingsId": 2}}]);
+        mount_json(&server, "/maintainerr/api/rules", groups.clone()).await;
+        mount_json(
+            &server,
+            "/maintainerr/api/rules/constants",
+            json!({"applications": []}),
+        )
+        .await;
+        mount_json(
+            &server,
+            "/maintainerr/api/servarr/radarr/2/profiles",
+            json!([{"id": 1, "name": "Any"}]),
+        )
+        .await;
+        mount_json(
+            &server,
+            "/maintainerr/api/servarr/sonarr/5/profiles",
+            json!([{"id": 7, "name": "HD"}]),
+        )
+        .await;
+        let client = ExternalMaintainerrClient::new(format!("{}/maintainerr/", server.uri()))
+            .expect("client");
+        assert_eq!(client.test_connection().await.expect("version"), "2.19.0");
+        assert_eq!(
+            client.list_rule_groups().await.expect("groups"),
+            groups.as_array().unwrap().clone()
+        );
+        assert_eq!(
+            client.rule_constants().await.expect("constants")["applications"],
+            json!([])
+        );
+        assert_eq!(
+            client.radarr_profiles(2).await.expect("radarr")[0]["name"],
+            "Any"
+        );
+        assert_eq!(
+            client.sonarr_profiles(5).await.expect("sonarr")[0]["name"],
+            "HD"
+        );
+        for request in server.received_requests().await.expect("requests") {
+            assert!(!request.headers.contains_key("x-api-key"));
+            assert!(!request.headers.contains_key("authorization"));
+        }
+    }
+
+    #[tokio::test]
+    async fn maintainerr_accepts_a_json_quoted_version() {
+        let server = MockServer::start().await;
+        mount_json(&server, "/api/settings/version", json!("2.20.1-beta.1")).await;
+        let client = ExternalMaintainerrClient::new(server.uri()).expect("client");
+        assert_eq!(
+            client.test_connection().await.expect("version"),
+            "2.20.1-beta.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn maintainerr_failures_carry_reason_codes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/settings/version"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("<!doctype html><title>Other app</title>"),
+            )
+            .mount(&server)
+            .await;
+        let client = ExternalMaintainerrClient::new(server.uri()).expect("client");
+        assert_eq!(
+            client
+                .test_connection()
+                .await
+                .expect_err("wrong app")
+                .reason(),
+            Some(reasons::SOURCE_APPLICATION_MISMATCH)
+        );
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = ExternalMaintainerrClient::new(server.uri()).expect("client");
+        assert_eq!(
+            client.test_connection().await.expect_err("401").reason(),
+            Some(reasons::SOURCE_UNAUTHORIZED)
+        );
+
+        let server = maintainerr_server("").await;
+        Mock::given(method("GET"))
+            .and(path("/api/rules"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        let client = ExternalMaintainerrClient::new(server.uri()).expect("client");
+        assert_eq!(
+            client
+                .list_rule_groups()
+                .await
+                .expect_err("non-json")
+                .reason(),
+            Some(reasons::SOURCE_UNEXPECTED_RESPONSE)
+        );
+        assert_eq!(
+            client
+                .rule_constants()
+                .await
+                .expect_err("not served")
+                .reason(),
+            Some(reasons::SOURCE_ENDPOINT_MISSING)
+        );
+
+        let server = maintainerr_server("").await;
+        Mock::given(method("GET"))
+            .and(path("/api/rules/constants"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("x".repeat(MAINTAINERR_MAX_RESPONSE_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+        let client = ExternalMaintainerrClient::new(server.uri()).expect("client");
+        assert_eq!(
+            client
+                .rule_constants()
+                .await
+                .expect_err("too large")
+                .reason(),
+            Some(reasons::SOURCE_RESPONSE_TOO_LARGE)
+        );
+
+        let client = ExternalMaintainerrClient::new(unreachable_url()).expect("client");
+        assert_eq!(
+            client
+                .test_connection()
+                .await
+                .expect_err("refused")
+                .reason(),
+            Some(reasons::SOURCE_UNREACHABLE)
         );
     }
 }
