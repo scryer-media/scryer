@@ -2250,6 +2250,44 @@ async fn import_movie_download(
             .await;
         }
     };
+    // A source that ties with its own earlier import is not an upgrade.
+    // Replacing it would recycle the library copy and write the same bytes
+    // again on every retried pass.
+    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
+        && let Some(existing_file) = superseded.first()
+        && crate::upgrade::incumbent_holds_identical_source(
+            existing_file,
+            &source_video,
+            source_size,
+        )
+        .await
+    {
+        return carry_out_import_rejection(
+            app,
+            actor,
+            title,
+            import_id,
+            completed,
+            ImportRejectionContext {
+                rejection: crate::import_decide::identical_incumbent_rejection(
+                    "this title",
+                    &existing_file.file_path,
+                ),
+                disposition: crate::import_decide::RejectionDisposition::Skip,
+                release_title: &prepared.parsed.raw_title,
+                source_title: source_title.as_deref(),
+                source_video: &source_video,
+                dest_path: &dest_path,
+                source_size,
+                quality: prepared.parsed.quality.clone(),
+                episode_ids: &[],
+                series_movie_link_id: None,
+                episode_artifacts: &[],
+            },
+            started_at,
+        )
+        .await;
+    }
     if let Some(directive) = plan.blocklist_after_import.as_ref() {
         tracing::info!(title_id = %title.id, code = directive.code, "{}", directive.reason);
         crate::post_download_gate::blocklist_release_for_title(
@@ -3066,6 +3104,42 @@ async fn import_series_movie_download(
             .await;
         }
     };
+    // Same guard as the title path: identical bytes are never an upgrade.
+    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
+        && let Some(existing_file) = superseded.first()
+        && crate::upgrade::incumbent_holds_identical_source(
+            existing_file,
+            &source_video,
+            source_size,
+        )
+        .await
+    {
+        return carry_out_import_rejection(
+            app,
+            actor,
+            title,
+            import_id,
+            completed,
+            ImportRejectionContext {
+                rejection: crate::import_decide::identical_incumbent_rejection(
+                    "this series-movie link",
+                    &existing_file.file_path,
+                ),
+                disposition: crate::import_decide::RejectionDisposition::Skip,
+                release_title: &prepared.parsed.raw_title,
+                source_title: source_title.as_deref(),
+                source_video: &source_video,
+                dest_path: &dest_path,
+                source_size,
+                quality: prepared.parsed.quality.clone(),
+                episode_ids: &linked_episode_ids,
+                series_movie_link_id: Some(series_movie_link_id),
+                episode_artifacts: &linked_episode_artifacts,
+            },
+            started_at,
+        )
+        .await;
+    }
     if let Some(directive) = plan.blocklist_after_import.as_ref() {
         tracing::info!(title_id = %title.id, code = directive.code, "{}", directive.reason);
         crate::post_download_gate::blocklist_release_for_title(
