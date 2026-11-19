@@ -2350,6 +2350,9 @@ pub mod location {
     pub const FULL_HASH_BACKFILL_CANCELLED: &str = "LOCATION_FULL_HASH_BACKFILL_CANCELLED";
     /// File changed while hashing.
     pub const FILE_CHANGED_WHILE_HASHING: &str = "LOCATION_FILE_CHANGED_WHILE_HASHING";
+    /// The file on disk is not the size the catalog recorded, so the full-hash
+    /// backfill refused it without reading it.
+    pub const BACKFILL_SIZE_MISMATCH: &str = "LOCATION_BACKFILL_SIZE_MISMATCH";
     /// A location operation currently owns these items.
     pub const OWNERSHIP_BUSY: &str = "LOCATION_OWNERSHIP_BUSY";
     /// Library roots changed; recovery needs a new plan.
@@ -2578,6 +2581,7 @@ pub mod location {
         FULL_HASH_BACKFILL_ALREADY_RUNNING,
         FULL_HASH_BACKFILL_CANCELLED,
         FILE_CHANGED_WHILE_HASHING,
+        BACKFILL_SIZE_MISMATCH,
         OWNERSHIP_BUSY,
         RECOVERY_ROOTS_CHANGED,
         RECOVERY_TITLE_NOT_FOUND,
@@ -6403,6 +6407,14 @@ pub mod scripts {
     pub const ALL: &[&str] = &[SCHEDULE_INVALID];
 }
 
+pub mod download_origin {
+    /// The read that says whether Scryer submitted a download failed, so the
+    /// download keeps the origin it was last known to have.
+    pub const LOOKUP_FAILED: &str = "DOWNLOAD_ORIGIN_LOOKUP_FAILED";
+    /// Every reason owned by this area.
+    pub const ALL: &[&str] = &[LOOKUP_FAILED];
+}
+
 pub mod arr_custom_formats {
     /// The pasted custom-format JSON is larger than the import accepts.
     pub const JSON_TOO_LARGE: &str = "ARR_CUSTOM_FORMAT_JSON_TOO_LARGE";
@@ -6501,6 +6513,7 @@ mod tests {
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),
             ("ARR_CUSTOM_FORMAT_", arr_custom_formats::ALL),
+            ("DOWNLOAD_ORIGIN_", download_origin::ALL),
         ];
         let mut distinct = std::collections::BTreeSet::new();
         for (prefix, codes) in areas {

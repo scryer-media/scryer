@@ -6,6 +6,9 @@ mod arr_compat_bridge;
 /// The explanation a parked release stores. `explanation` is the text the
 /// decision row records, `release_decision_explanation_for(candidate,
 /// decision_code)`; a parked external release also carries its announcement.
+/// Rows one page of the external pending-release read takes.
+const EXTERNAL_PENDING_PAGE_SIZE: usize = 500;
+
 pub(super) fn pending_explanation_for(
     candidate: &IndexerSearchResult,
     decision_code: ReleaseAutoDecisionCode,
@@ -503,17 +506,31 @@ impl AppUseCase {
     }
 
     pub(crate) async fn process_external_pending_releases(&self) -> AppResult<usize> {
-        let pending = self
-            .services
-            .workflow
-            .pending_releases
-            .list_waiting_pending_releases()
-            .await?;
+        // Only rows no indexer observed can carry an announcement; they are
+        // read in pages rather than with every active row.
+        let mut pending = Vec::new();
+        let mut after_id: Option<String> = None;
+        loop {
+            let page = self
+                .services
+                .workflow
+                .pending_releases
+                .list_waiting_indexerless_pending_releases(
+                    after_id.as_deref(),
+                    EXTERNAL_PENDING_PAGE_SIZE,
+                )
+                .await?;
+            let full = page.len() >= EXTERNAL_PENDING_PAGE_SIZE;
+            after_id = page.last().map(|row| row.id.clone());
+            pending.extend(page);
+            if !full || after_id.is_none() {
+                break;
+            }
+        }
+        // The order the full read gave: earliest delay first.
+        pending.sort_by(|left, right| left.delay_until.cmp(&right.delay_until));
         let mut grouped = HashMap::<String, Vec<(PendingRelease, IndexerSearchResult)>>::new();
-        for pending in pending
-            .into_iter()
-            .filter(|pending| pending.indexer_id.is_none())
-        {
+        for pending in pending {
             let candidate = pending_release_as_rss_result(&pending);
             if !candidate.extra.contains_key("external_announcement") {
                 continue;

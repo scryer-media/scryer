@@ -2193,8 +2193,13 @@ impl HousekeepingRepository for HousekeepingStore {
             "delete_release_attempts_older_than",
             "release_download_attempts",
             "id",
-            "attempted_at < {}
-                AND outcome != 'pending'",
+            // Every outcome ages out on the same retention. A `pending` row
+            // this old stands for a submission that resolved long ago, or one
+            // whose outcome was never written; either way it is history only.
+            // The outcome list lets both engines seek the
+            // `(outcome, attempted_at)` index instead of scanning the table.
+            "outcome IN ('success', 'failed', 'pending')
+                AND attempted_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
@@ -2549,6 +2554,9 @@ impl HousekeepingRepository for HousekeepingStore {
         }
     }
 }
+
+/// Most rows one page of a paged pending-release read returns.
+const PENDING_RELEASE_PAGE_LIMIT_MAX: usize = 1_000;
 
 const PENDING_RELEASE_COLUMNS: &str =
     "id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
@@ -2912,6 +2920,76 @@ impl PendingReleaseRepository for PendingReleaseStore {
             self.datastore.read_exec(),
             &sql,
             &[],
+            encryption_key.as_ref(),
+        )
+        .await
+    }
+
+    async fn has_waiting_pending_releases(&self) -> AppResult<bool> {
+        // Seeks `idx_pending_releases_status`; no row is decoded.
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present
+               FROM pending_releases
+              WHERE status IN ('waiting', 'standby')
+              LIMIT 1",
+            &[],
+        )
+        .await?
+        .is_some())
+    }
+
+    async fn has_expired_pending_releases(&self, now: &str) -> AppResult<bool> {
+        // The predicate of `list_expired_pending_releases`, as an existence
+        // check: seeks the waiting rows through `idx_pending_releases_status`.
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present
+               FROM pending_releases
+              WHERE status = 'waiting' AND delay_until <= {}
+              LIMIT 1",
+            &[self.datastore.timestamp_text_arg(now)?],
+        )
+        .await?
+        .is_some())
+    }
+
+    async fn list_waiting_indexerless_pending_releases(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<PendingRelease>> {
+        let limit = i64::try_from(limit.clamp(1, PENDING_RELEASE_PAGE_LIMIT_MAX)).unwrap_or(1);
+        let encryption_key = self.encryption_key()?;
+        let (sql, args) = match after_id {
+            Some(after_id) => (
+                format!(
+                    "SELECT {PENDING_RELEASE_COLUMNS}
+                       FROM pending_releases
+                      WHERE status IN ('waiting', 'standby')
+                        AND indexer_id IS NULL
+                        AND id > {{}}
+                      ORDER BY id ASC
+                      LIMIT {{}}"
+                ),
+                vec![SqlArg::Text(after_id.to_string()), SqlArg::I64(limit)],
+            ),
+            None => (
+                format!(
+                    "SELECT {PENDING_RELEASE_COLUMNS}
+                       FROM pending_releases
+                      WHERE status IN ('waiting', 'standby')
+                        AND indexer_id IS NULL
+                      ORDER BY id ASC
+                      LIMIT {{}}"
+                ),
+                vec![SqlArg::I64(limit)],
+            ),
+        };
+        fetch_pending_releases(
+            self.datastore.read_exec(),
+            &sql,
+            &args,
             encryption_key.as_ref(),
         )
         .await

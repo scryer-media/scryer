@@ -207,6 +207,80 @@ fn test_completed_sequence_job_state(
 }
 
 impl AppUseCase {
+    /// Whether a candidate already blocked for a reason would be held for that
+    /// same reason by the safety checks before its first step, asked without
+    /// claiming it. When it would, the pass writes nothing for it: no due
+    /// transition, lease, history entry or repeat of the same hold.
+    ///
+    /// Only a candidate with no step on record qualifies, and only when
+    /// nothing that runs before the first step's safety checks (the carried
+    /// attempt cap, the pass budget) would decide first. Every other case,
+    /// and any read that fails, returns `false` and takes the normal path.
+    pub(super) async fn lifecycle_sequence_hold_is_unchanged(
+        &self,
+        candidate: &LifecycleCandidate,
+        context: SequenceCandidateExecutionContext<'_>,
+    ) -> bool {
+        let SequenceCandidateExecutionContext {
+            detail,
+            sequence,
+            evaluator,
+            libraries,
+            tag_conflicts,
+            storage_roots,
+            budget,
+        } = context;
+        if candidate.state != LifecycleCandidateState::Blocked {
+            return false;
+        }
+        let Some(first) = sequence.steps.first() else {
+            return false;
+        };
+        let first_is_high_risk =
+            first.descriptor().risk_class == crate::lifecycle_rules::LifecycleRiskClass::High;
+        if first_is_high_risk
+            && candidate.action_attempts.max(0)
+                >= super::action_execution::LIFECYCLE_MAX_ACTION_ATTEMPTS
+        {
+            return false;
+        }
+        if budget
+            .hold_reason_before_dispatch(first_is_high_risk)
+            .is_some()
+        {
+            return false;
+        }
+        match self
+            .services
+            .customization
+            .lifecycle_evaluation
+            .list_action_steps(
+                &candidate.id,
+                candidate.match_generation,
+                candidate.revision_number,
+            )
+            .await
+        {
+            Ok(steps) if steps.is_empty() => {}
+            _ => return false,
+        }
+        match self
+            .lifecycle_execution_safety_checks(
+                detail,
+                sequence,
+                evaluator,
+                candidate,
+                libraries,
+                tag_conflicts,
+                storage_roots,
+            )
+            .await
+        {
+            SafetyDecision::Hold(reason) => candidate.state_reason == reason,
+            _ => false,
+        }
+    }
+
     pub(super) async fn execute_one_lifecycle_sequence_candidate(
         &self,
         candidate: LifecycleCandidate,

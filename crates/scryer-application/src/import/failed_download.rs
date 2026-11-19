@@ -50,12 +50,26 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
-    if !tracked_download_has_grabbed_submission(app, td).await {
-        warn_download_not_grabbed(td);
-        td.state = TrackedDownloadState::Downloading;
-        td.skip_reacquire_on_failure = false;
-        td.manual_failure_cleanup = false;
-        return;
+    match tracked_download_grabbed_submission_lookup(app, td).await {
+        Ok(true) => {}
+        Ok(false) => {
+            warn_download_not_grabbed(td);
+            td.state = TrackedDownloadState::Downloading;
+            td.skip_reacquire_on_failure = false;
+            td.manual_failure_cleanup = false;
+            return;
+        }
+        Err(error) => {
+            // A failed read is not "no grab on record": the download stays
+            // where it was and the next poll asks again.
+            tracing::warn!(
+                %error,
+                reason_code = crate::error_reasons::download_origin::LOOKUP_FAILED,
+                id = %td.id,
+                "could not read whether Scryer grabbed this failed download; keeping its state"
+            );
+            return;
+        }
     }
 
     if !td.manual_failure_cleanup
@@ -177,6 +191,7 @@ fn tracked_download_has_scryer_failure_origin(td: &TrackedDownload) -> bool {
     td.client_item.is_scryer_origin
 }
 
+#[cfg(test)]
 pub(crate) async fn tracked_download_has_grabbed_submission(
     app: &AppUseCase,
     td: &TrackedDownload,

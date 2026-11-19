@@ -14172,3 +14172,169 @@ async fn cleared_unmatched_rows_of_a_dropped_walk_are_still_removed() {
     .await
     .expect("dropped walk's cleared rows should be removed");
 }
+
+/// Probe store that keeps the last signature per title and counts writes.
+#[derive(Default)]
+struct RecordingProbeRepo {
+    rows: Mutex<HashMap<String, LibraryProbeSignature>>,
+    writes: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl LibraryProbeRepository for RecordingProbeRepo {
+    async fn get_probe_signature(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<LibraryProbeSignature>> {
+        Ok(self.rows.lock().await.get(title_id).cloned())
+    }
+
+    async fn upsert_probe_signature(&self, probe: &LibraryProbeSignature) -> AppResult<()> {
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.rows
+            .lock()
+            .await
+            .insert(probe.title_id.clone(), probe.clone());
+        Ok(())
+    }
+
+    async fn delete_probe_signatures_for_title_ids(&self, _: &[String]) -> AppResult<u32> {
+        Ok(0)
+    }
+}
+
+/// A refresh of a folder whose signature has not changed writes no probe row
+/// and never walks the folder; a changed folder still records its signature.
+#[tokio::test]
+async fn an_unchanged_refresh_probe_writes_nothing() {
+    use crate::library::discovery::{
+        BackgroundRefreshProbeOutcome, run_background_refresh_probe_with_delta,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("Lantern Cove (2031).mkv"), b"synthetic").expect("seed file");
+    let probes = Arc::new(RecordingProbeRepo::default());
+    let (app, _actor) = bootstrap();
+    let app =
+        app.with_test_overrides(|services| services.with_library_probe_signatures(probes.clone()));
+
+    let first = run_background_refresh_probe_with_delta(&app, "title-lantern", dir.path(), async {
+        Ok((
+            (),
+            HashSet::from(["a".to_string()]),
+            HashSet::<String>::new(),
+        ))
+    })
+    .await
+    .expect("first probe");
+    assert!(matches!(first, BackgroundRefreshProbeOutcome::Changed(())));
+    assert_eq!(probes.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let recorded = probes
+        .rows
+        .lock()
+        .await
+        .get("title-lantern")
+        .map(|probe| (probe.probe_signature_value.clone(), probe.last_probed_at));
+
+    let walked = std::sync::atomic::AtomicBool::new(false);
+    let second =
+        run_background_refresh_probe_with_delta(&app, "title-lantern", dir.path(), async {
+            walked.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(((), HashSet::<String>::new(), HashSet::<String>::new()))
+        })
+        .await
+        .expect("second probe");
+    assert!(matches!(second, BackgroundRefreshProbeOutcome::Unchanged));
+    assert!(!walked.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        probes.writes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "an unchanged folder must not rewrite its probe row"
+    );
+    assert_eq!(
+        probes
+            .rows
+            .lock()
+            .await
+            .get("title-lantern")
+            .map(|probe| (probe.probe_signature_value.clone(), probe.last_probed_at)),
+        recorded
+    );
+}
+
+/// A background refresh that finds the same refused title boundary as the
+/// last one leaves its row as it was: same scan session, same `updated_at`.
+#[tokio::test]
+async fn a_repeat_refresh_leaves_an_unchanged_refused_boundary_row_alone() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let mixed_parent = tempdir.path().join("L").join("Lantern Cove (2031)");
+    let mixed_child = mixed_parent.join("Harbor Lights (2032)");
+    std::fs::create_dir_all(&mixed_child).expect("create mixed layout");
+    std::fs::write(mixed_parent.join("Lantern Cove (2031).mkv"), b"parent")
+        .expect("write parent movie file");
+    std::fs::write(mixed_child.join("Harbor Lights (2032).mkv"), b"child")
+        .expect("write nested movie file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    app.services
+        .config
+        .settings
+        .upsert_setting_json(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::FOLDER_TEMPLATE_KEY,
+            Some(MediaFacet::Movie.as_str().to_string()),
+            serde_json::to_string("{title_first_character}/{title_with_article} ({year})")
+                .expect("serialize template"),
+            "test",
+            None,
+        )
+        .await
+        .expect("set the nested movie folder template");
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile legacy movie root");
+
+    let refused_row = || async {
+        let items = unmatched_items.items().await;
+        let rows: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                item.item_path == mixed_parent.to_string_lossy()
+                    && item.reason_code
+                        == crate::library_scan_unmatched::LIBRARY_SCAN_INVALID_TITLE_BOUNDARY
+            })
+            .collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        rows.into_iter().next().unwrap()
+    };
+
+    app.background_library_refresh_with_tracking(&user, MediaFacet::Movie, "refresh-one")
+        .await
+        .expect("first refresh");
+    let first = refused_row().await;
+    assert_eq!(first.scan_session_id, "refresh-one");
+    assert_eq!(first.status, PendingImportStatus::Ignored);
+
+    app.background_library_refresh_with_tracking(&user, MediaFacet::Movie, "refresh-two")
+        .await
+        .expect("second refresh");
+    let second = refused_row().await;
+    assert_eq!(
+        second, first,
+        "an unchanged refused boundary must not be rewritten"
+    );
+}

@@ -7296,6 +7296,29 @@ pub trait ReleaseAttemptRepository: Send + Sync {
         source_password: Option<String>,
     ) -> AppResult<()>;
 
+    /// Record a `pending` attempt for a submission about to be made and return
+    /// its id, so the submission's outcome is written onto this row with
+    /// [`Self::settle_release_attempt`] instead of leaving it pending beside a
+    /// second row. `None` when the store keeps no row to settle; the caller
+    /// then records the outcome as a row of its own. Redacts the source hint
+    /// like [`Self::record_release_attempt`].
+    async fn begin_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<Option<String>>;
+
+    /// Write the outcome of the submission a [`Self::begin_release_attempt`]
+    /// row stands for onto that row.
+    async fn settle_release_attempt(
+        &self,
+        attempt_id: &str,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+    ) -> AppResult<()>;
+
     async fn list_failed_release_signatures(
         &self,
         limit: usize,
@@ -8430,6 +8453,19 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         &self,
         item: &LibraryScanUnmatchedItem,
     ) -> AppResult<String>;
+
+    /// `upsert_library_scan_unmatched_item` for each of `items`. The SQL
+    /// store writes them in one transaction; the default writes them one by
+    /// one, stopping at the first error.
+    async fn upsert_library_scan_unmatched_items(
+        &self,
+        items: &[LibraryScanUnmatchedItem],
+    ) -> AppResult<()> {
+        for item in items {
+            self.upsert_library_scan_unmatched_item(item).await?;
+        }
+        Ok(())
+    }
 
     async fn get_library_scan_unmatched_item(
         &self,
@@ -11114,6 +11150,35 @@ pub trait PendingReleaseRepository: Send + Sync {
     ) -> AppResult<String>;
     async fn list_expired_pending_releases(&self, now: &str) -> AppResult<Vec<PendingRelease>>;
     async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>>;
+    /// Whether [`Self::list_waiting_pending_releases`] would return any row,
+    /// answered without reading one.
+    async fn has_waiting_pending_releases(&self) -> AppResult<bool> {
+        Ok(!self.list_waiting_pending_releases().await?.is_empty())
+    }
+    /// Whether [`Self::list_expired_pending_releases`] would return any row for
+    /// `now`: a waiting row whose delay has run out, answered without reading
+    /// one.
+    async fn has_expired_pending_releases(&self, now: &str) -> AppResult<bool> {
+        Ok(!self.list_expired_pending_releases(now).await?.is_empty())
+    }
+    /// One page of the waiting and standby rows no indexer observed (the rows
+    /// an external announcement parked), in id order after `after_id`.
+    async fn list_waiting_indexerless_pending_releases(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<PendingRelease>> {
+        let mut rows: Vec<_> = self
+            .list_waiting_pending_releases()
+            .await?
+            .into_iter()
+            .filter(|row| row.indexer_id.is_none())
+            .filter(|row| after_id.is_none_or(|after| row.id.as_str() > after))
+            .collect();
+        rows.sort_by(|left, right| left.id.cmp(&right.id));
+        rows.truncate(limit);
+        Ok(rows)
+    }
     /// Active rows whose indexer observation did not include a publish time.
     /// Callers use `added_at` plus the current policy to decide review timing.
     async fn list_active_release_age_unknown_pending_releases(
@@ -11542,6 +11607,16 @@ pub struct LifecycleCandidateQuery {
     pub limit: Option<usize>,
 }
 
+/// One repeat match to record, as [`LifecycleCandidateRepository::record_candidate_match`]
+/// takes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LifecycleCandidateMatch {
+    pub id: String,
+    pub last_matched_at: DateTime<Utc>,
+    pub reason_codes: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Durable lifecycle candidates.
 ///
 /// The store, not just the migration's partial unique index, is responsible for
@@ -11601,6 +11676,23 @@ pub trait LifecycleCandidateRepository: Send + Sync {
         reason_codes: &[String],
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
+
+    /// [`Self::record_candidate_match`] for each of `matches`, together. A
+    /// store records them in one transaction, so a failure records none of
+    /// them. Each write sets the same values however often it runs, so a
+    /// caller may replay a failed batch row by row.
+    async fn record_candidate_matches(&self, matches: &[LifecycleCandidateMatch]) -> AppResult<()> {
+        for candidate_match in matches {
+            self.record_candidate_match(
+                &candidate_match.id,
+                candidate_match.last_matched_at,
+                &candidate_match.reason_codes,
+                candidate_match.updated_at,
+            )
+            .await?;
+        }
+        Ok(())
+    }
 
     /// Record an inconclusive evaluation: advance `last_evaluated_at` and stamp
     /// `held_since` if it is not already set. Never advances the clock and

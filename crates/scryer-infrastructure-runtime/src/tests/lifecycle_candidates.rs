@@ -1039,6 +1039,97 @@ async fn recording_a_match_advances_the_last_match_and_clears_a_hold() {
     let _ = std::fs::remove_file(db);
 }
 
+/// A page of repeat matches recorded together leaves every row exactly as
+/// recording them one at a time does: held and unheld rows, changed and
+/// unchanged reason codes, a row left out of the page, and an id with no row.
+#[tokio::test]
+async fn a_page_of_matches_leaves_the_rows_one_at_a_time_recording_leaves() {
+    let (one_at_a_time, one_db) = temp_services("scryer_lifecycle_match_rows_single").await;
+    let (together, together_db) = temp_services("scryer_lifecycle_match_rows_batch").await;
+    let seeded: Vec<LifecycleCandidate> = (0..5)
+        .map(|index| {
+            candidate(
+                &format!("cand-{index}"),
+                "rule-a",
+                &format!("title-{index}"),
+                1,
+            )
+        })
+        .collect();
+    let held_at = Utc::now() + chrono::Duration::minutes(1);
+    for services in [&one_at_a_time, &together] {
+        seed_rule_set(services, "rule-a").await;
+        let store = evaluation_store(services);
+        for row in &seeded {
+            store.create_candidate(row).await.expect("create");
+        }
+        for held in ["cand-1", "cand-3"] {
+            store
+                .hold_candidate(held, held_at, held_at)
+                .await
+                .expect("hold");
+        }
+    }
+
+    let matched_at = held_at + chrono::Duration::minutes(1);
+    let matches: Vec<scryer_application::LifecycleCandidateMatch> = [
+        ("cand-0", vec!["stale".to_string(), "unwatched".to_string()]),
+        ("cand-1", vec!["still_stale".to_string()]),
+        ("cand-3", Vec::new()),
+        ("cand-4", vec!["unwatched".to_string()]),
+        ("cand-missing", vec!["stale".to_string()]),
+    ]
+    .into_iter()
+    .map(
+        |(id, reason_codes)| scryer_application::LifecycleCandidateMatch {
+            id: id.to_string(),
+            last_matched_at: matched_at,
+            reason_codes,
+            updated_at: matched_at,
+        },
+    )
+    .collect();
+
+    let single_store = evaluation_store(&one_at_a_time);
+    for candidate_match in &matches {
+        single_store
+            .record_candidate_match(
+                &candidate_match.id,
+                candidate_match.last_matched_at,
+                &candidate_match.reason_codes,
+                candidate_match.updated_at,
+            )
+            .await
+            .expect("record one match");
+    }
+    evaluation_store(&together)
+        .record_candidate_matches(&matches)
+        .await
+        .expect("record the page");
+
+    let ids: Vec<String> = seeded.iter().map(|row| row.id.clone()).collect();
+    let mut expected = single_store
+        .get_candidates_by_ids(&ids)
+        .await
+        .expect("read one-at-a-time rows");
+    let mut actual = evaluation_store(&together)
+        .get_candidates_by_ids(&ids)
+        .await
+        .expect("read batched rows");
+    expected.sort_by(|left, right| left.id.cmp(&right.id));
+    actual.sort_by(|left, right| left.id.cmp(&right.id));
+    assert_eq!(expected.len(), seeded.len());
+    assert_eq!(actual, expected);
+    let untouched = actual
+        .iter()
+        .find(|row| row.id == "cand-2")
+        .expect("row left out of the page");
+    assert_eq!(untouched.reason_codes, seeded[2].reason_codes);
+
+    let _ = std::fs::remove_file(one_db);
+    let _ = std::fs::remove_file(together_db);
+}
+
 #[tokio::test]
 async fn listing_filters_by_rule_state_and_library_and_counts_by_state() {
     let (services, db) = temp_services("scryer_lifecycle_candidate_listing").await;

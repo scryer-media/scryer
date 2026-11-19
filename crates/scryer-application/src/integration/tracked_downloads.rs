@@ -562,6 +562,19 @@ impl TrackedDownloadService {
         app: &AppUseCase,
         client_item: DownloadQueueItem,
     ) -> Option<TrackOutcome> {
+        self.track_with_origin(app, client_item, false).await
+    }
+
+    /// [`Self::track`], told whether the read of the row's origin failed. A
+    /// failed read is not evidence the origin changed, so a download already
+    /// tracked keeps the origin it was last known to have instead of flipping
+    /// to the client's own marker for one poll.
+    pub(crate) async fn track_with_origin(
+        &mut self,
+        app: &AppUseCase,
+        client_item: DownloadQueueItem,
+        origin_unknown: bool,
+    ) -> Option<TrackOutcome> {
         let observed_job = crate::download_identity::observed_queue_item_job(&client_item);
         // Memoized: the poller tracks every client row on every tick, and an
         // item whose locator, token and name have not moved cannot have changed
@@ -856,6 +869,14 @@ impl TrackedDownloadService {
             // staleness-lock.
             if client_item.seeding.is_none() {
                 client_item.seeding = existing.client_item.seeding.clone();
+            }
+            if origin_unknown && existing.client_item.is_scryer_origin {
+                tracing::debug!(
+                    reason_code = crate::error_reasons::download_origin::LOOKUP_FAILED,
+                    download_id = %download_id,
+                    "download origin lookup failed; keeping the last known origin"
+                );
+                client_item.is_scryer_origin = true;
             }
             existing.client_item = client_item;
             existing.is_trackable = true;
@@ -3342,6 +3363,7 @@ mod tests {
         canonical_identity_tracked_state_details: Arc<Mutex<HashMap<DownloadId, String>>>,
         password_retry: Mutex<Option<crate::DownloadPasswordRetryObservation>>,
         password_retry_read_failure: std::sync::atomic::AtomicBool,
+        submission_read_failure: std::sync::atomic::AtomicBool,
     }
 
     struct TestDownloadRegistry {
@@ -3533,6 +3555,12 @@ mod tests {
             canonical_download_id: Option<&DownloadId>,
             identity: &ClientJobLocator,
         ) -> AppResult<Option<crate::DownloadSubmission>> {
+            if self
+                .submission_read_failure
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(AppError::Repository("submission read failed".to_string()));
+            }
             let canonical = canonical_download_id.and_then(|canonical_download_id| {
                 self.canonical_submission
                     .as_ref()
@@ -6379,6 +6407,7 @@ mod tests {
             canonical_identity_tracked_state_details: Arc::new(Mutex::new(HashMap::new())),
             password_retry: Default::default(),
             password_retry_read_failure: Default::default(),
+            submission_read_failure: Default::default(),
         });
         let imports = Arc::new(TestImportRepo {
             import_record: Some(ImportRecord {
@@ -6700,6 +6729,7 @@ mod tests {
             canonical_identity_tracked_state_details: Arc::new(Mutex::new(HashMap::new())),
             password_retry: Default::default(),
             password_retry_read_failure: Default::default(),
+            submission_read_failure: Default::default(),
         });
         let imports = Arc::new(TestImportRepo::default());
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -7029,6 +7059,78 @@ mod tests {
                     .to_string()
             ]
         );
+    }
+
+    /// A poll whose origin read failed is not evidence the origin changed: a
+    /// download already known as Scryer's keeps that origin. A poll whose read
+    /// answered still takes the observation as it is.
+    #[tokio::test]
+    async fn a_failed_origin_lookup_keeps_the_last_known_origin() {
+        let app = build_app(
+            Arc::new(TestDownloadSubmissionRepo::default()),
+            Arc::new(TestImportRepo::default()),
+        );
+        let mut tracker = TrackedDownloadService::new();
+        let observed = |is_scryer_origin: bool| {
+            let mut item = build_client_item();
+            item.download_client_item_id = "lantern-cove-job".to_string();
+            item.is_scryer_origin = is_scryer_origin;
+            item
+        };
+
+        tracker.track(&app, observed(true)).await.expect("tracked");
+        let tracked_id = tracked_download_id_for_item(&observed(true));
+        let before = tracker.find(&tracked_id).expect("tracked download");
+        let (state_before, match_before, title_before) =
+            (before.state, before.match_type, before.title_id.clone());
+
+        tracker
+            .track_with_origin(&app, observed(false), true)
+            .await
+            .expect("tracked");
+        let after = tracker.find(&tracked_id).expect("tracked download");
+        assert!(after.client_item.is_scryer_origin, "origin kept");
+        assert!(!tracked_download_is_foreign(after));
+        assert_eq!(after.state, state_before);
+        assert_eq!(after.match_type, match_before);
+        assert_eq!(after.title_id, title_before);
+
+        tracker
+            .track_with_origin(&app, observed(false), false)
+            .await
+            .expect("tracked");
+        assert!(
+            !tracker
+                .find(&tracked_id)
+                .expect("tracked download")
+                .client_item
+                .is_scryer_origin,
+            "an answered read still sets the origin"
+        );
+    }
+
+    /// A failed read of the grab record leaves a failed download pending:
+    /// it is neither treated as "not grabbed" nor sent back to Downloading.
+    #[tokio::test]
+    async fn a_failed_grab_lookup_leaves_the_failed_download_pending() {
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        download_submissions
+            .submission_read_failure
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let app = build_app(download_submissions, Arc::new(TestImportRepo::default()));
+        let mut tracked = build_tracked_download("harbor-lights-job");
+        tracked.client_item.is_scryer_origin = true;
+        tracked.client_item.state = DownloadQueueState::Failed;
+        tracked.state = TrackedDownloadState::FailedPending;
+        tracked.status = TrackedDownloadStatus::Error;
+        tracked.manual_failure_cleanup = true;
+
+        crate::failed_download_handler::process_failed(&app, &mut tracked).await;
+
+        assert_eq!(tracked.state, TrackedDownloadState::FailedPending);
+        assert_eq!(tracked.status, TrackedDownloadStatus::Error);
+        assert!(tracked.status_messages.is_empty());
+        assert!(tracked.manual_failure_cleanup);
     }
 
     #[tokio::test]
