@@ -140,3 +140,54 @@ export function ruleImportReasonMessage(
   if (key) return translate(key);
   return serverMessage?.trim() || fallback;
 }
+
+/** Fact code of an item whose profiles name no Scryer quality profile. */
+export const RULE_IMPORT_PROFILE_SCORES_UNMATCHED =
+  "RULE_IMPORT_PROFILE_SCORES_UNMATCHED";
+
+/** The Arr profile names a review item could not match, in source order. */
+export function unmatchedProfileNames(item: ExternalRuleImportItem): string[] {
+  const fact = item.facts.find(
+    (candidate) => candidate.code === RULE_IMPORT_PROFILE_SCORES_UNMATCHED,
+  );
+  const names = isRecord(fact?.details) ? fact.details.unmatchedProfiles : null;
+  return Array.isArray(names)
+    ? names.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
+/** A translator finding attached to an item, with where in the format it is. */
+export type RuleImportDiagnostic = {
+  code: string;
+  message: string;
+  location: string | null;
+};
+
+/** The translator findings among an item's facts: those that carry a location. */
+export function ruleImportDiagnostics(
+  item: ExternalRuleImportItem,
+): RuleImportDiagnostic[] {
+  return item.facts.flatMap((fact) =>
+    isRecord(fact.details) && typeof fact.details.location === "string"
+      ? [
+          {
+            code: fact.code,
+            message: fact.message,
+            location: fact.details.location,
+          },
+        ]
+      : [],
+  );
+}
+
+/** Phase and counts from a running import's job-run progress. */
+export function ruleImportProgress(value: unknown): {
+  phase: ExternalRuleImportPhase;
+  counts: ExternalRuleImportCounts;
+} | null {
+  if (!isRecord(value)) return null;
+  return {
+    phase: oneOf(value.phase, PHASES, "QUEUED"),
+    counts: normalizeCounts(value.counts),
+  };
+}

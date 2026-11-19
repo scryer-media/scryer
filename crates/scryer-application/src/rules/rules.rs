@@ -15,7 +15,154 @@ fn format_rule_validation_errors(validation: &ValidationResult) -> String {
     )
 }
 
+/// Rewrites the package declaration to the system-assigned `id` and applies
+/// the validation every new rule set passes before it is written.
+fn validated_new_rule_source(rego_source: &str, id: &str) -> AppResult<String> {
+    let rewritten_source = scryer_rules::rewrite_package_declaration(rego_source, id);
+
+    if !retired_release_input_fields(&rewritten_source)
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::VALIDATION_FAILED,
+                format!("rule validation failed: {error}"),
+            )
+        })?
+        .is_empty()
+    {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::INPUT_RETIRED,
+            RETIRED_GUIDE_FACTS_REASON.to_string(),
+        ));
+    }
+
+    // Validate the rewritten Rego source
+    let validation = validate_user_rule(&rewritten_source, id).map_err(|e| {
+        AppError::validation_refused(
+            crate::error_reasons::rules::VALIDATION_FAILED,
+            format!("rule validation failed: {e}"),
+        )
+    })?;
+    if !validation.valid {
+        return Err(AppError::validation_refused_with_diagnostics(
+            crate::error_reasons::rules::SOURCE_INVALID,
+            format_rule_validation_errors(&validation),
+            validation.diagnostics,
+        ));
+    }
+    Ok(rewritten_source)
+}
+
+/// One rule set [`AppUseCase::create_rule_sets_batch`] creates.
+#[derive(Clone, Debug)]
+pub struct NewRuleSet {
+    pub name: String,
+    pub description: String,
+    pub rego_source: String,
+    pub applied_facets: Vec<MediaFacet>,
+    pub priority: i32,
+    pub enabled: bool,
+}
+
+fn prepared_rule_set(draft: NewRuleSet) -> AppResult<RuleSet> {
+    let id = Id::new_rego_safe().0;
+    let rego_source = validated_new_rule_source(&draft.rego_source, &id)?;
+    let now = Utc::now();
+    Ok(RuleSet {
+        id,
+        name: draft.name,
+        description: draft.description,
+        rego_source,
+        enabled: draft.enabled,
+        priority: draft.priority,
+        evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
+        exclusive_group: None,
+        disabled_reason_code: None,
+        disabled_reason: None,
+        applied_facets: draft.applied_facets,
+        created_at: now,
+        updated_at: now,
+        is_managed: false,
+        managed_key: None,
+        managed_tag_filter: None,
+    })
+}
+
 impl AppUseCase {
+    /// Creates several rule sets as [`Self::create_rule_set`] would, one result
+    /// per draft in order. Every source passes the same validation first.
+    /// The valid rule sets and their history are written in one transaction
+    /// under one acquisition of the rule mutation lock; only when that write
+    /// fails are they retried one row at a time. The engine is rebuilt once,
+    /// and only when an enabled rule set was written: it is built from the
+    /// enabled rule sets alone, so disabled ones cannot change it.
+    pub async fn create_rule_sets_batch(
+        &self,
+        actor: &User,
+        drafts: Vec<NewRuleSet>,
+    ) -> AppResult<Vec<AppResult<RuleSet>>> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        // Validation compiles every module; keep it off the async workers.
+        let mut results = tokio::task::spawn_blocking(move || {
+            drafts
+                .into_iter()
+                .map(prepared_rule_set)
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("rule validation failed: {error}")))?;
+        let valid: Vec<RuleSet> = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok().cloned())
+            .collect();
+        if valid.is_empty() {
+            return Ok(results);
+        }
+        let history: Vec<RuleSetHistoryChange> = valid
+            .iter()
+            .map(|rule_set| RuleSetHistoryChange {
+                rule_set_id: rule_set.id.clone(),
+                action: "created".to_string(),
+                rego_source: Some(rule_set.rego_source.clone()),
+                actor_id: Some(actor.id.clone()),
+            })
+            .collect();
+        let repository = &self.services.customization.rule_sets;
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
+        let mut wrote_enabled = false;
+        if repository.create_rule_sets(&valid, &history).await.is_ok() {
+            wrote_enabled = valid.iter().any(|rule_set| rule_set.enabled);
+        } else {
+            // The batch rolled back as a whole; write what can be written.
+            for result in &mut results {
+                let Ok(rule_set) = result.as_ref() else {
+                    continue;
+                };
+                let written = match repository.create_rule_set(rule_set).await {
+                    Ok(()) => {
+                        repository
+                            .record_rule_set_history(
+                                &rule_set.id,
+                                "created",
+                                Some(&rule_set.rego_source),
+                                Some(&actor.id),
+                            )
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match written {
+                    Ok(()) => wrote_enabled |= rule_set.enabled,
+                    Err(error) => *result = Err(error),
+                }
+            }
+        }
+        if wrote_enabled {
+            self.rebuild_user_rules_engine_unlocked().await?;
+        }
+        Ok(results)
+    }
+
     pub async fn list_rule_sets(&self, actor: &User) -> AppResult<Vec<RuleSet>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
@@ -103,38 +250,7 @@ impl AppUseCase {
         let id = Id::new_rego_safe().0;
         let _mutation = self.services.customization.rule_mutation_lock.lock().await;
 
-        // Rewrite the package declaration to match the system-assigned ID.
-        let rewritten_source = scryer_rules::rewrite_package_declaration(&rego_source, &id);
-
-        if !retired_release_input_fields(&rewritten_source)
-            .map_err(|error| {
-                AppError::validation_refused(
-                    crate::error_reasons::rules::VALIDATION_FAILED,
-                    format!("rule validation failed: {error}"),
-                )
-            })?
-            .is_empty()
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::rules::INPUT_RETIRED,
-                RETIRED_GUIDE_FACTS_REASON.to_string(),
-            ));
-        }
-
-        // Validate the rewritten Rego source
-        let validation = validate_user_rule(&rewritten_source, &id).map_err(|e| {
-            AppError::validation_refused(
-                crate::error_reasons::rules::VALIDATION_FAILED,
-                format!("rule validation failed: {e}"),
-            )
-        })?;
-        if !validation.valid {
-            return Err(AppError::validation_refused_with_diagnostics(
-                crate::error_reasons::rules::SOURCE_INVALID,
-                format_rule_validation_errors(&validation),
-                validation.diagnostics,
-            ));
-        }
+        let rewritten_source = validated_new_rule_source(&rego_source, &id)?;
 
         let now = Utc::now();
         let rule_set = RuleSet {

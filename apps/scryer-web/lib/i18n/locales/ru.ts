@@ -7923,6 +7923,16 @@ const ru: LocaleDictionary = {
     "Не удалось прочитать имена пользователей из источника.",
   "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
     "Источник ссылается на больше подключённых приложений, чем читает один импорт.",
+  "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
+    "Этот пользовательский формат использует условия, которые Scryer не может преобразовать, поэтому правило не сохранено.",
+  "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
+    "Не удалось прочитать этот пользовательский формат, поэтому правило не сохранено.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
+    "Профили качества оценивают этот формат по-разному, и для некоторых нет профиля качества Scryer с тем же именем. Правило даёт 0, пока вы его не проверите.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
+    "Оценка зависит от профиля качества Scryer с тем же именем.",
+  "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
+    "Все профили качества оценивают этот формат в 0, поэтому правило даёт 0.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "Эта версия внешнего приложения не поддерживается; требуется более новая основная версия.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -12020,6 +12030,31 @@ const ru: LocaleDictionary = {
     "Импортировано из JSON пользовательских форматов Arr.",
   "settings.arrImportDiagnostics": "Примечания к преобразованию",
   "settings.arrImportApply": "Использовать импортированный черновик",
+  "settings.arrImportDialogDescription":
+    "Импорт пользовательских форматов Sonarr или Radarr как правил оценки.",
+  "settings.arrImportTabConnect": "Подключение",
+  "settings.arrImportTabPaste": "Вставить JSON",
+  "settings.arrImportConnectDescription":
+    "Прочитать пользовательские форматы и оценки профилей качества из работающего Sonarr или Radarr. Каждый пользовательский формат сохраняется отдельным отключённым правилом для проверки.",
+  "settings.arrImportBaseUrl": "Базовый URL",
+  "settings.arrImportApiKey": "Ключ API",
+  "settings.arrImportStart": "Начать импорт",
+  "settings.arrImportStartAnother": "Импортировать снова",
+  "settings.arrImportRunning": "Импорт пользовательских форматов…",
+  "settings.arrImportRunFailed":
+    "Импорт остановился, не сохранив ни одного правила.",
+  "settings.arrImportCounts":
+    "Пользовательских форматов: {{total}}; сохранено: {{saved}}, на проверку: {{review}}, пропущено: {{skipped}}, с ошибкой: {{failed}}",
+  "settings.arrImportStateSaved": "Сохранено, отключено",
+  "settings.arrImportStateNeedsReview":
+    "Сохранено, отключено, требует проверки",
+  "settings.arrImportStateSavedFailedTranslation": "Сохранено без перевода",
+  "settings.arrImportStateSkipped": "Пропущено",
+  "settings.arrImportStatePending": "Ожидает",
+  "settings.arrImportStateFailed": "Не импортировано",
+  "settings.arrImportUnmatchedProfiles":
+    "Профили качества без профиля Scryer с тем же именем: {{names}}",
+  "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
   "settings.refReleaseNormalizedTokens":
     "Упорядоченные нормализованные токены, полученные парсером релиза",
   "settings.refReleaseHasHdrFallback":
