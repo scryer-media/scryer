@@ -3185,7 +3185,7 @@ export function MediaContentView({
     void refreshTitles(nextQuery);
   }, [refreshTitles, setTitleFilter, titleFilter, titleFilterInputValue]);
 
-  const handleSelectedOverviewBackToList = React.useCallback(() => {
+  const handleOverviewTitleNotFound = React.useCallback(() => {
     onCloseOverview();
     void refreshTitles(titleFilterInputValue);
   }, [onCloseOverview, refreshTitles, titleFilterInputValue]);
@@ -3229,7 +3229,7 @@ export function MediaContentView({
       }
 
       event.preventDefault();
-      handleSelectedOverviewBackToList();
+      onCloseOverview();
     };
 
     window.addEventListener("keydown", handleSelectedOverviewEscape);
@@ -3237,7 +3237,7 @@ export function MediaContentView({
       window.removeEventListener("keydown", handleSelectedOverviewEscape);
   }, [
     activeOverviewTitleId,
-    handleSelectedOverviewBackToList,
+    onCloseOverview,
     selectedTitleLayoutActive,
     selectedTitleListDrawerModeActive,
   ]);
@@ -4283,8 +4283,8 @@ export function MediaContentView({
                         fullBleedHero
                         heroLeadingAction={titleListDisclosure}
                         initialEpisodeId={routeOverviewEpisodeId}
-                        onTitleNotFound={handleSelectedOverviewBackToList}
-                        onBackToList={handleSelectedOverviewBackToList}
+                        onTitleNotFound={handleOverviewTitleNotFound}
+                        onBackToList={onCloseOverview}
                         onTitleResolved={(resolvedTitle) => {
                           if (resolvedTitle.id !== seriesSidePanelTitleId) {
                             onOpenOverview(view, resolvedTitle);
