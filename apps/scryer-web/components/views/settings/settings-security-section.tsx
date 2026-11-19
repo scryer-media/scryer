@@ -257,8 +257,12 @@ export function SettingsSecuritySection({
                   />
                   <CheckboxField
                     id="security-mcp-enabled"
-                    checked={settings.mcpEnabled}
-                    disabled={busy || !canManageApiKeysRestriction}
+                    checked={settings.mcpEnabledEnvOverride ?? settings.mcpEnabled}
+                    disabled={
+                      busy ||
+                      !canManageApiKeysRestriction ||
+                      settings.mcpEnabledEnvOverride !== null
+                    }
                     onCheckedChange={(checked) =>
                       onMcpEnabledChange(checked === true)
                     }
@@ -272,6 +276,11 @@ export function SettingsSecuritySection({
                     className="w-full items-center py-3"
                     checkboxClassName="mt-0"
                   />
+                  {settings.mcpEnabledEnvOverride !== null ? (
+                    <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-xs text-muted-foreground">
+                      {t("settings.securityMcpEnvOverride")}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </section>

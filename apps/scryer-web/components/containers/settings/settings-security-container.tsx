@@ -30,6 +30,7 @@ const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   skipLoginForLocalIps: false,
   apiKeysRestrictToSystemSettingsUsers: false,
   mcpEnabled: true,
+  mcpEnabledEnvOverride: null,
   mfaRequireConfigStepUp: false,
   mfaRequirePasswordLogin: false,
   mfaRequireJellyfinLogin: false,

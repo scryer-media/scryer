@@ -96,7 +96,9 @@ has an MCP client and no shell. Operator adds the server to the client's
 configuration, so the key stays out of the conversation.
 On by default; **Settings → Security & Access → Allow the MCP server** turns
 it off, and every request then gets HTTP 403 with `reason`
-`HTTP_MCP_DISABLED`. Only the operator turns it back on; use `gql.sh` meanwhile.
+`HTTP_MCP_DISABLED`. `SCRYER_MCP_ENABLED=true|false` overrides that setting
+while set (the switch then shows the forced value, locked). Only the operator
+turns it back on; use `gql.sh` meanwhile.
 
 - `whoami` replaces the section 4 check.
 - `list_operations` (optionally one `skill`) names operations;

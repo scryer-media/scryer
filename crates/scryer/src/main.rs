@@ -2243,6 +2243,7 @@ async fn bootstrap_application(
     }
     let bootstrap_admin = startup_auth::read_bootstrap_admin()?;
     let auth_mode = resolve_auth_mode_from_env(bootstrap_admin.active())?;
+    scryer_application::mcp_enabled_env_override()?;
     if bootstrap_admin.active() {
         app_use_case
             .configure_bootstrap_admin(
