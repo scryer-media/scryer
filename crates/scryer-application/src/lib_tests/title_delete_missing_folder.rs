@@ -626,3 +626,99 @@ async fn title_delete_bulk_read_failure_is_not_catalog_cleanup_failure() {
     })
     .await;
 }
+
+/// The seeded title with one file in its own folder, added by a public list.
+async fn seed_list_added_title() -> (
+    MissingFolderFixture,
+    Arc<crate::lists::test_support::MemoryListStore>,
+) {
+    use crate::lists::test_support::{MemoryListStore, membership, subscription};
+    let mut fixture = seed(MediaFacet::Movie).await;
+    let folder = fixture.root.join("Quillmere (2026)");
+    fixture
+        .record_file(&fixture.title_id, &folder.join("Quillmere (2026).mkv"))
+        .await;
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .set_folder_path(&fixture.title_id, &folder.to_string_lossy())
+        .await
+        .expect("record the title folder");
+    let lists = Arc::new(MemoryListStore::with_subscriptions(vec![subscription(
+        "list-a",
+    )]));
+    let mut row = membership(
+        "list-a",
+        "quillmere",
+        scryer_domain::ListMembershipState::Added,
+    );
+    row.title_id = Some(fixture.title_id.clone());
+    row.added_by_list = true;
+    lists.insert_rows(vec![row]);
+    fixture.app = fixture
+        .app
+        .with_test_overrides(|services| services.with_list_store(lists.clone()));
+    (fixture, lists)
+}
+
+#[tokio::test]
+async fn a_lifecycle_delete_excludes_the_title_from_the_list_that_added_it() {
+    let (fixture, lists) = seed_list_added_title().await;
+    let preview = fixture
+        .app
+        .preview_delete_title_files(&fixture.admin, &fixture.title_id)
+        .await
+        .expect("preview");
+
+    fixture
+        .app
+        .delete_title_by_policy(
+            &fixture.admin,
+            &fixture.title_id,
+            &preview.fingerprint,
+            &crate::PolicyDeleteAuthorization {
+                rule_set_id: "rule-1".to_string(),
+                candidate_id: "candidate-1".to_string(),
+                revision_number: 1,
+            },
+        )
+        .await
+        .expect("policy delete");
+
+    assert!(!fixture.title_exists().await);
+    let exclusions = lists.exclusions.lock().unwrap().clone();
+    assert_eq!(exclusions.len(), 1, "{exclusions:?}");
+    let exclusion = &exclusions[0];
+    assert_eq!(
+        exclusion.scope,
+        scryer_domain::ListExclusionScope::List {
+            subscription_id: "list-a".to_string()
+        }
+    );
+    assert_eq!(exclusion.kind, MediaFacet::Movie);
+    assert_eq!(exclusion.display_title, "Quillmere");
+    assert_eq!(
+        exclusion.external_ids,
+        vec![crate::lists::test_support::tmdb("quillmere-id")]
+    );
+}
+
+#[tokio::test]
+async fn an_operator_delete_writes_no_list_exclusion() {
+    let (fixture, lists) = seed_list_added_title().await;
+    let preview = fixture
+        .app
+        .preview_delete_title_files(&fixture.admin, &fixture.title_id)
+        .await
+        .expect("preview");
+
+    fixture
+        .delete_with_files(preview.fingerprint)
+        .await
+        .expect("operator delete");
+
+    assert!(!fixture.title_exists().await);
+    assert!(lists.exclusions.lock().unwrap().is_empty());
+}

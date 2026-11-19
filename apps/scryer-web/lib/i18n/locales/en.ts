@@ -1257,6 +1257,8 @@ const en: LocaleDictionary = {
     "Extracting the download's archives took too long; the import tries again later.",
   "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
     "The download's archives failed to extract on every attempt; retry the import to try again.",
+  "error.reason.BLOCKLIST_IMPORT_NOT_AN_UPGRADE":
+    "Downloaded, but the file was no better than the one already in the library. Blocked on every indexer so it is not downloaded again.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
     "Archive extraction requires a resolved import destination before staging output.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
@@ -1532,6 +1534,8 @@ const en: LocaleDictionary = {
     "This import retry is already running or awaiting reconciliation.",
   "error.reason.IMPORT_RETRY_IMPORT_RECORD_NOT_FOUND":
     "Retry import record was not found.",
+  "error.reason.IMPORT_RETRY_LIMIT_REACHED":
+    "Automatic import retries stopped: repeated attempts made no progress. Retry the import once the cause is fixed.",
   "error.reason.IMPORT_SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Saved disc selection changed before import metadata was published.",
   "error.reason.IMPORT_SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED":
@@ -1586,6 +1590,8 @@ const en: LocaleDictionary = {
     "Refusing to replace the old file during the upgrade because it is a symlink.",
   "error.reason.IMPORT_UNAVAILABLE": "The import is no longer cancellable.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH": "Unsafe archive entry path.",
+  "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED":
+    "The existing file was kept because preparing its replacement failed.",
   "error.reason.IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE":
     "Refusing to upgrade because the recycle bin path is unsafe.",
   "error.reason.INTEGRATION_ACTION_PERMISSION_DENIED":
@@ -8831,6 +8837,7 @@ const en: LocaleDictionary = {
   "wanted.decision.upgradeRejected": "Upgrade rejected",
   "wanted.decision.pendingDelay": "Pending delay",
   "wanted.decision.alreadyActive": "Already active",
+  "wanted.decision.queuedItemBlocksUpgrade": "Waiting for the current download",
   "wanted.decision.acceptInitial": "Accept initial",
   "wanted.decision.acceptUpgrade": "Accept upgrade",
   "wanted.decision.rejectInsufficientDelta": "Insufficient delta",

@@ -8,6 +8,7 @@ pub(super) type OneshotGate = (
 
 #[derive(Clone)]
 pub(super) struct MockReleaseAttemptRecord {
+    pub(super) id: String,
     pub(super) title_id: Option<String>,
     pub(super) source_hint: Option<String>,
     pub(super) source_title: Option<String>,
@@ -42,6 +43,7 @@ impl ReleaseAttemptRepository for MockReleaseAttemptRepo {
         source_password: Option<String>,
     ) -> AppResult<()> {
         self.attempts.lock().await.push(MockReleaseAttemptRecord {
+            id: scryer_domain::Id::new().0,
             title_id,
             source_hint,
             source_title,
@@ -50,6 +52,46 @@ impl ReleaseAttemptRepository for MockReleaseAttemptRepo {
             source_password,
             attempted_at: Utc::now().to_rfc3339(),
         });
+        Ok(())
+    }
+
+    async fn begin_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<Option<String>> {
+        let id = scryer_domain::Id::new().0;
+        self.attempts.lock().await.push(MockReleaseAttemptRecord {
+            id: id.clone(),
+            title_id,
+            source_hint: crate::url_redaction::redact_optional_url_credentials(source_hint),
+            source_title,
+            outcome: ReleaseDownloadAttemptOutcome::Pending,
+            error_message: None,
+            source_password,
+            attempted_at: Utc::now().to_rfc3339(),
+        });
+        Ok(Some(id))
+    }
+
+    async fn settle_release_attempt(
+        &self,
+        attempt_id: &str,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+    ) -> AppResult<()> {
+        if let Some(attempt) = self
+            .attempts
+            .lock()
+            .await
+            .iter_mut()
+            .find(|attempt| attempt.id == attempt_id)
+        {
+            attempt.outcome = outcome;
+            attempt.error_message = error_message;
+        }
         Ok(())
     }
 
@@ -216,6 +258,35 @@ impl BlocklistRepository for MockBlocklistRepo {
         entries.sort_by(|left, right| right.created_at.cmp(&left.created_at));
         entries.truncate(limit);
         Ok(entries)
+    }
+
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        self.title_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter(|entry| entry.title_id == title_id)
+            .filter(|entry| {
+                normalized_release_names.contains(&entry.normalized_release_name)
+                    || entry
+                        .info_hash
+                        .as_ref()
+                        .is_some_and(|info_hash| info_hashes.contains(info_hash))
+            })
+            .map(|entry| crate::BlocklistMatch {
+                indexer_id: entry.indexer_id.clone(),
+                normalized_release_name: entry.normalized_release_name.clone(),
+                info_hash: entry.info_hash.clone(),
+            })
+            .collect())
     }
 
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
@@ -1025,10 +1096,24 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             )
             .await?;
         let submission_state = self.get_tracked_state(&change.source).await?;
+        // Mirrors the store: a row that only counts stalled passes may go
+        // missing.
+        let counts_stalled_passes = change.state == scryer_domain::TrackedDownloadState::Missing
+            && previous.as_deref() == Some("import_pending")
+            && self
+                .get_identity_tracked_state_reason_for_download(
+                    Some(&change.download_id),
+                    &change.identity,
+                    Some(&change.source),
+                )
+                .await?
+                .as_deref()
+                == Some(crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
         if previous != change.expected_state
-            || previous
+            || (previous
                 .as_deref()
                 .is_some_and(|state| !matches!(state, "missing" | "downloading"))
+                && !counts_stalled_passes)
             || submission_state
                 .as_deref()
                 .is_some_and(|state| !matches!(state, "missing" | "downloading"))
@@ -1565,6 +1650,27 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             }
         }
         self.get_identity_tracked_state_detail(identity, source_identity)
+            .await
+    }
+
+    async fn get_identity_tracked_state_reason_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        identity: &DownloadSubmissionIdentity,
+        source_identity: Option<&ClientJobLocator>,
+    ) -> AppResult<Option<String>> {
+        // Keyed like the state and detail reads above, as the store is.
+        if let Some(download_id) = canonical_download_id {
+            let mut canonical_identity = identity.clone();
+            canonical_identity.download_id = Some(download_id.to_wire());
+            if let Some(reason) = self
+                .get_identity_tracked_state_reason(&canonical_identity, source_identity)
+                .await?
+            {
+                return Ok(Some(reason));
+            }
+        }
+        self.get_identity_tracked_state_reason(identity, source_identity)
             .await
     }
 

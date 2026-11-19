@@ -57,6 +57,8 @@ Format: code: meaning → usual next look.
   expected
 - `already_active`: same release already in the queue → queue
 - `queued_better_or_equal`: better or equal release downloading → queue
+- `queued_item_blocks_upgrade`: a better release waits until the worse one
+  still in the client queue finishes or is removed → queue; expected
 - `db_blocklisted`: blocklisted after an earlier failure → title history
   `BLOCKLISTED`
 - `pending_delay`: eligible but held by a delay profile → pending releases,
@@ -102,8 +104,15 @@ IMPORTED_SEEDING, IMPORT_BLOCKED, FAILED_PENDING, FAILED, IGNORED.
   either for an archive import that holds its sources, or because the source
   it set aside to find out could not be put back at its name; the `keptPath`
   fact then names where the source is.
+- `IMPORT_RETRY_LIMIT_REACHED`: six automatic import passes in a row made no
+  progress, so retries stopped. Waits on an in-progress, changed or
+  unavailable source, a full disk and denied permissions never count. A
+  manual import whose source cleanup failed six times carries the same code.
+  Operator fixes the cause, then retries the import from the queue item.
+- `IMPORT_UPGRADE_PREPARATION_FAILED`: preparing an upgrade failed, so the
+  existing library file was kept and nothing was placed.
 
-Nothing was removed in either case. Destination is the source's own file and
+Nothing was removed in any of these cases. Destination is the source's own file and
 that is recorded: import completes on that file, client entry later removed
 without its data. Scryer could not tell, for an import holding no sources:
 import fails and retries automatically; download shows the failure and its

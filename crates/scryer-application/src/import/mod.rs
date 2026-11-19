@@ -1,11 +1,11 @@
 pub(crate) use crate::*;
 
+pub mod archive_extraction;
 #[cfg(feature = "runtime-archives")]
 pub(crate) mod archive_extractor;
 #[cfg(not(feature = "runtime-archives"))]
 #[path = "archive_extractor_stub.rs"]
 pub(crate) mod archive_extractor;
-pub mod archive_extraction;
 pub(crate) mod archive_passwords;
 pub(crate) mod checks;
 pub mod completed_download;

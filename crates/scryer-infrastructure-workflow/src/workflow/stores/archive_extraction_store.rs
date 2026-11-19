@@ -370,7 +370,7 @@ mod tests {
             .await
             .expect("in-memory sqlite should open");
         sqlx::raw_sql(include_str!(
-            "../../../../scryer/src/db/migrations/0357_archive_extractions.sql"
+            "../../../../scryer/src/db/migrations/0358_archive_extractions.sql"
         ))
         .execute(&pool)
         .await

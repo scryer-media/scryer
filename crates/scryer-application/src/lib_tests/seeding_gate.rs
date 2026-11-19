@@ -143,6 +143,7 @@ fn tracked_for(
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,
@@ -2778,6 +2779,7 @@ async fn a_client_reported_usenet_failure_is_removed_with_its_payload() {
         crate::acquisition_workflow::process_download_failure(
             &app,
             crate::acquisition_workflow::DownloadFailureContext {
+                failure_code: None,
                 wanted_item: None,
                 title_id: tracked.title_id.clone(),
                 client_id: tracked.client_id.clone(),
@@ -6905,6 +6907,7 @@ async fn nzbget_script_failure_defers_history_until_verified_payload_cleanup() {
     let outcome = crate::acquisition_workflow::process_download_failure(
         &app,
         crate::acquisition_workflow::DownloadFailureContext {
+            failure_code: None,
             wanted_item: None,
             title_id: tracked.title_id.clone(),
             client_id: tracked.client_id.clone(),

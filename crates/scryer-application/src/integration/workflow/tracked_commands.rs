@@ -1177,7 +1177,11 @@ async fn process_tracked_download_snapshot(
         let id = tracked_download_id_for_item(item);
         seen_ids.insert(id.clone());
 
-        let Some(outcome) = runtime.tracker.track(app, item.clone()).await else {
+        let Some(outcome) = runtime
+            .tracker
+            .track_with_origin(app, item.clone(), enrichment.origin_is_unknown(item))
+            .await
+        else {
             continue;
         };
         let download_id = outcome.download_id;
@@ -1638,10 +1642,23 @@ async fn record_missing_client_download(
             Some(locator),
         )
         .await?;
+    // An `import_pending` row that only carries the stalled-pass count records
+    // a counter, not an import outcome: the dropped job still goes missing.
+    let existing_counts_stalled_passes = existing.as_deref()
+        == Some(TrackedDownloadState::ImportPending.as_str())
+        && repository
+            .get_identity_tracked_state_reason_for_download(
+                Some(&binding.download_id),
+                &identity,
+                Some(locator),
+            )
+            .await?
+            .as_deref()
+            == Some(crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON);
     let submission_state = repository.get_tracked_state(locator).await?;
     if existing
         .as_deref()
-        .is_some_and(|state| preserved.contains(&state))
+        .is_some_and(|state| preserved.contains(&state) && !existing_counts_stalled_passes)
         || submission_state
             .as_deref()
             .is_some_and(|state| preserved.contains(&state))
@@ -3927,6 +3944,7 @@ async fn handle_tracked_download_background_work_result(
         return None;
     };
 
+    let stalled_passes_before = tracked.stalled_import_passes;
     let state = match result.outcome {
         Ok(finished) => {
             merge_tracked_download_background_work_state(tracked, finished);
@@ -3984,6 +4002,14 @@ async fn handle_tracked_download_background_work_result(
             td.status_messages.first().map(|message| message.text.as_str()),
         )
         .await;
+    } else if state == TrackedDownloadState::ImportPending
+        && result.kind == TrackedDownloadBackgroundWorkKind::Import
+        && let Some(td) = tracker.get_by_download_id(download_id)
+        && td.stalled_import_passes != stalled_passes_before
+    {
+        // Only a pass that changed the count writes, so the limit holds
+        // across a restart without an idle write per poll.
+        crate::tracked_downloads::persist_stalled_import_passes(app, td).await;
     }
 
     publish_runtime_tracked_download_and_activity_item(app, tracker, Some(activity_item)).await;

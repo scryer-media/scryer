@@ -23,6 +23,12 @@ const INSERT_RELEASE_ATTEMPT_SQL: &str = "INSERT INTO release_download_attempts 
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
 )";
 
+/// The outcome of a submission written onto the `pending` row recorded for it,
+/// by primary key.
+const SETTLE_RELEASE_ATTEMPT_SQL: &str = "UPDATE release_download_attempts
+    SET outcome = {}, error_message = {}, updated_at = {}
+    WHERE id = {}";
+
 const LIST_FAILED_SIGNATURES_SQL: &str = "SELECT source_hint, source_title
     FROM (
         SELECT source_hint,
@@ -165,12 +171,11 @@ impl ReleaseStore {
     fn encryption_key(&self) -> AppResult<Option<EncryptionKey>> {
         current_encryption_key(&self.encryption_key)
     }
-}
 
-#[async_trait]
-impl ReleaseAttemptRepository for ReleaseStore {
-    async fn insert_release_attempt(
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_attempt_row(
         &self,
+        id: String,
         title_id: Option<String>,
         source_hint: Option<String>,
         source_title: Option<String>,
@@ -183,7 +188,7 @@ impl ReleaseAttemptRepository for ReleaseStore {
             encrypt_release_source_password(encryption_key.as_ref(), source_password.as_ref())?;
         let now = Utc::now();
         let args = vec![
-            SqlArg::Text(Id::new().0),
+            SqlArg::Text(id),
             SqlArg::OptText(title_id),
             SqlArg::OptText(source_hint),
             SqlArg::OptText(source_title),
@@ -199,6 +204,73 @@ impl ReleaseAttemptRepository for ReleaseStore {
             let args = args.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RELEASE_ATTEMPT_SQL, &args).await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+}
+
+#[async_trait]
+impl ReleaseAttemptRepository for ReleaseStore {
+    async fn insert_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<()> {
+        self.insert_attempt_row(
+            Id::new().0,
+            title_id,
+            source_hint,
+            source_title,
+            outcome,
+            error_message,
+            source_password,
+        )
+        .await
+    }
+
+    async fn begin_release_attempt(
+        &self,
+        title_id: Option<String>,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+    ) -> AppResult<Option<String>> {
+        let id = Id::new().0;
+        self.insert_attempt_row(
+            id.clone(),
+            title_id,
+            scryer_application::url_redaction::redact_optional_url_credentials(source_hint),
+            source_title,
+            ReleaseDownloadAttemptOutcome::Pending,
+            None,
+            source_password,
+        )
+        .await?;
+        Ok(Some(id))
+    }
+
+    async fn settle_release_attempt(
+        &self,
+        attempt_id: &str,
+        outcome: ReleaseDownloadAttemptOutcome,
+        error_message: Option<String>,
+    ) -> AppResult<()> {
+        let args = vec![
+            SqlArg::Text(outcome.as_str().to_string()),
+            SqlArg::OptText(error_message),
+            SqlArg::Timestamp(Utc::now()),
+            SqlArg::Text(attempt_id.to_string()),
+        ];
+        SqlRuntime::run_in_transaction(&self.datastore, "settle_release_attempt", move |tx| {
+            let args = args.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(SqlExec::Tx(tx), SETTLE_RELEASE_ATTEMPT_SQL, &args).await?;
                 Ok(())
             })
         })

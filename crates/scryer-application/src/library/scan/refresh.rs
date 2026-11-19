@@ -263,6 +263,11 @@ async fn refresh_title_boundaries(
     );
     let mut accepted = Vec::new();
     let mut rejected = 0;
+    // The root's rejected boundaries are recorded together once the walk
+    // ends; a refresh that finds the same rejections as the last one writes
+    // nothing.
+    let mut rejected_items = Vec::new();
+    let library_path = path_to_stored_string(root);
     while let Some(batch) = receiver.recv().await {
         for boundary in batch? {
             if let Some(reason) = boundary.rejection {
@@ -272,31 +277,36 @@ async fn refresh_title_boundaries(
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
-                crate::library_scan_unmatched::persist_ignored_library_scan_item(
-                    app,
-                    facet,
-                    library_id,
-                    crate::library_scan_unmatched::IgnoredLibraryScanItemArgs {
-                        title_id: None,
-                        session_id: Some(session_id),
-                        library_path: &path_to_stored_string(root),
-                        item_path: &path,
-                        display_name: &name,
-                        query: &name,
-                        year_hint: None,
-                        reason_code:
-                            crate::library_scan_unmatched::LIBRARY_SCAN_INVALID_TITLE_BOUNDARY,
-                        error_message: Some(reason),
-                        size_bytes: None,
-                    },
-                )
-                .await?;
+                rejected_items.push(
+                    crate::library_scan_unmatched::build_ignored_library_scan_item(
+                        facet,
+                        library_id,
+                        crate::library_scan_unmatched::IgnoredLibraryScanItemArgs {
+                            title_id: None,
+                            session_id: Some(session_id),
+                            library_path: &library_path,
+                            item_path: &path,
+                            display_name: &name,
+                            query: &name,
+                            year_hint: None,
+                            reason_code:
+                                crate::library_scan_unmatched::LIBRARY_SCAN_INVALID_TITLE_BOUNDARY,
+                            error_message: Some(reason),
+                            size_bytes: None,
+                        },
+                    ),
+                );
                 rejected += 1;
             } else {
                 accepted.push(boundary.path);
             }
         }
     }
+    crate::library_scan_unmatched::persist_changed_library_scan_unmatched_items(
+        app,
+        rejected_items,
+    )
+    .await?;
     let coordinator = LibraryScanCoordinator::new(app.clone(), session_id.to_string());
     coordinator.register_discovery_batch(rejected, false).await;
     coordinator.mark_title_match_completed(rejected).await;

@@ -333,6 +333,17 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// A stored import reason code, when it is one this release knows.
+fn known_import_reason_code(code: Option<&str>) -> Option<String> {
+    let code = code?;
+    crate::error_reasons::import::ALL
+        .iter()
+        .chain(crate::error_reasons::archive_extraction::ALL)
+        .copied()
+        .find(|known| *known == code)
+        .map(str::to_owned)
+}
+
 pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResultOverlay {
     let Some(result_json) = record.result_json.as_deref() else {
         return ImportRecordResultOverlay::default();
@@ -368,10 +379,11 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
                 .iter()
                 .find_map(|file| file.dest_path.clone()),
         );
+        let reason_code = known_import_reason_code(result.reason_code.as_deref());
         return ImportRecordResultOverlay {
             error_code,
             error_message,
-            reason_code: None,
+            reason_code,
             decision: None,
             skip_reason: None,
             title_id: non_empty(result.title_id),
@@ -383,14 +395,7 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
     let Ok(result) = serde_json::from_str::<scryer_domain::ImportResult>(result_json) else {
         return ImportRecordResultOverlay::default();
     };
-    let reason_code = result.reason_code.as_deref().and_then(|code| {
-        crate::error_reasons::import::ALL
-            .iter()
-            .chain(crate::error_reasons::archive_extraction::ALL)
-            .copied()
-            .find(|known| *known == code)
-            .map(str::to_owned)
-    });
+    let reason_code = known_import_reason_code(result.reason_code.as_deref());
     ImportRecordResultOverlay {
         error_code: None,
         error_message: non_empty(result.error_message),
@@ -581,6 +586,7 @@ pub(crate) async fn enrich_download_queue_items_from_submissions_with_original_i
     pass: &mut DownloadEnrichmentPass,
 ) {
     pass.restore_invalidated(app, items);
+    pass.clear_origin_unknown();
     let mut client_items = Vec::new();
     let mut seen_client_items = HashSet::new();
     for (index, item) in items.iter().enumerate() {
@@ -699,11 +705,26 @@ pub(crate) async fn enrich_download_queue_items_from_submissions_with_original_i
             continue;
         }
 
-        if let Some(submission) =
-            find_submission_for_queue_item_by_download_id(app, item, original, &adoption_scope)
-                .await
+        match find_submission_for_queue_item_by_download_id(app, item, original, &adoption_scope)
+            .await
         {
-            apply_submission_projection(item, &submission);
+            Ok(Some(submission)) => apply_submission_projection(item, &submission),
+            Ok(None) => {
+                // No submission was found, but a read that failed on the way
+                // is not proof that Scryer never submitted this row.
+                if !item.is_scryer_origin
+                    && lookup_keys
+                        .iter()
+                        .any(|key| pass.submission_lookup_failed.contains(key))
+                {
+                    pass.mark_origin_unknown(item);
+                }
+            }
+            Err(()) => {
+                if !item.is_scryer_origin {
+                    pass.mark_origin_unknown(item);
+                }
+            }
         }
         pass.remember(item, before);
     }
@@ -733,10 +754,12 @@ async fn find_submission_for_queue_item_by_download_id(
     adoption_scope: &Option<
         std::sync::Arc<crate::services::DownloadClientCategoryAdmissionSnapshot>,
     >,
-) -> Option<std::sync::Arc<SubmissionProjection>> {
-    let download_id = item.download_id.as_deref().map(str::trim)?;
+) -> Result<Option<std::sync::Arc<SubmissionProjection>>, ()> {
+    let Some(download_id) = item.download_id.as_deref().map(str::trim) else {
+        return Ok(None);
+    };
     if download_id.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // Resolving is adoption: a row with no submission and no Scryer token
@@ -745,7 +768,7 @@ async fn find_submission_for_queue_item_by_download_id(
     // row that carries a Scryer wire token is Scryer's own whatever its
     // category says.
     if !crate::download_identity::queue_item_is_in_adoption_scope(item, adoption_scope.as_deref()) {
-        return None;
+        return Ok(None);
     }
 
     // Memoized: an unchanged row on an unchanged registry generation costs no
@@ -766,14 +789,14 @@ async fn find_submission_for_queue_item_by_download_id(
         }
         crate::download_identity::ObservedClientJobResolution::Conflict
         | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
-            return None;
+            return Ok(None);
         }
         crate::download_identity::ObservedClientJobResolution::Unavailable => None,
     };
     // This row's by-id lookup already came back empty against this registry
     // generation, and it is the same row: nothing to look up again.
     if memoized.submission_lookup_missed {
-        return None;
+        return Ok(None);
     }
 
     let mut candidates = Vec::new();
@@ -831,7 +854,7 @@ async fn find_submission_for_queue_item_by_download_id(
                     .get(generation, key, tokio::time::Instant::now())
             && generation == app.runtime.acquisition.download_registry_generation()
         {
-            return Some(projection);
+            return Ok(Some(projection));
         }
         match app
             .services
@@ -863,19 +886,20 @@ async fn find_submission_for_queue_item_by_download_id(
                             tokio::time::Instant::now(),
                         );
                     }
-                    return Some(projection);
+                    return Ok(Some(projection));
                 }
             }
             Err(error) => {
                 tracing::warn!(
                     error = %error,
+                    reason_code = crate::error_reasons::download_origin::LOOKUP_FAILED,
                     client_id = %client_id,
                     client_type = %client_type,
                     "failed to load download submission by download id for queue enrichment"
                 );
                 // A read failure is not proof there is nothing to find, so the
-                // miss is not memoized.
-                return None;
+                // miss is not memoized, and the row's origin is unknown.
+                return Err(());
             }
         }
     }
@@ -886,7 +910,7 @@ async fn find_submission_for_queue_item_by_download_id(
         item.download_id.as_deref(),
     )
     .await;
-    None
+    Ok(None)
 }
 fn config_value_is_empty(value: Option<&serde_json::Value>) -> bool {
     match value {

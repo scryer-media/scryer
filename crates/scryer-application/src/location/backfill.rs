@@ -304,17 +304,27 @@ pub struct FullHashBackfillFailure {
     pub media_file_id: String,
     pub path: String,
     pub reason: String,
+    /// The stable code for a failure a client can tell apart, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 impl FullHashBackfillSummary {
     /// Counts a failed file and records it by name while there is room.
-    pub(crate) fn record_failure(&mut self, media_file_id: &str, path: &str, reason: &str) {
+    pub(crate) fn record_failure(
+        &mut self,
+        media_file_id: &str,
+        path: &str,
+        reason: &str,
+        reason_code: Option<&str>,
+    ) {
         self.failed += 1;
         if self.failures.len() < FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES {
             self.failures.push(FullHashBackfillFailure {
                 media_file_id: media_file_id.to_string(),
                 path: path.to_string(),
                 reason: reason.to_string(),
+                reason_code: reason_code.map(str::to_string),
             });
         } else {
             self.failures_truncated = true;
@@ -508,16 +518,17 @@ impl AppUseCase {
                         skipped = true;
                         summary.record_skip(skip);
                     }
-                    Err(BackfillOutcome::Failed(reason)) => {
+                    Err(BackfillOutcome::Failed { reason, code }) => {
                         if cancellation.is_cancelled() {
                             summary.cancelled = true;
                             break 'sweep;
                         }
-                        summary.record_failure(&candidate.id, &candidate.file_path, &reason);
+                        summary.record_failure(&candidate.id, &candidate.file_path, &reason, code);
                         tracing::warn!(
                             media_file_id = %candidate.id,
                             path = %candidate.file_path,
                             reason = %reason,
+                            reason_code = code.unwrap_or(""),
                             "full-hash backfill could not hash a file; leaving it queued"
                         );
                     }
@@ -607,7 +618,7 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(&candidate.id)
             .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+            .map_err(|error| BackfillOutcome::failed(error.to_string()))?;
         let current = match current {
             None => return Err(BackfillOutcome::Skipped(BackfillSkip::AlreadyHashed)),
             Some(file) if file.content_hashes.is_some() => {
@@ -616,33 +627,52 @@ impl AppUseCase {
             Some(file) => file,
         };
         if current.file_path != candidate.file_path || current.size_bytes != candidate.size_bytes {
-            return Err(BackfillOutcome::Failed(
-                "file changed before hashing".into(),
-            ));
+            return Err(BackfillOutcome::failed("file changed before hashing"));
+        }
+        // The mark just taken already holds the length on disk. A file that is
+        // not the size the catalog recorded can never publish a hash, so it is
+        // refused here rather than after reading every byte of it: the row is
+        // stale (an external re-tag, say), not the read.
+        if !before.is_len(current.size_bytes as u64) {
+            return Err(BackfillOutcome::Failed {
+                reason: format!(
+                    "size on disk ({} bytes) differs from the catalog ({} bytes); rescan the title",
+                    before
+                        .len()
+                        .map_or_else(|| "unknown".to_string(), |len| len.to_string()),
+                    current.size_bytes
+                ),
+                code: Some(crate::error_reasons::location::BACKFILL_SIZE_MISMATCH),
+            });
         }
 
         let hashes =
             hash_file_cancellable(path.clone(), io, cancellation.child_token(), Some(permit))
                 .await
-                .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+                .map_err(|error| BackfillOutcome::failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
         let after = disk.fingerprint_followed(&path).await.map_err(|reading| {
-            BackfillOutcome::Failed(format!(
+            BackfillOutcome::failed(format!(
                 "cannot read {}: {}",
                 path.display(),
                 reading.describe_absence()
             ))
         })?;
         if !before.compare(&after).is_untouched() || !after.is_len(bytes) {
-            return Err(BackfillOutcome::Failed("file changed while hashing".into()));
+            return Err(BackfillOutcome::failed("file changed while hashing"));
         }
-        // The file held still, but it is not the size the catalog recorded:
-        // the row is stale (an external re-tag, say), not the read.
+        // The file held still and the mark before the read matched the
+        // catalog, so the bytes read can only differ if the reader and the
+        // mark disagree. Keep the guard: a hash is never published for a size
+        // the catalog does not hold.
         if bytes != current.size_bytes as u64 {
-            return Err(BackfillOutcome::Failed(format!(
-                "size on disk ({bytes} bytes) differs from the catalog ({} bytes); rescan the title",
-                current.size_bytes
-            )));
+            return Err(BackfillOutcome::Failed {
+                reason: format!(
+                    "size on disk ({bytes} bytes) differs from the catalog ({} bytes); rescan the title",
+                    current.size_bytes
+                ),
+                code: Some(crate::error_reasons::location::BACKFILL_SIZE_MISMATCH),
+            });
         }
 
         let published = self
@@ -654,11 +684,9 @@ impl AppUseCase {
                 &PersistedContentHashes::from_streamed(&hashes, Some(&after), Utc::now()),
             )
             .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+            .map_err(|error| BackfillOutcome::failed(error.to_string()))?;
         if !published {
-            return Err(BackfillOutcome::Failed(
-                "catalog changed while hashing".into(),
-            ));
+            return Err(BackfillOutcome::failed("catalog changed while hashing"));
         }
 
         Ok(Some(bytes))
@@ -738,7 +766,20 @@ impl AppUseCase {
 /// are not, but neither stops the run.
 enum BackfillOutcome {
     Skipped(BackfillSkip),
-    Failed(String),
+    Failed {
+        reason: String,
+        /// The stable code for a failure a client can tell apart.
+        code: Option<&'static str>,
+    },
+}
+
+impl BackfillOutcome {
+    fn failed(reason: impl Into<String>) -> Self {
+        Self::Failed {
+            reason: reason.into(),
+            code: None,
+        }
+    }
 }
 
 type BackfillPermits = (

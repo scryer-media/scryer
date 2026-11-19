@@ -3101,6 +3101,14 @@ impl BlocklistRepository for NullBlocklistRepository {
     async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
         Ok(vec![])
     }
+    async fn list_matching_for_title(
+        &self,
+        _: &str,
+        _: &[String],
+        _: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        Ok(vec![])
+    }
     async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         Ok((vec![], 0))
     }
@@ -4945,6 +4953,23 @@ pub mod test_nulls {
             _: Option<String>,
             _: ReleaseDownloadAttemptOutcome,
             _: Option<String>,
+            _: Option<String>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+        async fn begin_release_attempt(
+            &self,
+            _: Option<String>,
+            _: Option<String>,
+            _: Option<String>,
+            _: Option<String>,
+        ) -> AppResult<Option<String>> {
+            Ok(None)
+        }
+        async fn settle_release_attempt(
+            &self,
+            _: &str,
+            _: ReleaseDownloadAttemptOutcome,
             _: Option<String>,
         ) -> AppResult<()> {
             Ok(())

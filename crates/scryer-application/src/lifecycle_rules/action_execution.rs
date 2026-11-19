@@ -1337,22 +1337,42 @@ impl AppUseCase {
                             }
                         }
                         Ok(sequence) => {
-                            self.execute_one_lifecycle_sequence_candidate(
-                                candidate,
-                                SequenceCandidateExecutionContext {
-                                    detail: &detail,
-                                    sequence: &sequence,
-                                    evaluator: &mut evaluator,
-                                    libraries: &libraries,
-                                    tag_conflicts: &tag_conflicts,
-                                    storage_roots: &super::storage::LifecycleStorageRootsOnce::new(
-                                    ),
-                                    budget: sequence_budget
-                                        .as_mut()
-                                        .expect("sequence actions always have a step budget"),
-                                },
-                            )
-                            .await
+                            let storage_roots = super::storage::LifecycleStorageRootsOnce::new();
+                            let budget = sequence_budget
+                                .as_mut()
+                                .expect("sequence actions always have a step budget");
+                            if self
+                                .lifecycle_sequence_hold_is_unchanged(
+                                    &candidate,
+                                    SequenceCandidateExecutionContext {
+                                        detail: &detail,
+                                        sequence: &sequence,
+                                        evaluator: &mut evaluator,
+                                        libraries: &libraries,
+                                        tag_conflicts: &tag_conflicts,
+                                        storage_roots: &storage_roots,
+                                        budget,
+                                    },
+                                )
+                                .await
+                            {
+                                // Already held for it; nothing is written.
+                                Ok(CandidateOutcome::Held)
+                            } else {
+                                self.execute_one_lifecycle_sequence_candidate(
+                                    candidate,
+                                    SequenceCandidateExecutionContext {
+                                        detail: &detail,
+                                        sequence: &sequence,
+                                        evaluator: &mut evaluator,
+                                        libraries: &libraries,
+                                        tag_conflicts: &tag_conflicts,
+                                        storage_roots: &storage_roots,
+                                        budget,
+                                    },
+                                )
+                                .await
+                            }
                         }
                         Err(reason)
                             if candidate.state == LifecycleCandidateState::Blocked

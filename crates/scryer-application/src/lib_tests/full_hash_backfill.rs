@@ -779,6 +779,44 @@ async fn a_file_that_cannot_be_hashed_is_recorded_and_warns() {
     assert_eq!(json["failuresTruncated"], false);
 }
 
+/// A file whose length on disk is not the catalog's is refused from the mark
+/// taken before the read: not one byte of it is read, and the failure carries
+/// its code.
+#[tokio::test]
+async fn a_size_mismatch_is_refused_without_reading_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let seeded = seed_unhashed_files(&media_files, dir.path(), 1).await;
+    media_files.store.lock().await[0].size_bytes += 1;
+
+    let app = bootstrap_backfill(media_files.clone());
+    let summary = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .expect("backfill run");
+
+    assert_eq!(summary.failed, 1);
+    assert_eq!(summary.hashed, 0);
+    assert_eq!(
+        summary.bytes_read, 0,
+        "a size mismatch must not read the file"
+    );
+    assert_eq!(summary.bytes_hashed, 0);
+    let failure = &summary.failures[0];
+    assert_eq!(failure.media_file_id, seeded[0].id);
+    assert_eq!(
+        failure.reason_code.as_deref(),
+        Some(crate::error_reasons::location::BACKFILL_SIZE_MISMATCH)
+    );
+    assert!(hashed_ids(&media_files).await.is_empty());
+
+    let json: serde_json::Value = serde_json::to_value(&summary).expect("summary serializes");
+    assert_eq!(
+        json["failures"][0]["reasonCode"],
+        "LOCATION_BACKFILL_SIZE_MISMATCH"
+    );
+}
+
 /// Runs the backfill job through the job runner over one seeded file and
 /// returns the persisted run once it reaches a terminal status.
 async fn run_backfill_job_over_one_file(stale_catalog_size: bool) -> JobRunRecord {
@@ -869,6 +907,7 @@ fn recorded_failures_are_capped_and_flag_truncation() {
             &format!("file-{index:03}"),
             &format!("/synthetic/library/file-{index:03}.mkv"),
             "synthetic read failure",
+            None,
         );
     }
 

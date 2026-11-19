@@ -3015,6 +3015,7 @@ fn completed_manual_import_record_for(
         status: scryer_domain::ImportStatus::Completed,
         error_code: None,
         error_message: None,
+        reason_code: None,
         requires_reconciliation: false,
         retry_attempts: 0,
         next_retry_at: None,

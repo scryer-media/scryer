@@ -3843,6 +3843,7 @@ const ru: LocaleDictionary = {
   "wanted.decision.upgradeRejected": "Обновление отклонено",
   "wanted.decision.pendingDelay": "Отложено",
   "wanted.decision.alreadyActive": "Уже активно",
+  "wanted.decision.queuedItemBlocksUpgrade": "Ожидает текущую загрузку",
   "wanted.decision.acceptInitial": "Первичное принятие",
   "wanted.decision.acceptUpgrade": "Обновление принято",
   "wanted.decision.rejectInsufficientDelta": "Недостаточная разница",
@@ -8233,6 +8234,8 @@ const ru: LocaleDictionary = {
     "Распаковка архивов загрузки заняла слишком много времени; импорт повторит попытку позже.",
   "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
     "Архивы загрузки не удалось распаковать ни с одной попытки; повторите импорт, чтобы попробовать снова.",
+  "error.reason.BLOCKLIST_IMPORT_NOT_AN_UPGRADE":
+    "Загружено, но файл оказался не лучше того, что уже есть в библиотеке. Заблокировано на всех индексаторах, чтобы не загружать его снова.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
     "Для извлечения архива нужно определить место назначения импорта до подготовки результата.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
@@ -8507,6 +8510,8 @@ const ru: LocaleDictionary = {
     "Эта повторная попытка импорта уже выполняется или ожидает сверки состояния.",
   "error.reason.IMPORT_RETRY_IMPORT_RECORD_NOT_FOUND":
     "Запись повторного импорта не найдена.",
+  "error.reason.IMPORT_RETRY_LIMIT_REACHED":
+    "Автоматические повторы импорта остановлены: повторные попытки не дали результата. Повторите импорт после устранения причины.",
   "error.reason.IMPORT_SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Сохранённый выбор содержимого диска изменился до публикации метаданных импорта.",
   "error.reason.IMPORT_SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED":
@@ -8563,6 +8568,8 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_UNAVAILABLE": "Этот импорт больше нельзя отменить.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH":
     "Небезопасный путь элемента архива.",
+  "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED":
+    "Существующий файл сохранён: подготовка его замены не удалась.",
   "error.reason.IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE":
     "Замена улучшенной версией запрещена: путь к корзине небезопасен.",
   "error.reason.INTEGRATION_ACTION_PERMISSION_DENIED":

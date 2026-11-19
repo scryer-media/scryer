@@ -14,9 +14,9 @@ use scryer_application::lifecycle_rules::ACTION_SEQUENCE_KIND;
 use scryer_application::{
     AppError, AppResult, LifecycleActionJobReceiptClaim, LifecycleActionJobReceiptTransition,
     LifecycleActionRunRepository, LifecycleActionStepCandidateKey, LifecycleActionStepClaim,
-    LifecycleActionStepRepository, LifecycleCandidateQuery, LifecycleCandidateRepository,
-    LifecycleEvaluationRunRepository, LifecycleExclusionRepository, LifecycleRuleScheduleAnchor,
-    LifecycleSequenceCompletionRepository,
+    LifecycleActionStepRepository, LifecycleCandidateMatch, LifecycleCandidateQuery,
+    LifecycleCandidateRepository, LifecycleEvaluationRunRepository, LifecycleExclusionRepository,
+    LifecycleRuleScheduleAnchor, LifecycleSequenceCompletionRepository,
 };
 use scryer_domain::{
     LIFECYCLE_TERMINAL_CANDIDATE_STATES, LifecycleActionJobReceipt, LifecycleActionJobReceiptState,
@@ -112,6 +112,13 @@ fn active_state_predicate() -> (String, Vec<SqlArg>) {
 }
 
 // ── Candidates ──────────────────────────────────────────────────────────────
+
+/// A repeat match: the grace clock (`first_matched_at`, `due_at`) is left as
+/// it is.
+const RECORD_CANDIDATE_MATCH_SQL: &str = "UPDATE lifecycle_candidates
+                SET last_matched_at = {}, last_evaluated_at = {}, reason_codes = {},
+                    held_since = NULL, updated_at = {}
+              WHERE id = {}";
 
 #[async_trait]
 impl LifecycleCandidateRepository for LifecycleEvaluationStore {
@@ -368,11 +375,45 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         execute_write(
             &self.datastore,
             "record_lifecycle_candidate_match",
-            "UPDATE lifecycle_candidates
-                SET last_matched_at = {}, last_evaluated_at = {}, reason_codes = {},
-                    held_since = NULL, updated_at = {}
-              WHERE id = {}",
+            RECORD_CANDIDATE_MATCH_SQL,
             args,
+        )
+        .await
+    }
+
+    async fn record_candidate_matches(&self, matches: &[LifecycleCandidateMatch]) -> AppResult<()> {
+        if matches.is_empty() {
+            return Ok(());
+        }
+        // The same statement `record_candidate_match` runs, once per row, in
+        // one transaction: five binds a statement, so no id list to chunk.
+        let mut statements = Vec::with_capacity(matches.len());
+        for candidate_match in matches {
+            statements.push(vec![
+                SqlArg::Timestamp(candidate_match.last_matched_at),
+                SqlArg::Timestamp(candidate_match.last_matched_at),
+                SqlArg::Text(canonical_json_text(&candidate_match.reason_codes)?),
+                SqlArg::Timestamp(candidate_match.updated_at),
+                SqlArg::Text(candidate_match.id.clone()),
+            ]);
+        }
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "record_lifecycle_candidate_matches",
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    for args in &statements {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(&mut *tx),
+                            RECORD_CANDIDATE_MATCH_SQL,
+                            args,
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
         )
         .await
     }

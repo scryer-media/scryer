@@ -2368,6 +2368,9 @@ pub mod location {
     pub const FULL_HASH_BACKFILL_CANCELLED: &str = "LOCATION_FULL_HASH_BACKFILL_CANCELLED";
     /// File changed while hashing.
     pub const FILE_CHANGED_WHILE_HASHING: &str = "LOCATION_FILE_CHANGED_WHILE_HASHING";
+    /// The file on disk is not the size the catalog recorded, so the full-hash
+    /// backfill refused it without reading it.
+    pub const BACKFILL_SIZE_MISMATCH: &str = "LOCATION_BACKFILL_SIZE_MISMATCH";
     /// A location operation currently owns these items.
     pub const OWNERSHIP_BUSY: &str = "LOCATION_OWNERSHIP_BUSY";
     /// Library roots changed; recovery needs a new plan.
@@ -2596,6 +2599,7 @@ pub mod location {
         FULL_HASH_BACKFILL_ALREADY_RUNNING,
         FULL_HASH_BACKFILL_CANCELLED,
         FILE_CHANGED_WHILE_HASHING,
+        BACKFILL_SIZE_MISMATCH,
         OWNERSHIP_BUSY,
         RECOVERY_ROOTS_CHANGED,
         RECOVERY_TITLE_NOT_FOUND,
@@ -5431,6 +5435,35 @@ pub mod archive_extraction {
     }
 }
 
+/// The kinds of download failure Scryer classifies itself, rather than
+/// relaying the download client's report.
+pub mod download_failure {
+    /// The download holds nothing but executables. The release itself is bad,
+    /// so it is blocked on every indexer rather than only the one that
+    /// served it.
+    pub const UNWANTED_EXECUTABLES: &str = "DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES";
+    pub const ALL: &[&str] = &[UNWANTED_EXECUTABLES];
+}
+
+/// Why Scryer itself wrote a blocklist entry. Stored as the entry's reason.
+pub mod blocklist {
+    /// The grab finished, but import refused its file as no better than the
+    /// one the title already has, so grabbing it again would only repeat the
+    /// download. The entry names no indexer.
+    pub const IMPORT_NOT_AN_UPGRADE: &str = "BLOCKLIST_IMPORT_NOT_AN_UPGRADE";
+    pub const ALL: &[&str] = &[IMPORT_NOT_AN_UPGRADE];
+}
+
+/// Why automatic grab admission refused a candidate, where the refusal has a
+/// code of its own.
+pub mod admission {
+    /// The candidate beats the release already downloading for its scope, but
+    /// an automatic grab is never submitted beside a download the client is
+    /// still working, so it is refused before it is parked or sent.
+    pub const QUEUED_ITEM_BLOCKS_UPGRADE: &str = "ADMISSION_QUEUED_ITEM_BLOCKS_UPGRADE";
+    pub const ALL: &[&str] = &[QUEUED_ITEM_BLOCKS_UPGRADE];
+}
+
 /// What the archive workspace health check reports. Each result carries its
 /// counts as facts beside the sentence.
 pub mod archive_workspace_health {
@@ -5927,9 +5960,21 @@ pub mod import {
     pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";
     /// The library file an import would replace could not be compared with the source, so it was left in place and the import is retried.
     pub const INCUMBENT_IDENTITY_UNDECIDED: &str = "IMPORT_INCUMBENT_IDENTITY_UNDECIDED";
+    /// Automatic import of a download ran several passes in a row that ended the same way and imported nothing new, so it stopped retrying. Retrying the import starts the count again.
+    pub const RETRY_LIMIT_REACHED: &str = "IMPORT_RETRY_LIMIT_REACHED";
+    /// The library file a re-run would replace was placed by this same download, so it was kept and counted as already present.
+    pub const INCUMBENT_PLACED_BY_THIS_DOWNLOAD: &str = "IMPORT_INCUMBENT_PLACED_BY_THIS_DOWNLOAD";
+    /// An extra video beside the download's episode names no episode; it was left in the download and not imported.
+    pub const UNPARSEABLE_EPISODE_MEMBER: &str = "IMPORT_UNPARSEABLE_EPISODE_MEMBER";
+    /// Preparing to replace the library file failed, so the new file was not placed and the existing file was kept.
+    pub const UPGRADE_PREPARATION_FAILED: &str = "IMPORT_UPGRADE_PREPARATION_FAILED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         INCUMBENT_IDENTITY_UNDECIDED,
+        RETRY_LIMIT_REACHED,
+        INCUMBENT_PLACED_BY_THIS_DOWNLOAD,
+        UNPARSEABLE_EPISODE_MEMBER,
+        UPGRADE_PREPARATION_FAILED,
         MEDIA_ROOT_REQUIRED,
         PATH_OUTSIDE_LIBRARY_ROOT,
         RECYCLE_BIN_CONFIG_REQUIRED,
@@ -6421,6 +6466,14 @@ pub mod scripts {
     pub const ALL: &[&str] = &[SCHEDULE_INVALID];
 }
 
+pub mod download_origin {
+    /// The read that says whether Scryer submitted a download failed, so the
+    /// download keeps the origin it was last known to have.
+    pub const LOOKUP_FAILED: &str = "DOWNLOAD_ORIGIN_LOOKUP_FAILED";
+    /// Every reason owned by this area.
+    pub const ALL: &[&str] = &[LOOKUP_FAILED];
+}
+
 pub mod arr_custom_formats {
     /// The pasted custom-format JSON is larger than the import accepts.
     pub const JSON_TOO_LARGE: &str = "ARR_CUSTOM_FORMAT_JSON_TOO_LARGE";
@@ -6568,12 +6621,16 @@ mod tests {
             ("EVENTS_", events::ALL),
             ("IMPORT_", import::ALL),
             ("ARCHIVE_EXTRACTION_", archive_extraction::ALL),
+            ("DOWNLOAD_FAILURE_", download_failure::ALL),
+            ("BLOCKLIST_", blocklist::ALL),
+            ("ADMISSION_", admission::ALL),
             ("ARCHIVE_WORKSPACE_", archive_workspace_health::ALL),
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),
             ("ARR_CUSTOM_FORMAT_", arr_custom_formats::ALL),
             ("MAINTAINERR_IMPORT_", maintainerr_import::ALL),
+            ("DOWNLOAD_ORIGIN_", download_origin::ALL),
         ];
         let mut distinct = std::collections::BTreeSet::new();
         for (prefix, codes) in areas {

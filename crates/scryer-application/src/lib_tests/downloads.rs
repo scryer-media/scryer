@@ -2753,6 +2753,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,
@@ -5364,6 +5365,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,
@@ -6424,6 +6426,49 @@ async fn automatic_episode_downgrade_is_already_present_without_burning() {
             .len(),
         1
     );
+    assert_lost_release_blocked_on_every_indexer(
+        &app,
+        &title.id,
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+    )
+    .await;
+}
+
+/// A grab's file that lost to the library leaves one block on its release
+/// name, naming no indexer, so the same release is decided `DbBlocklisted`
+/// whichever indexer offers it next.
+async fn assert_lost_release_blocked_on_every_indexer(
+    app: &AppUseCase,
+    title_id: &str,
+    release: &str,
+) {
+    let entries = app
+        .services
+        .workflow
+        .blocklist_repo
+        .list_for_title(title_id, 50)
+        .await
+        .expect("list title blocklist");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].indexer_id, "", "{entries:?}");
+    assert_eq!(
+        entries[0].reason.as_deref(),
+        Some(crate::error_reasons::blocklist::IMPORT_NOT_AN_UPGRADE)
+    );
+    let signatures = app
+        .load_title_release_blocklist_signatures(title_id, [(release, None)])
+        .await;
+    for indexer in ["indexer-that-served-it", "another-indexer"] {
+        assert!(
+            crate::app_usecase_discovery::is_release_blocklisted(
+                Some(indexer),
+                release,
+                None,
+                &signatures,
+            ),
+            "{indexer}"
+        );
+    }
 }
 
 async fn import_completed_events_for_title(
@@ -6634,6 +6679,259 @@ async fn automatic_episode_import_of_identical_bytes_leaves_the_library_file_in_
         .expect("list media files");
     assert_eq!(files.len(), 1, "{files:?}");
     assert_eq!(files[0].file_path, library_path);
+}
+
+/// After the first import, something outside the import rewrites the library
+/// file at the same size through a new file renamed over it (an operator
+/// post-processing script retagging it), which breaks the hardlink to the
+/// download's copy. A repeat pass of the very same download sees different
+/// sampled bytes, but the library file is one this download placed: the pass
+/// settles it as already present instead of replacing it, so there is no
+/// second ImportCompleted and the rewrite survives.
+#[tokio::test]
+async fn repeat_pass_keeps_a_library_file_this_download_placed_after_its_bytes_changed() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            library_dir: _library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        title_name: "Lantern Cove".to_string(),
+        ..Default::default()
+    })
+    .await;
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(source.path(), "Lantern.Cove.S01E01.720p.WEB-DL.mkv");
+    let completed = series_pack_completed_download(
+        "changed-bytes-1",
+        &title.id,
+        "Lantern.Cove.S01E01.720p.WEB-DL",
+        source.path(),
+    );
+    let first = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("first import should run")
+    };
+    assert_eq!(
+        first.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{first:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    let library_path = events[0].media_updates[0].path.clone();
+
+    // The default hardlink_or_copy mode hardlinked the library file to the
+    // download's copy, so an in-place edit would change both. A tool that
+    // writes its result to a new file and renames it over the library file
+    // breaks the link: rewrite the tail that way, keeping the size.
+    let rewritten = format!("{library_path}.retag");
+    std::fs::copy(&library_path, &rewritten).expect("copy library file for retagging");
+    stamp_fixture_identity(Path::new(&rewritten), "retagged-by-post-processing");
+    std::fs::rename(&rewritten, &library_path).expect("rename retagged file over library file");
+    let library_len = std::fs::metadata(&library_path)
+        .expect("library file")
+        .len();
+    assert_eq!(
+        library_len,
+        std::fs::metadata(&source_file).expect("source file").len()
+    );
+
+    let repeat = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("repeat import should run")
+    };
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(
+        repeat.decision,
+        scryer_domain::ImportDecision::Skipped,
+        "{repeat:?}"
+    );
+    assert_eq!(
+        repeat.skip_reason,
+        Some(scryer_domain::ImportSkipReason::AlreadyImported),
+        "{repeat:?}"
+    );
+    assert_eq!(
+        events.len(),
+        1,
+        "the repeat pass imported again: {events:?}"
+    );
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].file_path, library_path);
+    let artifacts = app
+        .services
+        .workflow
+        .import_artifacts
+        .list_by_source_identity(&ClientJobLocator::for_import_artifact(
+            Some(completed.client_id.as_str()),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        ))
+        .await
+        .expect("list import artifacts");
+    assert!(
+        artifacts
+            .iter()
+            .any(|artifact| artifact.reason_code.as_deref()
+                == Some(crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD)),
+        "{artifacts:?}"
+    );
+    let library_tail = {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(&library_path).expect("open library file");
+        let stamp = "retagged-by-post-processing";
+        file.seek(SeekFrom::End(-(stamp.len() as i64)))
+            .expect("seek library tail");
+        let mut tail = vec![0u8; stamp.len()];
+        file.read_exact(&mut tail).expect("read library tail");
+        tail
+    };
+    assert_eq!(
+        library_tail,
+        b"retagged-by-post-processing".to_vec(),
+        "the rewrite was replaced by the download's bytes"
+    );
+}
+
+/// A repeat pass of a grab whose own library file now outranks it (its row
+/// was rewritten to a better tier after the first pass) loses the comparison
+/// to a file this same download placed. That says nothing against the
+/// release, which already imported: the pass settles as placed by this
+/// download and blocks nothing.
+#[tokio::test]
+async fn repeat_pass_losing_to_its_own_placed_file_blocks_nothing() {
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir: _library_dir,
+            ..
+        },
+        submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        title_name: "Lantern Cove".to_string(),
+        media_files: media_files.clone(),
+        ..Default::default()
+    })
+    .await;
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(source.path(), "Lantern.Cove.S01E01.720p.WEB-DL.mkv");
+    // Scryer's own automatic grab, so a lost comparison would block it.
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "own-file-outranks-1",
+        "Lantern.Cove.S01E01.720p.WEB-DL",
+        SubmissionScope::Episode {
+            episode_id: episode.id.clone(),
+        },
+    )
+    .await;
+    let completed = series_pack_completed_download(
+        "own-file-outranks-1",
+        &title.id,
+        "Lantern.Cove.S01E01.720p.WEB-DL",
+        source.path(),
+    );
+    let first = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("first import should run")
+    };
+    assert_eq!(
+        first.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{first:?}"
+    );
+    let library_path = import_completed_events_for_title(&app, &title.id).await[0].media_updates[0]
+        .path
+        .clone();
+
+    // The library copy is rewritten outside the import, and its row now
+    // describes a better tier than the release this download carries.
+    let rewritten = format!("{library_path}.retag");
+    std::fs::copy(&library_path, &rewritten).expect("copy library file for retagging");
+    stamp_fixture_identity(Path::new(&rewritten), "retagged-by-post-processing");
+    std::fs::rename(&rewritten, &library_path).expect("rename retagged file over library file");
+    for file in media_files.store.lock().await.iter_mut() {
+        file.grabbed_release_title = Some("Lantern.Cove.S01E01.1080p.WEB-DL".to_string());
+        file.quality_label = Some("1080p".to_string());
+        file.resolution = Some("1080p".to_string());
+        file.video_width = Some(1920);
+        file.video_height = Some(1080);
+    }
+
+    let repeat = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("repeat import should run")
+    };
+    assert_eq!(
+        repeat.decision,
+        scryer_domain::ImportDecision::Skipped,
+        "{repeat:?}"
+    );
+    assert!(!repeat.release_burned, "{repeat:?}");
+    let entries = app
+        .services
+        .workflow
+        .blocklist_repo
+        .list_for_title(&title.id, 50)
+        .await
+        .expect("list title blocklist");
+    assert!(
+        entries.is_empty(),
+        "a release that lost only to its own placed file is never blocked: {entries:?}"
+    );
+    let artifacts = app
+        .services
+        .workflow
+        .import_artifacts
+        .list_by_source_identity(&ClientJobLocator::for_import_artifact(
+            Some(completed.client_id.as_str()),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        ))
+        .await
+        .expect("list import artifacts");
+    assert!(
+        artifacts
+            .iter()
+            .any(|artifact| artifact.reason_code.as_deref()
+                == Some(crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD)),
+        "{artifacts:?}"
+    );
+    assert_eq!(
+        import_completed_events_for_title(&app, &title.id)
+            .await
+            .len(),
+        1
+    );
 }
 
 /// Every regular file under `root`, at any depth.
@@ -7524,7 +7822,7 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
             panic!("native import fixture was rejected: {name}");
         };
         let mut catalog = serde_json::to_value(catalog).unwrap();
-        let mut rule_file = serde_json::to_value(
+        let rule_file = serde_json::to_value(
             imported
                 .rule_file_doc
                 .expect("canonical facts must reach import rules"),
@@ -7534,15 +7832,31 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         // Runtime instrumentation may vary between probes; metadata may not.
         catalog["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
         imported["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
-        rule_file["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
         assert_eq!(
             catalog, imported,
             "canonical production paths diverged for {name}"
         );
-        assert_eq!(
-            catalog["details"], rule_file["details"],
-            "rule projection lost structured facts for {name}"
+        // `input.file` carries the flat facts rules read, never the internal
+        // details tree, and those facts are the catalog's own.
+        assert!(
+            rule_file.get("details").is_none(),
+            "rule projection must not carry the details tree for {name}"
         );
+        for fact in [
+            "video_width",
+            "video_height",
+            "video_bit_depth",
+            "video_hdr_format",
+            "duration_seconds",
+            "num_chapters",
+            "container_format",
+            "has_multiaudio",
+        ] {
+            assert_eq!(
+                rule_file[fact], catalog[fact],
+                "rule projection lost {fact} for {name}"
+            );
+        }
         assert_eq!(
             catalog["details"]["revision"],
             scryer_media_types::ANALYSIS_REVISION
@@ -10341,6 +10655,186 @@ async fn automatic_import_parks_obfuscated_multi_file_episode_download_for_manua
             "{file_name} must not be recorded as imported"
         );
     }
+}
+
+/// A single-episode download with an unparseable extra video beside the
+/// episode. The episode is imported and the extra is recorded as ignored, so
+/// the download settles as imported on its first pass instead of retrying and
+/// then blocking with the grabbed episode already in the library.
+#[tokio::test]
+async fn extra_video_beside_single_episode_is_ignored_and_the_download_settles() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir,
+            import_repo,
+            import_artifacts,
+        },
+        download_submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        title_name: "Lantern Cove".to_string(),
+        ..FailClosedPackFixtureOptions::default()
+    })
+    .await;
+    let episode_three = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            episode.collection_id.clone(),
+            "standard".into(),
+            Some("3".into()),
+            Some("1".into()),
+            Some("S01E03".into()),
+            Some("Low Tide".into()),
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create episode three");
+
+    let item_id = "lantern-cove-extra-1";
+    let release = "Lantern.Cove.S01E03.1080p.WEB-DL";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release,
+        SubmissionScope::Episode {
+            episode_id: episode_three.id.clone(),
+        },
+    )
+    .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let episode_file = write_pack_video(source_dir.path(), "Lantern.Cove.S01E03.1080p.WEB-DL.mkv");
+    let extra_file = write_pack_video(source_dir.path(), "Behind.The.Scenes.mkv");
+    let completed = series_pack_completed_download(item_id, &title.id, release, source_dir.path());
+
+    let mut client_item = queue_history_fixture_item(item_id, DownloadQueueState::Completed, 40);
+    client_item.title_id = Some(title.id.clone());
+    client_item.title_name = title.name.clone();
+    client_item.facet = Some("series".to_string());
+    let tracked_id = crate::tracked_downloads::tracked_download_id_for_item(&client_item);
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, client_item).await;
+    let tracked = tracker
+        .find_mut(&tracked_id)
+        .expect("completed item is tracked");
+    tracked.state = TrackedDownloadState::ImportPending;
+    let lookup =
+        crate::import::completed_download::CompletedDownloadLookup::from_recent_downloads(vec![
+            completed,
+        ]);
+
+    // The episode lands, the extra is recorded as ignored, and the download
+    // settles as imported on the first pass. Only the episode is probed; the
+    // agreement keeps the test the same in a build with media analysis.
+    let _probe = probe_agrees_with_the_name(1920, 1080);
+    let imported =
+        crate::import::completed_download::import_with_lookup(&app, &user, tracked, &lookup).await;
+    assert!(imported, "the first pass verifies: {tracked:?}");
+    assert_eq!(tracked.state, TrackedDownloadState::Imported, "{tracked:?}");
+    assert!(tracked.import_execution_retry.is_none(), "{tracked:?}");
+    assert_eq!(
+        library_video_file_names(library_dir.path()).len(),
+        1,
+        "only the episode reached the library"
+    );
+    let episode_rows = import_artifacts
+        .artifacts_for_file("lantern.cove.s01e03.1080p.web-dl.mkv")
+        .await;
+    assert_eq!(episode_rows.len(), 1, "{episode_rows:?}");
+    assert_eq!(episode_rows[0].result, "imported");
+    let extra_rows = import_artifacts
+        .artifacts_for_file("behind.the.scenes.mkv")
+        .await;
+    assert_eq!(extra_rows.len(), 1, "{extra_rows:?}");
+    assert_eq!(extra_rows[0].result, "ignored");
+    assert_eq!(
+        extra_rows[0].reason_code.as_deref(),
+        Some(crate::error_reasons::import::UNPARSEABLE_EPISODE_MEMBER)
+    );
+    assert!(extra_rows[0].imported_media_file_id.is_none());
+    let records = import_repo.records.lock().await.clone();
+    let last_result: scryer_domain::ImportResult = serde_json::from_str(
+        records
+            .last()
+            .and_then(|record| record.result_json.as_deref())
+            .expect("pass result"),
+    )
+    .expect("pass result json");
+    assert_eq!(
+        last_result.decision,
+        scryer_domain::ImportDecision::Imported
+    );
+    assert!(episode_file.exists() && extra_file.exists());
+}
+
+/// The other side of the extra-video rule: a season pack whose only parseable
+/// member is one episode, beside an unparseable video, still lacks wanted
+/// episodes. Recording the extra as ignored never makes such a pack complete.
+#[tokio::test]
+async fn season_pack_missing_wanted_episodes_beside_an_extra_video_is_never_complete() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            ..
+        },
+        download_submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        title_name: "Lantern Cove".to_string(),
+        ..FailClosedPackFixtureOptions::default()
+    })
+    .await;
+    create_pack_episode_in_season(&app, &user, &title.id, 1, 5, Some(5), "standard").await;
+
+    let item_id = "lantern-cove-short-pack-1";
+    let release = "Lantern.Cove.S01.1080p.WEB-DL";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release,
+        SubmissionScope::Collection {
+            collection_id: episode.collection_id.clone().unwrap(),
+        },
+    )
+    .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(source_dir.path(), "Lantern.Cove.S01E01.1080p.WEB-DL.mkv");
+    write_pack_video(source_dir.path(), "Behind.The.Scenes.mkv");
+    let completed = series_pack_completed_download(item_id, &title.id, release, source_dir.path());
+
+    let mut client_item = queue_history_fixture_item(item_id, DownloadQueueState::Completed, 40);
+    client_item.title_id = Some(title.id.clone());
+    client_item.title_name = title.name.clone();
+    client_item.facet = Some("series".to_string());
+    let tracked_id = crate::tracked_downloads::tracked_download_id_for_item(&client_item);
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, client_item).await;
+    let tracked = tracker
+        .find_mut(&tracked_id)
+        .expect("completed item is tracked");
+    tracked.state = TrackedDownloadState::ImportPending;
+    let lookup =
+        crate::import::completed_download::CompletedDownloadLookup::from_recent_downloads(vec![
+            completed,
+        ]);
+
+    let imported =
+        crate::import::completed_download::import_with_lookup(&app, &user, tracked, &lookup).await;
+    assert!(
+        !imported,
+        "a pack missing wanted episodes verified: {tracked:?}"
+    );
+    assert_ne!(tracked.state, TrackedDownloadState::Imported, "{tracked:?}");
 }
 
 #[tokio::test]
@@ -15537,6 +16031,7 @@ impl DispositionFixture {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,
@@ -16445,7 +16940,8 @@ score_entry["operator_refuses_this_file"] := -10000 if {
 
 /// **`Skip`.** The scope already holds a better tier. The release is perfectly
 /// good, it just lost the comparison — so it is not burned, and the scope is not
-/// reopened for a search that has nothing new to find.
+/// reopened for a search that has nothing new to find. Its name is blocked on
+/// every indexer, so the same download is not fetched and refused again.
 #[tokio::test]
 async fn an_import_that_loses_the_comparison_is_skipped_without_burning_the_release() {
     let release_title = "Loses Comparison Movie.2026.720p.WEB-DL-GRP";
@@ -16467,11 +16963,8 @@ async fn an_import_that_loses_the_comparison_is_skipped_without_burning_the_rele
         scryer_domain::ImportDecision::Skipped,
         "{result:?}"
     );
-    assert!(
-        fixture.blocklisted_titles().await.is_empty(),
-        "losing a comparison is not a lie: {:?}",
-        fixture.blocklisted_titles().await
-    );
+    assert_lost_release_blocked_on_every_indexer(&fixture.app, &fixture.title.id, release_title)
+        .await;
     assert_eq!(
         fixture.scope_status().await,
         AcquisitionScopeStatus::Grabbed,
@@ -20736,6 +21229,163 @@ async fn automatic_import_maps_a_double_episode_through_an_alternate_order_bridg
     );
 }
 
+/// A persisted stalled-pass count is a counter, not an import outcome: a job
+/// the client dropped while it awaited a retry still goes missing, reopening
+/// its scope. An `import_pending` row with no such reason stays preserved.
+#[tokio::test]
+async fn a_stalled_pass_count_does_not_keep_a_dropped_download_grabbed() {
+    assert!(
+        missing_download_with_import_pending_reason(Some(
+            crate::STALLED_IMPORT_PASSES_TRACKED_STATE_REASON
+        ))
+        .await,
+        "a stalled-pass count must not keep a dropped download grabbed"
+    );
+    assert!(
+        !missing_download_with_import_pending_reason(None).await,
+        "an import_pending outcome is still preserved"
+    );
+}
+
+/// Seeds a grabbed movie whose identity row is `import_pending` with
+/// `reason`, drops it from the client, and reports whether it went missing
+/// (missing state, a `DownloadMissing` event and the scope reopened).
+async fn missing_download_with_import_pending_reason(reason: Option<&str>) -> bool {
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let scopes = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    *download_submissions.presence_scopes.lock().await = Some(scopes.clone());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_domain_events(domain_events.clone())
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scopes.clone())
+    });
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone()])
+        .await;
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "stalled-job-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-stalled".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "stalled-job-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Fixture.Stalled.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("seed download submission");
+    let mut identity = download_submissions
+        .get_submission_identity(&source_identity)
+        .await
+        .expect("identity loads")
+        .unwrap_or_default();
+    identity.download_id = Some(download_id.to_wire());
+    download_submissions
+        .record_identity_tracked_state_for_download(
+            Some(&download_id),
+            &identity,
+            Some(&source_identity),
+            TrackedDownloadState::ImportPending.as_str(),
+            reason,
+            reason.map(|_| "2"),
+        )
+        .await
+        .expect("seed import_pending identity state");
+
+    let grabbed_at = Utc::now() - chrono::Duration::hours(1);
+    let grab_record = serde_json::json!({
+        "title": "Fixture.Stalled.2026.1080p.WEB-DL", "score": 100,
+        "grabbed_at": grabbed_at, "download_id": download_id,
+    });
+    let row = AcquisitionScopeState {
+        id: "stalled-movie-scope".into(),
+        title_id: "title-stalled".into(),
+        title_name: None,
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".into(),
+        last_search_at: Some(grabbed_at.to_rfc3339()),
+        status: AcquisitionScopeStatus::Grabbed,
+        grabbed_release: Some(grab_record.to_string()),
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: grabbed_at.to_rfc3339(),
+        updated_at: grabbed_at.to_rfc3339(),
+    };
+    scopes.upsert_acquisition_scope_state(&row).await.unwrap();
+
+    crate::app_usecase_integration::drop_source_removed_from_client(&app, &source_identity).await;
+
+    let missing_state = download_submissions
+        .get_tracked_state(&source_identity)
+        .await
+        .expect("tracked state should load")
+        == Some(TrackedDownloadState::Missing.as_str().to_string());
+    let missing_events = app
+        .services
+        .events
+        .domain_events
+        .list(&scryer_domain::DomainEventFilter::default())
+        .await
+        .expect("events load")
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.payload,
+                scryer_domain::DomainEventPayload::DownloadMissing(_)
+            )
+        })
+        .count();
+    let reopened = scopes
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&row.title_id))
+        .await
+        .unwrap()
+        .remove(0)
+        .status
+        == AcquisitionScopeStatus::Wanted;
+    assert_eq!(
+        (missing_state, missing_events == 1, reopened),
+        (missing_state, missing_state, missing_state),
+        "missing state, event and reopen go together"
+    );
+    missing_state
+}
+
 /// Absence is not an operator ignore or failure. The same attempt must be
 /// recoverable when the client lists the job again.
 #[tokio::test]
@@ -23931,7 +24581,11 @@ mod held_sources {
             let library_root = fixture.title_folder.parent().unwrap();
             assert_eq!(
                 workspace.parent(),
-                Some(library_root.join(crate::ARCHIVE_EXTRACTION_DIR_NAME).as_path()),
+                Some(
+                    library_root
+                        .join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
+                        .as_path()
+                ),
                 "the workspace is staged in the library root's extraction folder: {}",
                 workspace.display()
             );
@@ -23954,7 +24608,11 @@ mod held_sources {
                 )
                 .await
             );
-            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            app.runtime
+                .imports
+                .archive_workspace_upkeep
+                .drain_removals()
+                .await;
             assert!(
                 !workspace.exists(),
                 "settling as imported removes the download's workspace"
@@ -24022,7 +24680,12 @@ mod held_sources {
 
         /// The video the latest extraction wrote.
         fn extracted_video(output_dirs: &OutputDirs, video_name: &str) -> PathBuf {
-            output_dirs.lock().unwrap().last().expect("extracted").join(video_name)
+            output_dirs
+                .lock()
+                .unwrap()
+                .last()
+                .expect("extracted")
+                .join(video_name)
         }
 
         fn extracting_provider(
@@ -24086,11 +24749,10 @@ mod held_sources {
             std::fs::write(&archive, b"rar").unwrap();
             let unrelated = folder.join("Synthetic.Notes.nfo");
             std::fs::write(&unrelated, b"unrelated").unwrap();
-            let key =
-                crate::import::archive_extraction::DownloadExtractionKey::for_completed(
-                    &fixture.completed,
-                )
-                .unwrap();
+            let key = crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+                &fixture.completed,
+            )
+            .unwrap();
             ArchiveDownload {
                 fixture,
                 folder,
@@ -24123,15 +24785,14 @@ mod held_sources {
             assert_eq!(read, first, "an import pass reads it without extracting");
             assert_eq!(output_dirs.lock().unwrap().len(), 1, "the plugin ran once");
             let record = download.key.record_in(app).await.expect("recorded");
-            assert_eq!(
-                record.state,
-                crate::ArchiveExtractionState::Extracted
-            );
+            assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
             assert_eq!(record.attempts, 1);
             assert_eq!(record.output_count, 1);
             assert_eq!(record.output_bytes, 300 * 1024 * 1024);
             let staged: Vec<_> = std::fs::read_dir(
-                download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
+                download
+                    .library_root()
+                    .join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
             )
             .unwrap()
             .collect();
@@ -24283,7 +24944,10 @@ mod held_sources {
             let provider = failing_provider(&calls);
             let app = &download.fixture.app;
             let clock = Clock::start(app);
-            download.extract(app, Some(provider.clone())).await.unwrap_err();
+            download
+                .extract(app, Some(provider.clone()))
+                .await
+                .unwrap_err();
             let failed = download.key.record_in(app).await.unwrap();
 
             clock.advance(app, chrono::Duration::minutes(4));
@@ -24316,7 +24980,10 @@ mod held_sources {
             let app = &download.fixture.app;
             let clock = Clock::start(app);
             for _ in 0..crate::import::archive_extraction::MAX_ATTEMPTS - 1 {
-                download.extract(app, Some(provider.clone())).await.unwrap_err();
+                download
+                    .extract(app, Some(provider.clone()))
+                    .await
+                    .unwrap_err();
                 clock.advance(app, chrono::Duration::minutes(21));
             }
 
@@ -24351,8 +25018,7 @@ mod held_sources {
             assert_eq!(download.key.record_in(app).await.unwrap(), blocked);
 
             // The operator's retry starts the count again.
-            crate::import::archive_extraction::reset_download_extraction(app, &download.key)
-                .await;
+            crate::import::archive_extraction::reset_download_extraction(app, &download.key).await;
             let reset = download.key.record_in(app).await.unwrap();
             assert_eq!(reset.state, crate::ArchiveExtractionState::Pending);
             assert_eq!(reset.attempts, 0);
@@ -24368,16 +25034,14 @@ mod held_sources {
         async fn a_retry_writes_nothing_for_a_download_without_a_record_or_one_extracted() {
             let download = archive_download("Retry Nothing Movie").await;
             let app = &download.fixture.app;
-            crate::import::archive_extraction::reset_download_extraction(app, &download.key)
-                .await;
+            crate::import::archive_extraction::reset_download_extraction(app, &download.key).await;
             assert!(download.key.record_in(app).await.is_none());
 
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
             download.extract(app, Some(provider)).await.unwrap();
             let extracted = download.key.record_in(app).await.unwrap();
-            crate::import::archive_extraction::reset_download_extraction(app, &download.key)
-                .await;
+            crate::import::archive_extraction::reset_download_extraction(app, &download.key).await;
             assert_eq!(download.key.record_in(app).await.unwrap(), extracted);
         }
 
@@ -24445,23 +25109,24 @@ mod held_sources {
                 });
             let (app, repository) = counted(&download);
             let _clock = Clock::start(&app);
-            let extract = |passwords: crate::import::archive_passwords::ArchivePasswordCandidates| {
-                let app = app.clone();
-                let provider = provider.clone();
-                let download = &download;
-                async move {
-                    crate::import::archive_extraction::extract_download_archives(
-                        &app,
-                        &download.key,
-                        &download.folder,
-                        crate::import::workflow::is_sample_file,
-                        download.key.destination(download.library_root()),
-                        &passwords,
-                        Some(provider),
-                    )
-                    .await
-                }
-            };
+            let extract =
+                |passwords: crate::import::archive_passwords::ArchivePasswordCandidates| {
+                    let app = app.clone();
+                    let provider = provider.clone();
+                    let download = &download;
+                    async move {
+                        crate::import::archive_extraction::extract_download_archives(
+                            &app,
+                            &download.key,
+                            &download.folder,
+                            crate::import::workflow::is_sample_file,
+                            download.key.destination(download.library_root()),
+                            &passwords,
+                            Some(provider),
+                        )
+                        .await
+                    }
+                };
             let with_operator = |value: &str| {
                 let mut passwords =
                     crate::import::archive_passwords::ArchivePasswordCandidates::default();
@@ -24482,28 +25147,46 @@ mod held_sources {
                 assert!(password_required(extract(Default::default()).await));
             }
             assert_eq!(calls_of(&calls), 1, "no candidate to try");
-            assert_eq!(repository.writes(), writes, "a repeat refusal writes nothing");
+            assert_eq!(
+                repository.writes(),
+                writes,
+                "a repeat refusal writes nothing"
+            );
 
             // A candidate the last attempt did not try runs it once. The
             // plugin is asked once per password tried, so calls are compared
             // before and after each pass.
-            assert!(password_required(extract(with_operator("synthetic-one")).await));
+            assert!(password_required(
+                extract(with_operator("synthetic-one")).await
+            ));
             let after_one = calls_of(&calls);
             assert!(after_one > 1, "a new candidate runs it");
-            assert!(password_required(extract(with_operator("synthetic-one")).await));
-            assert_eq!(calls_of(&calls), after_one, "the same candidates were tried");
-            assert!(password_required(extract(with_operator("synthetic-two")).await));
+            assert!(password_required(
+                extract(with_operator("synthetic-one")).await
+            ));
+            assert_eq!(
+                calls_of(&calls),
+                after_one,
+                "the same candidates were tried"
+            );
+            assert!(password_required(
+                extract(with_operator("synthetic-two")).await
+            ));
             let after_two = calls_of(&calls);
             assert!(after_two > after_one, "another candidate runs it again");
 
             // An operator retry runs it whatever was tried.
-            crate::import::archive_extraction::reset_download_extraction(&app, &download.key)
-                .await;
-            assert!(password_required(extract(with_operator("synthetic-two")).await));
+            crate::import::archive_extraction::reset_download_extraction(&app, &download.key).await;
+            assert!(password_required(
+                extract(with_operator("synthetic-two")).await
+            ));
             assert!(calls_of(&calls) > after_two);
             let record = download.key.record_in(&app).await.unwrap();
             assert_eq!(record.state, crate::ArchiveExtractionState::NeedsPassword);
-            assert_eq!(record.attempts, 0, "waiting for a password costs no attempt");
+            assert_eq!(
+                record.attempts, 0,
+                "waiting for a password costs no attempt"
+            );
         }
 
         /// The extraction records, counting every write that changes a row.
@@ -24602,10 +25285,9 @@ mod held_sources {
 
         fn counted(download: &ArchiveDownload) -> (AppUseCase, Arc<CountingExtractions>) {
             let repository = Arc::new(CountingExtractions::default());
-            let app = download
-                .fixture
-                .app
-                .with_test_overrides(|services| services.with_archive_extractions(repository.clone()));
+            let app = download.fixture.app.with_test_overrides(|services| {
+                services.with_archive_extractions(repository.clone())
+            });
             (app, repository)
         }
 
@@ -24636,7 +25318,10 @@ mod held_sources {
         async fn another_extracted_download(
             app: &AppUseCase,
             download: &ArchiveDownload,
-        ) -> (crate::import::archive_extraction::DownloadExtractionKey, PathBuf) {
+        ) -> (
+            crate::import::archive_extraction::DownloadExtractionKey,
+            PathBuf,
+        ) {
             let key = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some(&download.fixture.completed.client_id),
                 "another-synthetic-item",
@@ -24701,14 +25386,21 @@ mod held_sources {
                 let output_dirs = OutputDirs::default();
                 let provider = extracting_provider(&download.video_name, &output_dirs);
                 let app = &download.fixture.app;
-                let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
-                let (other_key, other_workspace) =
-                    another_extracted_download(app, &download).await;
+                let workspace = download
+                    .extract(app, Some(provider))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let (other_key, other_workspace) = another_extracted_download(app, &download).await;
                 let operator_file = workspace.parent().unwrap().join("Operator.Notes.txt");
                 std::fs::write(&operator_file, b"operator").unwrap();
 
                 settle_as(app, &download, state).await;
-                app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+                app.runtime
+                    .imports
+                    .archive_workspace_upkeep
+                    .drain_removals()
+                    .await;
 
                 assert!(!workspace.exists(), "{state:?}");
                 assert!(download.key.record_in(app).await.is_none(), "{state:?}");
@@ -24727,7 +25419,11 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let ended_at = clock.now();
 
             settle_as(&app, &download, TrackedDownloadState::ImportDismissed).await;
@@ -24744,15 +25440,20 @@ mod held_sources {
                 Some(ended_at)
             );
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
-            crate::import::archive_extraction::settle_download_extraction(
-                &app, &other_key, false,
-            )
-            .await;
+            crate::import::archive_extraction::settle_download_extraction(&app, &other_key, false)
+                .await;
 
-            clock.advance(&app, chrono::Duration::hours(22) + chrono::Duration::minutes(59));
+            clock.advance(
+                &app,
+                chrono::Duration::hours(22) + chrono::Duration::minutes(59),
+            );
             let writes = repository.writes();
             assert_eq!(sweep(&app).await, Default::default(), "not due yet");
-            assert_eq!(repository.writes(), writes, "a pass with nothing due writes nothing");
+            assert_eq!(
+                repository.writes(),
+                writes,
+                "a pass with nothing due writes nothing"
+            );
             assert!(workspace.is_dir());
 
             clock.advance(&app, chrono::Duration::minutes(2));
@@ -24825,7 +25526,11 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
             let unrecorded = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some(&download.fixture.completed.client_id),
@@ -24842,7 +25547,10 @@ mod held_sources {
 
             assert_eq!(repository.writes(), writes + 1, "one batch");
             for key in [&download.key, &other_key] {
-                assert_eq!(key.record_in(&app).await.unwrap().settled_at, Some(clock.now()));
+                assert_eq!(
+                    key.record_in(&app).await.unwrap().settled_at,
+                    Some(clock.now())
+                );
             }
             assert!(unrecorded.record_in(&app).await.is_none());
             assert!(workspace.is_dir());
@@ -24856,7 +25564,11 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = &download.fixture.app;
             let clock = Clock::start(app);
-            let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let claim = app
                 .runtime
                 .imports
@@ -24865,7 +25577,11 @@ mod held_sources {
                 .unwrap();
 
             settle_as(app, &download, TrackedDownloadState::Imported).await;
-            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            app.runtime
+                .imports
+                .archive_workspace_upkeep
+                .drain_removals()
+                .await;
 
             assert!(workspace.is_dir(), "a running extraction keeps it");
             assert_eq!(
@@ -24886,14 +25602,19 @@ mod held_sources {
 
         /// The extraction folder of the download's library root.
         fn extraction_folder(download: &ArchiveDownload) -> PathBuf {
-            download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
+            download
+                .library_root()
+                .join(crate::ARCHIVE_EXTRACTION_DIR_NAME)
         }
 
         /// An owned workspace of a download no record names.
         fn orphaned_workspace(
             download: &ArchiveDownload,
             item_id: &str,
-        ) -> (crate::import::archive_extraction::DownloadExtractionKey, PathBuf) {
+        ) -> (
+            crate::import::archive_extraction::DownloadExtractionKey,
+            PathBuf,
+        ) {
             let key = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some(&download.fixture.completed.client_id),
                 item_id,
@@ -24956,7 +25677,10 @@ mod held_sources {
                     unmarked: 1,
                 }
             );
-            assert!(orphan.join("Orphaned.Feature.mkv").exists(), "inside its day");
+            assert!(
+                orphan.join("Orphaned.Feature.mkv").exists(),
+                "inside its day"
+            );
 
             clock.advance(&app, chrono::Duration::hours(2));
             let swept = sweep_orphans(&app).await;
@@ -24984,9 +25708,16 @@ mod held_sources {
             assert!(hex_file.exists());
             assert!(operator_file.exists());
             assert!(download.archive.exists());
-            assert_eq!(repository.writes(), writes, "the orphan sweep writes no record");
             assert_eq!(
-                app.runtime.imports.archive_workspace_upkeep.last_orphan_sweep(),
+                repository.writes(),
+                writes,
+                "the orphan sweep writes no record"
+            );
+            assert_eq!(
+                app.runtime
+                    .imports
+                    .archive_workspace_upkeep
+                    .last_orphan_sweep(),
                 Some(swept)
             );
         }
@@ -25036,10 +25767,14 @@ mod held_sources {
             let unreleased = create_test_archive_workspace_owned_by(root, "unreleased-pass-import");
             let operator_file = root.join("Operator.Notes.txt");
             std::fs::write(&operator_file, b"operator").unwrap();
-            let library_video = download.fixture.title_folder.join("Root Pass Workspace Movie.mkv");
+            let library_video = download
+                .fixture
+                .title_folder
+                .join("Root Pass Workspace Movie.mkv");
             write_video(&library_video);
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(report.pass_workspaces_removed, 1);
             assert!(!old.exists());
@@ -25050,7 +25785,11 @@ mod held_sources {
             assert!(download.archive.exists());
         }
 
-        fn released_pass_workspace(parent: &Path, owner: &str, ago: std::time::Duration) -> PathBuf {
+        fn released_pass_workspace(
+            parent: &Path,
+            owner: &str,
+            ago: std::time::Duration,
+        ) -> PathBuf {
             let workspace = create_test_archive_workspace_owned_by(parent, owner);
             crate::archive_extractor::release_test_archive_workspace_at(
                 &workspace,
@@ -25072,7 +25811,8 @@ mod held_sources {
                 "recent-title-pass",
                 std::time::Duration::from_secs(60 * 60),
             );
-            let unreleased = create_test_archive_workspace_owned_by(title_folder, "unreleased-title-pass");
+            let unreleased =
+                create_test_archive_workspace_owned_by(title_folder, "unreleased-title-pass");
             let unmarked = title_folder.join(".scryer-ax-fedcba9876543210");
             std::fs::create_dir_all(&unmarked).unwrap();
             std::fs::write(unmarked.join("Operator.Copy.mkv"), b"operator").unwrap();
@@ -25082,7 +25822,8 @@ mod held_sources {
             write_video(&library_video);
 
             // Nothing noted yet: the title folder is left as it is.
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
             assert_eq!(report.noted_pass_workspaces_removed, 0);
             assert!(old.exists());
 
@@ -25092,11 +25833,14 @@ mod held_sources {
                 .walk(download.library_root())
                 .unwrap();
             assert_eq!(
-                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()),
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                ),
                 vec![title_folder.clone()]
             );
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(report.noted_pass_workspaces_removed, 1);
             assert!(!old.exists());
@@ -25105,7 +25849,12 @@ mod held_sources {
             assert!(unmarked.join("Operator.Copy.mkv").exists(), "unmarked");
             assert!(operator_file.exists());
             assert!(library_video.exists());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()).is_empty());
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                )
+                .is_empty()
+            );
         }
 
         #[tokio::test]
@@ -25114,21 +25863,36 @@ mod held_sources {
             let app = &download.fixture.app;
             let outside = tempfile::tempdir().unwrap();
             let workspace = released_pass_workspace(outside.path(), "outside-pass", OVER_A_DAY);
-            crate::import::archive_extraction::note_pass_workspace_parent(outside.path(), &workspace);
+            crate::import::archive_extraction::note_pass_workspace_parent(
+                outside.path(),
+                &workspace,
+            );
             // A root itself is the root sweep's, and is not swept twice.
-            let root_workspace = released_pass_workspace(download.library_root(), "root-pass", OVER_A_DAY);
+            let root_workspace =
+                released_pass_workspace(download.library_root(), "root-pass", OVER_A_DAY);
             crate::import::archive_extraction::note_pass_workspace_parent(
                 download.library_root(),
                 &root_workspace,
             );
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(report.noted_pass_workspaces_removed, 0);
             assert_eq!(report.pass_workspaces_removed, 1);
             assert!(workspace.join("out").is_dir(), "outside every root: kept");
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(outside.path()).is_empty());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root()).is_empty());
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    outside.path()
+                )
+                .is_empty()
+            );
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                )
+                .is_empty()
+            );
         }
 
         #[tokio::test]
@@ -25147,7 +25911,8 @@ mod held_sources {
                 crate::import::archive_extraction::note_pass_workspace_parent(folder, &last);
             }
 
-            let first = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let first =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(first.noted_pass_workspaces_removed, 0);
             assert!(last.exists(), "the last folder waits for the next pass");
@@ -25156,11 +25921,15 @@ mod held_sources {
                 vec![folders.last().unwrap().clone()]
             );
 
-            let second = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let second =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(second.noted_pass_workspaces_removed, 1);
             assert!(!last.exists());
-            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root).is_empty());
+            assert!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(root)
+                    .is_empty()
+            );
         }
 
         #[tokio::test]
@@ -25180,10 +25949,13 @@ mod held_sources {
                 .iter()
                 .map(|folder| create_test_archive_workspace_owned_by(folder, "stuck-rotation-pass"))
                 .collect();
-            let late = released_pass_workspace(folders.last().unwrap(), "late-rotation-pass", OVER_A_DAY);
+            let late =
+                released_pass_workspace(folders.last().unwrap(), "late-rotation-pass", OVER_A_DAY);
             let note_stuck = || {
                 for (folder, workspace) in folders.iter().zip(&stuck) {
-                    crate::import::archive_extraction::note_pass_workspace_parent(folder, workspace);
+                    crate::import::archive_extraction::note_pass_workspace_parent(
+                        folder, workspace,
+                    );
                 }
             };
             note_stuck();
@@ -25191,39 +25963,56 @@ mod held_sources {
                 crate::import::archive_extraction::note_pass_workspace_parent(folder, &late);
             }
 
-            let first = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let first =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
             assert_eq!(first.noted_pass_workspaces_removed, 0);
             assert!(late.exists(), "the first pass reaches the first hundred");
             note_stuck();
 
-            let second = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            let second =
+                crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
 
             assert_eq!(second.noted_pass_workspaces_removed, 1);
-            assert!(!late.exists(), "the next pass resumes after the folders already taken");
-            assert!(stuck.iter().all(|workspace| workspace.join("out").is_dir()), "never released");
+            assert!(
+                !late.exists(),
+                "the next pass resumes after the folders already taken"
+            );
+            assert!(
+                stuck.iter().all(|workspace| workspace.join("out").is_dir()),
+                "never released"
+            );
         }
 
         #[tokio::test]
         async fn a_noted_extraction_folder_is_dropped_unswept() {
             let download = archive_download("Noted Extraction Folder Movie").await;
             let app = &download.fixture.app;
-            let extraction = download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME);
+            let extraction = download
+                .library_root()
+                .join(crate::ARCHIVE_EXTRACTION_DIR_NAME);
             let (_, download_workspace) = orphaned_workspace(&download, "noted-extraction-item");
             crate::archive_extractor::release_test_archive_workspace_at(
                 &download_workspace,
                 std::time::SystemTime::now() - OVER_A_DAY,
             );
-            let pass_workspace = released_pass_workspace(&extraction, "noted-extraction-pass", OVER_A_DAY);
-            crate::import::archive_extraction::note_pass_workspace_parent(&extraction, &pass_workspace);
+            let pass_workspace =
+                released_pass_workspace(&extraction, "noted-extraction-pass", OVER_A_DAY);
+            crate::import::archive_extraction::note_pass_workspace_parent(
+                &extraction,
+                &pass_workspace,
+            );
             let held = tempfile::tempdir().unwrap();
-            let held_workspace = released_pass_workspace(held.path(), "held-extraction-pass", OVER_A_DAY);
+            let held_workspace =
+                released_pass_workspace(held.path(), "held-extraction-pass", OVER_A_DAY);
             crate::import::archive_extraction::note_pass_workspace_parent(
                 &download_workspace,
                 &held_workspace,
             );
             assert!(
-                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(download.library_root())
-                    .is_empty()
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(
+                    download.library_root()
+                )
+                .is_empty()
             );
 
             let removed = crate::import::archive_extraction::sweep_noted_pass_workspaces(app)
@@ -25245,10 +26034,12 @@ mod held_sources {
             let download = archive_download("Idle Housekeeping Movie").await;
             let (app, repository) = counted(&download);
             let (handle, _) = scripted_tracker(&[]);
-            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let app =
+                app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
             let _clock = Clock::start(&app);
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
 
             assert_eq!(report, Default::default());
             assert_eq!(repository.writes(), 0);
@@ -25256,10 +26047,15 @@ mod held_sources {
             // A tracked download with its fresh workspace: nothing to do.
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let writes = repository.writes();
 
-            let report = crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
+            let report =
+                crate::import::archive_extraction::archive_workspace_housekeeping(&app).await;
 
             assert_eq!(repository.writes(), writes);
             assert_eq!(report.untracked_settled, 0);
@@ -25296,7 +26092,10 @@ mod held_sources {
                     );
                 }
             });
-            (crate::tracked_downloads::TrackedDownloadHandle::new(tx), asked)
+            (
+                crate::tracked_downloads::TrackedDownloadHandle::new(tx),
+                asked,
+            )
         }
 
         #[tokio::test]
@@ -25304,11 +26103,16 @@ mod held_sources {
             let download = archive_download("Untracked Settle Movie").await;
             let (app, repository) = counted(&download);
             let (handle, asked) = scripted_tracker(&["another-synthetic-item"]);
-            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let app =
+                app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
             let removed_client = crate::import::archive_extraction::DownloadExtractionKey::new(
                 Some("removed-synthetic-client"),
@@ -25332,17 +26136,19 @@ mod held_sources {
 
             // Changed within the day: a manual import may be using them.
             clock.advance(&app, chrono::Duration::hours(23));
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
             assert!(asked.lock().unwrap().is_empty(), "nothing to ask about");
 
             clock.advance(&app, chrono::Duration::hours(2));
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
 
             assert_eq!(settled, 2);
             assert_eq!(repository.writes(), writes + 1, "one batch");
@@ -25350,7 +26156,10 @@ mod held_sources {
             asked_keys.sort();
             let mut expected = vec![download.key.pair(), other_key.pair()];
             expected.sort();
-            assert_eq!(asked_keys, expected, "a removed client's downloads are not asked about");
+            assert_eq!(
+                asked_keys, expected,
+                "a removed client's downloads are not asked about"
+            );
             assert_eq!(download.key.record_in(&app).await.unwrap().settled_at, None);
             assert_eq!(
                 other_key.record_in(&app).await.unwrap().settled_at,
@@ -25361,14 +26170,18 @@ mod held_sources {
                 Some(clock.now())
             );
             assert!(workspace.is_dir());
-            assert!(other_workspace.is_dir(), "kept for the day of a settled download");
+            assert!(
+                other_workspace.is_dir(),
+                "kept for the day of a settled download"
+            );
             assert!(removed_workspace.is_dir());
 
             // The tracked one alone remains: asked again, nothing written.
             let writes = repository.writes();
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
             assert_eq!(*asked.lock().unwrap(), vec![download.key.pair()]);
@@ -25385,9 +26198,10 @@ mod held_sources {
             let writes = repository.writes();
             clock.advance(&app, chrono::Duration::days(3));
 
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
 
             assert_eq!(settled, 0);
             assert_eq!(repository.writes(), writes);
@@ -25402,11 +26216,16 @@ mod held_sources {
                 "another-synthetic-item",
                 &download.fixture.completed.download_client_item_id,
             ]);
-            let app = app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
+            let app =
+                app.with_test_overrides(|services| services.with_tracked_download_handle(handle));
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let (other_key, other_workspace) = another_extracted_download(&app, &download).await;
             // The download's import keeps its sources for pending subtitles.
             download
@@ -25429,9 +26248,10 @@ mod held_sources {
             clock.advance(&app, chrono::Duration::hours(25));
             let writes = repository.writes();
 
-            let settled = crate::import::archive_extraction::settle_untracked_download_extractions(&app)
-                .await
-                .unwrap();
+            let settled =
+                crate::import::archive_extraction::settle_untracked_download_extractions(&app)
+                    .await
+                    .unwrap();
 
             assert_eq!(settled, 1, "only the download nothing holds");
             assert_eq!(repository.writes(), writes + 1, "one batch");
@@ -25442,7 +26262,10 @@ mod held_sources {
             );
             clock.advance(&app, chrono::Duration::days(2));
             assert_eq!(sweep(&app).await.removed, 1);
-            assert!(extracted_video(&output_dirs, &download.video_name).exists(), "held: kept");
+            assert!(
+                extracted_video(&output_dirs, &download.video_name).exists(),
+                "held: kept"
+            );
             assert!(!other_workspace.exists());
         }
 
@@ -25453,9 +26276,21 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = with_provider(&download, provider.clone());
             let clock = Clock::start(&app);
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             settle_as(&app, &download, TrackedDownloadState::ImportDismissed).await;
-            assert!(download.key.record_in(&app).await.unwrap().settled_at.is_some());
+            assert!(
+                download
+                    .key
+                    .record_in(&app)
+                    .await
+                    .unwrap()
+                    .settled_at
+                    .is_some()
+            );
 
             clock.advance(&app, chrono::Duration::hours(1));
             begin_manual(&app, &download, false).await.unwrap();
@@ -25474,11 +26309,18 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download.extract(&app, Some(provider.clone())).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider.clone()))
+                .await
+                .unwrap()
+                .unwrap();
             let writes = repository.writes();
             // A pass reusing a live download's extraction writes nothing.
             assert_eq!(
-                download.extract(&app, Some(provider.clone())).await.unwrap(),
+                download
+                    .extract(&app, Some(provider.clone()))
+                    .await
+                    .unwrap(),
                 Some(workspace.clone())
             );
             assert_eq!(repository.writes(), writes);
@@ -25519,7 +26361,11 @@ mod held_sources {
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = &download.fixture.app;
-            let workspace = download.extract(app, Some(provider.clone())).await.unwrap().unwrap();
+            let workspace = download
+                .extract(app, Some(provider.clone()))
+                .await
+                .unwrap()
+                .unwrap();
             let first_digest = download.key.record_in(app).await.unwrap().archive_digest;
             let leftover = workspace.join("Earlier.Output.mkv");
             std::fs::write(&leftover, b"earlier").unwrap();
@@ -25601,16 +26447,32 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = &download.fixture.app;
             let clock = Clock::start(app);
-            let workspace = download.extract(app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
             let in_flight = &app.runtime.imports.archive_extractions_in_flight;
 
             // Imported while a pass reads it: the removal waits, still due.
             let reader = in_flight.read(&download.key);
             let second_reader = in_flight.read(&download.key);
             settle_as(app, &download, TrackedDownloadState::Imported).await;
-            app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+            app.runtime
+                .imports
+                .archive_workspace_upkeep
+                .drain_removals()
+                .await;
             assert!(extracted_video(&output_dirs, &download.video_name).exists());
-            assert!(download.key.record_in(app).await.unwrap().settled_at.is_some());
+            assert!(
+                download
+                    .key
+                    .record_in(app)
+                    .await
+                    .unwrap()
+                    .settled_at
+                    .is_some()
+            );
             assert_eq!(sweep(app).await.deferred, 1, "read: deferred");
             drop(reader);
             assert_eq!(sweep(app).await.deferred, 1, "another reader remains");
@@ -25647,10 +26509,9 @@ mod held_sources {
             download: &ArchiveDownload,
             provider: Arc<dyn crate::ArchiveExtractorPluginProvider>,
         ) -> AppUseCase {
-            download
-                .fixture
-                .app
-                .with_test_overrides(|services| services.with_archive_extractor_plugin_provider(provider))
+            download.fixture.app.with_test_overrides(|services| {
+                services.with_archive_extractor_plugin_provider(provider)
+            })
         }
 
         async fn selection_workspace(download: &ArchiveDownload) -> Option<PathBuf> {
@@ -25666,8 +26527,12 @@ mod held_sources {
         }
 
         fn staged_workspaces(download: &ArchiveDownload) -> usize {
-            std::fs::read_dir(download.library_root().join(crate::ARCHIVE_EXTRACTION_DIR_NAME))
-                .map_or(0, |entries| entries.count())
+            std::fs::read_dir(
+                download
+                    .library_root()
+                    .join(crate::ARCHIVE_EXTRACTION_DIR_NAME),
+            )
+            .map_or(0, |entries| entries.count())
         }
 
         fn canonical(path: &Path) -> PathBuf {
@@ -25680,7 +26545,11 @@ mod held_sources {
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = with_provider(&download, provider.clone());
-            let workspace = download.extract(&app, Some(provider)).await.unwrap().unwrap();
+            let workspace = download
+                .extract(&app, Some(provider))
+                .await
+                .unwrap()
+                .unwrap();
 
             // Even without being asked to extract, the download's extraction
             // is read again.
@@ -25697,7 +26566,11 @@ mod held_sources {
                     .iter()
                     .any(|file| file.file_name == download.video_name),
                 "{:?}",
-                preview.files.iter().map(|file| &file.file_name).collect::<Vec<_>>()
+                preview
+                    .files
+                    .iter()
+                    .map(|file| &file.file_name)
+                    .collect::<Vec<_>>()
             );
             assert_eq!(output_dirs.lock().unwrap().len(), 1, "extracted once");
             assert_eq!(staged_workspaces(&download), 1);
@@ -25713,7 +26586,10 @@ mod held_sources {
             begin_manual(&app, &download, true).await.unwrap();
             let record = download.key.record_in(&app).await.expect("recorded");
             assert_eq!(record.state, crate::ArchiveExtractionState::Extracted);
-            assert_eq!(record.attempts, 1, "the manual extraction counts its attempt");
+            assert_eq!(
+                record.attempts, 1,
+                "the manual extraction counts its attempt"
+            );
             assert_eq!(
                 selection_workspace(&download).await.as_deref(),
                 Some(canonical(&download.workspace()).as_path())
@@ -25866,10 +26742,7 @@ mod held_sources {
             let download = archive_download("No Extractor Movie").await;
             let app = &download.fixture.app;
 
-            let error = download
-                .extract(app, None)
-                .await
-                .expect_err("no extractor");
+            let error = download.extract(app, None).await.expect_err("no extractor");
             assert!(
                 matches!(error, AppError::ArchiveExtractionPluginRequired { .. }),
                 "{error:?}"
@@ -25881,8 +26754,10 @@ mod held_sources {
 
             assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
             assert!(
-                tracked.status_messages.iter().any(|message| message.kind
-                    == crate::tracked_downloads::TrackedStatusMessageKind::ArchiveExtractorRequired),
+                tracked.status_messages.iter().any(|message| {
+                    message.kind
+                    == crate::tracked_downloads::TrackedStatusMessageKind::ArchiveExtractorRequired
+                }),
                 "{:?}",
                 tracked.status_messages
             );
@@ -25991,9 +26866,10 @@ mod held_sources {
         let app = &fixture.app;
         let now = Utc::now();
         app.runtime.environment.set_fixed_now_for_tests(Some(now));
-        let key =
-            crate::import::archive_extraction::DownloadExtractionKey::for_completed(&fixture.completed)
-                .unwrap();
+        let key = crate::import::archive_extraction::DownloadExtractionKey::for_completed(
+            &fixture.completed,
+        )
+        .unwrap();
         let workspace = fixture
             .title_folder
             .parent()
@@ -26020,7 +26896,11 @@ mod held_sources {
             )
             .await
         );
-        app.runtime.imports.archive_workspace_upkeep.drain_removals().await;
+        app.runtime
+            .imports
+            .archive_workspace_upkeep
+            .drain_removals()
+            .await;
         assert!(workspace.join("Synthetic.Feature.mkv").exists());
         assert_eq!(
             key.record_in(app).await.unwrap().settled_at,

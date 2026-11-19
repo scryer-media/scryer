@@ -229,14 +229,103 @@ fn schedule_import_verification_retry(td: &mut TrackedDownload) {
 /// the next poll. Progress (a pass that imported something new) resets the
 /// backoff at the call site, so a client still delivering files is picked up
 /// promptly while a download that can never verify settles at the 15 minute
-/// cap instead of re-running its import every cycle.
-fn schedule_partial_import_retry(td: &mut TrackedDownload) {
+/// cap instead of re-running its import every cycle. A pass that imported
+/// nothing new also counts toward the stalled-pass limit, which blocks the
+/// download for the operator instead of retrying it forever.
+async fn schedule_partial_import_retry(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    result: &ImportResult,
+    progress: ImportPassProgress,
+) {
+    if progress.new_units_this_pass > 0 {
+        td.stalled_import_passes = 0;
+    } else if td.record_stalled_import_pass() {
+        block_import_at_retry_limit(
+            app,
+            td,
+            result,
+            "the import could not be verified as complete",
+        )
+        .await;
+        return;
+    }
+    schedule_partial_import_backoff(td);
+}
+
+fn schedule_partial_import_backoff(td: &mut TrackedDownload) {
     td.schedule_import_execution_retry(Utc::now(), |_, next_retry_at| {
         format!(
             "Import partially completed; waiting for remaining files or verification. Retrying at {}.",
             next_retry_at.to_rfc3339()
         )
     });
+}
+
+/// Outcomes that clear by themselves: the source still being written, changed
+/// or briefly unreadable, a full disk, a denied permission. Retrying them is
+/// never counted against the stalled-pass limit.
+fn import_outcome_is_transient(result: &ImportResult) -> bool {
+    matches!(
+        result.skip_reason,
+        Some(
+            ImportSkipReason::DownloadInProgress
+                | ImportSkipReason::SourceChanged
+                | ImportSkipReason::SourceUnavailable
+                | ImportSkipReason::DiskFull
+                | ImportSkipReason::PermissionDenied
+        )
+    )
+}
+
+/// Ends automatic retries of a download whose passes keep ending the same way
+/// without importing anything new. The import record carries the coded reason
+/// so the queue and history explain it; nothing is cleaned up.
+async fn block_import_at_retry_limit(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    result: &ImportResult,
+    cause: &str,
+) {
+    let last = import_result_message(result, ImportStatus::Skipped);
+    let message = format!(
+        "Automatic import stopped after {} passes in a row imported nothing new: {cause}. \
+         Last result: {last} Retry the import once the cause is fixed.",
+        crate::tracked_downloads::IMPORT_STALLED_PASS_LIMIT,
+    );
+    let mut blocked = result.clone();
+    blocked.reason_code = Some(crate::error_reasons::import::RETRY_LIMIT_REACHED.to_string());
+    blocked.error_message = Some(message.clone());
+    let status = match result.decision {
+        ImportDecision::Failed => ImportStatus::Failed,
+        ImportDecision::Imported => ImportStatus::Completed,
+        _ => ImportStatus::Skipped,
+    };
+    if let Err(err) = app
+        .update_import_status_and_notify(
+            &result.import_id,
+            status,
+            serde_json::to_string(&blocked).ok(),
+        )
+        .await
+    {
+        tracing::warn!(
+            import_id = result.import_id.as_str(),
+            error = %err,
+            "failed to record the retry limit on the import attempt"
+        );
+    }
+    tracing::warn!(
+        id = %td.id,
+        import_id = result.import_id.as_str(),
+        passes = td.stalled_import_passes,
+        cause,
+        "import: stalled-pass limit reached; blocking for the operator"
+    );
+    td.client_item.attention_reason = Some(message.clone());
+    td.client_item.attention_reason_code =
+        Some(crate::error_reasons::import::RETRY_LIMIT_REACHED.to_string());
+    td.block_import_after_retry_limit(message);
 }
 
 /// What settling a released hold did to the tracked download.
@@ -368,7 +457,8 @@ pub(crate) async fn settle_released_import_hold(
             Err(error)
         }
         Ok(_) => {
-            schedule_partial_import_retry(td);
+            // The operator's release, not a repeat pass: it is not counted.
+            schedule_partial_import_backoff(td);
             Ok(ReleasedHoldVerdict::AwaitingImport)
         }
         Err(error) => {
@@ -476,6 +566,7 @@ pub(super) async fn apply_import_pass_result(
             // unit that had already succeeded is not progress.
             if progress.new_units_this_pass > 0 {
                 td.clear_import_execution_retry();
+                td.stalled_import_passes = 0;
             }
         }
         let verification = if intentionally_ignored_aggregate {
@@ -508,6 +599,7 @@ pub(super) async fn apply_import_pass_result(
         if verified {
             td.clear_no_video_import_retry();
             td.clear_import_execution_retry();
+            td.stalled_import_passes = 0;
             td.state = TrackedDownloadState::Imported;
             td.status = TrackedDownloadStatus::Ok;
             td.status_messages.clear();
@@ -516,7 +608,7 @@ pub(super) async fn apply_import_pass_result(
         }
 
         if result.decision == ImportDecision::Imported {
-            schedule_partial_import_retry(td);
+            schedule_partial_import_retry(app, td, &result, progress).await;
             return false;
         }
     }
@@ -637,7 +729,8 @@ pub(super) async fn apply_import_pass_result(
             td.status = TrackedDownloadStatus::Error;
             td.client_item.attention_reason = Some(message.clone());
             td.client_item.attention_reason_code = None;
-            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables,
                 message,
             )];
             td.burned_by_import_gate = true;
@@ -683,13 +776,14 @@ pub(super) async fn apply_import_pass_result(
                     if verified {
                         td.clear_no_video_import_retry();
                         td.clear_import_execution_retry();
+                        td.stalled_import_passes = 0;
                         td.state = TrackedDownloadState::Imported;
                         td.status = TrackedDownloadStatus::Ok;
                         td.status_messages.clear();
                         schedule_non_destructive_import_mark(app, td, &result, completed);
                         return true;
                     }
-                    schedule_partial_import_retry(td);
+                    schedule_partial_import_retry(app, td, &result, progress).await;
                     return false;
                 }
             }
@@ -703,6 +797,12 @@ pub(super) async fn apply_import_pass_result(
     td.clear_no_video_import_retry();
 
     if completed_import_result_is_retryable(&result) {
+        if progress.new_units_this_pass > 0 {
+            td.stalled_import_passes = 0;
+        } else if !import_outcome_is_transient(&result) && td.record_stalled_import_pass() {
+            block_import_at_retry_limit(app, td, &result, "the same failure repeated").await;
+            return false;
+        }
         let result_json = serde_json::to_string(&result).ok();
         if let Err(err) = app
             .update_import_status_and_notify(&result.import_id, ImportStatus::Pending, result_json)
@@ -714,9 +814,10 @@ pub(super) async fn apply_import_pass_result(
                 "failed to restore retryable import attempt to pending status"
             );
         }
-        // Sonarr re-attempts an approved-but-failed import on every refresh
-        // and never gives up; Scryer does the same behind a capped backoff so
-        // a stuck share or a slow unpack does not hammer the pipeline.
+        // Sonarr re-attempts an approved-but-failed import on every refresh;
+        // Scryer does the same behind a capped backoff so a stuck share or a
+        // slow unpack does not hammer the pipeline, and stops once the same
+        // outcome has repeated past the stalled-pass limit.
         let attempts = td.schedule_import_execution_retry(Utc::now(), |attempts, next_retry_at| {
             retryable_import_result_message(&result, attempts, next_retry_at)
         });

@@ -42,6 +42,9 @@ enum ImportVerificationMode {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 enum ImportArtifactSourceKey {
     RelativePath(String),
+    /// A source extracted into the download's archive workspace, by its path
+    /// there, so same-named files in different workspace folders stay apart.
+    WorkspacePath(String),
     NormalizedFileName(String),
 }
 
@@ -271,6 +274,24 @@ async fn verify_import_outcome_with_mode(
         } if expected > 0 && files_imported_this_pass >= expected
     );
     let source_video_units = visible_source_episode_units(app, td, &artifacts, completed).await;
+    // A retry may have moved part of the source before it was interrupted, so
+    // the units its artifacts record for this download's sources count as
+    // source units alongside the visible files. That only widens what must
+    // have landed; it never lets fewer files narrow the advertised set.
+    let source_video_units = match (mode, source_video_units) {
+        (ImportVerificationMode::Retry, SourceVideoEpisodeResolution::Resolved(mut units)) => {
+            units.extend(artifacts.iter().filter_map(|artifact| {
+                artifact
+                    .episode_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            }));
+            SourceVideoEpisodeResolution::Resolved(units)
+        }
+        (_, units) => units,
+    };
     let visible_sources_terminal = visible_source_files_have_terminal_dispositions_in_scope(
         app,
         td,
@@ -396,9 +417,14 @@ async fn verify_import_outcome_with_mode(
                 });
             }
 
-            // A retry may have moved only part of the source before interruption.
-            // Its surviving files/artifacts cannot narrow the advertised episode set.
-            if !matches!(mode, ImportVerificationMode::Retry)
+            // Retry reads the same evidence as the automatic import; its source
+            // units also carry what its artifacts recorded (see above). With no
+            // video left in the folder its units are those artifacts alone, and
+            // a retry interrupted after moving part of the pack must not let
+            // them narrow the advertised set.
+            let source_units_can_narrow =
+                !matches!(mode, ImportVerificationMode::Retry) || current_visible_files > 0;
+            if source_units_can_narrow
                 && let Some(source_units_complete) = source_video_expected_units_are_complete(
                     &source_video_units,
                     &successful_units,
@@ -453,7 +479,14 @@ async fn verify_import_outcome_with_mode(
             ));
         }
         ExpectedEpisodeResolution::Unresolved => {
-            if matches!(mode, ImportVerificationMode::Retry) || successful_units.is_empty() {
+            if successful_units.is_empty() {
+                return Ok(NotProven);
+            }
+            // A retry accepts what the automatic import accepts, once every
+            // source its artifacts record has a terminal disposition.
+            if matches!(mode, ImportVerificationMode::Retry)
+                && artifact_members == ArtifactMemberCompletion::Incomplete
+            {
                 return Ok(NotProven);
             }
             if matches!(
@@ -467,10 +500,9 @@ async fn verify_import_outcome_with_mode(
             }
 
             return Ok(VerificationOutcome::fallback_if(match mode {
-                ImportVerificationMode::Automatic => {
+                ImportVerificationMode::Automatic | ImportVerificationMode::Retry => {
                     files_imported_this_pass > 0 && rejected_units.is_empty()
                 }
-                ImportVerificationMode::Retry => false,
                 ImportVerificationMode::Manual { .. } => manual_source_coverage.unwrap_or(false),
             }));
         }
@@ -1313,7 +1345,8 @@ impl RecordedImportSuccesses {
 }
 
 /// The source file an artifact was recorded for: its path relative to the
-/// completed download's folder when known, otherwise its file name.
+/// completed download's folder when known, then its path in the archive
+/// workspace, otherwise its file name.
 fn import_artifact_source_key(artifact: &crate::ImportArtifact) -> Option<ImportArtifactSourceKey> {
     if let Some(relative_path) = artifact
         .relative_path
@@ -1323,6 +1356,16 @@ fn import_artifact_source_key(artifact: &crate::ImportArtifact) -> Option<Import
     {
         return Some(ImportArtifactSourceKey::RelativePath(
             relative_path.to_string(),
+        ));
+    }
+    if let Some(workspace_path) = artifact
+        .workspace_relative_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(ImportArtifactSourceKey::WorkspacePath(
+            workspace_path.to_string(),
         ));
     }
 
@@ -1345,7 +1388,12 @@ fn artifact_rows_have_unique_source_key(artifacts: &[&crate::ImportArtifact]) ->
         return true;
     }
 
-    source_keys.retain(|key| matches!(key, ImportArtifactSourceKey::RelativePath(_)));
+    source_keys.retain(|key| {
+        matches!(
+            key,
+            ImportArtifactSourceKey::RelativePath(_) | ImportArtifactSourceKey::WorkspacePath(_)
+        )
+    });
     source_keys.len() <= 1
 }
 
@@ -1425,6 +1473,7 @@ mod expected_episode_release_title_tests {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,

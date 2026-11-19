@@ -7,12 +7,12 @@ use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeState,
     AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery, AcquisitionScopeStatus,
-    AcquisitionScopeStatusTally, AppResult, BlocklistRepository, DownloadSourceKind,
-    HousekeepingMediaFileRootRow, HousekeepingRepository, LibraryProbeRepository,
-    LibraryProbeSignature, NewBlocklistEntry, PendingRelease, PendingReleaseObservation,
-    PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
-    PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
-    normalize_release_name,
+    AcquisitionScopeStatusTally, AppResult, BlocklistMatch, BlocklistRepository,
+    DownloadSourceKind, HousekeepingMediaFileRootRow, HousekeepingRepository,
+    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, PendingRelease,
+    PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
+    PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
+    ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
     subtitles::{
         ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
         SubtitleSearchBackoffKey,
@@ -2193,8 +2193,13 @@ impl HousekeepingRepository for HousekeepingStore {
             "delete_release_attempts_older_than",
             "release_download_attempts",
             "id",
-            "attempted_at < {}
-                AND outcome != 'pending'",
+            // Every outcome ages out on the same retention. A `pending` row
+            // this old stands for a submission that resolved long ago, or one
+            // whose outcome was never written; either way it is history only.
+            // The outcome list lets both engines seek the
+            // `(outcome, attempted_at)` index instead of scanning the table.
+            "outcome IN ('success', 'failed', 'pending')
+                AND attempted_at < {}",
             vec![housekeeping_cutoff_arg(days)],
         )
         .await
@@ -2549,6 +2554,9 @@ impl HousekeepingRepository for HousekeepingStore {
         }
     }
 }
+
+/// Most rows one page of a paged pending-release read returns.
+const PENDING_RELEASE_PAGE_LIMIT_MAX: usize = 1_000;
 
 const PENDING_RELEASE_COLUMNS: &str =
     "id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
@@ -2912,6 +2920,76 @@ impl PendingReleaseRepository for PendingReleaseStore {
             self.datastore.read_exec(),
             &sql,
             &[],
+            encryption_key.as_ref(),
+        )
+        .await
+    }
+
+    async fn has_waiting_pending_releases(&self) -> AppResult<bool> {
+        // Seeks `idx_pending_releases_status`; no row is decoded.
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present
+               FROM pending_releases
+              WHERE status IN ('waiting', 'standby')
+              LIMIT 1",
+            &[],
+        )
+        .await?
+        .is_some())
+    }
+
+    async fn has_expired_pending_releases(&self, now: &str) -> AppResult<bool> {
+        // The predicate of `list_expired_pending_releases`, as an existence
+        // check: seeks the waiting rows through `idx_pending_releases_status`.
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present
+               FROM pending_releases
+              WHERE status = 'waiting' AND delay_until <= {}
+              LIMIT 1",
+            &[self.datastore.timestamp_text_arg(now)?],
+        )
+        .await?
+        .is_some())
+    }
+
+    async fn list_waiting_indexerless_pending_releases(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<PendingRelease>> {
+        let limit = i64::try_from(limit.clamp(1, PENDING_RELEASE_PAGE_LIMIT_MAX)).unwrap_or(1);
+        let encryption_key = self.encryption_key()?;
+        let (sql, args) = match after_id {
+            Some(after_id) => (
+                format!(
+                    "SELECT {PENDING_RELEASE_COLUMNS}
+                       FROM pending_releases
+                      WHERE status IN ('waiting', 'standby')
+                        AND indexer_id IS NULL
+                        AND id > {{}}
+                      ORDER BY id ASC
+                      LIMIT {{}}"
+                ),
+                vec![SqlArg::Text(after_id.to_string()), SqlArg::I64(limit)],
+            ),
+            None => (
+                format!(
+                    "SELECT {PENDING_RELEASE_COLUMNS}
+                       FROM pending_releases
+                      WHERE status IN ('waiting', 'standby')
+                        AND indexer_id IS NULL
+                      ORDER BY id ASC
+                      LIMIT {{}}"
+                ),
+                vec![SqlArg::I64(limit)],
+            ),
+        };
+        fetch_pending_releases(
+            self.datastore.read_exec(),
+            &sql,
+            &args,
             encryption_key.as_ref(),
         )
         .await
@@ -3461,6 +3539,50 @@ impl BlocklistRepository for BlocklistStore {
             ],
         )
         .await
+    }
+
+    async fn list_matching_for_title(
+        &self,
+        title_id: &str,
+        normalized_release_names: &[String],
+        info_hashes: &[String],
+    ) -> AppResult<Vec<BlocklistMatch>> {
+        // Two exact reads, each served by an index: names by
+        // `(title_id, normalized_release_name)`, hashes by the infohash unique
+        // index, whose `info_hash IS NOT NULL` predicate the query repeats so
+        // both engines can use the partial index.
+        let mut matches = Vec::new();
+        for (column, values, extra_predicate) in [
+            ("normalized_release_name", normalized_release_names, ""),
+            ("info_hash", info_hashes, " AND info_hash IS NOT NULL"),
+        ] {
+            if values.is_empty() {
+                continue;
+            }
+            let exec = self.datastore.read_exec();
+            let (values, per_statement) =
+                id_list_statements(values, 1, 1, max_binds(&exec), ID_LIST_CHUNK);
+            for chunk in values.chunks(per_statement) {
+                let sql = format!(
+                    "SELECT indexer_id, normalized_release_name, info_hash
+                       FROM blocklist
+                      WHERE title_id = {{}}{extra_predicate}
+                        AND {column} IN ({})",
+                    placeholders(chunk.len())
+                );
+                let mut args = Vec::with_capacity(chunk.len() + 1);
+                args.push(SqlArg::Text(title_id.to_string()));
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                    matches.push(BlocklistMatch {
+                        indexer_id: row.text("indexer_id")?,
+                        normalized_release_name: row.text("normalized_release_name")?,
+                        info_hash: row.opt_text("info_hash")?,
+                    });
+                }
+            }
+        }
+        Ok(matches)
     }
 
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
@@ -4840,5 +4962,197 @@ mod index_plan_tests {
                 "the wanted table must not be scanned: {plan:#?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod blocklist_match_tests {
+    use std::sync::Arc;
+
+    use scryer_application::{BlocklistMatch, BlocklistRepository, NewBlocklistEntry};
+
+    use super::BlocklistStore;
+    use crate::media::id_list_statements::lower_max_binds_for_tests;
+    use crate::queries::sql_runtime::{SqlRuntime, StoreDatastore};
+
+    const TITLE: &str = "title-lantern-cove";
+
+    async fn store() -> (StoreDatastore, BlocklistStore) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .unwrap();
+        let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        // The rows under test are the blocklist's own; the title row its
+        // foreign key names is not part of it.
+        SqlRuntime::execute(datastore.read_exec(), "PRAGMA foreign_keys = OFF", &[])
+            .await
+            .unwrap();
+        (datastore.clone(), BlocklistStore::new(datastore))
+    }
+
+    /// One old row of each key shape, then 1,200 newer name blocks, so the old
+    /// rows sit past any window over the title's newest thousand.
+    async fn seed(datastore: &StoreDatastore) {
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO blocklist (id, title_id, release_name, normalized_release_name,
+                                    indexer_id, info_hash, reason, created_at)
+             VALUES ('old-any', 'title-lantern-cove', 'Lantern.Cove.S01E01.1080p',
+                     'lantern.cove.s01e01.1080p', '', NULL, 'failed', '2020-01-01T00:00:00Z'),
+                    ('old-scoped', 'title-lantern-cove', 'Lantern.Cove.S01E02.1080p',
+                     'lantern.cove.s01e02.1080p', 'indexer-a', NULL, 'failed',
+                     '2020-01-01T00:00:00Z'),
+                    ('old-hash', 'title-lantern-cove', 'Lantern.Cove.S01E03.1080p',
+                     'lantern.cove.s01e03.1080p', 'indexer-a',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'failed',
+                     '2020-01-01T00:00:00Z'),
+                    ('other-title', 'title-harbor-lights', 'Lantern.Cove.S01E04.1080p',
+                     'lantern.cove.s01e04.1080p', '', NULL, 'failed', '2020-01-01T00:00:00Z')",
+            &[],
+        )
+        .await
+        .unwrap();
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200)
+             INSERT INTO blocklist (id, title_id, release_name, normalized_release_name,
+                                    indexer_id, info_hash, reason, created_at)
+             SELECT 'newer-' || i, 'title-lantern-cove', 'Lantern.Cove.Newer.' || i,
+                    'lantern.cove.newer.' || i, 'indexer-' || (i % 3), NULL, 'failed',
+                    printf('2026-%02d-%02dT00:00:00Z', 1 + i % 12, 1 + i % 28)
+               FROM n",
+            &[],
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The decision the search-time exclusion takes from matched rows, with
+    /// the same keys as [`BlocklistRepository::is_blocked`].
+    fn blocked_by(
+        matches: &[BlocklistMatch],
+        indexer_id: &str,
+        name: &str,
+        hash: Option<&str>,
+    ) -> bool {
+        matches.iter().any(|row| {
+            hash.is_some_and(|hash| row.info_hash.as_deref() == Some(hash))
+                || (row.normalized_release_name == name
+                    && (row.indexer_id.is_empty() || row.indexer_id == indexer_id))
+        })
+    }
+
+    #[tokio::test]
+    async fn a_block_older_than_a_thousand_newer_ones_is_still_found() {
+        let (datastore, store) = store().await;
+        seed(&datastore).await;
+        let window = store.list_for_title(TITLE, 1_000).await.unwrap();
+        assert!(
+            !window.iter().any(|entry| entry.id.starts_with("old-")),
+            "the fixture puts the old rows outside the newest thousand"
+        );
+
+        let matches = store
+            .list_matching_for_title(
+                TITLE,
+                &["lantern.cove.s01e01.1080p".to_string()],
+                &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            )
+            .await
+            .unwrap();
+        assert!(blocked_by(
+            &matches,
+            "indexer-b",
+            "lantern.cove.s01e01.1080p",
+            None
+        ));
+        assert!(blocked_by(
+            &matches,
+            "indexer-b",
+            "renamed.upload",
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        ));
+        assert!(
+            store
+                .list_matching_for_title("title-harbor-lights", &[], &[])
+                .await
+                .unwrap()
+                .is_empty(),
+            "nothing asked, nothing read"
+        );
+    }
+
+    #[tokio::test]
+    async fn matched_rows_agree_with_the_exact_check_across_statements() {
+        let (datastore, store) = store().await;
+        seed(&datastore).await;
+        store
+            .block(&NewBlocklistEntry {
+                title_id: TITLE.to_string(),
+                release_name: "Lantern.Cove.S01E05.1080p".to_string(),
+                indexer_id: String::new(),
+                info_hash: Some("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string()),
+                reason: None,
+            })
+            .await
+            .unwrap();
+        let candidates = [
+            ("indexer-a", "lantern.cove.s01e01.1080p", None),
+            ("indexer-b", "lantern.cove.s01e02.1080p", None),
+            ("indexer-a", "lantern.cove.s01e02.1080p", None),
+            ("indexer-b", "lantern.cove.s01e03.1080p", None),
+            (
+                "indexer-c",
+                "lantern.cove.renamed",
+                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ),
+            ("indexer-a", "lantern.cove.s01e04.1080p", None),
+            ("indexer-c", "lantern.cove.s01e05.1080p", None),
+            (
+                "indexer-c",
+                "lantern.cove.other",
+                Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            ),
+            ("indexer-1", "lantern.cove.newer.7", None),
+            ("indexer-2", "lantern.cove.newer.7", None),
+            ("indexer-0", "lantern.cove.newer.1200", None),
+            ("indexer-0", "harbor.lights.unblocked", None),
+        ];
+        let names = candidates
+            .iter()
+            .map(|(_, name, _)| (*name).to_string())
+            .collect::<Vec<_>>();
+        let hashes = candidates
+            .iter()
+            .filter_map(|(_, _, hash)| hash.map(str::to_string))
+            .collect::<Vec<_>>();
+        // Small enough that both lists span several statements.
+        let _limit = lower_max_binds_for_tests(4);
+        let matches = store
+            .list_matching_for_title(TITLE, &names, &hashes)
+            .await
+            .unwrap();
+        drop(_limit);
+        let mut blocked = 0;
+        for (indexer, name, hash) in candidates {
+            let exact = store.is_blocked(TITLE, indexer, name, hash).await.unwrap();
+            assert_eq!(
+                blocked_by(&matches, indexer, name, hash),
+                exact,
+                "{indexer} {name} {hash:?}"
+            );
+            blocked += usize::from(exact);
+        }
+        assert_eq!(
+            blocked, 7,
+            "the fixture blocks most candidates and spares a few"
+        );
     }
 }

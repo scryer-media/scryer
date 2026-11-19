@@ -2053,6 +2053,60 @@ mod pack_blocklist_ledger_tests {
         assert_eq!(write.reopen_episode_ids, ["ep-2".to_string()]);
     }
 
+    /// A member that lost to the library blocks the name only when the
+    /// download imported nothing. A pack that placed some of its episodes is
+    /// not a release that would only be fetched and refused again; a lie found
+    /// in an imported member still blocks it.
+    #[test]
+    fn losing_to_the_library_blocks_a_pack_only_when_nothing_imported() {
+        let not_an_upgrade = crate::error_reasons::blocklist::IMPORT_NOT_AN_UPGRADE;
+
+        let mut nothing_imported = DownloadBlocklistLedger::default();
+        nothing_imported.record_lost_to_library(
+            "Synthetic.Show.S01.1080p-GRP",
+            Path::new("/downloads/pack/a.mkv"),
+            &["ep-1".to_string()],
+            not_an_upgrade.to_string(),
+        );
+        let write = nothing_imported
+            .planned_write()
+            .expect("a download that imported nothing earns the block");
+        assert_eq!(write.import_reason, Some(not_an_upgrade));
+        assert!(write.rejection.is_none());
+
+        let mut partly_imported = DownloadBlocklistLedger::default();
+        partly_imported.note_imported();
+        partly_imported.record_lost_to_library(
+            "Synthetic.Show.S01.1080p-GRP",
+            Path::new("/downloads/pack/b.mkv"),
+            &["ep-2".to_string()],
+            not_an_upgrade.to_string(),
+        );
+        assert!(
+            partly_imported.planned_write().is_none(),
+            "a pack that imported a member is not blocked for losing another"
+        );
+
+        let mut lied_and_lost = DownloadBlocklistLedger::default();
+        lied_and_lost.record_lost_to_library(
+            "Synthetic.Show.S01.1080p-GRP",
+            Path::new("/downloads/pack/b.mkv"),
+            &["ep-2".to_string()],
+            not_an_upgrade.to_string(),
+        );
+        lied_and_lost.note_imported();
+        lied_and_lost.record_import_blocklist(
+            "Synthetic.Show.S01.1080p-GRP",
+            Path::new("/downloads/pack/a.mkv"),
+            &["ep-1".to_string()],
+            "imported at its real quality".to_string(),
+        );
+        let write = lied_and_lost
+            .planned_write()
+            .expect("a lie still blocks the release");
+        assert_eq!(write.import_reason, Some("imported at its real quality"));
+    }
+
     /// A download where nothing was burned writes nothing.
     #[test]
     fn a_clean_download_earns_no_row() {
