@@ -2684,6 +2684,12 @@ fn is_archive_workspace_name(name: &str) -> bool {
         .is_some_and(is_workspace_hex)
 }
 
+/// Whether `name` is shaped like a per-pass workspace's name. Shape only;
+/// nothing is read, and ownership is still the marker's to prove.
+pub(crate) fn is_pass_workspace_name(name: &str) -> bool {
+    is_archive_workspace_name(name)
+}
+
 /// Whether `root` has the shape of a workspace: a per-pass name, or a
 /// download's name inside the library root's extraction folder. Shape only;
 /// ownership is still the marker's to prove.

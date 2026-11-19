@@ -150,6 +150,11 @@ pub(crate) fn is_download_workspace_name(name: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// Without archive support no per-pass workspace is made, so none is noted.
+pub(crate) fn is_pass_workspace_name(_name: &str) -> bool {
+    false
+}
+
 pub(crate) async fn remove_download_workspace(_root: &Path, _owner_id: &str) -> bool {
     false
 }

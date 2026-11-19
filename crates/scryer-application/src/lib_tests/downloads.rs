@@ -25050,6 +25050,118 @@ mod held_sources {
             assert!(download.archive.exists());
         }
 
+        fn released_pass_workspace(parent: &Path, owner: &str, ago: std::time::Duration) -> PathBuf {
+            let workspace = create_test_archive_workspace_owned_by(parent, owner);
+            crate::archive_extractor::release_test_archive_workspace_at(
+                &workspace,
+                std::time::SystemTime::now() - ago,
+            );
+            workspace
+        }
+
+        const OVER_A_DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60 + 60);
+
+        #[tokio::test]
+        async fn housekeeping_sweeps_a_pass_workspace_a_scan_noted_in_a_title_folder() {
+            let download = archive_download("Noted Title Folder Movie").await;
+            let app = &download.fixture.app;
+            let title_folder = &download.fixture.title_folder;
+            let old = released_pass_workspace(title_folder, "old-title-pass", OVER_A_DAY);
+            let recent = released_pass_workspace(
+                title_folder,
+                "recent-title-pass",
+                std::time::Duration::from_secs(60 * 60),
+            );
+            let unreleased = create_test_archive_workspace_owned_by(title_folder, "unreleased-title-pass");
+            let unmarked = title_folder.join(".scryer-ax-fedcba9876543210");
+            std::fs::create_dir_all(&unmarked).unwrap();
+            std::fs::write(unmarked.join("Operator.Copy.mkv"), b"operator").unwrap();
+            let operator_file = title_folder.join("Operator.Notes.txt");
+            std::fs::write(&operator_file, b"operator").unwrap();
+            let library_video = title_folder.join("Noted Title Folder Movie.mkv");
+            write_video(&library_video);
+
+            // Nothing noted yet: the title folder is left as it is.
+            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+            assert_eq!(report.noted_pass_workspaces_removed, 0);
+            assert!(old.exists());
+
+            crate::filesystem_walk::FilesystemWalker::new()
+                .skip_movie_scan_junk_and_extras()
+                .supported_video_and_nfo_files()
+                .walk(download.library_root())
+                .unwrap();
+            assert_eq!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(),
+                vec![title_folder.clone()]
+            );
+
+            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+
+            assert_eq!(report.noted_pass_workspaces_removed, 1);
+            assert!(!old.exists());
+            assert!(recent.join("out").is_dir(), "released within the day");
+            assert!(unreleased.join("out").is_dir(), "never released");
+            assert!(unmarked.join("Operator.Copy.mkv").exists(), "unmarked");
+            assert!(operator_file.exists());
+            assert!(library_video.exists());
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_noted_folder_outside_every_library_root_is_dropped_unswept() {
+            let download = archive_download("Outside Root Movie").await;
+            let app = &download.fixture.app;
+            let outside = tempfile::tempdir().unwrap();
+            let workspace = released_pass_workspace(outside.path(), "outside-pass", OVER_A_DAY);
+            crate::import::archive_extraction::note_pass_workspace_parent(outside.path(), &workspace);
+            // A root itself is the root sweep's, and is not swept twice.
+            let root_workspace = released_pass_workspace(download.library_root(), "root-pass", OVER_A_DAY);
+            crate::import::archive_extraction::note_pass_workspace_parent(
+                download.library_root(),
+                &root_workspace,
+            );
+
+            let report = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+
+            assert_eq!(report.noted_pass_workspaces_removed, 0);
+            assert_eq!(report.pass_workspaces_removed, 1);
+            assert!(workspace.join("out").is_dir(), "outside every root: kept");
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_housekeeping_pass_sweeps_at_most_a_hundred_noted_folders() {
+            let download = archive_download("Noted Bound Movie").await;
+            let app = &download.fixture.app;
+            let root = download.library_root();
+            let folders: Vec<PathBuf> = (0..101)
+                .map(|index| root.join(format!("Noted Bound Folder {index:03}")))
+                .collect();
+            for folder in &folders {
+                std::fs::create_dir_all(folder).unwrap();
+            }
+            let last = released_pass_workspace(folders.last().unwrap(), "last-pass", OVER_A_DAY);
+            for folder in &folders {
+                crate::import::archive_extraction::note_pass_workspace_parent(folder, &last);
+            }
+
+            let first = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+
+            assert_eq!(first.noted_pass_workspaces_removed, 0);
+            assert!(last.exists(), "the last folder waits for the next pass");
+            assert_eq!(
+                crate::import::archive_extraction::noted_pass_workspace_folders_for_test(),
+                vec![folders.last().unwrap().clone()]
+            );
+
+            let second = crate::import::archive_extraction::archive_workspace_housekeeping(app).await;
+
+            assert_eq!(second.noted_pass_workspaces_removed, 1);
+            assert!(!last.exists());
+            assert!(crate::import::archive_extraction::noted_pass_workspace_folders_for_test().is_empty());
+        }
+
         #[tokio::test]
         async fn an_idle_housekeeping_pass_writes_nothing() {
             let download = archive_download("Idle Housekeeping Movie").await;

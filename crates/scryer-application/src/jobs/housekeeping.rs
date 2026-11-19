@@ -1367,6 +1367,7 @@ impl AppUseCase {
                 orphans_waiting = workspaces.orphans.waiting,
                 unmarked = workspaces.orphans.unmarked,
                 pass_workspaces_removed = workspaces.pass_workspaces_removed,
+                noted_pass_workspaces_removed = workspaces.noted_pass_workspaces_removed,
                 "archive workspace upkeep"
             );
         }

@@ -1468,6 +1468,86 @@ pub(crate) async fn sweep_library_root_pass_workspaces(app: &AppUseCase) -> AppR
     Ok(removed)
 }
 
+/// Folders a library scan noted at most. When it is full, new notes are
+/// dropped; a later scan notes them again.
+const NOTED_FOLDER_CAP: usize = 4_096;
+
+/// Noted folders one housekeeping pass sweeps; the rest stay noted.
+const NOTED_FOLDER_SWEEP_LIMIT: usize = 100;
+
+/// Folders a library scan saw holding a directory named like a per-pass
+/// workspace, held in memory for this process only, for housekeeping to
+/// sweep.
+static NOTED_PASS_WORKSPACE_FOLDERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::BTreeSet<PathBuf>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn noted_pass_workspace_folders()
+-> std::sync::MutexGuard<'static, std::collections::BTreeSet<PathBuf>> {
+    NOTED_PASS_WORKSPACE_FOLDERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Note `parent` for housekeeping when `child`, an entry a scan has just
+/// listed in it, is named like a per-pass workspace. A string test on the
+/// name in hand: nothing is read from disk.
+pub(crate) fn note_pass_workspace_parent(parent: &Path, child: &Path) {
+    if !child
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(archive_extractor::is_pass_workspace_name)
+    {
+        return;
+    }
+    let mut noted = noted_pass_workspace_folders();
+    if noted.len() < NOTED_FOLDER_CAP && !noted.contains(parent) {
+        noted.insert(parent.to_path_buf());
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn noted_pass_workspace_folders_for_test() -> Vec<PathBuf> {
+    noted_pass_workspace_folders().iter().cloned().collect()
+}
+
+/// Up to `limit` noted folders inside one of `roots`, taken out of the
+/// notes. A noted folder outside every root is dropped unswept, and a root
+/// itself is dropped since the root sweep covers it; neither counts against
+/// the limit.
+fn take_noted_pass_workspace_folders(roots: &[PathBuf], limit: usize) -> Vec<PathBuf> {
+    let mut noted = noted_pass_workspace_folders();
+    let mut taken = Vec::new();
+    while taken.len() < limit {
+        let Some(folder) = noted.pop_first() else {
+            break;
+        };
+        if roots
+            .iter()
+            .any(|root| folder.starts_with(root) && folder != *root)
+        {
+            taken.push(folder);
+        }
+    }
+    taken
+}
+
+/// Remove per-pass workspaces in the folders a library scan noted, under
+/// their usual rule: owned, released, and released a day ago or more. With
+/// nothing noted it reads nothing. Per folder swept: one listing, and only
+/// entries named like a workspace are opened.
+pub(crate) async fn sweep_noted_pass_workspaces(app: &AppUseCase) -> AppResult<usize> {
+    if noted_pass_workspace_folders().is_empty() {
+        return Ok(0);
+    }
+    let roots = library_roots(app).await?;
+    let mut removed = 0;
+    for folder in take_noted_pass_workspace_folders(&roots, NOTED_FOLDER_SWEEP_LIMIT) {
+        removed += archive_extractor::sweep_stale_archive_workspaces_in(&folder).await;
+    }
+    Ok(removed)
+}
+
 /// What housekeeping's workspace upkeep did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ArchiveWorkspaceHousekeeping {
@@ -1475,6 +1555,8 @@ pub(crate) struct ArchiveWorkspaceHousekeeping {
     pub settled: SettledSweep,
     pub orphans: OrphanSweep,
     pub pass_workspaces_removed: usize,
+    /// Per-pass workspaces removed from folders a library scan noted.
+    pub noted_pass_workspaces_removed: usize,
 }
 
 /// Housekeeping's workspace upkeep, each step on its own: a step that fails
@@ -1505,6 +1587,12 @@ pub(crate) async fn archive_workspace_housekeeping(
         Ok(removed) => report.pass_workspaces_removed = removed,
         Err(error) => {
             tracing::warn!(error = %error, "stale archive workspaces in library roots could not be swept")
+        }
+    }
+    match sweep_noted_pass_workspaces(app).await {
+        Ok(removed) => report.noted_pass_workspaces_removed = removed,
+        Err(error) => {
+            tracing::warn!(error = %error, "stale archive workspaces in noted title folders could not be swept")
         }
     }
     report

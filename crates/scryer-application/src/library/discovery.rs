@@ -1118,6 +1118,9 @@ impl BoundaryFrame {
             };
             let child = entry.path();
             note_listed_sidecar(listed, sidecar_names, &entry.file_name(), Some(kind));
+            if kind.is_dir() {
+                crate::import::archive_extraction::note_pass_workspace_parent(&path, &child);
+            }
             if kind.is_dir() || kind.is_symlink() {
                 children.push(BoundaryChild::Typed(child.clone(), kind));
             }
@@ -2390,6 +2393,9 @@ fn compute_library_probe_signature_blocking(path: PathBuf) -> AppResult<(String,
                 _ => continue,
             };
 
+            if kind == "dir" {
+                crate::import::archive_extraction::note_pass_workspace_parent(&path, &child_path);
+            }
             if should_skip_library_top_level_entry(&child_path, kind == "dir") {
                 continue;
             }
