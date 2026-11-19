@@ -392,6 +392,15 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
             .count_release_decisions_for_acquisition_scope_state(wanted_item_id)
             .await
     }
+
+    async fn tally_recent_release_decision_codes(
+        &self,
+        sample: i64,
+    ) -> AppResult<scryer_application::ReleaseDecisionCodeTally> {
+        self.wanted
+            .tally_recent_release_decision_codes(sample)
+            .await
+    }
 }
 
 #[async_trait]

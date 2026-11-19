@@ -2292,7 +2292,10 @@ mod queue_query_unit_tests {
         assert!(item.attention_reason.as_deref().is_some_and(|reason| {
             !reason.is_empty() && reason != crate::DOWNLOAD_PASSWORD_RETRY_REASON
         }));
-        assert_eq!(item.tracked_state, Some(TrackedDownloadState::ImportBlocked));
+        assert_eq!(
+            item.tracked_state,
+            Some(TrackedDownloadState::ImportBlocked)
+        );
     }
 
     #[test]

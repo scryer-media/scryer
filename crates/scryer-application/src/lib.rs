@@ -129,6 +129,7 @@ mod polling_worker;
 mod ports;
 pub use acquisition::anime_numbering::{ExactCourTitleMatch, exact_cour_title_match};
 pub use ports::ObservationTouch;
+pub use ports::ReleaseDecisionCodeTally;
 pub use ports::UnfinishedLibraryScanSession;
 pub use ports::ensure_acquisition_scopes_grabbed_per_row;
 pub use ports::{

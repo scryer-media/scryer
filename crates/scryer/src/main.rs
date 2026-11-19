@@ -74,6 +74,7 @@ mod initial_auth;
 mod list_account_origin;
 mod log_buffer;
 mod log_delivery;
+mod mcp;
 mod metadata_gateway_url;
 mod metrics_setup;
 mod middleware;
@@ -868,7 +869,9 @@ async fn run_application() {
 
         let env_filter = enable_context_spans(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                // rmcp logs every request at info; an operator's own filter
+                // still decides when one is set.
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rmcp=warn")),
         );
 
         match log_format {
@@ -2623,6 +2626,13 @@ async fn bootstrap_application(
             post(graphql_handler)
                 .with_state(auth_state.clone())
                 .layer(DefaultBodyLimit::max(middleware::GRAPHQL_MAX_MESSAGE_BYTES)),
+        )
+        .route(
+            mcp::MCP_PATH,
+            post(mcp::mcp_handler).with_state(mcp::McpState::new(
+                auth_state.clone(),
+                diagnostics_route_state.host.clone(),
+            )),
         )
         .route(
             "/images/media/{token}/{variant}",

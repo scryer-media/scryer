@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::Omission;
+use super::query::SummarySection;
 use super::sanitize::KnownValues;
 use crate::{AppResult, AppUseCase};
 
@@ -454,18 +455,33 @@ impl AppUseCase {
         omissions: &mut Vec<Omission>,
     ) -> Value {
         let mut sections = serde_json::Map::new();
+        for name in SummarySection::ALL {
+            section(
+                &mut sections,
+                omissions,
+                name.as_str(),
+                self.summary_section(actor, *name).await,
+            );
+            if *name == SummarySection::DownloadQueue {
+                omissions.push(Omission::new(
+                    "summary.wanted_items",
+                    "no_instance_wide_count",
+                ));
+            }
+        }
+        Value::Object(sections)
+    }
 
-        section(
-            &mut sections,
-            omissions,
-            "quality_profiles",
-            self.summary_quality_profiles().await,
-        );
-        section(
-            &mut sections,
-            omissions,
-            "indexers",
-            self.services
+    /// One summary section, read on its own.
+    pub(super) async fn summary_section(
+        &self,
+        actor: &crate::User,
+        name: SummarySection,
+    ) -> AppResult<Value> {
+        match name {
+            SummarySection::QualityProfiles => self.summary_quality_profiles().await,
+            SummarySection::Indexers => self
+                .services
                 .integrations
                 .indexer_configs
                 .list(None)
@@ -485,12 +501,8 @@ impl AppUseCase {
                         "last_error_codes": tally(indexers.iter().filter_map(|indexer| indexer.last_error_code.clone())),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "download_clients",
-            self.services
+            SummarySection::DownloadClients => self
+                .services
                 .integrations
                 .download_client_configs
                 .list(None)
@@ -508,12 +520,8 @@ impl AppUseCase {
                         }).count(),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "libraries",
-            self.services
+            SummarySection::Libraries => self
+                .services
                 .catalog
                 .libraries
                 .list(None)
@@ -528,58 +536,32 @@ impl AppUseCase {
                         })),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "rule_sets",
-            self.summary_rule_sets().await,
-        );
-        section(
-            &mut sections,
-            omissions,
-            "delay_profiles",
-            self.delay_profiles().await.map(|profiles| {
+            SummarySection::RuleSets => self.summary_rule_sets().await,
+            SummarySection::DelayProfiles => self.delay_profiles().await.map(|profiles| {
                 json!({
                     "total": profiles.len(),
                     "enabled": profiles.iter().filter(|profile| profile.enabled).count(),
                 })
             }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "seeding_profiles",
-            self.seeding_profiles()
+            SummarySection::SeedingProfiles => self
+                .seeding_profiles()
                 .await
                 .map(|profiles| json!({ "total": profiles.len() })),
-        );
-        match self.services.notifications.notification_channels() {
-            Some(repository) => section(
-                &mut sections,
-                omissions,
-                "notification_channels",
-                repository.list_channels().await.map(|channels| {
-                    json!({
-                        "total": channels.len(),
-                        "by_type": count_by_type(channels.iter().map(|channel| {
-                            (serde_label(&channel.channel_type), channel.is_enabled)
-                        })),
-                    })
-                }),
-            ),
-            None => {
-                sections.insert(
-                    "notification_channels".to_string(),
-                    json!({ "available": false }),
-                );
+            SummarySection::NotificationChannels => {
+                match self.services.notifications.notification_channels() {
+                    Some(repository) => repository.list_channels().await.map(|channels| {
+                        json!({
+                            "total": channels.len(),
+                            "by_type": count_by_type(channels.iter().map(|channel| {
+                                (serde_label(&channel.channel_type), channel.is_enabled)
+                            })),
+                        })
+                    }),
+                    None => Ok(json!({ "available": false })),
+                }
             }
-        }
-        section(
-            &mut sections,
-            omissions,
-            "media_servers",
-            self.services
+            SummarySection::MediaServers => self
+                .services
                 .integrations
                 .media_server_connections
                 .list(None)
@@ -593,18 +575,13 @@ impl AppUseCase {
                         "with_path_mappings": servers.iter().filter(|server| !server.path_mappings.is_empty()).count(),
                     })
                 }),
-        );
-        match self
-            .services
-            .integrations
-            .subtitle_provider_configs
-            .available()
-        {
-            Some(repository) => section(
-                &mut sections,
-                omissions,
-                "subtitle_providers",
-                repository.list(None).await.map(|providers| {
+            SummarySection::SubtitleProviders => match self
+                .services
+                .integrations
+                .subtitle_provider_configs
+                .available()
+            {
+                Some(repository) => repository.list(None).await.map(|providers| {
                     json!({
                         "total": providers.len(),
                         "by_provider_type": count_by_type(providers.iter().map(|provider| {
@@ -612,19 +589,10 @@ impl AppUseCase {
                         })),
                     })
                 }),
-            ),
-            None => {
-                sections.insert(
-                    "subtitle_providers".to_string(),
-                    json!({ "available": false }),
-                );
-            }
-        }
-        section(
-            &mut sections,
-            omissions,
-            "proxies",
-            self.services
+                None => Ok(json!({ "available": false })),
+            },
+            SummarySection::Proxies => self
+                .services
                 .integrations
                 .proxy_configs
                 .list(None)
@@ -637,12 +605,8 @@ impl AppUseCase {
                         })),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "lists",
-            self.services
+            SummarySection::Lists => self
+                .services
                 .lists
                 .subscriptions
                 .list(crate::lists::ListSubscriptionQuery::default())
@@ -654,12 +618,8 @@ impl AppUseCase {
                         "by_scope": tally(subscriptions.iter().map(|s| serde_label(&s.scope))),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "plugins",
-            self.services
+            SummarySection::Plugins => self
+                .services
                 .customization
                 .plugin_installations
                 .list_plugin_installations()
@@ -685,28 +645,18 @@ impl AppUseCase {
                     });
                     Value::Array(rows)
                 }),
-        );
-        let health = self.runtime.health.results.read().await.clone();
-        sections.insert(
-            "health_checks".to_string(),
-            Value::Array(
-                health
-                    .iter()
-                    .map(|check| json!({ "kind": check.source, "severity": check.status.as_str() }))
-                    .collect(),
-            ),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "job_runs",
-            self.summary_job_runs().await,
-        );
-        section(
-            &mut sections,
-            omissions,
-            "titles",
-            self.services
+            SummarySection::HealthChecks => {
+                let health = self.runtime.health.results.read().await.clone();
+                Ok(Value::Array(
+                    health
+                        .iter()
+                        .map(|check| json!({ "kind": check.source, "severity": check.status.as_str() }))
+                        .collect(),
+                ))
+            }
+            SummarySection::JobRuns => self.summary_job_runs().await,
+            SummarySection::Titles => self
+                .services
                 .catalog
                 .titles
                 .title_counts()
@@ -720,53 +670,31 @@ impl AppUseCase {
                         "anime": counts.anime,
                     })
                 }),
-        );
-        let queue = self
-            .runtime
-            .acquisition
-            .download_queue_snapshot
-            .snapshot()
-            .await;
-        sections.insert(
-            "download_queue".to_string(),
-            json!({
-                "items": queue.items.len(),
-                "by_state": tally(queue.items.iter().map(|item| serde_label(&item.state))),
-                "by_client_type": tally(queue.items.iter().map(|item| item.client_type.clone())),
-            }),
-        );
-        omissions.push(Omission::new(
-            "summary.wanted_items",
-            "no_instance_wide_count",
-        ));
-        section(
-            &mut sections,
-            omissions,
-            "release_decisions",
-            self.list_release_decisions_page(
-                actor,
-                crate::ReleaseDecisionsQuery {
-                    wanted_item_id: None,
-                    title_id: None,
-                    limit: RECENT_RELEASE_DECISIONS,
-                    offset: 0,
-                    skip_total: false,
-                },
-            )
-            .await
-                .map(|(decisions, total)| {
+            SummarySection::DownloadQueue => {
+                let queue = self
+                    .runtime
+                    .acquisition
+                    .download_queue_snapshot
+                    .snapshot()
+                    .await;
+                Ok(json!({
+                    "items": queue.items.len(),
+                    "by_state": tally(queue.items.iter().map(|item| serde_label(&item.state))),
+                    "by_client_type": tally(queue.items.iter().map(|item| item.client_type.clone())),
+                }))
+            }
+            SummarySection::ReleaseDecisions => self
+                .tally_recent_release_decision_codes(actor, RECENT_RELEASE_DECISIONS)
+                .await
+                .map(|tally| {
                     json!({
-                        "total_rows": total,
-                        "sampled": decisions.len(),
-                        "by_code": tally(decisions.iter().map(|decision| decision.decision_code.clone())),
+                        "total_rows": tally.total_rows,
+                        "sampled": tally.sampled,
+                        "by_code": tally.by_code.into_iter().collect::<BTreeMap<_, _>>(),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "indexer_errors",
-            self.list_indexer_errors(None, RECENT_INDEXER_ERRORS, None)
+            SummarySection::IndexerErrors => self
+                .list_indexer_errors(None, RECENT_INDEXER_ERRORS, None)
                 .await
                 .map(|page| {
                     json!({
@@ -775,12 +703,8 @@ impl AppUseCase {
                         "by_operation": tally(page.items.iter().map(|error| serde_label(&error.operation))),
                     })
                 }),
-        );
-        section(
-            &mut sections,
-            omissions,
-            "users",
-            self.services
+            SummarySection::Users => self
+                .services
                 .identity
                 .users
                 .list_all()
@@ -791,8 +715,7 @@ impl AppUseCase {
                         "by_account_kind": tally(users.iter().map(|user| serde_label(&user.account_kind))),
                     })
                 }),
-        );
-        Value::Object(sections)
+        }
     }
 
     async fn summary_quality_profiles(&self) -> AppResult<Value> {
