@@ -341,9 +341,6 @@ export default function ArrCustomFormatImportDialog({
               />
             </TabsContent>
             <TabsContent value="paste" className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                {t("settings.arrImportDescription")}
-              </p>
               <label className="block">
                 <Label
                   className="mb-2 block"

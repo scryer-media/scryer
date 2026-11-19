@@ -11987,8 +11987,6 @@ const ru: LocaleDictionary = {
   "settings.ruleAiPromptCopy": "Копировать запрос",
   "settings.ruleAiPromptCopied": "Скопировано",
   "settings.arrImportTitle": "Импортировать пользовательские форматы Arr",
-  "settings.arrImportDescription":
-    "Вставьте экспорт пользовательских форматов Sonarr или Radarr, чтобы создать новый черновик правила Rego.",
   "settings.arrImportSource": "Исходное приложение",
   "settings.arrImportJson": "JSON пользовательских форматов",
   "settings.arrImportJsonPlaceholder":

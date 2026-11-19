@@ -7287,8 +7287,6 @@ const en: LocaleDictionary = {
   "settings.ruleAiPromptCopy": "Copy prompt",
   "settings.ruleAiPromptCopied": "Copied",
   "settings.arrImportTitle": "Import Arr custom formats",
-  "settings.arrImportDescription":
-    "Paste a Sonarr or Radarr custom-format export to create a new Rego rule draft.",
   "settings.arrImportSource": "Source application",
   "settings.arrImportJson": "Custom-format JSON",
   "settings.arrImportJsonPlaceholder":
