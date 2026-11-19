@@ -33,92 +33,6 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
 - Database indexes that no query used are dropped, and the indexes that common lookups were missing are added.
 - Guided tour progress and monthly indexer usage are kept in backups.
 
-### API changes
-
-This release contains breaking GraphQL changes.
-
-**Maintenance is renamed to lifecycle.** Every type, enum, input, field and operation named `Maintenance…` is now named `Lifecycle…`, for example `maintenanceRuleSets` → `lifecycleRuleSets`, `createMaintenanceRuleSet` → `createLifecycleRuleSet` and `MaintenanceCandidate` → `LifecycleCandidate`. Reason codes that began with `MAINTENANCE_` begin with `LIFECYCLE_`. The domain event `MAINTENANCE_RULE_NOTIFIED` is `LIFECYCLE_RULE_NOTIFIED`, and the plugin SDK event is `LifecycleRuleNotified` (`lifecycle_rule_notified`). Instance gate setting keys moved from `maintenance.gate.*` to `lifecycle.gate.*`.
-
-**Lifecycle rules**
-
-- `updateMaintenanceRuleMatcher` is replaced by `updateLifecycleRuleSource`, which takes `UpdateLifecycleRuleSourceInput` (`id`, `regoSource`, `graceDays`, `maxTitlesPerRun`, `builderModel`).
-- The action model is removed: `maintenanceActionDescriptors`, `maintenanceActionStepDescriptors`, `LifecycleActionDescriptor`, `LifecycleActionStepDescriptor`, `LifecycleActionInput`, `LifecycleActionSequenceInput`, `LifecycleActionStepInput`, `LifecycleActionStepParametersInput`, `LifecycleActionSpec`, `LifecycleActionKind` values, `LifecycleActionSubject`, `LifecycleEffectArming` and `LifecycleRiskClass`.
-- `CreateLifecycleRuleSetInput` and `PreviewLifecycleRuleInput` lose `action`, `actionSequence`, `storageRootId` and `subjectKind`.
-- `LifecycleRuleSet` loses `actionSpec`, `actionSequence`, `enabledArming` and `subjectKind`. `LifecycleRuleSetDetail` loses `actionSpec` and `actionSequence`. `LifecycleRuleRevision` loses `storageRootId`.
-- `LifecycleCandidate` and `LifecyclePreviewTitle` lose `storageRootFileCount` and `storageRootTotalSizeBytes`.
-- `matcherContentHash` is `sourceContentHash` on `LifecyclePreviewPayload` and `LifecycleRuleRevision`.
-- `runLifecycleActionHandlerNow` takes `ruleSetId`. Omitting it is refused with `LIFECYCLE_ACTION_RUN_RULE_REQUIRED`.
-- The job key `MAINTENANCE_ACTION_HANDLING` is removed.
-- Added: `LifecycleActionHead` (`ADD_TAGS`, `DELETE_EPISODE_FILES`, `DELETE_FILES`, `DELETE_SEASON_FILES`, `DELETE_TITLE`, `FETCH_EPISODE_SUBTITLES`, `FETCH_SEASON_SUBTITLES`, `FETCH_SUBTITLES`, `MONITOR`, `MONITOR_EPISODE`, `MONITOR_SEASON`, `MOVE_TO_LIBRARY`, `MOVE_TO_ROOT`, `NOTIFY`, `NOTIFY_EPISODE`, `NOTIFY_SEASON`, `REMOVE_TAGS`, `SEARCH`, `SET_QUALITY_PROFILE`, `UNMONITOR`, `UNMONITOR_EPISODE`, `UNMONITOR_SEASON`); `LifecycleDeclaredActions` on `LifecycleRuleSet`, `LifecycleRuleSetDetail` and `LifecycleRuleValidationPayload`; `LifecycleDecidedActions` on `LifecycleCandidate` and `LifecyclePreviewTitle`; `LifecycleCandidate.actionsConflict`; `LifecyclePreviewTitle.errorCode`; `LifecycleRuleSet.schedule`, `nextRunAt`, `maxTitlesPerRun` and `loadRefusal`; `schedule` and `maxTitlesPerRun` on `CreateLifecycleRuleSetInput` and `UpdateLifecycleRuleMetadataInput`; `LifecycleRuleValidationPayload.warnings`; and `LifecycleActionStepKind` values `FETCH_SUBTITLES`, `MONITOR`, `MOVE_TO_LIBRARY` and `MOVE_TO_ROOT`.
-- Lifecycle reason codes renamed to name their condition (0.22.5 name → 0.23.0 name):
-  - `MAINTENANCE_RULE_FAILED_COMPILE` → `LIFECYCLE_RULE_COMPILE_FAILED`
-  - `MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE` → `LIFECYCLE_FILE_COVERAGE_AMBIGUOUS`
-  - `MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON` → `LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED`
-  - `MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE` → `LIFECYCLE_CANDIDATE_TITLE_MISMATCH`
-  - `MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED` → `LIFECYCLE_FILE_TARGETS_CHANGED`
-  - `MAINTENANCE_RULE_SHIPS_SCRYER` → `LIFECYCLE_SYSTEM_RULE_READ_ONLY`
-  - `MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED` → `LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED`
-  - `MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED` → `LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED`
-  - `MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID` → `LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY`
-  - `MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE` → `LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES`
-  - `MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS` → `LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE`
-  - `MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE` → `LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES`
-  - `MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED` → `LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED`
-  - `MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY` → `LIFECYCLE_MOVIE_HAS_NO_EPISODES`
-  - `MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND` → `LIFECYCLE_SUBJECT_NOT_FOUND`
-  - `MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN` → `LIFECYCLE_RULE_HAS_NO_EFFECT`
-  - `MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP` → `LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING`
-  - `MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE` → `LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH`
-  - `MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST` → `LIFECYCLE_QUALITY_PROFILE_NOT_FOUND`
-  - `MAINTENANCE_RULE_CONFIGURATION_INVALID`, raised for a stale arm confirmation, → `LIFECYCLE_ARM_CONFIRMATION_STALE`
-- Lifecycle reason codes removed with the action model: `MAINTENANCE_ACTION_CONFIGURATION_INVALID`, `MAINTENANCE_ACTION_INVALID`, `MAINTENANCE_ACTION_NOT_STORABLE`, `MAINTENANCE_ACTION_UNSUPPORTED`, `MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT`, `MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE`, `MAINTENANCE_SEQUENCE_ACTIONS_INVALID`, `MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED` and `MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED`.
-
-**Request rules**
-
-- `updateRequestRuleMatcher` is replaced by `updateRequestRuleSource`, which takes `UpdateRequestRuleSourceInput` (`ruleSetId`, `regoSource`, `builderModel`).
-- `RequestRuleEvaluationModeValue`, `RequestRuleDecision.mode` and `RequestPreflightPayload.evaluationMode` are removed.
-- `matcherContentHash` is `sourceContentHash` on `RequestRulePreviewPayload` and `RequestRuleRevision`.
-- Added: `RequestActionHead` (`APPROVE`, `DENY`, `MANUAL`, `SET_QUALITY_PROFILE`, `SET_LEASE_DAYS`, `SET_MONITOR`, `SET_PREFERRED_AUDIO_LANGUAGES`, `SET_REQUIRED_AUDIO_LANGUAGES`, `ADD_TAGS`, `NOTIFY`); `RequestShaping` on `RequestRuleDecision` and `RequestPreflightPayload`; `RequestDeclaredActions` on `RequestRuleSet` and `RequestRuleValidationPayload`; `RequestRuleValidationPayload.warnings`; and `ValidateRequestRuleInput.libraryIds`.
-- Request rule reason codes renamed:
-  - `REQUEST_RULE_RULE_FAILED_COMPILE` → `REQUEST_RULE_COMPILE_FAILED`
-  - `REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED` → `REQUEST_RULE_TAG_LIMIT_EXCEEDED`
-  - `REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED` → `REQUEST_RULE_TAG_TOO_LONG`
-  - `REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET` → `REQUEST_RULE_LIBRARY_FACET_MISMATCH`
-  - `REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION` → `REQUEST_RULE_DECISION_READ_FORBIDDEN`
-  - `REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE` → `REQUEST_RULE_ENGINE_BUILD_FAILED`
-
-**Rule builder**
-
-- `ruleBuilderSchema(family:)` returns the subjects, outputs and output rules the Simple builder offers for a rule family.
-- `builderModel` is stored on scoring rules (`CreateRuleSetInput`, `UpdateRuleSetInput`, `RuleSetPayload`), lifecycle rules and request rules. A rule without one opens as Rego.
-- New validation reasons include `RULE_ACTION_REQUIRED`, `RULE_ACTION_VALUE_INVALID`, `RULE_ACTION_VALUE_NOT_LITERAL`, `RULE_ACTION_READS_OTHER_LEVEL`, `RULE_HEAD_DEFINED_AS_FUNCTION`, `RULE_QUALITY_PROFILE_UNKNOWN`, `RULE_QUALITY_PROFILE_AMBIGUOUS`, `RULE_AUDIO_LANGUAGE_UNKNOWN`, `RULE_MONITOR_UNSUPPORTED`, `RULE_UNREFERENCED_RULE`, `RULE_BUILDER_FAMILY_UNKNOWN`, `RULE_BUILDER_MODEL_INVALID` and `RULE_BUILDER_MODEL_TOO_LARGE`.
-
-**Grabs**
-
-- `startGrab` starts one grab as a background job and returns its `jobRun`; `grabJobResult(id:)` returns its outcome. The existing grab mutations are unchanged.
-- The job key `RELEASE_GRAB` is added.
-
-**Indexers and proxies**
-
-- `maxRequestsPerMonth` and `maxGrabsPerMonth` on `CreateIndexerConfigInput`, `UpdateIndexerConfigInput` and `IndexerConfigPayload`.
-- `InteractiveReleaseSearchSkipReasonValue.MONTHLY_LIMIT`.
-- Reasons `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID` and `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE`.
-- `reachThroughProxyConfigId` on `CreateProxyConfigInput`, `UpdateProxyConfigInput` and `ProxyConfigPayload`, with the reasons `INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND`, `INTEGRATION_PROXY_REACH_THROUGH_DISABLED`, `INTEGRATION_PROXY_REACH_THROUGH_SELF` and `INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER`.
-
-**Other additions**
-
-- Quality profiles: `minMissingEpisodesForPack` and `minMissingPercentForSeriesPack` on `QualityProfileCriteriaInput` and `QualityProfileCriteriaPayload`.
-- Titles: `TitlePayload.contentRatings` and `TitlePayload.certificationLabel`.
-- Guided tours: `recordMyUiTours`, `UiSettingsPayload.tours`, `UiTourOutcomeValue` (`COMPLETED`, `SKIPPED`), with the reasons `SETTINGS_UI_TOUR_ID_INVALID` and `SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE`.
-- Lists: `myListPolicy` returns the signed-in member's own list policy.
-- Plugins: `dismissPluginRestoreWarnings`.
-- Location moves: `locationTransferTitleOutcome(id:, titleId:)`, and `refusalReason`, `refusalFacts` and `detail` on a title's transfer outcome.
-- Imports: `ImportSkipReasonValue.ARCHIVE_EXTRACTION_BLOCKED`.
-- Import and location reasons: `IMPORT_DESTINATION_IS_SOURCE`, `IMPORT_DESTINATION_ALIAS_UNKNOWN`, `IMPORT_COPY_KEPT_SOURCE_GONE` (with a `keptPath` fact), `IMPORT_INCUMBENT_IDENTITY_UNDECIDED`, `LOCATION_UNPROVEN_LINK_NOT_REMOVED` (with a `leftBehindPath` fact), `LOCATION_DESTINATION_NO_SPACE`, `LOCATION_DESTINATION_PERMISSION_DENIED` and `LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK`.
-- Disk reasons, carried by refusals that come from the filesystem: `DISK_PATH_MISSING`, `DISK_PATH_UNREACHABLE`, `DISK_TIMED_OUT`, `DISK_PERMISSION_DENIED`, `DISK_NO_SPACE`, `DISK_DESTINATION_EXISTS`, `DISK_DIRECTORY_NOT_EMPTY`, `DISK_WRONG_KIND`, `DISK_MOVE_NEEDS_COPY`, `DISK_COPY_NOT_VERIFIED`, `DISK_COPY_CANCELLED`, `DISK_COPY_STAGING_OCCUPIED`, `DISK_LINK_DIFFERENT_VOLUME`, `DISK_LINK_NOT_FOLLOWED`, `DISK_LINK_NOT_SUPPORTED`, `DISK_LINK_UNVERIFIABLE`, `DISK_NOT_OBSERVED` and `DISK_OPERATION_FAILED`.
-- Archive reasons: `ARCHIVE_EXTRACTION_WAITING`, `ARCHIVE_EXTRACTION_IN_PROGRESS`, `ARCHIVE_EXTRACTION_BLOCKED`, `ARCHIVE_EXTRACTION_INTERRUPTED`, `ARCHIVE_EXTRACTION_TIMED_OUT`, `ARCHIVE_EXTRACTION_PASSWORD_REQUIRED`, `ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED`, `ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED`, `ARCHIVE_WORKSPACE_SCRATCH_IN_USE` and `ARCHIVE_WORKSPACE_UNMARKED_ENTRIES`.
-- Downloads: `INTEGRATION_DOWNLOAD_NOT_GRABBED` refuses failure cleanup for a download Scryer did not grab, and `INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE` refuses Ignore outside a blocked or failed import.
-
 ## Lifecycle rules
 
 - A rule's source is the whole rule. Its heads declare its actions, and each head names the level it acts at: title heads such as `unmonitor`, `delete_files`, `delete_title`, `search`, `set_quality_profile`, `add_tags`, `remove_tags`, `move_to_library`, `move_to_root`, `fetch_subtitles` and `notify`, with season and episode forms such as `unmonitor_season`, `delete_season_files`, `unmonitor_episode` and `delete_episode_files`.
@@ -336,3 +250,89 @@ All filesystem work now goes through one disk service.
 - Czech gains the monthly indexer limit text.
 - Lifecycle, request rule and watch-sync text is complete in English, Czech, Russian and Traditional Chinese (Taiwan and Hong Kong).
 - Error reasons read as sentences in every area.
+
+## API changes
+
+This release contains breaking GraphQL changes.
+
+**Maintenance is renamed to lifecycle.** Every type, enum, input, field and operation named `Maintenance…` is now named `Lifecycle…`, for example `maintenanceRuleSets` → `lifecycleRuleSets`, `createMaintenanceRuleSet` → `createLifecycleRuleSet` and `MaintenanceCandidate` → `LifecycleCandidate`. Reason codes that began with `MAINTENANCE_` begin with `LIFECYCLE_`. The domain event `MAINTENANCE_RULE_NOTIFIED` is `LIFECYCLE_RULE_NOTIFIED`, and the plugin SDK event is `LifecycleRuleNotified` (`lifecycle_rule_notified`). Instance gate setting keys moved from `maintenance.gate.*` to `lifecycle.gate.*`.
+
+**Lifecycle rules**
+
+- `updateMaintenanceRuleMatcher` is replaced by `updateLifecycleRuleSource`, which takes `UpdateLifecycleRuleSourceInput` (`id`, `regoSource`, `graceDays`, `maxTitlesPerRun`, `builderModel`).
+- The action model is removed: `maintenanceActionDescriptors`, `maintenanceActionStepDescriptors`, `LifecycleActionDescriptor`, `LifecycleActionStepDescriptor`, `LifecycleActionInput`, `LifecycleActionSequenceInput`, `LifecycleActionStepInput`, `LifecycleActionStepParametersInput`, `LifecycleActionSpec`, `LifecycleActionKind` values, `LifecycleActionSubject`, `LifecycleEffectArming` and `LifecycleRiskClass`.
+- `CreateLifecycleRuleSetInput` and `PreviewLifecycleRuleInput` lose `action`, `actionSequence`, `storageRootId` and `subjectKind`.
+- `LifecycleRuleSet` loses `actionSpec`, `actionSequence`, `enabledArming` and `subjectKind`. `LifecycleRuleSetDetail` loses `actionSpec` and `actionSequence`. `LifecycleRuleRevision` loses `storageRootId`.
+- `LifecycleCandidate` and `LifecyclePreviewTitle` lose `storageRootFileCount` and `storageRootTotalSizeBytes`.
+- `matcherContentHash` is `sourceContentHash` on `LifecyclePreviewPayload` and `LifecycleRuleRevision`.
+- `runLifecycleActionHandlerNow` takes `ruleSetId`. Omitting it is refused with `LIFECYCLE_ACTION_RUN_RULE_REQUIRED`.
+- The job key `MAINTENANCE_ACTION_HANDLING` is removed.
+- Added: `LifecycleActionHead` (`ADD_TAGS`, `DELETE_EPISODE_FILES`, `DELETE_FILES`, `DELETE_SEASON_FILES`, `DELETE_TITLE`, `FETCH_EPISODE_SUBTITLES`, `FETCH_SEASON_SUBTITLES`, `FETCH_SUBTITLES`, `MONITOR`, `MONITOR_EPISODE`, `MONITOR_SEASON`, `MOVE_TO_LIBRARY`, `MOVE_TO_ROOT`, `NOTIFY`, `NOTIFY_EPISODE`, `NOTIFY_SEASON`, `REMOVE_TAGS`, `SEARCH`, `SET_QUALITY_PROFILE`, `UNMONITOR`, `UNMONITOR_EPISODE`, `UNMONITOR_SEASON`); `LifecycleDeclaredActions` on `LifecycleRuleSet`, `LifecycleRuleSetDetail` and `LifecycleRuleValidationPayload`; `LifecycleDecidedActions` on `LifecycleCandidate` and `LifecyclePreviewTitle`; `LifecycleCandidate.actionsConflict`; `LifecyclePreviewTitle.errorCode`; `LifecycleRuleSet.schedule`, `nextRunAt`, `maxTitlesPerRun` and `loadRefusal`; `schedule` and `maxTitlesPerRun` on `CreateLifecycleRuleSetInput` and `UpdateLifecycleRuleMetadataInput`; `LifecycleRuleValidationPayload.warnings`; and `LifecycleActionStepKind` values `FETCH_SUBTITLES`, `MONITOR`, `MOVE_TO_LIBRARY` and `MOVE_TO_ROOT`.
+- Lifecycle reason codes renamed to name their condition (0.22.5 name → 0.23.0 name):
+  - `MAINTENANCE_RULE_FAILED_COMPILE` → `LIFECYCLE_RULE_COMPILE_FAILED`
+  - `MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE` → `LIFECYCLE_FILE_COVERAGE_AMBIGUOUS`
+  - `MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON` → `LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED`
+  - `MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE` → `LIFECYCLE_CANDIDATE_TITLE_MISMATCH`
+  - `MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED` → `LIFECYCLE_FILE_TARGETS_CHANGED`
+  - `MAINTENANCE_RULE_SHIPS_SCRYER` → `LIFECYCLE_SYSTEM_RULE_READ_ONLY`
+  - `MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED` → `LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED`
+  - `MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED` → `LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED`
+  - `MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID` → `LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY`
+  - `MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE` → `LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES`
+  - `MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS` → `LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE`
+  - `MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE` → `LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES`
+  - `MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED` → `LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED`
+  - `MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY` → `LIFECYCLE_MOVIE_HAS_NO_EPISODES`
+  - `MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND` → `LIFECYCLE_SUBJECT_NOT_FOUND`
+  - `MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN` → `LIFECYCLE_RULE_HAS_NO_EFFECT`
+  - `MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP` → `LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING`
+  - `MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE` → `LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH`
+  - `MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST` → `LIFECYCLE_QUALITY_PROFILE_NOT_FOUND`
+  - `MAINTENANCE_RULE_CONFIGURATION_INVALID`, raised for a stale arm confirmation, → `LIFECYCLE_ARM_CONFIRMATION_STALE`
+- Lifecycle reason codes removed with the action model: `MAINTENANCE_ACTION_CONFIGURATION_INVALID`, `MAINTENANCE_ACTION_INVALID`, `MAINTENANCE_ACTION_NOT_STORABLE`, `MAINTENANCE_ACTION_UNSUPPORTED`, `MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT`, `MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE`, `MAINTENANCE_SEQUENCE_ACTIONS_INVALID`, `MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED` and `MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED`.
+
+**Request rules**
+
+- `updateRequestRuleMatcher` is replaced by `updateRequestRuleSource`, which takes `UpdateRequestRuleSourceInput` (`ruleSetId`, `regoSource`, `builderModel`).
+- `RequestRuleEvaluationModeValue`, `RequestRuleDecision.mode` and `RequestPreflightPayload.evaluationMode` are removed.
+- `matcherContentHash` is `sourceContentHash` on `RequestRulePreviewPayload` and `RequestRuleRevision`.
+- Added: `RequestActionHead` (`APPROVE`, `DENY`, `MANUAL`, `SET_QUALITY_PROFILE`, `SET_LEASE_DAYS`, `SET_MONITOR`, `SET_PREFERRED_AUDIO_LANGUAGES`, `SET_REQUIRED_AUDIO_LANGUAGES`, `ADD_TAGS`, `NOTIFY`); `RequestShaping` on `RequestRuleDecision` and `RequestPreflightPayload`; `RequestDeclaredActions` on `RequestRuleSet` and `RequestRuleValidationPayload`; `RequestRuleValidationPayload.warnings`; and `ValidateRequestRuleInput.libraryIds`.
+- Request rule reason codes renamed:
+  - `REQUEST_RULE_RULE_FAILED_COMPILE` → `REQUEST_RULE_COMPILE_FAILED`
+  - `REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED` → `REQUEST_RULE_TAG_LIMIT_EXCEEDED`
+  - `REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED` → `REQUEST_RULE_TAG_TOO_LONG`
+  - `REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET` → `REQUEST_RULE_LIBRARY_FACET_MISMATCH`
+  - `REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION` → `REQUEST_RULE_DECISION_READ_FORBIDDEN`
+  - `REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE` → `REQUEST_RULE_ENGINE_BUILD_FAILED`
+
+**Rule builder**
+
+- `ruleBuilderSchema(family:)` returns the subjects, outputs and output rules the Simple builder offers for a rule family.
+- `builderModel` is stored on scoring rules (`CreateRuleSetInput`, `UpdateRuleSetInput`, `RuleSetPayload`), lifecycle rules and request rules. A rule without one opens as Rego.
+- New validation reasons include `RULE_ACTION_REQUIRED`, `RULE_ACTION_VALUE_INVALID`, `RULE_ACTION_VALUE_NOT_LITERAL`, `RULE_ACTION_READS_OTHER_LEVEL`, `RULE_HEAD_DEFINED_AS_FUNCTION`, `RULE_QUALITY_PROFILE_UNKNOWN`, `RULE_QUALITY_PROFILE_AMBIGUOUS`, `RULE_AUDIO_LANGUAGE_UNKNOWN`, `RULE_MONITOR_UNSUPPORTED`, `RULE_UNREFERENCED_RULE`, `RULE_BUILDER_FAMILY_UNKNOWN`, `RULE_BUILDER_MODEL_INVALID` and `RULE_BUILDER_MODEL_TOO_LARGE`.
+
+**Grabs**
+
+- `startGrab` starts one grab as a background job and returns its `jobRun`; `grabJobResult(id:)` returns its outcome. The existing grab mutations are unchanged.
+- The job key `RELEASE_GRAB` is added.
+
+**Indexers and proxies**
+
+- `maxRequestsPerMonth` and `maxGrabsPerMonth` on `CreateIndexerConfigInput`, `UpdateIndexerConfigInput` and `IndexerConfigPayload`.
+- `InteractiveReleaseSearchSkipReasonValue.MONTHLY_LIMIT`.
+- Reasons `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID` and `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE`.
+- `reachThroughProxyConfigId` on `CreateProxyConfigInput`, `UpdateProxyConfigInput` and `ProxyConfigPayload`, with the reasons `INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND`, `INTEGRATION_PROXY_REACH_THROUGH_DISABLED`, `INTEGRATION_PROXY_REACH_THROUGH_SELF` and `INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER`.
+
+**Other additions**
+
+- Quality profiles: `minMissingEpisodesForPack` and `minMissingPercentForSeriesPack` on `QualityProfileCriteriaInput` and `QualityProfileCriteriaPayload`.
+- Titles: `TitlePayload.contentRatings` and `TitlePayload.certificationLabel`.
+- Guided tours: `recordMyUiTours`, `UiSettingsPayload.tours`, `UiTourOutcomeValue` (`COMPLETED`, `SKIPPED`), with the reasons `SETTINGS_UI_TOUR_ID_INVALID` and `SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE`.
+- Lists: `myListPolicy` returns the signed-in member's own list policy.
+- Plugins: `dismissPluginRestoreWarnings`.
+- Location moves: `locationTransferTitleOutcome(id:, titleId:)`, and `refusalReason`, `refusalFacts` and `detail` on a title's transfer outcome.
+- Imports: `ImportSkipReasonValue.ARCHIVE_EXTRACTION_BLOCKED`.
+- Import and location reasons: `IMPORT_DESTINATION_IS_SOURCE`, `IMPORT_DESTINATION_ALIAS_UNKNOWN`, `IMPORT_COPY_KEPT_SOURCE_GONE` (with a `keptPath` fact), `IMPORT_INCUMBENT_IDENTITY_UNDECIDED`, `LOCATION_UNPROVEN_LINK_NOT_REMOVED` (with a `leftBehindPath` fact), `LOCATION_DESTINATION_NO_SPACE`, `LOCATION_DESTINATION_PERMISSION_DENIED` and `LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK`.
+- Disk reasons, carried by refusals that come from the filesystem: `DISK_PATH_MISSING`, `DISK_PATH_UNREACHABLE`, `DISK_TIMED_OUT`, `DISK_PERMISSION_DENIED`, `DISK_NO_SPACE`, `DISK_DESTINATION_EXISTS`, `DISK_DIRECTORY_NOT_EMPTY`, `DISK_WRONG_KIND`, `DISK_MOVE_NEEDS_COPY`, `DISK_COPY_NOT_VERIFIED`, `DISK_COPY_CANCELLED`, `DISK_COPY_STAGING_OCCUPIED`, `DISK_LINK_DIFFERENT_VOLUME`, `DISK_LINK_NOT_FOLLOWED`, `DISK_LINK_NOT_SUPPORTED`, `DISK_LINK_UNVERIFIABLE`, `DISK_NOT_OBSERVED` and `DISK_OPERATION_FAILED`.
+- Archive reasons: `ARCHIVE_EXTRACTION_WAITING`, `ARCHIVE_EXTRACTION_IN_PROGRESS`, `ARCHIVE_EXTRACTION_BLOCKED`, `ARCHIVE_EXTRACTION_INTERRUPTED`, `ARCHIVE_EXTRACTION_TIMED_OUT`, `ARCHIVE_EXTRACTION_PASSWORD_REQUIRED`, `ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED`, `ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED`, `ARCHIVE_WORKSPACE_SCRATCH_IN_USE` and `ARCHIVE_WORKSPACE_UNMARKED_ENTRIES`.
+- Downloads: `INTEGRATION_DOWNLOAD_NOT_GRABBED` refuses failure cleanup for a download Scryer did not grab, and `INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE` refuses Ignore outside a blocked or failed import.
