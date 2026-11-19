@@ -6049,7 +6049,23 @@ fn write_pack_video(dir: &Path, file_name: &str) -> std::path::PathBuf {
         .expect("open source video fixture")
         .set_len(PACK_VIDEO_SIZE_BYTES)
         .expect("size source video above the import sample threshold");
+    stamp_fixture_identity(&path, file_name);
     path
+}
+
+/// Ends a fixture video with its own file name, so two releases written from
+/// one fixture hold different bytes the way two real releases do. Without it
+/// every upgrade in these tests would deliver the file the library already has.
+fn stamp_fixture_identity(path: &Path, file_name: &str) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open fixture video to stamp it");
+    file.seek(SeekFrom::End(-(file_name.len() as i64)))
+        .expect("seek to the fixture video's tail");
+    file.write_all(file_name.as_bytes())
+        .expect("stamp the fixture video");
 }
 
 fn write_hd_pack_video(dir: &Path, file_name: &str, resolution: u32) -> std::path::PathBuf {
@@ -6064,6 +6080,7 @@ fn write_hd_pack_video(dir: &Path, file_name: &str, resolution: u32) -> std::pat
         .expect("open HD source video fixture")
         .set_len(PACK_VIDEO_SIZE_BYTES)
         .expect("size HD source video above the import sample threshold");
+    stamp_fixture_identity(&path, file_name);
     path
 }
 
@@ -6525,6 +6542,97 @@ async fn automatic_episode_upgrade_marks_import_completed_as_upgrade() {
     );
 }
 
+/// The bytes already in the library arriving again never replace themselves.
+/// Admission accepts a tie, so without this a download whose files stay in the
+/// client's folder recycles its own library copy on every retried pass.
+#[tokio::test]
+async fn automatic_episode_import_of_identical_bytes_leaves_the_library_file_in_place() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            library_dir: _library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        ..Default::default()
+    })
+    .await;
+
+    let initial_source = tempfile::tempdir().expect("initial source tempdir");
+    write_pack_video(
+        initial_source.path(),
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
+    );
+    let initial = series_pack_completed_download(
+        "identical-bytes-initial",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+        initial_source.path(),
+    );
+    let initial_result = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &initial)
+            .await
+            .expect("initial completed import should run")
+    };
+    assert_eq!(
+        initial_result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{initial_result:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    let library_path = events[0].media_updates[0].path.clone();
+
+    // The same bytes under a name that lands at another destination and wins
+    // the comparison, so only the content can show there is nothing to gain.
+    let repeat_source = tempfile::tempdir().expect("repeat source tempdir");
+    std::fs::copy(
+        &library_path,
+        repeat_source
+            .path()
+            .join("Fail.Closed.Pack.S01E01.1080p.WEB-DL.mkv"),
+    )
+    .expect("copy the imported bytes under another name");
+    let repeat = series_pack_completed_download(
+        "identical-bytes-repeat",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+        repeat_source.path(),
+    );
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &repeat)
+            .await
+            .expect("repeat completed import should run")
+    };
+
+    assert_eq!(
+        result.skip_reason,
+        Some(scryer_domain::ImportSkipReason::AlreadyImported),
+        "{result:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "nothing may be imported again: {events:?}");
+    assert!(
+        Path::new(&library_path).is_file(),
+        "the library file must stay where it is"
+    );
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].file_path, library_path);
+}
+
 #[tokio::test]
 async fn automatic_multi_file_import_prefers_rejection_over_another_import() {
     automatic_mixed_pack_with_better_incumbent(true).await;
@@ -6589,6 +6697,9 @@ async fn automatic_mixed_pack_with_better_incumbent(missing_incumbent: bool) {
         mixed_source.path(),
         "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
     );
+    // The pack delivers the very bytes the library already holds for this
+    // episode: the duplicate check is what leaves the incumbent alone here.
+    std::fs::write(&incoming, &incumbent_bytes).expect("deliver the incumbent's bytes");
     write_pack_video(
         mixed_source.path(),
         "Fail.Closed.Pack.S01E02.1080p.WEB-DL.mkv",
@@ -15270,6 +15381,7 @@ async fn seed_primary_movie_file(
         .expect("create incumbent file")
         .set_len(300 * 1024 * 1024)
         .expect("size incumbent file");
+    stamp_fixture_identity(&fixture.title_folder.join(file_name), file_name);
     fixture
         .app
         .services
@@ -17206,6 +17318,7 @@ async fn series_movie_link_upgrade_finds_its_incumbent_at_another_path() {
         .expect("create incumbent file")
         .set_len(300 * 1024 * 1024)
         .expect("size incumbent file");
+    stamp_fixture_identity(&incumbent_path, "incumbent");
     let incumbent_id = app
         .services
         .library
@@ -17581,6 +17694,7 @@ score_entry["operator_refuses_this_file"] := -10000 if {
         .expect("create incumbent file")
         .set_len(300 * 1024 * 1024)
         .expect("size incumbent file");
+    stamp_fixture_identity(&incumbent_path, "incumbent");
     let incumbent_id = app
         .services
         .library

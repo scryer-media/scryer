@@ -144,6 +144,44 @@ fn configured_roots_match(left: &Path, right: &Path) -> bool {
         && recycle_bin::path_is_under_configured_root(right, left)
 }
 
+/// Whether the library file an import would replace already holds the source's
+/// bytes.
+///
+/// Import admission accepts a tie, so a source that is imported a second time
+/// (a retried pass over a download whose files stay in the client's folder)
+/// ties with its own earlier copy and would replace it: the copy goes to the
+/// recycle bin and the same bytes are written again, once per retry. Identical
+/// bytes are never an upgrade, so callers settle such a source as already
+/// imported instead.
+///
+/// The catalog size gates the probe: a replacement of a different size, which
+/// is every real upgrade, reads nothing. Only an equal size costs the sampled
+/// content proof of both files (size plus first and last windows, never a
+/// full read). A file that cannot be read is no match.
+pub(crate) async fn incumbent_holds_identical_source(
+    existing_file: &TitleMediaFile,
+    source_path: &Path,
+    source_size: i64,
+) -> bool {
+    if source_size <= 0 || existing_file.size_bytes != source_size {
+        return false;
+    }
+    let incumbent_path = stored_path_to_path_buf(&existing_file.file_path);
+    let source_path = source_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let proof = |path: &Path| crate::fs_integrity::import_content_proof(path).ok();
+        match (proof(&source_path), proof(&incumbent_path)) {
+            (Some(source), Some(incumbent)) => {
+                source.size_bytes == incumbent.size_bytes
+                    && source.sample_blake3 == incumbent.sample_blake3
+            }
+            _ => false,
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Execute a guarded file upgrade: import and validate replacement, then retire old.
 ///
 /// The old file is not recycled or deleted until the replacement file is on disk,

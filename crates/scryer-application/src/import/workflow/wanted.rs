@@ -695,6 +695,42 @@ async fn execute_resolved_episode_import(
     if let crate::import_decide::SupersededIncumbents::Episodes(superseded) = &plan.superseded
         && let Some((primary_incumbent, additional_superseded)) = superseded.split_first()
     {
+        // A source that ties with its own earlier import is not an upgrade.
+        // Replacing it would recycle the library copy and write the same bytes
+        // again on every retried pass.
+        for incumbent in superseded {
+            if target_episode_ids
+                .iter()
+                .all(|episode_id| incumbent.episode_ids.contains(episode_id))
+                && crate::upgrade::incumbent_holds_identical_source(
+                    &incumbent.media_file,
+                    source_video,
+                    source_size,
+                )
+                .await
+            {
+                let rejection = crate::import_decide::identical_incumbent_rejection(
+                    "this episode",
+                    &incumbent.media_file.file_path,
+                );
+                tracing::info!(
+                    title_id = %title.id,
+                    file_id = %incumbent.media_file.id,
+                    source = %source_video.display(),
+                    "import source is identical to the library file it would replace; leaving the library file in place"
+                );
+                return Ok(EpisodeImportOutcome::Skipped {
+                    message: rejection.message,
+                    reason_code: Some(rejection.recycle_reason.to_string()),
+                    skip_reason: rejection.skip_reason,
+                    episode_ids: target_episode_ids.clone(),
+                    already_present_destination: Some((
+                        incumbent.media_file.file_path.clone(),
+                        incumbent.media_file.id.clone(),
+                    )),
+                });
+            }
+        }
         let replacement_media_root = title_folder_path
             .parent()
             .and_then(|path| path.to_str())
