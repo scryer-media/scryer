@@ -333,6 +333,17 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// A stored import reason code, when it is one this release knows.
+fn known_import_reason_code(code: Option<&str>) -> Option<String> {
+    let code = code?;
+    crate::error_reasons::import::ALL
+        .iter()
+        .chain(crate::error_reasons::archive_extraction::ALL)
+        .copied()
+        .find(|known| *known == code)
+        .map(str::to_owned)
+}
+
 pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResultOverlay {
     let Some(result_json) = record.result_json.as_deref() else {
         return ImportRecordResultOverlay::default();
@@ -368,10 +379,11 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
                 .iter()
                 .find_map(|file| file.dest_path.clone()),
         );
+        let reason_code = known_import_reason_code(result.reason_code.as_deref());
         return ImportRecordResultOverlay {
             error_code,
             error_message,
-            reason_code: None,
+            reason_code,
             decision: None,
             skip_reason: None,
             title_id: non_empty(result.title_id),
@@ -383,14 +395,7 @@ pub fn import_record_result_overlay(record: &ImportRecord) -> ImportRecordResult
     let Ok(result) = serde_json::from_str::<scryer_domain::ImportResult>(result_json) else {
         return ImportRecordResultOverlay::default();
     };
-    let reason_code = result.reason_code.as_deref().and_then(|code| {
-        crate::error_reasons::import::ALL
-            .iter()
-            .chain(crate::error_reasons::archive_extraction::ALL)
-            .copied()
-            .find(|known| *known == code)
-            .map(str::to_owned)
-    });
+    let reason_code = known_import_reason_code(result.reason_code.as_deref());
     ImportRecordResultOverlay {
         error_code: None,
         error_message: non_empty(result.error_message),

@@ -8507,6 +8507,8 @@ const ru: LocaleDictionary = {
     "Эта повторная попытка импорта уже выполняется или ожидает сверки состояния.",
   "error.reason.IMPORT_RETRY_IMPORT_RECORD_NOT_FOUND":
     "Запись повторного импорта не найдена.",
+  "error.reason.IMPORT_RETRY_LIMIT_REACHED":
+    "Автоматические повторы импорта остановлены: повторные попытки не дали результата. Повторите импорт после устранения причины.",
   "error.reason.IMPORT_SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Сохранённый выбор содержимого диска изменился до публикации метаданных импорта.",
   "error.reason.IMPORT_SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED":
@@ -8563,6 +8565,8 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_UNAVAILABLE": "Этот импорт больше нельзя отменить.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH":
     "Небезопасный путь элемента архива.",
+  "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED":
+    "Существующий файл сохранён: подготовка его замены не удалась.",
   "error.reason.IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE":
     "Замена улучшенной версией запрещена: путь к корзине небезопасен.",
   "error.reason.INTEGRATION_ACTION_PERMISSION_DENIED":

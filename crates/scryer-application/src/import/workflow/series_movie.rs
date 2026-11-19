@@ -893,6 +893,12 @@ async fn try_match_titleless_archive_from_inner_video(
             let extracted_dir = match relocation {
                 TitlelessArchiveRelocation::Ready(extracted_dir) => extracted_dir,
                 TitlelessArchiveRelocation::ReextractUnderMatchedTitle => {
+                    // Without an extraction key every pass extracts again; the
+                    // re-extraction under the matched title is what repeats,
+                    // so it gets the same attempts a keyed extraction gets.
+                    crate::import::archive_extraction::begin_keyless_reextraction(
+                        app, completed,
+                    )?;
                     mark_import_extracting(app, import_id).await?;
                     let destination =
                         archive_extraction_destination_for_title(app, import_id, None, &title)
@@ -931,6 +937,23 @@ async fn try_match_titleless_archive_from_inner_video(
 
     crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
     Ok(None)
+}
+
+/// A failed upgrade never falls through to a placement beside the file it
+/// would have replaced: that file fails and the existing one stays. An error
+/// that already names its condition, needs reconciliation or was cancelled
+/// is returned as it is.
+fn upgrade_preparation_failed(error: AppError) -> AppError {
+    if error.reason().is_some()
+        || error.requires_manual_reconciliation()
+        || matches!(error, AppError::Canceled(_))
+    {
+        return error;
+    }
+    AppError::validation_refused(
+        crate::error_reasons::import::UPGRADE_PREPARATION_FAILED,
+        format!("the existing file was kept because preparing its replacement failed: {error}"),
+    )
 }
 
 #[expect(
@@ -1651,23 +1674,38 @@ async fn import_source_size(source_video: &Path) -> AppResult<i64> {
 /// full read) has to agree too. A copy that is gone is simply no match; any
 /// other failure to read the evidence is an error, so the caller backs off
 /// instead of minting another destination on unverified state.
+///
+/// `placed_by_this_download` names the library file an earlier pass of the
+/// same download placed from this source. That copy is the answer whatever its
+/// bytes are now, so it is never proved, overwritten or copied again.
 async fn existing_additional_import_media_file(
     app: &AppUseCase,
     title: &scryer_domain::Title,
     source_video: &Path,
     source_size: i64,
-) -> AppResult<Option<crate::TitleMediaFile>> {
+    placed_by_this_download: Option<&str>,
+) -> AppResult<Option<PriorAdditionalImport>> {
     let source_key = path_to_stored_string(source_video);
-    let mut candidates = app
+    let additional = app
         .services
         .library
         .media_files
         .list_media_files_for_title(&title.id)
         .await?
         .into_iter()
-        .filter(|file| file.role == crate::MediaFileRole::Additional)
-        .filter(|file| file.size_bytes == source_size)
-        .collect::<Vec<_>>();
+        .filter(|file| file.role == crate::MediaFileRole::Additional);
+    let mut candidates = Vec::new();
+    for file in additional {
+        if placed_by_this_download == Some(file.id.as_str()) {
+            return Ok(Some(PriorAdditionalImport {
+                file,
+                placed_by_this_download: true,
+            }));
+        }
+        if file.size_bytes == source_size {
+            candidates.push(file);
+        }
+    }
     candidates.sort_by_key(|file| file.original_file_path.as_deref() != Some(source_key.as_str()));
     if candidates.is_empty() {
         return Ok(None);
@@ -1701,13 +1739,24 @@ async fn existing_additional_import_media_file(
             if copy_proof.size_bytes == source_proof.size_bytes
                 && copy_proof.sample_blake3 == source_proof.sample_blake3
             {
-                return Ok(Some(candidate));
+                return Ok(Some(PriorAdditionalImport {
+                    file: candidate,
+                    placed_by_this_download: false,
+                }));
             }
         }
         Ok(None)
     })
     .await
     .map_err(|error| AppError::Repository(error.to_string()))?
+}
+
+/// An additional copy a retried import resolves instead of minting a new one.
+struct PriorAdditionalImport {
+    file: crate::TitleMediaFile,
+    /// An earlier pass of this download placed it from this source; otherwise
+    /// its sampled bytes match the source.
+    placed_by_this_download: bool,
 }
 
 #[expect(
@@ -1788,8 +1837,53 @@ async fn import_additional_movie_download(
         };
         full_folder_path.join(&rendered_filename)
     };
-    let prior_additional_file =
-        existing_additional_import_media_file(app, title, source_video, source_size).await?;
+    let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+    let prior_additional_file = existing_additional_import_media_file(
+        app,
+        title,
+        source_video,
+        source_size,
+        placed_files.placed_from_source(Some(completed), source_video),
+    )
+    .await?;
+    if let Some(prior) = prior_additional_file
+        .as_ref()
+        .filter(|prior| prior.placed_by_this_download)
+    {
+        let linked_episode_ids = series_movie_context
+            .and_then(|context| context.linked_episode_id)
+            .map(|episode_id| vec![episode_id.to_string()])
+            .unwrap_or_default();
+        return carry_out_import_rejection(
+            app,
+            actor,
+            title,
+            import_id,
+            completed,
+            ImportRejectionContext {
+                rejection: crate::import_decide::placed_by_this_download_rejection(
+                    "this title",
+                    &prior.file.file_path,
+                ),
+                disposition: crate::import_decide::RejectionDisposition::Skip,
+                release_title: &parsed.raw_title,
+                source_title: source_title.as_deref(),
+                source_video,
+                dest_path: Path::new(&prior.file.file_path),
+                source_size,
+                quality: parsed.quality.clone(),
+                episode_ids: &linked_episode_ids,
+                series_movie_link_id: series_movie_context
+                    .map(|context| context.series_movie_link_id),
+                episode_artifacts: series_movie_context
+                    .map(|context| context.linked_episode_artifacts)
+                    .unwrap_or(&[]),
+            },
+            started_at,
+        )
+        .await;
+    }
+    let prior_additional_file = prior_additional_file.map(|prior| prior.file);
     let dest_path = match prior_additional_file.as_ref() {
         Some(prior) => PathBuf::from(&prior.file_path),
         None => additional_import_dest_path(&canonical_dest_path, parsed),
@@ -2492,6 +2586,42 @@ async fn import_movie_download(
             .await;
         }
     };
+    // A file an earlier pass of this same download placed is never an
+    // incumbent to replace, whatever its bytes are now.
+    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
+        && !superseded.is_empty()
+    {
+        let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+        if let Some(own) = superseded.iter().find(|file| {
+            placed_files.placed_incumbent(Some(completed), &source_video, &file.id)
+        }) {
+            return carry_out_import_rejection(
+                app,
+                actor,
+                title,
+                import_id,
+                completed,
+                ImportRejectionContext {
+                    rejection: crate::import_decide::placed_by_this_download_rejection(
+                        "this title",
+                        &own.file_path,
+                    ),
+                    disposition: crate::import_decide::RejectionDisposition::Skip,
+                    release_title: &prepared.parsed.raw_title,
+                    source_title: source_title.as_deref(),
+                    source_video: &source_video,
+                    dest_path: &dest_path,
+                    source_size,
+                    quality: prepared.parsed.quality.clone(),
+                    episode_ids: &[],
+                    series_movie_link_id: None,
+                    episode_artifacts: &[],
+                },
+                started_at,
+            )
+            .await;
+        }
+    }
     // A source that ties with its own earlier import is not an upgrade.
     // Replacing it would recycle the library copy and write the same bytes
     // again on every retried pass. Every superseded file is compared, and one
@@ -2695,14 +2825,8 @@ async fn import_movie_download(
                 .await;
             }
             Err(err) => {
-                if import_mode == scryer_domain::ImportMode::Move {
-                    tracing::error!(error = %err, "movie upgrade failed in move mode");
-                    return Err(err);
-                }
-                tracing::error!(
-                    error = %err,
-                    "upgrade failed, falling through to normal import"
-                );
+                tracing::error!(error = %err, "movie upgrade failed; keeping the existing file");
+                return Err(upgrade_preparation_failed(err));
             }
         }
     }
@@ -3364,7 +3488,42 @@ async fn import_series_movie_download(
             .await;
         }
     };
-    // Same guard as the title path: identical bytes are never an upgrade.
+    // Same guards as the title path: a file this download placed is never
+    // replaced, and identical bytes are never an upgrade.
+    if let crate::import_decide::SupersededIncumbents::Title(superseded) = &plan.superseded
+        && !superseded.is_empty()
+    {
+        let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+        if let Some(own) = superseded.iter().find(|file| {
+            placed_files.placed_incumbent(Some(completed), &source_video, &file.id)
+        }) {
+            return carry_out_import_rejection(
+                app,
+                actor,
+                title,
+                import_id,
+                completed,
+                ImportRejectionContext {
+                    rejection: crate::import_decide::placed_by_this_download_rejection(
+                        "this series-movie link",
+                        &own.file_path,
+                    ),
+                    disposition: crate::import_decide::RejectionDisposition::Skip,
+                    release_title: &prepared.parsed.raw_title,
+                    source_title: source_title.as_deref(),
+                    source_video: &source_video,
+                    dest_path: &dest_path,
+                    source_size,
+                    quality: prepared.parsed.quality.clone(),
+                    episode_ids: &linked_episode_ids,
+                    series_movie_link_id: Some(series_movie_link_id),
+                    episode_artifacts: &linked_episode_artifacts,
+                },
+                started_at,
+            )
+            .await;
+        }
+    }
     let superseded_identity = match &plan.superseded {
         crate::import_decide::SupersededIncumbents::Title(superseded) => {
             crate::upgrade::superseded_source_identity(
@@ -3611,17 +3770,11 @@ async fn import_series_movie_download(
                     return Ok(result);
                 }
                 Err(err) => {
-                    if import_mode == scryer_domain::ImportMode::Move {
-                        tracing::error!(
-                            error = %err,
-                            "series movie upgrade failed in move mode"
-                        );
-                        return Err(err);
-                    }
                     tracing::error!(
                         error = %err,
-                        "series movie upgrade failed, falling through to normal import"
+                        "series movie upgrade failed; keeping the existing file"
                     );
+                    return Err(upgrade_preparation_failed(err));
                 }
             }
         }

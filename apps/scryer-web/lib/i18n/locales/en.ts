@@ -1532,6 +1532,8 @@ const en: LocaleDictionary = {
     "This import retry is already running or awaiting reconciliation.",
   "error.reason.IMPORT_RETRY_IMPORT_RECORD_NOT_FOUND":
     "Retry import record was not found.",
+  "error.reason.IMPORT_RETRY_LIMIT_REACHED":
+    "Automatic import retries stopped: repeated attempts made no progress. Retry the import once the cause is fixed.",
   "error.reason.IMPORT_SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Saved disc selection changed before import metadata was published.",
   "error.reason.IMPORT_SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED":
@@ -1586,6 +1588,8 @@ const en: LocaleDictionary = {
     "Refusing to replace the old file during the upgrade because it is a symlink.",
   "error.reason.IMPORT_UNAVAILABLE": "The import is no longer cancellable.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH": "Unsafe archive entry path.",
+  "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED":
+    "The existing file was kept because preparing its replacement failed.",
   "error.reason.IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE":
     "Refusing to upgrade because the recycle bin path is unsafe.",
   "error.reason.INTEGRATION_ACTION_PERMISSION_DENIED":

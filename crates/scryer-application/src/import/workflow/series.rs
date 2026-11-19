@@ -142,6 +142,15 @@ async fn import_series_download(
     // One release, one blocklist row — accumulated across the members and
     // written once after the loop. See [`DownloadBlocklistLedger`].
     let mut blocklist_ledger = DownloadBlocklistLedger::for_download(release_evidence);
+    let placed_files = DownloadPlacedFiles::load(app, import_id, Some(completed)).await?;
+    // Whether some video of a multi-video download names its own episode. An
+    // unparseable video is an extra beside such a video; when none names one,
+    // every video is unidentified and the download waits for manual import.
+    let a_video_names_an_episode = video_file_count > 1
+        && video_files.iter().any(|video| {
+            file_episode_identity_for_title(video.path(), title).is_some()
+                || file_episode_identity_for_title(video.parse_path().as_ref(), title).is_some()
+        });
 
     for source_video in video_files {
         match import_single_episode_file(
@@ -164,7 +173,9 @@ async fn import_series_download(
                 .as_ref()
                 .and_then(|plan| plan.disposition_for(source_video.path())),
             video_file_count,
+            a_video_names_an_episode,
             &mut blocklist_ledger,
+            &placed_files,
         )
         .await
         {
@@ -1489,7 +1500,9 @@ async fn import_single_episode_file(
     expected_episode_ids: Option<&HashSet<String>>,
     planned_disposition: Option<&PlannedEpisodeMemberDisposition>,
     video_file_count: usize,
+    a_video_names_an_episode: bool,
     blocklist_ledger: &mut DownloadBlocklistLedger,
+    placed_files: &DownloadPlacedFiles,
 ) -> AppResult<EpisodeImportOutcome> {
     // The physical path is what every transfer, artifact and cleanup call sees.
     // `parse_video` differs from it only when srrdb recovered the original
@@ -1714,6 +1727,40 @@ async fn import_single_episode_file(
             other_video_files,
             "skipping file with no parseable episode info"
         );
+        // An extra video beside the grabbed episode(s) that names no episode
+        // of its own is left in the download. Recording it as ignored lets
+        // verification settle the download once the grabbed episodes landed;
+        // verification still requires every expected episode, so a download
+        // missing one is never taken as complete because of this row.
+        if other_video_files
+            && a_video_names_an_episode
+            && expected_episode_ids.is_some_and(|ids| !ids.is_empty())
+        {
+            let reason_code = crate::error_reasons::import::UNPARSEABLE_EPISODE_MEMBER;
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "ignored",
+                Some(reason_code),
+                None,
+                &[],
+            )
+            .await?;
+            return Ok(EpisodeImportOutcome::Ignored {
+                message: unresolved_episode_import_message(
+                    &parsed,
+                    parse_video,
+                    release_evidence,
+                    video_file_count,
+                ),
+                reason_code: reason_code.to_string(),
+                episode_ids: Vec::new(),
+            });
+        }
         return Ok(EpisodeImportOutcome::Skipped {
             message: unresolved_episode_import_message(
                 &parsed,
@@ -1906,6 +1953,7 @@ async fn import_single_episode_file(
         release_evidence.release_listing_json(),
         additional_import,
         None,
+        placed_files,
     )
     .await?;
 
@@ -2892,6 +2940,147 @@ async fn persist_file_import_artifact(
     }
     Ok(())
 }
+
+/// The library files earlier passes of one download placed, read once per
+/// pass from that download's import artifacts.
+///
+/// A later pass of the same download must never treat one of them as an
+/// incumbent to replace. Something outside the import, such as a
+/// post-processing script retagging the file, can rewrite the library copy, so
+/// its bytes no longer match the source; replacing it would place the release
+/// again on every pass and undo that rewrite.
+#[derive(Debug, Default)]
+struct DownloadPlacedFiles {
+    media_file_ids: HashSet<String>,
+    /// Keyed like [`DownloadPlacedFiles::source_key`].
+    by_source: HashMap<String, String>,
+    /// A manual import is the operator choosing which file goes where, so
+    /// only the file placed from the same source counts as already present;
+    /// another file of the download may still replace it.
+    same_source_only: bool,
+}
+
+impl DownloadPlacedFiles {
+    async fn load_for_manual_import(
+        app: &AppUseCase,
+        import_id: &str,
+        completed: Option<&CompletedDownload>,
+    ) -> AppResult<Self> {
+        let mut placed = Self::load(app, import_id, completed).await?;
+        placed.same_source_only = true;
+        Ok(placed)
+    }
+
+    /// Whether `media_file_id`, an incumbent `source_path` would replace, is a
+    /// file this download placed and must be left in place.
+    fn placed_incumbent(
+        &self,
+        completed: Option<&CompletedDownload>,
+        source_path: &Path,
+        media_file_id: &str,
+    ) -> bool {
+        if !self.media_file_ids.contains(media_file_id) {
+            return false;
+        }
+        !self.same_source_only
+            || self.placed_from_source(completed, source_path) == Some(media_file_id)
+    }
+
+    async fn load(
+        app: &AppUseCase,
+        import_id: &str,
+        completed: Option<&CompletedDownload>,
+    ) -> AppResult<Self> {
+        let Some(completed) = completed else {
+            return Ok(Self::default());
+        };
+        let canonical_download_id = app
+            .services
+            .workflow
+            .imports
+            .canonical_download_id_for_import(import_id)
+            .await
+            .map_err(|error| AppError::ImportEvidenceUnavailable(error.to_string()))?;
+        let source_identity = ClientJobLocator::for_import_artifact(
+            Some(completed.client_id.as_str()),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        );
+        let artifacts = &app.services.workflow.import_artifacts;
+        let mut rows = artifacts
+            .list_by_source_identity_for_download(canonical_download_id.as_ref(), &source_identity)
+            .await
+            .map_err(|error| AppError::ImportEvidenceUnavailable(error.to_string()))?;
+        if canonical_download_id.is_none() {
+            rows.extend(
+                artifacts
+                    .list_by_source_identity(&source_identity)
+                    .await
+                    .map_err(|error| AppError::ImportEvidenceUnavailable(error.to_string()))?,
+            );
+        }
+        let mut placed = Self::default();
+        for artifact in rows {
+            let Some(media_file_id) = artifact.imported_media_file_id else {
+                continue;
+            };
+            let source_key = artifact
+                .relative_path
+                .filter(|path| !path.is_empty())
+                .map(|path| format!("relative:{path}"))
+                .or_else(|| {
+                    artifact
+                        .workspace_relative_path
+                        .map(|path| format!("workspace:{path}"))
+                })
+                .unwrap_or_else(|| format!("name:{}", artifact.normalized_file_name));
+            placed.by_source.insert(source_key, media_file_id.clone());
+            placed.media_file_ids.insert(media_file_id);
+        }
+        Ok(placed)
+    }
+
+    /// The library file an earlier pass placed from this same source file.
+    fn placed_from_source(
+        &self,
+        completed: Option<&CompletedDownload>,
+        source_path: &Path,
+    ) -> Option<&str> {
+        let completed = completed?;
+        if self.by_source.is_empty() {
+            return None;
+        }
+        self.by_source
+            .get(&Self::source_key(completed, source_path))
+            .map(String::as_str)
+    }
+
+    /// The same precedence [`persist_file_import_artifact`] records: the path
+    /// inside the download folder, then the path inside an extraction
+    /// workspace, then the file name.
+    fn source_key(completed: &CompletedDownload, source_path: &Path) -> String {
+        if let Some(path) = source_path
+            .strip_prefix(&completed.dest_dir)
+            .ok()
+            .map(path_to_stored_string)
+            .filter(|path| !path.is_empty())
+        {
+            return format!("relative:{path}");
+        }
+        if let Some(path) =
+            crate::archive_extractor::owned_archive_workspace_relative_path(source_path)
+        {
+            return format!("workspace:{path}");
+        }
+        let name = source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_ascii_lowercase())
+            .unwrap_or_else(|| source_path.to_string_lossy().to_ascii_lowercase());
+        format!("name:{name}")
+    }
+}
+
 /// Explicit sample naming is excluded during discovery. File size alone cannot
 /// distinguish a short episode from a sample; that requires the runtime gate.
 pub(crate) fn is_sample_named_file(path: &Path) -> bool {

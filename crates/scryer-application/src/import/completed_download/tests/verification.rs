@@ -1429,6 +1429,56 @@ async fn verify_import_accepts_resolved_pack_when_move_removed_source_but_artifa
     assert!(verify_import_inner(&app, &td, 2, Some(&completed)).await);
 }
 
+/// A season pack that holds two of the season's three episodes, both imported
+/// by an earlier pass. The automatic import accepts it (every visible source
+/// unit is imported: a fallback), and the operator's Retry import, and the
+/// restart recovery of an interrupted Retry, accept the very same evidence.
+#[tokio::test]
+async fn retry_accepts_a_pack_the_automatic_import_accepts() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    for name in ["Lantern.Cove.S01E01.mkv", "Lantern.Cove.S01E02.mkv"] {
+        std::fs::File::create(temp_dir.path().join(name))
+            .expect("create video")
+            .set_len(60 * 1024 * 1024)
+            .expect("size video");
+    }
+    let title = build_title("title-1", "Lantern Cove", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![
+        build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+        build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+        build_episode("ep-3", "title-1", "season-1", "1", "3", None),
+    ];
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Lantern.Cove.S01E01.mkv"),
+        build_artifact("dl-1", "ep-2", "Lantern.Cove.S01E02.mkv"),
+    ];
+    let app = build_app(vec![title], vec![collection], episodes, artifacts);
+    let release = "Lantern.Cove.S01.1080p.WEB-DL";
+    let td = build_tracked_download("title-1", "series", release);
+    let completed = build_completed_download(
+        release,
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    let evidence = crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some(release.to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope: crate::SubmissionScope::Collection {
+            collection_id: "season-1".to_string(),
+        },
+    };
+
+    let (automatic, retry) = verifies_automatic_and_retry(&app, &td, &completed, &evidence).await;
+    assert!(automatic, "the automatic import accepts the pack");
+    assert!(retry, "Retry accepts the same evidence");
+}
+
 #[tokio::test]
 async fn verify_import_rejects_artifact_manifest_when_source_episode_lacks_successful_coverage() {
     let temp_dir = tempfile::tempdir().expect("temp dir");

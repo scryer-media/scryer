@@ -5927,9 +5927,21 @@ pub mod import {
     pub const COPY_KEPT_SOURCE_GONE: &str = "IMPORT_COPY_KEPT_SOURCE_GONE";
     /// The library file an import would replace could not be compared with the source, so it was left in place and the import is retried.
     pub const INCUMBENT_IDENTITY_UNDECIDED: &str = "IMPORT_INCUMBENT_IDENTITY_UNDECIDED";
+    /// Automatic import of a download ran several passes in a row that ended the same way and imported nothing new, so it stopped retrying. Retrying the import starts the count again.
+    pub const RETRY_LIMIT_REACHED: &str = "IMPORT_RETRY_LIMIT_REACHED";
+    /// The library file a re-run would replace was placed by this same download, so it was kept and counted as already present.
+    pub const INCUMBENT_PLACED_BY_THIS_DOWNLOAD: &str = "IMPORT_INCUMBENT_PLACED_BY_THIS_DOWNLOAD";
+    /// An extra video beside the download's episode names no episode; it was left in the download and not imported.
+    pub const UNPARSEABLE_EPISODE_MEMBER: &str = "IMPORT_UNPARSEABLE_EPISODE_MEMBER";
+    /// Preparing to replace the library file failed, so the new file was not placed and the existing file was kept.
+    pub const UPGRADE_PREPARATION_FAILED: &str = "IMPORT_UPGRADE_PREPARATION_FAILED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         INCUMBENT_IDENTITY_UNDECIDED,
+        RETRY_LIMIT_REACHED,
+        INCUMBENT_PLACED_BY_THIS_DOWNLOAD,
+        UNPARSEABLE_EPISODE_MEMBER,
+        UPGRADE_PREPARATION_FAILED,
         MEDIA_ROOT_REQUIRED,
         PATH_OUTSIDE_LIBRARY_ROOT,
         RECYCLE_BIN_CONFIG_REQUIRED,

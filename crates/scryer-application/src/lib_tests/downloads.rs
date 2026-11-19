@@ -2753,6 +2753,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,
@@ -5364,6 +5365,7 @@ async fn run_unclaimed_failed_tracked_cleanup(
         path_missing_since: None,
         no_video_import_retry: None,
         import_execution_retry: None,
+        stalled_import_passes: 0,
         import_hold: None,
         skip_reacquire_on_failure: false,
         manual_failure_cleanup: false,
@@ -6634,6 +6636,128 @@ async fn automatic_episode_import_of_identical_bytes_leaves_the_library_file_in_
         .expect("list media files");
     assert_eq!(files.len(), 1, "{files:?}");
     assert_eq!(files[0].file_path, library_path);
+}
+
+/// After the first import, something outside the import rewrites the library
+/// file at the same size through a new file renamed over it (an operator
+/// post-processing script retagging it), which breaks the hardlink to the
+/// download's copy. A repeat pass of the very same download sees different
+/// sampled bytes, but the library file is one this download placed: the pass
+/// settles it as already present instead of replacing it, so there is no
+/// second ImportCompleted and the rewrite survives.
+#[tokio::test]
+async fn repeat_pass_keeps_a_library_file_this_download_placed_after_its_bytes_changed() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            library_dir: _library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        title_name: "Lantern Cove".to_string(),
+        ..Default::default()
+    })
+    .await;
+
+    let source = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(source.path(), "Lantern.Cove.S01E01.720p.WEB-DL.mkv");
+    let completed = series_pack_completed_download(
+        "changed-bytes-1",
+        &title.id,
+        "Lantern.Cove.S01E01.720p.WEB-DL",
+        source.path(),
+    );
+    let first = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("first import should run")
+    };
+    assert_eq!(
+        first.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{first:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    let library_path = events[0].media_updates[0].path.clone();
+
+    // The default hardlink_or_copy mode hardlinked the library file to the
+    // download's copy, so an in-place edit would change both. A tool that
+    // writes its result to a new file and renames it over the library file
+    // breaks the link: rewrite the tail that way, keeping the size.
+    let rewritten = format!("{library_path}.retag");
+    std::fs::copy(&library_path, &rewritten).expect("copy library file for retagging");
+    stamp_fixture_identity(Path::new(&rewritten), "retagged-by-post-processing");
+    std::fs::rename(&rewritten, &library_path).expect("rename retagged file over library file");
+    let library_len = std::fs::metadata(&library_path).expect("library file").len();
+    assert_eq!(
+        library_len,
+        std::fs::metadata(&source_file).expect("source file").len()
+    );
+
+    let repeat = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("repeat import should run")
+    };
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(
+        repeat.decision,
+        scryer_domain::ImportDecision::Skipped,
+        "{repeat:?}"
+    );
+    assert_eq!(
+        repeat.skip_reason,
+        Some(scryer_domain::ImportSkipReason::AlreadyImported),
+        "{repeat:?}"
+    );
+    assert_eq!(events.len(), 1, "the repeat pass imported again: {events:?}");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].file_path, library_path);
+    let artifacts = app
+        .services
+        .workflow
+        .import_artifacts
+        .list_by_source_identity(&ClientJobLocator::for_import_artifact(
+            Some(completed.client_id.as_str()),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        ))
+        .await
+        .expect("list import artifacts");
+    assert!(
+        artifacts.iter().any(|artifact| artifact.reason_code.as_deref()
+            == Some(crate::error_reasons::import::INCUMBENT_PLACED_BY_THIS_DOWNLOAD)),
+        "{artifacts:?}"
+    );
+    let library_tail = {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(&library_path).expect("open library file");
+        let stamp = "retagged-by-post-processing";
+        file.seek(SeekFrom::End(-(stamp.len() as i64)))
+            .expect("seek library tail");
+        let mut tail = vec![0u8; stamp.len()];
+        file.read_exact(&mut tail).expect("read library tail");
+        tail
+    };
+    assert_eq!(
+        library_tail,
+        b"retagged-by-post-processing".to_vec(),
+        "the rewrite was replaced by the download's bytes"
+    );
 }
 
 /// Every regular file under `root`, at any depth.
@@ -10341,6 +10465,178 @@ async fn automatic_import_parks_obfuscated_multi_file_episode_download_for_manua
             "{file_name} must not be recorded as imported"
         );
     }
+}
+
+/// A single-episode download with an unparseable extra video beside the
+/// episode. The episode is imported and the extra is recorded as ignored, so
+/// the download settles as imported on its first pass instead of retrying and
+/// then blocking with the grabbed episode already in the library.
+#[tokio::test]
+async fn extra_video_beside_single_episode_is_ignored_and_the_download_settles() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir,
+            import_repo,
+            import_artifacts,
+        },
+        download_submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        title_name: "Lantern Cove".to_string(),
+        ..FailClosedPackFixtureOptions::default()
+    })
+    .await;
+    let episode_three = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            episode.collection_id.clone(),
+            "standard".into(),
+            Some("3".into()),
+            Some("1".into()),
+            Some("S01E03".into()),
+            Some("Low Tide".into()),
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create episode three");
+
+    let item_id = "lantern-cove-extra-1";
+    let release = "Lantern.Cove.S01E03.1080p.WEB-DL";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release,
+        SubmissionScope::Episode {
+            episode_id: episode_three.id.clone(),
+        },
+    )
+    .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let episode_file = write_pack_video(source_dir.path(), "Lantern.Cove.S01E03.1080p.WEB-DL.mkv");
+    let extra_file = write_pack_video(source_dir.path(), "Behind.The.Scenes.mkv");
+    let completed = series_pack_completed_download(item_id, &title.id, release, source_dir.path());
+
+    let mut client_item = queue_history_fixture_item(item_id, DownloadQueueState::Completed, 40);
+    client_item.title_id = Some(title.id.clone());
+    client_item.title_name = title.name.clone();
+    client_item.facet = Some("series".to_string());
+    let tracked_id = crate::tracked_downloads::tracked_download_id_for_item(&client_item);
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, client_item).await;
+    let tracked = tracker
+        .find_mut(&tracked_id)
+        .expect("completed item is tracked");
+    tracked.state = TrackedDownloadState::ImportPending;
+    let lookup =
+        crate::import::completed_download::CompletedDownloadLookup::from_recent_downloads(vec![
+            completed,
+        ]);
+
+    // The episode lands, the extra is recorded as ignored, and the download
+    // settles as imported on the first pass.
+    let imported =
+        crate::import::completed_download::import_with_lookup(&app, &user, tracked, &lookup).await;
+    assert!(imported, "the first pass verifies: {tracked:?}");
+    assert_eq!(tracked.state, TrackedDownloadState::Imported, "{tracked:?}");
+    assert!(tracked.import_execution_retry.is_none(), "{tracked:?}");
+    assert_eq!(
+        library_video_file_names(library_dir.path()).len(),
+        1,
+        "only the episode reached the library"
+    );
+    let episode_rows = import_artifacts
+        .artifacts_for_file("lantern.cove.s01e03.1080p.web-dl.mkv")
+        .await;
+    assert_eq!(episode_rows.len(), 1, "{episode_rows:?}");
+    assert_eq!(episode_rows[0].result, "imported");
+    let extra_rows = import_artifacts
+        .artifacts_for_file("behind.the.scenes.mkv")
+        .await;
+    assert_eq!(extra_rows.len(), 1, "{extra_rows:?}");
+    assert_eq!(extra_rows[0].result, "ignored");
+    assert_eq!(
+        extra_rows[0].reason_code.as_deref(),
+        Some(crate::error_reasons::import::UNPARSEABLE_EPISODE_MEMBER)
+    );
+    assert!(extra_rows[0].imported_media_file_id.is_none());
+    let records = import_repo.records.lock().await.clone();
+    let last_result: scryer_domain::ImportResult = serde_json::from_str(
+        records
+            .last()
+            .and_then(|record| record.result_json.as_deref())
+            .expect("pass result"),
+    )
+    .expect("pass result json");
+    assert_eq!(last_result.decision, scryer_domain::ImportDecision::Imported);
+    assert!(episode_file.exists() && extra_file.exists());
+}
+
+/// The other side of the extra-video rule: a season pack whose only parseable
+/// member is one episode, beside an unparseable video, still lacks wanted
+/// episodes. Recording the extra as ignored never makes such a pack complete.
+#[tokio::test]
+async fn season_pack_missing_wanted_episodes_beside_an_extra_video_is_never_complete() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            ..
+        },
+        download_submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        title_name: "Lantern Cove".to_string(),
+        ..FailClosedPackFixtureOptions::default()
+    })
+    .await;
+    create_pack_episode_in_season(&app, &user, &title.id, 1, 5, Some(5), "standard").await;
+
+    let item_id = "lantern-cove-short-pack-1";
+    let release = "Lantern.Cove.S01.1080p.WEB-DL";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release,
+        SubmissionScope::Collection {
+            collection_id: episode.collection_id.clone().unwrap(),
+        },
+    )
+    .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(source_dir.path(), "Lantern.Cove.S01E01.1080p.WEB-DL.mkv");
+    write_pack_video(source_dir.path(), "Behind.The.Scenes.mkv");
+    let completed = series_pack_completed_download(item_id, &title.id, release, source_dir.path());
+
+    let mut client_item = queue_history_fixture_item(item_id, DownloadQueueState::Completed, 40);
+    client_item.title_id = Some(title.id.clone());
+    client_item.title_name = title.name.clone();
+    client_item.facet = Some("series".to_string());
+    let tracked_id = crate::tracked_downloads::tracked_download_id_for_item(&client_item);
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, client_item).await;
+    let tracked = tracker
+        .find_mut(&tracked_id)
+        .expect("completed item is tracked");
+    tracked.state = TrackedDownloadState::ImportPending;
+    let lookup =
+        crate::import::completed_download::CompletedDownloadLookup::from_recent_downloads(vec![
+            completed,
+        ]);
+
+    let imported =
+        crate::import::completed_download::import_with_lookup(&app, &user, tracked, &lookup).await;
+    assert!(!imported, "a pack missing wanted episodes verified: {tracked:?}");
+    assert_ne!(tracked.state, TrackedDownloadState::Imported, "{tracked:?}");
 }
 
 #[tokio::test]
@@ -15537,6 +15833,7 @@ impl DispositionFixture {
             path_missing_since: None,
             no_video_import_retry: None,
             import_execution_retry: None,
+            stalled_import_passes: 0,
             import_hold: None,
             skip_reacquire_on_failure: false,
             manual_failure_cleanup: false,

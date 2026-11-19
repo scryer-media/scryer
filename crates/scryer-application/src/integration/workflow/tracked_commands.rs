@@ -3927,6 +3927,7 @@ async fn handle_tracked_download_background_work_result(
         return None;
     };
 
+    let stalled_passes_before = tracked.stalled_import_passes;
     let state = match result.outcome {
         Ok(finished) => {
             merge_tracked_download_background_work_state(tracked, finished);
@@ -3984,6 +3985,14 @@ async fn handle_tracked_download_background_work_result(
             td.status_messages.first().map(|message| message.text.as_str()),
         )
         .await;
+    } else if state == TrackedDownloadState::ImportPending
+        && result.kind == TrackedDownloadBackgroundWorkKind::Import
+        && let Some(td) = tracker.get_by_download_id(download_id)
+        && td.stalled_import_passes != stalled_passes_before
+    {
+        // Only a pass that changed the count writes, so the limit holds
+        // across a restart without an idle write per poll.
+        crate::tracked_downloads::persist_stalled_import_passes(app, td).await;
     }
 
     publish_runtime_tracked_download_and_activity_item(app, tracker, Some(activity_item)).await;

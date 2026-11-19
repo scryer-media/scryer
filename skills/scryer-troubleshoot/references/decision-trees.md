@@ -68,6 +68,9 @@ not run them.
      three attempts is not due yet. `ARCHIVE_EXTRACTION_BLOCKED`: all three
      failed. Operator retries the import from the queue item once the archive
      is fixed.
+   - `attentionReasonCode` `IMPORT_RETRY_LIMIT_REACHED`: six passes in a row
+     made no progress. Read the import's last `skipReason` and error (step 3)
+     for the cause; operator retries from the queue item once it is fixed.
 3. `ImportHistory.graphql` with limit 25, group by `decision` and
    `skipReason`. `UNRESOLVED_IDENTITY`, `UNPARSEABLE_EPISODE`: file name did
    not map to a title or episode. Operator resolves it from the queue item's
