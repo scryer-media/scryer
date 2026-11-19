@@ -1574,6 +1574,48 @@ async fn interactive_search_blocklist_is_per_title_and_removal_reallows_the_rele
 }
 
 #[tokio::test]
+async fn interactive_search_excludes_a_block_older_than_a_thousand_newer_ones() {
+    let release_title = "Lantern.Cove.2024.1080p.WEB-DL-GRP";
+    let (app, user, blocklist) = bootstrap_interactive_search_with_blocklist(release_title).await;
+    let title = add_movie_title_for_search(&app, &user, "Lantern Cove").await;
+
+    blocklist
+        .block(&blocklist_entry_for(
+            &title.id,
+            release_title,
+            "grab failed",
+        ))
+        .await
+        .expect("seed the old block");
+    for index in 0..1_100 {
+        blocklist
+            .block(&blocklist_entry_for(
+                &title.id,
+                &format!("Lantern.Cove.Other.{index}.2024.1080p"),
+                "grab failed",
+            ))
+            .await
+            .expect("seed a newer block");
+    }
+    assert!(
+        !blocklist
+            .list_for_title(&title.id, 1_000)
+            .await
+            .expect("list newest blocks")
+            .iter()
+            .any(|entry| entry.release_name == release_title),
+        "the fixture leaves the old block outside the newest thousand"
+    );
+
+    assert!(
+        interactive_search_titles(&app, &user, &title.id)
+            .await
+            .is_empty(),
+        "a blocked release stays blocked however many newer blocks follow it"
+    );
+}
+
+#[tokio::test]
 async fn interactive_search_ignores_failed_attempt_history_without_a_blocklist_entry() {
     // The failed-attempt log is history/audit only: a Failed attempt with no
     // blocklist entry (e.g. one whose entry the operator removed) must not gate.
@@ -1712,6 +1754,14 @@ impl BlocklistRepository for FailingBlocklistRepo {
     async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
         Err(AppError::Repository("blocklist unavailable".to_string()))
     }
+    async fn list_matching_for_title(
+        &self,
+        _: &str,
+        _: &[String],
+        _: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        Err(AppError::Repository("blocklist unavailable".to_string()))
+    }
     async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         Err(AppError::Repository("blocklist unavailable".to_string()))
     }
@@ -1780,14 +1830,30 @@ async fn title_release_blocklist_signatures_are_per_title_and_normalized() {
         .await
         .expect("seed other-title entry");
 
-    let signatures = app.load_title_release_blocklist_signatures(&title.id).await;
+    let signatures = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            [
+                ("Mixed.Case.Release.2024.1080p", None),
+                ("Other.Title.Release.2024.1080p", None),
+            ],
+        )
+        .await;
     assert_eq!(
         signatures.release_names,
         HashSet::from([(String::new(), "mixed.case.release.2024.1080p".to_string())])
     );
     assert!(signatures.info_hashes.is_empty());
 
-    let other_signatures = app.load_title_release_blocklist_signatures(&other.id).await;
+    let other_signatures = app
+        .load_title_release_blocklist_signatures(
+            &other.id,
+            [
+                ("Mixed.Case.Release.2024.1080p", None),
+                ("Other.Title.Release.2024.1080p", None),
+            ],
+        )
+        .await;
     assert_eq!(
         other_signatures.release_names,
         HashSet::from([(String::new(), "other.title.release.2024.1080p".to_string())])
@@ -2292,6 +2358,7 @@ async fn a_queued_releases_announced_size_affects_fit_without_creating_score_upg
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
             missing_history: false,
+            blocks_submission: false,
             history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),
@@ -2411,6 +2478,7 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
             missing_history: false,
+            blocks_submission: false,
             history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),

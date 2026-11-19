@@ -41,6 +41,10 @@ pub enum TrackedStatusMessageKind {
     /// Blocked because no installed plugin extracts the download's archives;
     /// reopened when an archive extractor is installed.
     ArchiveExtractorRequired,
+    /// Import found nothing but executables. Failure handling reads this kind,
+    /// which survives the merge back from background work, to block the
+    /// release on every indexer.
+    UnwantedExecutables,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

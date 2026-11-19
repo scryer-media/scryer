@@ -1196,6 +1196,8 @@ const en: LocaleDictionary = {
     "Extracting the download's archives took too long; the import tries again later.",
   "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
     "The download's archives failed to extract on every attempt; retry the import to try again.",
+  "error.reason.BLOCKLIST_IMPORT_NOT_AN_UPGRADE":
+    "Downloaded, but the file was no better than the one already in the library. Blocked on every indexer so it is not downloaded again.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
     "Archive extraction requires a resolved import destination before staging output.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
@@ -8664,6 +8666,7 @@ const en: LocaleDictionary = {
   "wanted.decision.upgradeRejected": "Upgrade rejected",
   "wanted.decision.pendingDelay": "Pending delay",
   "wanted.decision.alreadyActive": "Already active",
+  "wanted.decision.queuedItemBlocksUpgrade": "Waiting for the current download",
   "wanted.decision.acceptInitial": "Accept initial",
   "wanted.decision.acceptUpgrade": "Accept upgrade",
   "wanted.decision.rejectInsufficientDelta": "Insufficient delta",

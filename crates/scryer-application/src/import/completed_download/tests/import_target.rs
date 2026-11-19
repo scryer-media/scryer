@@ -242,6 +242,11 @@ async fn scryer_grab_of_only_an_executable_is_routed_to_failure_handling() {
         crate::tracked_downloads::status_texts(&td.status_messages),
         vec![expected]
     );
+    assert_eq!(
+        td.status_messages[0].kind,
+        crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables,
+        "failure handling reads the kind to block the release on every indexer"
+    );
     assert!(
         td.burned_by_import_gate,
         "the failure is the import gate's, so terminal cleanup removes the files too"

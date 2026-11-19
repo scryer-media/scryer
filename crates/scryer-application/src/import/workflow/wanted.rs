@@ -129,6 +129,7 @@ async fn execute_resolved_episode_import(
     if additional_import {
         if target_episode_ids.len() != 1 {
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection: crate::post_download_gate::ImportedFileRejection {
                     message: "additional-file episode imports support exactly one episode"
                         .to_string(),
@@ -171,6 +172,7 @@ async fn execute_resolved_episode_import(
                 Ok(prepared) => prepared,
                 Err(rejection) => {
                     return Ok(EpisodeImportOutcome::Rejected {
+                        blocklist: None,
                         reason_code: Some(rejection.recycle_reason.to_string()),
                         rejection,
                         disposition: crate::import_decide::RejectionDisposition::Hold,
@@ -241,6 +243,7 @@ async fn execute_resolved_episode_import(
                 .await
         {
             return Ok(EpisodeImportOutcome::Skipped {
+                blocklist: None,
                 message: reason,
                 reason_code: Some(code.as_str().to_string()),
                 skip_reason: Some(
@@ -416,6 +419,7 @@ async fn execute_resolved_episode_import(
     {
         tracing::debug!(file = %precheck_dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped {
+            blocklist: None,
             message: reason,
             reason_code: Some(code.as_str().to_string()),
             skip_reason: Some(
@@ -490,6 +494,7 @@ async fn execute_resolved_episode_import(
             // must stay grabbable after review.
             if rejection.requires_review() {
                 return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist: None,
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
                     skip_reason: Some(rejection.review_hold_skip_reason()),
@@ -505,6 +510,7 @@ async fn execute_resolved_episode_import(
             let disposition =
                 crate::import_decide::prepare_rejection_disposition_for_origin(&rejection, origin);
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection,
                 disposition,
                 reason_code: None,
@@ -538,6 +544,7 @@ async fn execute_resolved_episode_import(
         };
         let rejection = origin.held_rejection(rejection);
         return Ok(EpisodeImportOutcome::Rejected {
+            blocklist: None,
             disposition: crate::import_decide::prepare_rejection_disposition_for_origin(
                 &rejection, origin,
             ),
@@ -571,6 +578,7 @@ async fn execute_resolved_episode_import(
             "holding episode replacement for manual resolution"
         );
         return Ok(EpisodeImportOutcome::Skipped {
+            blocklist: None,
             message,
             reason_code: Some(
                 crate::post_download_gate::REPLACE_BLOCKED_RUNTIME_MISMATCH_CODE.to_string(),
@@ -650,6 +658,7 @@ async fn execute_resolved_episode_import(
             rejection,
             disposition,
             better_library_copy,
+            blocklist,
         } => {
             tracing::info!(
                 title_id = %title.id,
@@ -668,6 +677,7 @@ async fn execute_resolved_episode_import(
                 // least as well, so the episodes are in place and the file has
                 // nothing to add. The existing file is left exactly as it is.
                 return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist,
                     message: rejection.message,
                     reason_code,
                     skip_reason: rejection.skip_reason,
@@ -676,6 +686,7 @@ async fn execute_resolved_episode_import(
                 });
             }
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist,
                 rejection,
                 disposition,
                 reason_code,
@@ -736,6 +747,7 @@ async fn execute_resolved_episode_import(
                     "import source is identical to the library file it would replace; leaving the library file in place"
                 );
                 return Ok(EpisodeImportOutcome::Skipped {
+                    blocklist: None,
                     message: rejection.message,
                     reason_code: Some(rejection.recycle_reason.to_string()),
                     skip_reason: rejection.skip_reason,
@@ -833,6 +845,7 @@ async fn execute_resolved_episode_import(
                 // The transfer itself failed a safety check; nothing was judged
                 // about the release, so it keeps its place in the search space.
                 return Ok(EpisodeImportOutcome::Rejected {
+                    blocklist: None,
                     rejection,
                     disposition: crate::import_decide::RejectionDisposition::Hold,
                     reason_code: None,

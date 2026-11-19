@@ -227,6 +227,14 @@ pub trait ListMembershipRepository: Send + Sync {
 pub trait ListExclusionRepository: Send + Sync {
     async fn create(&self, exclusion: ListExclusion) -> AppResult<ListExclusion>;
 
+    /// Store several exclusions as one write: all of them or none.
+    async fn create_many(&self, exclusions: Vec<ListExclusion>) -> AppResult<()> {
+        for exclusion in exclusions {
+            self.create(exclusion).await?;
+        }
+        Ok(())
+    }
+
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ListExclusion>>;
 
     /// Every exclusion, all-lists first, then list-scoped, newest first within

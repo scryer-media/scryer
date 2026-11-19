@@ -6424,6 +6424,49 @@ async fn automatic_episode_downgrade_is_already_present_without_burning() {
             .len(),
         1
     );
+    assert_lost_release_blocked_on_every_indexer(
+        &app,
+        &title.id,
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+    )
+    .await;
+}
+
+/// A grab's file that lost to the library leaves one block on its release
+/// name, naming no indexer, so the same release is decided `DbBlocklisted`
+/// whichever indexer offers it next.
+async fn assert_lost_release_blocked_on_every_indexer(
+    app: &AppUseCase,
+    title_id: &str,
+    release: &str,
+) {
+    let entries = app
+        .services
+        .workflow
+        .blocklist_repo
+        .list_for_title(title_id, 50)
+        .await
+        .expect("list title blocklist");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].indexer_id, "", "{entries:?}");
+    assert_eq!(
+        entries[0].reason.as_deref(),
+        Some(crate::error_reasons::blocklist::IMPORT_NOT_AN_UPGRADE)
+    );
+    let signatures = app
+        .load_title_release_blocklist_signatures(title_id, [(release, None)])
+        .await;
+    for indexer in ["indexer-that-served-it", "another-indexer"] {
+        assert!(
+            crate::app_usecase_discovery::is_release_blocklisted(
+                Some(indexer),
+                release,
+                None,
+                &signatures,
+            ),
+            "{indexer}"
+        );
+    }
 }
 
 async fn import_completed_events_for_title(
@@ -16445,7 +16488,8 @@ score_entry["operator_refuses_this_file"] := -10000 if {
 
 /// **`Skip`.** The scope already holds a better tier. The release is perfectly
 /// good, it just lost the comparison — so it is not burned, and the scope is not
-/// reopened for a search that has nothing new to find.
+/// reopened for a search that has nothing new to find. Its name is blocked on
+/// every indexer, so the same download is not fetched and refused again.
 #[tokio::test]
 async fn an_import_that_loses_the_comparison_is_skipped_without_burning_the_release() {
     let release_title = "Loses Comparison Movie.2026.720p.WEB-DL-GRP";
@@ -16467,11 +16511,8 @@ async fn an_import_that_loses_the_comparison_is_skipped_without_burning_the_rele
         scryer_domain::ImportDecision::Skipped,
         "{result:?}"
     );
-    assert!(
-        fixture.blocklisted_titles().await.is_empty(),
-        "losing a comparison is not a lie: {:?}",
-        fixture.blocklisted_titles().await
-    );
+    assert_lost_release_blocked_on_every_indexer(&fixture.app, &fixture.title.id, release_title)
+        .await;
     assert_eq!(
         fixture.scope_status().await,
         AcquisitionScopeStatus::Grabbed,

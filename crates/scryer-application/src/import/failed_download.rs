@@ -81,11 +81,19 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
-    let failure_reason = td
-        .client_item
-        .attention_reason
-        .as_deref()
-        .unwrap_or("Failed download detected");
+    // Import's verdict lives in the status messages: the client item is the
+    // client's own report and is refreshed on every poll.
+    let unwanted_executables = td.status_messages.iter().find(|message| {
+        message.kind == crate::tracked_downloads::TrackedStatusMessageKind::UnwantedExecutables
+    });
+    let failure_code =
+        unwanted_executables.map(|_| crate::error_reasons::download_failure::UNWANTED_EXECUTABLES);
+    let failure_reason = unwanted_executables
+        .map(|message| message.text.as_str())
+        .or(td.client_item.attention_reason.as_deref())
+        .unwrap_or("Failed download detected")
+        .to_owned();
+    let failure_reason = failure_reason.as_str();
 
     tracing::warn!(
         id = %td.id,
@@ -109,12 +117,13 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
                 .clone()
                 .unwrap_or_else(|| td.client_item.title_name.clone()),
             reason: failure_reason.to_string(),
-            // Only the import gate routes a download here with this flag set
-            // (a download holding nothing but unwanted executables); the
-            // blocklist then names the import's verdict, not the client.
+            // The import gate and the warning timeout route a download here
+            // with this flag set; the blocklist then names Scryer's verdict,
+            // not the client.
             blocklist_reason: td
                 .burned_by_import_gate
                 .then(|| format!("import rejected: {failure_reason}")),
+            failure_code,
             skip_reacquire: td.skip_reacquire_on_failure,
         },
         td.manual_failure_cleanup,

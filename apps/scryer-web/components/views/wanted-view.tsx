@@ -155,6 +155,7 @@ function formatWantedDecisionCode(code: string, t: Translate) {
     upgrade_rejected: "wanted.decision.upgradeRejected",
     pending_delay: "wanted.decision.pendingDelay",
     already_active: "wanted.decision.alreadyActive",
+    queued_item_blocks_upgrade: "wanted.decision.queuedItemBlocksUpgrade",
     accept_initial: "wanted.decision.acceptInitial",
     accept_upgrade: "wanted.decision.acceptUpgrade",
     reject_insufficient_delta: "wanted.decision.rejectInsufficientDelta",

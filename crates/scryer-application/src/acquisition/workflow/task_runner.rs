@@ -2487,7 +2487,12 @@ async fn plan_series_pack_for_title(
         )
         .await;
     }
-    let blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&evaluated_candidates),
+        )
+        .await;
 
     // Only the *best* candidate's coverage here, not the union across the list.
     //
@@ -2899,8 +2904,14 @@ async fn commit_season_pack_proposal(
                             grabbed_at: Some(now.to_rfc3339()),
                         })
                         .await?;
-                    let pack_blocklist =
-                        app.load_title_release_blocklist_signatures(&title.id).await;
+                    let pack_blocklist = app
+                        .load_title_release_blocklist_signatures(
+                            &title.id,
+                            crate::app_usecase_discovery::search_result_blocklist_keys(
+                                pack_results,
+                            ),
+                        )
+                        .await;
                     persist_standby_candidates(
                         app,
                         item,
@@ -4897,7 +4908,12 @@ async fn process_single_target(
     // Load the per-title blocklist (covers post-import failures like fake/non-video
     // files, in addition to the download-client snapshot checked below). It is the
     // single, removable exclusion source; the failed-attempt log never gates.
-    let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let db_blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+        )
+        .await;
     let existing_files = context
         .reads
         .primary_file_cutoffs(app)
@@ -5442,7 +5458,12 @@ async fn process_single_target(
     // Re-read the blocklist: a definitive grab failure in the walk above wrote
     // entries the loop's snapshot predates, and retaining a release this cycle
     // just burned would hand the next walk a row it must immediately skip.
-    let retention_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let retention_blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+        )
+        .await;
     let retention_complete = persist_standby_candidates(
         app,
         item,
@@ -5543,7 +5564,12 @@ async fn propose_covered_episode_evidence(
         .await?;
 
     let failed_routes = cycle.failed_routes();
-    let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let db_blocklist = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            crate::app_usecase_discovery::search_result_blocklist_keys(&results),
+        )
+        .await;
     let eligible = results
         .iter()
         .enumerate()

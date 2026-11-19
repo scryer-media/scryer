@@ -1828,14 +1828,24 @@ impl AppUseCase {
         // RSS evaluates multiple scopes and may block a failed release between
         // them. Share catalog/policy inputs, but refresh this mutable exclusion.
         if let Some(prepared) = prepared.as_mut() {
-            prepared.blocklist = self.load_title_release_blocklist_signatures(title_id).await;
+            prepared.blocklist = self
+                .load_title_release_blocklist_signatures(
+                    title_id,
+                    search_result_blocklist_keys(&raw_results),
+                )
+                .await;
         }
         if prepared.is_none() {
             #[cfg(test)]
             reads
                 .scoring_preparations
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let blocklist = self.load_title_release_blocklist_signatures(title_id).await;
+            let blocklist = self
+                .load_title_release_blocklist_signatures(
+                    title_id,
+                    search_result_blocklist_keys(&raw_results),
+                )
+                .await;
             let DownloadSourceCapabilities {
                 has_usenet: has_usenet_client,
                 has_torrent: has_torrent_client,
@@ -3252,12 +3262,14 @@ impl AppUseCase {
     }
 }
 
-/// Upper bound on blocklist entries read per title for search-time exclusion.
-const TITLE_RELEASE_BLOCKLIST_READ_LIMIT: usize = 1_000;
-
-/// A title's blocked releases, keyed the way [`is_release_blocklisted`] keys a
-/// candidate. The per-title `blocklist` table is the single search-time
-/// exclusion source; `release_download_attempts` is history only.
+/// A title's blocked releases among the candidates they were loaded for, keyed
+/// the way [`is_release_blocklisted`] keys a candidate. The per-title
+/// `blocklist` table is the single search-time exclusion source;
+/// `release_download_attempts` is history only.
+///
+/// The set holds only the rows that match the releases passed to
+/// [`AppUseCase::load_title_release_blocklist_signatures`], so it answers for
+/// those releases and no others.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TitleReleaseBlocklistSignatures {
     /// `(indexer_id, normalized_release_name)`. An empty indexer id blocks the
@@ -3267,19 +3279,48 @@ pub(crate) struct TitleReleaseBlocklistSignatures {
     pub(crate) info_hashes: HashSet<String>,
 }
 
+/// The `(release name, infohash)` keys of search results, for
+/// [`AppUseCase::load_title_release_blocklist_signatures`].
+pub(crate) fn search_result_blocklist_keys(
+    results: &[IndexerSearchResult],
+) -> impl Iterator<Item = (&str, Option<&str>)> {
+    results
+        .iter()
+        .map(|result| (result.title.as_str(), result.info_hash()))
+}
+
 impl AppUseCase {
-    /// Loads the title's blocked releases. A repository error warns and yields
-    /// an empty set: a storage hiccup degrades to "nothing excluded" rather
-    /// than failing the search.
-    pub(crate) async fn load_title_release_blocklist_signatures(
+    /// Loads the title's blocked releases among `releases`, each given as its
+    /// `(release name, infohash)`. Every matching row counts, however old: the
+    /// read is an exact lookup of these names and hashes, not a window over
+    /// the title's newest rows. A repository error warns and yields an empty
+    /// set: a storage hiccup degrades to "nothing excluded" rather than
+    /// failing the search.
+    pub(crate) async fn load_title_release_blocklist_signatures<'a>(
         &self,
         title_id: &str,
+        releases: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     ) -> TitleReleaseBlocklistSignatures {
+        let mut release_names = HashSet::new();
+        let mut info_hashes = HashSet::new();
+        for (release_name, info_hash) in releases {
+            if let Some(release_name) = normalize_release_name(Some(release_name)) {
+                release_names.insert(release_name);
+            }
+            if let Some(info_hash) = scryer_plugin_sdk::torrent::normalize_info_hash(info_hash) {
+                info_hashes.insert(info_hash);
+            }
+        }
+        if release_names.is_empty() && info_hashes.is_empty() {
+            return TitleReleaseBlocklistSignatures::default();
+        }
+        let release_names = release_names.into_iter().collect::<Vec<_>>();
+        let info_hashes = info_hashes.into_iter().collect::<Vec<_>>();
         let entries = match self
             .services
             .workflow
             .blocklist_repo
-            .list_for_title(title_id, TITLE_RELEASE_BLOCKLIST_READ_LIMIT)
+            .list_matching_for_title(title_id, &release_names, &info_hashes)
             .await
         {
             Ok(entries) => entries,

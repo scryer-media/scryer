@@ -834,6 +834,12 @@ impl AppUseCase {
                 );
                 Some(crate::admission::QueuedRelease {
                     missing_history: false,
+                    // The job is still in the client's working queue, the same
+                    // test the submission conflict check applies.
+                    blocks_submission: crate::acquisition_workflow::submission_is_active(
+                        submission,
+                        dl_snapshot,
+                    ),
                     history_cutoff_reached: false,
                     release_group: facts.release_group.clone(),
                     release_key: crate::admission::release_key(&release_title),
@@ -938,6 +944,9 @@ impl AppUseCase {
                         .is_none_or(|cutoff| facts.score >= cutoff);
                 crate::admission::QueuedRelease {
                     missing_history: state.status == crate::AcquisitionScopeStatus::Wanted,
+                    // The ledger's memory of a grab; a job the client is still
+                    // working appears as its own submission claim.
+                    blocks_submission: false,
                     history_cutoff_reached,
                     release_group: facts.release_group.clone(),
                     covers: match submission_scope_for_acquisition_scope_state(state) {

@@ -431,7 +431,7 @@ pub use catalog::workflow::{
 };
 pub use contracts::{
     AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeStatesQuery,
-    AcquisitionScopeStatusTally, ActivityWindowCounts, AudioStreamDetail,
+    AcquisitionScopeStatusTally, ActivityWindowCounts, AudioStreamDetail, BlocklistMatch,
     CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator, CollectionUpdate,
     DashboardActivityStats, DeleteExecutionConfirmation, DownloadClientAddRequest,
     DownloadClientBindingRecord, DownloadClientConfigUpdate, DownloadClientMarkImportedRequest,

@@ -8,6 +8,8 @@ mod blake3_identities_upgrade_tests;
 #[cfg(test)]
 #[path = "blocklist_release_identity_upgrade_tests.rs"]
 mod blocklist_release_identity_upgrade_tests;
+#[cfg(test)]
+mod blocklist_title_release_name_index_upgrade_tests;
 pub mod canonical_download_identity;
 #[cfg(test)]
 mod catalog_sort_indexes_upgrade_tests;

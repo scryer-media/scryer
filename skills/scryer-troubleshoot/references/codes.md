@@ -57,6 +57,8 @@ Format: code: meaning → usual next look.
   expected
 - `already_active`: same release already in the queue → queue
 - `queued_better_or_equal`: better or equal release downloading → queue
+- `queued_item_blocks_upgrade`: a better release waits until the worse one
+  still in the client queue finishes or is removed → queue; expected
 - `db_blocklisted`: blocklisted after an earlier failure → title history
   `BLOCKLISTED`
 - `pending_delay`: eligible but held by a delay profile → pending releases,

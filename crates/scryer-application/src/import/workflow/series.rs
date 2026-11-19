@@ -376,6 +376,10 @@ enum EpisodeImportOutcome {
         skip_reason: Option<ImportSkipReason>,
         episode_ids: Vec<String>,
         already_present_destination: Option<(String, String)>,
+        /// A block on the release name this file earned by losing to the
+        /// library. Reported, like `blocklist_after_import`, so a pack writes
+        /// one row.
+        blocklist: Option<crate::import_decide::BlocklistDirective>,
     },
     Ignored {
         message: String,
@@ -391,6 +395,8 @@ enum EpisodeImportOutcome {
         disposition: crate::import_decide::RejectionDisposition,
         reason_code: Option<String>,
         episode_ids: Vec<String>,
+        /// As on `Skipped`.
+        blocklist: Option<crate::import_decide::BlocklistDirective>,
     },
 }
 
@@ -1557,6 +1563,7 @@ async fn import_single_episode_file(
             )
             .await?;
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection: crate::post_download_gate::ImportedFileRejection {
                     message: message.clone(),
                     recycle_reason: reason_code,
@@ -1636,6 +1643,7 @@ async fn import_single_episode_file(
             )
             .await?;
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection: crate::post_download_gate::ImportedFileRejection {
                     message,
                     recycle_reason: ANIME_NUMBERING_AMBIGUOUS_REASON,
@@ -1670,6 +1678,7 @@ async fn import_single_episode_file(
             )
             .await?;
             return Ok(EpisodeImportOutcome::Rejected {
+                blocklist: None,
                 rejection: crate::post_download_gate::ImportedFileRejection {
                     message,
                     recycle_reason: reason_code,
@@ -1715,6 +1724,7 @@ async fn import_single_episode_file(
             "skipping file with no parseable episode info"
         );
         return Ok(EpisodeImportOutcome::Skipped {
+            blocklist: None,
             message: unresolved_episode_import_message(
                 &parsed,
                 parse_video,
@@ -1755,6 +1765,7 @@ async fn import_single_episode_file(
         )
         .await?;
         return Ok(EpisodeImportOutcome::Rejected {
+            blocklist: None,
             rejection: crate::post_download_gate::ImportedFileRejection {
                 // A release can number an episode the catalog files elsewhere
                 // (an OVA named S01E13 that the catalog lists as a special);
@@ -1800,6 +1811,7 @@ async fn import_single_episode_file(
         )
         .await?;
         return Ok(EpisodeImportOutcome::Rejected {
+            blocklist: None,
             rejection: crate::post_download_gate::ImportedFileRejection {
                 message: obfuscated_message.unwrap_or_else(|| {
                     "Automatic import resolved the downloaded file to episode(s) outside the grabbed release. Open Manual Import and assign the correct season and episode."
@@ -1999,8 +2011,21 @@ async fn import_single_episode_file(
             reason_code,
             skip_reason,
             already_present_destination,
+            blocklist,
             ..
         } => {
+            // Lost to the library: block the name once for the download,
+            // recycling and reopening nothing.
+            if let Some(directive) = blocklist {
+                blocklist_ledger.record_import_blocklist(
+                    &release_evidence
+                        .release_title(Some(parse_video))
+                        .unwrap_or_default(),
+                    source_video,
+                    &target_episode_ids,
+                    directive.reason.clone(),
+                );
+            }
             let already_present = episode_skip_is_already_present(skip_reason.as_ref());
             if already_present {
                 let release_title = release_evidence.release_title(Some(parse_video));
@@ -2052,8 +2077,21 @@ async fn import_single_episode_file(
             rejection,
             disposition,
             reason_code,
+            blocklist,
             ..
         } => {
+            // Lost to the library: block the name once for the download,
+            // recycling and reopening nothing.
+            if let Some(directive) = blocklist {
+                blocklist_ledger.record_import_blocklist(
+                    &release_evidence
+                        .release_title(Some(parse_video))
+                        .unwrap_or_default(),
+                    source_video,
+                    &target_episode_ids,
+                    directive.reason.clone(),
+                );
+            }
             // Only a release that provably lied is burned, and only once per
             // download. `Skip` and `Hold` record the decision and stop: the
             // download sits in `ImportBlocked` for the operator either way, and
