@@ -4,7 +4,8 @@
 //! A group the translator cannot express is still saved, as a disabled
 //! starter rule named `(Maintainerr) FAILED - <name>` whose description says
 //! what did not translate. A group whose rule already exists under either
-//! name is skipped, checked again in the same transaction as the write.
+//! name is skipped, checked again under the lifecycle mutation lock in the
+//! same transaction as the write.
 
 use crate::lifecycle_rules::maintainerr::{
     ArrKind, MAINTAINERR_FAILED_NAME_PREFIX, MAINTAINERR_NAME_PREFIX, MaintainerrDiagnostic,
@@ -28,11 +29,6 @@ pub mod reasons {
     pub const GROUP_UNTRANSLATABLE: &str = "RULE_IMPORT_GROUP_UNTRANSLATABLE";
     pub const ALL: &[&str] = &[GROUP_UNTRANSLATABLE];
 }
-
-/// Serializes the name check and write of imported lifecycle rules across
-/// every run in this process, so two overlapping imports cannot both pass
-/// the check for one group.
-static LIFECYCLE_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// What one rule group saves as.
 #[derive(Debug)]
@@ -168,17 +164,17 @@ impl AppUseCase {
             library_ids: Vec::new(),
             max_titles_per_run: rule.max_titles_per_run,
         };
-        let created = {
-            let _writes = LIFECYCLE_WRITES.lock().await;
-            self.create_lifecycle_rule_set_unless_named(
+        // Both names are checked again under the lifecycle mutation lock, in
+        // the insert's transaction, so overlapping runs write a group once.
+        let created = self
+            .create_lifecycle_rule_set_unless_named(
                 actor,
                 draft,
                 BuilderModelChange::Keep,
                 None,
                 &rule.taken_names,
             )
-            .await
-        };
+            .await;
         if matches!(created, Ok(_)) {
             // Saved now, or by someone else since the run loaded the names.
             context

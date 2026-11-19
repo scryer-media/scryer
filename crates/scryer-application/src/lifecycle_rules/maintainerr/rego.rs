@@ -401,7 +401,9 @@ fn grace_days(delete_after_days: Option<f64>) -> i64 {
     days.clamp(0.0, LIFECYCLE_MAX_GRACE_DAYS as f64) as i64
 }
 
-/// Text with every control or line-breaking character replaced by a space.
+/// Text with every control or line-breaking character replaced by a space and
+/// runs of whitespace collapsed to one, as the Sonarr and Radarr import cleans
+/// remote names.
 fn single_line(text: &str) -> String {
     text.chars()
         .map(|c| {
@@ -412,8 +414,9 @@ fn single_line(text: &str) -> String {
             }
         })
         .collect::<String>()
-        .trim()
-        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn comment(text: &str) -> String {

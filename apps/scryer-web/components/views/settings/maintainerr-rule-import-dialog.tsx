@@ -14,7 +14,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { ExternalRuleImportController } from "@/lib/hooks/use-external-rule-import";
+import {
+  ruleImportBusy,
+  type ExternalRuleImportController,
+} from "@/lib/hooks/use-external-rule-import";
 import type {
   ExternalRuleImportItem,
   ExternalRuleImportItemState,
@@ -129,10 +132,12 @@ export function MaintainerrRuleImportDialog({
   const { runs } = useJobRunToasts();
   const {
     run,
+    running,
     report,
     starting,
     loadingReport,
     error,
+    reportError,
     start,
     reloadReport,
     reset,
@@ -146,11 +151,15 @@ export function MaintainerrRuleImportDialog({
       run ? (runs.find((candidate) => candidate.id === run.id) ?? run) : null,
     [run, runs],
   );
-  const running = Boolean(run) && !report && !loadingReport && !error;
   // A run that finished but whose report did not load can be retried.
   const reportFailed =
-    Boolean(run) && !report && !loadingReport && Boolean(error);
-  const busy = starting || running || loadingReport;
+    Boolean(run) &&
+    !running &&
+    !report &&
+    !loadingReport &&
+    Boolean(reportError);
+  const busy = ruleImportBusy(controller);
+  const shownError = error ?? reportError;
 
   const progress = running ? ruleImportProgress(liveRun?.progressJson) : null;
   const counts = report?.counts ?? progress?.counts ?? null;
@@ -193,13 +202,13 @@ export function MaintainerrRuleImportDialog({
             />
           </label>
 
-          {error ? (
+          {shownError ? (
             <div
               id="settings-lifecycle-rules-maintainerr-error"
               className="flex gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]"
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div className="whitespace-pre-wrap">{error}</div>
+              <div className="whitespace-pre-wrap">{shownError}</div>
             </div>
           ) : null}
 
@@ -262,7 +271,7 @@ export function MaintainerrRuleImportDialog({
             variant="secondary"
             onClick={() => onOpenChange(false)}
           >
-            {busy || report ? t("label.close") : t("label.cancel")}
+            {busy || run ? t("label.close") : t("label.cancel")}
           </Button>
           {reportFailed ? (
             <Button

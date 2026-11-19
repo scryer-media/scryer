@@ -403,6 +403,14 @@ impl AppUseCase {
             builder_model_json,
         );
 
+        // Every insert holds the lifecycle mutation lock, so the name check
+        // below sees each write that finished before it and none in flight.
+        let mutation = self
+            .services
+            .customization
+            .lifecycle_rule_mutation_lock
+            .lock()
+            .await;
         let created = if taken_names.is_empty() {
             self.services
                 .customization
@@ -417,6 +425,7 @@ impl AppUseCase {
                 .create_rule_set_unless_named(&rule_set, &revision, taken_names)
                 .await?
         };
+        drop(mutation);
         if !created {
             return Ok(None);
         }
@@ -676,20 +685,29 @@ impl AppUseCase {
                 .await?;
         }
 
-        self.services
-            .customization
-            .lifecycle_rule_sets
-            .update_rule_set_metadata(
-                &rule_set.id,
-                &name,
-                &description,
-                &library_ids,
-                schedule.as_ref(),
-                max_titles_per_run,
-                scope_changed,
-                now,
-            )
-            .await?;
+        {
+            // A rename takes a name an import may be checking for.
+            let _mutation = self
+                .services
+                .customization
+                .lifecycle_rule_mutation_lock
+                .lock()
+                .await;
+            self.services
+                .customization
+                .lifecycle_rule_sets
+                .update_rule_set_metadata(
+                    &rule_set.id,
+                    &name,
+                    &description,
+                    &library_ids,
+                    schedule.as_ref(),
+                    max_titles_per_run,
+                    scope_changed,
+                    now,
+                )
+                .await?;
+        }
         if let Some(max) = max_titles_per_run {
             rule_set.max_titles_per_run = max;
         }

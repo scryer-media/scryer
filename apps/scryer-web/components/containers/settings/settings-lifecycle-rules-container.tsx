@@ -477,12 +477,15 @@ export function SettingsLifecycleRulesContainer({
   const canImportRules =
     sessionUser !== null &&
     hasAppPermission(sessionUser, APP_PERMISSIONS.manageCatalogSettings);
-  const maintainerrImport = useExternalRuleImport();
+  // A finished run may have saved rules even when the dialog is closed or
+  // its report was cleared.
+  const refreshAfterImport = useCallback(() => {
+    void refreshRuleSets();
+  }, [refreshRuleSets]);
+  const maintainerrImport = useExternalRuleImport({
+    onTerminal: refreshAfterImport,
+  });
   const [isMaintainerrImportOpen, setIsMaintainerrImportOpen] = useState(false);
-  const importedRunId = maintainerrImport.report?.runId ?? null;
-  useEffect(() => {
-    if (importedRunId) void refreshRuleSets();
-  }, [importedRunId, refreshRuleSets]);
 
   const refreshCatalogs = useCallback(async () => {
     try {

@@ -1008,6 +1008,77 @@ async fn maintainerr_rule_import_saves_disabled_lifecycle_rules_and_skips_them_o
 }
 
 #[tokio::test]
+async fn overlapping_maintainerr_rule_imports_save_each_group_once() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("sample-user"))
+            .await
+            .expect("operator");
+        let server = maintainerr_with_groups(false).await;
+
+        // Both runs are accepted before either settles, so both plans can
+        // see no existing rule; each group, translated or not, is still
+        // written once.
+        let first = ctx
+            .app
+            .start_rule_import(
+                &actor,
+                "maintainerr-overlap-a",
+                maintainerr_connection(&server),
+            )
+            .await
+            .expect("first accepted");
+        let second = ctx
+            .app
+            .start_rule_import(
+                &actor,
+                "maintainerr-overlap-b",
+                maintainerr_connection(&server),
+            )
+            .await
+            .expect("second accepted");
+        assert_ne!(first.id, second.id);
+        let (first, second) = tokio::join!(
+            ctx.app.wait_rule_import(&actor, &first.id),
+            ctx.app.wait_rule_import(&actor, &second.id),
+        );
+        let (first, second) = (
+            first.expect("first settles"),
+            second.expect("second settles"),
+        );
+        assert_eq!(first.items.len(), second.items.len());
+        for index in 0..first.items.len() {
+            let (a, b) = (&first.items[index], &second.items[index]);
+            let skipped = [a, b]
+                .into_iter()
+                .filter(|item| item.state == RuleImportItemState::SkippedExists)
+                .collect::<Vec<_>>();
+            assert_eq!(skipped.len(), 1, "{:?} {:?}", a.state, b.state);
+            assert_eq!(skipped[0].reason.as_deref(), Some(refusal::ALREADY_EXISTS));
+            assert_eq!(skipped[0].rule_set_id, None);
+        }
+
+        let mut names: Vec<_> = ctx
+            .app
+            .list_lifecycle_rule_sets(&actor)
+            .await
+            .expect("lifecycle rules")
+            .into_iter()
+            .map(|rule| rule.name)
+            .collect();
+        names.sort();
+        let mut unique = names.clone();
+        unique.dedup();
+        assert_eq!(names, unique);
+        assert_eq!(names.len(), first.items.len());
+    })
+    .await
+    .expect("overlapping maintainerr import scenario bound");
+}
+
+#[tokio::test]
 async fn maintainerr_rule_reading_who_watched_needs_permission_management() {
     timeout(FAILURE_BOUND, async {
         let ctx = TestContext::new().await;
