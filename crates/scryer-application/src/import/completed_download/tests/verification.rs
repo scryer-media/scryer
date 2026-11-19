@@ -165,6 +165,172 @@ async fn verify_import_does_not_terminalize_movie_when_largest_video_has_no_arti
     assert!(!verify_import_inner(&app, &td, 1, Some(&completed)).await);
 }
 
+fn lantern_cove_release_evidence(
+    scope: crate::SubmissionScope,
+) -> crate::import_workflow::ReleaseEvidence {
+    crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Lantern.Cove.The.Movie.2019.1080p.WEB-DL".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope,
+    }
+}
+
+/// A film linked to a series special, with a smaller bonus video beside it.
+fn lantern_cove_series_movie_fixture(
+    film_result: &str,
+    film_episode_id: Option<&str>,
+) -> (
+    tempfile::TempDir,
+    AppUseCase,
+    TrackedDownload,
+    CompletedDownload,
+) {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::File::create(
+        temp_dir
+            .path()
+            .join("Lantern.Cove.The.Movie.2019.1080p.mkv"),
+    )
+    .expect("create film")
+    .set_len(60 * 1024 * 1024)
+    .expect("size film");
+    std::fs::File::create(temp_dir.path().join("Lantern.Cove.Creditless.Opening.mkv"))
+        .expect("create bonus video")
+        .set_len(5 * 1024 * 1024)
+        .expect("size bonus video");
+    let title = build_title("title-1", "Lantern Cove", MediaFacet::Series);
+    let mut film = build_artifact_with_result(
+        "dl-1",
+        film_episode_id,
+        "Lantern.Cove.The.Movie.2019.1080p.mkv",
+        film_result,
+    );
+    film.media_kind = "movie".to_string();
+    let app = build_app(vec![title], vec![], vec![], vec![film]);
+    let td = build_tracked_download(
+        "title-1",
+        "series",
+        "Lantern.Cove.The.Movie.2019.1080p.WEB-DL",
+    );
+    let completed = build_completed_download(
+        "Lantern.Cove.The.Movie.2019.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    (temp_dir, app, td, completed)
+}
+
+/// The series-movie import places only the largest video, so a bonus video
+/// beside the film must not keep the download from verifying.
+#[tokio::test]
+async fn verify_import_terminalizes_series_movie_with_unrecorded_bonus_video() {
+    let (_temp_dir, app, td, completed) = lantern_cove_series_movie_fixture("imported", None);
+    let evidence = lantern_cove_release_evidence(crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: "link-1".to_string(),
+    });
+
+    assert!(
+        super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            1,
+            Some(&completed),
+            Some(&evidence),
+        )
+        .await
+        .expect("verification")
+    );
+    // Without the series-movie scope the bonus video still needs a row.
+    assert!(!verify_import_inner(&app, &td, 1, Some(&completed)).await);
+}
+
+/// An identical film already in the library is recorded as already present
+/// with its linked episode; that settles the download on a later pass too.
+#[tokio::test]
+async fn verify_import_terminalizes_series_movie_already_present_with_bonus_video() {
+    let (_temp_dir, app, td, completed) =
+        lantern_cove_series_movie_fixture("already_present", Some("ep-special-1"));
+    let evidence = lantern_cove_release_evidence(crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: "link-1".to_string(),
+    });
+
+    assert!(
+        super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            0,
+            Some(&completed),
+            Some(&evidence),
+        )
+        .await
+        .expect("verification")
+    );
+    assert!(
+        super::verify_retry_import_with_release_evidence(&app, &td, 0, &completed, &evidence)
+            .await
+            .expect("verification")
+    );
+}
+
+/// Episode downloads keep demanding a disposition for every visible video:
+/// the automatic importer skips unparseable files without a row.
+#[tokio::test]
+async fn verify_import_keeps_unrecorded_smaller_video_blocking_for_episode_scope() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::File::create(temp_dir.path().join("Harbor.Lights.S01E01.1080p.mkv"))
+        .expect("create episode")
+        .set_len(60 * 1024 * 1024)
+        .expect("size episode");
+    std::fs::File::create(temp_dir.path().join("Harbor.Lights.S01E02.1080p.mkv"))
+        .expect("create second episode")
+        .set_len(5 * 1024 * 1024)
+        .expect("size second episode");
+    let title = build_title("title-1", "Harbor Lights", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![build_episode("ep-1", "title-1", "season-1", "1", "1", None)];
+    let artifacts = vec![build_artifact(
+        "dl-1",
+        "ep-1",
+        "Harbor.Lights.S01E01.1080p.mkv",
+    )];
+    let app = build_app(vec![title], vec![collection], episodes, artifacts);
+    let td = build_tracked_download("title-1", "series", "Harbor.Lights.S01E01.1080p.WEB-DL");
+    let completed = build_completed_download(
+        "Harbor.Lights.S01E01.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    let evidence = crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Harbor.Lights.S01E01.1080p.WEB-DL".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope: crate::SubmissionScope::Episode {
+            episode_id: "ep-1".to_string(),
+        },
+    };
+
+    assert!(
+        !super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            1,
+            Some(&completed),
+            Some(&evidence),
+        )
+        .await
+        .expect("verification")
+    );
+}
+
 #[tokio::test]
 async fn verify_import_uses_completed_identity_alias_with_normalized_client_fields() {
     let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
