@@ -11305,6 +11305,28 @@ pub trait RuleSetRepository: Send + Sync {
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
 
+    /// The name of every rule set.
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .map(|rule_set| rule_set.name)
+            .collect())
+    }
+
+    /// Inserts new rule sets and their history in one transaction: all of them
+    /// are written, or none.
+    async fn create_rule_sets(
+        &self,
+        _rule_sets: &[RuleSet],
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "batched rule set writes are not configured".to_string(),
+        ))
+    }
+
     async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
         Ok(Vec::new())
     }

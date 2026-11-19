@@ -73,6 +73,7 @@ pub mod fs_safety;
 pub mod grabbed_file_names;
 pub mod nzb_text;
 pub mod rule_import;
+pub mod rule_import_arr;
 pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
@@ -170,6 +171,7 @@ pub use rules::preview::{
     RuleSetTestRequest, RuleSetTestResult, RuleSetTestRuleSetResult,
 };
 pub use rules::tracked_packs::{RulePackPreviewChange, TrackedRulePackPreview};
+pub use rules::workflow::NewRuleSet;
 mod scheduler;
 pub mod scripts;
 mod security;

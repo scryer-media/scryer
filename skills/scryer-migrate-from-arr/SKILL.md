@@ -93,20 +93,28 @@ snapshot. Report gaps before going on.
 
 ## f. Custom formats
 
-Follow `references/custom-formats.md`:
+Follow `references/custom-formats.md`. Primary path, once per arr app
+(job key `EXTERNAL_RULE_IMPORT`, needs `MANAGE_CATALOG_SETTINGS`):
 
-1. Translate in review mode; list formats that cannot be translated.
-2. Settle score decision with operator explicitly: arr scores are per quality
-   profile, translated rule set applies to every profile. Use
-   `qualityProfiles.distinctScoreSets` from the summary.
-3. Translate with agreed scores, validate.
-4. Replay arr grab history, report mismatches only:
+1. With a yes, `StartExternalRuleImport.graphql` (`source` `SONARR` or
+   `RADARR`, `baseUrl`, `apiKey`, a `requestKey` you keep). Scryer reads the
+   custom formats and quality-profile scores itself and saves one **disabled**
+   rule per format, named `(Sonarr) <format name>` / `(Radarr) <format name>`.
+2. Poll `ExternalRuleImportStatus.graphql` until `active` is `false`.
+3. Report each item by `state`: `SAVED`; `SAVED_NEEDS_REVIEW` (named
+   `(Radarr) REVIEW - <format name>`, scores 0, per-profile table commented
+   out); `SKIPPED_EXISTS` (name already exists, as on a re-run); `FAILED`
+   (untranslatable, nothing saved).
+4. Replay arr grab history against saved rules, report mismatches only:
 
 ```sh
-"$M/scripts/replay-history.sh" snap/sonarr arr-formats.rego series,anime <arr-profile-id> > replay.tsv
+"$M/scripts/replay-history.sh" snap/sonarr rule.rego series,anime <arr-profile-id> > replay.tsv
 ```
 
-5. Save disabled; enable after operator agrees.
+5. Fix REVIEW rules with the operator, then enable after they agree.
+
+Only when Scryer cannot reach arr: the paste-JSON fallback in the same
+reference, which builds one rule set from the snapshot.
 
 ## g. The rest
 

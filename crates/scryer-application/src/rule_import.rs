@@ -324,7 +324,10 @@ pub struct PlannedRuleImportItem {
 /// for example a disabled scoring rule set or a disabled lifecycle rule, and
 /// handles it in [`AppUseCase::save_rule_import_item`].
 #[derive(Debug)]
-pub enum PlannedRuleImportTranslation {}
+pub enum PlannedRuleImportTranslation {
+    /// A disabled scoring rule set for one Sonarr or Radarr custom format.
+    ArrScoringRule(crate::rule_import_arr::PlannedArrScoringRule),
+}
 
 /// The outcome of saving one planned item.
 #[derive(Clone, Debug, PartialEq)]
@@ -340,7 +343,26 @@ pub struct RuleImportSaveOutcome {
 /// existing rules, so saves never query per item.
 #[derive(Default)]
 pub struct RuleImportSaveContext {
+    /// Names of existing scoring rule sets, and of every name this run claims.
     pub existing_names: std::collections::HashSet<String>,
+    /// Scoring rule sets the run writes together once every item is decided.
+    pub staged_rule_sets: Vec<StagedRuleImportRuleSet>,
+}
+
+/// A scoring rule set an item saves, written with the run's batch.
+#[derive(Debug)]
+pub struct StagedRuleImportRuleSet {
+    pub item_index: usize,
+    /// The item's state once the rule set is written.
+    pub state: RuleImportItemState,
+    pub rule_set: crate::NewRuleSet,
+}
+
+/// Scryer state a translator reads while planning, loaded once per run.
+#[derive(Default)]
+pub struct RuleImportPlanContext {
+    /// Names of Scryer's quality profiles, matched exactly.
+    pub quality_profile_names: std::collections::HashSet<String>,
 }
 
 impl RuleImportConnection {
@@ -531,11 +553,19 @@ fn maintainerr_profile_sources(groups: &[Value]) -> (BTreeSet<i64>, BTreeSet<i64
 
 /// Turns fetched data into one planned item per source object. A source whose
 /// translator has not been written yet is refused, never faked.
-pub fn plan_rule_import(fetched: &RuleImportFetched) -> AppResult<Vec<PlannedRuleImportItem>> {
+pub fn plan_rule_import(
+    fetched: &RuleImportFetched,
+    context: &RuleImportPlanContext,
+) -> AppResult<Vec<PlannedRuleImportItem>> {
+    use crate::arr_custom_format::ArrSourceApplication;
     match fetched {
-        RuleImportFetched::Sonarr(_)
-        | RuleImportFetched::Radarr(_)
-        | RuleImportFetched::Maintainerr(_) => Err(AppError::validation_refused(
+        RuleImportFetched::Sonarr(arr) => {
+            crate::rule_import_arr::plan_arr_rule_import(ArrSourceApplication::Sonarr, arr, context)
+        }
+        RuleImportFetched::Radarr(arr) => {
+            crate::rule_import_arr::plan_arr_rule_import(ArrSourceApplication::Radarr, arr, context)
+        }
+        RuleImportFetched::Maintainerr(_) => Err(AppError::validation_refused(
             refusal::TRANSLATOR_UNAVAILABLE,
             "Scryer cannot translate rules from this source yet",
         )),
@@ -830,7 +860,18 @@ impl AppUseCase {
             Ok((fetched, facts)) => {
                 progress.facts = facts;
                 progress.phase = RuleImportPhase::Planning;
-                plan_rule_import(&fetched)
+                match self.load_rule_import_plan_context(&fetched).await {
+                    // Translation compiles every source object; keep it off
+                    // the async workers.
+                    Ok(context) => {
+                        tokio::task::spawn_blocking(move || plan_rule_import(&fetched, &context))
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(AppError::Repository("rule import planning failed".into()))
+                            })
+                    }
+                    Err(error) => Err(error),
+                }
             }
         };
         let planned = match outcome {
@@ -881,13 +922,15 @@ impl AppUseCase {
         progress.phase = RuleImportPhase::Saving;
         self.publish_rule_import(&mut run, &mut progress).await?;
 
-        let context = self.load_rule_import_save_context(actor).await?;
+        let mut context = self.load_rule_import_save_context(actor).await?;
         let mut last_publish = std::time::Instant::now();
         for (index, item) in planned.into_iter().enumerate() {
             if shutdown.is_cancelled() {
                 break;
             }
-            let outcome = self.save_rule_import_item(actor, &context, item).await;
+            let outcome = self
+                .save_rule_import_item(actor, &mut context, index, item)
+                .await;
             let entry = &mut progress.items[index];
             match outcome {
                 Ok(outcome) => {
@@ -908,7 +951,12 @@ impl AppUseCase {
                 last_publish = std::time::Instant::now();
             }
         }
-        settle_interrupted(&mut progress);
+        if shutdown.is_cancelled() {
+            settle_interrupted(&mut progress);
+        } else {
+            self.save_staged_rule_import(actor, &mut context, &mut progress)
+                .await;
+        }
         let status = if progress.items.iter().all(|item| item.state.is_clean()) {
             JobRunStatus::Completed
         } else {
@@ -918,23 +966,107 @@ impl AppUseCase {
             .await
     }
 
+    /// Loads, once per run, the Scryer state planning reads.
+    async fn load_rule_import_plan_context(
+        &self,
+        fetched: &RuleImportFetched,
+    ) -> AppResult<RuleImportPlanContext> {
+        let mut context = RuleImportPlanContext::default();
+        if matches!(
+            fetched,
+            RuleImportFetched::Sonarr(_) | RuleImportFetched::Radarr(_)
+        ) {
+            context.quality_profile_names = self
+                .services
+                .config
+                .quality_profiles
+                .list_quality_profiles(crate::SETTINGS_SCOPE_SYSTEM, None)
+                .await?
+                .into_iter()
+                .map(|profile| profile.name)
+                .collect();
+        }
+        Ok(context)
+    }
+
     /// Loads, once per run, whatever saves need to decide each item.
     async fn load_rule_import_save_context(
         &self,
         _actor: &User,
     ) -> AppResult<RuleImportSaveContext> {
-        Ok(RuleImportSaveContext::default())
+        Ok(RuleImportSaveContext {
+            existing_names: self
+                .services
+                .customization
+                .rule_sets
+                .list_rule_set_names()
+                .await?
+                .into_iter()
+                .collect(),
+            ..RuleImportSaveContext::default()
+        })
     }
 
     /// Saves one planned item as the acting user. Translators add one arm per
-    /// [`PlannedRuleImportTranslation`] variant.
+    /// [`PlannedRuleImportTranslation`] variant. An item may stage its write
+    /// in `context` and report `Pending`; staged writes land together after
+    /// the last item.
     async fn save_rule_import_item(
         &self,
         _actor: &User,
-        _context: &RuleImportSaveContext,
+        context: &mut RuleImportSaveContext,
+        index: usize,
         item: PlannedRuleImportItem,
     ) -> AppResult<RuleImportSaveOutcome> {
-        match item.translation {}
+        match item.translation {
+            PlannedRuleImportTranslation::ArrScoringRule(rule) => Ok(
+                crate::rule_import_arr::stage_arr_scoring_rule(context, index, rule),
+            ),
+        }
+    }
+
+    /// Writes the staged scoring rule sets as one batch and settles their items.
+    async fn save_staged_rule_import(
+        &self,
+        actor: &User,
+        context: &mut RuleImportSaveContext,
+        progress: &mut RuleImportProgress,
+    ) {
+        let staged = std::mem::take(&mut context.staged_rule_sets);
+        if staged.is_empty() {
+            return;
+        }
+        let (targets, drafts): (Vec<_>, Vec<_>) = staged
+            .into_iter()
+            .map(|staged| ((staged.item_index, staged.state), staged.rule_set))
+            .unzip();
+        let results = match self.create_rule_sets_batch(actor, drafts).await {
+            Ok(results) => results.into_iter().map(Some).collect(),
+            Err(error) => {
+                for (index, _) in &targets {
+                    let entry = &mut progress.items[*index];
+                    entry.state = RuleImportItemState::Failed;
+                    entry.reason = Some(error.reason().unwrap_or(refusal::ITEM_FAILED).into());
+                    entry.message = Some(bounded_message(&error));
+                }
+                Vec::new()
+            }
+        };
+        for ((index, state), result) in targets.into_iter().zip(results) {
+            let entry = &mut progress.items[index];
+            match result {
+                Some(Ok(rule_set)) => {
+                    entry.state = state;
+                    entry.rule_set_id = Some(rule_set.id);
+                }
+                Some(Err(error)) => {
+                    entry.state = RuleImportItemState::Failed;
+                    entry.reason = Some(error.reason().unwrap_or(refusal::ITEM_FAILED).into());
+                    entry.message = Some(bounded_message(&error));
+                }
+                None => {}
+            }
+        }
     }
 
     async fn finish_rule_import(
@@ -1080,12 +1212,6 @@ mod tests {
 
     #[test]
     fn every_source_without_a_translator_is_refused_with_a_code() {
-        let arr = FetchedArrRules {
-            app_name: "Radarr".into(),
-            version: "6.0.0".into(),
-            custom_formats: Vec::new(),
-            quality_profiles: Vec::new(),
-        };
         let maintainerr = FetchedMaintainerrRules {
             version: "2.19.0".into(),
             rule_groups: Vec::new(),
@@ -1094,13 +1220,9 @@ mod tests {
             radarr_profiles: Vec::new(),
             sonarr_profiles: Vec::new(),
         };
-        for fetched in [
-            RuleImportFetched::Sonarr(arr.clone()),
-            RuleImportFetched::Radarr(arr),
-            RuleImportFetched::Maintainerr(maintainerr),
-        ] {
+        for fetched in [RuleImportFetched::Maintainerr(maintainerr)] {
             assert_eq!(
-                plan_rule_import(&fetched)
+                plan_rule_import(&fetched, &RuleImportPlanContext::default())
                     .expect_err("no translator yet")
                     .validation_reason(),
                 Some(refusal::TRANSLATOR_UNAVAILABLE)

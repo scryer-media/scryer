@@ -213,3 +213,16 @@ WINGET, WINDOWS_SUPERVISED, DISABLED, UNSUPPORTED. `managementOwner`: IN_APP
 - app_bundle_read_only_volume: app bundle on a read-only volume
 - app_bundle_not_tray_supervised: macOS app not started by its tray
   supervisor
+
+## Rule import (`EXTERNAL_RULE_IMPORT`)
+
+Sonarr or Radarr custom-format import runs as job key `EXTERNAL_RULE_IMPORT`.
+`JobRuns.graphql` shows its `status` (`WARNING` when some format needs review
+or was not imported, `FAILED` when the run stopped short) and `summaryJson`
+counts (`saved`, `savedNeedsReview`, `skippedExists`, `failed`). The
+per-format report is `externalRuleImportStatus` (the migrate skill's
+`ExternalRuleImportStatus.graphql`), readable only by the account that started
+the run. Run and item reason codes (`EXTERNAL_IMPORT_SOURCE_*`,
+`RULE_IMPORT_*`) are in `scryer-connect/references/errors.md`. Imported rules
+are saved disabled, so a finished import never changes release decisions until
+the operator enables a rule.

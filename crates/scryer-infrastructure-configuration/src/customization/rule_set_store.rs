@@ -200,6 +200,41 @@ impl RuleSetRepository for RuleSetStore {
         fetch_rule_sets(self.datastore.read_exec(), &sql, &[SqlArg::Text(pattern)]).await
     }
 
+    async fn list_rule_set_names(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT name FROM rule_sets",
+            &[],
+        )
+        .await?;
+        rows.iter().map(|row| row.text("name")).collect()
+    }
+
+    async fn create_rule_sets(
+        &self,
+        rule_sets: &[RuleSet],
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<()> {
+        let rows: Arc<[Vec<SqlArg>]> = rule_sets
+            .iter()
+            .map(rule_set_args)
+            .collect::<AppResult<Vec<_>>>()?
+            .into();
+        let history: Arc<[RuleSetHistoryChange]> = history.into();
+        SqlRuntime::run_in_transaction(&self.datastore, "create_rule_sets", move |tx| {
+            let rows = rows.clone();
+            let history = history.clone();
+            Box::pin(async move {
+                for args in rows.iter() {
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, args).await?;
+                }
+                insert_rule_set_history(tx, &history).await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),

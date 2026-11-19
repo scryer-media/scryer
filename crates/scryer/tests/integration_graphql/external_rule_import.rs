@@ -2,10 +2,12 @@ use super::*;
 use scryer_application::rule_import::{
     RuleImportConnection, RuleImportItemState, RuleImportPhase, RuleImportSource, refusal,
 };
+use scryer_application::rule_import_arr;
 use scryer_application::{JobKey, JobRunRecord, JobRunRepository, JobRunStatus, JobTriggerSource};
 use scryer_infrastructure_workflow::workflow::stores::WorkflowOperationStore;
 use tokio::time::{Duration, timeout};
 use wiremock::MockServer;
+use wiremock::matchers::header;
 
 const FAILURE_BOUND: Duration = Duration::from_secs(120);
 
@@ -155,45 +157,47 @@ async fn rule_import_reports_a_coded_source_failure_and_keeps_no_api_key() {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        let run = ctx
-            .app
-            .start_rule_import(
-                &actor,
-                "sonarr-rejected",
-                RuleImportConnection {
-                    source: RuleImportSource::Sonarr,
-                    base_url: server.uri(),
-                    api_key: Some("synthetic-rejected-key".into()),
-                },
-            )
-            .await
-            .expect("accepted");
-        let report = ctx
-            .app
-            .wait_rule_import(&actor, &run.id)
-            .await
-            .expect("settles");
-        assert_eq!(
-            report.reason.as_deref(),
-            Some(scryer_application::error_reasons::external_import::SOURCE_UNAUTHORIZED)
-        );
-        let (stored, _) = ctx
-            .app
-            .rule_import_status(&actor, &run.id)
-            .await
-            .expect("status");
-        let stored_text = format!(
-            "{:?}{:?}{:?}",
-            stored.progress_json, stored.summary_json, stored.error_text
-        );
-        assert!(!stored_text.contains("synthetic-rejected-key"));
-        assert!(
-            store(&ctx)
-                .private_job_input(&run.id, &actor.id)
+        for source in [RuleImportSource::Sonarr, RuleImportSource::Radarr] {
+            let run = ctx
+                .app
+                .start_rule_import(
+                    &actor,
+                    &format!("{source:?}-rejected"),
+                    RuleImportConnection {
+                        source,
+                        base_url: server.uri(),
+                        api_key: Some("synthetic-rejected-key".into()),
+                    },
+                )
                 .await
-                .expect("input read")
-                .is_none()
-        );
+                .expect("accepted");
+            let report = ctx
+                .app
+                .wait_rule_import(&actor, &run.id)
+                .await
+                .expect("settles");
+            assert_eq!(
+                report.reason.as_deref(),
+                Some(scryer_application::error_reasons::external_import::SOURCE_UNAUTHORIZED)
+            );
+            let (stored, _) = ctx
+                .app
+                .rule_import_status(&actor, &run.id)
+                .await
+                .expect("status");
+            let stored_text = format!(
+                "{:?}{:?}{:?}",
+                stored.progress_json, stored.summary_json, stored.error_text
+            );
+            assert!(!stored_text.contains("synthetic-rejected-key"));
+            assert!(
+                store(&ctx)
+                    .private_job_input(&run.id, &actor.id)
+                    .await
+                    .expect("input read")
+                    .is_none()
+            );
+        }
     })
     .await
     .expect("rule import failure scenario bound");
@@ -417,4 +421,328 @@ async fn graphql_starts_a_rule_import_and_reads_its_report() {
     })
     .await
     .expect("graphql rule import scenario bound");
+}
+
+fn arr_title_format(id: i64, name: &str) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "includeCustomFormatWhenRenaming": false,
+        "specifications": [{
+            "name": "Sample",
+            "implementation": "ReleaseTitleSpecification",
+            "negate": false,
+            "required": true,
+            "fields": [{"order": 0, "name": "value", "value": "\\bsample\\b"}]
+        }]
+    })
+}
+
+fn arr_year_format(id: i64, name: &str) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "specifications": [{
+            "name": "Year",
+            "implementation": "YearSpecification",
+            "negate": false,
+            "required": true,
+            "fields": [{"name": "min", "value": 2000}, {"name": "max", "value": 2010}]
+        }]
+    })
+}
+
+/// A Radarr that lists `formats` and `profiles` to the synthetic key only.
+async fn radarr(formats: Value, profiles: Value) -> MockServer {
+    let server = MockServer::start().await;
+    let routes = [
+        ("/api", json!({"current": "v3"})),
+        (
+            "/api/v3/system/status",
+            json!({"appName": "Radarr", "version": "6.0.4.10291"}),
+        ),
+        ("/api/v3/customformat", formats),
+        ("/api/v3/qualityprofile", profiles),
+    ];
+    for (route, body) in routes {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .and(header("X-Api-Key", "synthetic-radarr-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    server
+}
+
+fn radarr_connection(server: &MockServer) -> RuleImportConnection {
+    RuleImportConnection {
+        source: RuleImportSource::Radarr,
+        base_url: server.uri(),
+        api_key: Some("synthetic-radarr-key".into()),
+    }
+}
+
+async fn seed_scryer_profiles(ctx: &TestContext, names: &[&str]) {
+    seed_typed_settings_definitions(ctx).await;
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default settings actor");
+    let profiles = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let mut profile = scryer_application::builtin_1080p_profile();
+            profile.id = format!("sample-profile-{index}");
+            profile.name = (*name).to_string();
+            profile
+        })
+        .collect();
+    ctx.app
+        .save_quality_profile_settings(
+            &actor,
+            scryer_application::SaveQualityProfileSettings {
+                profiles,
+                replace_existing: false,
+                global_profile_id: None,
+                category_selections: vec![],
+                global_scoring_persona: None,
+                category_persona_selections: vec![],
+            },
+        )
+        .await
+        .expect("seed quality profiles");
+}
+
+#[tokio::test]
+async fn radarr_rule_import_saves_one_disabled_rule_per_format_and_skips_them_on_a_rerun() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        seed_scryer_profiles(&ctx, &["Sample Profile A", "Sample Profile B"]).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-radarr"))
+            .await
+            .expect("operator");
+        let server = radarr(
+            json!([
+                arr_title_format(1, "Sample Format Alpha"),
+                arr_title_format(2, "Sample Format Beta"),
+                arr_year_format(3, "Sample Format Gamma"),
+                arr_title_format(4, "Sample Format Delta"),
+            ]),
+            json!([
+                {"id": 1, "name": "Sample Profile A", "formatItems": [
+                    {"format": 1, "name": "Sample Format Alpha", "score": 25},
+                    {"format": 2, "name": "Sample Format Beta", "score": 40},
+                    {"format": 3, "name": "Sample Format Gamma", "score": 5},
+                    {"format": 4, "name": "Sample Format Delta", "score": 0}
+                ]},
+                {"id": 2, "name": "Sample Profile B", "formatItems": [
+                    {"format": 1, "name": "Sample Format Alpha", "score": 25},
+                    {"format": 2, "name": "Sample Format Beta", "score": -10}
+                ]}
+            ]),
+        )
+        .await;
+
+        let run = ctx
+            .app
+            .start_rule_import(&actor, "radarr-first", radarr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &run.id)
+            .await
+            .expect("settles");
+        assert_eq!(report.phase, RuleImportPhase::Finished);
+        assert_eq!(report.reason, None);
+        let states: Vec<_> = report.items.iter().map(|item| item.state).collect();
+        assert_eq!(
+            states,
+            [
+                RuleImportItemState::Saved,
+                RuleImportItemState::Saved,
+                RuleImportItemState::Failed,
+                RuleImportItemState::Saved,
+            ]
+        );
+        assert_eq!(report.counts.saved, 3);
+        assert_eq!(report.counts.failed, 1);
+        let gamma = &report.items[2];
+        assert_eq!(gamma.saved_name, None);
+        assert_eq!(gamma.rule_set_id, None);
+        assert_eq!(
+            gamma.reason.as_deref(),
+            Some(rule_import_arr::reasons::FORMAT_UNTRANSLATABLE)
+        );
+        assert!(!gamma.facts.is_empty());
+        assert!(gamma.facts[0].details.as_ref().expect("details")["location"].is_string());
+        assert!(
+            report.items[3]
+                .facts
+                .iter()
+                .any(|fact| fact.code == rule_import_arr::reasons::FORMAT_UNSCORED)
+        );
+
+        let rule_sets = ctx.app.list_rule_sets(&actor).await.expect("rule sets");
+        let mut imported: Vec<_> = rule_sets
+            .iter()
+            .filter(|rule_set| rule_set.name.starts_with("(Radarr) "))
+            .collect();
+        imported.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<_> = imported
+            .iter()
+            .map(|rule_set| rule_set.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "(Radarr) Sample Format Alpha",
+                "(Radarr) Sample Format Beta",
+                "(Radarr) Sample Format Delta",
+            ]
+        );
+        for rule_set in &imported {
+            assert!(!rule_set.enabled, "{}", rule_set.name);
+            assert_eq!(rule_set.description, "Imported from Radarr 6.0.4.10291.");
+            assert_eq!(rule_set.applied_facets, [MediaFacet::Movie]);
+            let item = report
+                .items
+                .iter()
+                .find(|item| item.saved_name.as_deref() == Some(rule_set.name.as_str()))
+                .expect("item for rule set");
+            assert_eq!(item.rule_set_id.as_deref(), Some(rule_set.id.as_str()));
+        }
+        assert!(imported[0].rego_source.contains(":= 25 if {"));
+        assert!(
+            imported[1]
+                .rego_source
+                .contains("\"Sample Profile A\": 40,\n  \"Sample Profile B\": -10\n}"),
+            "{}",
+            imported[1].rego_source
+        );
+
+        let rerun = ctx
+            .app
+            .start_rule_import(&actor, "radarr-second", radarr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &rerun.id)
+            .await
+            .expect("settles");
+        let states: Vec<_> = report.items.iter().map(|item| item.state).collect();
+        assert_eq!(
+            states,
+            [
+                RuleImportItemState::SkippedExists,
+                RuleImportItemState::SkippedExists,
+                RuleImportItemState::Failed,
+                RuleImportItemState::SkippedExists,
+            ]
+        );
+        assert!(
+            report
+                .items
+                .iter()
+                .filter(|item| item.state == RuleImportItemState::SkippedExists)
+                .all(|item| item.reason.as_deref() == Some(refusal::ALREADY_EXISTS))
+        );
+        assert_eq!(
+            ctx.app
+                .list_rule_sets(&actor)
+                .await
+                .expect("rule sets")
+                .len(),
+            rule_sets.len()
+        );
+    })
+    .await
+    .expect("radarr rule import scenario bound");
+}
+
+#[tokio::test]
+async fn radarr_rule_import_flags_profiles_scryer_does_not_have_for_review() {
+    timeout(FAILURE_BOUND, async {
+        let ctx = TestContext::new().await;
+        seed_scryer_profiles(&ctx, &["Sample Profile A"]).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("rule-import-review"))
+            .await
+            .expect("operator");
+        let server = radarr(
+            json!([arr_title_format(1, "Sample Format Alpha")]),
+            json!([
+                {"id": 1, "name": "Sample Profile A", "formatItems": [
+                    {"format": 1, "name": "Sample Format Alpha", "score": 25}
+                ]},
+                {"id": 2, "name": "Sample Profile Unmatched", "formatItems": [
+                    {"format": 1, "name": "Sample Format Alpha", "score": -10}
+                ]}
+            ]),
+        )
+        .await;
+        let run = ctx
+            .app
+            .start_rule_import(&actor, "radarr-review", radarr_connection(&server))
+            .await
+            .expect("accepted");
+        let report = ctx
+            .app
+            .wait_rule_import(&actor, &run.id)
+            .await
+            .expect("settles");
+        let item = &report.items[0];
+        assert_eq!(item.state, RuleImportItemState::SavedNeedsReview);
+        assert_eq!(
+            item.saved_name.as_deref(),
+            Some("(Radarr) REVIEW - Sample Format Alpha")
+        );
+        assert_eq!(
+            item.reason.as_deref(),
+            Some(rule_import_arr::reasons::PROFILE_SCORES_UNMATCHED)
+        );
+        let details = item.facts[0].details.as_ref().expect("details");
+        assert_eq!(
+            details["unmatchedProfiles"],
+            json!(["Sample Profile Unmatched"])
+        );
+        assert_eq!(
+            details["scores"],
+            json!([
+                {"profile": "Sample Profile A", "score": 25},
+                {"profile": "Sample Profile Unmatched", "score": -10}
+            ])
+        );
+        assert_eq!(report.counts.saved_needs_review, 1);
+        let (stored, _) = ctx
+            .app
+            .rule_import_status(&actor, &run.id)
+            .await
+            .expect("status");
+        assert_eq!(stored.status, JobRunStatus::Warning);
+        let rule_set = ctx
+            .app
+            .list_rule_sets(&actor)
+            .await
+            .expect("rule sets")
+            .into_iter()
+            .find(|rule_set| rule_set.name == "(Radarr) REVIEW - Sample Format Alpha")
+            .expect("review rule saved");
+        assert!(!rule_set.enabled);
+        assert!(rule_set.rego_source.contains(":= 0 if {"));
+        assert!(
+            rule_set
+                .rego_source
+                .contains("#   \"Sample Profile Unmatched\": -10")
+        );
+    })
+    .await
+    .expect("radarr review scenario bound");
 }

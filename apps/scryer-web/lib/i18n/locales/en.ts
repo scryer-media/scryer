@@ -1018,6 +1018,16 @@ const en: LocaleDictionary = {
     "User names could not be read from the source.",
   "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
     "The source refers to more connected applications than one import reads.",
+  "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
+    "This custom format uses conditions Scryer cannot convert, so no rule was saved.",
+  "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
+    "This custom format could not be read, so no rule was saved.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
+    "Quality profiles score this format differently and some have no Scryer quality profile with the same name. The rule scores 0 until you review it.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
+    "The score follows the Scryer quality profile with the same name.",
+  "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
+    "Every quality profile scores this format 0, so the rule scores 0.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
     "This version of the external application is not supported; a newer major version is required.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
@@ -7318,6 +7328,30 @@ const en: LocaleDictionary = {
   "settings.arrImportDraftDescription": "Imported from Arr custom-format JSON.",
   "settings.arrImportDiagnostics": "Translation notes",
   "settings.arrImportApply": "Use imported draft",
+  "settings.arrImportDialogDescription":
+    "Import Sonarr or Radarr custom formats as scoring rules.",
+  "settings.arrImportTabConnect": "Connect",
+  "settings.arrImportTabPaste": "Paste JSON",
+  "settings.arrImportConnectDescription":
+    "Read the custom formats and quality-profile scores from a running Sonarr or Radarr. Each custom format is saved as its own disabled rule for you to review.",
+  "settings.arrImportBaseUrl": "Base URL",
+  "settings.arrImportApiKey": "API key",
+  "settings.arrImportStart": "Start import",
+  "settings.arrImportStartAnother": "Import again",
+  "settings.arrImportRunning": "Importing custom formats…",
+  "settings.arrImportRunFailed":
+    "The import stopped before it could save any rules.",
+  "settings.arrImportCounts":
+    "{{total}} custom formats: {{saved}} saved, {{review}} to review, {{skipped}} skipped, {{failed}} failed",
+  "settings.arrImportStateSaved": "Saved, disabled",
+  "settings.arrImportStateNeedsReview": "Saved, disabled, needs review",
+  "settings.arrImportStateSavedFailedTranslation": "Saved without translation",
+  "settings.arrImportStateSkipped": "Skipped",
+  "settings.arrImportStatePending": "Pending",
+  "settings.arrImportStateFailed": "Not imported",
+  "settings.arrImportUnmatchedProfiles":
+    "Quality profiles with no Scryer profile of the same name: {{names}}",
+  "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":
