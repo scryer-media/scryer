@@ -217,9 +217,15 @@ WINGET, WINDOWS_SUPERVISED, DISABLED, UNSUPPORTED. `managementOwner`: IN_APP
 ## Rule import (`EXTERNAL_RULE_IMPORT`)
 
 Sonarr or Radarr custom-format import runs as job key `EXTERNAL_RULE_IMPORT`.
-`JobRuns.graphql` shows its `status` (`WARNING` when some format needs review
-or was not imported, `FAILED` when the run stopped short) and `summaryJson`
-counts (`saved`, `savedNeedsReview`, `skippedExists`, `failed`). The
+`JobRuns.graphql` shows its `status` and `summaryJson` counts (`saved`,
+`savedNeedsReview`, `skippedExists`, `failed`). `COMPLETED`: every format was
+saved or skipped as already present. `WARNING`: the run reached the save step
+and some format needs review or was not imported; this includes a run where
+every format failed and a save Scryer interrupted (unsaved formats and the run
+`reason` are `RULE_IMPORT_INTERRUPTED`). `FAILED`: the run stopped short,
+because reading the source or planning was refused or interrupted (nothing
+saved), or on an internal error (rules already saved are kept). A re-run skips (`SKIPPED_EXISTS`) every format already present under its
+plain or `REVIEW - ` name, so it only adds formats new in arr. The
 per-format report is `externalRuleImportStatus` (the migrate skill's
 `ExternalRuleImportStatus.graphql`), readable only by the account that started
 the run. Run and item reason codes (`EXTERNAL_IMPORT_SOURCE_*`,

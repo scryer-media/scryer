@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  duplicateProfileNames,
   normalizeExternalRuleImportStatus,
   ruleImportDiagnostics,
   ruleImportProgress,
@@ -108,7 +109,7 @@ test("review items list the profile names Scryer could not match", () => {
   assert.deepEqual(unmatchedProfileNames({ ...item, facts: [] }), []);
 });
 
-test("diagnostics are the facts that carry a location", () => {
+test("diagnostics are every fact except the scoring ones", () => {
   const item = {
     key: "customformat:2",
     sourceName: "Sample Format Beta",
@@ -121,9 +122,33 @@ test("diagnostics are the facts that carry a location", () => {
       {
         code: "arr.year.unmapped",
         message: "Year cannot be mapped.",
-        details: { severity: "ERROR", location: "$.specifications[0]" },
+        details: {
+          severity: "ERROR",
+          location: "$.specifications[0]",
+          specificationIndex: 0,
+        },
+      },
+      {
+        code: "arr.condition.unknown",
+        message: "Condition kind is unknown.",
+        details: { severity: "ERROR", location: null, specificationIndex: 2 },
+      },
+      {
+        code: "arr.format.invalid",
+        message: "Format is not valid.",
+        details: null,
       },
       { code: "RULE_IMPORT_FORMAT_UNSCORED", message: "info", details: null },
+      {
+        code: "RULE_IMPORT_PROFILE_SCORES_APPLIED",
+        message: "info",
+        details: { scores: [] },
+      },
+      {
+        code: "RULE_IMPORT_PROFILE_SCORES_UNMATCHED",
+        message: "info",
+        details: { unmatchedProfiles: [], duplicateProfiles: [] },
+      },
     ],
   };
   assert.deepEqual(ruleImportDiagnostics(item), [
@@ -131,8 +156,47 @@ test("diagnostics are the facts that carry a location", () => {
       code: "arr.year.unmapped",
       message: "Year cannot be mapped.",
       location: "$.specifications[0]",
+      specificationIndex: 0,
+    },
+    {
+      code: "arr.condition.unknown",
+      message: "Condition kind is unknown.",
+      location: null,
+      specificationIndex: 2,
+    },
+    {
+      code: "arr.format.invalid",
+      message: "Format is not valid.",
+      location: null,
+      specificationIndex: null,
     },
   ]);
+});
+
+test("repeated Arr profile names are listed apart from unmatched ones", () => {
+  const item = {
+    key: "customformat:3",
+    sourceName: "Sample Format Gamma",
+    savedName: "(Sonarr) REVIEW - Sample Format Gamma",
+    ruleSetId: "rule-3",
+    state: "SAVED_NEEDS_REVIEW" as const,
+    reason: "RULE_IMPORT_PROFILE_SCORES_UNMATCHED",
+    message: null,
+    facts: [
+      {
+        code: "RULE_IMPORT_PROFILE_SCORES_UNMATCHED",
+        message: "server copy",
+        details: {
+          unmatchedProfiles: ["Sample Profile C"],
+          duplicateProfiles: ["Sample Profile A", null],
+          scores: [],
+        },
+      },
+    ],
+  };
+  assert.deepEqual(unmatchedProfileNames(item), ["Sample Profile C"]);
+  assert.deepEqual(duplicateProfileNames(item), ["Sample Profile A"]);
+  assert.deepEqual(duplicateProfileNames({ ...item, facts: [] }), []);
 });
 
 test("running progress reads its phase and counts defensively", () => {

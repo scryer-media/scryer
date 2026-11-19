@@ -28,8 +28,10 @@ pub mod reasons {
     pub const FORMAT_UNTRANSLATABLE: &str = "RULE_IMPORT_FORMAT_UNTRANSLATABLE";
     /// A custom format could not be read at all, so no rule was saved.
     pub const FORMAT_UNREADABLE: &str = "RULE_IMPORT_FORMAT_UNREADABLE";
-    /// Quality profiles score the format differently and at least one has no
-    /// Scryer quality profile of the same name; the rule scores 0 until reviewed.
+    /// Quality profiles score the format differently and at least one cannot
+    /// be matched to a single Scryer quality profile of the same name, because
+    /// none exists or the source repeats the name with another score; the
+    /// rule scores 0 until reviewed.
     pub const PROFILE_SCORES_UNMATCHED: &str = "RULE_IMPORT_PROFILE_SCORES_UNMATCHED";
     /// Quality profiles score the format differently; the rule scores by
     /// Scryer quality profile name.
@@ -65,6 +67,9 @@ pub struct ArrScoringRuleDraft {
     pub description: String,
     pub rego_source: String,
     pub applied_facets: Vec<MediaFacet>,
+    /// Every name this format saves under, with and without the review
+    /// prefix: a rule set holding any of them means the format was imported.
+    pub claimed_names: Vec<String>,
     /// `Saved` or `SavedNeedsReview`.
     pub state: RuleImportItemState,
     pub reason: Option<&'static str>,
@@ -76,6 +81,25 @@ fn label(application: ArrSourceApplication) -> &'static str {
         ArrSourceApplication::Radarr => "Radarr",
         ArrSourceApplication::Sonarr => "Sonarr",
     }
+}
+
+/// Text from the source made safe to store and to print in a comment: control
+/// characters and line or paragraph separators become spaces, and runs of
+/// whitespace collapse to one space.
+fn clean_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| {
+            if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn diagnostic_fact(diagnostic: ArrDiagnostic) -> RuleImportFact {
@@ -100,53 +124,71 @@ fn scores_details(scores: &[(String, i32)]) -> Value {
     )
 }
 
-/// How the instance's profiles score one format.
+/// How the instance's profiles score one format. `scores` carry the source's
+/// profile names, for the report; `table` carries the names the rule looks
+/// up in `input.profile.name`: the stored name of the matching Scryer
+/// profile, or the source's name where there is none.
 enum Scoring {
     Literal(i32),
     /// Profiles disagree and each has a Scryer profile of the same name.
-    Matched(Vec<(String, i32)>),
-    /// Profiles disagree and `unmatched` name no Scryer profile.
+    Matched {
+        scores: Vec<(String, i32)>,
+        table: Vec<(String, i32)>,
+    },
+    /// Profiles disagree and `unmatched` name no Scryer profile, or the
+    /// source repeats the `duplicates` names with different scores.
     Unmatched {
         scores: Vec<(String, i32)>,
+        table: Vec<(String, i32)>,
         unmatched: Vec<String>,
+        duplicates: Vec<String>,
     },
 }
 
-/// Profile scores for one format, in the instance's profile order. A profile
-/// that does not list the format scores 0. A name the instance repeats keeps
-/// its first score; a repeat with a different score counts as unmatched,
-/// since one name cannot carry two scores.
-fn scoring(profiles: &[(String, bool)], listed: &HashMap<usize, i32>) -> Scoring {
+/// Profile scores for one format, in the instance's profile order. Each
+/// profile is its source name with the stored name of the Scryer profile it
+/// matches. A profile that does not list the format scores 0. A name the
+/// instance repeats keeps its first score; a repeat with a different score
+/// is reported as a duplicate, since one name cannot carry two scores.
+fn scoring(profiles: &[(String, Option<String>)], listed: &HashMap<usize, i32>) -> Scoring {
     let score_of = |index: usize| listed.get(&index).copied().unwrap_or(0);
     let first = if profiles.is_empty() { 0 } else { score_of(0) };
     if (0..profiles.len()).all(|index| score_of(index) == first) {
         return Scoring::Literal(first);
     }
     let mut scores: Vec<(String, i32)> = Vec::with_capacity(profiles.len());
+    let mut table: Vec<(String, i32)> = Vec::with_capacity(profiles.len());
     let mut seen: HashMap<&str, i32> = HashMap::with_capacity(profiles.len());
     let mut unmatched: Vec<String> = Vec::new();
-    let mut unmatched_seen: HashSet<&str> = HashSet::new();
-    for (index, (name, matched)) in profiles.iter().enumerate() {
+    let mut duplicates: Vec<String> = Vec::new();
+    let mut duplicates_seen: HashSet<&str> = HashSet::new();
+    for (index, (name, scryer_name)) in profiles.iter().enumerate() {
         let score = score_of(index);
         match seen.get(name.as_str()) {
             Some(kept) => {
-                if *kept != score && unmatched_seen.insert(name) {
-                    unmatched.push(name.clone());
+                if *kept != score && duplicates_seen.insert(name) {
+                    duplicates.push(name.clone());
                 }
             }
             None => {
                 seen.insert(name, score);
                 scores.push((name.clone(), score));
-                if !matched && unmatched_seen.insert(name) {
+                table.push((scryer_name.clone().unwrap_or_else(|| name.clone()), score));
+                if scryer_name.is_none() {
                     unmatched.push(name.clone());
                 }
             }
         }
     }
-    if unmatched.is_empty() {
-        Scoring::Matched(scores)
+    if unmatched.is_empty() && duplicates.is_empty() {
+        Scoring::Matched { scores, table }
     } else {
-        Scoring::Unmatched { scores, unmatched }
+        Scoring::Unmatched {
+            scores,
+            table,
+            unmatched,
+            duplicates,
+        }
     }
 }
 
@@ -163,7 +205,10 @@ pub fn plan_arr_rule_import(
         ));
     }
     let label = label(application);
-    let version: String = fetched.version.chars().take(MAX_VERSION_CHARS).collect();
+    let version: String = clean_text(&fetched.version)
+        .chars()
+        .take(MAX_VERSION_CHARS)
+        .collect();
     let description = if version.is_empty() {
         format!("Imported from {label}.")
     } else {
@@ -174,7 +219,7 @@ pub fn plan_arr_rule_import(
     )];
     let review_notes = vec![
         format!(
-            "REVIEW: the {label} quality profiles score this format differently, and some of them have no Scryer quality profile with the same name."
+            "REVIEW: the {label} quality profiles score this format differently, and some of them cannot be matched to one Scryer quality profile with the same name."
         ),
         "This rule scores 0 until it is reviewed. Make the section below fit your Scryer quality profiles, then use it in place of the score_entry rule above.".to_string(),
     ];
@@ -183,15 +228,31 @@ pub fn plan_arr_rule_import(
         .filter_map(|facet| MediaFacet::parse(facet))
         .collect();
 
-    // Profile names, with whether Scryer has a profile of exactly that name.
-    let profiles: Vec<(String, bool)> = fetched
+    // Scryer profiles whose stored name has surrounding whitespace, by their
+    // trimmed name; `None` when two of them trim to the same name.
+    let mut padded: HashMap<&str, Option<&str>> = HashMap::new();
+    for stored in &context.quality_profile_names {
+        let trimmed = stored.trim();
+        if trimmed != stored {
+            padded
+                .entry(trimmed)
+                .and_modify(|kept| *kept = None)
+                .or_insert(Some(stored));
+        }
+    }
+    // Profile names, each with the stored name of the Scryer profile whose
+    // name matches it exactly once both are trimmed.
+    let profiles: Vec<(String, Option<String>)> = fetched
         .quality_profiles
         .iter()
         .map(|profile| {
-            (
-                profile.name.clone(),
-                context.quality_profile_names.contains(&profile.name),
-            )
+            let name = profile.name.trim();
+            let scryer_name = if context.quality_profile_names.contains(name) {
+                Some(name.to_string())
+            } else {
+                padded.get(name).copied().flatten().map(str::to_string)
+            };
+            (name.to_string(), scryer_name)
         })
         .collect();
     // Format id -> (profile index -> score), built once for every format.
@@ -216,9 +277,8 @@ pub fn plan_arr_rule_import(
         let raw_name = raw
             .get("name")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string);
+            .map(clean_text)
+            .filter(|name| !name.is_empty());
         let by_profile = format_id.and_then(|id| listed.get(&id)).unwrap_or(&empty);
         let mut out_of_range = false;
         let by_profile: HashMap<usize, i32> = by_profile
@@ -265,9 +325,9 @@ pub fn plan_arr_rule_import(
                 None,
                 Vec::new(),
             ),
-            Scoring::Matched(scores) => (
+            Scoring::Matched { scores, table } => (
                 ArrFormatScoring::ProfileTable(
-                    scores
+                    table
                         .iter()
                         .filter(|(_, score)| *score != 0)
                         .cloned()
@@ -283,17 +343,23 @@ pub fn plan_arr_rule_import(
                     .with_details(json!({ "scores": scores_details(scores) })),
                 ],
             ),
-            Scoring::Unmatched { scores, unmatched } => (
-                ArrFormatScoring::ReviewTable(scores.clone()),
+            Scoring::Unmatched {
+                scores,
+                table,
+                unmatched,
+                duplicates,
+            } => (
+                ArrFormatScoring::ReviewTable(table.clone()),
                 RuleImportItemState::SavedNeedsReview,
                 Some(reasons::PROFILE_SCORES_UNMATCHED),
                 vec![
                     RuleImportFact::new(
                         reasons::PROFILE_SCORES_UNMATCHED,
-                        "some quality profiles have no Scryer quality profile with the same name",
+                        "some quality profiles cannot be matched to one Scryer quality profile with the same name",
                     )
                     .with_details(json!({
                         "unmatchedProfiles": unmatched,
+                        "duplicateProfiles": duplicates,
                         "scores": scores_details(scores),
                     })),
                 ],
@@ -301,15 +367,23 @@ pub fn plan_arr_rule_import(
         };
         let translated =
             translate_arr_custom_format(application, raw, &format_scoring, &notes, &review_notes);
-        let source_name = translated.name.clone().unwrap_or(source_name);
+        let source_name = translated
+            .name
+            .as_deref()
+            .map(clean_text)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(source_name);
         let rule = match (translated.status, translated.rego_source) {
             (Some(ArrFormatStatus::Translated), Some(rego_source)) => {
-                let name = if state == RuleImportItemState::SavedNeedsReview {
-                    format!("({label}) REVIEW - {source_name}")
+                let plain = format!("({label}) {source_name}");
+                let review = format!("({label}) REVIEW - {source_name}");
+                let (name, other) = if state == RuleImportItemState::SavedNeedsReview {
+                    (review, plain)
                 } else {
-                    format!("({label}) {source_name}")
+                    (plain, review)
                 };
                 PlannedArrScoringRule::Save(ArrScoringRuleDraft {
+                    claimed_names: vec![name.clone(), other],
                     name,
                     description: description.clone(),
                     rego_source,
@@ -341,8 +415,10 @@ pub fn plan_arr_rule_import(
     Ok(planned)
 }
 
-/// Decides one planned format against the run's existing names. A rule to
-/// write is staged, and stays pending until the run's batch is written.
+/// Decides one planned format against the run's existing names: a format is
+/// already imported when a rule set holds either of its names, with or
+/// without the review prefix. A rule to write is staged, and stays pending
+/// until the run's batch is written, which checks the names again.
 pub(crate) fn stage_arr_scoring_rule(
     context: &mut RuleImportSaveContext,
     item_index: usize,
@@ -357,18 +433,26 @@ pub(crate) fn stage_arr_scoring_rule(
             facts,
         },
         PlannedArrScoringRule::Save(draft) => {
-            if !context.existing_names.insert(draft.name.clone()) {
+            if let Some(taken) = draft
+                .claimed_names
+                .iter()
+                .find(|name| context.existing_names.contains(*name))
+            {
                 return RuleImportSaveOutcome {
                     state: RuleImportItemState::SkippedExists,
-                    saved_name: Some(draft.name),
+                    saved_name: Some(taken.clone()),
                     rule_set_id: None,
                     reason: Some(refusal::ALREADY_EXISTS),
                     facts: draft.facts,
                 };
             }
+            context
+                .existing_names
+                .extend(draft.claimed_names.iter().cloned());
             context.staged_rule_sets.push(StagedRuleImportRuleSet {
                 item_index,
                 state: draft.state,
+                claimed_names: draft.claimed_names,
                 rule_set: NewRuleSet {
                     name: draft.name.clone(),
                     description: draft.description,

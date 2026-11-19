@@ -6,13 +6,17 @@ import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExternalRuleImport } from "@/lib/hooks/use-external-rule-import";
+import {
+  type ExternalRuleImportController,
+  ruleImportBusy,
+} from "@/lib/hooks/use-external-rule-import";
 import type {
   ExternalRuleImportItem,
   ExternalRuleImportItemState,
 } from "@/lib/types/external-import";
 import type { ArrSource } from "@/lib/utils/arr-custom-format-import-state";
 import {
+  duplicateProfileNames,
   ruleImportDiagnostics,
   ruleImportProgress,
   ruleImportReasonMessage,
@@ -21,10 +25,9 @@ import {
 
 type ArrRuleImportConnectPanelProps = {
   source: ArrSource;
-  onBusyChange: (busy: boolean) => void;
+  /** Owned above the dialog, so a run outlives closing and reopening it. */
+  controller: ExternalRuleImportController;
   onClose: () => void;
-  /** Called once a run's report has loaded, so the rule list can refresh. */
-  onImported: () => void;
 };
 
 function ItemStateLabel({ state }: { state: ExternalRuleImportItemState }) {
@@ -54,6 +57,7 @@ function ReportItem({
 }) {
   const t = useTranslate();
   const unmatched = unmatchedProfileNames(item);
+  const duplicates = duplicateProfileNames(item);
   const diagnostics =
     item.state === "FAILED" ? ruleImportDiagnostics(item) : [];
   return (
@@ -85,6 +89,13 @@ function ReportItem({
           })}
         </p>
       ) : null}
+      {duplicates.length ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("settings.arrImportDuplicateProfiles", {
+            names: duplicates.join(", "),
+          })}
+        </p>
+      ) : null}
       {diagnostics.length ? (
         <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
           {diagnostics.map((diagnostic, diagnosticIndex) => (
@@ -94,7 +105,12 @@ function ReportItem({
                     message: diagnostic.message,
                     location: diagnostic.location,
                   })
-                : diagnostic.message}
+                : diagnostic.specificationIndex !== null
+                  ? t("settings.arrImportDiagnosticAtCondition", {
+                      message: diagnostic.message,
+                      number: diagnostic.specificationIndex + 1,
+                    })
+                  : diagnostic.message}
             </li>
           ))}
         </ul>
@@ -111,28 +127,26 @@ function ReportItem({
  */
 export function ArrRuleImportConnectPanel({
   source,
-  onBusyChange,
+  controller,
   onClose,
-  onImported,
 }: ArrRuleImportConnectPanelProps) {
   const t = useTranslate();
-  const controller = useExternalRuleImport();
-  const { run, report, starting, loadingReport, error, start, reset } =
-    controller;
+  const {
+    run,
+    running,
+    report,
+    starting,
+    loadingReport,
+    error,
+    reportError,
+    start,
+    reloadReport,
+    reset,
+  } = controller;
   const [baseUrl, setBaseUrl] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
 
-  const running = Boolean(run) && !report && !error;
-  const busy = starting || running || loadingReport;
-
-  React.useEffect(() => {
-    onBusyChange(busy);
-  }, [busy, onBusyChange]);
-
-  const reportedRunId = report?.runId ?? null;
-  React.useEffect(() => {
-    if (reportedRunId) onImported();
-  }, [reportedRunId, onImported]);
+  const busy = ruleImportBusy(controller);
 
   const progress = running ? ruleImportProgress(run?.progressJson) : null;
   const counts = report?.counts ?? progress?.counts ?? null;
@@ -195,6 +209,27 @@ export function ArrRuleImportConnectPanel({
           </div>
         ) : null}
 
+        {reportError && !loadingReport ? (
+          <div
+            id="settings-rules-arr-connect-report-error"
+            className="flex flex-wrap items-start gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1 whitespace-pre-wrap">
+              {reportError}
+            </div>
+            <Button
+              id="settings-rules-arr-connect-report-retry"
+              type="button"
+              variant="secondary"
+              className="h-7 px-2 text-xs"
+              onClick={() => void reloadReport()}
+            >
+              {t("label.retry")}
+            </Button>
+          </div>
+        ) : null}
+
         {running || loadingReport ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoadingMark className="h-4 w-4" />
@@ -241,9 +276,9 @@ export function ArrRuleImportConnectPanel({
 
       <DialogFooter>
         <Button type="button" variant="secondary" onClick={onClose}>
-          {report ? t("label.close") : t("label.cancel")}
+          {report || run ? t("label.close") : t("label.cancel")}
         </Button>
-        {report ? (
+        {report || (run && !busy) ? (
           <Button
             id="settings-rules-arr-connect-again"
             type="button"
