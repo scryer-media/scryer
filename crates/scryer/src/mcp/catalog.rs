@@ -27,51 +27,10 @@ pub(crate) struct SkillOperationFile {
 
 include!(concat!(env!("OUT_DIR"), "/skill_operations.rs"));
 
-/// Removing a library root takes every title under it out of the catalog.
-pub(crate) const UPDATE_LIBRARY: &str = "updateLibrary";
-/// Library settings carry download-client routing whose `removeCompleted`
-/// and `removeFailed` override the scope routing.
-pub(crate) const CREATE_LIBRARY: &str = "createLibrary";
-/// `removeCompleted` and `removeFailed` make Scryer remove items from the
-/// download client.
-pub(crate) const UPDATE_DOWNLOAD_CLIENT_ROUTING: &str = "updateDownloadClientRouting";
-/// A new client gets routing that removes completed and failed items from it.
-pub(crate) const CREATE_DOWNLOAD_CLIENT_CONFIG: &str = "createDownloadClientConfig";
-/// Enabling or repointing a client with no saved routing entry gives it the
-/// default routing, which removes completed and failed items.
-pub(crate) const UPDATE_DOWNLOAD_CLIENT_CONFIG: &str = "updateDownloadClientConfig";
-/// A rename collision policy can replace an existing library file.
-pub(crate) const UPDATE_MEDIA_SETTINGS: &str = "updateMediaSettings";
-/// Tags are lifecycle rule facts, so a tag change can arm a rule that deletes
-/// a title.
-pub(crate) const UPDATE_TITLE_TAGS: &str = "updateTitleTags";
-/// A new title can carry tags, which are lifecycle rule facts.
-pub(crate) const ADD_TITLE: &str = "addTitle";
-/// Creates download clients from an import, with the same removal defaults.
-pub(crate) const START_EXTERNAL_IMPORT_SOURCES: &str = "startExternalImportSources";
-/// Retries the import's client and indexer creation, with the same defaults.
-pub(crate) const RETRY_EXTERNAL_IMPORT_SOURCES: &str = "retryExternalImportSources";
-/// A scan reconciles the catalog with the disk and can apply staged import
-/// state; whether it ever removes a title or file is not settled, so it is
-/// withheld.
-pub(crate) const SCAN_LIBRARY: &str = "scanLibrary";
-
-/// Root fields whose resolvers can delete or remove files on disk, library
-/// titles or download-client items. An operation that selects any of them is
-/// never served, whatever its name and whatever the key may do.
-pub(crate) const DENIED: &[&str] = &[
-    UPDATE_LIBRARY,
-    CREATE_LIBRARY,
-    UPDATE_DOWNLOAD_CLIENT_ROUTING,
-    CREATE_DOWNLOAD_CLIENT_CONFIG,
-    UPDATE_DOWNLOAD_CLIENT_CONFIG,
-    UPDATE_MEDIA_SETTINGS,
-    UPDATE_TITLE_TAGS,
-    ADD_TITLE,
-    START_EXTERNAL_IMPORT_SOURCES,
-    RETRY_EXTERNAL_IMPORT_SOURCES,
-    SCAN_LIBRARY,
-];
+/// GraphQL root fields MCP clients may not run. An operation that selects one,
+/// directly or through a fragment, is withheld whatever its name and whatever
+/// the key may do. Nothing is withheld today.
+pub(crate) const DENIED: &[&str] = &[];
 
 /// Characters of an operation's one-line purpose.
 pub(crate) const PURPOSE_MAX_CHARS: usize = 100;
@@ -126,11 +85,11 @@ pub(crate) struct Operation {
 }
 
 impl Operation {
-    /// Whether the operation selects a [`DENIED`] root field.
-    pub(crate) fn denied(&self) -> bool {
+    /// Whether the operation selects one of the `denied` root fields.
+    pub(crate) fn denied(&self, denied: &[&str]) -> bool {
         self.root_fields
             .iter()
-            .any(|field| DENIED.contains(&field.as_str()))
+            .any(|field| denied.contains(&field.as_str()))
     }
 }
 
@@ -158,10 +117,13 @@ pub(crate) struct Catalog {
     pub unreadable: Vec<String>,
 }
 
-pub(crate) static CATALOG: LazyLock<Catalog> = LazyLock::new(|| Catalog::build(SKILL_OPERATIONS));
+pub(crate) static CATALOG: LazyLock<Catalog> =
+    LazyLock::new(|| Catalog::build(SKILL_OPERATIONS, DENIED));
 
 impl Catalog {
-    pub(crate) fn build(files: &[SkillOperationFile]) -> Self {
+    /// The catalog of `files`, less operations that select a `denied` root
+    /// field.
+    pub(crate) fn build(files: &[SkillOperationFile], denied: &[&str]) -> Self {
         let mut catalog = Self::default();
         let mut by_name = BTreeMap::<String, Vec<(&SkillOperationFile, Operation)>>::new();
         for file in files {
@@ -178,7 +140,7 @@ impl Catalog {
         for (name, found) in by_name {
             let found = found
                 .into_iter()
-                .filter(|(_, operation)| !operation.denied())
+                .filter(|(_, operation)| !operation.denied(denied))
                 .collect::<Vec<_>>();
             if found.is_empty() {
                 catalog.withheld.push(name);
@@ -413,7 +375,7 @@ pub(crate) fn cut_line(text: &str, max_chars: usize) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn file(skill: &'static str, file: &'static str, text: &'static str) -> SkillOperationFile {
@@ -502,34 +464,67 @@ mod tests {
             );
         }
         for operation in CATALOG.operations() {
-            assert!(!operation.denied(), "{} is served", operation.name);
+            assert!(!operation.denied(DENIED), "{} is served", operation.name);
         }
         // Each withheld name has no served variant.
-        assert!(!CATALOG.withheld.is_empty());
         for name in &CATALOG.withheld {
             assert!(CATALOG.variants(name).is_empty(), "{name}");
         }
     }
 
+    /// Operations that change libraries, titles, tags, media settings,
+    /// download clients and their routing, and external imports, each with
+    /// the one skill that carries it.
+    pub(crate) const SERVED_SETTINGS_AND_LIBRARY_MUTATIONS: &[(&str, &str)] = &[
+        ("AddTitle", "scryer-migrate-from-arr"),
+        ("CreateDownloadClient", "scryer-configure-acquisition"),
+        ("CreateLibrary", "scryer-migrate-from-arr"),
+        ("RetryExternalImportSources", "scryer-migrate-from-arr"),
+        ("ScanLibrary", "scryer-migrate-from-arr"),
+        ("StartExternalImportSources", "scryer-migrate-from-arr"),
+        ("UpdateDownloadClient", "scryer-configure-acquisition"),
+        (
+            "UpdateDownloadClientRouting",
+            "scryer-configure-acquisition",
+        ),
+        ("UpdateLibrary", "scryer-migrate-from-arr"),
+        ("UpdateMediaSettings", "scryer-migrate-from-arr"),
+        ("UpdateTitleTags", "scryer-migrate-from-arr"),
+    ];
+
+    #[test]
+    fn library_title_and_download_client_mutations_are_served() {
+        for (name, skill) in SERVED_SETTINGS_AND_LIBRARY_MUTATIONS {
+            let operation = CATALOG.get(name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(operation.kind, OperationKind::Mutation, "{name}");
+            assert!(operation.skills.contains(skill), "{name}");
+            assert!(!CATALOG.withheld.iter().any(|held| held == name), "{name}");
+        }
+    }
+
     #[test]
     fn a_denied_field_is_withheld_whatever_the_name_or_fragment() {
-        let catalog = Catalog::build(&[
-            file(
-                "skill-a",
-                "Renamed.graphql",
-                "mutation Renamed($id: String!) { scanLibrary(id: $id) }\n",
-            ),
-            file(
-                "skill-a",
-                "Spread.graphql",
-                "mutation Spread { ...Root }\nfragment Root on MutationRoot { ... on MutationRoot { updateTitleTags(input: {}) { id } } }\n",
-            ),
-            file(
-                "skill-a",
-                "Kept.graphql",
-                "query Kept { me { username } }\n",
-            ),
-        ]);
+        let denied = ["mcpFixtureRemoveThing", "mcpFixtureArmThing"];
+        let catalog = Catalog::build(
+            &[
+                file(
+                    "skill-a",
+                    "Renamed.graphql",
+                    "mutation Renamed($id: String!) { mcpFixtureRemoveThing(id: $id) }\n",
+                ),
+                file(
+                    "skill-a",
+                    "Spread.graphql",
+                    "mutation Spread { ...Root }\nfragment Root on MutationRoot { ... on MutationRoot { mcpFixtureArmThing(input: {}) { id } } }\n",
+                ),
+                file(
+                    "skill-a",
+                    "Kept.graphql",
+                    "query Kept { me { username } }\n",
+                ),
+            ],
+            &denied,
+        );
         assert_eq!(catalog.withheld, ["Renamed", "Spread"]);
         assert!(catalog.get("Kept").is_some());
         assert!(catalog.variants("Renamed").is_empty());
@@ -555,34 +550,37 @@ mod tests {
 
     #[test]
     fn identical_files_merge_and_differing_files_stay_apart() {
-        let catalog = Catalog::build(&[
-            file(
-                "skill-b",
-                "Same.graphql",
-                "# Fixture.\nquery Same { me { username } }\n",
-            ),
-            file(
-                "skill-a",
-                "Same.graphql",
-                "# Fixture.\nquery Same { me { username } }\n",
-            ),
-            file(
-                "skill-a",
-                "Split.graphql",
-                "query Split { me { username } }\n",
-            ),
-            file(
-                "skill-b",
-                "Split.graphql",
-                "query Split { me { accountKind } }\n",
-            ),
-            file(
-                "skill-a",
-                "Two.graphql",
-                "query A { me { username } }\nquery B { me { username } }\n",
-            ),
-            file("skill-a", "Anonymous.graphql", "{ me { username } }\n"),
-        ]);
+        let catalog = Catalog::build(
+            &[
+                file(
+                    "skill-b",
+                    "Same.graphql",
+                    "# Fixture.\nquery Same { me { username } }\n",
+                ),
+                file(
+                    "skill-a",
+                    "Same.graphql",
+                    "# Fixture.\nquery Same { me { username } }\n",
+                ),
+                file(
+                    "skill-a",
+                    "Split.graphql",
+                    "query Split { me { username } }\n",
+                ),
+                file(
+                    "skill-b",
+                    "Split.graphql",
+                    "query Split { me { accountKind } }\n",
+                ),
+                file(
+                    "skill-a",
+                    "Two.graphql",
+                    "query A { me { username } }\nquery B { me { username } }\n",
+                ),
+                file("skill-a", "Anonymous.graphql", "{ me { username } }\n"),
+            ],
+            &[],
+        );
         let same = catalog.get("Same").expect("merged");
         assert_eq!(same.skills, ["skill-a", "skill-b"]);
         assert!(catalog.get("Split").is_none());

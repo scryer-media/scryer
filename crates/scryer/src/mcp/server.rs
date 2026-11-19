@@ -21,7 +21,6 @@ use crate::middleware::{ApiKeyCaller, AuthState};
 
 const INSTRUCTIONS: &str = "Calls act as the API key's account, with its permissions. \
 list_operations, then describe_operation for variables, then run_query or run_mutation. \
-Operations that can delete files, titles or download-client items are not served. \
 Errors: isError with errors[{code, reason, message}]; decide on code and reason, never on message.";
 
 const _: () = assert!(INSTRUCTIONS.len() < 400);

@@ -1264,7 +1264,7 @@ async fn the_tool_list_and_instructions_stay_within_their_token_budget() {
         .len();
     let (_, _, listed) = send(&fixture.router, rpc_request(Some(&key), None, list_tools())).await;
     let tools = listed["result"].to_string().len();
-    // Measured at 326 + 2,945 characters, about 820 tokens together.
+    // Measured at 244 + 2,945 characters, about 800 tokens together.
     assert!(instructions + tools < 3_300, "{instructions} + {tools}");
 }
 
@@ -1384,10 +1384,12 @@ async fn list_operations_groups_the_catalog_by_skill_and_filters_to_one() {
         .map(|operation| operation.skills.len())
         .sum::<usize>();
     assert_eq!(listed, memberships);
-    for denied in catalog::DENIED {
+    for (name, skill) in catalog::tests::SERVED_SETTINGS_AND_LIBRARY_MUTATIONS {
         assert!(
-            !all.to_string().contains(&format!("\"{denied}\"")),
-            "{denied}"
+            all[skill]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row[0] == *name && row[1] == "m")),
+            "{name} under {skill}"
         );
     }
 
@@ -1887,10 +1889,18 @@ async fn a_catalog_run_draws_on_its_operations_graphql_class() {
 }
 
 #[tokio::test]
-async fn every_withheld_operation_is_unknown_to_the_run_tools() {
+async fn library_title_and_download_client_mutations_are_described_as_mutations() {
     let fixture = fixture().await;
     let key = fixture.api_key.clone();
-    assert!(!catalog::CATALOG.withheld.is_empty());
+    for (name, _) in catalog::tests::SERVED_SETTINGS_AND_LIBRARY_MUTATIONS {
+        let described = success(
+            "describe_operation",
+            &call(&fixture, &key, "describe_operation", json!({"name": name})).await,
+        );
+        assert_eq!(described["name"], *name, "{described}");
+        assert_eq!(described["kind"], "m", "{described}");
+    }
+    // A withheld name is unknown to the run tools.
     for name in &catalog::CATALOG.withheld {
         let body = call(&fixture, &key, "run_mutation", json!({"name": name})).await;
         assert_eq!(
