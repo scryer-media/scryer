@@ -249,6 +249,29 @@ impl QualityProfileCriteria {
             })
     }
 
+    /// The tier a file must reach before searches stop nominating it for a
+    /// quality upgrade: the configured `cutoff_tier`, or the profile's top
+    /// tier when none is set. A profile without a cutoff still upgrades to
+    /// its best tier; past that, only same-tier upgrades remain, which
+    /// [`quality_cutoff_met`](Self::quality_cutoff_met) leaves open to the
+    /// minimum score delta. `None` when the configured cutoff is not one of
+    /// the profile's tiers, or the profile lists no tiers.
+    pub(crate) fn search_cutoff_tier(&self) -> Option<String> {
+        let tier = match self
+            .cutoff_tier
+            .as_deref()
+            .map(str::trim)
+            .filter(|cutoff| !cutoff.is_empty())
+        {
+            Some(cutoff) => normalize_quality_tier(Some(cutoff))?,
+            None => self.quality_tiers.first()?.clone(),
+        };
+        self.quality_tiers
+            .iter()
+            .any(|listed| listed == &tier)
+            .then_some(tier)
+    }
+
     /// Whether the tier cutoff applies at all: only while the quality tier
     /// is one of the profile's gates. The one place that ties the tier cutoff
     /// to a step.
