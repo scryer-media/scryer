@@ -1,0 +1,1722 @@
+{
+ "applications": [
+  {
+   "id": 0,
+   "name": "Plex",
+   "props": [
+    {
+     "id": 0,
+     "name": "addDate",
+     "humanName": "Date added",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 1,
+     "name": "seenBy",
+     "humanName": "[list] Viewed by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 2,
+     "name": "releaseDate",
+     "humanName": "Release date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 3,
+     "name": "rating_user",
+     "humanName": "User rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 4,
+     "name": "people",
+     "humanName": "[list] People involved",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 5,
+     "name": "viewCount",
+     "humanName": "Times viewed",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 6,
+     "name": "collections",
+     "humanName": "Present in amount of other collections",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 7,
+     "name": "lastViewedAt",
+     "humanName": "Last view date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 8,
+     "name": "fileVideoResolution",
+     "humanName": "Media file resolution (4k, 1080,..)",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 9,
+     "name": "fileBitrate",
+     "humanName": "Media file bitrate",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 10,
+     "name": "fileVideoCodec",
+     "humanName": "Media file codec",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 11,
+     "name": "genre",
+     "humanName": "[list] List of genres (Action, Adventure,..)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 12,
+     "name": "sw_allEpisodesSeenBy",
+     "humanName": "[list] Users that watched every episode",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 49,
+     "name": "sw_allEpisodesSeenBySinceAdded",
+     "humanName": "[list] Users that watched every episode since added",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 13,
+     "name": "sw_lastWatched",
+     "humanName": "Newest episode view date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 14,
+     "name": "sw_episodes",
+     "humanName": "Amount of available episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 15,
+     "name": "sw_viewedEpisodes",
+     "humanName": "Amount of watched episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 45,
+     "name": "sw_markedWatchedEpisodes",
+     "humanName": "Amount of episodes marked as watched",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 16,
+     "name": "sw_lastEpisodeAddedAt",
+     "humanName": "Last episode added at",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 17,
+     "name": "sw_amountOfViews",
+     "humanName": "Total views",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 18,
+     "name": "sw_watchers",
+     "humanName": "[list] Users that watched at least one episode",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 50,
+     "name": "sw_watchersSinceAdded",
+     "humanName": "[list] Users that watched at least one episode since added",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 19,
+     "name": "collection_names",
+     "humanName": "[list] Collections media is present in (titles)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 20,
+     "name": "playlists",
+     "humanName": "Present in amount of playlists",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 21,
+     "name": "playlist_names",
+     "humanName": "[list] Playlists media is present in (titles)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 22,
+     "name": "rating_critics",
+     "humanName": "Critics rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 23,
+     "name": "rating_audience",
+     "humanName": "Audience rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 24,
+     "name": "labels",
+     "humanName": "[list] Labels",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 25,
+     "name": "sw_collections_including_parent",
+     "humanName": "Present in amount of other collections (incl. parents)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 26,
+     "name": "sw_collection_names_including_parent",
+     "humanName": "[list] Collections media is present in (titles) (incl. parents)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 27,
+     "name": "sw_lastEpisodeAiredAt",
+     "humanName": "Last episode aired at",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 28,
+     "name": "watchlist_isListedByUsers",
+     "humanName": "[list] Watchlisted by (username) [experimental]",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 30,
+     "name": "watchlist_isWatchlisted",
+     "humanName": "Is Watchlisted",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 29,
+     "name": "sw_seasonLastEpisodeAiredAt",
+     "humanName": "Last episode aired at (season)",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 31,
+     "name": "rating_imdb",
+     "humanName": "IMDb rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 35,
+     "name": "rating_imdbShow",
+     "humanName": "IMDb rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 32,
+     "name": "rating_rottenTomatoesCritic",
+     "humanName": "Rotten Tomatoes critic rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 36,
+     "name": "rating_rottenTomatoesCriticShow",
+     "humanName": "Rotten Tomatoes critic rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 33,
+     "name": "rating_rottenTomatoesAudience",
+     "humanName": "Rotten Tomatoes audience rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 37,
+     "name": "rating_rottenTomatoesAudienceShow",
+     "humanName": "Rotten Tomatoes audience rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 34,
+     "name": "rating_tmdb",
+     "humanName": "The Movie Database rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 38,
+     "name": "rating_tmdbShow",
+     "humanName": "The Movie Database rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 39,
+     "name": "collectionsIncludingSmart",
+     "humanName": "Present in amount of other collections (incl. smart collections)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 40,
+     "name": "sw_collections_including_parent_and_smart",
+     "humanName": "Present in amount of other collections (incl. parents and smart collections)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 41,
+     "name": "sw_collection_names_including_parent_and_smart",
+     "humanName": "[list] Collections media is present in (titles) (incl. parents and smart collections)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 42,
+     "name": "collection_names_including_smart",
+     "humanName": "[list] Collections media is present in (titles) (incl. smart collections)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 43,
+     "name": "isWatched",
+     "humanName": "Is Watched",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 44,
+     "name": "collection_siblings_lastViewedAt",
+     "humanName": "Newest view date across collection",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 46,
+     "name": "studios",
+     "humanName": "[list] Studios",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 47,
+     "name": "lastPlayedAt",
+     "humanName": "Last play date (including unfinished)",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 48,
+     "name": "sw_lastViewedAtThroughSeason",
+     "humanName": "Newest episode view date in this or an earlier season",
+     "type": {
+      "key": "1"
+     }
+    }
+   ]
+  },
+  {
+   "id": 1,
+   "name": "Radarr",
+   "props": [
+    {
+     "id": 0,
+     "name": "addDate",
+     "humanName": "Date added",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 2,
+     "name": "tags",
+     "humanName": "[list] Tags",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 3,
+     "name": "profile",
+     "humanName": "Quality profile",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 4,
+     "name": "releaseDate",
+     "humanName": "Release date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 5,
+     "name": "monitored",
+     "humanName": "is monitored",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 6,
+     "name": "inCinemas",
+     "humanName": "In cinemas date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 7,
+     "name": "fileSize",
+     "humanName": "File - size in MB",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 8,
+     "name": "fileAudioChannels",
+     "humanName": "File - audio channels",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 22,
+     "name": "fileAudioLanguages",
+     "humanName": "File - audio languages",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 9,
+     "name": "fileQuality",
+     "humanName": "File - quality (2160, 1080,..)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 10,
+     "name": "fileDate",
+     "humanName": "File - download date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 11,
+     "name": "runTime",
+     "humanName": "File - runtime in minutes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 12,
+     "name": "filePath",
+     "humanName": "File - file path",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 21,
+     "name": "fileQualityName",
+     "humanName": "File - quality name",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 20,
+     "name": "fileQualityCutoffMet",
+     "humanName": "File - quality cutoff met",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 13,
+     "name": "originalLanguage",
+     "humanName": "Original language",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 14,
+     "name": "rottenTomatoesRating",
+     "humanName": "Rotten Tomatoes rating (scale 0-100)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 17,
+     "name": "rottenTomatoesRatingVotes",
+     "humanName": "Rotten Tomatoes rating vote count",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 15,
+     "name": "traktRating",
+     "humanName": "Trakt rating (scale 0-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 18,
+     "name": "traktRatingVotes",
+     "humanName": "Trakt rating vote count",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 16,
+     "name": "imdbRating",
+     "humanName": "IMDb rating (scale 0-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 19,
+     "name": "imdbRatingVotes",
+     "humanName": "IMDb rating vote count",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 23,
+     "name": "diskspace_remaining_gb",
+     "humanName": "Remaining disk space (GB)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 24,
+     "name": "diskspace_total_gb",
+     "humanName": "Total disk space (GB)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 25,
+     "name": "movieTitle",
+     "humanName": "Movie title",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 26,
+     "name": "movieId",
+     "humanName": "Movie ID",
+     "type": {
+      "key": "0"
+     }
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "Sonarr",
+   "props": [
+    {
+     "id": 0,
+     "name": "addDate",
+     "humanName": "Date added",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 1,
+     "name": "diskSizeEntireShow",
+     "humanName": "Files - Disk size in MB ",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 2,
+     "name": "tags",
+     "humanName": "[list] Tags (show)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 25,
+     "name": "qualityProfileName",
+     "humanName": "Quality profile name",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 3,
+     "name": "qualityProfileId",
+     "humanName": "Quality profile ID",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 4,
+     "name": "firstAirDate",
+     "humanName": "First air date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 5,
+     "name": "seasons",
+     "humanName": "Number of seasons / episodes (also unavailable)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 6,
+     "name": "status",
+     "humanName": "Status (continuing, ended)",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 7,
+     "name": "ended",
+     "humanName": "Show ended",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 8,
+     "name": "monitored",
+     "humanName": "Is monitored (deprecated)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 9,
+     "name": "monitored",
+     "humanName": "Is monitored",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 10,
+     "name": "unaired_episodes",
+     "humanName": "Has unaired episodes",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 11,
+     "name": "seasons_monitored",
+     "humanName": "Number of monitored seasons / episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 12,
+     "name": "unaired_episodes_season",
+     "humanName": "Season has unaired episodes",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 13,
+     "name": "part_of_latest_season",
+     "humanName": "Is (part of) latest aired/airing season",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 14,
+     "name": "filePath",
+     "humanName": "Base file path (show)",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 15,
+     "name": "originalLanguage",
+     "humanName": "Original language",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 16,
+     "name": "seasonFinale",
+     "humanName": "Has season finale episode",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 17,
+     "name": "seriesFinale",
+     "humanName": "Has series finale episode",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 18,
+     "name": "seasonNumber",
+     "humanName": "Season number",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 19,
+     "name": "rating",
+     "humanName": "Show rating (IMDb) (scale 0-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 20,
+     "name": "ratingVotes",
+     "humanName": "Show rating (IMDb) vote count",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 22,
+     "name": "episodeNumber",
+     "humanName": "Episode number",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 21,
+     "name": "episodeFilePath",
+     "humanName": "Episode file path",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 23,
+     "name": "fileQualityCutoffMet",
+     "humanName": "Episode file quality cutoff met",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 24,
+     "name": "fileQualityName",
+     "humanName": "Episode file quality",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 26,
+     "name": "fileAudioLanguages",
+     "humanName": "Episode file audio languages",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 27,
+     "name": "seriesType",
+     "humanName": "Series type",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 28,
+     "name": "diskspace_remaining_gb",
+     "humanName": "Remaining disk space (GB)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 29,
+     "name": "diskspace_total_gb",
+     "humanName": "Total disk space (GB)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 30,
+     "name": "missing_episodes_season",
+     "humanName": "Number of missing episodes in season",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 31,
+     "name": "missing_episodes_show",
+     "humanName": "Number of missing episodes in show",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 32,
+     "name": "episodeFileRank",
+     "humanName": "Episode position by air date (1 = latest)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 33,
+     "name": "seriesTitle",
+     "humanName": "Series title",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 34,
+     "name": "seriesId",
+     "humanName": "Series ID",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 35,
+     "name": "seasonFileRank",
+     "humanName": "Season position by air date (1 = latest)",
+     "type": {
+      "key": "0"
+     }
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "name": "Jellyfin",
+   "props": [
+    {
+     "id": 0,
+     "name": "addDate",
+     "humanName": "Date added",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 1,
+     "name": "seenBy",
+     "humanName": "[list] Viewed by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 2,
+     "name": "releaseDate",
+     "humanName": "Release date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 3,
+     "name": "rating_user",
+     "humanName": "User rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 4,
+     "name": "people",
+     "humanName": "[list] People involved",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 5,
+     "name": "viewCount",
+     "humanName": "Times viewed",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 6,
+     "name": "collections",
+     "humanName": "Present in amount of other collections",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 7,
+     "name": "lastViewedAt",
+     "humanName": "Last view date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 8,
+     "name": "fileVideoResolution",
+     "humanName": "Media file resolution (4k, 1080,..)",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 9,
+     "name": "fileBitrate",
+     "humanName": "Media file bitrate",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 10,
+     "name": "fileVideoCodec",
+     "humanName": "Media file codec",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 11,
+     "name": "genre",
+     "humanName": "[list] List of genres (Action, Adventure,..)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 12,
+     "name": "sw_allEpisodesSeenBy",
+     "humanName": "[list] Users that watched every episode",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 13,
+     "name": "sw_lastWatched",
+     "humanName": "Newest episode view date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 14,
+     "name": "sw_episodes",
+     "humanName": "Amount of available episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 15,
+     "name": "sw_viewedEpisodes",
+     "humanName": "Amount of watched episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 16,
+     "name": "sw_lastEpisodeAddedAt",
+     "humanName": "Last episode added at",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 17,
+     "name": "sw_amountOfViews",
+     "humanName": "Total views",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 18,
+     "name": "sw_watchers",
+     "humanName": "[list] Users that watched at least one episode",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 19,
+     "name": "collection_names",
+     "humanName": "[list] Collections media is present in (titles)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 20,
+     "name": "playlists",
+     "humanName": "Present in amount of playlists",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 21,
+     "name": "playlist_names",
+     "humanName": "[list] Playlists media is present in (titles)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 22,
+     "name": "rating_critics",
+     "humanName": "Critics rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 23,
+     "name": "rating_audience",
+     "humanName": "Audience rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 24,
+     "name": "labels",
+     "humanName": "[list] Tags",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 25,
+     "name": "sw_collections_including_parent",
+     "humanName": "Present in amount of other collections (incl. parents)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 26,
+     "name": "sw_collection_names_including_parent",
+     "humanName": "[list] Collections media is present in (titles) (incl. parents)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 27,
+     "name": "sw_lastEpisodeAiredAt",
+     "humanName": "Last episode aired at",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 29,
+     "name": "sw_seasonLastEpisodeAiredAt",
+     "humanName": "Last episode aired at (season)",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 30,
+     "name": "playCount",
+     "humanName": "Total play attempts (including unfinished)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 31,
+     "name": "sw_playCount",
+     "humanName": "Total play attempts (including unfinished)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 32,
+     "name": "rating_rottenTomatoesCritic",
+     "humanName": "Rotten Tomatoes critic rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 33,
+     "name": "rating_rottenTomatoesAudience",
+     "humanName": "Rotten Tomatoes audience rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 34,
+     "name": "rating_tmdb",
+     "humanName": "The Movie Database rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 44,
+     "name": "rating_imdb",
+     "humanName": "IMDb rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 35,
+     "name": "rating_imdbShow",
+     "humanName": "IMDb rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 36,
+     "name": "rating_rottenTomatoesCriticShow",
+     "humanName": "Rotten Tomatoes critic rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 37,
+     "name": "rating_rottenTomatoesAudienceShow",
+     "humanName": "Rotten Tomatoes audience rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 38,
+     "name": "rating_tmdbShow",
+     "humanName": "The Movie Database rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 39,
+     "name": "favoritedBy",
+     "humanName": "[list] Favorited by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 40,
+     "name": "sw_favoritedBy",
+     "humanName": "[list] Favorited by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 41,
+     "name": "sw_favoritedBy_including_parent",
+     "humanName": "[list] Favorited by (username) (incl. parents)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 42,
+     "name": "isWatched",
+     "humanName": "Is Watched",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 45,
+     "name": "collection_siblings_lastViewedAt",
+     "humanName": "Newest view date across collection",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 46,
+     "name": "studios",
+     "humanName": "[list] Studios",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 47,
+     "name": "lastPlayedAt",
+     "humanName": "Last play date (including unfinished)",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 48,
+     "name": "sw_lastViewedAtThroughSeason",
+     "humanName": "Newest episode view date in this or an earlier season",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 49,
+     "name": "sw_allEpisodesSeenBySinceAdded",
+     "humanName": "[list] Users that watched every episode since added",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 50,
+     "name": "sw_watchersSinceAdded",
+     "humanName": "[list] Users that watched at least one episode since added",
+     "type": {
+      "key": "4"
+     }
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "name": "Emby",
+   "props": [
+    {
+     "id": 0,
+     "name": "addDate",
+     "humanName": "Date added",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 1,
+     "name": "seenBy",
+     "humanName": "[list] Viewed by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 2,
+     "name": "releaseDate",
+     "humanName": "Release date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 3,
+     "name": "rating_user",
+     "humanName": "User rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 4,
+     "name": "people",
+     "humanName": "[list] People involved",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 5,
+     "name": "viewCount",
+     "humanName": "Times viewed",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 6,
+     "name": "collections",
+     "humanName": "Present in amount of other collections",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 7,
+     "name": "lastViewedAt",
+     "humanName": "Last view date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 8,
+     "name": "fileVideoResolution",
+     "humanName": "Media file resolution (4k, 1080,..)",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 9,
+     "name": "fileBitrate",
+     "humanName": "Media file bitrate",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 10,
+     "name": "fileVideoCodec",
+     "humanName": "Media file codec",
+     "type": {
+      "key": "2"
+     }
+    },
+    {
+     "id": 11,
+     "name": "genre",
+     "humanName": "[list] List of genres (Action, Adventure,..)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 12,
+     "name": "sw_allEpisodesSeenBy",
+     "humanName": "[list] Users that watched every episode",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 13,
+     "name": "sw_lastWatched",
+     "humanName": "Newest episode view date",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 14,
+     "name": "sw_episodes",
+     "humanName": "Amount of available episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 15,
+     "name": "sw_viewedEpisodes",
+     "humanName": "Amount of watched episodes",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 16,
+     "name": "sw_lastEpisodeAddedAt",
+     "humanName": "Last episode added at",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 17,
+     "name": "sw_amountOfViews",
+     "humanName": "Total views",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 18,
+     "name": "sw_watchers",
+     "humanName": "[list] Users that watched at least one episode",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 19,
+     "name": "collection_names",
+     "humanName": "[list] Collections media is present in (titles)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 20,
+     "name": "playlists",
+     "humanName": "Present in amount of playlists",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 21,
+     "name": "playlist_names",
+     "humanName": "[list] Playlists media is present in (titles)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 22,
+     "name": "rating_critics",
+     "humanName": "Critics rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 23,
+     "name": "rating_audience",
+     "humanName": "Audience rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 24,
+     "name": "labels",
+     "humanName": "[list] Tags",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 25,
+     "name": "sw_collections_including_parent",
+     "humanName": "Present in amount of other collections (incl. parents)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 26,
+     "name": "sw_collection_names_including_parent",
+     "humanName": "[list] Collections media is present in (titles) (incl. parents)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 27,
+     "name": "sw_lastEpisodeAiredAt",
+     "humanName": "Last episode aired at",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 29,
+     "name": "sw_seasonLastEpisodeAiredAt",
+     "humanName": "Last episode aired at (season)",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 30,
+     "name": "playCount",
+     "humanName": "Total play attempts (including unfinished)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 31,
+     "name": "sw_playCount",
+     "humanName": "Total play attempts (including unfinished)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 32,
+     "name": "rating_rottenTomatoesCritic",
+     "humanName": "Rotten Tomatoes critic rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 33,
+     "name": "rating_rottenTomatoesAudience",
+     "humanName": "Rotten Tomatoes audience rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 34,
+     "name": "rating_tmdb",
+     "humanName": "The Movie Database rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 44,
+     "name": "rating_imdb",
+     "humanName": "IMDb rating (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 35,
+     "name": "rating_imdbShow",
+     "humanName": "IMDb rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 36,
+     "name": "rating_rottenTomatoesCriticShow",
+     "humanName": "Rotten Tomatoes critic rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 37,
+     "name": "rating_rottenTomatoesAudienceShow",
+     "humanName": "Rotten Tomatoes audience rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 38,
+     "name": "rating_tmdbShow",
+     "humanName": "The Movie Database rating (show) (scale 1-10)",
+     "type": {
+      "key": "0"
+     }
+    },
+    {
+     "id": 39,
+     "name": "favoritedBy",
+     "humanName": "[list] Favorited by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 40,
+     "name": "sw_favoritedBy",
+     "humanName": "[list] Favorited by (username)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 41,
+     "name": "sw_favoritedBy_including_parent",
+     "humanName": "[list] Favorited by (username) (incl. parents)",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 42,
+     "name": "isWatched",
+     "humanName": "Is Watched",
+     "type": {
+      "key": "3"
+     }
+    },
+    {
+     "id": 45,
+     "name": "collection_siblings_lastViewedAt",
+     "humanName": "Newest view date across collection",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 46,
+     "name": "studios",
+     "humanName": "[list] Studios",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 47,
+     "name": "lastPlayedAt",
+     "humanName": "Last play date (including unfinished)",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 48,
+     "name": "sw_lastViewedAtThroughSeason",
+     "humanName": "Newest episode view date in this or an earlier season",
+     "type": {
+      "key": "1"
+     }
+    },
+    {
+     "id": 49,
+     "name": "sw_allEpisodesSeenBySinceAdded",
+     "humanName": "[list] Users that watched every episode since added",
+     "type": {
+      "key": "4"
+     }
+    },
+    {
+     "id": 50,
+     "name": "sw_watchersSinceAdded",
+     "humanName": "[list] Users that watched at least one episode since added",
+     "type": {
+      "key": "4"
+     }
+    }
+   ]
+  }
+ ]
+}
