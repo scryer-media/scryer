@@ -2773,7 +2773,8 @@ const ru: LocaleDictionary = {
   "settings.refAudioStreamChannels":
     "Количество каналов отдельного аудиопотока",
   "settings.refAudioStreamLanguage": "Код языка отдельного аудиопотока",
-  "settings.refAudioStreamName": "Название отдельной звуковой дорожки, если доступно",
+  "settings.refAudioStreamName":
+    "Название отдельной звуковой дорожки, если доступно",
   "settings.refAudioStreamBitrateKbps":
     "Битрейт отдельного аудиопотока в кбит/с",
   "settings.refSectionSubtitleStreams": "— Вложенные записи потоков субтитров",
@@ -12051,8 +12052,6 @@ const ru: LocaleDictionary = {
     "Импорт пользовательских форматов Sonarr или Radarr как правил оценки.",
   "settings.arrImportTabConnect": "Подключение",
   "settings.arrImportTabPaste": "Вставить JSON",
-  "settings.arrImportConnectDescription":
-    "Прочитать пользовательские форматы и оценки профилей качества из работающего Sonarr или Radarr. Каждый пользовательский формат сохраняется отдельным отключённым правилом для проверки.",
   "settings.arrImportBaseUrl": "Базовый URL",
   "settings.arrImportApiKey": "Ключ API",
   "settings.arrImportStart": "Начать импорт",
@@ -12066,7 +12065,7 @@ const ru: LocaleDictionary = {
   "settings.arrImportStateNeedsReview":
     "Сохранено, отключено, требует проверки",
   "settings.arrImportStateSavedFailedTranslation": "Сохранено без перевода",
-  "settings.arrImportStateSkipped": "Пропущено",
+  "settings.arrImportStateSkipped": "Уже существует, пропущено",
   "settings.arrImportStatePending": "Ожидает",
   "settings.arrImportStateFailed": "Не импортировано",
   "settings.arrImportUnmatchedProfiles":

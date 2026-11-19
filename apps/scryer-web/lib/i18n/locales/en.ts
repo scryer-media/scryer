@@ -7351,8 +7351,6 @@ const en: LocaleDictionary = {
     "Import Sonarr or Radarr custom formats as scoring rules.",
   "settings.arrImportTabConnect": "Connect",
   "settings.arrImportTabPaste": "Paste JSON",
-  "settings.arrImportConnectDescription":
-    "Read the custom formats and quality-profile scores from a running Sonarr or Radarr. Each custom format is saved as its own disabled rule for you to review.",
   "settings.arrImportBaseUrl": "Base URL",
   "settings.arrImportApiKey": "API key",
   "settings.arrImportStart": "Start import",
@@ -7365,7 +7363,7 @@ const en: LocaleDictionary = {
   "settings.arrImportStateSaved": "Saved, disabled",
   "settings.arrImportStateNeedsReview": "Saved, disabled, needs review",
   "settings.arrImportStateSavedFailedTranslation": "Saved without translation",
-  "settings.arrImportStateSkipped": "Skipped",
+  "settings.arrImportStateSkipped": "Already exists, skipped",
   "settings.arrImportStatePending": "Pending",
   "settings.arrImportStateFailed": "Not imported",
   "settings.arrImportUnmatchedProfiles":
@@ -7447,7 +7445,8 @@ const en: LocaleDictionary = {
     "A rule reads a Scryer fact that differs slightly from Maintainerr's. Preview before enabling.",
   "settings.maintainerrImportCode.actionApproximate":
     "The group's action maps to Scryer actions that differ slightly from Maintainerr's. Preview before enabling.",
-  "settings.arrImportDiagnosticAtCondition": "{{message}} (condition {{number}})",
+  "settings.arrImportDiagnosticAtCondition":
+    "{{message}} (condition {{number}})",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":

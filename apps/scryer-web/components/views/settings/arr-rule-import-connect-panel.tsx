@@ -56,8 +56,10 @@ function ReportItem({
   index: number;
 }) {
   const t = useTranslate();
-  const unmatched = unmatchedProfileNames(item);
-  const duplicates = duplicateProfileNames(item);
+  // A skipped item already says all there is to say in its state label.
+  const review = item.state === "SAVED_NEEDS_REVIEW";
+  const unmatched = review ? unmatchedProfileNames(item) : [];
+  const duplicates = review ? duplicateProfileNames(item) : [];
   const diagnostics =
     item.state === "FAILED" ? ruleImportDiagnostics(item) : [];
   return (
@@ -72,7 +74,7 @@ function ReportItem({
           <ItemStateLabel state={item.state} />
         </span>
       </div>
-      {item.reason ? (
+      {item.reason && item.state !== "SKIPPED_EXISTS" && !diagnostics.length ? (
         <p className="mt-1 text-xs text-muted-foreground">
           {ruleImportReasonMessage(
             item.reason,
@@ -179,9 +181,6 @@ export function ArrRuleImportConnectPanel({
       <div className="space-y-4">
         {finished ? null : (
           <>
-            <p className="text-sm text-muted-foreground">
-              {t("settings.arrImportConnectDescription")}
-            </p>
             <label className="block">
               <Label
                 className="mb-2 block"
