@@ -572,7 +572,8 @@ const de: LocaleDictionary = {
     "Quelle: Standard-Präferenzen (BluRay > WEB-DL > WEB-Rip)",
   "persona.trait.balanced.audio": "Audio: ausgewogene Codec-Gewichtung",
   "persona.trait.balanced.x265": "x265: unter 4K bestraft",
-  "persona.trait.balanced.size": "Dateigröße: größere Dateien bevorzugt",
+  "persona.trait.balanced.size":
+    "Dateigröße: übergroße Dateien werden abgewertet",
   "persona.trait.balanced.remux": "Remux: standardmäßig nicht priorisiert",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision und HDR10 belohnt",
   "persona.trait.audiophile.source": "Quelle: BluRay stark bevorzugt",
@@ -586,14 +587,16 @@ const de: LocaleDictionary = {
   "persona.trait.efficient.audio":
     "Audio: verlustbehaftete Codecs akzeptabel (DDP bevorzugt)",
   "persona.trait.efficient.x265": "x265: bei allen Auflösungen belohnt",
-  "persona.trait.efficient.size": "Dateigröße: kompakte Encodes bevorzugt",
+  "persona.trait.efficient.size":
+    "Dateigröße: kompakte Encodes bevorzugt, übergroße Dateien werden stark abgewertet",
   "persona.trait.efficient.remux": "Remux: nicht priorisiert",
   "persona.trait.efficient.hdr": "HDR: Standard",
   "persona.trait.compatible.source": "Quelle: WEB-DL bevorzugt",
   "persona.trait.compatible.audio":
     "Audio: DDP und AAC für breite Geräteunterstützung priorisiert",
   "persona.trait.compatible.x265": "x265: H.264 gegenüber H.265 bevorzugt",
-  "persona.trait.compatible.size": "Dateigröße: Standard-Präferenzen",
+  "persona.trait.compatible.size":
+    "Dateigröße: übergroße Dateien werden abgewertet",
   "persona.trait.compatible.remux": "Remux: nicht priorisiert",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision bestraft (Kompatibilitätsrisiko)",

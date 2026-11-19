@@ -575,7 +575,8 @@ const it: LocaleDictionary = {
     "Sorgente: preferenze standard (BluRay > WEB-DL > WeRip)",
   "persona.trait.balanced.audio": "Audio: pesi codec bilanciati",
   "persona.trait.balanced.x265": "x265: penalizzato sotto il 4K",
-  "persona.trait.balanced.size": "Dimensione file: preferisce file più grandi",
+  "persona.trait.balanced.size":
+    "Dimensione file: i file troppo grandi sono penalizzati",
   "persona.trait.balanced.remux":
     "Remux: non prioritizzato per impostazione predefinita",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision e HDR10 premiati",
@@ -590,14 +591,16 @@ const it: LocaleDictionary = {
   "persona.trait.efficient.audio":
     "Audio: codec lossy accettabili (DDP preferito)",
   "persona.trait.efficient.x265": "x265: premiato a tutte le risoluzioni",
-  "persona.trait.efficient.size": "Dimensione file: encode compatti preferiti",
+  "persona.trait.efficient.size":
+    "Dimensione file: encode compatti preferiti, file troppo grandi fortemente penalizzati",
   "persona.trait.efficient.remux": "Remux: non prioritizzato",
   "persona.trait.efficient.hdr": "HDR: standard",
   "persona.trait.compatible.source": "Sorgente: WEB-DL preferito",
   "persona.trait.compatible.audio":
     "Audio: DDP e AAC prioritizzati per ampio supporto dispositivi",
   "persona.trait.compatible.x265": "x265: H.264 preferito rispetto a H.265",
-  "persona.trait.compatible.size": "Dimensione file: preferenze standard",
+  "persona.trait.compatible.size":
+    "Dimensione file: i file troppo grandi sono penalizzati",
   "persona.trait.compatible.remux": "Remux: non prioritizzato",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision penalizzato (rischio compatibilità)",

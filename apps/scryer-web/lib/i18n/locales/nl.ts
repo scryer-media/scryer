@@ -611,7 +611,7 @@ const nl: LocaleDictionary = {
   "persona.trait.balanced.audio": "Audio: gebalanceerde codec-weging",
   "persona.trait.balanced.x265": "x265: bestraft onder 4K",
   "persona.trait.balanced.size":
-    "Bestandsgrootte: geeft de voorkeur aan grotere bestanden",
+    "Bestandsgrootte: te grote bestanden worden bestraft",
   "persona.trait.balanced.remux": "Remux: standaard niet geprioriteerd",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision en HDR10 beloond",
   "persona.trait.audiophile.source": "Bron: BluRay sterk geprefereerd",
@@ -627,14 +627,15 @@ const nl: LocaleDictionary = {
     "Audio: lossy codecs acceptabel (DDP geprefereerd)",
   "persona.trait.efficient.x265": "x265: beloond op alle resoluties",
   "persona.trait.efficient.size":
-    "Bestandsgrootte: compacte encodes geprefereerd",
+    "Bestandsgrootte: compacte encodes geprefereerd, te grote bestanden worden zwaar bestraft",
   "persona.trait.efficient.remux": "Remux: niet geprioriteerd",
   "persona.trait.efficient.hdr": "HDR: standaard",
   "persona.trait.compatible.source": "Bron: WEB-DL geprefereerd",
   "persona.trait.compatible.audio":
     "Audio: DDP en AAC geprioriteerd voor brede apparaatondersteuning",
   "persona.trait.compatible.x265": "x265: H.264 geprefereerd boven H.265",
-  "persona.trait.compatible.size": "Bestandsgrootte: standaardvoorkeuren",
+  "persona.trait.compatible.size":
+    "Bestandsgrootte: te grote bestanden worden bestraft",
   "persona.trait.compatible.remux": "Remux: niet geprioriteerd",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision bestraft (compatibiliteitsrisico)",
