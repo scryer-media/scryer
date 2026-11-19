@@ -739,8 +739,8 @@ impl AppUseCase {
             ));
         }
 
-        let live_path = self
-            .recycled_unit_live_file_path(
+        let (live_file_id, live_path) = self
+            .recycled_unit_live_file(
                 upgrades,
                 manifest,
                 title_id,
@@ -760,7 +760,30 @@ impl AppUseCase {
                 "replacement path is a recycled or staged file, not a library file: {live_path}"
             ));
         }
-        if !upgrades.file_exists(&live_path_buf).await {
+        // The pass shares what it learned about the chain, but the file that
+        // proves this entry redundant is read again for this entry alone, just
+        // before the purge, so a file removed earlier in a long pass is seen.
+        let live_row = self
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(&live_file_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        match live_row {
+            Some(row) if row.title_id == title_id && row.file_path == live_path => {}
+            Some(_) => {
+                return Err(format!(
+                    "replacement media file changed during the purge pass: {live_file_id}"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "replacement media file row is gone: {live_file_id}"
+                ));
+            }
+        }
+        if !live_file_exists(&live_path_buf).await {
             return Err(format!(
                 "replacement media file does not exist on disk: {live_path}"
             ));
@@ -789,7 +812,7 @@ impl AppUseCase {
         Ok(row)
     }
 
-    /// The catalog path of the library file that now covers what an
+    /// The id and catalog path of the library file that now covers what an
     /// upgrade-recycled file covered, narrowest evidence first:
     ///
     /// 1. the replacement row the manifest names, wherever it now lives, so a
@@ -801,14 +824,14 @@ impl AppUseCase {
     ///    the bin's own entries record, followed to a row that still exists.
     ///
     /// Anything else is refused.
-    async fn recycled_unit_live_file_path(
+    async fn recycled_unit_live_file(
         &self,
         upgrades: &mut UpgradePurgeContext,
         manifest: &crate::recycle_bin::RecycleManifest,
         title_id: &str,
         original_file_id: &str,
         media_root_path: &Path,
-    ) -> Result<String, String> {
+    ) -> Result<(String, String), String> {
         let replacement_file_id = manifest
             .replacement_file_id
             .as_deref()
@@ -825,7 +848,7 @@ impl AppUseCase {
                     title_id, replacement.title_id
                 ));
             }
-            return Ok(replacement.file_path);
+            return Ok((replacement.id, replacement.file_path));
         }
 
         if let Some(episode_ids) = manifest
@@ -875,7 +898,7 @@ impl AppUseCase {
         let terminal = self
             .resolve_upgrade_chain(upgrades, title_id, replacement_file_id)
             .await?;
-        Ok(terminal.file_path)
+        Ok((terminal.id, terminal.file_path))
     }
 
     /// A live primary file of `title_id` covering every one of `episode_ids`,
@@ -888,7 +911,7 @@ impl AppUseCase {
         episode_ids: &[String],
         original_file_id: &str,
         media_root_path: &Path,
-    ) -> Result<String, String> {
+    ) -> Result<(String, String), String> {
         let key = (title_id.to_string(), episode_ids.to_vec());
         if !upgrades.episode_files.contains_key(&key) {
             let files = self
@@ -920,7 +943,7 @@ impl AppUseCase {
                     .cmp(&right.media_file.created_at)
                     .then_with(|| right.media_file.id.cmp(&left.media_file.id))
             })
-            .map(|file| file.media_file.file_path.clone())
+            .map(|file| (file.media_file.id.clone(), file.media_file.file_path.clone()))
             .ok_or_else(|| {
                 "replacement media file row is missing and no live primary file covers the episodes the entry covered"
                     .to_string()
@@ -935,7 +958,7 @@ impl AppUseCase {
         title_id: &str,
         original_file_id: &str,
         media_root_path: &Path,
-    ) -> Result<String, String> {
+    ) -> Result<(String, String), String> {
         if !upgrades.movie_files.contains_key(title_id) {
             let files = self
                 .services
@@ -955,7 +978,7 @@ impl AppUseCase {
                         media_root_path,
                     )
             })
-            .map(|file| file.file_path.clone())
+            .map(|file| (file.id.clone(), file.file_path.clone()))
             .ok_or_else(|| {
                 "replacement media file row is missing and the movie has no live primary file"
                     .to_string()
@@ -2656,8 +2679,14 @@ impl AppUseCase {
         let total = entry_ids.len();
         let mut results = Vec::with_capacity(total);
         let mut succeeded = 0usize;
+        // One context per bin for the whole batch, so a bin is listed at most
+        // once however many of its entries follow a chain.
+        let mut upgrades = HashMap::new();
         for (index, entry_id) in entry_ids.iter().enumerate() {
-            match self.delete_recycled_item(&actor, entry_id).await {
+            match self
+                .delete_recycled_item_sharing(&actor, entry_id, &mut upgrades)
+                .await
+            {
                 Ok(true) => {
                     succeeded += 1;
                     results.push(serde_json::json!({ "id": entry_id, "status": "completed" }));
@@ -2895,6 +2924,18 @@ impl AppUseCase {
         actor: &scryer_domain::User,
         entry_id: &str,
     ) -> AppResult<bool> {
+        self.delete_recycled_item_sharing(actor, entry_id, &mut HashMap::new())
+            .await
+    }
+
+    /// [`Self::delete_recycled_item`], with what earlier entries of the same
+    /// batch learned about each bin, keyed by the bin's path.
+    async fn delete_recycled_item_sharing(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+        upgrades: &mut HashMap<PathBuf, UpgradePurgeContext>,
+    ) -> AppResult<bool> {
         let roots = self.recycle_root_libraries().await?;
 
         for (media_root, config) in self.resolve_all_recycle_configs().await {
@@ -2928,7 +2969,9 @@ impl AppUseCase {
                         &config,
                         &committed_entry,
                         actor,
-                        &mut UpgradePurgeContext::unlisted(&config),
+                        upgrades
+                            .entry(config.base_path.clone())
+                            .or_insert_with(|| UpgradePurgeContext::unlisted(&config)),
                     )
                     .await;
             }
@@ -3085,9 +3128,10 @@ enum UpgradeLinkSource {
 }
 
 /// What one recycle purge pass has learned while validating upgrade entries,
-/// so each media file row, chain, title and on-disk probe is read at most once
-/// per pass however many entries lead to it. Each entry is still validated,
-/// and still under its own guard; only the reads are shared.
+/// so each media file row on a chain, each chain, title and candidate list is
+/// read at most once per pass however many entries lead to it. Each entry is
+/// still validated, and still under its own guard; the live file that settles
+/// an entry is read and probed again for that entry just before its purge.
 pub(crate) struct UpgradePurgeContext {
     links: UpgradeLinkSource,
     rows: HashMap<String, Option<crate::TitleMediaFile>>,
@@ -3095,7 +3139,6 @@ pub(crate) struct UpgradePurgeContext {
     facets: HashMap<String, Option<scryer_domain::MediaFacet>>,
     movie_files: HashMap<String, Vec<crate::MediaFileCutoffSummary>>,
     episode_files: HashMap<(String, Vec<String>), Vec<crate::EpisodeScopedMediaFile>>,
-    probes: HashMap<PathBuf, bool>,
 }
 
 impl UpgradePurgeContext {
@@ -3107,7 +3150,6 @@ impl UpgradePurgeContext {
             facets: HashMap::new(),
             movie_files: HashMap::new(),
             episode_files: HashMap::new(),
-            probes: HashMap::new(),
         }
     }
 
@@ -3140,18 +3182,14 @@ impl UpgradePurgeContext {
             UpgradeLinkSource::Unlisted(_) => &NONE,
         }
     }
+}
 
-    /// Whether `path` is on disk, probed once per pass.
-    async fn file_exists(&mut self, path: &Path) -> bool {
-        if let Some(exists) = self.probes.get(path) {
-            return *exists;
-        }
-        #[cfg(test)]
-        test_upgrade_purge_probes::record(path);
-        let exists = Disk::process().follow(path).await.exists() == Some(true);
-        self.probes.insert(path.to_path_buf(), exists);
-        exists
-    }
+/// Whether the live file `path` is on disk now. Probed for every entry, never
+/// answered from earlier in the pass.
+async fn live_file_exists(path: &Path) -> bool {
+    #[cfg(test)]
+    test_upgrade_purge_probes::record(path);
+    Disk::process().follow(path).await.exists() == Some(true)
 }
 
 /// Whether `path` names a library file rather than a recycled copy or an

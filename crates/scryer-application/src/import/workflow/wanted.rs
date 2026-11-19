@@ -694,7 +694,18 @@ async fn execute_resolved_episode_import(
         // A source that ties with its own earlier import is not an upgrade.
         // Replacing it would recycle the library copy and write the same bytes
         // again on every retried pass. Every superseded file is compared, and
-        // one that could not be compared is never replaced.
+        // one that could not be compared is never replaced. Only an identical
+        // file holding every target episode settles the source; one holding
+        // only some of them leaves the others to the upgrade.
+        let covers_every_target: std::collections::HashSet<&str> = superseded
+            .iter()
+            .filter(|incumbent| {
+                target_episode_ids
+                    .iter()
+                    .all(|episode_id| incumbent.episode_ids.contains(episode_id))
+            })
+            .map(|incumbent| incumbent.media_file.id.as_str())
+            .collect();
         match crate::upgrade::superseded_source_identity(
             superseded
                 .iter()
@@ -702,6 +713,7 @@ async fn execute_resolved_episode_import(
                 .collect(),
             source_video,
             source_size,
+            |file| covers_every_target.contains(file.id.as_str()),
         )
         .await
         {

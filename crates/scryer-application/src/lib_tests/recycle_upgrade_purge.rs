@@ -639,10 +639,11 @@ async fn an_episode_chain_that_loops_is_quarantined() {
     assert_quarantined_and_kept(&c);
 }
 
-/// One pass over a bin holding one long chain reads each media file row once
-/// and probes the one live file once, however many entries lead to it.
+/// One pass over a bin holding one long chain walks the chain once: each
+/// media file row is read once for the walk, and each entry then re-reads and
+/// probes the live file once before its purge, so the cost stays linear.
 #[tokio::test]
-async fn a_long_episode_chain_is_resolved_with_one_read_per_file_and_one_probe() {
+async fn a_long_episode_chain_is_resolved_with_linear_reads_and_probes() {
     const LENGTH: usize = 2_000;
     let fixture = UpgradeFixture::new().await;
     fixture.series().await;
@@ -677,14 +678,125 @@ async fn a_long_episode_chain_is_resolved_with_one_read_per_file_and_one_probe()
     assert_eq!(purged as usize, LENGTH);
     assert!(entries.iter().all(|entry| !entry.exists()));
     assert!(live.exists(), "the live file is untouched");
-    // Every entry's own original row, plus the live terminal row: each once.
+    // Every entry's own original row and the live terminal row once for the
+    // walk, plus one fresh read of the live row per entry before its purge.
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst) - reads_before,
-        LENGTH + 1
+        2 * LENGTH + 1
     );
+    // One probe of the live file per entry before its purge.
     assert_eq!(
         crate::jobs::housekeeping::test_upgrade_purge_probes::count_under(&fixture.root())
             - probes_before,
+        LENGTH
+    );
+}
+
+/// The live file leaves the disk and the catalog after the first entry of a
+/// pass purged: the entries after it re-check the live file and are kept.
+#[tokio::test]
+async fn entries_after_the_live_file_disappears_mid_pass_are_quarantined() {
+    let fixture = UpgradeFixture::new().await;
+    let title_id = fixture.title.id.clone();
+    let live = fixture
+        .live_file(REPLACEMENT_ID, &title_id, "Lanternfall.2160p.mkv")
+        .await;
+    let mut entries = Vec::new();
+    for index in 0..3 {
+        entries.push(
+            fixture
+                .upgrade_entry(
+                    &format!("Lanternfall.v{index}.mkv"),
+                    &format!("synthetic-file-old-{index}"),
+                    Some((REPLACEMENT_ID, &live)),
+                )
+                .await,
+        );
+    }
+    let watched = entries.clone();
+    let live_on_disk = live.clone();
+    *fixture.media_files.before_file_id_read.lock().unwrap() = Some(Box::new(
+        move |file_id: &str, store: &mut Vec<TitleMediaFile>| {
+            if file_id == REPLACEMENT_ID && watched.iter().any(|entry| !entry.exists()) {
+                store.retain(|file| file.id != REPLACEMENT_ID);
+                let _ = std::fs::remove_file(&live_on_disk);
+            }
+        },
+    ));
+
+    let purged = fixture
+        .app
+        .empty_recycle_bin(&fixture.user, None)
+        .await
+        .expect("empty the bin");
+
+    assert_eq!(purged, 1);
+    let kept: Vec<_> = entries.iter().filter(|entry| entry.exists()).collect();
+    assert_eq!(kept.len(), 2);
+    for entry in kept {
+        assert_quarantined_and_kept(entry);
+    }
+}
+
+/// A batch purge of several entries that each follow the chain lists the bin
+/// once for the whole batch.
+#[tokio::test]
+async fn a_batch_purge_of_chain_entries_lists_the_bin_once() {
+    let fixture = UpgradeFixture::new().await;
+    fixture.series().await;
+    let a = fixture
+        .episode_upgrade_entry("S01E01.480p.mkv", "synthetic-ep-a", "synthetic-ep-b", None)
+        .await;
+    let b = fixture
+        .episode_upgrade_entry("S01E01.720p.mkv", "synthetic-ep-b", "synthetic-ep-c", None)
+        .await;
+    let c = fixture
+        .episode_upgrade_entry("S01E01.1080p.mkv", "synthetic-ep-c", "synthetic-ep-d", None)
+        .await;
+    let d = fixture
+        .live_episode_file("synthetic-ep-d", "S01E01.2160p.mkv", "synthetic-episode-1")
+        .await;
+    let entry_id = |recycled: &Path| {
+        recycled
+            .parent()
+            .and_then(Path::file_name)
+            .expect("entry directory")
+            .to_string_lossy()
+            .to_string()
+    };
+    let ids = vec![entry_id(&a), entry_id(&b), entry_id(&c)];
+    let bin = fixture.root().join(".scryer-recycle");
+    let lists_before = crate::recycle_bin::test_bin_calls::count_kind(
+        &bin,
+        crate::recycle_bin::test_bin_calls::LIST,
+    );
+
+    fixture
+        .app
+        .start_purge_recycled_items_job(&fixture.user, ids.clone())
+        .await
+        .expect("start the batch purge");
+    // The batch holds every entry's guard until it finishes.
+    for id in &ids {
+        crate::test_wait::within_deadline(
+            "the batch purge finishes",
+            fixture
+                .app
+                .runtime
+                .jobs
+                .interactive_operation_guards
+                .acquire(&format!("recycle-entry:{id}")),
+        )
+        .await;
+    }
+
+    assert!(!a.exists() && !b.exists() && !c.exists());
+    assert!(d.exists(), "the live file is untouched");
+    assert_eq!(
+        crate::recycle_bin::test_bin_calls::count_kind(
+            &bin,
+            crate::recycle_bin::test_bin_calls::LIST
+        ) - lists_before,
         1
     );
 }

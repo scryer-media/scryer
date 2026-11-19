@@ -2391,6 +2391,7 @@ async fn import_movie_download(
                 superseded.iter().collect(),
                 &source_video,
                 source_size,
+                |_| true,
             )
             .await
         }
@@ -3259,6 +3260,7 @@ async fn import_series_movie_download(
                 superseded.iter().collect(),
                 &source_video,
                 source_size,
+                |_| true,
             )
             .await
         }

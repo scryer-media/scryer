@@ -263,6 +263,11 @@ pub(crate) struct MockMediaFileRepo {
     pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
     /// How many single-file lookups by id ran.
     pub(super) file_id_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// Runs on the store before each single-file lookup by id, so a test can
+    /// change the catalog between two steps of one pass.
+    #[allow(clippy::type_complexity)]
+    pub(super) before_file_id_read:
+        Arc<std::sync::Mutex<Option<Box<dyn Fn(&str, &mut Vec<TitleMediaFile>) + Send + Sync>>>>,
     /// Each file's title-wide role, as `media_files.role` holds it. Episode
     /// elections change only the per-link role (`role` on the link rows in
     /// `store`), the way the real store changes only `file_episode_map`, so
@@ -1284,13 +1289,11 @@ impl MediaFileRepository for MockMediaFileRepo {
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>> {
         self.file_id_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(self
-            .store
-            .lock()
-            .await
-            .iter()
-            .find(|entry| entry.id == file_id)
-            .cloned())
+        let mut store = self.store.lock().await;
+        if let Some(hook) = self.before_file_id_read.lock().unwrap().as_ref() {
+            hook(file_id, &mut store);
+        }
+        Ok(store.iter().find(|entry| entry.id == file_id).cloned())
     }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {

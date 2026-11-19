@@ -218,19 +218,22 @@ pub(crate) enum SupersededSourceIdentity<'a> {
 }
 
 /// Compares the source with every superseded library file. Only same-size
-/// files are read. Any identical file settles the answer; otherwise any
+/// files are read. Any identical file that `settles` accepts settles the
+/// answer; an identical file it refuses counts as different. Otherwise any
 /// file that could not be compared leaves it undecided.
 pub(crate) async fn superseded_source_identity<'a>(
     superseded: Vec<&'a TitleMediaFile>,
     source_path: &Path,
     source_size: i64,
+    settles: impl Fn(&TitleMediaFile) -> bool,
 ) -> SupersededSourceIdentity<'a> {
     let mut undecided = None;
     for existing_file in superseded {
         match incumbent_source_identity(existing_file, source_path, source_size).await {
-            IncumbentIdentity::Identical => {
+            IncumbentIdentity::Identical if settles(existing_file) => {
                 return SupersededSourceIdentity::Identical(existing_file);
             }
+            IncumbentIdentity::Identical => {}
             IncumbentIdentity::Undecided => {
                 undecided.get_or_insert(existing_file);
             }
@@ -2462,7 +2465,9 @@ mod incumbent_identity_tests {
         let first_row = library_row("first", &first, size);
         let second_row = library_row("second", &second, size);
 
-        match superseded_source_identity(vec![&first_row, &second_row], &source, size).await {
+        match superseded_source_identity(vec![&first_row, &second_row], &source, size, |_| true)
+            .await
+        {
             SupersededSourceIdentity::Identical(file) => assert_eq!(file.id, "second"),
             other => panic!("expected the second incumbent to be identical, got {other:?}"),
         }
@@ -2480,7 +2485,9 @@ mod incumbent_identity_tests {
         let unreadable_row = library_row("unreadable", &unreadable, size);
         let same_row = library_row("same", &same, size);
 
-        match superseded_source_identity(vec![&unreadable_row, &same_row], &source, size).await {
+        match superseded_source_identity(vec![&unreadable_row, &same_row], &source, size, |_| true)
+            .await
+        {
             SupersededSourceIdentity::Identical(file) => assert_eq!(file.id, "same"),
             other => panic!("expected the readable twin to settle it, got {other:?}"),
         }
@@ -2498,7 +2505,9 @@ mod incumbent_identity_tests {
         let other_row = library_row("other", &other, size);
         let unreadable_row = library_row("unreadable", &unreadable, size);
 
-        match superseded_source_identity(vec![&other_row, &unreadable_row], &source, size).await {
+        match superseded_source_identity(vec![&other_row, &unreadable_row], &source, size, |_| true)
+            .await
+        {
             SupersededSourceIdentity::Undecided(file) => assert_eq!(file.id, "unreadable"),
             other => panic!("expected an undecided answer, got {other:?}"),
         }
@@ -2507,5 +2516,26 @@ mod incumbent_identity_tests {
             error.reason(),
             Some(crate::error_reasons::import::INCUMBENT_IDENTITY_UNDECIDED)
         );
+    }
+
+    /// An identical file covering only some target episodes does not settle
+    /// the source; the import goes on as an upgrade.
+    #[tokio::test]
+    async fn an_identical_incumbent_that_does_not_settle_is_not_identical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let size = write_fixture(&source, b"quiet harbour episode bytes");
+        let partial = dir.path().join("partial.mkv");
+        write_fixture(&partial, b"quiet harbour episode bytes");
+        let partial_row = library_row("partial", &partial, size);
+
+        match superseded_source_identity(vec![&partial_row], &source, size, |file| {
+            file.id != "partial"
+        })
+        .await
+        {
+            SupersededSourceIdentity::NoneIdentical => {}
+            other => panic!("expected the partial twin not to settle it, got {other:?}"),
+        }
     }
 }
