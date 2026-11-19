@@ -275,7 +275,7 @@ export default function ArrCustomFormatImportDialog({
       >
         <DialogHeader>
           <DialogTitle>{t("settings.arrImportTitle")}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             {t("settings.arrImportDialogDescription")}
           </DialogDescription>
         </DialogHeader>
