@@ -3,14 +3,89 @@ use scryer_infrastructure_datastore::keystore;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-#[cfg(unix)]
-use scryer_application::disk::OwnerOnly;
-use scryer_application::disk::{Access, Disk, Replace};
+use scryer_application::disk::{Access, Disk, DiskError, Open, reason};
 
 const KEY_FILE: &str = "scryer_encryption_key.txt";
 
 fn exists(path: &Path) -> bool {
     Disk::process().follow_blocking(path).exists() == Some(true)
+}
+
+/// Why [`create_new_file`] did not leave the whole file behind.
+#[derive(Debug)]
+enum CreateFailure {
+    /// The file was not created.
+    Create(DiskError),
+    /// The file was created, but writing or closing it failed.
+    Write(io::Error),
+}
+
+impl CreateFailure {
+    /// Something already holds the name: a file, or a link that was not
+    /// followed.
+    fn name_taken(&self) -> bool {
+        matches!(
+            self,
+            Self::Create(error)
+                if matches!(
+                    error.reason(),
+                    reason::DISK_DESTINATION_EXISTS | reason::DISK_LINK_NOT_FOLLOWED
+                )
+        )
+    }
+
+    fn words(&self) -> String {
+        match self {
+            Self::Create(error) => error.words().to_string(),
+            Self::Write(error) => error.to_string(),
+        }
+    }
+}
+
+/// Create `path` holding `contents`, with `access` applied as it is created.
+///
+/// Anything already at `path` is refused and kept, a link included, so the
+/// contents never land in a file someone else placed there. Answers the
+/// permission bits the file was created with, where the platform has them.
+fn create_new_file(
+    disk: &Disk,
+    path: &Path,
+    contents: &[u8],
+    access: Access,
+) -> Result<Option<u32>, CreateFailure> {
+    let mut file = disk
+        .open_blocking(
+            path,
+            Open::create_new()
+                .with_access(access)
+                .without_following_links(),
+        )
+        .map_err(CreateFailure::Create)?;
+    file.write_all(contents).map_err(CreateFailure::Write)?;
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        // The handle's own metadata, not another look at the path.
+        file.metadata()
+            .ok()
+            .map(|metadata| metadata.permissions().mode() & 0o777)
+    };
+    #[cfg(not(unix))]
+    let mode = None;
+    disk.finish_blocking(path, file)
+        .map_err(|error| CreateFailure::Write(error.into()))?;
+    Ok(mode)
+}
+
+/// What init says about the key file's permissions: the exact owner-only
+/// mode when it has it, the mode it has when that is narrower still, and
+/// nothing where the platform has no such modes.
+fn key_file_permissions_note(mode: Option<u32>) -> String {
+    match mode {
+        Some(0o600) => " (0600)".to_string(),
+        Some(mode) => format!(" ({mode:04o})"),
+        None => String::new(),
+    }
 }
 
 enum InitMode {
@@ -85,31 +160,25 @@ fn run_init_docker(args: Vec<String>) {
     } else {
         let compose_path = output_path.as_deref().unwrap_or("docker-compose.yml");
         let disk = Disk::process();
-        let write = |path: &str, contents: &str| {
-            disk.write_blocking(
-                Path::new(path),
-                contents.as_bytes(),
-                Replace::Allowed,
-                Access::Default,
+        let create = |path: &str, contents: &str, access: Access| {
+            create_new_file(&disk, Path::new(path), contents.as_bytes(), access).unwrap_or_else(
+                |failure| {
+                    if failure.name_taken() {
+                        eprintln!("error: {path} already exists (refusing to overwrite)");
+                    } else {
+                        eprintln!("error: failed to write {path}: {}", failure.words());
+                    }
+                    std::process::exit(1);
+                },
             )
-            .unwrap_or_else(|e| {
-                eprintln!("error: failed to write {path}: {}", e.words());
-                std::process::exit(1);
-            });
         };
-        write(compose_path, &compose);
-        write(KEY_FILE, &encryption_key);
-        // Permissions here are owner modes only on Unix.
-        #[cfg(unix)]
-        disk.restrict_to_owner_blocking(Path::new(KEY_FILE), OwnerOnly::File)
-            .unwrap_or_else(|e| {
-                eprintln!(
-                    "warning: could not set {KEY_FILE} permissions to 600: {}",
-                    e.words()
-                );
-            });
+        create(compose_path, &compose, Access::Default);
+        let key_mode = create(KEY_FILE, &encryption_key, Access::OwnerOnly);
         eprintln!("wrote {compose_path}");
-        eprintln!("wrote scryer_encryption_key.txt (0600)");
+        eprintln!(
+            "wrote scryer_encryption_key.txt{}",
+            key_file_permissions_note(key_mode)
+        );
         eprintln!();
         eprintln!("Your encryption key is stored in scryer_encryption_key.txt and mounted");
         eprintln!("as a Docker secret. Do not lose this file — you will need to reconfigure");
@@ -300,4 +369,107 @@ volumes:
   scryer-config:
 "#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(path: &Path) -> Vec<u8> {
+        Disk::process()
+            .read_blocking(path)
+            .expect("fixture file is readable")
+    }
+
+    #[test]
+    fn a_new_key_file_is_created_owner_only_with_its_contents() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("key.txt");
+
+        let mode = create_new_file(&Disk::process(), &path, b"synthetic-key", Access::OwnerOnly)
+            .expect("a free name is created");
+
+        assert_eq!(read(&path), b"synthetic-key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = mode.expect("unix reports a mode");
+            assert_eq!(mode & 0o077, 0, "no access beyond the owner: {mode:o}");
+            let on_disk = std::fs::metadata(&path)
+                .expect("created file has metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, on_disk);
+        }
+        #[cfg(not(unix))]
+        assert_eq!(mode, None);
+    }
+
+    #[test]
+    fn an_existing_file_is_refused_and_kept() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("key.txt");
+        let disk = Disk::process();
+        create_new_file(&disk, &path, b"earlier-contents", Access::Default).expect("fixture");
+
+        let failure = create_new_file(&disk, &path, b"synthetic-key", Access::OwnerOnly)
+            .expect_err("an existing file is never replaced");
+
+        assert!(failure.name_taken(), "{failure:?}");
+        assert_eq!(read(&path), b"earlier-contents");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_link_is_refused_and_its_target_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("elsewhere.txt");
+        let link = dir.path().join("key.txt");
+        let disk = Disk::process();
+        create_new_file(&disk, &target, b"someone-elses-file", Access::Default).expect("fixture");
+        let target_mode = || {
+            std::fs::metadata(&target)
+                .expect("target has metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let mode_before = target_mode();
+        std::os::unix::fs::symlink(&target, &link).expect("plant link");
+
+        let failure = create_new_file(&disk, &link, b"synthetic-key", Access::OwnerOnly)
+            .expect_err("a link at the name is never written through");
+
+        assert!(failure.name_taken(), "{failure:?}");
+        assert_eq!(read(&target), b"someone-elses-file");
+        assert_eq!(target_mode(), mode_before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_is_refused_and_creates_nothing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("not-there.txt");
+        let link = dir.path().join("key.txt");
+        std::os::unix::fs::symlink(&target, &link).expect("plant link");
+
+        let failure = create_new_file(&Disk::process(), &link, b"synthetic-key", Access::OwnerOnly)
+            .expect_err("a dangling link is never followed");
+
+        assert!(failure.name_taken(), "{failure:?}");
+        assert_eq!(
+            Disk::process().follow_blocking(&target).exists(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn the_permissions_note_claims_only_what_is_true() {
+        assert_eq!(key_file_permissions_note(Some(0o600)), " (0600)");
+        assert_eq!(key_file_permissions_note(Some(0o400)), " (0400)");
+        assert_eq!(key_file_permissions_note(None), "");
+    }
 }
