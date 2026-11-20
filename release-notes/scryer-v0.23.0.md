@@ -1,6 +1,6 @@
 # Scryer 0.23.0 release notes
 
-These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
+These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
 
 ## Highlights
 
@@ -12,10 +12,13 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
 - **Safer file handling**: one disk service now carries out every filesystem operation. Moves, imports, copies and the recycle bin never replace a different file, never remove the only copy, and take back only what they placed. A dead mount no longer ties up threads.
 - **Archives are extracted once per download**, into a workspace of their own, instead of again on every import retry.
 - **Pack thresholds per quality profile** replace the fixed rule for when a season or multi-season pack may be taken.
-- **Content ratings** are stored per title and shown as a certification badge on the overview.
+- **Import rules from Sonarr, Radarr and Maintainerr**: connect to a Sonarr or Radarr instance to bring its custom formats in as scoring rules, or to Maintainerr to bring its rule groups in as lifecycle rules. Every imported rule is saved disabled, with a report of what translated exactly and what needs review.
+- **Content ratings and awards** are stored per title. The overview shows a certification badge, and request and lifecycle rules can read both.
+- **Per-library full hashing**: a library can keep the nightly full-hash job off its disks.
+- **Security hardening**: sessions are signed with a key derived from the instance's master key, open admin mode and Skip for local IPs can be narrowed to listed host names and trusted proxies, and replies from every outside service are read within a size limit.
 - **Dolby Vision is detected** in real Matroska and MP4 files.
 - **Grabs and searches run in the background**: a grab button no longer holds a request open, and episode, series-movie and cutoff searches wait in line instead of running twice.
-- **Built-in MCP endpoint**: Scryer serves `/mcp` so an MCP client can run the operator skills' operations with an API key.
+- **Built-in MCP endpoint**: Scryer serves `/mcp` so an MCP client can run the operator skills' operations with an API key. A mutation with lasting effects runs only after the client confirms it.
 
 ## Upgrade notes
 
@@ -26,7 +29,14 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
 - A lifecycle rule that deletes files or titles must carry a maximum number of titles per run. The built-in per-run limits are gone. Rules that do not delete may leave the maximum empty for no limit.
 - New lifecycle rules run every 8 hours by default.
 - The pack thresholds default to the values Scryer used before: a pack needs at least 2 missing episodes, and a multi-season pack needs more than 30% of its monitored, aired episodes missing. Existing profiles read these defaults until they are changed.
-- First start queues a metadata refresh for existing titles so their content ratings are stored.
+- **Every user signs in once more after the upgrade.** Sessions are now signed with a key derived from the instance's encryption master key, so sessions issued by 0.22 are no longer accepted. An instance that sets `SCRYER_JWT_SIGNING_SECRET` keeps its sessions. API keys are unaffected.
+- **Lifecycle rules need Manage system settings**, where they needed Manage catalog settings before. This covers reading, editing, previewing, running and importing them. Members with only catalog-settings management no longer see the Lifecycle page. Scheduled runs are unchanged.
+- First start queues a metadata refresh for existing titles so their content ratings and awards are stored. Until a title's refresh lands, rules read its ratings and awards as unknown, so a lifecycle rule that needs them holds that title.
+- A quality profile with no cutoff now searches for upgrades up to its top tier. Earlier, searches never looked for upgrades for such a profile.
+- A download whose import passes keep ending the same way without importing anything new stops after six such passes and waits for a retry.
+- The background full-hash job stays on for every library. A library where it is turned off asks for confirmation first.
+- The MCP endpoint is on by default. It can be turned off under Settings > Security & Access, and `SCRYER_MCP_ENABLED` forces it on or off while set.
+- The two local trust limits are off by default and change nothing until set.
 - Media analysis revision 3 analyzes again the files that were analyzed before Dolby Vision records were read.
 - Extraction workspaces left inside title folders by 0.22 are noted by the next library scan and removed by housekeeping once their download has settled for a day.
 - Working files and folders take short `.scry-` names. Names written by earlier releases are still recognised.
@@ -45,7 +55,12 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
   - the shape of a series
   - Jellyfin and Emby favorites, including series and season favorites and unplayed favorites, read for every media-server account. Plex favorites read as unknown.
   - storage facts for every library root, with free space sampled by the storage capacity module
+  - when a title was first requested (`requested_at`), and who watched it, by name (`watched_by_usernames`) and with each user's plays (`watched_by_users`)
+  - content ratings (`age_rating`, `certifications`, `certification_label`, `certification_rank`) and awards (`award_count`, `awards`), in the same shapes request rules read
 - A rule loads only the fact groups it names.
+- A title whose ratings or awards are not stored yet reads them as unknown (`metadata_not_stored`), never as empty.
+- A rule that deletes files to free space checks the free space again after each deletion, and stops once the space it freed satisfies it.
+- A title deleted by a lifecycle rule is excluded from every public list that added it, so the list does not add it back.
 - A rule holds a title when a fact it needs cannot be known. `max_video_height` is unknown until every file of the title has been scanned. A new series or season favorite holds an action that would remove it.
 - Conflicting actions across a title, its seasons and its episodes hold each other, and the Simple builder refuses to save them.
 - Act now runs one selected rule and evaluates it first. Only a rule's own run acts on its candidates.
@@ -65,6 +80,8 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
 - A request rule can approve, deny or send a request to manual review, and can shape it: quality profile, lease days, monitoring, preferred and required audio languages, tags and a notification.
 - When rules disagree on a shaped value, the request goes to manual review.
 - Rules can read series shape, release dates, other requesters of the same title, the requester's watchlist, list membership, account age and free space.
+- Rules can read a title's `awards`: every award win, with `award`, `award_id`, `year`, `recipient`, `recipient_id` and `given_to`.
+- The requester's watchlist is read only when a loaded rule can use it. Preview always reads it.
 - A request whose rules cannot be consulted waits for review.
 - A denial stands when the tag registry cannot be read.
 - Preflight and the rule tester read the monitor type and selection the way a submitted request does, so a rule sees the same value in all three.
@@ -83,6 +100,17 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
 - Scoring and request rule libraries and references open as slide-out panels, and reference tables fit the panel.
 - Rule input references match what each engine provides. `input.file.audio_streams[].name` is in the scoring reference, and the 4K x264 template matches the lower-case quality the parser emits.
 - Rule refusals read as sentences in every area.
+
+## Rule imports
+
+- The scoring rules import dialog gains a Connect tab beside paste: give a Sonarr or Radarr URL and API key, and each custom format is saved as a disabled scoring rule set.
+- Profiles that agree on a format's score give a literal score. Profiles that disagree score by Scryer quality profile name when every name matches. Otherwise the rule is saved for review, scoring 0, with the score table commented out.
+- Lifecycle rules import Maintainerr rule groups from its URL, one disabled lifecycle rule per group. Properties, sections and AND/OR follow Maintainerr's meaning, and actions map onto lifecycle actions.
+- A Maintainerr comparison that Scryer's facts could make match more titles than Maintainerr would fails its group instead of translating loosely. A group tied to one library warns that it now applies to every library.
+- A group or format with no faithful translation is saved as a failed placeholder or not at all, and the report lists each finding.
+- Imports run as background jobs. The report survives closing the dialog and switching tabs, and a run can be retried when its report fails to load.
+- A rule whose name already exists is skipped. The connection details are stored encrypted for the run and removed after the fetch.
+- Sonarr and Radarr imports need Manage catalog settings; Maintainerr imports need Manage system settings.
 
 ## Guided tours
 
@@ -120,6 +148,11 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..59d4677d4`.
 - Failure cleanup is offered only for downloads Scryer grabbed.
 - Mismatch recovery queues every eligible scope of a title.
 - Editing a custom search alias reopens the title's searches.
+- A profile with no cutoff uses its top tier as the cutoff. Files below it are upgrade targets, and past it only same-tier releases that clear the minimum score delta replace them.
+- A pack or upgrade that overlaps a download the client is still working waits until that download leaves the queue, instead of being refused by submission on every pass.
+- A grabbed file that loses to the library copy blocks its release on every indexer, except when it lost to a file the same download placed. A pack is blocked for losing only when it imported nothing.
+- A download holding only unwanted executables is blocked on every indexer. A password failure stays with its indexer.
+- The search-time blocklist check looks up the candidates' names and hashes exactly, instead of reading the title's newest thousand rows.
 
 ## Quality profiles
 
@@ -166,6 +199,13 @@ All filesystem work now goes through one disk service.
 - A series-movie import completes its scope row whatever its status.
 - A cancelled import clears its staged file.
 - NZBs with Latin-1 text, a byte order mark or comment before the root, or HTML entities in a subject are accepted. A subject with no quoted name takes its last dotted word, as the download client does.
+- A download whose passes keep ending the same way stops after six such passes and waits for a retry. Transient outcomes never count, and the count survives a restart.
+- An unparseable extra video beside a grabbed episode is recorded as ignored, so the download settles once its episodes land.
+- A pass never replaces a library file the same download placed, and never adds another copy of it.
+- A failed upgrade keeps the existing file instead of placing a second one beside it.
+- Retry import accepts the same evidence the automatic import does.
+- A film extracted from archives settles when a loose trailer or extra sits beside the archives.
+- Manual import settles an identical linked film as already present.
 
 ## Archives
 
@@ -175,6 +215,17 @@ All filesystem work now goes through one disk service.
 - A download whose archives have no installed extractor creates nothing and is reopened when an extractor plugin is installed.
 - Leftover workspaces are swept, and a health check reports them.
 - Manual imports and downloads without a client item id extract per pass, as before.
+- Re-extraction is held to the same attempt limit.
+- The leftover-folder sweep continues from where it stopped and wraps around, so folders that sort late are reached. A download's workspace is never swept by age.
+- A settled workspace is removed only after its download is checked again under a removal hold, so a download that became live meanwhile keeps its workspace.
+- When the free-space check for an extraction fails, the volume's last known free space is used.
+
+## Libraries
+
+- Each library has a setting, on by default, for the background full-hash job. Off, the job never reads that library's files, and a file's full hash is read only when something needs it.
+- Turning it off asks for confirmation, since it reduces how far Scryer can prove some file moves safe.
+- In a library with hashing off, a title folder whose source file is gone is recovered by finding the file in the destination by its name and catalog size, and checked again the same way before the recovery commits. The original stays in place; only the catalog row is re-pointed.
+- A `tvshow.nfo` larger than 32 MiB is ignored.
 
 ## Recycle bin
 
@@ -191,7 +242,8 @@ All filesystem work now goes through one disk service.
 ## Titles and metadata
 
 - Content ratings are stored per title, and the overview shows a certification badge that matches the `certification_label` request fact.
-- A rematch clears a title's stored content ratings.
+- Award wins are stored per title beside its content ratings.
+- A rematch clears a title's stored content ratings and awards.
 - Title merge clears orphaned monitor selections and manual-import candidates.
 - Deleting a user clears the monitor selections of their requests.
 - Library graph posters no longer pile onto each other in small libraries.
@@ -210,12 +262,30 @@ All filesystem work now goes through one disk service.
 - Dotted episode file names keep their episode.
 - Bilingual torrent release names are kept.
 - Latin spellings reach Cyrillic catalog names, and imports accept romanized names of the identified series.
+- A number in a show's name, such as `The.140.Lanterns.S02E01`, stays in the guessed title when the release numbers its episode later. Such releases were refused as title mismatches by automatic search and RSS.
 
 ## Lists, plugins and accounts
 
 - A member whose lists are not allowed no longer sees the Lists page, unless they manage lists.
 - Restore warnings on the Plugins page can be dismissed.
 - WebSockets whose sign-in is stale are closed. A sign-out heard by no connection is stored, so later connections are not closed at once.
+- A user's live connections end when their permissions change or they are deleted.
+
+## Security
+
+- Sessions are signed with a salt derived from the instance's encryption master key, unless `SCRYER_JWT_SIGNING_SECRET` is set. Stored API key, OAuth token and indexer client key hashes still verify.
+- Settings > Security & Access gains a Local network trust panel:
+  - **Allowed host names**: when the list is not empty, a request served by open admin mode or Skip for local IPs must name an IP address, `localhost`, the public URL host or a listed name. Sign-ins and API keys are unaffected, and a save that would lock out the browser making it is refused.
+  - **Trust forwarded addresses only from trusted proxies**: only a listed trusted proxy may vouch for a local client, and only when the whole forwarded chain is local. It cannot be on while no trusted proxy is listed.
+- Skip for local IPs and the disable-login dialog warn that a reverse proxy that does not forward client addresses makes every visitor local.
+- Replies are read within a size limit from indexers (caps), SAB-compatible download clients, media servers (with a page ceiling on catalog scans), plugin downloads, Sonarr and Radarr, and title images. Image dimensions are checked before decoding.
+- A restore unpacks its payload entry by entry, and refuses too many entries, entries that are not files or folders, and a payload that would leave too little scratch space.
+- An indexer or download client whose field definitions are unavailable has every stored text value treated as a secret.
+- Aliased GraphQL searches are charged one search per field.
+- `scryer init --compose` creates its files only when the name is free and never through a link, and the key file is owner-only from creation.
+- A plugin keeps at most 64 HTTP dispatchers per host.
+- The bundled SQLite and the plugin runtime (wasmtime 50.0.3) are updated past published vulnerabilities.
+- Backups leave out the session signing secret when it is only the SMG registration secret.
 
 ## MCP endpoint
 
@@ -223,7 +293,22 @@ All filesystem work now goes through one disk service.
 - Its tools are `whoami`, `list_operations`, `describe_operation`, `run_query`, `run_mutation`, `read_diagnostics_section` and `search_service_logs`.
 - The run tools execute only the operations shipped with the operator skills, as the key's account, with each operation's own permission checks.
 - Each call is charged to the rate limit the GraphQL API gives the same operation. A result over 32 KiB is refused with its size.
-- The diagnostics bundle's release decision tally is filled in.
+- A mutation that changes the library or settings runs nothing on its first call. It returns a summary with secret values redacted and a single-use confirmation token, bound to the API key and the exact call and valid for five minutes. The same call with the token runs it. `describe_operation` marks these operations.
+- The endpoint can be turned off under Settings > Security & Access, and `SCRYER_MCP_ENABLED` forces it on or off while set. The switch shows a forced value, locked.
+- The Sonarr and Radarr import reads used by the migrate skill fit the result limit on large libraries.
+- The diagnostics bundle's release decision tally is filled in, and it shows `SCRYER_MCP_ENABLED`.
+
+## Web interface
+
+- Acquisition is listed under Settings at `/settings/acquisition`. The old address redirects.
+- A dropped connection while a page loads no longer leaves "Failed to fetch dynamically imported module" on screen. The page retries with back-off, waits while offline, and later pages load from the cache.
+- Back to list and Escape return to the poster grid at the same scroll position, without reloading the list.
+- The diagnostics bundle download says the bundle is sanitized on a best-effort basis: safe to share in a Discord ticket, but not recommended on GitHub issues or public Discord channels.
+
+## Backups
+
+- Postgres backup exports are ordered correctly.
+- Title awards are kept in backups.
 
 ## Windows
 
@@ -244,12 +329,16 @@ All filesystem work now goes through one disk service.
 - Backups page by key, and their file work and restore run off the runtime.
 - Media file analyses are decoded once per read.
 - Newest imports are read through a creation-time index.
+- Passes that find nothing to do stop repeating reads, writes and hashing: hash backfill refuses a size mismatch before reading the file, a download's pending attempt is settled in place, pending-release and RSS passes ask existence questions, and library refresh writes only rows that changed.
+- Each activity feed read is bounded to twenty source pages and resumes from the last event it scanned.
+- A failed origin lookup keeps a download's state instead of treating it as unowned.
 
 ## Translations
 
 - Czech gains the monthly indexer limit text.
 - Lifecycle, request rule and watch-sync text is complete in English, Czech, Russian and Traditional Chinese (Taiwan and Hong Kong).
 - Error reasons read as sentences in every area.
+- The library hashing setting is translated in every locale. Local trust and MCP settings text is in English and Russian.
 
 ## API changes
 
@@ -289,6 +378,8 @@ This release contains breaking GraphQL changes.
   - `MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE` → `LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH`
   - `MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST` → `LIFECYCLE_QUALITY_PROFILE_NOT_FOUND`
   - `MAINTENANCE_RULE_CONFIGURATION_INVALID`, raised for a stale arm confirmation, → `LIFECYCLE_ARM_CONFIRMATION_STALE`
+- Every lifecycle query and mutation an actor makes now requires system-settings management instead of catalog-settings management.
+- Lifecycle rule facts that can read unknown with the reasons `metadata_not_stored`, `no_age_rating`, `no_certifications`, `no_us_certification` and `unrankable_certification`.
 - Lifecycle reason codes removed with the action model: `MAINTENANCE_ACTION_CONFIGURATION_INVALID`, `MAINTENANCE_ACTION_INVALID`, `MAINTENANCE_ACTION_NOT_STORABLE`, `MAINTENANCE_ACTION_UNSUPPORTED`, `MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT`, `MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE`, `MAINTENANCE_SEQUENCE_ACTIONS_INVALID`, `MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED` and `MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED`.
 
 **Request rules**
@@ -311,6 +402,15 @@ This release contains breaking GraphQL changes.
 - `builderModel` is stored on scoring rules (`CreateRuleSetInput`, `UpdateRuleSetInput`, `RuleSetPayload`), lifecycle rules and request rules. A rule without one opens as Rego.
 - New validation reasons include `RULE_ACTION_REQUIRED`, `RULE_ACTION_VALUE_INVALID`, `RULE_ACTION_VALUE_NOT_LITERAL`, `RULE_ACTION_READS_OTHER_LEVEL`, `RULE_HEAD_DEFINED_AS_FUNCTION`, `RULE_QUALITY_PROFILE_UNKNOWN`, `RULE_QUALITY_PROFILE_AMBIGUOUS`, `RULE_AUDIO_LANGUAGE_UNKNOWN`, `RULE_MONITOR_UNSUPPORTED`, `RULE_UNREFERENCED_RULE`, `RULE_BUILDER_FAMILY_UNKNOWN`, `RULE_BUILDER_MODEL_INVALID` and `RULE_BUILDER_MODEL_TOO_LARGE`.
 
+**Rule imports**
+
+- `startExternalRuleImport(requestKey:, input: ExternalRuleImportInput)` starts an import and returns its `jobRun`; `externalRuleImportStatus(runId:)` returns `ExternalRuleImportStatusPayload` with its phase, counts and per-item report.
+- Added types: `ExternalRuleImportInput` (`source`, `baseUrl`, `apiKey`), `ExternalRuleImportSource` (`SONARR`, `RADARR`, `MAINTAINERR`), `ExternalRuleImportPhase`, `ExternalRuleImportItemState`, `ExternalRuleImportItemPayload`, `ExternalRuleImportCountsPayload` and `ExternalRuleImportFactPayload`.
+- The job key `EXTERNAL_RULE_IMPORT` is added.
+- Reasons: `RULE_IMPORT_ALREADY_EXISTS`, `RULE_IMPORT_API_KEY_REQUIRED`, `RULE_IMPORT_FETCH_FAILED`, `RULE_IMPORT_FORMAT_UNREADABLE`, `RULE_IMPORT_FORMAT_UNSCORED`, `RULE_IMPORT_FORMAT_UNTRANSLATABLE`, `RULE_IMPORT_GROUP_UNTRANSLATABLE`, `RULE_IMPORT_INTERRUPTED`, `RULE_IMPORT_INVALID_REQUEST`, `RULE_IMPORT_ITEM_FAILED`, `RULE_IMPORT_NOT_OWNED`, `RULE_IMPORT_PLAN_FAILED`, `RULE_IMPORT_PROFILES_UNAVAILABLE`, `RULE_IMPORT_PROFILE_SCORES_APPLIED`, `RULE_IMPORT_PROFILE_SCORES_UNMATCHED`, `RULE_IMPORT_QUEUE_FULL`, `RULE_IMPORT_REQUEST_CHANGED`, `RULE_IMPORT_TOO_MANY_ITEMS`, `RULE_IMPORT_TOO_MANY_PROFILE_SOURCES` and `RULE_IMPORT_TRANSLATOR_UNAVAILABLE`.
+- Source connection reasons: `EXTERNAL_IMPORT_SOURCE_UNREACHABLE`, `EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED`, `EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING`, `EXTERNAL_IMPORT_SOURCE_RATE_LIMITED`, `EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE` and `EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE`.
+- Maintainerr source reasons: `MAINTAINERR_IMPORT_GROUPS_JSON_INVALID`, `MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID`, `MAINTAINERR_IMPORT_PROFILES_JSON_INVALID`, `MAINTAINERR_IMPORT_GROUPS_TOO_MANY` and `MAINTAINERR_IMPORT_JSON_TOO_LARGE`. Per-group translation findings carry `maintainerr.*` codes, such as `maintainerr.comparator.partial_list_widens`, `maintainerr.comparator.absence_widens`, `maintainerr.comparator.date_drift_widens`, `maintainerr.username.unknown_widens` and `maintainerr.scope.all_libraries`.
+
 **Grabs**
 
 - `startGrab` starts one grab as a background job and returns its `jobRun`; `grabJobResult(id:)` returns its outcome. The existing grab mutations are unchanged.
@@ -323,7 +423,19 @@ This release contains breaking GraphQL changes.
 - Reasons `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID` and `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE`.
 - `reachThroughProxyConfigId` on `CreateProxyConfigInput`, `UpdateProxyConfigInput` and `ProxyConfigPayload`, with the reasons `INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND`, `INTEGRATION_PROXY_REACH_THROUGH_DISABLED`, `INTEGRATION_PROXY_REACH_THROUGH_SELF` and `INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER`.
 
+**Security and MCP**
+
+- `SecuritySettingsPayload` gains `mcpEnabled`, `mcpEnabledEnvOverride`, `localTrustAllowedHosts` and `restrictLocalTrustToTrustedProxies`; `UpdateSecuritySettingsInput` gains `mcpEnabled`, `localTrustAllowedHosts` and `restrictLocalTrustToTrustedProxies`. Omitting one keeps the saved value.
+- Reasons `SETTINGS_LOCAL_TRUST_HOST_INVALID`, `SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT` and `SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY`.
+- HTTP refusals `HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED` (403), `HTTP_MCP_DISABLED`, `HTTP_MCP_CONFIRMATION_MISMATCH` and `HTTP_MCP_CONFIRMATION_UNKNOWN`.
+- MCP `run_mutation` takes a `confirm_token` for operations that need confirmation.
+
 **Other additions**
+
+- Libraries: `LibraryPayload.fullHashBackfillEnabled` and `setLibraryFullHashBackfill(input: SetLibraryFullHashBackfillInput)` (`libraryId`, `enabled`), with the recovery reasons `LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND` and `LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS`.
+- Import and acquisition reasons: `IMPORT_RETRY_LIMIT_REACHED`, `IMPORT_UNPARSEABLE_EPISODE_MEMBER`, `IMPORT_INCUMBENT_PLACED_BY_THIS_DOWNLOAD`, `IMPORT_UPGRADE_PREPARATION_FAILED`, `ADMISSION_QUEUED_ITEM_BLOCKS_UPGRADE`, `BLOCKLIST_IMPORT_NOT_AN_UPGRADE`, `DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES`, `DOWNLOAD_ORIGIN_LOOKUP_FAILED` and `LOCATION_BACKFILL_SIZE_MISMATCH`.
+- Backups and media: `SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES`, `SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED`, `SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW` and `MEDIA_IMAGE_DIMENSIONS_TOO_LARGE`.
+- Request rules: the `awards` fact.
 
 - Quality profiles: `minMissingEpisodesForPack` and `minMissingPercentForSeriesPack` on `QualityProfileCriteriaInput` and `QualityProfileCriteriaPayload`.
 - Titles: `TitlePayload.contentRatings` and `TitlePayload.certificationLabel`.
