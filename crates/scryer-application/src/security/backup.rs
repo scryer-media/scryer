@@ -425,6 +425,17 @@ where
         .map_err(|_| AppError::Repository(backup_timeout_error_message()))?
 }
 
+/// The stored-credential salt a bundle carries. A restore rebuilds a salt
+/// equal to the registration secret from that secret alone, so the bundle
+/// leaves it out; an explicit `SCRYER_JWT_SIGNING_SECRET` would otherwise also
+/// key the restored instance's sessions.
+fn backup_jwt_signing_secret(
+    jwt_signing_salt: &str,
+    smg_registration_secret: Option<&str>,
+) -> Option<String> {
+    (smg_registration_secret != Some(jwt_signing_salt)).then(|| jwt_signing_salt.to_string())
+}
+
 impl AppUseCase {
     async fn collect_backup_export_secrets(&self) -> AppResult<BackupExportSecrets> {
         let encryption_master_key = self
@@ -437,10 +448,14 @@ impl AppUseCase {
                 AppError::validation_refused(crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_CONFIGURED_ENCRYPTION_MASTER_KEY, "backup export requires a configured encryption master key")
             })?;
 
+        let smg_registration_secret = self.services.config.smg_registration_secret.clone();
         Ok(BackupExportSecrets {
             encryption_master_key,
-            jwt_signing_secret: self.auth.jwt_signing_salt.clone(),
-            smg_registration_secret: self.services.config.smg_registration_secret.clone(),
+            jwt_signing_secret: backup_jwt_signing_secret(
+                &self.auth.jwt_signing_salt,
+                smg_registration_secret.as_deref(),
+            ),
+            smg_registration_secret,
             smg_gateway_url: self.services.config.smg_gateway_url.clone(),
         })
     }
@@ -974,6 +989,22 @@ pub async fn start_background_auto_backup_scheduler(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn backup_leaves_out_a_signing_salt_the_registration_secret_rebuilds() {
+        assert_eq!(
+            backup_jwt_signing_secret("registration-secret", Some("registration-secret")),
+            None
+        );
+        assert_eq!(
+            backup_jwt_signing_secret("explicit-secret", Some("registration-secret")),
+            Some("explicit-secret".to_string())
+        );
+        assert_eq!(
+            backup_jwt_signing_secret("local-file-salt", None),
+            Some("local-file-salt".to_string())
+        );
+    }
 
     fn backup_info(
         filename: &str,

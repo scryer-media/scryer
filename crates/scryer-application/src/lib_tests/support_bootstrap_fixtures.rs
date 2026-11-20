@@ -316,6 +316,7 @@ fn bootstrap_with_services(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -461,6 +462,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             Arc::new(registry),
         ),
@@ -647,6 +649,7 @@ pub(super) fn bootstrap_with_metadata_gateway_settings_and_titles(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -795,6 +798,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_queue_commands(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -858,6 +862,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_tracked_handle(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -921,6 +926,7 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_indexer(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     )
@@ -1012,6 +1018,7 @@ pub(super) fn bootstrap_with_search_settings_indexer_configs_and_management(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1084,6 +1091,7 @@ pub(super) fn bootstrap_with_settings_repo_and_profiles_and_libraries(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1180,6 +1188,7 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1236,6 +1245,7 @@ pub(super) fn bootstrap_with_delete_queue(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1400,6 +1410,7 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_repos(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1515,6 +1526,7 @@ pub(super) fn bootstrap_with_library_delete_repositories(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1619,6 +1631,7 @@ pub(super) fn bootstrap_with_scan_unmatched_and_metadata_tracking_and_repos(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );

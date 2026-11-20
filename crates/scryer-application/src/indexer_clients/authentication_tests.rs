@@ -131,3 +131,43 @@ async fn authentication_and_delivery_revalidation_reject_changed_authority() {
         Some(reasons::KEY_INVALID)
     );
 }
+
+#[tokio::test]
+async fn indexer_client_key_hashed_before_the_session_salt_split_still_verifies() {
+    // Stored with the derivation in use before sessions got their own salt:
+    // HMAC-SHA256 keyed by the credential salt the test fixture carries.
+    const RAW_KEY: &str = "sck_AQEBAQEBAQEBAQEBAQEBAQ.AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
+    const STORED_HASH: &str = "QrEdy-5d2cXz9r9yfh5Nly7owd4PmGPc6lxhdYDdZc0";
+
+    let (mut app, _) = crate::lib_tests::bootstrap();
+    assert_ne!(app.auth.jwt_signing_salt, app.auth.session_signing_salt);
+    let now = app.runtime.environment.now();
+    let record = IndexerClientRecord {
+        id: "client-before-split".into(),
+        configuration: IndexerClientConfiguration {
+            name: "Client fixture".into(),
+            enabled: true,
+            protocols: vec![IndexerClientProtocol::Newznab],
+            grants: vec![IndexerClientGrant {
+                indexer_id: "source-a".into(),
+                categories: None,
+            }],
+        },
+        lookup_id: Some("AQEBAQEBAQEBAQEBAQEBAQ".into()),
+        secret_hash: Some(STORED_HASH.into()),
+        key_generation: 1,
+        revision: 1,
+        last_used_at: None,
+        last_outcome_code: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let repository = Arc::new(ClientFixture(Mutex::new(Some(record))));
+    app.services.integrations.indexer_clients = crate::RuntimeFeature::Enabled(repository);
+
+    let authenticated = app
+        .authenticate_indexer_client(RAW_KEY)
+        .await
+        .expect("a key stored before the split authenticates");
+    assert_eq!(authenticated.client.id, "client-before-split");
+}

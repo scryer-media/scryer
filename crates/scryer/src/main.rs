@@ -1737,7 +1737,8 @@ async fn bootstrap_application(
     // Prefer an explicit managed JWT signing secret so restored bundles can
     // preserve instance identity across environments. Fall back to the SMG
     // registration secret or a persistent local secret for fresh installs.
-    let jwt_signing_salt = match normalize_env_option("SCRYER_JWT_SIGNING_SECRET") {
+    let explicit_jwt_signing_secret = normalize_env_option("SCRYER_JWT_SIGNING_SECRET");
+    let jwt_signing_salt = match explicit_jwt_signing_secret.clone() {
         Some(secret) => secret,
         None => match &smg_registration_secret {
             Some(secret) => secret.clone(),
@@ -1749,6 +1750,18 @@ async fn bootstrap_application(
             }
         },
     };
+    // Sessions sign with an explicit secret when one is set, and otherwise
+    // with a salt derived from this instance's encryption master key, which
+    // the encryption bootstrap above has already resolved or refused to start
+    // without. The salt above keeps keying stored credential hashes.
+    let session_master_key = bootstrap_settings_store
+        .current_encryption_key_base64()
+        .await?
+        .ok_or("encryption master key is unavailable after bootstrap")?;
+    let session_signing_salt = scryer_application::JwtAuthConfig::select_session_signing_salt(
+        explicit_jwt_signing_secret.as_deref(),
+        &session_master_key,
+    )?;
 
     let metadata_gateway = Arc::new(datastore.metadata_gateway_client(
         metadata_gateway_url.as_str().to_string(),
@@ -1920,6 +1933,7 @@ async fn bootstrap_application(
         scryer_application::JwtAuthConfig {
             issuer: jwt_issuer,
             jwt_signing_salt,
+            session_signing_salt,
         },
         facet_registry,
         webauthn,

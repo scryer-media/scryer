@@ -1603,7 +1603,8 @@ impl BackupBundleManifest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackupInstanceSecrets {
     encryption_master_key: String,
-    jwt_signing_secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    jwt_signing_secret: Option<String>,
     smg_registration_secret: Option<String>,
     smg_gateway_url: Option<String>,
 }
@@ -1625,11 +1626,9 @@ impl BackupInstanceSecrets {
             "SCRYER_ENCRYPTION_KEY",
             &self.encryption_master_key,
         );
-        push_env_assignment(
-            &mut output,
-            "SCRYER_JWT_SIGNING_SECRET",
-            &self.jwt_signing_secret,
-        );
+        if let Some(value) = self.jwt_signing_secret.as_deref() {
+            push_env_assignment(&mut output, "SCRYER_JWT_SIGNING_SECRET", value);
+        }
         if let Some(value) = self.smg_registration_secret.as_deref() {
             push_env_assignment(&mut output, "SCRYER_SMG_REGISTRATION_SECRET", value);
         }
@@ -1643,7 +1642,10 @@ impl BackupInstanceSecrets {
 #[derive(Clone, Debug)]
 pub struct BackupExportSecrets {
     pub encryption_master_key: String,
-    pub jwt_signing_secret: String,
+    /// The stored-credential salt, carried only when the restored instance
+    /// could not rebuild it from the registration secret the bundle also
+    /// carries. Writing it would pin the restore to it for sessions too.
+    pub jwt_signing_secret: Option<String>,
     pub smg_registration_secret: Option<String>,
     pub smg_gateway_url: Option<String>,
 }
@@ -2763,13 +2765,36 @@ mod tests {
     fn env_file_writer_escapes_multiline_values() {
         let secrets = BackupInstanceSecrets {
             encryption_master_key: "enc".into(),
-            jwt_signing_secret: "jwt".into(),
+            jwt_signing_secret: Some("jwt".into()),
             smg_registration_secret: Some("reg".into()),
             smg_gateway_url: Some("https://smg.example/graphql".into()),
         };
 
         let env_file = secrets.to_env_file();
         assert!(env_file.contains("SCRYER_ENCRYPTION_KEY=\"enc\""));
+        assert!(env_file.contains("SCRYER_JWT_SIGNING_SECRET=\"jwt\""));
+    }
+
+    #[test]
+    fn env_file_leaves_out_an_absent_signing_secret() {
+        let secrets = BackupInstanceSecrets {
+            encryption_master_key: "enc".into(),
+            jwt_signing_secret: None,
+            smg_registration_secret: Some("reg".into()),
+            smg_gateway_url: None,
+        };
+
+        let env_file = secrets.to_env_file();
+        assert!(!env_file.contains("SCRYER_JWT_SIGNING_SECRET"));
+        assert!(env_file.contains("SCRYER_SMG_REGISTRATION_SECRET=\"reg\""));
+
+        let encoded = serde_json::to_string(&secrets).expect("encode secrets");
+        assert!(!encoded.contains("jwt_signing_secret"));
+        let older: BackupInstanceSecrets = serde_json::from_str(
+            r#"{"encryption_master_key":"enc","jwt_signing_secret":"jwt","smg_registration_secret":null,"smg_gateway_url":null}"#,
+        )
+        .expect("decode older secrets");
+        assert_eq!(older.jwt_signing_secret.as_deref(), Some("jwt"));
     }
 
     #[test]
@@ -3402,7 +3427,7 @@ mod tests {
     fn test_export_secrets() -> BackupExportSecrets {
         BackupExportSecrets {
             encryption_master_key: "master-key".to_string(),
-            jwt_signing_secret: "jwt-secret".to_string(),
+            jwt_signing_secret: Some("jwt-secret".to_string()),
             smg_registration_secret: Some("smg-secret".to_string()),
             smg_gateway_url: None,
         }

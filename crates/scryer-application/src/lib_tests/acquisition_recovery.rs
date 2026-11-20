@@ -13554,6 +13554,7 @@ async fn bootstrap_rss_with_media_files_and_profiles(
         JwtAuthConfig {
             issuer: "scryer-test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );

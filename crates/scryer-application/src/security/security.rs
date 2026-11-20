@@ -557,10 +557,12 @@ impl AppUseCase {
     }
 
     /// Derive a per-user JWT signing key:
-    /// HMAC-SHA256(key=salt, msg="{password_hash}\n{authorization_and_session_fingerprint}").
+    /// HMAC-SHA256(key=session_signing_salt, msg="{password_hash}\n{authorization_and_session_fingerprint}").
     ///
-    /// The salt is the registration secret baked into the binary, so an offline
-    /// DB dump alone cannot forge tokens.
+    /// The session signing salt is `SCRYER_JWT_SIGNING_SECRET` when the
+    /// operator sets it, and otherwise is derived from the instance's
+    /// encryption master key (see [`JwtAuthConfig::derive_session_signing_salt`]). A database
+    /// dump alone, or the binary, therefore cannot forge tokens.
     // HMAC-SHA256 JWT and session key derivation is a documented signing contract; see helpers.rs.
     #[allow(clippy::disallowed_methods)]
     pub(crate) fn derive_jwt_key(
@@ -569,7 +571,7 @@ impl AppUseCase {
         authorization_fingerprint: &str,
     ) -> Vec<u8> {
         let signing_material = format!("{password_hash}\n{authorization_fingerprint}");
-        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.session_signing_salt.as_bytes());
         hmac::sign(&hmac_key, signing_material.as_bytes())
             .as_ref()
             .to_vec()

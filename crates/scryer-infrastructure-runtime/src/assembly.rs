@@ -2445,7 +2445,7 @@ mod tests {
                 source_engine: "sqlite".into(),
                 secrets: BackupExportSecrets {
                     encryption_master_key: "test-master-key".into(),
-                    jwt_signing_secret: "test-jwt-secret".into(),
+                    jwt_signing_secret: Some("test-jwt-secret".into()),
                     smg_registration_secret: Some("test-smg-secret".into()),
                     smg_gateway_url: Some("https://smg.example.invalid/graphql".into()),
                 },
@@ -2721,7 +2721,7 @@ mod tests {
                 source_engine: self.engine_name().to_string(),
                 secrets: BackupExportSecrets {
                     encryption_master_key: "test-master-key".to_string(),
-                    jwt_signing_secret: "test-jwt-secret".to_string(),
+                    jwt_signing_secret: Some("test-jwt-secret".to_string()),
                     smg_registration_secret: Some("test-smg-secret".to_string()),
                     smg_gateway_url: Some("https://smg.example.invalid/graphql".to_string()),
                 },

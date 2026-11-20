@@ -581,7 +581,7 @@ async fn token_signed_without_auth_session_version_authenticates() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode token");
 
@@ -598,6 +598,101 @@ async fn issue_mfa_enrollment_token_sets_enrollment_scope() {
     let user = User {
         id: "user-jwt-mfa-enroll".to_string(),
         username: "jwt_mfa_enroll".to_string(),
+#[tokio::test]
+async fn token_forged_with_the_credential_salt_is_rejected() {
+    let (app, _) = bootstrap();
+    assert_ne!(app.auth.jwt_signing_salt, app.auth.session_signing_salt);
+    let user = User {
+        id: "user-jwt-credential-salt".to_string(),
+        username: "jwt_credential_salt".to_string(),
+        password_hash: Some(TEST_PASSWORD_HASH.to_string()),
+        password_change_required: false,
+        account_kind: Default::default(),
+        authorization: Default::default(),
+    };
+    app.services
+        .identity
+        .users
+        .create(user.clone())
+        .await
+        .unwrap();
+    let claims = JwtClaims {
+        sub: user.id.clone(),
+        exp: Utc::now().timestamp() + 3600,
+        iat: Utc::now().timestamp(),
+        iss: app.auth.issuer.clone(),
+        username: user.username.clone(),
+        app_permissions: vec![],
+        library_permissions: vec![],
+        mfa_verified_until: None,
+        mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
+        actor_capabilities: vec![],
+        oauth_client_id: None,
+        oauth_grant_id: None,
+        oauth_authorization_source: crate::types::OAuthAuthorizationSource::Authenticated,
+        auth_scope: JwtSessionScope::Full,
+        persist_session: false,
+        auth_session_version: None,
+        password_change_required_after_enrollment: false,
+    };
+    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    let encode_with = |salt: &str| {
+        let signing_key = test_derive_jwt_key(salt, TEST_PASSWORD_HASH, &[]);
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(&signing_key),
+        )
+        .expect("encode token")
+    };
+
+    // The derivation every session used before sessions got their own salt:
+    // the credential salt, which can be the registration secret in the binary.
+    let forged = encode_with(&app.auth.jwt_signing_salt);
+    assert!(app.authenticate_token(&forged).await.is_err());
+
+    let genuine = encode_with(&app.auth.session_signing_salt);
+    let decoded = app
+        .authenticate_token(&genuine)
+        .await
+        .expect("token signed with the session salt authenticates");
+    assert_eq!(decoded.id, user.id);
+}
+
+#[test]
+fn session_signing_salt_follows_explicit_secret_or_master_key() {
+    use base64::Engine as _;
+    let master_key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+    let other_master_key = base64::engine::general_purpose::STANDARD.encode([8u8; 32]);
+
+    assert_eq!(
+        JwtAuthConfig::select_session_signing_salt(Some("explicit-secret"), &master_key).unwrap(),
+        "explicit-secret"
+    );
+    assert_eq!(
+        JwtAuthConfig::select_session_signing_salt(Some("explicit-secret"), &other_master_key)
+            .unwrap(),
+        "explicit-secret"
+    );
+
+    let derived = JwtAuthConfig::select_session_signing_salt(None, &master_key).unwrap();
+    // A fixed vector: any change to the derivation signs every session out.
+    assert_eq!(derived, "lsTTNZ4b9f73kFiYVw_htSr8fs3Wtou40UbN2DfYSaM");
+    assert_ne!(
+        derived,
+        JwtAuthConfig::derive_session_signing_salt(&other_master_key).unwrap()
+    );
+    assert_ne!(derived, master_key);
+    assert!(JwtAuthConfig::derive_session_signing_salt("not base64!").is_err());
+    assert!(
+        JwtAuthConfig::derive_session_signing_salt(
+            &base64::engine::general_purpose::STANDARD.encode([7u8; 16])
+        )
+        .is_err()
+    );
+}
+
         password_hash: Some(TEST_PASSWORD_HASH.to_string()),
         password_change_required: false,
         account_kind: Default::default(),
@@ -727,7 +822,7 @@ async fn legacy_token_without_scope_claim_defaults_to_full_scope() {
         mfa_verified_until: None,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode legacy token");
 
@@ -965,7 +1060,7 @@ async fn oauth_token_with_app_permissions_is_rejected_during_authentication() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode token");
 
@@ -1026,7 +1121,7 @@ async fn oauth_token_with_actor_capabilities_is_rejected_during_authentication()
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode token");
 
@@ -1810,7 +1905,7 @@ async fn expired_token_returns_unauthorized() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let expired_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
     let result = app.authenticate_token(&expired_token).await;
@@ -1855,7 +1950,7 @@ async fn wrong_issuer_token_returns_unauthorized() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
     let result = app.authenticate_token(&bad_token).await;
@@ -2446,7 +2541,7 @@ async fn deleting_user_invalidates_existing_token_immediately() {
 fn jwt_key_derivation_is_stable_across_permission_order() {
     let (app, _) = bootstrap();
     let key_a = test_derive_jwt_key(
-        &app.auth.jwt_signing_salt,
+        &app.auth.session_signing_salt,
         TEST_PASSWORD_HASH,
         &[
             TestPermissionPreset::TitleManagement,
@@ -2454,7 +2549,7 @@ fn jwt_key_derivation_is_stable_across_permission_order() {
         ],
     );
     let key_b = test_derive_jwt_key(
-        &app.auth.jwt_signing_salt,
+        &app.auth.session_signing_salt,
         TEST_PASSWORD_HASH,
         &[
             TestPermissionPreset::CatalogView,
@@ -2507,7 +2602,7 @@ async fn token_permission_claims_do_not_override_database_authorization() {
         password_change_required_after_enrollment: false,
     };
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
+    let signing_key = test_derive_jwt_key(&app.auth.session_signing_salt, TEST_PASSWORD_HASH, &[]);
     let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
     let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
 

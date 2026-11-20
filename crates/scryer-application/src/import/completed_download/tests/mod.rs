@@ -1818,6 +1818,7 @@ fn build_app_with_import_artifact_repository_and_repositories(
         JwtAuthConfig {
             issuer: "test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(test_facet_registry()),
     )
