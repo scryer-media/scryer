@@ -63,6 +63,11 @@ type SettingsSecuritySectionProps = {
   onMfaPasswordLoginChange: (enabled: boolean) => void;
   onTotpJellyfinLoginChange: (enabled: boolean) => void;
   onTotpEmbyLoginChange: (enabled: boolean) => void;
+  onRestrictLocalTrustChange: (enabled: boolean) => void;
+  allowedHostsDraft: string;
+  onAllowedHostsDraftChange: (value: string) => void;
+  onAllowedHostsSubmit: () => Promise<void> | void;
+  canManageLocalTrust: boolean;
   /** Who can reach Scryer, its public URL and trusted proxies. */
   networkPanel: React.ReactNode;
   oauthApplicationsPanel: React.ReactNode;
@@ -105,6 +110,11 @@ export function SettingsSecuritySection({
   onMfaPasswordLoginChange,
   onTotpJellyfinLoginChange,
   onTotpEmbyLoginChange,
+  onRestrictLocalTrustChange,
+  allowedHostsDraft,
+  onAllowedHostsDraftChange,
+  onAllowedHostsSubmit,
+  canManageLocalTrust,
   networkPanel,
   oauthApplicationsPanel,
 }: SettingsSecuritySectionProps) {
@@ -234,6 +244,14 @@ export function SettingsSecuritySection({
                     className="w-full items-center py-3"
                     checkboxClassName="mt-0"
                   />
+                  {settings.skipLoginForLocalIps ? (
+                    <div
+                      id="security-skip-local-ips-proxy-warning"
+                      className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-xs text-muted-foreground"
+                    >
+                      {t("settings.securityLocalTrustProxyWarning")}
+                    </div>
+                  ) : null}
                   <CheckboxField
                     id="security-api-keys-restrict-to-system-settings-users"
                     checked={settings.apiKeysRestrictToSystemSettingsUsers}
@@ -281,6 +299,71 @@ export function SettingsSecuritySection({
                       {t("settings.securityMcpEnvOverride")}
                     </div>
                   ) : null}
+                </div>
+              </div>
+            </section>
+
+            <section
+              id="security-local-trust"
+              className={`${SECURITY_INSET_CLASS} p-4 lg:col-span-2`}
+            >
+              <div className={SECURITY_INSET_HEADER_CLASS}>
+                <h4 className={SECURITY_INSET_TITLE_CLASS}>
+                  {t("settings.securityLocalTrust")}
+                </h4>
+              </div>
+              <p className="mb-4 text-xs text-[var(--scry-muted3)]">
+                {t("settings.securityLocalTrustHelp")}
+              </p>
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="security-local-trust-allowed-hosts">
+                    {t("settings.securityLocalTrustAllowedHosts")}
+                  </Label>
+                  <textarea
+                    id="security-local-trust-allowed-hosts"
+                    rows={3}
+                    value={allowedHostsDraft}
+                    disabled={busy || !canManageLocalTrust}
+                    spellCheck={false}
+                    onChange={(event) =>
+                      onAllowedHostsDraftChange(event.target.value)
+                    }
+                    className="w-full rounded-md border border-[var(--scry-border)] bg-[var(--scry-bg)] p-3 font-mono text-sm disabled:opacity-50"
+                  />
+                  <p className="text-xs text-[var(--scry-muted3)]">
+                    {t("settings.securityLocalTrustAllowedHostsHelp")}
+                  </p>
+                  <Button
+                    id="security-local-trust-allowed-hosts-save"
+                    type="button"
+                    disabled={busy || !canManageLocalTrust}
+                    onClick={() => void onAllowedHostsSubmit()}
+                  >
+                    {t("label.save")}
+                  </Button>
+                </div>
+                <div>
+                  <CheckboxField
+                    id="security-restrict-local-trust-to-proxies"
+                    checked={settings.restrictLocalTrustToTrustedProxies}
+                    disabled={busy || !canManageLocalTrust}
+                    onCheckedChange={(checked) =>
+                      onRestrictLocalTrustChange(checked === true)
+                    }
+                    label={t("settings.securityRestrictLocalTrustToProxies")}
+                    labelAccessory={
+                      <InfoHelp
+                        ariaLabel={t(
+                          "settings.securityRestrictLocalTrustToProxies",
+                        )}
+                        text={t(
+                          "settings.securityRestrictLocalTrustToProxiesHelp",
+                        )}
+                      />
+                    }
+                    className="max-w-full rounded-[10px] bg-[var(--scry-inset)] px-3 py-3"
+                  />
                 </div>
               </div>
             </section>
@@ -521,7 +604,14 @@ export function SettingsSecuritySection({
         isBusy={confirmBusy}
         onConfirm={onConfirmDisable}
         onCancel={onCancelDisable}
-      />
+      >
+        <div
+          id="settings-security-disable-proxy-warning"
+          className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-xs text-muted-foreground"
+        >
+          {t("settings.securityAuthlessProxyWarning")}
+        </div>
+      </ConfirmDialog>
     </>
   );
 }

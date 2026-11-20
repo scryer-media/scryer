@@ -206,6 +206,14 @@ const en: LocaleDictionary = {
     "API keys are not supported for WebSocket connections.",
   "error.reason.HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED":
     "Scryer web client proof is required for unauthenticated WebSocket access.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOST_INVALID":
+    "An allowed host name is invalid. Enter up to 64 host names without a scheme, port or path.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT":
+    "This list leaves out the host name this page is using, so saving it would lock this page out. Add that name first.",
+  "error.reason.SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY":
+    "Add a trusted proxy before trusting forwarded addresses only from trusted proxies.",
+  "error.reason.HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED":
+    "Scryer was reached through a host name that is not on its allowed host names list.",
 
   "error.reason.PLUGIN_ARTIFACT_DESTINATION_FORBIDDEN":
     "The artifact URL resolves to a private or otherwise forbidden destination.",
@@ -4971,6 +4979,20 @@ const en: LocaleDictionary = {
     "Lets coding agents use Scryer's skills over MCP at /mcp with an API key. When off, every MCP request is refused; API keys keep working with the GraphQL API.",
   "settings.securityMcpEnvOverride":
     "SCRYER_MCP_ENABLED is set and decides whether the MCP server answers. The saved choice applies after the variable is removed.",
+  "settings.securityLocalTrust": "Local network trust",
+  "settings.securityLocalTrustHelp":
+    "Open admin mode and Skip for local IPs trust a request because of the address it comes from. These settings narrow that trust.",
+  "settings.securityLocalTrustProxyWarning":
+    "Unsafe behind a reverse proxy that does not forward client addresses. Every request then arrives from the proxy's local address and skips login.",
+  "settings.securityAuthlessProxyWarning":
+    "Without login, Scryer admits any caller from a local address. Behind a reverse proxy that does not forward client addresses, every visitor arrives from the proxy's local address and gets full access.",
+  "settings.securityRestrictLocalTrustToProxies":
+    "Trust forwarded addresses only from trusted proxies",
+  "settings.securityRestrictLocalTrustToProxiesHelp":
+    "When on, a listed trusted proxy counts as local only when it forwards a local client address, and forwarding headers from any other caller are not trusted. Local callers that connect directly still count as local. Needs at least one trusted proxy.",
+  "settings.securityLocalTrustAllowedHosts": "Allowed host names",
+  "settings.securityLocalTrustAllowedHostsHelp":
+    "Requests trusted by their address must name an IP address, localhost, the public URL host or one of these host names. This blocks DNS rebinding. One name per line; leave empty to turn the check off.",
   "settings.securityMfaConfigStepUp":
     "Require MFA step-up for configuration changes",
   "settings.securityMfaConfigStepUpHelp":

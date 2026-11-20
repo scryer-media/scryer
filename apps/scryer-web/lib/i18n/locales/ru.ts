@@ -419,6 +419,20 @@ const ru: LocaleDictionary = {
     "Позволяет агентам для программирования использовать навыки Scryer через MCP по адресу /mcp с ключом API. Если выключено, каждый запрос MCP отклоняется; ключи API продолжают работать с GraphQL API.",
   "settings.securityMcpEnvOverride":
     "Задана переменная SCRYER_MCP_ENABLED, и она определяет, отвечает ли MCP-сервер. Сохранённый выбор применится после удаления переменной.",
+  "settings.securityLocalTrust": "Доверие к локальной сети",
+  "settings.securityLocalTrustHelp":
+    "Открытый режим администратора и пропуск входа для локальных IP-адресов доверяют запросу по адресу, с которого он пришёл. Эти параметры сужают это доверие.",
+  "settings.securityLocalTrustProxyWarning":
+    "Небезопасно за обратным прокси, который не передаёт адреса клиентов. Тогда каждый запрос приходит с локального адреса прокси и обходит вход.",
+  "settings.securityAuthlessProxyWarning":
+    "Без входа Scryer пускает любого, кто обращается с локального адреса. За обратным прокси, который не передаёт адреса клиентов, каждый посетитель приходит с локального адреса прокси и получает полный доступ.",
+  "settings.securityRestrictLocalTrustToProxies":
+    "Доверять переданным адресам только от доверенных прокси",
+  "settings.securityRestrictLocalTrustToProxiesHelp":
+    "Если включено, доверенный прокси из списка считается локальным, только когда передаёт локальный адрес клиента, а заголовкам переадресации от других отправителей не доверяют. Локальные клиенты, подключающиеся напрямую, по-прежнему считаются локальными. Нужен хотя бы один доверенный прокси.",
+  "settings.securityLocalTrustAllowedHosts": "Разрешённые имена хостов",
+  "settings.securityLocalTrustAllowedHostsHelp":
+    "Запросы, которым доверяют по адресу, должны указывать IP-адрес, localhost, хост публичного URL или одно из этих имён. Это блокирует DNS rebinding. По одному имени на строку; оставьте пустым, чтобы отключить проверку.",
   "settings.securityPasswordMinLength": "Минимальная длина пароля",
   "settings.securitySessionDuration": "Вход действителен",
   "settings.securitySessionDurationHelp":
@@ -7184,6 +7198,14 @@ const ru: LocaleDictionary = {
     "Ключи API не поддерживаются для подключений WebSocket.",
   "error.reason.HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED":
     "Для доступа к WebSocket без аутентификации требуется подтверждение от веб-клиента Scryer.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOST_INVALID":
+    "Недопустимое разрешённое имя хоста. Укажите до 64 имён хостов без схемы, порта и пути.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT":
+    "В списке нет имени хоста, через которое открыта эта страница, поэтому сохранение закроет к ней доступ. Сначала добавьте это имя.",
+  "error.reason.SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY":
+    "Добавьте доверенный прокси, прежде чем доверять переданным адресам только от доверенных прокси.",
+  "error.reason.HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED":
+    "К Scryer обратились по имени хоста, которого нет в списке разрешённых имён хостов.",
   "error.reason.PLUGIN_ARTIFACT_DESTINATION_FORBIDDEN":
     "URL артефакта указывает на частный или иной запрещённый адрес назначения.",
   "error.reason.PLUGIN_ARTIFACT_HOST_UNAVAILABLE":
