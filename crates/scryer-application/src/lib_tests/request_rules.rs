@@ -744,8 +744,18 @@ async fn deleting_a_rule_set_keeps_the_decisions_it_made() {
 /// hand-picked subset of them.
 #[tokio::test]
 async fn previewing_lists_every_app_permission_the_requester_holds() {
-    let mut harness = bootstrap_media_request_app();
-    harness.user.authorization.app = scryer_domain::AppPermissionMask::MANAGE_LISTS;
+    let harness = bootstrap_media_request_app();
+    harness
+        .app
+        .services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(
+            &harness.user.id,
+            scryer_domain::AppPermissionMask::MANAGE_LISTS,
+        )
+        .await
+        .expect("grant the requester one app permission");
     harness.users.store.lock().await.push(harness.user.clone());
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
 

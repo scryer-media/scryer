@@ -17952,6 +17952,111 @@ async fn a_lifecycle_search_dispatched_by_the_system_actor_recovers() {
     );
 }
 
+/// The job's actor column references `users`, and the synthetic system actor
+/// has no row there, so a lifecycle Search dispatch must not store its id:
+/// on a real database that insert fails its foreign key and the step fails.
+/// The run records the actor as `system_actor` instead, and recovery resumes
+/// it as the system actor from that marker alone.
+#[tokio::test]
+async fn a_system_lifecycle_search_stores_no_actor_id_and_still_recovers() {
+    let harness = bootstrap_media_request_app();
+    harness.users.create(harness.manager.clone()).await.unwrap();
+    let evaluation = Arc::new(
+        crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo::default(),
+    );
+    let jobs = Arc::new(RecordingJobRunRepo::with_lifecycle_action_job_receipts(
+        evaluation.action_job_receipts.clone(),
+    ));
+    let app = harness.app.with_test_overrides({
+        let jobs = jobs.clone();
+        let evaluation = evaluation.clone();
+        move |services| {
+            services
+                .with_lifecycle_evaluation_store(evaluation)
+                .with_job_runs(jobs)
+        }
+    });
+    let now = Utc::now();
+    let key = scryer_domain::LifecycleActionStepKey {
+        candidate_id: "candidate-system-search".into(),
+        match_generation: 1,
+        revision_number: 1,
+        step_id: "search".into(),
+    };
+    let receipt = scryer_domain::LifecycleActionJobReceipt {
+        schema_version: scryer_domain::LIFECYCLE_ACTION_JOB_RECEIPT_SCHEMA_VERSION,
+        logical_request_key: key.logical_request_key(),
+        key,
+        dispatch_attempt: 1,
+        request_hash: "system-search-hash".into(),
+        job_run_id: Some("system-lifecycle-search".into()),
+        state: scryer_domain::LifecycleActionJobReceiptState::Accepted,
+        reconciliation_evidence_json: "{}".into(),
+        created_at: now,
+        updated_at: now,
+    };
+    let request = AcquisitionSearchRequest {
+        automatic: false,
+        wanted_kind: WantedKind::Missing,
+        facet: None,
+        library_ids: Vec::new(),
+        title_id: None,
+        season_number: None,
+        wanted_item_id: None,
+    };
+    app.start_lifecycle_acquisition_search_job(&User::system_execution_actor(), request, receipt)
+        .await
+        .expect("the system actor dispatches a lifecycle Search");
+    let view =
+        await_acquisition_search_job(&app, &harness.manager, "system-lifecycle-search").await;
+    assert_eq!(view.state, "completed", "{view:?}");
+    let stored = jobs
+        .get_job_run("system-lifecycle-search")
+        .await
+        .unwrap()
+        .expect("the dispatch stores its job run");
+    assert_eq!(stored.actor_user_id, None);
+    let summary: serde_json::Value =
+        serde_json::from_str(stored.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["system_actor"], serde_json::json!(true));
+
+    // Recovery reads the marker: the same row, interrupted, resumes as the
+    // system actor. Without the marker an absent actor is still refused.
+    for (id, system_actor) in [("recover-marked", true), ("recover-unmarked", false)] {
+        jobs.seed(JobRunRecord {
+            id: id.into(),
+            job_key: JobKey::AcquisitionSearch,
+            operation_type: "maintenance_acquisition_search:missing:0".into(),
+            status: JobRunStatus::Running,
+            trigger_source: JobTriggerSource::SystemInternal,
+            actor_user_id: None,
+            progress_json: None,
+            summary_json: Some(
+                serde_json::json!({"schema_version": 1, "system_actor": system_actor,
+                    "maintenance_action_request": {
+                    "wanted_kind": "missing", "facet": null, "library_ids": [],
+                    "title_id": null, "season_number": null, "wanted_item_id": null
+                }})
+                .to_string(),
+            ),
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await;
+    }
+    let reserved = app.resume_interrupted_lifecycle_searches().await.unwrap();
+    assert_eq!(reserved.len(), 2, "{reserved:?}");
+    app.reconcile_interrupted_job_runs(&reserved).await.unwrap();
+    let marked = await_acquisition_search_job(&app, &harness.manager, "recover-marked").await;
+    assert_eq!(marked.state, "completed", "{marked:?}");
+    let unmarked = await_acquisition_search_job(&app, &harness.manager, "recover-unmarked").await;
+    assert_eq!(unmarked.state, "failed", "{unmarked:?}");
+}
+
 #[tokio::test]
 async fn recovered_lifecycle_search_does_not_resubmit_pending_downloads() {
     let (app, title, _, downloads) = seed_recent_failed_season_pack_fixture_with_indexer(Arc::new(

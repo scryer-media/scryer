@@ -1566,7 +1566,9 @@ impl AppUseCase {
             ),
             status: JobRunStatus::Running,
             trigger_source: JobTriggerSource::SystemInternal,
-            actor_user_id: Some(actor.id.clone()),
+            // The synthetic system actor has no `users` row, and the job's
+            // actor column references one. The summary records it instead.
+            actor_user_id: (!actor.is_system_execution_actor()).then(|| actor.id.clone()),
             progress_json: serde_json::to_string(&AcquisitionSearchProgress {
                 state: "running".to_string(),
                 total: plan.scope_count(),
@@ -1579,6 +1581,7 @@ impl AppUseCase {
             summary_json: Some(
                 serde_json::json!({
                     "schema_version": 1,
+                    "system_actor": actor.is_system_execution_actor(),
                     "maintenance_action_request": {
                         "automatic": request.automatic,
                         "wanted_kind": request.wanted_kind.as_str(),
@@ -1744,16 +1747,21 @@ impl AppUseCase {
                         season_number: saved.season_number,
                         wanted_item_id: saved.wanted_item_id,
                     };
-                    let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
-                        AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_UNAVAILABLE, "search actor is unavailable")
-                    })?;
                     // A lifecycle sequence dispatches its Search step as the
                     // synthetic system actor, which has no persisted user row.
                     // Reconstructing it is what makes those steps recoverable
                     // at all; `UserStore` would answer "no such user" forever.
-                    let actor = if actor_id == User::SYSTEM_EXECUTION_ID {
+                    // The job records it as `system_actor` in its summary with
+                    // no actor id, because the actor column references
+                    // `users`; the id form is still read for older rows.
+                    let system_actor = summary["system_actor"].as_bool() == Some(true)
+                        || persisted.actor_user_id.as_deref() == Some(User::SYSTEM_EXECUTION_ID);
+                    let actor = if system_actor {
                         User::system_execution_actor()
                     } else {
+                        let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
+                            AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_UNAVAILABLE, "search actor is unavailable")
+                        })?;
                         let actor = app
                             .services
                             .identity
