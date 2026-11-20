@@ -1380,7 +1380,7 @@ async fn destructive_arming_rejects_a_stale_scope_even_with_the_same_revision_an
 }
 
 #[tokio::test]
-async fn destructive_arming_requires_system_settings_authority() {
+async fn arming_any_rule_requires_system_settings_authority() {
     let fixture = execution_app(None);
     let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
     let delete_rule = fixture.observed_rule(delete_draft()).await;
@@ -1392,9 +1392,17 @@ async fn destructive_arming_requires_system_settings_authority() {
         loaded: true,
         ..Default::default()
     };
+    let mut settings_manager = User::new_admin("settings-manager");
+    settings_manager.authorization = scryer_domain::UserAuthorization {
+        app: AppPermissionMask::from_permissions([
+            scryer_domain::AppPermission::ManageSystemSettings,
+        ]),
+        loaded: true,
+        ..Default::default()
+    };
 
-    // Catalog authority is enough to enable a reversible rule…
-    fixture
+    // Catalog authority enables neither a reversible rule nor one that deletes.
+    let reversible = fixture
         .set_state(
             &outsider,
             &unmonitor_rule,
@@ -1403,10 +1411,8 @@ async fn destructive_arming_requires_system_settings_authority() {
             None,
         )
         .await
-        .expect("reversible arming under catalog authority");
-
-    // …but enabling a rule that deletes files is elevated.
-    let refused = fixture
+        .expect_err("reversible arming must demand system-settings authority");
+    let destructive = fixture
         .set_state(
             &outsider,
             &delete_rule,
@@ -1416,13 +1422,38 @@ async fn destructive_arming_requires_system_settings_authority() {
         )
         .await
         .expect_err("destructive arming must demand system-settings authority");
-    assert!(
-        matches!(
-            refused,
-            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
-        ),
-        "{refused:?}"
-    );
+    for refused in [reversible, destructive] {
+        assert!(
+            matches!(
+                &refused,
+                AppError::UnauthorizedReason { reason, .. }
+                    if *reason == crate::error_reasons::authorization::ACTION_PERMISSION_DENIED
+            ),
+            "{refused:?}"
+        );
+    }
+
+    // System-settings authority alone arms both.
+    fixture
+        .set_state(
+            &settings_manager,
+            &unmonitor_rule,
+            LifecycleRuleState::Enabled,
+            None,
+            None,
+        )
+        .await
+        .expect("reversible arming under system-settings authority");
+    fixture
+        .set_state(
+            &settings_manager,
+            &delete_rule,
+            LifecycleRuleState::Enabled,
+            Some(0),
+            super::lifecycle_rules::arming_confirmation(&fixture.app, &delete_rule).await,
+        )
+        .await
+        .expect("destructive arming under system-settings authority");
 }
 
 #[tokio::test]

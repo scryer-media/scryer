@@ -32,7 +32,8 @@ gql() { "$C/scripts/gql.sh" "$@"; }
 ## Prerequisites
 
 - `scryer-connect` done: a working API key.
-- The key's account has `MANAGE_CATALOG_SETTINGS` to start and read the run.
+- The key's account has `MANAGE_SYSTEM_SETTINGS` to start and read the run,
+  and to read or change the lifecycle rules it creates.
 - A rule group that reads facts about specific people (who watched, who
   favourited, who requested, a user's plays) saves only for an account that
   also has `MANAGE_PERMISSIONS`. Without it that group is `FAILED` with

@@ -1320,7 +1320,7 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
     let create_error = app
         .create_lifecycle_rule_set(&outsider, draft(MONITORED_SOURCE))
         .await
-        .expect_err("create must require ManageCatalogSettings");
+        .expect_err("create must require ManageSystemSettings");
     assert!(
         matches!(
             create_error,
@@ -1332,7 +1332,7 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
     let list_error = app
         .list_lifecycle_rule_sets(&outsider)
         .await
-        .expect_err("list must require ManageCatalogSettings");
+        .expect_err("list must require ManageSystemSettings");
     assert!(
         matches!(
             list_error,
@@ -1357,13 +1357,87 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
             },
         )
         .await
-        .expect_err("preview must require ManageCatalogSettings");
+        .expect_err("preview must require ManageSystemSettings");
     assert!(
         matches!(
             preview_error,
             AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
         ),
         "{preview_error:?}"
+    );
+}
+
+#[tokio::test]
+async fn catalog_settings_alone_cannot_read_edit_or_fire_a_lifecycle_rule() {
+    let LifecycleFixture { app, user, .. } = lifecycle_app();
+    let created = app
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
+        .await
+        .expect("an administrator creates the rule");
+    let rule_id = created.rule_set.id.clone();
+    let mut catalog_manager = User::new_admin("catalog-manager");
+    catalog_manager.authorization = scryer_domain::UserAuthorization {
+        app: AppPermissionMask::from_permissions([AppPermission::ManageCatalogSettings]),
+        loaded: true,
+        ..Default::default()
+    };
+    let denied = |error: AppError| {
+        assert!(
+            matches!(
+                &error,
+                AppError::UnauthorizedReason { reason, .. }
+                    if *reason == crate::error_reasons::authorization::ACTION_PERMISSION_DENIED
+            ),
+            "{error:?}"
+        );
+    };
+
+    denied(
+        app.get_lifecycle_rule_set(&catalog_manager, &rule_id)
+            .await
+            .expect_err("reading a rule needs system settings"),
+    );
+    denied(
+        app.list_lifecycle_rule_sets(&catalog_manager)
+            .await
+            .expect_err("listing rules needs system settings"),
+    );
+    denied(
+        app.update_lifecycle_rule_source(
+            &catalog_manager,
+            &rule_id,
+            LifecycleSourceDraft {
+                rego_source: created.revision.rego_source.clone(),
+                grace_days: created.revision.grace_days,
+                max_titles_per_run: Some(Some(500)),
+            },
+        )
+        .await
+        .expect_err("raising the per-run maximum needs system settings"),
+    );
+    denied(
+        app.run_lifecycle_evaluation_now(&catalog_manager, Some(rule_id.clone()))
+            .await
+            .expect_err("firing evaluation needs system settings"),
+    );
+    denied(
+        app.run_lifecycle_action_handler_now(&catalog_manager, Some(rule_id.clone()))
+            .await
+            .expect_err("firing the action handler needs system settings"),
+    );
+
+    let stored = app
+        .get_lifecycle_rule_set(&user, &rule_id)
+        .await
+        .expect("an administrator reads the rule")
+        .expect("the rule exists");
+    assert_eq!(
+        stored.rule_set.max_titles_per_run,
+        created.rule_set.max_titles_per_run
+    );
+    assert_eq!(
+        stored.revision.revision_number,
+        created.revision.revision_number
     );
 }
 

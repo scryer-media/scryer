@@ -235,7 +235,7 @@ async fn rule_import_needs_catalog_settings_permission_and_hides_other_users_run
             .app
             .start_rule_import(&viewer, "denied", maintainerr_connection(&server))
             .await
-            .expect_err("no catalog settings permission");
+            .expect_err("no system settings permission");
         assert!(
             matches!(
                 denied,
@@ -253,6 +253,50 @@ async fn rule_import_needs_catalog_settings_permission_and_hides_other_users_run
             .wait_rule_import(&owner, &run.id)
             .await
             .expect("settles");
+
+        // A Maintainerr import creates lifecycle rules, so catalog settings
+        // alone neither start one nor read its report, even the caller's own.
+        let mut catalog_only = owner.clone();
+        catalog_only.authorization = scryer_domain::UserAuthorization {
+            app: scryer_domain::AppPermissionMask::from_permissions([
+                scryer_domain::AppPermission::ManageCatalogSettings,
+            ]),
+            loaded: true,
+            ..Default::default()
+        };
+        let refused_start = ctx
+            .app
+            .start_rule_import(&catalog_only, "catalog-only", maintainerr_connection(&server))
+            .await
+            .expect_err("Maintainerr import needs system settings");
+        let refused_status = ctx
+            .app
+            .rule_import_status(&catalog_only, &run.id)
+            .await
+            .expect_err("Maintainerr report needs system settings");
+        for refused in [refused_start, refused_status] {
+            assert!(
+                matches!(
+                    &refused,
+                    AppError::UnauthorizedReason { reason, .. }
+                        if *reason == scryer_application::error_reasons::authorization::ACTION_PERMISSION_DENIED
+                ),
+                "{refused:?}"
+            );
+        }
+        let mut settings_only = owner.clone();
+        settings_only.authorization = scryer_domain::UserAuthorization {
+            app: scryer_domain::AppPermissionMask::from_permissions([
+                scryer_domain::AppPermission::ManageSystemSettings,
+            ]),
+            loaded: true,
+            ..Default::default()
+        };
+        ctx.app
+            .rule_import_status(&settings_only, &run.id)
+            .await
+            .expect("system settings read the Maintainerr report");
+
         let other_admin = ctx
             .users
             .create(User::new_admin("rule-import-other-admin"))
@@ -1089,28 +1133,32 @@ async fn maintainerr_rule_reading_who_watched_needs_permission_management() {
             .create(User::new_admin("rule-import-admin"))
             .await
             .expect("admin");
-        let catalog = ctx
+        let settings_manager = ctx
             .app
             .create_user(
                 &admin,
                 "sample-user".to_string(),
-                "catalog-pass1".to_string(),
+                "settings-pass1".to_string(),
                 AppPermissionMask::from_permission(
-                    scryer_domain::AppPermission::ManageCatalogSettings,
+                    scryer_domain::AppPermission::ManageSystemSettings,
                 ),
                 vec![],
             )
             .await
-            .expect("catalog user");
+            .expect("system settings user");
         let server = maintainerr_with_groups(true).await;
         let run = ctx
             .app
-            .start_rule_import(&catalog, "person-fact", maintainerr_connection(&server))
+            .start_rule_import(
+                &settings_manager,
+                "person-fact",
+                maintainerr_connection(&server),
+            )
             .await
             .expect("accepted");
         let report = ctx
             .app
-            .wait_rule_import(&catalog, &run.id)
+            .wait_rule_import(&settings_manager, &run.id)
             .await
             .expect("settles");
         assert_eq!(
@@ -1132,7 +1180,7 @@ async fn maintainerr_rule_reading_who_watched_needs_permission_management() {
         assert_eq!(refused.rule_set_id, None);
         assert_eq!(
             ctx.app
-                .list_lifecycle_rule_sets(&catalog)
+                .list_lifecycle_rule_sets(&settings_manager)
                 .await
                 .expect("lifecycle rules")
                 .len(),

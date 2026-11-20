@@ -22622,7 +22622,7 @@ type MutationRoot {
 		corrections: [IndexerApiKeyOverrideInput!]!
 	): ExternalImportSourceJobPayload!
 	"""
-	Start importing Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules. Requires catalog-settings management; repeating a request key returns the run it started.
+	Start importing Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules. Sonarr and Radarr require catalog-settings management and Maintainerr requires system-settings management; repeating a request key returns the run it started.
 	"""
 	startExternalRuleImport(
 		"""
@@ -27206,7 +27206,7 @@ type QueryRoot {
 		family: String!
 	): RuleBuilderSchema!
 	"""
-	List lifecycle rule sets; requires catalog-settings management permission.
+	List lifecycle rule sets; requires system-settings management permission.
 	"""
 	lifecycleRuleSets: [LifecycleRuleSet!]!
 	"""
@@ -27228,7 +27228,7 @@ type QueryRoot {
 		ruleSetId: ID!
 	): [LifecycleRuleRevision!]!
 	"""
-	List lifecycle candidates the lifecycle evaluator has recorded; requires catalog-settings management permission.
+	List lifecycle candidates the lifecycle evaluator has recorded; requires system-settings management permission.
 	
 	Candidates are ordered by due time across rules, soonest first, and
 	none are returned while lifecycle is switched off for the instance.
@@ -27489,7 +27489,7 @@ type QueryRoot {
 	"""
 	externalImportSetupSecretDraft: ExternalImportSetupSecretDraftPayload
 	"""
-	Read one of the caller's external rule imports and its per-item report; requires catalog-settings management.
+	Read one of the caller's external rule imports and its per-item report; requires the permission its source needs to start, catalog-settings management for Sonarr or Radarr and system-settings management for Maintainerr.
 	"""
 	externalRuleImportStatus(
 		"""

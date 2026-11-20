@@ -669,10 +669,10 @@ async fn an_unrequested_movie_never_matches_the_shipped_template() {
 
 // ── The person-fact authoring bar ───────────────────────────────────────────
 
-fn catalog_only_author() -> User {
+fn settings_only_author() -> User {
     test_user_with_app_permissions(
-        "catalog-operator",
-        AppPermissionMask::from_permissions([AppPermission::ManageCatalogSettings]),
+        "settings-operator",
+        AppPermissionMask::from_permissions([AppPermission::ManageSystemSettings]),
     )
 }
 
@@ -683,7 +683,7 @@ async fn authoring_a_watch_rule_needs_permission_management() {
     let error = fixture
         .app
         .create_lifecycle_rule_set(
-            &catalog_only_author(),
+            &settings_only_author(),
             draft(WATCHED_BY_ALL_REQUESTERS_SOURCE),
         )
         .await
@@ -718,7 +718,7 @@ async fn every_person_targeted_fact_trips_the_bar_and_is_named() {
             format!("package whatever\nimport rego.v1\n\nmatch if {{\n\tinput.facts.{fact}\n}}\n");
         let error = fixture
             .app
-            .create_lifecycle_rule_set(&catalog_only_author(), draft(&source))
+            .create_lifecycle_rule_set(&settings_only_author(), draft(&source))
             .await
             .err()
             .unwrap_or_else(|| panic!("{fact} must be gated"));
@@ -740,9 +740,9 @@ async fn a_rule_about_media_rather_than_people_is_unaffected() {
 
     fixture
         .app
-        .create_lifecycle_rule_set(&catalog_only_author(), draft(MONITORED_SOURCE))
+        .create_lifecycle_rule_set(&settings_only_author(), draft(MONITORED_SOURCE))
         .await
-        .expect("catalog-settings management is enough for a rule about media");
+        .expect("system-settings management is enough for a rule about media");
 }
 
 /// The anonymous aggregates are deliberately outside the bar: they say
@@ -759,7 +759,7 @@ async fn the_anonymous_watch_aggregate_is_not_gated() {
 
     fixture
         .app
-        .create_lifecycle_rule_set(&catalog_only_author(), draft(LAST_WATCHED_SOURCE))
+        .create_lifecycle_rule_set(&settings_only_author(), draft(LAST_WATCHED_SOURCE))
         .await
         .expect("requested and last_watched_at name nobody");
 }
@@ -787,7 +787,7 @@ async fn the_bar_applies_to_replacing_a_source_too() {
     let error = fixture
         .app
         .update_lifecycle_rule_source(
-            &catalog_only_author(),
+            &settings_only_author(),
             &created.rule_set.id,
             LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
@@ -827,7 +827,7 @@ async fn previewing_a_person_fact_draft_needs_permission_management() {
 
     let error = fixture
         .preview_as(
-            &catalog_only_author(),
+            &settings_only_author(),
             inline_source(WATCHED_BY_ALL_REQUESTERS_SOURCE),
             &title.id,
         )
@@ -876,12 +876,12 @@ async fn previewing_a_rule_about_media_is_unaffected() {
 
     let preview = fixture
         .preview_as(
-            &catalog_only_author(),
+            &settings_only_author(),
             inline_source(MONITORED_SOURCE),
             &title.id,
         )
         .await
-        .expect("catalog-settings management is enough to preview a rule about media");
+        .expect("system-settings management is enough to preview a rule about media");
 
     assert_eq!(preview.titles.len(), 1);
 }
@@ -900,7 +900,7 @@ async fn previewing_a_stored_person_fact_rule_is_gated_too() {
 
     let error = fixture
         .preview_as(
-            &catalog_only_author(),
+            &settings_only_author(),
             LifecyclePreviewSource::Stored {
                 rule_set_id: created.rule_set.id.clone(),
             },
@@ -1006,13 +1006,13 @@ async fn preview_shows_the_fact_document_only_to_a_permissions_manager() {
         "{facts}"
     );
 
-    let catalog_only = fixture
+    let settings_only = fixture
         .preview_as(
-            &catalog_only_author(),
+            &settings_only_author(),
             inline_source(MONITORED_SOURCE),
             &title.id,
         )
         .await
-        .expect("a rule about media previews for a catalog manager");
-    assert!(catalog_only.titles[0].facts.is_none());
+        .expect("a rule about media previews for a settings manager");
+    assert!(settings_only.titles[0].facts.is_none());
 }

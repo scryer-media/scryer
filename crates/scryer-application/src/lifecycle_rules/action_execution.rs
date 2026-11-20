@@ -605,9 +605,9 @@ impl AppUseCase {
     /// Enabled may act with exactly the effects the rule's own actions can
     /// have; execution still requires the matching instance gate as well.
     /// Enabling a rule that can delete files is the
-    /// elevated, count-acknowledged step: it additionally requires
-    /// system-settings authority, a confirmation of the reviewed revision and
-    /// library scope, and the current number of non-terminal candidates.
+    /// elevated, count-acknowledged step: it additionally requires a
+    /// confirmation of the reviewed revision and library scope, and the
+    /// current number of non-terminal candidates.
     /// Enabling any other rule needs no confirmation.
     ///
     /// The confirmation never outlives the revision it was given for: what an
@@ -623,7 +623,7 @@ impl AppUseCase {
         confirmation: Option<scryer_domain::LifecycleRuleArmingConfirmation>,
         acknowledged_candidate_count: Option<i64>,
     ) -> AppResult<LifecycleRuleSetDetail> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
@@ -642,8 +642,6 @@ impl AppUseCase {
         }
 
         if destructive {
-            self.require_app_permission(actor, AppPermission::ManageSystemSettings)
-                .await?;
             super::service::require_max_titles_per_run(
                 &detail.declared_actions,
                 detail.rule_set.max_titles_per_run,
@@ -829,7 +827,7 @@ impl AppUseCase {
         candidate_id: Option<&str>,
         limit: Option<usize>,
     ) -> AppResult<Vec<LifecycleActionRunView>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         let limit = limit.unwrap_or(50).clamp(1, 200);
         // A DeleteFiles step owns an internal scoped-deletion action run for
@@ -951,7 +949,7 @@ impl AppUseCase {
         actor: &User,
         rule_set_id: Option<String>,
     ) -> AppResult<LifecycleEvaluationTrigger> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let Some(rule_set_id) = rule_set_id else {

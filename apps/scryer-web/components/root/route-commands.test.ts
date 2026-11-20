@@ -148,27 +148,17 @@ test("scripts is grouped with Settings for system-settings managers only", () =>
   assert.equal(find([APP_PERMISSIONS.manageCatalogSettings]), undefined);
 });
 
-test("lifecycle-rules command is offered to catalog managers without the experimental switch", () => {
-  const catalogManager = user({
-    appPermissions: [APP_PERMISSIONS.manageCatalogSettings],
-  });
+test("lifecycle-rules command is offered to system-settings managers only", () => {
+  const offered = (appPermissions: AuthUser["appPermissions"]) =>
+    buildRouteCommands({
+      t,
+      user: user({ appPermissions }),
+      onNavigate: () => {},
+    }).some((command) => command.id === "settings-lifecycle-rules");
 
-  assert.ok(
-    buildRouteCommands({
-      t,
-      user: catalogManager,
-      onNavigate: () => {},
-    }).some((command) => command.id === "settings-lifecycle-rules"),
-  );
-  // The catalog-settings permission still gates it.
-  assert.equal(
-    buildRouteCommands({
-      t,
-      user: user(),
-      onNavigate: () => {},
-    }).some((command) => command.id === "settings-lifecycle-rules"),
-    false,
-  );
+  assert.ok(offered([APP_PERMISSIONS.manageSystemSettings]));
+  assert.equal(offered([APP_PERMISSIONS.manageCatalogSettings]), false);
+  assert.equal(offered([]), false);
 });
 
 test("lists command reaches catalog viewers and list managers", () => {

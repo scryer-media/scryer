@@ -235,7 +235,7 @@ pub struct LifecyclePreviewTitleResult {
 
 impl AppUseCase {
     pub async fn list_lifecycle_rule_sets(&self, actor: &User) -> AppResult<Vec<LifecycleRuleSet>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         self.services
             .customization
@@ -278,7 +278,7 @@ impl AppUseCase {
         actor: &User,
         id: &str,
     ) -> AppResult<Option<LifecycleRuleSetDetail>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         let Some(rule_set) = self
             .services
@@ -297,7 +297,7 @@ impl AppUseCase {
         actor: &User,
         rule_set_id: &str,
     ) -> AppResult<Vec<LifecycleRuleRevision>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         self.services
             .customization
@@ -353,7 +353,7 @@ impl AppUseCase {
         schedule: Option<ScriptSchedule>,
         taken_names: &[String],
     ) -> AppResult<Option<LifecycleRuleSetDetail>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         let schedule = validated_rule_schedule(schedule)?
             .unwrap_or_else(scryer_domain::default_lifecycle_rule_schedule);
@@ -449,7 +449,7 @@ impl AppUseCase {
     /// atomically with the append. The destructive acknowledgement is bound to
     /// the revision it was given for, so a replacement source that can delete
     /// has to be confirmed again on its own terms. Without this,
-    /// catalog-settings authority alone would be enough to swap an enabled
+    /// rule-authoring authority alone would be enough to swap an enabled
     /// rule's source and have the next handler pass delete under someone
     /// else's acknowledgement. A rule that was enabled is flagged as edited
     /// since it was enabled, so the operator is told to review it and enable
@@ -488,7 +488,7 @@ impl AppUseCase {
         draft: LifecycleSourceDraft,
         builder_model: BuilderModelChange,
     ) -> AppResult<LifecycleRuleSetDetail> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let mut rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
@@ -657,7 +657,7 @@ impl AppUseCase {
         schedule: Option<ScriptSchedule>,
         max_titles_per_run: Option<Option<u32>>,
     ) -> AppResult<LifecycleRuleSet> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         let schedule = validated_rule_schedule(schedule)?;
 
@@ -771,7 +771,7 @@ impl AppUseCase {
         actor: &User,
         rule_set_id: &str,
     ) -> AppResult<()> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         let rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
         if rule_set.system_owned {
@@ -954,7 +954,7 @@ impl AppUseCase {
         actor: &User,
         rego_source: &str,
     ) -> AppResult<LifecycleRuleSourceValidation> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let scratch_id = Id::new_rego_safe().0;
@@ -999,7 +999,7 @@ impl AppUseCase {
         actor: &User,
         request: LifecyclePreviewRequest,
     ) -> AppResult<LifecyclePreviewResult> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let (policy, declared, library_ids, grace_days) =
@@ -1416,7 +1416,7 @@ impl AppUseCase {
     /// Gate authoring — or previewing — a matcher that reads person-targeted
     /// facts.
     ///
-    /// Catalog-settings management is enough to write a rule about *media*.
+    /// System-settings management is enough to write a rule about *media*.
     /// Writing one about *people* — who added a title, who asked for it, who
     /// watched it — is a use of the instance's identity records, so it asks for
     /// the same authority that hands out permissions in the first place.

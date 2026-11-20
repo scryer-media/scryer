@@ -81,12 +81,12 @@ export function canAccessSettingsSection(
     case "plugins":
     case "scripts":
     case "notifications":
+    case "lifecycleRules":
       return canManageSystemSettings;
     case "qualityProfiles":
     case "delayProfiles":
     case "titleTags":
     case "rules":
-    case "lifecycleRules":
     case "requestRules":
     case "post-processing":
     case "subtitles":

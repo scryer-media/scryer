@@ -687,6 +687,10 @@ export function buildRouteCommands({
             icon: SlidersHorizontal,
             onSelect: buildNavigate(onNavigate, "settings", "rules"),
           } satisfies RouteCommand,
+        ]
+      : []),
+    ...(canManageSystemSettings
+      ? [
           {
             id: "settings-lifecycle-rules",
             label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.lifecycleRules")}`,
@@ -704,6 +708,10 @@ export function buildRouteCommands({
             icon: Wrench,
             onSelect: buildNavigate(onNavigate, "settings", "lifecycleRules"),
           } satisfies RouteCommand,
+        ]
+      : []),
+    ...(canManageCatalogSettings
+      ? [
           {
             id: "settings-post-processing",
             label: `${automationGroupLabel} / ${t("settings.postProcessing")}`,
