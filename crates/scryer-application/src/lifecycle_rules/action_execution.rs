@@ -2003,7 +2003,7 @@ impl AppUseCase {
                 files,
                 &storage_roots,
                 &mut capacities,
-                super::storage::LifecycleStorageRead::Refresh,
+                super::storage::LifecycleStorageRead::RefreshUncached,
             )
             .await;
         }

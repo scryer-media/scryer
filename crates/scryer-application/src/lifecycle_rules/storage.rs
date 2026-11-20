@@ -90,8 +90,13 @@ pub(crate) fn rule_reads_storage(rego_source: &str) -> bool {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LifecycleStorageRead {
     /// A figure taken now through the capacity owner, bounded by a timeout.
-    /// Preview and the guards that act on free space use it.
+    /// Preview uses it.
     Refresh,
+    /// A figure from a call made now, never one taken before it was asked
+    /// for, bounded by the same timeout. The execution guard uses it, so a
+    /// recheck after a deletion reads the space that deletion freed rather
+    /// than a figure taken just before it.
+    RefreshUncached,
     /// The capacity owner's last sample as of this instant, with no disk
     /// call. Scheduled evaluation uses it: the sampler keeps every library
     /// root current, so a pass over thousands of subjects never touches a
@@ -283,26 +288,42 @@ impl AppUseCase {
             .flatten();
             return storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE);
         }
-        let capacity = &self.runtime.health.storage_capacity;
-        match read {
-            LifecycleStorageRead::Refresh => {
-                let space = capacity
-                    .refresh(std::path::PathBuf::from(path), ROOT_STAT_TIMEOUT)
-                    .await
-                    .ok();
-                storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE)
-            }
-            LifecycleStorageRead::Sampled(now) => match capacity.reading(&path, now) {
-                crate::disk::capacity::StorageCapacityReading::Known {
-                    available_bytes,
-                    total_bytes,
-                    ..
-                } => Ok((available_bytes, total_bytes)),
-                other => Err(other
-                    .unknown_reason()
-                    .unwrap_or(STORAGE_CAPACITY_UNAVAILABLE)),
-            },
+        storage_capacity_figures(&self.runtime.health.storage_capacity, path, read).await
+    }
+}
+
+/// A root's figures from `capacity` as `read` asks for them, or the unknown
+/// reason.
+pub(crate) async fn storage_capacity_figures(
+    capacity: &crate::disk::capacity::StorageCapacity,
+    path: String,
+    read: LifecycleStorageRead,
+) -> Result<(i64, i64), &'static str> {
+    match read {
+        LifecycleStorageRead::Refresh => {
+            let space = capacity
+                .refresh(std::path::PathBuf::from(path), ROOT_STAT_TIMEOUT)
+                .await
+                .ok();
+            storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE)
         }
+        LifecycleStorageRead::RefreshUncached => {
+            let space = capacity
+                .refresh_uncached(std::path::PathBuf::from(path), ROOT_STAT_TIMEOUT)
+                .await
+                .ok();
+            storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE)
+        }
+        LifecycleStorageRead::Sampled(now) => match capacity.reading(&path, now) {
+            crate::disk::capacity::StorageCapacityReading::Known {
+                available_bytes,
+                total_bytes,
+                ..
+            } => Ok((available_bytes, total_bytes)),
+            other => Err(other
+                .unknown_reason()
+                .unwrap_or(STORAGE_CAPACITY_UNAVAILABLE)),
+        },
     }
 }
 

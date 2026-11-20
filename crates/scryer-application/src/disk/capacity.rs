@@ -352,13 +352,32 @@ impl StorageCapacity {
     /// after the caller asked or is under [`STORAGE_CAPACITY_REFRESH_REUSE`]
     /// old. Blocks on the disk call: call it only from a blocking thread.
     pub fn refresh_blocking(&self, path: &Path) -> io::Result<FilesystemSpace> {
+        self.refresh_blocking_with(path, true)
+    }
+
+    /// A figure for `path` from a call made now, after any call for this
+    /// path already out has returned; never one taken before the caller
+    /// asked. For a guard that has just changed what the filesystem holds,
+    /// such as a deletion's recheck, where a figure from before the change
+    /// would be wrong. The sample it takes serves every other reader.
+    /// Bounded and off the async runtime like [`Self::refresh`].
+    pub(crate) async fn refresh_uncached(
+        &self,
+        path: impl Into<PathBuf>,
+        timeout: std::time::Duration,
+    ) -> io::Result<FilesystemSpace> {
+        self.refresh_with(path.into(), timeout, false).await
+    }
+
+    fn refresh_blocking_with(&self, path: &Path, reuse: bool) -> io::Result<FilesystemSpace> {
         let key = key_of(path);
         let asked_at = self.inner.clock.now();
         let flight = self.flight(&key, path);
         let _out = flight
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(sample) = self.sample(&key)
+        if reuse
+            && let Some(sample) = self.sample(&key)
             && reusable(sample.sampled_at, asked_at, STORAGE_CAPACITY_REFRESH_REUSE)
         {
             return sample.space();
@@ -377,10 +396,22 @@ impl StorageCapacity {
         path: impl Into<PathBuf>,
         timeout: std::time::Duration,
     ) -> io::Result<FilesystemSpace> {
-        let path = path.into();
+        self.refresh_with(path.into(), timeout, true).await
+    }
+
+    async fn refresh_with(
+        &self,
+        path: PathBuf,
+        timeout: std::time::Duration,
+        reuse: bool,
+    ) -> io::Result<FilesystemSpace> {
         let owner = self.clone();
         let probed = path.clone();
-        match offload(Some(timeout), move || owner.refresh_blocking(&probed)).await {
+        match offload(Some(timeout), move || {
+            owner.refresh_blocking_with(&probed, reuse)
+        })
+        .await
+        {
             Offloaded::Done(answer) => answer,
             Offloaded::Failed(join) => Err(io::Error::other(join)),
             Offloaded::TimedOut => {
@@ -942,6 +973,49 @@ mod tests {
         clock.set(at(1));
         assert_eq!(capacity.refresh_blocking(path).unwrap(), space(30, 100));
         assert_eq!(capacity.disk_calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_deletion_recheck_reads_the_space_the_previous_deletion_freed() {
+        use crate::lifecycle_rules::storage::{LifecycleStorageRead, storage_capacity_figures};
+
+        let clock = ManualClock::at(at(0));
+        let (capacity, disk) = owner(&clock);
+        let root = "/srv/fixture-pressure";
+        // Before the first file goes, then after it.
+        disk.then(root, Ok(reading(100, 1_000, None)));
+        disk.then(root, Ok(reading(400, 1_000, None)));
+
+        let first = storage_capacity_figures(
+            &capacity,
+            root.into(),
+            LifecycleStorageRead::RefreshUncached,
+        )
+        .await;
+        assert_eq!(first, Ok((100, 1_000)));
+        // The first file is deleted; the recheck for the next one comes well
+        // inside the reuse window, on the same instant.
+        let second = storage_capacity_figures(
+            &capacity,
+            root.into(),
+            LifecycleStorageRead::RefreshUncached,
+        )
+        .await;
+        assert_eq!(second, Ok((400, 1_000)), "the post-delete figure");
+        assert_eq!(capacity.disk_calls(), 2, "one call per recheck");
+
+        // An ordinary refresh in the window still shares that figure, and a
+        // cached read sees it too.
+        assert_eq!(
+            storage_capacity_figures(&capacity, root.into(), LifecycleStorageRead::Refresh).await,
+            Ok((400, 1_000))
+        );
+        assert_eq!(
+            storage_capacity_figures(&capacity, root.into(), LifecycleStorageRead::Sampled(at(0)))
+                .await,
+            Ok((400, 1_000))
+        );
+        assert_eq!(capacity.disk_calls(), 2, "readers keep the reuse window");
     }
 
     fn reading(available: u64, total: u64, id: Option<u64>) -> CapacityProbeReading {
