@@ -278,6 +278,79 @@ mod tests {
     }
 
     #[test]
+    fn download_client_without_field_definitions_shows_no_stored_string() {
+        let client = |client_type: &str| scryer_domain::DownloadClientConfig {
+            id: "client-1".into(),
+            name: "Synthetic client".into(),
+            client_type: client_type.into(),
+            config_json: json!({
+                "host": "h.invalid",
+                "cookie": "c1",
+                "passkey": "p1",
+                "use_ssl": true,
+            })
+            .to_string(),
+            client_priority: 0,
+            is_enabled: true,
+            status: Default::default(),
+            last_error: None,
+            last_seen_at: None,
+            proxy_config_id: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let value_of = |payload: &crate::types::DownloadClientConfigPayload, key: &str| {
+            payload
+                .config
+                .iter()
+                .find(|value| value.key == key)
+                .unwrap_or_else(|| panic!("{key} should be present"))
+                .value
+                .clone()
+        };
+        let stored_secret = |value: Option<ProviderConfigFieldValue>| {
+            matches!(
+                value,
+                Some(ProviderConfigFieldValue::Secret(SecretConfigValuePayload {
+                    stored: true
+                }))
+            )
+        };
+
+        let orphaned =
+            super::from_download_client_config_with_fields(client("synthetic-orphan"), &[], None);
+        for key in ["host", "cookie", "passkey"] {
+            assert!(stored_secret(value_of(&orphaned, key)), "{key} is redacted");
+        }
+        assert!(matches!(
+            value_of(&orphaned, "use_ssl"),
+            Some(ProviderConfigFieldValue::Bool(BoolConfigValuePayload {
+                value: true
+            }))
+        ));
+        let mut stored_keys = orphaned.stored_secret_keys.clone();
+        stored_keys.sort();
+        assert_eq!(stored_keys, ["cookie", "host", "passkey"]);
+
+        // A loaded plugin's definitions still decide, and built-in clients keep
+        // their key-name rules.
+        let loaded = super::from_download_client_config_with_fields(
+            client("synthetic-orphan"),
+            &[config_field("host", "Host", ConfigFieldType::String)],
+            None,
+        );
+        assert!(matches!(
+            value_of(&loaded, "host"),
+            Some(ProviderConfigFieldValue::String(payload)) if payload.value == "h.invalid"
+        ));
+        let native = super::from_download_client_config_with_fields(client("nzbget"), &[], None);
+        assert!(matches!(
+            value_of(&native, "host"),
+            Some(ProviderConfigFieldValue::String(payload)) if payload.value == "h.invalid"
+        ));
+    }
+
+    #[test]
     fn provider_config_inputs_use_secret_value_and_clear_secret() {
         let mut secret = config_input("api_key");
         secret.secret_value = Some("replacement-secret".to_string());

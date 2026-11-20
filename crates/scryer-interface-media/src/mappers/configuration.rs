@@ -1044,6 +1044,18 @@ pub fn from_download_client_config_with_fields(
     config_fields: &[ConfigFieldDef],
     status: Option<&scryer_application::escalation_backoff::DownloadClientStatus>,
 ) -> DownloadClientConfigPayload {
+    // Without the provider's field definitions nothing says which stored
+    // values are secrets, so every stored string is redacted.
+    let fallback_fields = config_fields
+        .is_empty()
+        .then(|| {
+            scryer_application::download_client_stored_config_fallback_fields(
+                &config.client_type,
+                &config.config_json,
+            )
+        })
+        .flatten();
+    let config_fields = fallback_fields.as_deref().unwrap_or(config_fields);
     let base_url =
         scryer_application::resolve_download_client_base_url_from_config_json(&config.config_json);
     let stored_secret_keys =

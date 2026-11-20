@@ -299,6 +299,7 @@ impl UserMutations {
             .set_user_app_permissions(&actor, &user_id, permissions)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).revoke_user_connections(&user.id);
         let user = app
             .attach_user_authorization(user)
             .await
@@ -340,6 +341,7 @@ impl UserMutations {
             .set_user_library_permissions(&actor, &user_id, grants)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).revoke_user_connections(&user.id);
         let user = app
             .attach_user_authorization(user)
             .await
@@ -382,6 +384,7 @@ impl UserMutations {
         app.delete_user(&actor, &id_string)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).revoke_user_connections(&id_string);
         Ok(DeleteUserPayload { id })
     }
 

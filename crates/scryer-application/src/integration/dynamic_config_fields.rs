@@ -174,17 +174,22 @@ impl AppUseCase {
     }
 
     /// Effective fields for a stored indexer config, for payloads that redact
-    /// its secrets. Unknown providers yield no fields, as before.
+    /// its secrets. When the provider's fields are unavailable, every stored
+    /// string value is treated as a secret.
     pub async fn indexer_config_fields_for_config(
         &self,
         config: &IndexerConfig,
     ) -> Vec<scryer_domain::ConfigFieldDef> {
-        self.effective_indexer_config_fields(
-            &config.provider_type,
-            &[config.config_json.as_deref()],
-        )
-        .await
-        .unwrap_or_default()
+        match self
+            .effective_indexer_config_fields(
+                &config.provider_type,
+                &[config.config_json.as_deref()],
+            )
+            .await
+        {
+            Ok(fields) if !fields.is_empty() => fields,
+            _ => stored_config_keys_as_secrets(config.config_json.as_deref()),
+        }
     }
 
     /// The plugin's answer for `trigger_values`, or `None` when the plugin is
@@ -486,6 +491,35 @@ pub(crate) fn merge_dynamic_config_fields(
         .collect::<Vec<_>>();
     merged.extend(dynamic.fields.iter().cloned());
     merged
+}
+
+/// Fields for a stored config whose provider's field definitions are
+/// unavailable: every key holding a string becomes an optional secret, so a
+/// payload never shows the value and a save that omits it keeps it.
+pub fn stored_config_keys_as_secrets(
+    config_json: Option<&str>,
+) -> Vec<scryer_domain::ConfigFieldDef> {
+    let mut object = parse_config_object(config_json);
+    object.retain(|_, value| value.is_string());
+    with_unknown_keys_as_secrets(Vec::new(), &[object])
+}
+
+/// Redaction fields for a stored download-client config when its provider
+/// offers no field definitions. Built-in clients have none to offer and keep
+/// their key-name rules (`None`); for any other type every stored string is
+/// treated as a secret.
+pub fn download_client_stored_config_fallback_fields(
+    client_type: &str,
+    config_json: &str,
+) -> Option<Vec<scryer_domain::ConfigFieldDef>> {
+    let client_type = client_type.trim();
+    if crate::NATIVE_DOWNLOAD_CLIENT_TYPES
+        .iter()
+        .any(|native| native.eq_ignore_ascii_case(client_type))
+    {
+        return None;
+    }
+    Some(stored_config_keys_as_secrets(Some(config_json)))
 }
 
 fn with_unknown_keys_as_secrets(
@@ -793,6 +827,29 @@ mod tests {
                 .iter()
                 .all(|field| { field.field_type == ConfigFieldType::Password && !field.required })
         );
+    }
+
+    #[test]
+    fn download_clients_without_definitions_redact_stored_strings_unless_built_in() {
+        let stored = r#"{"host":"h.invalid","cookie":"c1","use_ssl":true,"port":8080}"#;
+
+        let fields = download_client_stored_config_fallback_fields("synthetic-orphan", stored)
+            .expect("a plugin type without definitions falls back");
+        let keys = fields
+            .iter()
+            .map(|field| field.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, ["cookie", "host"]);
+        assert!(
+            fields
+                .iter()
+                .all(|field| field.field_type == ConfigFieldType::Password && !field.required)
+        );
+
+        for native in ["nzbget", "SABnzbd", " weaver ", "http"] {
+            assert!(download_client_stored_config_fallback_fields(native, stored).is_none());
+        }
+        assert!(stored_config_keys_as_secrets(Some("not json")).is_empty());
     }
 
     #[test]

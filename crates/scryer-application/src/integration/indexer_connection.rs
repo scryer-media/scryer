@@ -7493,5 +7493,38 @@ mod tests {
             assert_eq!(cookie.field_type, scryer_domain::ConfigFieldType::Password);
             assert!(!cookie.required);
         }
+
+        #[tokio::test]
+        async fn a_stored_indexer_without_field_definitions_redacts_every_stored_string() {
+            let (app, _, _) = dynamic_app(&[], RecordingIndexerClient::new(false));
+            let mut stored = app
+                .create_indexer_config(
+                    &test_admin(),
+                    new_config(r#"{"definition":"alpha","username":"reader"}"#),
+                )
+                .await
+                .unwrap();
+
+            // With the plugin loaded its own definitions govern, as before.
+            let loaded = app.indexer_config_fields_for_config(&stored).await;
+            let username = loaded.iter().find(|field| field.key == "username").unwrap();
+            assert_eq!(username.field_type, scryer_domain::ConfigFieldType::String);
+
+            // A type no loaded plugin offers has no definitions to consult.
+            stored.provider_type = "synthetic-orphan".into();
+            stored.config_json = Some(
+                r#"{"definition":"alpha","passkey":"p1","username":"reader","limit":5}"#.into(),
+            );
+            let fields = app.indexer_config_fields_for_config(&stored).await;
+            let mut keys = fields
+                .iter()
+                .map(|field| field.key.as_str())
+                .collect::<Vec<_>>();
+            keys.sort();
+            assert_eq!(keys, ["definition", "passkey", "username"]);
+            assert!(fields.iter().all(|field| {
+                field.field_type == scryer_domain::ConfigFieldType::Password && !field.required
+            }));
+        }
     }
 }

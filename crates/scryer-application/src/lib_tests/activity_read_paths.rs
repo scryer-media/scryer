@@ -499,6 +499,122 @@ async fn activity_visibility_with_prefetched_libraries_follows_each_title() {
     }
 }
 
+/// The live feed's budgeted reads, resumed from each read's resume point,
+/// deliver exactly the events and order that unbounded reads deliver over a
+/// long history the caller mostly cannot see, and no read examines more than
+/// the page budget.
+#[tokio::test]
+async fn budgeted_domain_event_reads_match_unbounded_reads() {
+    use crate::DomainEventRepository as _;
+    let harness = bootstrap_media_request_app();
+    let (app, admin, domain_events) = (harness.app, harness.manager, harness.domain_events);
+    let visible_title = seed_title(
+        &app,
+        "title-emberfall",
+        "Emberfall",
+        MediaFacet::Movie,
+        9001,
+    )
+    .await;
+    let hidden_title = seed_title(
+        &app,
+        "title-ashgrove-series",
+        "Ashgrove",
+        MediaFacet::Series,
+        9101,
+    )
+    .await;
+    let viewer = manager_of("movie-viewer", &[visible_title.library_id.as_str()]);
+
+    // 45 source pages of mostly hidden events, a few visible ones far apart,
+    // then more visible events than one read returns, then a hidden tail.
+    let hidden_run = 500 * 45;
+    let sparse_visible = [3, 7, 15_000];
+    let mut seeded = Vec::new();
+    for n in 0..hidden_run + 150 + 10 {
+        let visible = sparse_visible.contains(&n) || (hidden_run..hidden_run + 150).contains(&n);
+        let title = if visible {
+            &visible_title
+        } else {
+            &hidden_title
+        };
+        seeded.push(new_title_domain_event(
+            &admin,
+            title,
+            analyzed(title, n, vec![]),
+        ));
+    }
+    domain_events
+        .append_many(seeded)
+        .await
+        .expect("seed domain events");
+    let filter = |cursor| DomainEventFilter {
+        after_sequence: Some(cursor),
+        limit: 100,
+        ..DomainEventFilter::default()
+    };
+
+    // The feed's reads before the budget: each resumes after its last event.
+    let mut unbounded = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let events = app
+            .list_domain_events(&viewer, &filter(cursor))
+            .await
+            .expect("unbounded read");
+        let Some(last) = events.last() else {
+            break;
+        };
+        cursor = last.sequence;
+        unbounded.extend(events);
+    }
+
+    let mut budgeted = Vec::new();
+    let mut cursor = 0;
+    let mut stopped_at_budget = 0;
+    loop {
+        let calls_before = domain_events
+            .list_calls
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let page = app
+            .list_domain_events_within_budget(&viewer, &filter(cursor))
+            .await
+            .expect("budgeted read");
+        let source_pages = domain_events
+            .list_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+            - calls_before;
+        assert!(
+            source_pages <= crate::DOMAIN_EVENT_FEED_SOURCE_PAGE_BUDGET,
+            "one read examined {source_pages} source pages"
+        );
+        if page.events.is_empty() && page.resume_after_sequence.is_none() {
+            break;
+        }
+        if let Some(last) = page.events.last() {
+            cursor = last.sequence;
+        }
+        if let Some(resume_after) = page.resume_after_sequence {
+            stopped_at_budget += 1;
+            cursor = cursor.max(resume_after);
+        }
+        budgeted.extend(page.events);
+    }
+
+    let sequences = |events: &[DomainEvent]| {
+        events
+            .iter()
+            .map(|event| (event.sequence, event.event_id.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(unbounded.len(), sparse_visible.len() + 150);
+    assert_eq!(sequences(&budgeted), sequences(&unbounded));
+    assert!(
+        stopped_at_budget >= 2,
+        "the history is long enough that reads stop at the budget"
+    );
+}
+
 fn manager_of(name: &str, library_ids: &[&str]) -> User {
     let mut mask = LibraryPermissionMask::VIEW;
     mask.insert(LibraryPermissionMask::MANAGE_TITLES);

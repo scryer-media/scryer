@@ -289,6 +289,9 @@ pub use import::failed_download as failed_download_handler;
 pub use import::post_processing as app_usecase_post_processing;
 pub use import::srrdb::{SRRDB_API_BASE_URL, SrrdbHttpFilenameLookup};
 pub use import::upgrade;
+pub use integration::dynamic_config_fields::{
+    download_client_stored_config_fallback_fields, stored_config_keys_as_secrets,
+};
 pub use integration::indexer_caps_cache::{
     CapsRequestCache, IndexerCapsDiagnostic, IndexerCapsRefreshContext, IndexerCapsSource,
     ResolvedIndexerCaps, cached_indexer_caps,
@@ -477,6 +480,7 @@ pub use event_views::{
 };
 pub use events::activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
 pub use events::activity_api::{
+    DOMAIN_EVENT_FEED_SOURCE_PAGE_BUDGET, DomainEventFeedPage,
     is_supported_title_history_event_type, supported_title_history_event_types,
 };
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
