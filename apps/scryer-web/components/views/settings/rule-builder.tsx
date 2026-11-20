@@ -1,5 +1,4 @@
 import * as React from "react";
-import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { Plus, Trash2 } from "lucide-react";
 import { EditorValidationPlacement } from "@/components/common/editor-validation-status";
 import { HelpLabel } from "@/components/common/info-help";
@@ -703,8 +702,8 @@ function outputTableRows(schema: RuleBuilderSchema): OutputTableRow[] {
   return rows;
 }
 
-/// One row for flags that exclude each other. Pressing the chosen one again
-/// clears it.
+/// One row of checkboxes for flags that exclude each other: ticking one
+/// clears the others.
 function OutputChoiceRow({
   schema,
   variant,
@@ -736,39 +735,41 @@ function OutputChoiceRow({
 
   return (
     <tr className={cn(chosen && "bg-[var(--scry-surfC)]")}>
-      <td className="w-9 py-1.5 pr-1 pl-3" />
-      <td colSpan={2} className="py-1.5 pr-3 align-middle">
-        <ToggleGroupPrimitive.Root
-          type="single"
+      <td colSpan={3} className="py-1.5 pr-3 pl-3 align-middle">
+        <div
+          role="group"
           aria-label={members
             .map((output) => ruleBuilderOutputLabel(t, output))
             .join(" / ")}
-          className="inline-flex flex-wrap gap-1 rounded-md border border-border p-1"
-          value={chosen?.id ?? ""}
-          disabled={readOnly}
-          onValueChange={choose}
+          className="flex flex-wrap items-center gap-x-8 gap-y-1"
         >
-          {members.map((output) => (
-            <ToggleGroupPrimitive.Item
-              key={output.id}
-              value={output.id}
-              asChild
-              disabled={
-                chosen?.id !== output.id &&
-                !isRuleBuilderOutputInVariant(output, variant)
-              }
-            >
-              <Button
-                type="button"
-                size="sm"
-                id={selectorId(`${prefix}-action`, output.id)}
-                variant={chosen?.id === output.id ? "default" : "ghost"}
+          {members.map((output) => {
+            const id = selectorId(`${prefix}-action`, output.id);
+            const checked = chosen?.id === output.id;
+            const blocked =
+              !checked && !isRuleBuilderOutputInVariant(output, variant);
+            return (
+              <label
+                key={output.id}
+                htmlFor={id}
+                className={cn(
+                  "flex cursor-pointer items-center gap-2 text-sm",
+                  blocked && "text-muted-foreground",
+                )}
               >
+                <Checkbox
+                  id={id}
+                  checked={checked}
+                  disabled={readOnly || blocked}
+                  onCheckedChange={(value) =>
+                    choose(value === true ? output.id : "")
+                  }
+                />
                 {ruleBuilderOutputLabel(t, output)}
-              </Button>
-            </ToggleGroupPrimitive.Item>
-          ))}
-        </ToggleGroupPrimitive.Root>
+              </label>
+            );
+          })}
+        </div>
         <ProblemText
           id={selectorId(
             `${prefix}-action-problem`,
