@@ -1914,6 +1914,11 @@ const ko: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "다운로드 대기열에 필러로 분류된 영화 포함",
   "settings.sidecarFilesTitle": "사이드카 파일",
+  "settings.libraryFullHashBackfillTitle": "백그라운드 해시",
+  "settings.libraryFullHashBackfillLabel": "매일 밤 파일 해시",
+  "settings.libraryFullHashBackfillDescription": "이 라이브러리의 모든 파일을 밤에 한 번 읽어 전체 콘텐츠 해시를 기록합니다. 스핀다운 상태로 두는 디스크의 라이브러리에서는 끄세요. 그러면 파일의 해시는 이동, 가져오기 또는 검사에 필요할 때만 읽습니다.",
+  "settings.libraryFullHashBackfillEnabledStatus": "이 라이브러리의 야간 해시를 켰습니다.",
+  "settings.libraryFullHashBackfillDisabledStatus": "이 라이브러리의 야간 해시를 껐습니다.",
   "settings.nfoWriteOnImportLabel": "가져오기 시 NFO 작성",
   "settings.nfoWriteOnImportDescription":
     "가져온 미디어와 함께 Kodi/Jellyfin/Emby 호환 .nfo 메타데이터 파일을 작성합니다. 기존 .nfo 파일은 절대 덮어쓰지 않습니다",

@@ -16,7 +16,7 @@ permission check only.
 | Rule sets | `validateRuleSet`, `testRuleSet`, `createRuleSet`, `updateRuleSet`, `toggleRuleSet`, `translateArrCustomFormats` | `MANAGE_CATALOG_SETTINGS` | yes |
 | Rule sets (read) | `ruleSets`, `ruleSet` | any key | no |
 | Libraries: create | `createLibrary` | `MANAGE_CATALOG_SETTINGS` | yes |
-| Libraries: edit, scan | `updateLibrary`, `scanLibrary` | manage-library grant on that library | no |
+| Libraries: edit, scan | `updateLibrary`, `setLibraryFullHashBackfill`, `scanLibrary` | manage-library grant on that library | no |
 | Quality profiles | `saveQualityProfileSettings` | `MANAGE_CATALOG_SETTINGS` | yes |
 | Delay profiles | `upsertDelayProfile` | `MANAGE_CATALOG_SETTINGS` | yes |
 | Indexer and client routing | `updateIndexerRouting`, `updateDownloadClientRouting` | `MANAGE_CATALOG_SETTINGS` | yes |

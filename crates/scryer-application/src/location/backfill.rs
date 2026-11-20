@@ -16,6 +16,10 @@
 //! - **Resumable.** See the cursor note below.
 //! - **Skips** unavailable mounts, files an active location operation owns, and
 //!   files that already carry a current full hash.
+//! - **Never visits** a library whose backfill is turned off. Its files are
+//!   left out of the queue itself, so the job makes no probe and no read on
+//!   that library's disks. Their hashes are taken when something needs them:
+//!   [`crate::disk::Disk::full_hash`] reads the one file and records it.
 //!
 //! # The cursor: interrupt and re-run without rework
 //!
@@ -456,7 +460,9 @@ impl AppUseCase {
         let io = std::sync::Arc::new(HashIoStats::default());
         let owned = self.full_hash_backfill_owned_scope().await?;
         let mut cursor = self.read_full_hash_backfill_cursor().await;
+        let mut persisted_cursor = cursor.clone();
         let mut summary = FullHashBackfillSummary::default();
+        let library_generation = &self.runtime.jobs.full_hash_library_generation;
 
         'sweep: while summary.examined < options.files_per_run {
             if cancellation.is_cancelled() {
@@ -467,6 +473,9 @@ impl AppUseCase {
             let page_size = options
                 .page_size
                 .min(u32::try_from(remaining).unwrap_or(u32::MAX));
+            // Taken before the page is read: a library turned off after this
+            // point shows as a changed generation before the next file.
+            let generation = library_generation.load(std::sync::atomic::Ordering::Acquire);
             let page = self
                 .services
                 .library
@@ -484,6 +493,12 @@ impl AppUseCase {
                 if cancellation.is_cancelled() {
                     summary.cancelled = true;
                     break 'sweep;
+                }
+                // A library's setting changed since this page was read. The
+                // rest of the page may belong to a library that is now off,
+                // so ask the queue again from here instead of reading it.
+                if library_generation.load(std::sync::atomic::Ordering::Acquire) != generation {
+                    continue 'sweep;
                 }
                 if started.elapsed() >= options.max_duration {
                     summary.stop_reason = Some(FullHashBackfillStopReason::TimeLimit);
@@ -542,6 +557,7 @@ impl AppUseCase {
                 summary.examined += 1;
                 if !skipped {
                     self.write_full_hash_backfill_cursor(cursor.clone()).await;
+                    persisted_cursor = cursor.clone();
                 }
 
                 // Between every two files, unconditionally. Real work gets a
@@ -559,7 +575,10 @@ impl AppUseCase {
         }
 
         summary.resume_after_id = cursor.clone();
-        self.write_full_hash_backfill_cursor(cursor).await;
+        // A pass that moved nothing writes nothing.
+        if cursor != persisted_cursor {
+            self.write_full_hash_backfill_cursor(cursor).await;
+        }
         summary.stop_reason = Some(if summary.cancelled {
             FullHashBackfillStopReason::Cancelled
         } else if summary.completed_sweep {

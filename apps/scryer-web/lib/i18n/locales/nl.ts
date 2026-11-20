@@ -2937,6 +2937,11 @@ const nl: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Iedereen schrijven",
   "settings.chmodPresetCustom": "Custom",
   "settings.sidecarFilesTitle": "Sidecar-bestanden",
+  "settings.libraryFullHashBackfillTitle": "Hashen op de achtergrond",
+  "settings.libraryFullHashBackfillLabel": "Bestanden 's nachts hashen",
+  "settings.libraryFullHashBackfillDescription": "Leest elk bestand in deze bibliotheek één keer 's nachts om de volledige inhoudshash vast te leggen. Zet dit uit voor bibliotheken op schijven die je in slaapstand houdt; de hash van een bestand wordt dan alleen gelezen wanneer een verplaatsing, import of controle die nodig heeft.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Nachtelijk hashen ingeschakeld voor deze bibliotheek.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Nachtelijk hashen uitgeschakeld voor deze bibliotheek.",
   "settings.identityStorageTitle": "Identiteit & opslag",
   "settings.mediaProfilesTitle": "Mediaprofielen",
   "settings.mediaProfilesHelp":

@@ -1813,6 +1813,11 @@ const zh_CN: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "将分类为填充内容的电影包含在下载队列中",
   "settings.sidecarFilesTitle": "Sidecar 文件",
+  "settings.libraryFullHashBackfillTitle": "后台哈希",
+  "settings.libraryFullHashBackfillLabel": "每晚计算文件哈希",
+  "settings.libraryFullHashBackfillDescription": "每晚读取此媒体库中的每个文件一次，记录其完整内容哈希。对于磁盘保持休眠的媒体库，请关闭此项；此后仅在移动、导入或检查需要时才读取文件哈希。",
+  "settings.libraryFullHashBackfillEnabledStatus": "已为此媒体库开启夜间哈希。",
+  "settings.libraryFullHashBackfillDisabledStatus": "已为此媒体库关闭夜间哈希。",
   "settings.nfoWriteOnImportLabel": "导入时写入 NFO",
   "settings.nfoWriteOnImportDescription":
     "在导入的媒体旁写入 Kodi/Jellyfin/Emby 兼容的 .nfo 元数据文件；已存在的 .nfo 文件绝不会被覆盖",

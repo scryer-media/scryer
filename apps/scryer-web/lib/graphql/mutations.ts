@@ -3552,3 +3552,10 @@ export const createFolderMutation = `mutation CreateFolder($parentPath: String!,
     isDirectory
   }
 }`;
+
+export const setLibraryFullHashBackfillMutation = `mutation SetLibraryFullHashBackfill($input: SetLibraryFullHashBackfillInput!) {
+  setLibraryFullHashBackfill(input: $input) {
+    id
+    fullHashBackfillEnabled
+  }
+}`;

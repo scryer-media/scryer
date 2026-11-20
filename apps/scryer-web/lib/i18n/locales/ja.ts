@@ -1953,6 +1953,11 @@ const ja: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "フィラーとして分類された映画をダウンロード キューに含める",
   "settings.sidecarFilesTitle": "サイドカーファイル",
+  "settings.libraryFullHashBackfillTitle": "バックグラウンドハッシュ",
+  "settings.libraryFullHashBackfillLabel": "夜間にファイルをハッシュ",
+  "settings.libraryFullHashBackfillDescription": "このライブラリの各ファイルを夜間に一度読み取り、内容全体のハッシュを記録します。スピンダウンさせているディスク上のライブラリではオフにしてください。その場合、ファイルのハッシュは移動・インポート・チェックで必要になったときだけ読み取られます。",
+  "settings.libraryFullHashBackfillEnabledStatus": "このライブラリの夜間ハッシュをオンにしました。",
+  "settings.libraryFullHashBackfillDisabledStatus": "このライブラリの夜間ハッシュをオフにしました。",
   "settings.nfoWriteOnImportLabel": "インポート時にNFOを書き込み",
   "settings.nfoWriteOnImportDescription":
     "インポートされたメディアと一緒にKodi/Jellyfin/Emby互換の.nfoメタデータファイルを書き込みます。既存の.nfoファイルが上書きされることはありません",

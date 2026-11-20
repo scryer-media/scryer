@@ -3382,6 +3382,11 @@ const ru: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Запись для всех",
   "settings.chmodPresetCustom": "Пользовательские настройки",
   "settings.sidecarFilesTitle": "Дополнительные файлы",
+  "settings.libraryFullHashBackfillTitle": "Фоновое хеширование",
+  "settings.libraryFullHashBackfillLabel": "Хешировать файлы ночью",
+  "settings.libraryFullHashBackfillDescription": "Ночью один раз читает каждый файл этой библиотеки, чтобы записать полный хеш его содержимого. Отключите для библиотек на дисках, которые вы держите остановленными; тогда хеш файла читается, только когда он нужен для перемещения, импорта или проверки.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Ночное хеширование для этой библиотеки включено.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Ночное хеширование для этой библиотеки отключено.",
   "settings.identityStorageTitle": "Идентификация и хранилище",
   "settings.mediaProfilesTitle": "Профили медиа",
   "settings.mediaProfilesHelp":

@@ -6342,3 +6342,10 @@ export const grabJobResultQuery = `query GrabJobResult($id: ID!) {
     }
   }
 }`;
+
+export const libraryFullHashBackfillQuery = `query LibraryFullHashBackfill {
+  libraries(permission: MANAGE_LIBRARY) {
+    id
+    fullHashBackfillEnabled
+  }
+}`;

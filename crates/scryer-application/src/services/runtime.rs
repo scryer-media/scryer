@@ -2357,6 +2357,9 @@ pub struct AppRuntimeJobState {
     /// Image maintenance queues FIFO; hash backfill only tries immediate admission.
     pub(crate) background_disk_maintenance: Arc<tokio::sync::Mutex<()>>,
     pub(crate) full_hash_shutdown: tokio_util::sync::CancellationToken,
+    /// Bumped whenever a library's full-hash backfill setting changes, so a
+    /// run in progress drops the page it holds and asks the queue again.
+    pub(crate) full_hash_library_generation: Arc<std::sync::atomic::AtomicU64>,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
     pub interactive_operation_guards: InteractiveOperationGuardTable,
@@ -2774,6 +2777,7 @@ impl AppRuntimeState {
                 full_hash_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
                 background_disk_maintenance: Arc::new(tokio::sync::Mutex::new(())),
                 full_hash_shutdown: tokio_util::sync::CancellationToken::new(),
+                full_hash_library_generation: Arc::default(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
                 interactive_operation_guards: InteractiveOperationGuardTable::default(),

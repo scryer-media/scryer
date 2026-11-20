@@ -2085,6 +2085,11 @@ const fr: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "Inclure les films classés comme remplissage dans la file d'attente de téléchargement",
   "settings.sidecarFilesTitle": "Fichiers sidecar",
+  "settings.libraryFullHashBackfillTitle": "Hachage en arrière-plan",
+  "settings.libraryFullHashBackfillLabel": "Hacher les fichiers la nuit",
+  "settings.libraryFullHashBackfillDescription": "Lit chaque fichier de cette bibliothèque une fois, pendant la nuit, pour enregistrer l'empreinte complète de son contenu. Désactivez-le pour les bibliothèques sur des disques que vous laissez en veille ; l'empreinte d'un fichier n'est alors lue que lorsqu'un déplacement, une importation ou une vérification en a besoin.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Hachage nocturne activé pour cette bibliothèque.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Hachage nocturne désactivé pour cette bibliothèque.",
   "settings.nfoWriteOnImportLabel": "Écrire les NFO à l'importation",
   "settings.nfoWriteOnImportDescription":
     "Écrire des fichiers de métadonnées .nfo compatibles Kodi/Jellyfin/Emby à côté des médias importés ; un fichier .nfo existant n'est jamais écrasé",

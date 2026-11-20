@@ -2004,6 +2004,11 @@ const pt_BR: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "Incluir filmes classificados como filler na fila de download",
   "settings.sidecarFilesTitle": "Arquivos sidecar",
+  "settings.libraryFullHashBackfillTitle": "Hash em segundo plano",
+  "settings.libraryFullHashBackfillLabel": "Calcular hash dos arquivos à noite",
+  "settings.libraryFullHashBackfillDescription": "Lê cada arquivo desta biblioteca uma vez, durante a noite, para registrar o hash completo do conteúdo. Desative para bibliotecas em discos que você mantém em repouso; o hash de um arquivo só será lido quando uma movimentação, importação ou verificação precisar dele.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Hash noturno ativado para esta biblioteca.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Hash noturno desativado para esta biblioteca.",
   "settings.nfoWriteOnImportLabel": "Gravar NFO ao importar",
   "settings.nfoWriteOnImportDescription":
     "Gravar arquivos de metadados .nfo compatíveis com Kodi/Jellyfin/Emby junto à mídia importada; um arquivo .nfo existente nunca é sobrescrito",

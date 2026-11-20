@@ -180,6 +180,31 @@ impl LibraryPayload {
 
 #[ComplexObject]
 impl LibraryPayload {
+    /// Whether the background full-hash job reads this library's files. Off,
+    /// a file's full hash is read only when something needs it, one file at a
+    /// time. Readable by anyone who can see the library.
+    async fn full_hash_backfill_enabled(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let enabled = match loaders_from_ctx(ctx) {
+            Some(loaders) => {
+                loaders
+                    .library_full_hash_backfill
+                    .load_one(self.id.to_string())
+                    .await?
+            }
+            None => app_from_ctx(ctx)?
+                .library_full_hash_backfill_enabled(std::slice::from_ref(&*self.id))
+                .await
+                .map_err(to_gql_error)?
+                .remove(self.id.as_str()),
+        };
+        enabled.ok_or_else(|| {
+            to_gql_error(scryer_application::AppError::not_found_reason(
+                scryer_application::error_reasons::settings::LIBRARY_NOT_FOUND,
+                format!("library {}", self.id.as_str()),
+            ))
+        })
+    }
+
     /// Required audio languages a new title in this library inherits: the
     /// library's own, else its facet's. An empty list requires none. The
     /// `original` token stays unresolved. Readable by anyone who can see the

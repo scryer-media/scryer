@@ -4364,6 +4364,23 @@ file = "postgres/migrations/0360_blocklist_title_release_name_index.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 361
+description = "library full hash backfill toggle"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0361_library_full_hash_backfill_toggle.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0361_library_full_hash_backfill_toggle.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

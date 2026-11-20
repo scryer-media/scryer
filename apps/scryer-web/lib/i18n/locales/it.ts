@@ -2012,6 +2012,11 @@ const it: LocaleDictionary = {
   "settings.monitorFillerMoviesDescription":
     "Includi i film classificati come riempitivi nella coda di download",
   "settings.sidecarFilesTitle": "File sidecar",
+  "settings.libraryFullHashBackfillTitle": "Hash in background",
+  "settings.libraryFullHashBackfillLabel": "Calcola l'hash dei file di notte",
+  "settings.libraryFullHashBackfillDescription": "Legge ogni file di questa libreria una volta, durante la notte, per registrarne l'hash completo del contenuto. Disattivalo per le librerie su dischi che tieni in standby; l'hash di un file verrà letto solo quando uno spostamento, un'importazione o un controllo ne ha bisogno.",
+  "settings.libraryFullHashBackfillEnabledStatus": "Hash notturno attivato per questa libreria.",
+  "settings.libraryFullHashBackfillDisabledStatus": "Hash notturno disattivato per questa libreria.",
   "settings.nfoWriteOnImportLabel": "Scrivi NFO all'importazione",
   "settings.nfoWriteOnImportDescription":
     "Scrivi file di metadati .nfo compatibili con Kodi/Jellyfin/Emby accanto ai media importati; un file .nfo esistente non viene mai sovrascritto",

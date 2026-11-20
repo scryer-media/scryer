@@ -11218,6 +11218,12 @@ type LibraryPayload {
 	"""
 	removedTitleCount: Int!
 	"""
+	Whether the background full-hash job reads this library's files. Off,
+	a file's full hash is read only when something needs it, one file at a
+	time. Readable by anyone who can see the library.
+	"""
+	fullHashBackfillEnabled: Boolean!
+	"""
 	Required audio languages a new title in this library inherits: the
 	library's own, else its facet's. An empty list requires none. The
 	`original` token stays unresolved. Readable by anyone who can see the
@@ -21381,6 +21387,17 @@ type MutationRoot {
 		input: UpdateLibraryInput!
 	): LibraryPayload!
 	"""
+	Turn the background full-hash job on or off for one library. Off, the
+	job never reads the library's files, and a file's full hash is read
+	only when something needs it.
+	"""
+	setLibraryFullHashBackfill(
+		"""
+		Library identity and whether the background full-hash job reads its files.
+		"""
+		input: SetLibraryFullHashBackfillInput!
+	): LibraryPayload!
+	"""
 	Accept a background job that deletes the library identified by the
 	supplied ID and removes its titles from the catalog. Files on disk are
 	left alone.
@@ -31417,6 +31434,20 @@ input SetIndexerSeedingProfileInput {
 	Seeding profile identity to assign, or null to clear the assignment.
 	"""
 	seedingProfileId: ID
+}
+
+"""
+Turns the background full-hash job on or off for one library.
+"""
+input SetLibraryFullHashBackfillInput {
+	"""
+	Library identity to change.
+	"""
+	libraryId: ID!
+	"""
+	Whether the background full-hash job reads this library's files. Off, a file's full hash is read only when something needs it.
+	"""
+	enabled: Boolean!
 }
 
 """
