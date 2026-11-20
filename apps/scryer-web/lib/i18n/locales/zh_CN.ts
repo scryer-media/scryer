@@ -236,6 +236,8 @@ const zh_CN: LocaleDictionary = {
   "label.filters": "过滤器",
   "label.enabled": "已启用",
   "label.disabled": "已禁用",
+  "label.createEnabled": "创建并启用",
+  "label.createDisabled": "创建但禁用",
   "unit.seconds": "秒",
   "label.enable": "启用",
   "label.disable": "禁用",

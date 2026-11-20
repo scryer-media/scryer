@@ -246,6 +246,8 @@ const nl: LocaleDictionary = {
   "label.filters": "Filters",
   "label.enabled": "Ingeschakeld",
   "label.disabled": "Uitgeschakeld",
+  "label.createEnabled": "Ingeschakeld aanmaken",
+  "label.createDisabled": "Uitgeschakeld aanmaken",
   "unit.seconds": "seconden",
   "label.enable": "Inschakelen",
   "label.disable": "Uitschakelen",

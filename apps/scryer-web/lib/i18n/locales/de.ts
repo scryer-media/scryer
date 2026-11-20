@@ -266,6 +266,8 @@ const de: LocaleDictionary = {
   "label.filters": "Filter",
   "label.enabled": "Aktiviert",
   "label.disabled": "Deaktiviert",
+  "label.createEnabled": "Aktiviert erstellen",
+  "label.createDisabled": "Deaktiviert erstellen",
   "unit.seconds": "Sekunden",
   "label.enable": "Aktivieren",
   "label.disable": "Deaktivieren",

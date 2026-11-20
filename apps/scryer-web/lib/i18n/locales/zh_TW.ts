@@ -244,6 +244,8 @@ const zh_TW: LocaleDictionary = {
   "label.filters": "過濾器",
   "label.enabled": "已啟用",
   "label.disabled": "已停用",
+  "label.createEnabled": "建立並啟用",
+  "label.createDisabled": "建立但停用",
   "unit.seconds": "秒",
   "label.enable": "啟用",
   "label.disable": "停用",

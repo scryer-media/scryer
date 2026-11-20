@@ -263,6 +263,8 @@ const ko: LocaleDictionary = {
   "label.filters": "필터",
   "label.enabled": "활성화됨",
   "label.disabled": "비활성화됨",
+  "label.createEnabled": "활성화하여 만들기",
+  "label.createDisabled": "비활성화하여 만들기",
   "unit.seconds": "초",
   "label.enable": "활성화",
   "label.disable": "비활성화",

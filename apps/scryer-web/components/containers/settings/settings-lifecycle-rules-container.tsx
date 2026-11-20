@@ -85,6 +85,7 @@ import {
   lifecycleRuleDraftFromDetail,
   lifecycleRuleUpdatePlan,
   newLifecycleRuleBuilderDraft,
+  LIFECYCLE_CREATE_ENABLED,
 } from "@/lib/utils/lifecycle-rule-sets";
 import {
   librariesQuery,
@@ -733,6 +734,10 @@ export function SettingsLifecycleRulesContainer({
   /// them versions. A half the editor did not change is not sent.
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // Create Enabled is the form's first submit button, so Enter takes it too.
+    const enableOnCreate =
+      (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") ===
+      LIFECYCLE_CREATE_ENABLED;
     if (
       builderEditor.attached &&
       isIncompleteRuleBuilderDraft(builderBinding, ruleSetDraft)
@@ -771,6 +776,7 @@ export function SettingsLifecycleRulesContainer({
     }
 
     setMutatingRuleSetId(editingRuleSetId || "new");
+    let created: LifecycleRuleSetRecord | null = null;
     try {
       if (editingRuleSetId) {
         const plan = lifecycleRuleUpdatePlan(
@@ -799,7 +805,7 @@ export function SettingsLifecycleRulesContainer({
           level: "SUCCESS",
         });
       } else {
-        const { error } = await client
+        const { data, error } = await client
           .mutation(createLifecycleRuleSetMutation, {
             input: createLifecycleRuleSetInput(ruleSetDraft, builderBinding),
           })
@@ -808,9 +814,13 @@ export function SettingsLifecycleRulesContainer({
         setGlobalStatus(t("settings.lifecycleRuleCreated"), {
           level: "SUCCESS",
         });
+        created = data?.createLifecycleRuleSet?.ruleSet ?? null;
       }
       closeEditor();
       await refreshRuleSets();
+      // Rules are created disabled; enabling goes through the same control
+      // as the table, so a rule that deletes files still asks first.
+      if (enableOnCreate && created) setRuleState(created, "ENABLED");
     } catch (error) {
       const message = userFacingGraphQlErrorMessage(
         error,

@@ -244,6 +244,8 @@ const zh_HK: LocaleDictionary = {
   "label.filters": "過濾器",
   "label.enabled": "已啓用",
   "label.disabled": "已禁用",
+  "label.createEnabled": "創建並啓用",
+  "label.createDisabled": "創建但不啓用",
   "unit.seconds": "秒",
   "label.enable": "啓用",
   "label.disable": "禁用",

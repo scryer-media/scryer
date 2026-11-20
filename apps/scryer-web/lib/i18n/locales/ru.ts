@@ -274,6 +274,8 @@ const ru: LocaleDictionary = {
   "label.for": "для",
   "label.enabled": "Включено",
   "label.disabled": "Отключено",
+  "label.createEnabled": "Создать включённым",
+  "label.createDisabled": "Создать отключённым",
   "unit.seconds": "секунды",
   "label.enable": "Включить",
   "label.disable": "Отключить",

@@ -88,6 +88,7 @@ import {
   lifecycleLoadRefusalKey,
   lifecyclePreviewErrorText,
   LIFECYCLE_STARTER_SOURCE,
+  LIFECYCLE_CREATE_ENABLED,
 } from "@/lib/utils/lifecycle-rule-sets";
 import { useRuleOutputDescriptors } from "@/lib/hooks/use-rule-builder-schema";
 import {
@@ -1440,7 +1441,7 @@ export function SettingsLifecycleRulesSection({
                 </fieldset>
 
                 <div className="flex gap-2">
-                  {editingSystemOwned ? null : (
+                  {editingSystemOwned ? null : editingRuleSetId ? (
                     <Button
                       id="settings-lifecycle-rule-save"
                       type="submit"
@@ -1448,10 +1449,29 @@ export function SettingsLifecycleRulesSection({
                     >
                       {mutatingRuleSetId !== null
                         ? t("label.saving")
-                        : editingRuleSetId
-                          ? t("settings.lifecycleRuleUpdate")
-                          : t("settings.lifecycleRuleCreate")}
+                        : t("settings.lifecycleRuleUpdate")}
                     </Button>
+                  ) : (
+                    <>
+                      <Button
+                        id="settings-lifecycle-rule-save"
+                        type="submit"
+                        value={LIFECYCLE_CREATE_ENABLED}
+                        disabled={mutatingRuleSetId !== null || validating}
+                      >
+                        {mutatingRuleSetId !== null
+                          ? t("label.saving")
+                          : t("label.createEnabled")}
+                      </Button>
+                      <Button
+                        id="settings-lifecycle-rule-save-disabled"
+                        type="submit"
+                        variant="outline"
+                        disabled={mutatingRuleSetId !== null || validating}
+                      >
+                        {t("label.createDisabled")}
+                      </Button>
+                    </>
                   )}
                   <Button
                     id="settings-lifecycle-rule-cancel"

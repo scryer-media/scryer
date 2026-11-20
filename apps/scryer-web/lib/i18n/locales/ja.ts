@@ -264,6 +264,8 @@ const ja: LocaleDictionary = {
   "label.filters": "フィルター",
   "label.enabled": "有効",
   "label.disabled": "無効",
+  "label.createEnabled": "有効で作成",
+  "label.createDisabled": "無効で作成",
   "unit.seconds": "秒",
   "label.enable": "有効化",
   "label.disable": "無効化",

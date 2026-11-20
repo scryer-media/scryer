@@ -263,6 +263,8 @@ const pt_BR: LocaleDictionary = {
   "label.filters": "Filtros",
   "label.enabled": "Habilitado",
   "label.disabled": "Desabilitado",
+  "label.createEnabled": "Criar habilitada",
+  "label.createDisabled": "Criar desabilitada",
   "unit.seconds": "segundos",
   "label.enable": "Habilitar",
   "label.disable": "Desabilitar",

@@ -323,6 +323,8 @@ const cs: LocaleDictionary = {
   "label.filters": "Filtry",
   "label.enabled": "Zapnuto",
   "label.disabled": "Vypnuto",
+  "label.createEnabled": "Vytvořit zapnuté",
+  "label.createDisabled": "Vytvořit vypnuté",
   "unit.seconds": "sekund",
   "label.enable": "Zapnout",
   "label.disable": "Vypnout",

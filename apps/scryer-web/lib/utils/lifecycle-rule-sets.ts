@@ -312,10 +312,7 @@ export function clampLifecyclePreviewLimit(limit: number): number {
   if (!Number.isFinite(limit)) {
     return LIFECYCLE_PREVIEW_LIMIT_DEFAULT;
   }
-  return Math.min(
-    LIFECYCLE_PREVIEW_LIMIT_MAX,
-    Math.max(1, Math.trunc(limit)),
-  );
+  return Math.min(LIFECYCLE_PREVIEW_LIMIT_MAX, Math.max(1, Math.trunc(limit)));
 }
 
 type LifecyclePreviewInputOptions = {
@@ -382,8 +379,7 @@ export function previewOutcomeBadgeTone(
 /// action runs carry.
 const ACTION_KIND_LABEL_KEYS: Record<LifecycleActionKind, string> = {
   DO_NOTHING: "settings.lifecycleActionDoNothing",
-  UNMONITOR_SCOPE_KEEP_FILES:
-    "settings.lifecycleActionUnmonitorScopeKeepFiles",
+  UNMONITOR_SCOPE_KEEP_FILES: "settings.lifecycleActionUnmonitorScopeKeepFiles",
   DELETE_TITLE_AND_FILES: "settings.lifecycleActionDeleteTitleAndFiles",
   UNMONITOR_TITLE_DELETE_ALL_FILES:
     "settings.lifecycleActionUnmonitorTitleDeleteAllFiles",
@@ -411,8 +407,7 @@ export function actionKindLabelKey(kind: string): string | null {
 const ACTION_STEP_KIND_LABEL_KEYS: Record<LifecycleActionStepKind, string> = {
   UNMONITOR: "settings.lifecycleSequenceStepUnmonitor",
   DELETE_FILES: "settings.lifecycleSequenceStepDeleteFiles",
-  CHANGE_QUALITY_PROFILE:
-    "settings.lifecycleSequenceStepChangeQualityProfile",
+  CHANGE_QUALITY_PROFILE: "settings.lifecycleSequenceStepChangeQualityProfile",
   SEARCH: "settings.lifecycleSequenceStepSearch",
   ADD_TAGS: "settings.lifecycleSequenceStepAddTags",
   REMOVE_TAGS: "settings.lifecycleSequenceStepRemoveTags",
@@ -434,9 +429,7 @@ const PREVIEW_OUTCOME_LABEL_KEYS: Record<LifecyclePreviewOutcome, string> = {
 };
 
 export function previewOutcomeLabelKey(outcome: string): string | null {
-  return (
-    PREVIEW_OUTCOME_LABEL_KEYS[outcome as LifecyclePreviewOutcome] ?? null
-  );
+  return PREVIEW_OUTCOME_LABEL_KEYS[outcome as LifecyclePreviewOutcome] ?? null;
 }
 
 // ── Operating a rule: state and switches ──────────────────────────────
@@ -491,6 +484,10 @@ export function ruleStateNeedsConfirmation(
 /// Sentinel for "no filter". The select primitive refuses an empty-string
 /// option value, and `all` is how the rest of the settings filters spell it.
 export const LIFECYCLE_FILTER_ALL = "all";
+
+/// Value of the editor's Create Enabled button, read from the submit event to
+/// tell it from Create Disabled.
+export const LIFECYCLE_CREATE_ENABLED = "enabled";
 
 /// Translate a filter select's value into the query argument: the sentinel and
 /// the empty string both mean "send nothing and let the API decide".
@@ -731,8 +728,7 @@ export function lifecycleLoadRefusalKey(code: string): string {
 /// Preview failures the web words itself. The evaluator's own failures carry
 /// the engine's detail, which only the server's text has.
 const LIFECYCLE_PREVIEW_ERROR_KEYS: Readonly<Record<string, string>> = {
-  LIFECYCLE_PREVIEW_NO_DECISION:
-    "error.reason.LIFECYCLE_PREVIEW_NO_DECISION",
+  LIFECYCLE_PREVIEW_NO_DECISION: "error.reason.LIFECYCLE_PREVIEW_NO_DECISION",
 };
 
 export function lifecyclePreviewErrorText(
