@@ -1723,7 +1723,7 @@ mod tests {
                 source_engine: "sqlite".into(),
                 secrets: scryer_application::BackupExportSecrets {
                     encryption_master_key: "fixture-master-key".into(),
-                    jwt_signing_secret: "fixture-jwt-secret".into(),
+                    jwt_signing_secret: Some("fixture-jwt-secret".into()),
                     smg_registration_secret: None,
                     smg_gateway_url: None,
                 },

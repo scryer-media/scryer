@@ -386,6 +386,8 @@ fn from_security_settings(
         effective_form_login_enabled: auth_runtime.effective_form_login_enabled,
         env_override_active: auth_runtime.env_override_active,
         env_override_description: auth_runtime.env_override_description.clone(),
+        local_trust_allowed_hosts: settings.local_trust_allowed_hosts,
+        restrict_local_trust_to_trusted_proxies: settings.restrict_local_trust_to_trusted_proxies,
     }
 }
 

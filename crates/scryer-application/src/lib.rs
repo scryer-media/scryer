@@ -30,6 +30,7 @@ mod download_identity;
 pub mod http_release_refusal;
 pub mod indexer_clients;
 pub mod initial_auth;
+pub mod local_trust;
 pub mod login_challenge_refusal;
 pub mod network_bind;
 pub mod public_url;

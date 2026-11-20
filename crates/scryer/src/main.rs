@@ -1737,7 +1737,8 @@ async fn bootstrap_application(
     // Prefer an explicit managed JWT signing secret so restored bundles can
     // preserve instance identity across environments. Fall back to the SMG
     // registration secret or a persistent local secret for fresh installs.
-    let jwt_signing_salt = match normalize_env_option("SCRYER_JWT_SIGNING_SECRET") {
+    let explicit_jwt_signing_secret = normalize_env_option("SCRYER_JWT_SIGNING_SECRET");
+    let jwt_signing_salt = match explicit_jwt_signing_secret.clone() {
         Some(secret) => secret,
         None => match &smg_registration_secret {
             Some(secret) => secret.clone(),
@@ -1749,6 +1750,18 @@ async fn bootstrap_application(
             }
         },
     };
+    // Sessions sign with an explicit secret when one is set, and otherwise
+    // with a salt derived from this instance's encryption master key, which
+    // the encryption bootstrap above has already resolved or refused to start
+    // without. The salt above keeps keying stored credential hashes.
+    let session_master_key = bootstrap_settings_store
+        .current_encryption_key_base64()
+        .await?
+        .ok_or("encryption master key is unavailable after bootstrap")?;
+    let session_signing_salt = scryer_application::JwtAuthConfig::select_session_signing_salt(
+        explicit_jwt_signing_secret.as_deref(),
+        &session_master_key,
+    )?;
 
     let metadata_gateway = Arc::new(datastore.metadata_gateway_client(
         metadata_gateway_url.as_str().to_string(),
@@ -1920,6 +1933,7 @@ async fn bootstrap_application(
         scryer_application::JwtAuthConfig {
             issuer: jwt_issuer,
             jwt_signing_salt,
+            session_signing_salt,
         },
         facet_registry,
         webauthn,
@@ -2515,6 +2529,10 @@ async fn bootstrap_application(
         tracing::error!(%error, "failed to load trusted proxy configuration");
         std::process::exit(1);
     }
+    if let Err(error) = app_use_case.initialize_local_trust_policy().await {
+        tracing::error!(%error, "failed to load local trust configuration");
+        std::process::exit(1);
+    }
     let rate_limiter = ScryerRateLimiter::from_env(app_use_case.trusted_proxy_runtime());
     if matches!(
         initial_auth_state,
@@ -2563,12 +2581,14 @@ async fn bootstrap_application(
         auth_runtime: auth_runtime.clone(),
         policy: authless_access_policy,
         allowlist: authless_access_allowlist.clone(),
+        local_trust: middleware::LocalTrustContext::from_app(&app_use_case),
     };
     let authless_web_client_proof_route_state = AuthlessWebClientProofRouteState {
         auth_runtime: auth_runtime.clone(),
         policy: authless_access_policy,
         proof: authless_web_client_proof.clone(),
         allowlist: authless_access_allowlist,
+        local_trust: middleware::LocalTrustContext::from_app(&app_use_case),
     };
 
     let cors_for_layer = cors.clone();

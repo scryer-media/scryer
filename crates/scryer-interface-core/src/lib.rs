@@ -340,6 +340,16 @@ pub fn default_persist_session_from_ctx(ctx: &Context<'_>) -> bool {
 #[derive(Clone, Copy)]
 pub struct RequestClientIp(pub std::net::IpAddr);
 
+/// The host the HTTP request named, from `Host` or the HTTP/2 authority.
+/// Absent from schema-level and WebSocket contexts.
+#[derive(Clone)]
+pub struct RequestHost(pub Option<String>);
+
+pub fn request_host_from_ctx(ctx: &Context<'_>) -> Option<String> {
+    ctx.data_opt::<RequestHost>()
+        .and_then(|host| host.0.clone())
+}
+
 /// Where the callback origins approved for account linking come from.
 /// Transport adapters implement it from operator configuration, never from
 /// client headers. It is consulted only when a resolver links an account, so

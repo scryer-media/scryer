@@ -2613,6 +2613,7 @@ pub struct AppRuntimeSecurityState {
     pub(super) recovery_admin_login_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) trusted_proxies: crate::rate_limit_proxy_policy::TrustedProxyRuntime,
     pub(crate) public_url: crate::public_url::PublicUrlRuntime,
+    pub(crate) local_trust: crate::local_trust::LocalTrustRuntime,
     pub(crate) service_settings_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -2661,6 +2662,7 @@ impl AppRuntimeState {
                 recovery_admin_login_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 trusted_proxies: Default::default(),
                 public_url: Default::default(),
+                local_trust: Default::default(),
                 service_settings_lock: Default::default(),
             },
             events: AppRuntimeEventState {

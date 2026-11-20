@@ -1283,6 +1283,7 @@ impl TestContext {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             facet_registry,
         );

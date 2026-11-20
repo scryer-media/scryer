@@ -181,6 +181,8 @@ fn from_security_settings(
         effective_form_login_enabled: auth_runtime.effective_form_login_enabled,
         env_override_active: auth_runtime.env_override_active,
         env_override_description: auth_runtime.env_override_description.clone(),
+        local_trust_allowed_hosts: settings.local_trust_allowed_hosts,
+        restrict_local_trust_to_trusted_proxies: settings.restrict_local_trust_to_trusted_proxies,
     }
 }
 
@@ -1280,7 +1282,10 @@ impl SettingsMutations {
         let auth_runtime = auth_runtime_from_ctx(ctx);
         let actor =
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageUsers).await?;
-        if input.api_keys_restrict_to_system_settings_users.is_some() || input.mcp_enabled.is_some()
+        if input.api_keys_restrict_to_system_settings_users.is_some()
+            || input.mcp_enabled.is_some()
+            || input.local_trust_allowed_hosts.is_some()
+            || input.restrict_local_trust_to_trusted_proxies.is_some()
         {
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
                 .await?;
@@ -1318,6 +1323,10 @@ impl SettingsMutations {
                     mfa_require_password_login: input.mfa_require_password_login,
                     totp_require_jellyfin_login: jellyfin_mfa_requirement,
                     totp_require_emby_login: emby_mfa_requirement,
+                    local_trust_allowed_hosts: input.local_trust_allowed_hosts,
+                    restrict_local_trust_to_trusted_proxies: input
+                        .restrict_local_trust_to_trusted_proxies,
+                    request_host: scryer_interface_core::request_host_from_ctx(ctx),
                 },
             )
             .await

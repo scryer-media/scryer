@@ -1557,6 +1557,7 @@ fn bootstrap_plugins_inner(
         JwtAuthConfig {
             issuer: "test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1611,6 +1612,7 @@ fn bootstrap_plugins_with_subtitles(
         JwtAuthConfig {
             issuer: "test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );
@@ -1692,6 +1694,7 @@ fn bootstrap_plugins_with_runtime_providers_and_archive(
         JwtAuthConfig {
             issuer: "test".to_string(),
             jwt_signing_salt: "test-salt".to_string(),
+            session_signing_salt: "test-session-salt".to_string(),
         },
         Arc::new(registry),
     );

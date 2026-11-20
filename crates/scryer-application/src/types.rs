@@ -3571,7 +3571,57 @@ pub struct IndexerErrorPage {
 #[derive(Clone, Debug)]
 pub struct JwtAuthConfig {
     pub issuer: String,
+    /// Keys the stored hashes of API keys, OAuth tokens and indexer client
+    /// keys. It never changes for an instance, or every stored credential
+    /// stops verifying.
     pub jwt_signing_salt: String,
+    /// Keys the per-user session and JWT signing keys. Kept apart from
+    /// `jwt_signing_salt` so it can be derived from the instance's own
+    /// encryption master key instead of a value shipped in the binary.
+    pub session_signing_salt: String,
+}
+
+impl JwtAuthConfig {
+    /// HKDF-SHA256 info label for the session signing salt. Changing it
+    /// signs every session out, so a new derivation gets a new version.
+    pub const SESSION_SIGNING_SALT_INFO: &'static [u8] = b"scryer/session-signing-salt/v1";
+
+    /// The session signing salt: an explicit `SCRYER_JWT_SIGNING_SECRET` when
+    /// the operator sets one, unchanged, and otherwise the salt derived from
+    /// the encryption master key.
+    pub fn select_session_signing_salt(
+        explicit_secret: Option<&str>,
+        master_key_base64: &str,
+    ) -> Result<String, String> {
+        match explicit_secret {
+            Some(secret) => Ok(secret.to_string()),
+            None => Self::derive_session_signing_salt(master_key_base64),
+        }
+    }
+
+    /// Derives the session signing salt from the instance's encryption master
+    /// key (standard base64, 32 bytes) with HKDF-SHA256.
+    pub fn derive_session_signing_salt(master_key_base64: &str) -> Result<String, String> {
+        use aws_lc_rs::hkdf;
+        use base64::Engine as _;
+
+        let master_key = base64::engine::general_purpose::STANDARD
+            .decode(master_key_base64.trim())
+            .map_err(|error| format!("encryption master key is not valid base64: {error}"))?;
+        if master_key.len() != 32 {
+            return Err(format!(
+                "encryption master key must be exactly 32 bytes, got {}",
+                master_key.len()
+            ));
+        }
+        let mut output = [0u8; 32];
+        hkdf::Salt::new(hkdf::HKDF_SHA256, &[])
+            .extract(&master_key)
+            .expand(&[Self::SESSION_SIGNING_SALT_INFO], hkdf::HKDF_SHA256)
+            .and_then(|okm| okm.fill(&mut output))
+            .map_err(|_| "session signing salt derivation failed".to_string())?;
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(output))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

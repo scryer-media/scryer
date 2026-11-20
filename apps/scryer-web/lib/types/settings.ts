@@ -256,6 +256,10 @@ export type SecuritySettings = {
   mfaRequirePasswordLogin: boolean;
   mfaRequireJellyfinLogin: boolean;
   mfaRequireEmbyLogin: boolean;
+  /** Host names a request trusted only by its network address may use; empty turns the check off. */
+  localTrustAllowedHosts: string[];
+  /** Local trust follows the trusted proxy list instead of any local peer. */
+  restrictLocalTrustToTrustedProxies: boolean;
   effectiveFormLoginEnabled: boolean;
   envOverrideActive: boolean;
   envOverrideDescription: string | null;

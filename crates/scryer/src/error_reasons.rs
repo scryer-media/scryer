@@ -119,8 +119,13 @@ pub const HTTP_MCP_CONFIRMATION_UNKNOWN: &str = "HTTP_MCP_CONFIRMATION_UNKNOWN";
 /// variables; it is spent.
 pub const HTTP_MCP_CONFIRMATION_MISMATCH: &str = "HTTP_MCP_CONFIRMATION_MISMATCH";
 
+/// A request that would be served without a login named a host outside the
+/// local-trust allowed-host list.
+pub const HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED: &str = "HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED";
+
 #[cfg(test)]
 const ALL: &[&str] = &[
+    HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED,
     HTTP_MCP_ORIGIN_NOT_ALLOWED,
     HTTP_MCP_CONFIRMATION_UNKNOWN,
     HTTP_MCP_CONFIRMATION_MISMATCH,

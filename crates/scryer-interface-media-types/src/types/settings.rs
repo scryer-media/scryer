@@ -262,6 +262,11 @@ pub struct SecuritySettingsPayload {
     pub env_override_active: bool,
     /// Description of the active override, or null when none is active.
     pub env_override_description: Option<String>,
+    /// Host names a request served without a login must use, beside IP
+    /// addresses, localhost and the public URL host. Empty when the check is off.
+    pub local_trust_allowed_hosts: Vec<String>,
+    /// Whether forwarding headers count for local trust only from a listed trusted proxy.
+    pub restrict_local_trust_to_trusted_proxies: bool,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -1573,6 +1578,13 @@ pub struct UpdateSecuritySettingsInput {
     /// Deprecated alias for `mfaRequireEmbyLogin`. Omission preserves the saved setting.
     #[graphql(deprecation = "Use mfaRequireEmbyLogin.")]
     pub totp_require_emby_login: Option<bool>,
+    /// Host names a request served without a login must use, beside IP
+    /// addresses, localhost and the public URL host. An empty list turns the
+    /// check off. Needs system-settings permission; omission preserves the saved list.
+    pub local_trust_allowed_hosts: Option<Vec<String>>,
+    /// Whether forwarding headers count for local trust only from a listed
+    /// trusted proxy. Needs system-settings permission; omission preserves the saved setting.
+    pub restrict_local_trust_to_trusted_proxies: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]

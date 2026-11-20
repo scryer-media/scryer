@@ -1184,6 +1184,8 @@ export const updateSecuritySettingsMutation = `mutation UpdateSecuritySettings($
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin
     mfaRequireEmbyLogin
+    localTrustAllowedHosts
+    restrictLocalTrustToTrustedProxies
     effectiveFormLoginEnabled
     envOverrideActive
     envOverrideDescription

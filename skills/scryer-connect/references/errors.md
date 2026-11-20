@@ -42,6 +42,10 @@ useful; never parse it.
   header may be set. Slow down. No parallel calls.
 - **HTTP 403 "web client proof"**: no key reached Scryer in authless mode.
   Check `SCRYER_API_KEY` is exported.
+- **HTTP 403 `HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED`**: no key reached Scryer,
+  and the host name in `SCRYER_URL` is not on the instance's allowed host
+  names list. Check `SCRYER_API_KEY` is exported; requests with a key skip
+  this check.
 - **HTML instead of JSON**: `SCRYER_URL` points at a proxy page or wrong base
   path.
 

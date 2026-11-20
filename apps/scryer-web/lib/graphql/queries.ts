@@ -3343,6 +3343,8 @@ export const securitySettingsQuery = `query SecuritySettings {
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin
     mfaRequireEmbyLogin
+    localTrustAllowedHosts
+    restrictLocalTrustToTrustedProxies
     effectiveFormLoginEnabled
     envOverrideActive
     envOverrideDescription
