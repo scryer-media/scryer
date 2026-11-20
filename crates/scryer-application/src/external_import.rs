@@ -519,12 +519,17 @@ pub struct ExternalArrClient {
     api_bucket: ExternalArrApiBucket,
     api_prefix: Arc<RwLock<Option<String>>>,
     system_status: Arc<RwLock<Option<ExternalArrSystemStatus>>>,
-    /// Bodies past this size are refused; `None` reads the whole body.
+    /// Bodies past this size are refused.
     max_body_bytes: Option<usize>,
 }
 
 /// Largest Sonarr or Radarr response body a rule import reads.
 pub const RULE_IMPORT_ARR_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Largest Sonarr or Radarr response body any other read accepts. A library
+/// import reads the whole movie or series list in one unpaged response, so
+/// this sits far above the largest real library.
+pub const ARR_MAX_RESPONSE_BYTES: usize = 1024 * 1024 * 1024;
 
 impl ExternalArrClient {
     pub fn for_sonarr_v4(base_url: String, api_key: String) -> AppResult<Self> {
@@ -562,7 +567,7 @@ impl ExternalArrClient {
             api_bucket,
             api_prefix: Arc::new(RwLock::new(None)),
             system_status: Arc::new(RwLock::new(None)),
-            max_body_bytes: None,
+            max_body_bytes: Some(ARR_MAX_RESPONSE_BYTES),
         })
     }
 
