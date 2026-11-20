@@ -26,6 +26,9 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 const DIRECT_NAB_CAPS_USER_AGENT: &str = "scryer-indexer-caps/0.1";
+/// Largest caps reply, success or error, read into memory. A caps document
+/// lists categories and search modes and runs to kilobytes.
+const MAX_CAPS_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct DirectNabConfig {
@@ -600,7 +603,10 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         };
 
         let status = response.status();
-        let body = match response.bytes().await {
+        // A reply past the cap is treated like one that could not be read.
+        let body = match scryer_outbound_http::read_body_bounded(response, MAX_CAPS_RESPONSE_BYTES)
+            .await
+        {
             Ok(body) => body,
             Err(error) => {
                 tally.note_result(IndexerRequestResult::NoResponse);
@@ -612,7 +618,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         tally.note_response(&CapturedIndexerHttpResponse {
             status: status.as_u16(),
             headers: Vec::new(),
-            body: body.to_vec(),
+            body: body.clone(),
         });
         if !status.is_success() {
             let body_snippet = String::from_utf8_lossy(&body);
@@ -1592,5 +1598,38 @@ mod tests {
             origin.received_requests().await.unwrap_or_default().len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_caps_reply_fails_like_an_unreadable_one() {
+        for status in [200, 500] {
+            let origin = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .respond_with(wiremock::ResponseTemplate::new(status).set_body_bytes(vec![
+                    b'x';
+                    MAX_CAPS_RESPONSE_BYTES
+                        + 1
+                ]))
+                .mount(&origin)
+                .await;
+            let config = direct_newznab_config(&origin.uri(), None);
+            let error = DirectNabCapsSnapshotRefresher::new()
+                .fetch_for_config(&config, None)
+                .await
+                .expect_err("an oversized caps reply fails the refresh");
+            assert!(
+                matches!(error, AppError::Repository(_)),
+                "status {status}: an oversized reply is a read failure, got {error:?}"
+            );
+        }
+
+        // A reply within the cap still parses.
+        let origin = caps_origin().await;
+        let config = direct_newznab_config(&origin.uri(), None);
+        DirectNabCapsSnapshotRefresher::new()
+            .fetch_for_config(&config, None)
+            .await
+            .expect("caps within the cap are read")
+            .expect("snapshot");
     }
 }
