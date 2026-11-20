@@ -542,6 +542,7 @@ async fn fetch_plugin_bytes_from_locations_with_redirect_policy(
     label: &str,
     scope_prefix: &str,
     redirect_policy: PluginRedirectPolicy,
+    max_bytes: u64,
 ) -> AppResult<(Vec<u8>, String)> {
     let mut last_error = None;
     for (index, url) in locations.iter().enumerate() {
@@ -550,6 +551,7 @@ async fn fetch_plugin_bytes_from_locations_with_redirect_policy(
             label,
             format!("{scope_prefix}:{index}"),
             redirect_policy,
+            max_bytes,
         )
         .await
         {
@@ -635,21 +637,26 @@ async fn fetch_signed_blob_from_locations(
     data_urls: &[String],
     signature_urls: &[String],
     label: &str,
+    data_max_bytes: u64,
 ) -> AppResult<FetchedSignedBlob> {
     fetch_signed_blob_from_locations_with_redirect_policy(
         data_urls,
         signature_urls,
         label,
         PluginRedirectPolicy::Reject,
+        data_max_bytes,
     )
     .await
 }
 
+/// `data_max_bytes` bounds the blob's transfer; the signature bundle is
+/// bounded by the transfer allowance of its own decoded limit.
 async fn fetch_signed_blob_from_locations_with_redirect_policy(
     data_urls: &[String],
     signature_urls: &[String],
     label: &str,
     redirect_policy: PluginRedirectPolicy,
+    data_max_bytes: u64,
 ) -> AppResult<FetchedSignedBlob> {
     let scope = format!("verified_blob:{}", blake3_digest(label.as_bytes()));
     let (raw, actual_url) = fetch_plugin_bytes_from_locations_with_redirect_policy(
@@ -657,6 +664,7 @@ async fn fetch_signed_blob_from_locations_with_redirect_policy(
         label,
         &format!("{scope}:blob"),
         redirect_policy,
+        data_max_bytes,
     )
     .await?;
     let (bundle, bundle_url) = fetch_plugin_bytes_from_locations_with_redirect_policy(
@@ -664,6 +672,7 @@ async fn fetch_signed_blob_from_locations_with_redirect_policy(
         &format!("{label} signature"),
         &format!("{scope}:signature"),
         redirect_policy,
+        plugin_transfer_limit(PLUGIN_SIGNATURE_BUNDLE_OUTPUT_LIMIT),
     )
     .await?;
     let signature_bundle = decode_signature_bundle(bundle, &bundle_url).await?;
@@ -690,12 +699,14 @@ async fn fetch_verified_central_catalog_blob(
     data_urls: &[String],
     signature_urls: &[String],
     label: &str,
+    data_max_bytes: u64,
 ) -> AppResult<(Vec<u8>, String)> {
     let fetched = fetch_signed_blob_from_locations_with_redirect_policy(
         data_urls,
         signature_urls,
         label,
         central_catalog_redirect_policy(),
+        data_max_bytes,
     )
     .await?;
     verify_signed_blob(
@@ -713,8 +724,15 @@ async fn fetch_verified_catalog_redirect_candidate(
 ) -> AppResult<(CatalogV3Redirect, String)> {
     let data_urls = vec![url.to_string()];
     let signature_urls = vec![redirect_bundle_url_for(url)];
-    let (raw, actual_url) =
-        fetch_verified_central_catalog_blob(&data_urls, &signature_urls, label).await?;
+    // The redirect is never compressed, so its decoded limit bounds the
+    // transfer exactly.
+    let (raw, actual_url) = fetch_verified_central_catalog_blob(
+        &data_urls,
+        &signature_urls,
+        label,
+        PLUGIN_CATALOG_REDIRECT_OUTPUT_LIMIT,
+    )
+    .await?;
     let redirect_raw = bound_uncompressed_bytes(
         raw,
         PLUGIN_CATALOG_REDIRECT_OUTPUT_LIMIT,
@@ -1175,8 +1193,11 @@ impl AppUseCase {
         signature_urls: &[String],
         signer: &RequiredSigner,
         label: &str,
+        data_max_bytes: u64,
     ) -> AppResult<(Vec<u8>, String)> {
-        let fetched = fetch_signed_blob_from_locations(data_urls, signature_urls, label).await?;
+        let fetched =
+            fetch_signed_blob_from_locations(data_urls, signature_urls, label, data_max_bytes)
+                .await?;
         verify_signed_blob(
             fetched.raw.clone(),
             fetched.signature_bundle,
@@ -1245,6 +1266,7 @@ impl AppUseCase {
                     &data_urls,
                     &signature_urls,
                     "plugin catalog",
+                    plugin_transfer_limit(PLUGIN_CATALOG_JSON_OUTPUT_LIMIT),
                 )
                 .await?;
                 let decoded = decode_catalog_json(raw, &actual_url, "plugin catalog").await?;
@@ -1288,6 +1310,7 @@ impl AppUseCase {
                 &signature_urls,
                 &signer,
                 "community plugin catalog",
+                plugin_transfer_limit(PLUGIN_CATALOG_JSON_OUTPUT_LIMIT),
             )
             .await?;
         let decoded = decode_catalog_json(raw, &actual_url, "community plugin catalog").await?;
@@ -1630,6 +1653,11 @@ impl AppUseCase {
                         ),
                         &signer,
                         "rule pack artifact",
+                        plugin_transfer_limit(
+                            release
+                                .rule_pack_bytes
+                                .unwrap_or(RULE_PACK_MANIFEST_FALLBACK_OUTPUT_LIMIT),
+                        ),
                     )
                     .await?;
                 verify_digest_set(

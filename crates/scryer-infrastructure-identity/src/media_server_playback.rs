@@ -28,7 +28,7 @@ use scryer_application::{
     MediaServerPlaybackProbe, PlaybackActivitySnapshot, PlaybackProbeStatus,
 };
 use scryer_domain::{MediaServerConnection, MediaServerProvider};
-use scryer_outbound_http::generic_reqwest_client;
+use scryer_outbound_http::{generic_reqwest_client, read_body_bounded};
 use serde_json::Value;
 use url::Url;
 
@@ -41,6 +41,13 @@ use crate::jellyfin::JellyfinAuth;
 /// a lifecycle action. A slow server should be reported as unknown quickly,
 /// not block the sweep for a minute.
 const PLAYBACK_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The most bytes a session answer may decode to. A session list is usually a
+/// few kilobytes per client, but a server can attach each client's whole play
+/// queue to its session, so a busy shared server answers in megabytes. The
+/// limit only stops an answer that never ends, which reads as an unreadable
+/// response.
+const PLAYBACK_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Plex's own service host. A Plex connection whose base URL is still this has
 /// no selected server, so there is no session endpoint to ask.
@@ -221,6 +228,15 @@ fn sessions_status(body: &Value) -> PlaybackProbeStatus {
 /// its body, mapping every failure to an `Unreachable` status carrying a
 /// terse, credential-free reason.
 async fn fetch_json(request: reqwest::RequestBuilder) -> Result<Value, PlaybackProbeStatus> {
+    fetch_json_bounded(request, PLAYBACK_RESPONSE_MAX_BYTES).await
+}
+
+/// [`fetch_json`] with the body limit given, so tests can reach it with a
+/// small one.
+async fn fetch_json_bounded(
+    request: reqwest::RequestBuilder,
+    limit: usize,
+) -> Result<Value, PlaybackProbeStatus> {
     let response = request
         .header("Accept", "application/json")
         .timeout(PLAYBACK_PROBE_TIMEOUT)
@@ -234,10 +250,11 @@ async fn fetch_json(request: reqwest::RequestBuilder) -> Result<Value, PlaybackP
             status.as_u16()
         )));
     }
-    response
-        .json::<Value>()
+    let unreadable = || PlaybackProbeStatus::Unreachable("unreadable response".into());
+    let body = read_body_bounded(response, limit)
         .await
-        .map_err(|_| PlaybackProbeStatus::Unreachable("unreadable response".into()))
+        .map_err(|_| unreadable())?;
+    serde_json::from_slice::<Value>(&body).map_err(|_| unreadable())
 }
 
 /// The session endpoint for a stored base URL. Mirrors the media-server URL
@@ -975,5 +992,33 @@ mod tests {
         // Reporting "no connections" here would read as Clear, so this is the
         // one failure the probe must surface as an error.
         assert!(probe.active_playback().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_session_answer_past_the_byte_limit_is_unreadable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "NowPlayingItem": { "Name": "x".repeat(4096) } }
+            ])))
+            .mount(&server)
+            .await;
+        let url = session_url(&server.uri(), "Sessions").expect("session URL");
+        let client = generic_reqwest_client();
+
+        let body = fetch_json_bounded(client.get(url.clone()), PLAYBACK_RESPONSE_MAX_BYTES)
+            .await
+            .expect("the answer fits the standard limit");
+        assert_eq!(
+            sessions_status(&body),
+            PlaybackProbeStatus::ActiveSessions(1)
+        );
+        assert_eq!(
+            fetch_json_bounded(client.get(url), 1024)
+                .await
+                .expect_err("past the limit"),
+            PlaybackProbeStatus::Unreachable("unreadable response".to_string())
+        );
     }
 }

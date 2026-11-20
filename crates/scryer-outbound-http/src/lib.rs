@@ -1178,6 +1178,43 @@ pub fn effective_proxy_request_timeout(request_timeout_seconds: u32) -> Duration
     .min(INDEXER_HTTP_TIMEOUT)
 }
 
+/// Why [`read_body_bounded`] gave up on a response body.
+#[derive(Debug, Error)]
+pub enum BoundedBodyError {
+    /// The body is larger than the caller's limit.
+    #[error("response body is larger than {limit} bytes")]
+    TooLarge { limit: usize },
+    /// The connection failed while the body was read.
+    #[error("failed to read response body: {0}")]
+    Read(#[source] reqwest::Error),
+}
+
+/// Reads a response body whole, refusing it as soon as it passes `limit`
+/// bytes.
+///
+/// The limit applies to the bytes the caller receives. A client that
+/// decompresses responses hands over decoded chunks and drops the length
+/// header, so a small compressed body that expands past the limit is refused
+/// while it is read, never after it is held in memory. A declared length past
+/// the limit is refused before any of the body is read.
+pub async fn read_body_bounded(
+    mut response: Response,
+    limit: usize,
+) -> Result<Vec<u8>, BoundedBodyError> {
+    let declared = response.content_length();
+    if declared.is_some_and(|length| length > limit as u64) {
+        return Err(BoundedBodyError::TooLarge { limit });
+    }
+    let mut body = Vec::with_capacity(declared.map_or(0, |length| length as usize));
+    while let Some(chunk) = response.chunk().await.map_err(BoundedBodyError::Read)? {
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(BoundedBodyError::TooLarge { limit });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 #[derive(Debug, Error)]
 pub enum OutboundDestinationError {
     #[error("{label} URL is invalid: {message}")]
@@ -5979,6 +6016,54 @@ mod tests {
         });
 
         (format!("http://{address}/test"), hits)
+    }
+
+    /// A chunked answer carries no length, so only the read itself can stop
+    /// it: the same shape a decompressed answer reaches the reader in.
+    fn chunked_response(chunks: &[&str]) -> String {
+        let mut response = String::from(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+        );
+        for chunk in chunks {
+            response.push_str(&format!("{:x}\r\n{chunk}\r\n", chunk.len()));
+        }
+        response.push_str("0\r\n\r\n");
+        response
+    }
+
+    #[tokio::test]
+    async fn bounded_body_reads_a_body_within_the_limit_whole() {
+        let (url, _) = spawn_http_server(vec![
+            chunked_response(&["abcd", "efgh"]),
+            http_response(200, &[], "abcdefgh"),
+        ])
+        .await;
+        for _ in 0..2 {
+            let response = generic_reqwest_client().get(&url).send().await.unwrap();
+            let body = read_body_bounded(response, 8).await.expect("fits exactly");
+            assert_eq!(body, b"abcdefgh");
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_body_refuses_an_unlengthed_body_once_it_passes_the_limit() {
+        let (url, _) = spawn_http_server(vec![chunked_response(&["abcd", "efgh", "i"])]).await;
+        let response = generic_reqwest_client().get(&url).send().await.unwrap();
+        assert!(response.content_length().is_none());
+        let error = read_body_bounded(response, 8)
+            .await
+            .expect_err("past the limit");
+        assert!(matches!(error, BoundedBodyError::TooLarge { limit: 8 }));
+    }
+
+    #[tokio::test]
+    async fn bounded_body_refuses_a_declared_length_past_the_limit() {
+        let (url, _) = spawn_http_server(vec![http_response(200, &[], "abcdefghi")]).await;
+        let response = generic_reqwest_client().get(&url).send().await.unwrap();
+        let error = read_body_bounded(response, 8)
+            .await
+            .expect_err("declared past the limit");
+        assert!(matches!(error, BoundedBodyError::TooLarge { limit: 8 }));
     }
 
     fn bound_url_socket_addr(url: &str) -> SocketAddr {

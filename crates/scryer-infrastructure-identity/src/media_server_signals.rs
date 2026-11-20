@@ -137,7 +137,7 @@ use scryer_application::{
     SignalReadFailure,
 };
 use scryer_domain::{MediaServerConnection, MediaServerProvider, MediaServerSignalKind};
-use scryer_outbound_http::generic_reqwest_client;
+use scryer_outbound_http::{generic_reqwest_client, read_body_bounded};
 use serde_json::Value;
 use tokio::sync::OnceCell;
 use tracing::warn;
@@ -170,6 +170,14 @@ const LOOKUP_BATCH: usize = 100;
 /// [`SIGNAL_PAGE_SIZE`] rows a page this is two million rows, far past any
 /// real watch history, so only a server that is not paging as asked meets it.
 const SIGNAL_PAGE_CEILING: usize = 4_000;
+
+/// The most bytes one answer may decode to before the read gives up on it.
+///
+/// A page of [`SIGNAL_PAGE_SIZE`] rows is kilobytes to a few megabytes, and
+/// the unpaged answers (Jellyfin and Emby `/Users`, Plex `library/sections`,
+/// the plex.tv share list) are smaller still. The limit only stops a server
+/// whose answer never ends; reaching it reads as an unreadable response.
+const SIGNAL_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// How many single-item requests a live re-check keeps in flight where the
 /// provider cannot answer for several items at once (Plex history is read per
@@ -419,6 +427,8 @@ pub struct HttpMediaServerSignalSource {
     plex_service_url: Url,
     /// [`SIGNAL_PAGE_CEILING`], lowered only by tests.
     page_ceiling: usize,
+    /// [`SIGNAL_RESPONSE_MAX_BYTES`], lowered only by tests.
+    response_byte_limit: usize,
 }
 
 impl Default for HttpMediaServerSignalSource {
@@ -433,6 +443,7 @@ impl HttpMediaServerSignalSource {
             client: generic_reqwest_client(),
             plex_service_url: Url::parse(PLEX_SERVICE_URL).expect("valid Plex service URL"),
             page_ceiling: SIGNAL_PAGE_CEILING,
+            response_byte_limit: SIGNAL_RESPONSE_MAX_BYTES,
         }
     }
 
@@ -442,12 +453,19 @@ impl HttpMediaServerSignalSource {
             client: generic_reqwest_client(),
             plex_service_url,
             page_ceiling: SIGNAL_PAGE_CEILING,
+            response_byte_limit: SIGNAL_RESPONSE_MAX_BYTES,
         }
     }
 
     #[cfg(test)]
     fn with_page_ceiling(mut self, page_ceiling: usize) -> Self {
         self.page_ceiling = page_ceiling;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_response_byte_limit(mut self, response_byte_limit: usize) -> Self {
+        self.response_byte_limit = response_byte_limit;
         self
     }
 
@@ -488,10 +506,10 @@ impl HttpMediaServerSignalSource {
         if !status.is_success() {
             return Err(FetchFailure::Status(status));
         }
-        response
-            .json::<Value>()
+        let body = read_body_bounded(response, self.response_byte_limit)
             .await
-            .map_err(|_| FetchFailure::Unreadable)
+            .map_err(|_| FetchFailure::Unreadable)?;
+        serde_json::from_slice::<Value>(&body).map_err(|_| FetchFailure::Unreadable)
     }
 
     // ── Jellyfin and Emby ───────────────────────────────────────────────────
@@ -756,11 +774,10 @@ impl HttpMediaServerSignalSource {
         if !response.status().is_success() {
             return Err(FetchFailure::Status(response.status()));
         }
-        let body = response
-            .text()
+        let body = read_body_bounded(response, self.response_byte_limit)
             .await
             .map_err(|_| FetchFailure::Unreadable)?;
-        shared_server_tokens(&body).ok_or(FetchFailure::Unreadable)
+        shared_server_tokens(&String::from_utf8_lossy(&body)).ok_or(FetchFailure::Unreadable)
     }
 
     /// One account's played set, straight from the movie and show libraries,
@@ -3258,6 +3275,64 @@ mod tests {
         let message = format!("{error}");
         assert!(!message.contains("api-key"), "{message}");
         assert!(!message.contains("user-123"), "{message}");
+    }
+
+    /// An answer past the byte limit is an unreadable response, the same
+    /// failure as one that is not JSON; the same answer within the limit
+    /// reads as before.
+    #[tokio::test]
+    async fn an_answer_past_the_byte_limit_is_an_unreadable_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [],
+                "TotalRecordCount": 0,
+                "StartIndex": 0,
+                "Padding": "x".repeat(4096),
+            })))
+            .mount(&server)
+            .await;
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        HttpMediaServerSignalSource::new()
+            .read_played(&connection, "user-123")
+            .await
+            .expect("the answer fits the standard limit");
+        let error = HttpMediaServerSignalSource::new()
+            .with_response_byte_limit(1024)
+            .read_played(&connection, "user-123")
+            .await
+            .expect_err("an answer past the limit fails the read");
+        assert_eq!(error.reason, reasons::RESPONSE_UNREADABLE);
+    }
+
+    /// The plex.tv share list is read within the same limit.
+    #[tokio::test]
+    async fn a_plex_share_list_past_the_byte_limit_is_unreadable() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/servers/machine-1/shared_servers"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "<MediaContainer><!-- {} --></MediaContainer>",
+                "x".repeat(4096)
+            )))
+            .mount(&server)
+            .await;
+
+        let source = plex_source(&server).with_response_byte_limit(1024);
+        let failure = source
+            .plex_shared_server_tokens("machine-1", "owner-token")
+            .await
+            .expect_err("an answer past the limit is unreadable");
+        assert!(matches!(failure, FetchFailure::Unreadable), "{failure:?}");
     }
 
     #[tokio::test]
