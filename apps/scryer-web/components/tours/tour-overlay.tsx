@@ -171,6 +171,7 @@ function TourStepOverlay({
         <DialogPrimitive.Content
           ref={setCard}
           data-slot="tour-card"
+          data-testid="guided-tour-dialog"
           data-tour-side={placement?.side}
           onPointerDownOutside={(event) => event.preventDefault()}
           onInteractOutside={(event) => event.preventDefault()}
@@ -237,6 +238,7 @@ function TourStepOverlay({
               size="sm"
               className="text-muted-foreground"
               onClick={onSkip}
+              data-testid="guided-tour-skip"
             >
               {t("tours.skip")}
             </Button>
