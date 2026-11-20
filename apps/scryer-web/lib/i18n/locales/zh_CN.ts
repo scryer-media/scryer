@@ -2337,6 +2337,10 @@ const zh_CN: LocaleDictionary = {
   "settings.lifecycleNavRules": "规则",
   "settings.lifecycleNavHistory": "历史",
   "settings.lifecycleRuleAction": "操作",
+  "settings.lifecycleRuleView": "查看",
+  "settings.lifecycleRuleViewTitle": "查看内置规则",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "此规则随 Scryer 提供，无法编辑。请在规则列表中更改其状态。",
   "settings.lifecycleRuleGraceDays": "宽限天数",
   "settings.lifecycleRuleGraceDaysHelp":
     "规则首次匹配后、操作执行前的天数（目前不会执行任何操作）。",

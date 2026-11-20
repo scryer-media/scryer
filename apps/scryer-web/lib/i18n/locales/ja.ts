@@ -2533,6 +2533,10 @@ const ja: LocaleDictionary = {
   "settings.lifecycleNavRules": "ルール",
   "settings.lifecycleNavHistory": "履歴",
   "settings.lifecycleRuleAction": "アクション",
+  "settings.lifecycleRuleView": "表示",
+  "settings.lifecycleRuleViewTitle": "組み込みルールを表示",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "このルールは Scryer に付属しており、編集できません。状態はルール一覧で変更します。",
   "settings.lifecycleRuleGraceDays": "猶予日数",
   "settings.lifecycleRuleGraceDaysHelp":
     "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",

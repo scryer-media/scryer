@@ -4991,6 +4991,10 @@ const cs: LocaleDictionary = {
   "settings.lifecycleRuleEditedSinceEnabled":
     "Upraveno od zapnutí. Zkontrolujte kandidáty a zapněte jej znovu.",
   "settings.lifecycleRuleSystemOwned": "Vestavěné",
+  "settings.lifecycleRuleView": "Zobrazit",
+  "settings.lifecycleRuleViewTitle": "Zobrazit vestavěné pravidlo",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "Toto pravidlo je součástí Scryeru a nelze ho upravit. Jeho stav změníte v seznamu pravidel.",
   "settings.expiredRequestLeasesHelp":
     "Smaže požadovaný titul a jeho soubory poté, co vyprší nárok žádosti a uplyne ochranná doba. Změna ochranné doby nastaví pravidlo na zkušební běh, dokud jej znovu nezapnete. Stejně jako každé pravidlo životního cyklu funguje jen tehdy, když je životní cyklus zapnutý.",
   "settings.lifecycleSwitchEnabled": "Životní cyklus",
@@ -7804,7 +7808,7 @@ const cs: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
     "Sada pravidel životního cyklu nebyla nalezena.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
-    "Toto pravidlo je součástí Scryeru: jeho podmínku a akce nelze změnit. Jeho ochrannou lhůtu, knihovny a stav ano.",
+    "Toto pravidlo je součástí Scryeru a nelze ho upravit. Lze ho zobrazit a změnit jeho stav.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "Toto pravidlo je součástí Scryeru a nelze ho smazat. Místo toho ho nastavte na Vypnuto.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":

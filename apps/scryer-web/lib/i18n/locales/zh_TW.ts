@@ -4348,6 +4348,10 @@ const zh_TW: LocaleDictionary = {
     "啟用後已編輯。請檢查候選項目並再次啟用。",
   "settings.lifecycleRuleSystemOwned": "內建",
   "settings.lifecycleSwitchEnabled": "生命週期",
+  "settings.lifecycleRuleView": "檢視",
+  "settings.lifecycleRuleViewTitle": "檢視內建規則",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "此規則隨 Scryer 提供，無法編輯。請在規則清單中變更其狀態。",
   "settings.lifecycleSwitchEnabledHelp":
     "在此執行個體上評估規則並顯示其候選項目。",
   "settings.lifecycleSwitchActionsPaused": "暫停所有動作",
@@ -6330,7 +6334,7 @@ const zh_TW: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_COMPILE_FAILED": "生命週期規則編譯失敗。",
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND": "找不到生命週期規則集。",
   "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
-    "此規則隨 Scryer 提供：其條件與動作無法變更，但寬限期、媒體庫與狀態可以。",
+    "此規則隨 Scryer 提供，無法編輯；可以檢視並變更其狀態。",
   "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "此規則隨 Scryer 提供，無法刪除。請改為設為停用。",
   "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":

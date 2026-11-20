@@ -2589,6 +2589,10 @@ const de: LocaleDictionary = {
   "settings.lifecycleNavRules": "Regeln",
   "settings.lifecycleNavHistory": "Verlauf",
   "settings.lifecycleRuleAction": "Aktion",
+  "settings.lifecycleRuleView": "Ansehen",
+  "settings.lifecycleRuleViewTitle": "Integrierte Regel ansehen",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "Diese Regel ist Teil von Scryer und kann nicht bearbeitet werden. Ihren Zustand legen Sie in der Regelliste fest.",
   "settings.lifecycleRuleGraceDays": "Karenztage",
   "settings.lifecycleRuleGraceDaysHelp":
     "Tage nach der ersten Übereinstimmung der Regel, bevor die Aktion ausgeführt würde (es werden noch keine Aktionen ausgeführt).",

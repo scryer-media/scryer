@@ -2451,7 +2451,7 @@ const en: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
     "Lifecycle rule set was not found.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
-    "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.",
+    "This rule ships with Scryer and cannot be edited. It can be viewed, and its state changed.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
@@ -9903,6 +9903,10 @@ const en: LocaleDictionary = {
   "settings.lifecycleRuleEditedSinceEnabled":
     "Edited since it was enabled. Review the candidates and enable it again.",
   "settings.lifecycleRuleSystemOwned": "Built in",
+  "settings.lifecycleRuleView": "View",
+  "settings.lifecycleRuleViewTitle": "View built-in rule",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "This rule ships with Scryer and cannot be edited. Set its state from the rule list.",
   "settings.expiredRequestLeasesHelp":
     "Deletes a requested title and its files once its request lease has expired and the grace period has passed. Changing the grace period sets the rule to Dry run until you enable it again. Like every lifecycle rule, it only runs while Lifecycle is on.",
   "settings.lifecycleSwitchEnabled": "Lifecycle",

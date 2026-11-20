@@ -492,6 +492,7 @@ impl AppUseCase {
             .await?;
 
         let mut rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
+        refuse_system_rule_edit(&rule_set)?;
         let current_revision = self
             .services
             .customization
@@ -510,17 +511,6 @@ impl AppUseCase {
             current_revision.builder_model_json.clone(),
             BuilderFamily::Lifecycle,
         )?;
-        if rule_set.system_owned
-            && (prepared.declared_actions_json != current_revision.declared_actions_json
-                || scryer_rules::strip_editor_source(&prepared.rego_source)
-                    != scryer_rules::strip_editor_source(&current_revision.rego_source))
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::SYSTEM_RULE_READ_ONLY,
-                "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace \
-                 period, libraries and state can.",
-            ));
-        }
         // The maximum is judged against the new source together: a save may
         // add a delete head and its maximum at once. This early check reads the
         // row as it was; the store repeats it inside the write's transaction,
@@ -662,13 +652,8 @@ impl AppUseCase {
         let schedule = validated_rule_schedule(schedule)?;
 
         let mut rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
+        refuse_system_rule_edit(&rule_set)?;
         let name = require_non_empty(&name, "name")?;
-        if rule_set.system_owned && name != rule_set.name {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::SYSTEM_RULE_RENAME_REFUSED,
-                "This rule ships with Scryer and cannot be renamed.",
-            ));
-        }
         // An early check against the revision as read; the store repeats it in
         // the write's transaction against the revision then in force.
         if let Some(max) = max_titles_per_run {
@@ -2098,3 +2083,16 @@ fn format_lifecycle_validation_errors(validation: &ValidationResult) -> String {
 #[cfg(test)]
 #[path = "web_template_tests.rs"]
 mod web_template_tests;
+
+/// A rule that ships with Scryer is read-only: it can be viewed and its state
+/// changed, but nothing else about it is edited. Startup brings its source up
+/// to date through the store, not through these edits.
+fn refuse_system_rule_edit(rule_set: &LifecycleRuleSet) -> AppResult<()> {
+    if rule_set.system_owned {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::lifecycle::SYSTEM_RULE_READ_ONLY,
+            "This rule ships with Scryer and cannot be edited. It can be viewed, and its state changed.",
+        ));
+    }
+    Ok(())
+}

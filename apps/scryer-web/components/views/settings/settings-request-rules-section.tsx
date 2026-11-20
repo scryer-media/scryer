@@ -130,8 +130,6 @@ type SettingsRequestRulesSectionProps = {
   /// Which pane of the page is open: the rule list, a request to try the
   /// rules against, or the decisions they made.
   section: RequestRulesSection;
-  /// The shipped expired-request-leases lifecycle rule, shown first.
-  leaseRuleControl?: React.ReactNode;
   isEditorOpen: boolean;
   editingRuleSetId: string | null;
   ruleSetDraft: RequestRuleSetDraft;
@@ -1111,7 +1109,6 @@ export function SettingsRequestRulesSection({
   decisionOutcomeFilter,
   setDecisionOutcomeFilter,
   refreshDecisions,
-  leaseRuleControl,
   ...previewProps
 }: SettingsRequestRulesSectionProps) {
   const t = useTranslate();
@@ -1211,7 +1208,6 @@ export function SettingsRequestRulesSection({
         className="mx-auto w-full max-w-[1280px] space-y-4"
       >
         <div className="pb-2">{pageHead}</div>
-        {leaseRuleControl}
 
         <div className="overflow-hidden rounded border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">

@@ -936,7 +936,7 @@ fn the_shipped_rule_matches_the_web_template() {
 }
 
 #[tokio::test]
-async fn the_shipped_rule_keeps_its_source_and_name_but_not_its_grace_or_scope() {
+async fn the_shipped_rule_can_be_disabled_but_not_edited() {
     let fixture = claims_app();
     fixture
         .app
@@ -1020,34 +1020,69 @@ async fn the_shipped_rule_keeps_its_source_and_name_but_not_its_grace_or_scope()
         LifecycleRuleState::Enabled
     );
 
-    // Grace and libraries are edited exactly as on any rule, including the
-    // drop to Dry run that every matcher or scope edit of an enabled rule has.
-    let regraced = fixture
-        .app
-        .update_lifecycle_rule_source(&fixture.user, &id, matcher(&stored_source, 14))
-        .await
-        .expect("grace period is editable");
-    assert_eq!(regraced.revision.grace_days, 14);
-    let rescoped = fixture
-        .app
-        .update_lifecycle_rule_metadata(
-            &fixture.user,
-            &id,
-            detail.rule_set.name.clone(),
-            detail.rule_set.description.clone(),
-            vec!["library-1".into()],
-        )
-        .await
-        .expect("libraries are editable");
-    assert_eq!(rescoped.library_ids, vec!["library-1".to_string()]);
-    let edited = fixture.shipped_rule().await;
-    assert!(edited.rule_set.system_owned);
+    // Nothing else about the rule is edited either: not its grace period, its
+    // libraries or its schedule, and each refusal names the read-only reason.
+    let read_only = |result: AppResult<()>| match result {
+        Err(error) => {
+            error.validation_reason()
+                == Some(crate::error_reasons::lifecycle::SYSTEM_RULE_READ_ONLY)
+        }
+        Ok(()) => false,
+    };
+    assert!(read_only(
+        fixture
+            .app
+            .update_lifecycle_rule_source(&fixture.user, &id, matcher(&stored_source, 14))
+            .await
+            .map(|_| ())
+    ));
+    assert!(read_only(
+        fixture
+            .app
+            .update_lifecycle_rule_metadata(
+                &fixture.user,
+                &id,
+                detail.rule_set.name.clone(),
+                detail.rule_set.description.clone(),
+                vec!["library-1".into()],
+            )
+            .await
+            .map(|_| ())
+    ));
+    assert!(read_only(
+        fixture
+            .app
+            .update_lifecycle_rule_metadata_with_schedule(
+                &fixture.user,
+                &id,
+                detail.rule_set.name.clone(),
+                detail.rule_set.description.clone(),
+                Vec::new(),
+                Some(scryer_domain::default_lifecycle_rule_schedule()),
+                None,
+            )
+            .await
+            .map(|_| ())
+    ));
+    let still = fixture.shipped_rule().await;
     assert_eq!(
-        crate::lifecycle_rules::lifecycle_rule_state(&edited),
-        LifecycleRuleState::DryRun
+        still.rule_set, detail.rule_set,
+        "a refused edit writes nothing"
     );
-    assert!(edited.rule_set.edited_since_enabled);
-    assert_eq!(edited.rule_set.destructive_confirmed_revision, None);
+    assert_eq!(still.revision.grace_days, 7);
+
+    // Its state is the one thing an operator changes.
+    super::lifecycle_rules::set_rule_state(
+        &fixture.app,
+        &fixture.user,
+        &id,
+        LifecycleRuleState::Disabled,
+        None,
+    )
+    .await;
+    let disabled = fixture.shipped_rule().await;
+    assert!(disabled.rule_set.system_owned);
+    assert_eq!(disabled.rule_set.state, LifecycleRuleState::Disabled);
 }
 
 #[tokio::test]

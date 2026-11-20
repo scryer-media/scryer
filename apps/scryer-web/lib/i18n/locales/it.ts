@@ -2618,6 +2618,10 @@ const it: LocaleDictionary = {
   "settings.lifecycleNavRules": "Regole",
   "settings.lifecycleNavHistory": "Cronologia",
   "settings.lifecycleRuleAction": "Azione",
+  "settings.lifecycleRuleView": "Visualizza",
+  "settings.lifecycleRuleViewTitle": "Visualizza regola integrata",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "Questa regola è fornita con Scryer e non può essere modificata. Cambia il suo stato dall'elenco delle regole.",
   "settings.lifecycleRuleGraceDays": "Giorni di tolleranza",
   "settings.lifecycleRuleGraceDaysHelp":
     "Giorni dalla prima corrispondenza della regola prima che l'azione venga eseguita (nessuna azione viene ancora eseguita).",

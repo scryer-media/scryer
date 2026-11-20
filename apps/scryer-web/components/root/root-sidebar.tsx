@@ -1,3 +1,4 @@
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -53,7 +54,6 @@ import {
   Rss,
   Server,
   Settings2,
-  Hourglass,
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
@@ -133,7 +133,7 @@ const RULES_SECTION_ITEMS: Record<
   { labelKey: string; icon: LucideIcon }
 > = {
   scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
-  lifecycle: { labelKey: "settings.lifecycleRules", icon: Hourglass },
+  lifecycle: { labelKey: "settings.lifecycleRules", icon: LifecycleRulesIcon },
   request: { labelKey: "settings.requestRules", icon: Inbox },
 };
 
@@ -458,7 +458,7 @@ const settingsEntries: Array<{
   {
     id: "lifecycleRules",
     label: (t) => t("settings.lifecycleRules"),
-    icon: Hourglass,
+    icon: LifecycleRulesIcon,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {

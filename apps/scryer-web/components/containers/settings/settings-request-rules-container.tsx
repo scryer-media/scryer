@@ -14,7 +14,6 @@ import {
 import { useClient } from "urql";
 import type { RequestRulesSection } from "@/components/root/types";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
-import { ExpiredRequestLeasesControl } from "@/components/containers/settings/expired-request-leases-control";
 import {
   SettingsRequestRulesSection,
   type RequestQualityProfileOption,
@@ -760,7 +759,6 @@ export function SettingsRequestRulesContainer({
     <>
       <SettingsRequestRulesSection
         section={section}
-        leaseRuleControl={<ExpiredRequestLeasesControl />}
         isEditorOpen={isEditorOpen}
         editingRuleSetId={editingRuleSetId}
         ruleSetDraft={ruleSetDraft}

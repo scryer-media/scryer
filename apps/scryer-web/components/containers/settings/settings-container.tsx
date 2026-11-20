@@ -1,3 +1,4 @@
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 
 import {
@@ -33,7 +34,6 @@ import {
   Timer,
   User,
   Users,
-  Wrench,
 } from "lucide-react";
 import { INDEXER_SETTINGS_TAB_ITEMS } from "@/components/views/settings/indexer-settings-tabs";
 import { UnderlineTabLink } from "@/components/common/underline-filter-button";
@@ -536,7 +536,7 @@ export const SettingsContainer = memo(function SettingsContainer({
       case "rules":
         return SlidersHorizontal;
       case "lifecycleRules":
-        return Wrench;
+        return LifecycleRulesIcon;
       case "requestRules":
         return Inbox;
       case "post-processing":

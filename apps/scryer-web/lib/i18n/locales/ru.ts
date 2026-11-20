@@ -9463,7 +9463,7 @@ const ru: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
     "Набор правил жизненного цикла не найден.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
-    "Это правило входит в состав Scryer: его условие и действия изменить нельзя. Можно изменить период ожидания, библиотеки и состояние.",
+    "Это правило входит в состав Scryer и не редактируется. Его можно просмотреть и изменить его состояние.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "Это правило входит в состав Scryer и не может быть удалено. Вместо этого отключите его.",
   "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
@@ -12756,6 +12756,10 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRuleEditedSinceEnabled":
     "Правило изменено после включения. Проверьте кандидатов и включите его снова.",
   "settings.lifecycleRuleSystemOwned": "Встроенное",
+  "settings.lifecycleRuleView": "Просмотр",
+  "settings.lifecycleRuleViewTitle": "Просмотр встроенного правила",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "Это правило входит в состав Scryer и не редактируется. Его состояние меняется в списке правил.",
   "settings.expiredRequestLeasesHelp":
     "Удаляет запрошенный тайтл и его файлы после истечения срока хранения по запросу и окончания периода отсрочки. При изменении периода отсрочки правило переходит в режим пробного запуска, пока вы не включите его снова. Как и любое правило жизненного цикла, оно работает только при включённом жизненном цикле.",
   "settings.lifecycleSwitchEnabled": "Жизненный цикл",

@@ -2607,6 +2607,10 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecycleNavRules": "Regras",
   "settings.lifecycleNavHistory": "Histórico",
   "settings.lifecycleRuleAction": "Ação",
+  "settings.lifecycleRuleView": "Ver",
+  "settings.lifecycleRuleViewTitle": "Ver regra integrada",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "Esta regra vem com o Scryer e não pode ser editada. Altere o estado dela na lista de regras.",
   "settings.lifecycleRuleGraceDays": "Dias de carência",
   "settings.lifecycleRuleGraceDaysHelp":
     "Dias após a primeira correspondência da regra até que a ação seria executada (nenhuma ação é executada ainda).",

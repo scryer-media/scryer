@@ -2478,6 +2478,10 @@ const ko: LocaleDictionary = {
   "settings.lifecycleNavRules": "규칙",
   "settings.lifecycleNavHistory": "기록",
   "settings.lifecycleRuleAction": "작업",
+  "settings.lifecycleRuleView": "보기",
+  "settings.lifecycleRuleViewTitle": "기본 제공 규칙 보기",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "이 규칙은 Scryer에 포함되어 있어 편집할 수 없습니다. 상태는 규칙 목록에서 변경하세요.",
   "settings.lifecycleRuleGraceDays": "유예 일수",
   "settings.lifecycleRuleGraceDaysHelp":
     "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",

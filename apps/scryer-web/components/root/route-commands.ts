@@ -1,3 +1,4 @@
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import type { LucideIcon } from "lucide-react";
 import {
   ActivitySquare,
@@ -24,7 +25,6 @@ import {
   Trash2,
   User,
   Users,
-  Wrench,
 } from "lucide-react";
 import type {
   ActivitySection,
@@ -705,7 +705,7 @@ export function buildRouteCommands({
               "cleanup",
               "prune",
             ],
-            icon: Wrench,
+            icon: LifecycleRulesIcon,
             onSelect: buildNavigate(onNavigate, "settings", "lifecycleRules"),
           } satisfies RouteCommand,
         ]

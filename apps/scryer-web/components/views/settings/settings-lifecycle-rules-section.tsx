@@ -5,7 +5,15 @@ import {
 import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
 import { LifecycleSubjectPicker } from "@/components/common/lifecycle-subject-picker";
-import { BookOpen, Copy, Edit, Plus, Sparkles, Trash2 } from "lucide-react";
+import {
+  BookOpen,
+  Copy,
+  Edit,
+  Eye,
+  Plus,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import {
   GutterPanel,
   GutterPanelButton,
@@ -1086,28 +1094,46 @@ export function SettingsLifecycleRulesSection({
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <IconButton
-                            id={selectorId(
-                              "settings-lifecycle-rule-copy",
-                              record.id,
-                            )}
-                            label={t("settings.lifecycleRuleCopy")}
-                            tone="neutral"
-                            onClick={() => copyRuleSet(record)}
-                          >
-                            <Copy className="h-4 w-4" />
-                          </IconButton>
-                          <IconButton
-                            id={selectorId(
-                              "settings-lifecycle-rule-edit",
-                              record.id,
-                            )}
-                            label={t("label.edit")}
-                            tone="edit"
-                            onClick={() => editRuleSet(record)}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </IconButton>
+                          {/* A built-in rule is viewed and its state set from
+                              this row; it is never copied, edited or deleted. */}
+                          {record.systemOwned ? (
+                            <IconButton
+                              id={selectorId(
+                                "settings-lifecycle-rule-view",
+                                record.id,
+                              )}
+                              label={t("settings.lifecycleRuleView")}
+                              tone="neutral"
+                              onClick={() => editRuleSet(record)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </IconButton>
+                          ) : (
+                            <>
+                              <IconButton
+                                id={selectorId(
+                                  "settings-lifecycle-rule-copy",
+                                  record.id,
+                                )}
+                                label={t("settings.lifecycleRuleCopy")}
+                                tone="neutral"
+                                onClick={() => copyRuleSet(record)}
+                              >
+                                <Copy className="h-4 w-4" />
+                              </IconButton>
+                              <IconButton
+                                id={selectorId(
+                                  "settings-lifecycle-rule-edit",
+                                  record.id,
+                                )}
+                                label={t("label.edit")}
+                                tone="edit"
+                                onClick={() => editRuleSet(record)}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </IconButton>
+                            </>
+                          )}
                           {record.systemOwned ? null : (
                             <IconButton
                               id={selectorId(
@@ -1182,240 +1208,270 @@ export function SettingsLifecycleRulesSection({
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
-                {editingRuleSetId
-                  ? t("settings.lifecycleRuleUpdate")
-                  : t("settings.lifecycleRuleCreate")}
+                {editingSystemOwned
+                  ? t("settings.lifecycleRuleViewTitle")
+                  : editingRuleSetId
+                    ? t("settings.lifecycleRuleUpdate")
+                    : t("settings.lifecycleRuleCreate")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <form
                 id="settings-lifecycle-rule-form"
                 className="space-y-3"
-                onSubmit={submitRuleSet}
+                onSubmit={(event) => {
+                  if (editingSystemOwned) {
+                    event.preventDefault();
+                    return;
+                  }
+                  submitRuleSet(event);
+                }}
               >
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label>
-                    <Label className="mb-2 block">{t("label.name")}</Label>
-                    <Input
-                      id="settings-lifecycle-rule-name"
-                      value={ruleSetDraft.name}
-                      readOnly={editingSystemOwned}
-                      onChange={(event) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          name: event.target.value,
-                        }))
-                      }
-                      required
-                      placeholder="stale_unmonitored_titles"
-                    />
-                  </label>
-                  <label>
-                    <Label className="mb-2 block">
-                      {t("settings.ruleDescription")}
-                    </Label>
-                    <Input
-                      id="settings-lifecycle-rule-description"
-                      value={ruleSetDraft.description}
-                      onChange={(event) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          description: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-
-                {!editingRuleSetId ? (
-                  <SingleSelectField
-                    id="settings-lifecycle-rule-template"
-                    label={t("settings.lifecycleRuleTemplate")}
-                    placeholder={t("settings.lifecycleRuleTemplatePlaceholder")}
-                    value=""
-                    onValueChange={(id) => {
-                      const template = LIFECYCLE_RULE_TEMPLATES.find(
-                        (candidate) => candidate.id === id,
-                      );
-                      if (template) applyTemplate(template);
-                    }}
-                    options={LIFECYCLE_RULE_TEMPLATES.map((template) => ({
-                      value: template.id,
-                      label: t(template.titleKey),
-                    }))}
-                  />
+                {editingSystemOwned ? (
+                  <p
+                    id="settings-lifecycle-rule-system-owned-note"
+                    className="rounded border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+                  >
+                    {t("settings.lifecycleRuleSystemOwnedNote")}
+                  </p>
                 ) : null}
-
-                <RuleEditorSurface
-                  idPrefix="settings-lifecycle-rule"
-                  schema={builderSchema}
-                  builderStatus={builderStatus}
-                  variant={null}
-                  mode={editorMode}
-                  onModeChange={setEditorMode}
-                  available={!editingSystemOwned}
-                  onEditAsRego={editAsRego}
-                  model={ruleSetDraft.builderModel}
-                  onModelChange={setBuilderModel}
-                  options={builderOptions}
-                  generatedSource={ruleSetDraft.regoSource}
-                  feedback={validationStatus}
-                  starterSource={LIFECYCLE_STARTER_SOURCE}
-                  editor={(readOnly, source) => (
-                    <LazyRegoEditor
-                      ruleFamily="lifecycle"
-                      ruleVariant={null}
-                      id="settings-lifecycle-rule-rego-source"
-                      value={source}
-                      readOnly={editingSystemOwned || readOnly}
-                      onChange={editRegoSource}
-                      diagnostics={regoDiagnostics(
-                        ruleSetDraft.regoSource,
-                        validationResult,
-                        t,
-                      )}
-                      feedback={validationStatus}
-                      minLines={12}
-                      maxLines={35}
-                    />
-                  )}
-                />
-
-                <LifecycleRuleSourceFindings
-                  source={ruleSetDraft.regoSource}
-                  checked={
-                    !validating &&
-                    validationResult !== null &&
-                    !validationResult.unavailable
-                  }
-                  warnings={validationResult?.warnings ?? []}
-                />
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block">
-                    <Label className="mb-2 block">
-                      <HelpLabel
-                        label={t("settings.lifecycleRuleGraceDays")}
-                        help={t("settings.lifecycleRuleGraceDaysHelp")}
+                {/* A built-in rule opens read-only: every field below is
+                    shown but disabled, and there is nothing to save. */}
+                <fieldset
+                  disabled={editingSystemOwned}
+                  className="min-w-0 space-y-3"
+                >
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label>
+                      <Label className="mb-2 block">{t("label.name")}</Label>
+                      <Input
+                        id="settings-lifecycle-rule-name"
+                        value={ruleSetDraft.name}
+                        readOnly={editingSystemOwned}
+                        onChange={(event) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            name: event.target.value,
+                          }))
+                        }
+                        required
+                        placeholder="stale_unmonitored_titles"
                       />
-                    </Label>
-                    <Input
-                      id="settings-lifecycle-rule-grace-days"
-                      {...integerInputProps}
-                      min={0}
-                      value={ruleSetDraft.graceDays}
-                      onChange={(event) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          graceDays:
-                            Number(sanitizeDigits(event.target.value)) || 0,
-                        }))
-                      }
-                      placeholder="0"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <Label className="mb-2 block">
-                      <HelpLabel
-                        label={t("settings.lifecycleRuleMaxTitlesPerRun")}
-                        help={t("settings.lifecycleRuleMaxTitlesPerRunHelp")}
+                    </label>
+                    <label>
+                      <Label className="mb-2 block">
+                        {t("settings.ruleDescription")}
+                      </Label>
+                      <Input
+                        id="settings-lifecycle-rule-description"
+                        value={ruleSetDraft.description}
+                        onChange={(event) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            description: event.target.value,
+                          }))
+                        }
                       />
-                    </Label>
-                    <Input
-                      id="settings-lifecycle-rule-max-titles-per-run"
-                      {...integerInputProps}
-                      min={1}
-                      required={
-                        validationResult?.declaredActions?.destructive === true
-                      }
-                      value={ruleSetDraft.maxTitlesPerRun ?? ""}
-                      onChange={(event) => {
-                        const digits = sanitizeDigits(event.target.value);
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          maxTitlesPerRun:
-                            digits === "" ? null : Number(digits),
-                        }));
-                      }}
-                      placeholder={t(
-                        "settings.lifecycleRuleMaxTitlesPerRunNone",
-                      )}
-                    />
-                  </label>
-                </div>
-
-                <LifecycleRuleScheduleField
-                  key={editorSessionKey}
-                  idPrefix="settings-lifecycle-rule-form-schedule"
-                  value={ruleSetDraft.schedule}
-                  onChange={(schedule) =>
-                    setRuleSetDraft((prev) => ({ ...prev, schedule }))
-                  }
-                  nextRunAt={editingNextRunAt}
-                />
-
-                <div>
-                  <Label className="mb-2 block">
-                    <HelpLabel
-                      label={t("settings.lifecycleRuleLibraries")}
-                      help={t("settings.lifecycleRuleLibrariesHelp")}
-                    />
-                  </Label>
-                  <div className="flex flex-wrap items-center gap-4">
-                    {libraries.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">
-                        {t("settings.lifecycleRuleLibrariesAll")}
-                      </span>
-                    ) : null}
-                    {libraries.map((library) => (
-                      <label
-                        key={library.id}
-                        className="flex items-center gap-2"
-                      >
-                        <Checkbox
-                          id={selectorId(
-                            "settings-lifecycle-rule-library",
-                            library.id,
-                          )}
-                          checked={ruleSetDraft.libraryIds.includes(library.id)}
-                          onCheckedChange={(value) => {
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              libraryIds:
-                                value === true
-                                  ? [...prev.libraryIds, library.id]
-                                  : prev.libraryIds.filter(
-                                      (id) => id !== library.id,
-                                    ),
-                            }));
-                          }}
-                        />
-                        <span className="text-sm">{library.name}</span>
-                      </label>
-                    ))}
+                    </label>
                   </div>
-                </div>
+
+                  {!editingRuleSetId ? (
+                    <SingleSelectField
+                      id="settings-lifecycle-rule-template"
+                      label={t("settings.lifecycleRuleTemplate")}
+                      placeholder={t(
+                        "settings.lifecycleRuleTemplatePlaceholder",
+                      )}
+                      value=""
+                      onValueChange={(id) => {
+                        const template = LIFECYCLE_RULE_TEMPLATES.find(
+                          (candidate) => candidate.id === id,
+                        );
+                        if (template) applyTemplate(template);
+                      }}
+                      options={LIFECYCLE_RULE_TEMPLATES.map((template) => ({
+                        value: template.id,
+                        label: t(template.titleKey),
+                      }))}
+                    />
+                  ) : null}
+
+                  <RuleEditorSurface
+                    idPrefix="settings-lifecycle-rule"
+                    schema={builderSchema}
+                    builderStatus={builderStatus}
+                    variant={null}
+                    mode={editorMode}
+                    onModeChange={setEditorMode}
+                    available={!editingSystemOwned}
+                    onEditAsRego={editAsRego}
+                    model={ruleSetDraft.builderModel}
+                    onModelChange={setBuilderModel}
+                    options={builderOptions}
+                    generatedSource={ruleSetDraft.regoSource}
+                    feedback={validationStatus}
+                    starterSource={LIFECYCLE_STARTER_SOURCE}
+                    editor={(readOnly, source) => (
+                      <LazyRegoEditor
+                        ruleFamily="lifecycle"
+                        ruleVariant={null}
+                        id="settings-lifecycle-rule-rego-source"
+                        value={source}
+                        readOnly={editingSystemOwned || readOnly}
+                        onChange={editRegoSource}
+                        diagnostics={regoDiagnostics(
+                          ruleSetDraft.regoSource,
+                          validationResult,
+                          t,
+                        )}
+                        feedback={validationStatus}
+                        minLines={12}
+                        maxLines={35}
+                      />
+                    )}
+                  />
+
+                  <LifecycleRuleSourceFindings
+                    source={ruleSetDraft.regoSource}
+                    checked={
+                      !validating &&
+                      validationResult !== null &&
+                      !validationResult.unavailable
+                    }
+                    warnings={validationResult?.warnings ?? []}
+                  />
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <Label className="mb-2 block">
+                        <HelpLabel
+                          label={t("settings.lifecycleRuleGraceDays")}
+                          help={t("settings.lifecycleRuleGraceDaysHelp")}
+                        />
+                      </Label>
+                      <Input
+                        id="settings-lifecycle-rule-grace-days"
+                        {...integerInputProps}
+                        min={0}
+                        value={ruleSetDraft.graceDays}
+                        onChange={(event) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            graceDays:
+                              Number(sanitizeDigits(event.target.value)) || 0,
+                          }))
+                        }
+                        placeholder="0"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <Label className="mb-2 block">
+                        <HelpLabel
+                          label={t("settings.lifecycleRuleMaxTitlesPerRun")}
+                          help={t("settings.lifecycleRuleMaxTitlesPerRunHelp")}
+                        />
+                      </Label>
+                      <Input
+                        id="settings-lifecycle-rule-max-titles-per-run"
+                        {...integerInputProps}
+                        min={1}
+                        required={
+                          validationResult?.declaredActions?.destructive ===
+                          true
+                        }
+                        value={ruleSetDraft.maxTitlesPerRun ?? ""}
+                        onChange={(event) => {
+                          const digits = sanitizeDigits(event.target.value);
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            maxTitlesPerRun:
+                              digits === "" ? null : Number(digits),
+                          }));
+                        }}
+                        placeholder={t(
+                          "settings.lifecycleRuleMaxTitlesPerRunNone",
+                        )}
+                      />
+                    </label>
+                  </div>
+
+                  <LifecycleRuleScheduleField
+                    key={editorSessionKey}
+                    idPrefix="settings-lifecycle-rule-form-schedule"
+                    value={ruleSetDraft.schedule}
+                    onChange={(schedule) =>
+                      setRuleSetDraft((prev) => ({ ...prev, schedule }))
+                    }
+                    nextRunAt={editingNextRunAt}
+                  />
+
+                  <div>
+                    <Label className="mb-2 block">
+                      <HelpLabel
+                        label={t("settings.lifecycleRuleLibraries")}
+                        help={t("settings.lifecycleRuleLibrariesHelp")}
+                      />
+                    </Label>
+                    <div className="flex flex-wrap items-center gap-4">
+                      {libraries.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">
+                          {t("settings.lifecycleRuleLibrariesAll")}
+                        </span>
+                      ) : null}
+                      {libraries.map((library) => (
+                        <label
+                          key={library.id}
+                          className="flex items-center gap-2"
+                        >
+                          <Checkbox
+                            id={selectorId(
+                              "settings-lifecycle-rule-library",
+                              library.id,
+                            )}
+                            checked={ruleSetDraft.libraryIds.includes(
+                              library.id,
+                            )}
+                            onCheckedChange={(value) => {
+                              setRuleSetDraft((prev) => ({
+                                ...prev,
+                                libraryIds:
+                                  value === true
+                                    ? [...prev.libraryIds, library.id]
+                                    : prev.libraryIds.filter(
+                                        (id) => id !== library.id,
+                                      ),
+                              }));
+                            }}
+                          />
+                          <span className="text-sm">{library.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </fieldset>
 
                 <div className="flex gap-2">
-                  <Button
-                    id="settings-lifecycle-rule-save"
-                    type="submit"
-                    disabled={mutatingRuleSetId !== null || validating}
-                  >
-                    {mutatingRuleSetId !== null
-                      ? t("label.saving")
-                      : editingRuleSetId
-                        ? t("settings.lifecycleRuleUpdate")
-                        : t("settings.lifecycleRuleCreate")}
-                  </Button>
+                  {editingSystemOwned ? null : (
+                    <Button
+                      id="settings-lifecycle-rule-save"
+                      type="submit"
+                      disabled={mutatingRuleSetId !== null || validating}
+                    >
+                      {mutatingRuleSetId !== null
+                        ? t("label.saving")
+                        : editingRuleSetId
+                          ? t("settings.lifecycleRuleUpdate")
+                          : t("settings.lifecycleRuleCreate")}
+                    </Button>
+                  )}
                   <Button
                     id="settings-lifecycle-rule-cancel"
                     type="button"
                     variant="secondary"
                     onClick={resetRuleSetDraft}
                   >
-                    {t("label.cancel")}
+                    {editingSystemOwned ? t("label.close") : t("label.cancel")}
                   </Button>
                 </div>
               </form>

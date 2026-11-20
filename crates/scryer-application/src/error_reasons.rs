@@ -1925,7 +1925,7 @@ pub mod lifecycle {
     pub const FILE_TARGETS_CHANGED: &str = "LIFECYCLE_FILE_TARGETS_CHANGED";
     /// Lifecycle file ownership changed.
     pub const FILE_OWNERSHIP_CHANGED: &str = "LIFECYCLE_FILE_OWNERSHIP_CHANGED";
-    /// This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.
+    /// This rule ships with Scryer and cannot be edited. It can be viewed, and its state changed.
     pub const SYSTEM_RULE_READ_ONLY: &str = "LIFECYCLE_SYSTEM_RULE_READ_ONLY";
     /// This rule ships with Scryer and cannot be renamed.
     pub const SYSTEM_RULE_RENAME_REFUSED: &str = "LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED";

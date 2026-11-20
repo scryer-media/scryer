@@ -1,3 +1,4 @@
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
@@ -15,7 +16,6 @@ import {
   Sparkles,
   Users,
   Wand2,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,7 @@ const TOUR_ICONS: Record<TourIcon, LucideIcon> = {
   calendar: CalendarDays,
   settings: Settings,
   rules: Gavel,
-  maintenance: Wrench,
+  maintenance: LifecycleRulesIcon,
   lists: ListChecks,
   discover: Compass,
   system: Server,
