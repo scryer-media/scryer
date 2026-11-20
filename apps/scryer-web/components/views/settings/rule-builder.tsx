@@ -1,4 +1,5 @@
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { Plus, Trash2 } from "lucide-react";
 import { EditorValidationPlacement } from "@/components/common/editor-validation-status";
 import { HelpLabel } from "@/components/common/info-help";
@@ -1187,7 +1188,7 @@ export function RuleBuilder({
   schema,
   model,
   variant,
-  problems,
+  problems: allProblems,
   options,
   readOnly = false,
   onChange,
@@ -1210,6 +1211,17 @@ export function RuleBuilder({
   const t = useTranslate();
   const prefix = schema.idPrefix;
   const hasSubjects = (schema.subjects?.length ?? 0) > 0;
+  // Unfinished choices are marked only once a save is held for them, so a
+  // row just added does not open with a complaint.
+  const [problemsShown, setProblemsShown] = React.useState(false);
+  React.useEffect(() => {
+    const element = document.getElementById(prefix);
+    if (!element) return;
+    const show = () => flushSync(() => setProblemsShown(true));
+    element.addEventListener(REVEAL_PROBLEMS_EVENT, show);
+    return () => element.removeEventListener(REVEAL_PROBLEMS_EVENT, show);
+  }, [prefix]);
+  const problems = problemsShown ? allProblems : NO_PROBLEMS;
   // An empty outputs table already says nothing is chosen, so the "choose one
   // of" list is not repeated under it.
   const general = problems.filter(
@@ -1360,10 +1372,14 @@ export function RuleBuilder({
 /// Scroll the builder's first marked problem into view, once the render that
 /// shows it has landed. Used when a save is held for unfinished choices.
 export function revealFirstRuleBuilderProblem(schema: RuleBuilderSchema) {
-  window.setTimeout(() =>
-    document
-      .getElementById(schema.idPrefix)
+  window.setTimeout(() => {
+    const builder = document.getElementById(schema.idPrefix);
+    builder?.dispatchEvent(new Event(REVEAL_PROBLEMS_EVENT));
+    builder
       ?.querySelector("[data-rule-builder-problem]")
-      ?.scrollIntoView({ block: "center" }),
-  );
+      ?.scrollIntoView({ block: "center" });
+  });
 }
+
+const REVEAL_PROBLEMS_EVENT = "rule-builder-reveal-problems";
+const NO_PROBLEMS: RuleBuilderProblem[] = [];

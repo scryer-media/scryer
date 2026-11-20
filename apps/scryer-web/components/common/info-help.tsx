@@ -57,7 +57,8 @@ export function InfoHelp({ text, ariaLabel }: InfoHelpProps) {
   return (
     <ActionTooltip
       content={text}
-      className="max-w-[28rem] whitespace-normal break-words"
+      // Lines fill the box; balanced lines would leave it wider than its text.
+      className="max-w-[28rem] whitespace-normal break-words text-pretty"
     >
       {trigger}
     </ActionTooltip>
