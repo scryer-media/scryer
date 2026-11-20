@@ -456,9 +456,11 @@ async fn export_table_part(
                 .map(|(column, _)| format!("{}::text", quote_identifier(column)))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // Sort by the native keys, whose projected text copies can have
+            // the same column names.
             let key_list = key
                 .iter()
-                .map(|(column, _)| quote_identifier(column))
+                .map(|(column, _)| format!("source.{}", quote_identifier(column)))
                 .collect::<Vec<_>>()
                 .join(", ");
             let key_params = key
@@ -468,14 +470,12 @@ async fn export_table_part(
                 .collect::<Vec<_>>()
                 .join(", ");
             let first_sql = format!(
-                "SELECT *, {key_text} FROM {} ORDER BY {} LIMIT $1",
-                quote_identifier(table),
-                order.order_by
+                "SELECT *, {key_text} FROM {} AS source ORDER BY {key_list} LIMIT $1",
+                quote_identifier(table)
             );
             let next_sql = format!(
-                "SELECT *, {key_text} FROM {} WHERE ({key_list}) > ({key_params}) ORDER BY {} LIMIT ${}",
+                "SELECT *, {key_text} FROM {} AS source WHERE ({key_list}) > ({key_params}) ORDER BY {key_list} LIMIT ${}",
                 quote_identifier(table),
-                order.order_by,
                 key.len() + 1
             );
             let mut last_key: Option<Vec<String>> = None;

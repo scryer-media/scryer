@@ -538,6 +538,7 @@ export default function CodeEditor({
       diagnosticField,
       diagnosticTheme,
       EditorView.lineWrapping,
+      EditorView.contentAttributes.of(id ? { id: `${id}-content` } : {}),
       ...(language === "rego" ? [regoHighlightTheme, regoHighlightPlugin] : []),
     ];
 
@@ -562,10 +563,10 @@ export default function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-    // Only a language switch creates a new editor. Compartments preserve history.
+    // Changing the language or editor identity creates a new editor.
     // Value and diagnostics are synchronized by dedicated effects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language]);
+  }, [id, language]);
 
   useEffect(() => {
     const view = viewRef.current;
