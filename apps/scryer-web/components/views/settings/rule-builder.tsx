@@ -402,6 +402,7 @@ function OutputValuePicker({
   value,
   options,
   readOnly,
+  compact = false,
   onChange,
 }: {
   schema: RuleBuilderSchema;
@@ -409,10 +410,14 @@ function OutputValuePicker({
   value: RuleBuilderOutputValue;
   options: RuleBuilderOptions;
   readOnly: boolean;
+  /// Shorter controls for the outputs table.
+  compact?: boolean;
   onChange: (value: RuleBuilderOutputValue) => void;
 }) {
   const t = useTranslate();
   const id = selectorId(`${schema.idPrefix}-action-value`, output.id);
+  const inputClass = compact ? "h-8 text-sm" : undefined;
+  const selectSize = compact ? "compact" : undefined;
   const spec = output.value;
   const catalog =
     spec.kind === "choice" || spec.kind === "text_list"
@@ -456,6 +461,7 @@ function OutputValuePicker({
           value={typeof value === "string" ? value : ""}
           readOnly={readOnly}
           placeholder={placeholder}
+          className={inputClass}
           inputMode={spec.kind === "number" ? "numeric" : undefined}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -469,6 +475,7 @@ function OutputValuePicker({
             value={text}
             readOnly={readOnly}
             placeholder={placeholder}
+            className={inputClass}
             onChange={(event) => onChange(event.target.value)}
           />
         );
@@ -479,6 +486,7 @@ function OutputValuePicker({
           <SingleSelectField
             id={id}
             value={text}
+            size={selectSize}
             disabled={readOnly}
             valueKind={presentation.display ?? "text"}
             placeholder={placeholder}
@@ -521,6 +529,7 @@ function OutputValuePicker({
           <MultiSelectDropdown
             id={id}
             optionIdPrefix={id}
+            size={selectSize}
             disabled={readOnly}
             triggerLabel={
               selected.length > 0 ? pickerLabels(names, selected) : placeholder
@@ -617,7 +626,7 @@ function OutputRow({
       </td>
       <td
         className={cn(
-          "py-1.5 pr-3 align-middle text-sm whitespace-nowrap md:w-[34%]",
+          "w-52 py-1.5 pr-3 align-middle text-sm whitespace-nowrap",
           blocked && "text-muted-foreground",
         )}
       >
@@ -654,6 +663,7 @@ function OutputRow({
             value={outputs[output.id]}
             options={options}
             readOnly={readOnly}
+            compact
             onChange={(value) => onChange({ ...outputs, [output.id]: value })}
           />
         ) : null}
@@ -741,7 +751,7 @@ function OutputChoiceRow({
           aria-label={members
             .map((output) => ruleBuilderOutputLabel(t, output))
             .join(" / ")}
-          className="flex flex-wrap items-center gap-x-8 gap-y-1"
+          className="flex flex-wrap items-center gap-x-6 gap-y-1"
         >
           {members.map((output) => {
             const id = selectorId(`${prefix}-action`, output.id);
@@ -1078,8 +1088,11 @@ export function RuleBuilder({
   const t = useTranslate();
   const prefix = schema.idPrefix;
   const hasSubjects = (schema.subjects?.length ?? 0) > 0;
+  // An empty outputs table already says nothing is chosen, so the "choose one
+  // of" list is not repeated under it.
   const general = problems.filter(
     (problem) =>
+      problem.code !== "BUILDER_OUTPUT_REQUIRED" &&
       problem.conditionIndex === undefined &&
       problem.output === undefined &&
       problem.actionIndex === undefined,
@@ -1144,7 +1157,7 @@ export function RuleBuilder({
             </Button>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]">
+          <div className="max-w-3xl overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]">
             <table id={`${prefix}-outputs`} className="w-full border-collapse">
               <tbody className="divide-y divide-[var(--scry-border3)]">
                 {outputTableRows(schema).map((row) =>
