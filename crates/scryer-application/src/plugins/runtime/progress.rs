@@ -214,9 +214,15 @@ impl AppUseCase {
             &resolved.artifact.signature_url,
             &resolved.artifact.signature_mirror_urls,
         );
-        let fetched_blob =
-            fetch_signed_blob_from_locations(&data_urls, &signature_urls, "plugin artifact")
-                .await?;
+        // The artifact is held to its declared size once decoded, and never
+        // past the WASM ceiling; its transfer gets the same allowance.
+        let fetched_blob = fetch_signed_blob_from_locations(
+            &data_urls,
+            &signature_urls,
+            "plugin artifact",
+            plugin_transfer_limit(resolved.artifact.bytes.min(MANUAL_PLUGIN_WASM_OUTPUT_LIMIT)),
+        )
+        .await?;
         reporter.verifying().await;
         verify_signed_blob(
             fetched_blob.raw.clone(),

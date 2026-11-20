@@ -137,6 +137,7 @@ impl AppUseCase {
                 &signature_urls,
                 &signer,
                 "manual plugin catalog",
+                plugin_transfer_limit(PLUGIN_CATALOG_JSON_OUTPUT_LIMIT),
             )
             .await?;
         let catalog_raw =
