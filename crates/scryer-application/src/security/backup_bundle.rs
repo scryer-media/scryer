@@ -2067,12 +2067,131 @@ fn extract_bundle_to_tempdir(
     let payload_reader = open_bundle_payload_reader(bundle_path, passphrase)?;
     let decoder = zstd::Decoder::new(crate::RestoreReader::new(payload_reader))
         .map_err(|error| map_streaming_bundle_error(error, "backup payload is not valid zstd"))?;
-    let mut archive = tar::Archive::new(crate::RestoreReader::new(decoder));
-    archive.unpack(tempdir.path()).map_err(|error| {
-        map_streaming_bundle_error(error, "backup payload is not a valid tar archive")
+    let archive = tar::Archive::new(crate::RestoreReader::new(decoder));
+    let capacity = crate::disk::capacity::StorageCapacity::process();
+    unpack_bundle_entries(archive, tempdir.path(), |path| {
+        capacity.refresh_blocking(path)
     })?;
 
     Ok(tempdir)
+}
+
+/// Entries a backup payload may hold. A bundle carries the manifest, the
+/// instance secrets, the tables directory and one file per restorable table,
+/// a few hundred in all.
+#[cfg(feature = "runtime-backups")]
+const MAX_BUNDLE_ENTRIES: u64 = 4_000;
+
+/// Payload bytes written between two free-space checks of the scratch volume.
+#[cfg(feature = "runtime-backups")]
+const SCRATCH_SPACE_CHECK_EVERY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Free space a restore leaves on the scratch volume: 5% of it, at most 1 GiB.
+#[cfg(feature = "runtime-backups")]
+fn scratch_reserve_bytes(total_bytes: u64) -> u64 {
+    (total_bytes / 20).min(1024 * 1024 * 1024)
+}
+
+/// Unpacks a backup payload into `dst` the way `tar::Archive::unpack` does,
+/// directories last and every entry through `unpack_in` so nothing lands
+/// outside `dst`, while refusing a payload that has more entries than a
+/// bundle holds, holds anything but regular files and directories, or would
+/// leave the scratch volume short of its reserve. `scratch_space` reads the
+/// free space of the volume holding `dst`.
+#[cfg(feature = "runtime-backups")]
+// disk-guard: the payload is unpacked into the owner's scratch directory; the
+// owner has no archive extraction.
+#[allow(clippy::disallowed_methods)]
+fn unpack_bundle_entries<R: Read>(
+    mut archive: tar::Archive<R>,
+    dst: &Path,
+    mut scratch_space: impl FnMut(&Path) -> io::Result<crate::helpers::FilesystemSpace>,
+) -> AppResult<()> {
+    use crate::error_reasons::security as reasons;
+    let invalid = |error: io::Error| {
+        map_streaming_bundle_error(error, "backup payload is not a valid tar archive")
+    };
+    // As tar does: a canonical root keeps long Windows paths creatable.
+    let dst = dst.canonicalize().unwrap_or_else(|_| dst.to_path_buf());
+    let mut entries_seen: u64 = 0;
+    let mut written_since_check: Option<u64> = None;
+    let mut directories = Vec::new();
+    for entry in archive.entries().map_err(invalid)? {
+        let mut entry = entry.map_err(invalid)?;
+        entries_seen += 1;
+        if entries_seen > MAX_BUNDLE_ENTRIES {
+            return Err(AppError::validation_refused_with_facts(
+                reasons::BACKUP_BUNDLE_TOO_MANY_ENTRIES,
+                format!("backup payload has more than {MAX_BUNDLE_ENTRIES} entries"),
+                vec![crate::RefusalFact::new(
+                    "maxEntries",
+                    MAX_BUNDLE_ENTRIES.to_string(),
+                )],
+            ));
+        }
+        match entry.header().entry_type() {
+            tar::EntryType::Directory => {
+                directories.push(entry);
+                continue;
+            }
+            tar::EntryType::Regular => {}
+            _ => {
+                return Err(AppError::validation_refused(
+                    reasons::BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED,
+                    "backup payload holds an entry that is not a regular file or directory",
+                ));
+            }
+        }
+        let size = entry.size();
+        if written_since_check
+            .is_none_or(|written| written.saturating_add(size) >= SCRATCH_SPACE_CHECK_EVERY_BYTES)
+        {
+            ensure_scratch_room(&dst, size, &mut scratch_space)?;
+            written_since_check = Some(0);
+        }
+        entry.unpack_in(&dst).map_err(invalid)?;
+        written_since_check = written_since_check.map(|written| written.saturating_add(size));
+    }
+    directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
+    for mut directory in directories {
+        directory.unpack_in(&dst).map_err(invalid)?;
+    }
+    Ok(())
+}
+
+/// Refuses when writing `pending` more bytes would leave the scratch volume
+/// below its reserve. A free-space call that fails does not stop the restore:
+/// it goes ahead as it did before this check existed.
+#[cfg(feature = "runtime-backups")]
+fn ensure_scratch_room(
+    dst: &Path,
+    pending: u64,
+    scratch_space: &mut impl FnMut(&Path) -> io::Result<crate::helpers::FilesystemSpace>,
+) -> AppResult<()> {
+    let space = match scratch_space(dst) {
+        Ok(space) => space,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "restore scratch free-space check failed; unpacking without it"
+            );
+            return Ok(());
+        }
+    };
+    let reserve = scratch_reserve_bytes(space.total_bytes);
+    if space.available_bytes.saturating_sub(pending) < reserve {
+        return Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::security::BACKUP_BUNDLE_SCRATCH_SPACE_LOW,
+            format!(
+                "unpacking this backup would leave less than {reserve} bytes free for restore scratch space"
+            ),
+            vec![
+                crate::RefusalFact::new("reserveBytes", reserve.to_string()),
+                crate::RefusalFact::new("availableBytes", space.available_bytes.to_string()),
+            ],
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(not(feature = "runtime-backups"))]
@@ -2937,6 +3056,221 @@ mod tests {
 
         assert!(!bundle_path.exists());
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn payload_tar(
+        build: impl FnOnce(&mut tar::Builder<Vec<u8>>),
+    ) -> tar::Archive<Cursor<Vec<u8>>> {
+        let mut builder = tar::Builder::new(Vec::new());
+        build(&mut builder);
+        tar::Archive::new(Cursor::new(builder.into_inner().expect("finish tar")))
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn append_entry(
+        builder: &mut tar::Builder<Vec<u8>>,
+        kind: tar::EntryType,
+        path: &str,
+        len: u64,
+    ) {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_size(len);
+        header.set_mode(if kind == tar::EntryType::Directory {
+            0o755
+        } else {
+            0o644
+        });
+        if matches!(kind, tar::EntryType::Symlink | tar::EntryType::Link) {
+            header.set_link_name("manifest.json").expect("link name");
+        }
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, io::repeat(b'x').take(len))
+            .expect("append entry");
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn fresh_dir(temp: &tempfile::TempDir, name: &str) -> PathBuf {
+        let dir = temp.path().join(name);
+        std::fs::create_dir(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    fn roomy_scratch(_: &Path) -> io::Result<crate::helpers::FilesystemSpace> {
+        Ok(crate::helpers::FilesystemSpace {
+            total_bytes: 1 << 40,
+            available_bytes: 1 << 39,
+        })
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_unpacks_its_files_and_directories() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archive = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 12);
+            append_entry(builder, tar::EntryType::Directory, TABLES_DIRNAME, 0);
+            append_entry(builder, tar::EntryType::Regular, "tables/titles.ndjson", 7);
+        });
+
+        unpack_bundle_entries(archive, temp.path(), roomy_scratch).expect("unpack payload");
+
+        assert_eq!(
+            std::fs::read(temp.path().join(MANIFEST_FILENAME)).expect("manifest"),
+            vec![b'x'; 12]
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("tables/titles.ndjson")).expect("table"),
+            vec![b'x'; 7]
+        );
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_past_the_entry_limit_is_refused() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let at_limit = payload_tar(|builder| {
+            for index in 0..MAX_BUNDLE_ENTRIES {
+                append_entry(builder, tar::EntryType::Directory, &format!("d{index}"), 0);
+            }
+        });
+        unpack_bundle_entries(at_limit, &fresh_dir(&temp, "at-limit"), roomy_scratch)
+            .expect("a payload at the limit unpacks");
+
+        let past_limit = payload_tar(|builder| {
+            for index in 0..=MAX_BUNDLE_ENTRIES {
+                append_entry(builder, tar::EntryType::Directory, &format!("d{index}"), 0);
+            }
+        });
+        let error = unpack_bundle_entries(past_limit, &fresh_dir(&temp, "past"), roomy_scratch)
+            .expect_err("a payload past the limit is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::BACKUP_BUNDLE_TOO_MANY_ENTRIES)
+        );
+        assert_eq!(
+            error.refusal_facts(),
+            &[crate::RefusalFact::new("maxEntries", "4000")]
+        );
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_with_links_is_refused() {
+        for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let archive = payload_tar(|builder| {
+                append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 4);
+                append_entry(builder, kind, "linked.json", 0);
+            });
+            let error = unpack_bundle_entries(archive, temp.path(), roomy_scratch)
+                .expect_err("a link entry is refused");
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::security::BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED),
+                "{kind:?}"
+            );
+            assert!(temp.path().join("linked.json").symlink_metadata().is_err());
+        }
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_entry_outside_the_scratch_directory_is_not_written() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dst = temp.path().join("scratch");
+        std::fs::create_dir(&dst).expect("scratch dir");
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_old();
+        let name = b"../escaped.json";
+        header.as_old_mut().name[..name.len()].copy_from_slice(name);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(3);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append(&header, &b"abc"[..])
+            .expect("append raw entry");
+        let archive = tar::Archive::new(Cursor::new(builder.into_inner().expect("finish tar")));
+
+        unpack_bundle_entries(archive, &dst, roomy_scratch).expect("unpack skips the entry");
+
+        assert!(temp.path().join("escaped.json").symlink_metadata().is_err());
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn a_backup_payload_stops_before_the_scratch_reserve_and_checks_every_16_mib() {
+        let gib = 1024 * 1024 * 1024_u64;
+        let tight = |_: &Path| {
+            Ok(crate::helpers::FilesystemSpace {
+                total_bytes: 100 * gib,
+                available_bytes: gib + 100,
+            })
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fits = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 50);
+        });
+        unpack_bundle_entries(fits, &fresh_dir(&temp, "fits"), tight)
+            .expect("an entry that keeps the reserve unpacks");
+
+        let too_big = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 200);
+        });
+        let error = unpack_bundle_entries(too_big, &fresh_dir(&temp, "too-big"), tight)
+            .expect_err("an entry that eats into the reserve is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::BACKUP_BUNDLE_SCRATCH_SPACE_LOW)
+        );
+        assert!(
+            error
+                .refusal_facts()
+                .contains(&crate::RefusalFact::new("reserveBytes", gib.to_string()))
+        );
+        assert!(
+            temp.path()
+                .join("too-big")
+                .join(MANIFEST_FILENAME)
+                .symlink_metadata()
+                .is_err()
+        );
+
+        let mut checks = 0;
+        let twenty_mib = payload_tar(|builder| {
+            for index in 0..20 {
+                append_entry(
+                    builder,
+                    tar::EntryType::Regular,
+                    &format!("part{index}"),
+                    1 << 20,
+                );
+            }
+        });
+        unpack_bundle_entries(twenty_mib, &fresh_dir(&temp, "cadence"), |path| {
+            checks += 1;
+            roomy_scratch(path)
+        })
+        .expect("unpack twenty mebibytes");
+        assert_eq!(checks, 2);
+
+        let failing = payload_tar(|builder| {
+            append_entry(builder, tar::EntryType::Regular, MANIFEST_FILENAME, 5);
+        });
+        unpack_bundle_entries(failing, &fresh_dir(&temp, "unprobed"), |_| {
+            Err(io::Error::other("synthetic capacity failure"))
+        })
+        .expect("a failed free-space call does not stop the restore");
+        assert!(
+            temp.path()
+                .join("unprobed")
+                .join(MANIFEST_FILENAME)
+                .is_file()
+        );
     }
 
     #[cfg(feature = "runtime-backups")]

@@ -10424,14 +10424,20 @@ const ru: LocaleDictionary = {
     "Сеанс аутентификации аннулирован.",
   "error.reason.SECURITY_BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD":
     "Этот пакет резервной копии зашифрован и требует пароля.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED":
+    "Резервная копия содержит что-то кроме файлов и папок, поэтому её нельзя восстановить.",
   "error.reason.SECURITY_BACKUP_BUNDLE_INVALID":
     "Недопустимый пакет резервной копии.",
   "error.reason.SECURITY_BACKUP_BUNDLE_NOT_FOUND":
     "Пакет резервной копии не найден.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW":
+    "Недостаточно свободного места на диске, чтобы распаковать эту резервную копию для восстановления.",
   "error.reason.SECURITY_BACKUP_BUNDLE_STILL_BEING_CREATED":
     "Пакет резервной копии ещё создаётся.",
   "error.reason.SECURITY_BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG":
     "Таблицы резервной копии не совпадают с тем, что может восстановить эта версия Scryer.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES":
+    "Резервная копия содержит больше записей, чем бывает в резервной копии Scryer, поэтому её нельзя восстановить.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MANIFEST_INCOMPLETE":
     "Манифест контрольных сумм резервной копии неполон.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MISMATCH":
