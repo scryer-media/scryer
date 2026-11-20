@@ -6,6 +6,7 @@ import type {
   ListsSection,
   LogsSection,
   LifecycleRulesSection,
+  RequestRulesSection,
   RulesSection,
   SettingsSection,
   SystemSection,
@@ -98,6 +99,20 @@ const LIFECYCLE_RULES_SECTION_BY_SEGMENT: Record<
   exclusions: "candidates",
 };
 
+/// Panes of the Request Rules page. As on Lifecycle, the rule list is the
+/// default and adds no segment, so `/automation/rules/request` still opens it.
+export const REQUEST_RULES_SECTION_PATH: Record<RequestRulesSection, string> = {
+  rules: "",
+  try: "try",
+  decisions: "decisions",
+};
+
+const REQUEST_RULES_SECTION_BY_SEGMENT: Record<string, RequestRulesSection> = {
+  rules: "rules",
+  try: "try",
+  decisions: "decisions",
+};
+
 /// Which kinds of rule the Rules page offers, in rail order. Lifecycle and
 /// request rules are in beta and badged as such, but no longer wait behind the
 /// experimental-features switch.
@@ -125,17 +140,34 @@ export const RULES_SECTION_BY_SETTINGS_SECTION: Partial<
   requestRules: "request",
 };
 
-/// Path of one Rules pane. Lifecycle carries its own pane as a fourth
-/// segment; the lifecycle rule list is the default and adds none.
+/// Path of one Rules pane. Lifecycle and request rules carry their own pane
+/// as a fourth segment; each rule list is the default and adds none.
+export function buildRulesPath(
+  section: "lifecycle",
+  subSection?: LifecycleRulesSection,
+): string;
+export function buildRulesPath(
+  section: "request",
+  subSection?: RequestRulesSection,
+): string;
+export function buildRulesPath(section: RulesSection): string;
 export function buildRulesPath(
   section: RulesSection,
-  lifecycleSection: LifecycleRulesSection = "rules",
+  subSection?: LifecycleRulesSection | RequestRulesSection,
 ): string {
   const base = `/automation/rules/${RULES_SECTION_PATH[section]}`;
-  if (section !== "lifecycle") {
-    return base;
+  let segment = "";
+  if (section === "lifecycle") {
+    segment =
+      LIFECYCLE_RULES_SECTION_PATH[
+        (subSection as LifecycleRulesSection | undefined) ?? "rules"
+      ];
+  } else if (section === "request") {
+    segment =
+      REQUEST_RULES_SECTION_PATH[
+        (subSection as RequestRulesSection | undefined) ?? "rules"
+      ];
   }
-  const segment = LIFECYCLE_RULES_SECTION_PATH[lifecycleSection];
   return segment ? `${base}/${segment}` : base;
 }
 
@@ -165,6 +197,23 @@ export function lifecycleRulesSectionFromPath(
   }
   return (
     LIFECYCLE_RULES_SECTION_BY_SEGMENT[
+      segments[rulesAt + 2]?.toLowerCase() ?? ""
+    ] ?? "rules"
+  );
+}
+
+export function requestRulesSectionFromPath(
+  pathname: string,
+): RequestRulesSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const rulesAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "rules",
+  );
+  if (rulesAt < 0) {
+    return "rules";
+  }
+  return (
+    REQUEST_RULES_SECTION_BY_SEGMENT[
       segments[rulesAt + 2]?.toLowerCase() ?? ""
     ] ?? "rules"
   );
@@ -605,8 +654,9 @@ function settingsRoute(section: SettingsSection): ParsedAppRoute {
 /// `/automation/rules/...` — the Rules page and its two levels of panes.
 ///
 /// A bare `/automation/rules` names the page rather than a pane, so it lands on
-/// Scoring rather than 404ing. Lifecycle takes a further segment for its own
-/// pane, and the rule list is the pane a segment-less lifecycle path means.
+/// Scoring rather than 404ing. Lifecycle and request rules take a further
+/// segment for their own pane, and the rule list is the pane a segment-less
+/// path means.
 function resolveRulesRoute(
   currentPath: string,
   rawSegments: string[],
@@ -623,15 +673,15 @@ function resolveRulesRoute(
     return { kind: "not-found" };
   }
 
-  // Scoring and request rules are one page each: neither carries a second level
-  // of panes, so a fourth segment names nothing.
-  if (rulesSection === "scoring" || rulesSection === "request") {
+  // Scoring rules are one page: no second level of panes, so a fourth segment
+  // names nothing.
+  if (rulesSection === "scoring") {
     if (rawSegments.length !== 3) {
       return { kind: "not-found" };
     }
     return canonicalOrRedirect(
       currentPath,
-      settingsRoute(rulesSection === "scoring" ? "rules" : "requestRules"),
+      settingsRoute("rules"),
       search,
       hash,
     );
@@ -639,6 +689,24 @@ function resolveRulesRoute(
 
   if (rawSegments.length > 4) {
     return { kind: "not-found" };
+  }
+
+  if (rulesSection === "request") {
+    const requestSection =
+      rawSegments.length === 3
+        ? "rules"
+        : REQUEST_RULES_SECTION_BY_SEGMENT[normalizedSegments[3] ?? ""];
+    if (!requestSection) {
+      return { kind: "not-found" };
+    }
+    return canonicalOrRedirect(
+      currentPath,
+      parsedRoute(buildRulesPath("request", requestSection), "settings", {
+        settingsSection: "requestRules",
+      }),
+      search,
+      hash,
+    );
   }
 
   const lifecycleSection =

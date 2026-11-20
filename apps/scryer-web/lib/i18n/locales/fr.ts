@@ -3416,6 +3416,9 @@ const fr: LocaleDictionary = {
   "settings.requestPreviewInputUnavailable":
     "Le document d'entrée n'a pas pu être relu.",
   "settings.requestDecisionsTitle": "Décisions récentes",
+  "settings.requestNavRules": "Règles",
+  "settings.requestNavTry": "Essayer une demande",
+  "settings.requestNavDecisions": "Décisions",
   "settings.requestDecisionsOutcomeFilter": "Issue",
   "settings.requestDecisionsOutcomeAll": "Toute issue",
   "settings.requestDecisionsColTime": "Évaluée",

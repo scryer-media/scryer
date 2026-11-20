@@ -5835,6 +5835,9 @@ const cs: LocaleDictionary = {
   "settings.requestPreviewUndefinedTags":
     "Než je bude možné použít, definujte je v Nastavení › Štítky.",
   "settings.requestDecisionsTitle": "Nedávná rozhodnutí",
+  "settings.requestNavRules": "Pravidla",
+  "settings.requestNavTry": "Vyzkoušet žádost",
+  "settings.requestNavDecisions": "Rozhodnutí",
   "settings.requestDecisionsOutcomeFilter": "Výsledek",
   "settings.requestDecisionsOutcomeAll": "Libovolný výsledek",
   "settings.requestDecisionsColTime": "Vyhodnoceno",

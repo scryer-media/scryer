@@ -5061,6 +5061,9 @@ const zh_TW: LocaleDictionary = {
   "settings.requestPreviewUndefinedTags":
     "在套用之前請先在「設定 › 標籤」中定義這些標籤。",
   "settings.requestDecisionsTitle": "近期決策",
+  "settings.requestNavRules": "規則",
+  "settings.requestNavTry": "試執行請求",
+  "settings.requestNavDecisions": "決策",
   "settings.requestDecisionsOutcomeFilter": "結果",
   "settings.requestDecisionsOutcomeAll": "任意結果",
   "settings.requestDecisionsColTime": "評估時間",

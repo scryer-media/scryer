@@ -10827,6 +10827,9 @@ const en: LocaleDictionary = {
     "Define these in Settings › Tags before they can be applied.",
 
   "settings.requestDecisionsTitle": "Recent decisions",
+  "settings.requestNavRules": "Rules",
+  "settings.requestNavTry": "Try a request",
+  "settings.requestNavDecisions": "Decisions",
   "settings.requestDecisionsOutcomeFilter": "Outcome",
   "settings.requestDecisionsOutcomeAll": "Any outcome",
   "settings.requestDecisionsColTime": "Evaluated",

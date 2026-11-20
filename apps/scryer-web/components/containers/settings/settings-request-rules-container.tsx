@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { useClient } from "urql";
+import type { RequestRulesSection } from "@/components/root/types";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ExpiredRequestLeasesControl } from "@/components/containers/settings/expired-request-leases-control";
 import {
@@ -110,7 +111,11 @@ type PendingEditorAction =
   | { type: "close" }
   | null;
 
-export function SettingsRequestRulesContainer() {
+export function SettingsRequestRulesContainer({
+  section = "rules",
+}: {
+  section?: RequestRulesSection;
+}) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
@@ -518,9 +523,13 @@ export function SettingsRequestRulesContainer() {
     void refreshCatalogs();
   }, [refreshCatalogs]);
 
+  // Decisions are their own pane, so they load when it opens, and again on
+  // each return to it, rather than with every visit to the rule list.
   useEffect(() => {
-    void refreshDecisions();
-  }, [refreshDecisions]);
+    if (section === "decisions") {
+      void refreshDecisions();
+    }
+  }, [refreshDecisions, section]);
 
   const applyRequesters = useCallback(
     (usernames: string[]) => {
@@ -750,6 +759,7 @@ export function SettingsRequestRulesContainer() {
   return (
     <>
       <SettingsRequestRulesSection
+        section={section}
         leaseRuleControl={<ExpiredRequestLeasesControl />}
         isEditorOpen={isEditorOpen}
         editingRuleSetId={editingRuleSetId}

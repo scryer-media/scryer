@@ -3240,6 +3240,9 @@ const ja: LocaleDictionary = {
   "settings.requestPreviewInputUnavailable":
     "入力ドキュメントを読み戻せませんでした。",
   "settings.requestDecisionsTitle": "最近の判定",
+  "settings.requestNavRules": "ルール",
+  "settings.requestNavTry": "リクエストで試す",
+  "settings.requestNavDecisions": "判定",
   "settings.requestDecisionsOutcomeFilter": "結果",
   "settings.requestDecisionsOutcomeAll": "すべての結果",
   "settings.requestDecisionsColTime": "評価日時",

@@ -3309,6 +3309,9 @@ const de: LocaleDictionary = {
   "settings.requestPreviewInputUnavailable":
     "Das Eingabedokument konnte nicht gelesen werden.",
   "settings.requestDecisionsTitle": "Jüngste Entscheidungen",
+  "settings.requestNavRules": "Regeln",
+  "settings.requestNavTry": "Anfrage ausprobieren",
+  "settings.requestNavDecisions": "Entscheidungen",
   "settings.requestDecisionsOutcomeFilter": "Ergebnis",
   "settings.requestDecisionsOutcomeAll": "Beliebiges Ergebnis",
   "settings.requestDecisionsColTime": "Ausgewertet",

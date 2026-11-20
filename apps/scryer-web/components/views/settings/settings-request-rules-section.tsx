@@ -19,12 +19,13 @@ import {
   GutterPanelButton,
 } from "@/components/common/gutter-panel";
 import {
-  RuleSidePanelButtons,
   RULE_REFERENCE_BODY_CLASS,
   RuleSidePanelHeader,
   useRuleSidePanels,
 } from "@/components/views/settings/rule-side-panels";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
+import type { RequestRulesSection } from "@/components/root/types";
+import { RequestRulesTabs } from "@/components/views/settings/request-rules-tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -126,6 +127,9 @@ const PREVIEW_MONITOR_TYPES = [
 ];
 
 type SettingsRequestRulesSectionProps = {
+  /// Which pane of the page is open: the rule list, a request to try the
+  /// rules against, or the decisions they made.
+  section: RequestRulesSection;
   /// The shipped expired-request-leases lifecycle rule, shown first.
   leaseRuleControl?: React.ReactNode;
   isEditorOpen: boolean;
@@ -1071,6 +1075,7 @@ function RequestDecisionsPanel({
 }
 
 export function SettingsRequestRulesSection({
+  section,
   isEditorOpen,
   editingRuleSetId,
   ruleSetDraft,
@@ -1116,7 +1121,7 @@ export function SettingsRequestRulesSection({
     buttonProps: sidePanelButtonProps,
     panelProps: sidePanelProps,
     close: closeSidePanel,
-  } = useRuleSidePanels<RequestSidePanel>();
+  } = useRuleSidePanels<RequestSidePanel>(section === "rules");
   const validationStatus = (
     <EditorValidationStatus
       id="settings-request-rule-validation"
@@ -1136,6 +1141,65 @@ export function SettingsRequestRulesSection({
     />
   );
 
+  // The starter rules and the input reference help write a rule, so their
+  // buttons sit on the tab strip only while the rule list is open.
+  const pageHead = (
+    <RequestRulesTabs
+      activeSection={section}
+      actions={
+        section === "rules" ? (
+          <>
+            <GutterPanelButton
+              panelId={REQUEST_TEMPLATES_PANEL_ID}
+              label={t("settings.requestTemplateGallery")}
+              icon={<Sparkles className="h-4 w-4" />}
+              {...sidePanelButtonProps("templates")}
+            />
+            <GutterPanelButton
+              panelId={REQUEST_REFERENCE_PANEL_ID}
+              label={t("settings.refReqTitle")}
+              icon={<BookOpen className="h-4 w-4" />}
+              {...sidePanelButtonProps("reference")}
+            />
+          </>
+        ) : null
+      }
+    />
+  );
+
+  // Trying a request and reading decisions are one pane each, in the same
+  // column width as the rule list so the tabs do not move between them. A
+  // draft open in the rule editor stays open, so it can still be tried here.
+  if (section !== "rules") {
+    return (
+      <div id="settings-request-rules-section" className="text-sm">
+        <div className="mx-auto w-full max-w-[1280px] space-y-6">
+          {pageHead}
+          {section === "try" ? (
+            <RequestPreviewPanel
+              isEditorOpen={isEditorOpen}
+              draftName={ruleSetDraft.name}
+              ruleSetRecords={ruleSetRecords}
+              libraries={libraries}
+              qualityProfiles={qualityProfiles}
+              users={users}
+              {...previewProps}
+            />
+          ) : (
+            <RequestDecisionsPanel
+              decisions={decisions}
+              decisionsLoading={decisionsLoading}
+              decisionsError={decisionsError}
+              decisionOutcomeFilter={decisionOutcomeFilter}
+              setDecisionOutcomeFilter={setDecisionOutcomeFilter}
+              refreshDecisions={refreshDecisions}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={sidePanelRootRef}
@@ -1146,20 +1210,7 @@ export function SettingsRequestRulesSection({
         ref={sidePanelColumnRef}
         className="mx-auto w-full max-w-[1280px] space-y-4"
       >
-        <RuleSidePanelButtons>
-          <GutterPanelButton
-            panelId={REQUEST_TEMPLATES_PANEL_ID}
-            label={t("settings.requestTemplateGallery")}
-            icon={<Sparkles className="h-4 w-4" />}
-            {...sidePanelButtonProps("templates")}
-          />
-          <GutterPanelButton
-            panelId={REQUEST_REFERENCE_PANEL_ID}
-            label={t("settings.refReqTitle")}
-            icon={<BookOpen className="h-4 w-4" />}
-            {...sidePanelButtonProps("reference")}
-          />
-        </RuleSidePanelButtons>
+        <div className="pb-2">{pageHead}</div>
         {leaseRuleControl}
 
         <div className="overflow-hidden rounded border border-border bg-card">
@@ -1492,25 +1543,6 @@ export function SettingsRequestRulesSection({
             disabled={mutatingRuleSetId !== null}
           />
         </div>
-
-        <RequestPreviewPanel
-          isEditorOpen={isEditorOpen}
-          draftName={ruleSetDraft.name}
-          ruleSetRecords={ruleSetRecords}
-          libraries={libraries}
-          qualityProfiles={qualityProfiles}
-          users={users}
-          {...previewProps}
-        />
-
-        <RequestDecisionsPanel
-          decisions={decisions}
-          decisionsLoading={decisionsLoading}
-          decisionsError={decisionsError}
-          decisionOutcomeFilter={decisionOutcomeFilter}
-          setDecisionOutcomeFilter={setDecisionOutcomeFilter}
-          refreshDecisions={refreshDecisions}
-        />
       </div>
       <GutterPanel
         id={REQUEST_TEMPLATES_PANEL_ID}

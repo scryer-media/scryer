@@ -53,7 +53,7 @@ import {
   Rss,
   Server,
   Settings2,
-  Wrench,
+  Hourglass,
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
@@ -133,7 +133,7 @@ const RULES_SECTION_ITEMS: Record<
   { labelKey: string; icon: LucideIcon }
 > = {
   scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
-  lifecycle: { labelKey: "settings.lifecycleRules", icon: Wrench },
+  lifecycle: { labelKey: "settings.lifecycleRules", icon: Hourglass },
   request: { labelKey: "settings.requestRules", icon: Inbox },
 };
 
@@ -458,7 +458,7 @@ const settingsEntries: Array<{
   {
     id: "lifecycleRules",
     label: (t) => t("settings.lifecycleRules"),
-    icon: Wrench,
+    icon: Hourglass,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {

@@ -5524,6 +5524,9 @@ const ru: LocaleDictionary = {
   "settings.requestPreviewUndefinedTags":
     "Определите их в «Настройки › Теги», прежде чем их можно будет применить.",
   "settings.requestDecisionsTitle": "Недавние решения",
+  "settings.requestNavRules": "Правила",
+  "settings.requestNavTry": "Проверить запрос",
+  "settings.requestNavDecisions": "Решения",
   "settings.requestDecisionsOutcomeFilter": "Итог",
   "settings.requestDecisionsOutcomeAll": "Любой итог",
   "settings.requestDecisionsColTime": "Оценено",

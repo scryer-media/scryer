@@ -61,6 +61,7 @@ import {
   indexerSettingsTabFromPath,
   INDEXER_SETTINGS_TABS,
   lifecycleRulesSectionFromPath,
+  requestRulesSectionFromPath,
   BETA_RULES_SECTIONS,
   rulesSectionFromPath,
 } from "@/lib/utils/routing";
@@ -293,6 +294,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   const indexerSettingsTab = indexerSettingsTabFromPath(pathname);
   // Same for the Lifecycle Rules page's tabs.
   const lifecycleRulesSection = lifecycleRulesSectionFromPath(pathname);
+  const requestRulesSection = requestRulesSectionFromPath(pathname);
   const [
     indexerDownloadClientMappingCatalogResource,
     setIndexerDownloadClientMappingCatalogResource,
@@ -790,7 +792,9 @@ export const SettingsContainer = memo(function SettingsContainer({
                       section={lifecycleRulesSection}
                     />
                   ) : settingsSection === "requestRules" ? (
-                    <SettingsRequestRulesContainer />
+                    <SettingsRequestRulesContainer
+                      section={requestRulesSection}
+                    />
                   ) : settingsSection === "plugins" ? (
                     <SettingsPluginsContainer />
                   ) : settingsSection === "scripts" ? (

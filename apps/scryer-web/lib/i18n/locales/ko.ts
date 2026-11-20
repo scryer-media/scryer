@@ -3179,6 +3179,9 @@ const ko: LocaleDictionary = {
   "settings.requestPreviewInputUnavailable":
     "입력 문서를 다시 읽을 수 없었습니다.",
   "settings.requestDecisionsTitle": "최근 결정",
+  "settings.requestNavRules": "규칙",
+  "settings.requestNavTry": "요청으로 시험",
+  "settings.requestNavDecisions": "결정",
   "settings.requestDecisionsOutcomeFilter": "결과",
   "settings.requestDecisionsOutcomeAll": "모든 결과",
   "settings.requestDecisionsColTime": "평가 시각",

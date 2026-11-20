@@ -3322,6 +3322,9 @@ const pt_BR: LocaleDictionary = {
   "settings.requestPreviewInputUnavailable":
     "Não foi possível reler o documento de entrada.",
   "settings.requestDecisionsTitle": "Decisões recentes",
+  "settings.requestNavRules": "Regras",
+  "settings.requestNavTry": "Testar uma solicitação",
+  "settings.requestNavDecisions": "Decisões",
   "settings.requestDecisionsOutcomeFilter": "Resultado",
   "settings.requestDecisionsOutcomeAll": "Qualquer resultado",
   "settings.requestDecisionsColTime": "Avaliada",

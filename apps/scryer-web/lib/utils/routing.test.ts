@@ -12,6 +12,7 @@ import {
   INDEXER_SETTINGS_TABS,
   listsSectionFromPath,
   lifecycleRulesSectionFromPath,
+  requestRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
   BETA_RULES_SECTIONS,
@@ -73,6 +74,8 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/rules/lifecycle/candidates",
     "/automation/rules/lifecycle/history",
     "/automation/rules/request",
+    "/automation/rules/request/try",
+    "/automation/rules/request/decisions",
     "/automation/subtitles",
     "/automation/post-processing",
     "/integrations/indexers",
@@ -148,6 +151,7 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/automation/rules", "/automation/rules/scoring"],
     ["/automation/rules/scoring-rules", "/automation/rules/scoring"],
     ["/automation/rules/lifecycle/rules", "/automation/rules/lifecycle"],
+    ["/automation/rules/request/rules", "/automation/rules/request"],
     ["/automation/rules/request-rules", "/automation/rules/request"],
     // Folded panes redirect: exclusions to the candidates, gates to the list.
     [
@@ -155,10 +159,7 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
       "/automation/rules/lifecycle/candidates",
     ],
     ["/automation/rules/lifecycle/gates", "/automation/rules/lifecycle"],
-    [
-      "/automation/rules/lifecycle/runs",
-      "/automation/rules/lifecycle/history",
-    ],
+    ["/automation/rules/lifecycle/runs", "/automation/rules/lifecycle/history"],
     // Lifecycle rules were called maintenance rules; every path that named
     // them by the old name redirects to the lifecycle pane it meant.
     ["/settings/maintenance-rules", "/automation/rules/lifecycle"],
@@ -351,20 +352,34 @@ test("the rules page carries all three kinds of rule as panes", () => {
     assert.equal(route.canonicalPath, path, path);
     assert.equal(route.settingsSection, "lifecycleRules", path);
   }
+  for (const path of [
+    "/automation/rules/request/try",
+    "/automation/rules/request/decisions",
+  ]) {
+    const route = canonical(path);
+    assert.equal(route.canonicalPath, path, path);
+    assert.equal(route.settingsSection, "requestRules", path);
+  }
   assert.deepEqual(resolveAppRoute("/automation/rules/nope"), {
     kind: "not-found",
   });
   assert.deepEqual(resolveAppRoute("/automation/rules/lifecycle/nope"), {
     kind: "not-found",
   });
-  // Scoring and request rules have no second level of panes, and lifecycle
-  // stops at one.
+  assert.deepEqual(resolveAppRoute("/automation/rules/request/nope"), {
+    kind: "not-found",
+  });
+  // Scoring rules have no second level of panes, and lifecycle and request
+  // rules stop at one.
   assert.deepEqual(resolveAppRoute("/automation/rules/scoring/candidates"), {
     kind: "not-found",
   });
-  assert.deepEqual(resolveAppRoute("/automation/rules/request/decisions"), {
-    kind: "not-found",
-  });
+  assert.deepEqual(
+    resolveAppRoute("/automation/rules/request/decisions/extra"),
+    {
+      kind: "not-found",
+    },
+  );
   assert.deepEqual(
     resolveAppRoute("/automation/rules/lifecycle/history/extra"),
     {
@@ -386,6 +401,16 @@ test("rules pane paths round-trip through the section helpers", () => {
     assert.equal(lifecycleRulesSectionFromPath(path), section, section);
     assert.equal(rulesSectionFromPath(path), "lifecycle", section);
   }
+  for (const section of ["rules", "try", "decisions"] as const) {
+    const path = buildRulesPath("request", section);
+    assert.equal(requestRulesSectionFromPath(path), section, section);
+    assert.equal(rulesSectionFromPath(path), "request", section);
+  }
+  assert.equal(buildRulesPath("request", "rules"), "/automation/rules/request");
+  assert.equal(
+    requestRulesSectionFromPath("/automation/rules/request"),
+    "rules",
+  );
   // Anything that is not a known pane segment falls back to the default pane.
   assert.equal(rulesSectionFromPath("/automation/rules"), "scoring");
   assert.equal(rulesSectionFromPath("/automation/rules/unknown"), "scoring");

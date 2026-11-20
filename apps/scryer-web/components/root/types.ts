@@ -59,6 +59,10 @@ export type RulesSection = "scoring" | "lifecycle" | "request";
 /// would a rule match".
 export type LifecycleRulesSection = "rules" | "candidates" | "history";
 
+/// Panes of the Request Rules page: the rules themselves, a request to try
+/// them against, and the decisions they made.
+export type RequestRulesSection = "rules" | "try" | "decisions";
+
 /// Panes of the Indexers settings page. Seeding profiles live here rather than
 /// in their own settings section because a profile is only ever reached
 /// through the indexer that applies it. Proxies used to be a pane too; they

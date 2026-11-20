@@ -3338,6 +3338,9 @@ const it: LocaleDictionary = {
   "settings.requestPreviewInputUnavailable":
     "Non è stato possibile rileggere il documento di input.",
   "settings.requestDecisionsTitle": "Decisioni recenti",
+  "settings.requestNavRules": "Regole",
+  "settings.requestNavTry": "Prova una richiesta",
+  "settings.requestNavDecisions": "Decisioni",
   "settings.requestDecisionsOutcomeFilter": "Esito",
   "settings.requestDecisionsOutcomeAll": "Qualsiasi esito",
   "settings.requestDecisionsColTime": "Valutata",
