@@ -555,6 +555,10 @@ impl TitleFileMover for RecoveryExecution<'_> {
                 VerificationDepth::Full,
                 "Full content verified; original source preserved",
             ),
+            None if file.source_version.is_none() && file.matched_by_name_and_size => (
+                VerificationDepth::Quick,
+                "Missing source matched by file name and size; its library keeps the full-hash job off",
+            ),
             None => (
                 VerificationDepth::Quick,
                 "Quick content check passed; original source preserved",
@@ -657,12 +661,39 @@ pub(super) async fn prove_file(
     progress: CopyProgress,
     depth: VerificationDepth,
 ) -> AppResult<Option<StreamedContentHashes>> {
+    if file.source_version.is_none() && file.matched_by_name_and_size {
+        return name_and_size_prove_file(file).await.map(|()| None);
+    }
     if depth == VerificationDepth::Quick
         && let Some(version) = &file.source_version
     {
         return quick_prove_file(file, version).await.map(|()| None);
     }
     full_prove_file(file, progress).await.map(Some)
+}
+
+/// A missing source the plan found by name and length, in a library that
+/// keeps the full-hash job off: the destination still has the source's file
+/// name and the catalog's length, and did not change while it was looked at.
+/// Nothing is read.
+async fn name_and_size_prove_file(file: &RecoveryFile) -> AppResult<()> {
+    let source = stored_path_to_path_buf(&file.media.file_path);
+    let destination = stored_path_to_path_buf(&file.destination);
+    inspect_path(&destination, false).await?;
+    let before = recovery_file_version(&destination).await?;
+    let named = source.file_name().is_some() && destination.file_name() == source.file_name();
+    let sized = Disk::process()
+        .fingerprint(&destination)
+        .await
+        .map_err(unreadable)?
+        .is_len(file.media.size_bytes.max(0) as u64);
+    if !named || !sized || recovery_file_version(&destination).await? != before {
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_CONTENT_MISMATCH,
+            "Destination no longer has the missing source's name and size; files preserved",
+        ));
+    }
+    Ok(())
 }
 
 async fn quick_prove_file(file: &RecoveryFile, version: &str) -> AppResult<()> {

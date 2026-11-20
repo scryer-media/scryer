@@ -1078,9 +1078,14 @@ impl AppUseCase {
                     hardlink_proofs.push(ConflictHardlinkProof {
                         version: file.version.clone(),
                         full_blake3: match depth {
-                            VerificationDepth::Full => {
-                                Some(conflict_hash(&file.path, &file.version).await?)
-                            }
+                            VerificationDepth::Full => Some(
+                                conflict_hash(
+                                    &file.path,
+                                    &file.version,
+                                    file.media_file_id.as_deref(),
+                                )
+                                .await?,
+                            ),
                             VerificationDepth::Quick => None,
                         },
                         link_count,
@@ -1708,7 +1713,10 @@ fn same_content_version(left: &str, right: &str) -> Sameness {
     StoredVersion::new(left).same_content(StoredVersion::new(right))
 }
 
-async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
+/// The full hash of `path`, held to `version`. A file the catalog tracks
+/// passes its row, so a hash read here is stored there and a stored hash that
+/// still fits the file is used instead of reading it again.
+async fn conflict_hash(path: &str, version: &str, row: Option<&str>) -> AppResult<String> {
     let native = stored_path_to_path_buf(path);
     if super::resolution::file_version(&native).await? != version {
         return Err(refused(
@@ -1720,7 +1728,10 @@ async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
     // the version is read again after it, as before, so a file that changed
     // between the first version and the read is refused too.
     let hashed = match Disk::process()
-        .full_hash(crate::disk::HashAsk::new(native.as_path()))
+        .full_hash(
+            crate::disk::HashAsk::new(native.as_path())
+                .of_row_if(row.map(|id| crate::disk::HashRow::Id(id.to_string()))),
+        )
         .await
     {
         crate::disk::FullHashAnswer::Read(known)
@@ -1761,7 +1772,7 @@ async fn content_holds(
     depth: VerificationDepth,
 ) -> AppResult<bool> {
     match expected {
-        Some(expected) => Ok(conflict_hash(path, version).await? == expected),
+        Some(expected) => Ok(conflict_hash(path, version, None).await? == expected),
         None => Ok(depth == VerificationDepth::Quick),
     }
 }
@@ -3566,7 +3577,7 @@ mod hardlink_disposal_tests {
                 completed: false,
                 source_version: Some(version.clone()),
                 destination_version: None,
-                identity_hash: Some(conflict_hash(&retained_path, &version).await.unwrap()),
+                identity_hash: Some(conflict_hash(&retained_path, &version, None).await.unwrap()),
                 warning: None,
                 reason_code: None,
             };
@@ -3717,7 +3728,7 @@ mod hardlink_disposal_tests {
         std::fs::write(&file, b"historical movie").unwrap();
         let path = path_to_stored_string(&file);
         let version = super::super::resolution::file_version(&file).await.unwrap();
-        let hash = conflict_hash(&path, &version).await.unwrap();
+        let hash = conflict_hash(&path, &version, None).await.unwrap();
         let wrong = "0".repeat(64);
         for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
             assert!(

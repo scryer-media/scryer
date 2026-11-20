@@ -38,6 +38,7 @@ async fn permissions_fixture() -> (tempfile::TempDir, RecoveryFile) {
         destination: path_to_stored_string(&destination),
         source_version: Some(recovery_file_version(&source).await.unwrap()),
         expected_hash: None,
+        matched_by_name_and_size: false,
     };
     (temp, file)
 }

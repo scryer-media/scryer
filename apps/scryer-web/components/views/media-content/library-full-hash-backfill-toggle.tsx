@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { useClient } from "urql";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -37,6 +38,7 @@ export function LibraryFullHashBackfillToggle({
   const checkboxId = useId();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmingOff, setConfirmingOff] = useState(false);
 
   const load = useCallback(async () => {
     setEnabled(null);
@@ -118,9 +120,32 @@ export function LibraryFullHashBackfillToggle({
           size="large"
           checked={enabled === true}
           disabled={disabled || saving || enabled === null}
-          onCheckedChange={(value) => void save(value === true)}
+          onCheckedChange={(value) => {
+            if (value === true) {
+              void save(true);
+            } else {
+              setConfirmingOff(true);
+            }
+          }}
         />
       </label>
+      <ConfirmDialog
+        open={confirmingOff}
+        title={t("settings.libraryFullHashBackfillDisableTitle")}
+        description={t("settings.libraryFullHashBackfillDisableWarning")}
+        contentId="library-full-hash-backfill-disable-dialog"
+        confirmButtonId="library-full-hash-backfill-disable-confirm"
+        cancelButtonId="library-full-hash-backfill-disable-cancel"
+        confirmLabel={t("settings.libraryFullHashBackfillDisableConfirm")}
+        cancelLabel={t("label.cancel")}
+        confirmButtonVariant="destructive"
+        isBusy={saving}
+        onCancel={() => setConfirmingOff(false)}
+        onConfirm={async () => {
+          await save(false);
+          setConfirmingOff(false);
+        }}
+      />
     </div>
   );
 }

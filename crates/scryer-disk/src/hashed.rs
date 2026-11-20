@@ -162,6 +162,12 @@ impl HashAsk {
         self
     }
 
+    /// [`Self::of_row`] where there is one.
+    pub fn of_row_if(mut self, row: Option<HashRow>) -> Self {
+        self.row = row;
+        self
+    }
+
     /// What the caller already holds of the file's recorded hash, as its
     /// catalog row stored it, judged here as a stored row would be; the table
     /// is not asked. A read is recorded on the row, where there is one.

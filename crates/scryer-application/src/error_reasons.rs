@@ -2485,6 +2485,14 @@ pub mod location {
         "LOCATION_RECOVERY_SOURCE_FULL_HASH_REQUIRED";
     /// Missing full hash.
     pub const RECOVERY_FULL_HASH_REQUIRED: &str = "LOCATION_RECOVERY_FULL_HASH_REQUIRED";
+    /// A missing source in a library with the full-hash job off has no file
+    /// of its name and catalog length in the destination.
+    pub const RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND: &str =
+        "LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND";
+    /// A missing source in a library with the full-hash job off has more than
+    /// one file of its name and catalog length in the destination.
+    pub const RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS: &str =
+        "LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS";
     /// Recovery destination missing was not found.
     pub const RECOVERY_DESTINATION_NOT_FOUND: &str = "LOCATION_RECOVERY_DESTINATION_NOT_FOUND";
     /// Generated destination is not a directory.
@@ -2644,6 +2652,8 @@ pub mod location {
         RECOVERY_SOURCE_CHANGED,
         RECOVERY_SOURCE_FULL_HASH_REQUIRED,
         RECOVERY_FULL_HASH_REQUIRED,
+        RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND,
+        RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS,
         RECOVERY_DESTINATION_NOT_FOUND,
         RECOVERY_GENERATED_DESTINATION_NOT_DIRECTORY,
         RECOVERY_GENERATED_DESTINATION_UNCLAIMED,

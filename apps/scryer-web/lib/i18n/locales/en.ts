@@ -2244,6 +2244,10 @@ const en: LocaleDictionary = {
     "Multiple destination files match the missing source hash.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_HASH_NOT_FOUND":
     "No destination matches the missing source's full-content hash was not found.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS":
+    "More than one destination file has the missing source's name and size.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND":
+    "No destination file has the missing source's name and size.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED":
     "Generated destination inventory limit exceeded.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_NOT_FOUND":
@@ -8401,6 +8405,9 @@ const en: LocaleDictionary = {
   "settings.libraryFullHashBackfillTitle": "Background hashing",
   "settings.libraryFullHashBackfillLabel": "Hash files nightly",
   "settings.libraryFullHashBackfillDescription": "Reads every file in this library once, overnight, to record its full content hash. Turn this off for libraries on disks you keep spun down; a file's hash is then read only when a move, import or check needs it.",
+  "settings.libraryFullHashBackfillDisableTitle": "Turn off nightly hashing?",
+  "settings.libraryFullHashBackfillDisableWarning": "Disabling this reduces Scryer's ability to ensure certain file moves are 100% safe.",
+  "settings.libraryFullHashBackfillDisableConfirm": "Turn off",
   "settings.libraryFullHashBackfillEnabledStatus": "Nightly hashing turned on for this library.",
   "settings.libraryFullHashBackfillDisabledStatus": "Nightly hashing turned off for this library.",
   "settings.identityStorageTitle": "Identity & storage",
