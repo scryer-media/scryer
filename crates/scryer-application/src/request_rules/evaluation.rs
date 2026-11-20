@@ -284,6 +284,9 @@ impl AppUseCase {
                     RequestEvaluationPurpose::Resubmit { request_id } => Some(request_id.as_str()),
                     _ => None,
                 },
+                // Every loaded rule is evaluated; when none can read the
+                // watchlist facts, the requester's lists stay unread.
+                cache.reads_watchlist_facts,
             )
             .await
         {

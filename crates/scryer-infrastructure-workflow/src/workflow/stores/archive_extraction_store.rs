@@ -150,6 +150,24 @@ impl ArchiveExtractionRepository for ArchiveExtractionStore {
         .transpose()
     }
 
+    async fn get_many(&self, keys: &[(String, String)]) -> AppResult<Vec<ArchiveExtractionRecord>> {
+        let mut records = Vec::new();
+        for chunk in keys.chunks(KEY_CHUNK) {
+            let mut args = Vec::with_capacity(chunk.len() * 2);
+            let predicate = keys_predicate(chunk, &mut args);
+            for row in SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!("SELECT {COLUMNS} FROM archive_extractions WHERE {predicate}"),
+                &args,
+            )
+            .await?
+            {
+                records.push(record_from_row(&row)?);
+            }
+        }
+        Ok(records)
+    }
+
     async fn save(&self, record: &ArchiveExtractionRecord) -> AppResult<()> {
         let record = record.clone();
         SqlRuntime::run_in_transaction(&self.datastore, "save_archive_extraction", move |tx| {
@@ -508,6 +526,50 @@ mod tests {
             "another client's item"
         );
         store.settle(&[], at(30)).await.expect("no keys");
+    }
+
+    #[tokio::test]
+    async fn get_many_reads_only_the_named_downloads_across_chunks() {
+        let store = store().await;
+        let items: Vec<String> = (0..KEY_CHUNK * 2 + 3)
+            .map(|n| format!("item-{n}"))
+            .collect();
+        for item in &items {
+            store.save(&record(item)).await.expect("save");
+        }
+        let mut other = record("item-0");
+        other.client_id = "client-beta".to_string();
+        store.save(&other).await.expect("save other client");
+
+        let mut keys: Vec<_> = items
+            .iter()
+            .step_by(2)
+            .map(|item| key("client-alpha", item))
+            .collect();
+        keys.push(key("client-alpha", "item-missing"));
+        let mut read: Vec<_> = store
+            .get_many(&keys)
+            .await
+            .expect("get_many")
+            .into_iter()
+            .map(|row| (row.client_id, row.client_item_id))
+            .collect();
+        read.sort();
+        let mut expected: Vec<_> = items
+            .iter()
+            .step_by(2)
+            .map(|item| key("client-alpha", item))
+            .collect();
+        expected.sort();
+        assert_eq!(read, expected);
+        assert!(store.get_many(&[]).await.expect("no keys").is_empty());
+        assert_eq!(
+            store
+                .get_many(&[key("client-beta", "item-0")])
+                .await
+                .unwrap(),
+            vec![other]
+        );
     }
 
     #[tokio::test]

@@ -29,6 +29,22 @@ test("API navigation and direct access require both the opt-in and system permis
   );
 });
 
+test("lifecycle rules open for system-settings managers, not catalog managers", () => {
+  assert.equal(
+    canAccessSettingsSection("lifecycleRules", false, false, true, false),
+    true,
+  );
+  assert.equal(
+    canAccessSettingsSection("lifecycleRules", false, false, false, true),
+    false,
+  );
+  // The other rule pages keep catalog settings.
+  assert.equal(
+    canAccessSettingsSection("requestRules", false, false, false, true),
+    true,
+  );
+});
+
 /**
  * `defaultAccessibleRoute` is what `/` resolves to once the signed-in user is
  * known, so these cases are the two user classes landing on the root path.

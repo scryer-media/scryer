@@ -459,7 +459,7 @@ const settingsEntries: Array<{
     id: "lifecycleRules",
     label: (t) => t("settings.lifecycleRules"),
     icon: Wrench,
-    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {
     id: "requestRules",
@@ -1391,7 +1391,11 @@ function RootSidebarContent({
                             ) ? (
                               <SidebarGroupContent>
                                 <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
-                                  {RULES_SECTIONS.map((section) => {
+                                  {RULES_SECTIONS.filter(
+                                    (section) =>
+                                      section !== "lifecycle" ||
+                                      canManageSystemSettings,
+                                  ).map((section) => {
                                     const rulesItem =
                                       RULES_SECTION_ITEMS[section];
                                     return (

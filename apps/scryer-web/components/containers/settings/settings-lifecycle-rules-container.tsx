@@ -476,7 +476,7 @@ export function SettingsLifecycleRulesContainer({
   // reopening it shows that run.
   const canImportRules =
     sessionUser !== null &&
-    hasAppPermission(sessionUser, APP_PERMISSIONS.manageCatalogSettings);
+    hasAppPermission(sessionUser, APP_PERMISSIONS.manageSystemSettings);
   // A finished run may have saved rules even when the dialog is closed or
   // its report was cleared.
   const refreshAfterImport = useCallback(() => {

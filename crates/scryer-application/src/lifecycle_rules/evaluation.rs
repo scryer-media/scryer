@@ -368,7 +368,7 @@ impl AppUseCase {
     }
 
     /// Read the gates. Instance-wide arming is a system setting, so it is
-    /// gated like one, not like the catalog-settings authoring surface.
+    /// gated like one.
     pub async fn lifecycle_instance_gates(&self, actor: &User) -> AppResult<LifecycleGates> {
         self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
@@ -432,7 +432,7 @@ impl AppUseCase {
         actor: &User,
         rule_set_id: Option<&str>,
     ) -> AppResult<Vec<LifecycleExclusionView>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let exclusions = self
@@ -502,7 +502,7 @@ impl AppUseCase {
         rule_set_id: Option<String>,
         reason: Option<String>,
     ) -> AppResult<LifecycleExclusionView> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let title = self
@@ -548,7 +548,7 @@ impl AppUseCase {
     }
 
     pub async fn remove_lifecycle_exclusion(&self, actor: &User, id: &str) -> AppResult<String> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         self.services
@@ -581,7 +581,7 @@ impl AppUseCase {
         actor: &User,
         filter: LifecycleCandidateFilter,
     ) -> AppResult<Vec<LifecycleCandidateView>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         let gates = self.load_lifecycle_gates().await?;
@@ -671,7 +671,7 @@ impl AppUseCase {
         rule_set_id: Option<&str>,
         limit: Option<usize>,
     ) -> AppResult<Vec<LifecycleEvaluationRun>> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         self.services
             .customization
@@ -796,7 +796,7 @@ impl AppUseCase {
         actor: &User,
         rule_set_id: Option<String>,
     ) -> AppResult<LifecycleEvaluationTrigger> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
         if !self.load_lifecycle_gates().await?.evaluation_enabled {

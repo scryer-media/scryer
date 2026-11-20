@@ -652,6 +652,8 @@ impl AppUseCase {
                 snapshot,
                 evaluated_at,
                 None,
+                // The preview shows the whole input document.
+                true,
             )
             .await?;
         let input = build_request_input(context);

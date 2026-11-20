@@ -25,8 +25,9 @@ mod lists;
 
 use scryer_interface_core as context;
 use scryer_interface_core::{
-    actor_from_ctx, app_from_ctx, application_upgrade_assessment_from_ctx, current_user_from_ctx,
-    mfa_verification_from_ctx, require_app_permission, require_config_app_permission, to_gql_error,
+    actor_from_ctx, actor_has_app_permission, app_from_ctx,
+    application_upgrade_assessment_from_ctx, current_user_from_ctx, mfa_verification_from_ctx,
+    require_app_permission, require_config_app_permission, to_gql_error,
 };
 use scryer_interface_media::mappers;
 use scryer_interface_media::mappers::{
@@ -1407,14 +1408,21 @@ impl ExternalImportQueries {
             .map_err(to_gql_error)
     }
 
-    /// Read one of the caller's external rule imports and its per-item report; requires catalog-settings management.
+    /// Read one of the caller's external rule imports and its per-item report; requires the permission its source needs to start, catalog-settings management for Sonarr or Radarr and system-settings management for Maintainerr.
     async fn external_rule_import_status(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Rule import job run identity.")] run_id: ID,
     ) -> GqlResult<ExternalRuleImportStatusPayload> {
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        // The run's source decides the permission; the application checks it
+        // once the run is read.
+        let permission =
+            if actor_has_app_permission(ctx, AppPermission::ManageCatalogSettings).await? {
+                AppPermission::ManageCatalogSettings
+            } else {
+                AppPermission::ManageSystemSettings
+            };
+        let actor = require_config_app_permission(ctx, permission).await?;
         let app = app_from_ctx(ctx)?;
         app.rule_import_status(&actor, run_id.as_str())
             .await
@@ -4202,7 +4210,7 @@ impl AcquisitionQueries {
 
     // ── Lifecycle Rule Sets ────────────────────────────────────────────
 
-    /// List lifecycle rule sets; requires catalog-settings management permission.
+    /// List lifecycle rule sets; requires system-settings management permission.
     async fn lifecycle_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<LifecycleRuleSet>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -4263,7 +4271,7 @@ impl AcquisitionQueries {
             .collect())
     }
 
-    /// List lifecycle candidates the lifecycle evaluator has recorded; requires catalog-settings management permission.
+    /// List lifecycle candidates the lifecycle evaluator has recorded; requires system-settings management permission.
     ///
     /// Candidates are ordered by due time across rules, soonest first, and
     /// none are returned while lifecycle is switched off for the instance.

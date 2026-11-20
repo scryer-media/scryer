@@ -1261,6 +1261,46 @@ pub fn request_person_targeted_paths(
     }
 }
 
+/// Whether a request rule may read any of `facts`: by name under
+/// `input.facts` or `input.observations`, or through any reference that does
+/// not name what it reads (the whole input document, the whole fact or
+/// observation object, or a computed selector). True for a source whose
+/// references cannot be read off it, so a caller that skips a read for rules
+/// answering false can never hand a rule a value it reads.
+pub fn request_rule_may_read_facts(rego_source: &str, rule_set_id: &str, facts: &[&str]) -> bool {
+    let policy_path = request::user_policy_path(rule_set_id);
+    let ctx = InputPathContext::request();
+    let Ok(module) = parse_module(rego_source, &policy_path, &ctx.limits) else {
+        return true;
+    };
+    if input_import_error(&module, ctx.family).is_some() {
+        return true;
+    }
+    let nested = ctx.nested_fact_sections;
+    let mut reads = false;
+    walk_module_input_paths(&module, ctx, |path| {
+        reads = reads
+            || path.references_input_wholesale()
+            || path.selects_fact_dynamically(nested)
+            || path.reads_facts_object_wholesale(nested)
+            || path
+                .fact_name(nested)
+                .is_some_and(|name| facts.contains(&name.as_str()))
+            || match path.components.as_slice() {
+                [
+                    InputPathComponent::Field(input),
+                    InputPathComponent::Field(observations),
+                    rest @ ..,
+                ] if input == "input" && observations == "observations" => match rest.first() {
+                    Some(InputPathComponent::Field(name)) => facts.contains(&name.as_str()),
+                    _ => true,
+                },
+                _ => false,
+            };
+    });
+    reads
+}
+
 /// Reject any import that pulls `input` (or part of it) into scope.
 ///
 /// `import input.facts` would let a rule write `facts.monitored`, which the
@@ -3628,6 +3668,36 @@ mod tests {
                 "is_adult".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn a_request_rule_may_read_a_fact_unless_every_reference_names_another() {
+        let watched = ["on_requester_watchlist", "requester_watchlist_days"];
+        let reads = |body: &str| {
+            request_rule_may_read_facts(
+                &request::rewrite_package_declaration(body, "fact_reader"),
+                "fact_reader",
+                &watched,
+            )
+        };
+        assert!(!reads(
+            "approve if {\n  input.facts.certification_rank <= 2\n  \
+             input.observations.is_adult.status == \"known\"\n  \
+             input.requester.username == \"synthetic\"\n}\n"
+        ));
+        for body in [
+            "approve if {\n  input.facts.on_requester_watchlist\n}\n",
+            "approve if {\n  input.facts.requester_watchlist_days < 30\n}\n",
+            "manual if {\n  input.observations.on_requester_watchlist.status == \"unknown\"\n}\n",
+            "manual if {\n  some name\n  input.observations[name].status == \"unknown\"\n}\n",
+            "manual if {\n  count(input.observations) > 0\n}\n",
+            "approve if {\n  walk(input, [_, _])\n}\n",
+            "approve if {\n  some name\n  input.facts[name] == true\n}\n",
+            "approve if {\n  count(input.facts) > 0\n}\n",
+            "approve if {\n  not valid rego\n",
+        ] {
+            assert!(reads(body), "{body}");
+        }
     }
 
     /// The gate the application authors on: which named people the rule asks

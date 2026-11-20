@@ -131,6 +131,17 @@ impl RuleImportSource {
     fn requires_api_key(self) -> bool {
         matches!(self, Self::Sonarr | Self::Radarr)
     }
+
+    /// The permission to start, follow or read an import from this source.
+    /// A Maintainerr import creates lifecycle rules, which need system
+    /// settings; custom formats become release rules, which need catalog
+    /// settings.
+    pub fn required_permission(self) -> AppPermission {
+        match self {
+            Self::Sonarr | Self::Radarr => AppPermission::ManageCatalogSettings,
+            Self::Maintainerr => AppPermission::ManageSystemSettings,
+        }
+    }
 }
 
 /// What the operator submitted. Stored encrypted as the run's private input
@@ -623,7 +634,7 @@ impl AppUseCase {
         request_key: &str,
         connection: RuleImportConnection,
     ) -> AppResult<JobRunRecord> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, connection.source.required_permission())
             .await?;
         if request_key.trim().is_empty() || request_key.len() > 128 {
             return Err(AppError::validation_refused(
@@ -741,8 +752,21 @@ impl AppUseCase {
         actor: &User,
         run_id: &str,
     ) -> AppResult<(JobRunRecord, RuleImportProgress)> {
-        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
-            .await?;
+        // Which permission applies depends on the run's source, so a caller
+        // holding neither is refused before any run is read.
+        if !self
+            .has_any_app_permission(
+                actor,
+                scryer_domain::AppPermissionMask::from_permissions([
+                    AppPermission::ManageCatalogSettings,
+                    AppPermission::ManageSystemSettings,
+                ]),
+            )
+            .await?
+        {
+            self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+                .await?;
+        }
         let run = self
             .services
             .events
@@ -761,6 +785,8 @@ impl AppUseCase {
             })?;
         let mut progress: RuleImportProgress =
             decode(run.progress_json.as_deref().unwrap_or("{}"))?;
+        self.require_app_permission(actor, progress.source.required_permission())
+            .await?;
         if run.status.is_terminal() {
             settle_interrupted(&mut progress);
         }

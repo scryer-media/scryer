@@ -29,8 +29,8 @@ permission check only.
 | Notifications | `createNotificationChannel` | `MANAGE_SYSTEM_SETTINGS` | yes |
 | Arr import: finalize | `finalizeExternalImport` | `MANAGE_CATALOG_SETTINGS` | no |
 | Rule import from Sonarr or Radarr: start | `startExternalRuleImport` | `MANAGE_CATALOG_SETTINGS` | yes |
-| Rule import: report (own runs only) | `externalRuleImportStatus` | `MANAGE_CATALOG_SETTINGS` | yes |
-| Rule import from Maintainerr: start | `startExternalRuleImport` (source `MAINTAINERR`, no API key) | `MANAGE_CATALOG_SETTINGS`; a group reading facts about people saves only with `MANAGE_PERMISSIONS` too | yes |
+| Rule import: report (own runs only) | `externalRuleImportStatus` | what that run's source needs to start: `MANAGE_CATALOG_SETTINGS` for Sonarr or Radarr, `MANAGE_SYSTEM_SETTINGS` for Maintainerr | yes |
+| Rule import from Maintainerr: start | `startExternalRuleImport` (source `MAINTAINERR`, no API key) | `MANAGE_SYSTEM_SETTINGS`; a group reading facts about people saves only with `MANAGE_PERMISSIONS` too | yes |
 | Users, permissions, lists | user and list operations | `MANAGE_USERS`, `MANAGE_PERMISSIONS`, `MANAGE_LISTS` | varies |
 
 Library-scoped reads (titles, scans) respect per-library grants: an account

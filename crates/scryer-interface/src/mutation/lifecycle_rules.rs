@@ -147,8 +147,7 @@ impl LifecycleRuleMutations {
         input: CreateLifecycleRuleSetInput,
     ) -> GqlResult<LifecycleRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let schedule = rule_schedule(input.schedule)?;
         let detail = app
             .create_lifecycle_rule_set_with_schedule(
@@ -179,8 +178,7 @@ impl LifecycleRuleMutations {
         input: UpdateLifecycleRuleSourceInput,
     ) -> GqlResult<LifecycleRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let detail = app
             .update_lifecycle_rule_source_with_builder_model(
                 &actor,
@@ -212,8 +210,7 @@ impl LifecycleRuleMutations {
         input: UpdateLifecycleRuleMetadataInput,
     ) -> GqlResult<LifecycleRuleSet> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let schedule = rule_schedule(input.schedule)?;
         app.update_lifecycle_rule_metadata_with_schedule(
@@ -260,8 +257,7 @@ impl LifecycleRuleMutations {
         #[graphql(desc = "Lifecycle rule-set identity to delete.")] id: ID,
     ) -> GqlResult<DeleteLifecycleRuleSetPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let id = id.to_string();
         app.delete_lifecycle_rule_set(&actor, &id)
@@ -278,8 +274,7 @@ impl LifecycleRuleMutations {
         #[graphql(desc = "Matcher source to validate.")] input: ValidateLifecycleRuleInput,
     ) -> GqlResult<LifecycleRuleValidationPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let validation = app
             .validate_lifecycle_rule_source(&actor, &input.rego_source)
@@ -317,8 +312,7 @@ impl LifecycleRuleMutations {
         mut input: PreviewLifecycleRuleInput,
     ) -> GqlResult<LifecyclePreviewPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let source = preview_source(&mut input)?;
         let selection = preview_selection(&mut input)?;
@@ -346,8 +340,7 @@ impl LifecycleRuleMutations {
         confirmation: Option<LifecycleRuleArmingConfirmationInput>,
     ) -> GqlResult<LifecycleRuleSet> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let candidate_count = confirmation
             .as_ref()
@@ -390,8 +383,7 @@ impl LifecycleRuleMutations {
         rule_set_id: Option<ID>,
     ) -> GqlResult<LifecycleEvaluationTriggerPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let trigger = app
             .run_lifecycle_action_handler_now(&actor, rule_set_id.map(String::from))
@@ -439,8 +431,7 @@ impl LifecycleRuleMutations {
         input: ExcludeLifecycleSubjectInput,
     ) -> GqlResult<LifecycleExclusion> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let subject_kind =
             crate::mappers::lifecycle_rule_subject_kind_into_application(input.subject_kind);
@@ -480,8 +471,7 @@ impl LifecycleRuleMutations {
         #[graphql(desc = "Exclusion identity to remove.")] id: ID,
     ) -> GqlResult<DeleteLifecycleExclusionPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let removed = app
             .remove_lifecycle_exclusion(&actor, id.as_ref())
@@ -506,8 +496,7 @@ impl LifecycleRuleMutations {
         rule_set_id: Option<ID>,
     ) -> GqlResult<LifecycleEvaluationTriggerPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor =
-            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let trigger = app
             .run_lifecycle_evaluation_now(&actor, rule_set_id.map(String::from))

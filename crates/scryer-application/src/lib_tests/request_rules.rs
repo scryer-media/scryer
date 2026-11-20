@@ -539,6 +539,50 @@ async fn enabling_a_rule_set_rebuilds_the_engine() {
 }
 
 #[tokio::test]
+async fn the_engine_reads_watchlists_only_while_a_loaded_rule_may_use_them() {
+    const READS_WATCHLIST: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.facts.on_requester_watchlist == true
+}
+"#;
+    let harness = bootstrap_media_request_app();
+    let plain = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &plain.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert!(
+        !harness
+            .app
+            .request_rules_engine_snapshot()
+            .reads_watchlist_facts
+    );
+
+    let watching = create_rule(&harness, "Watchlisted titles", READS_WATCHLIST).await;
+    // A disabled rule is not loaded, so it cannot need the read.
+    assert!(
+        !harness
+            .app
+            .request_rules_engine_snapshot()
+            .reads_watchlist_facts
+    );
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &watching.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert!(
+        harness
+            .app
+            .request_rules_engine_snapshot()
+            .reads_watchlist_facts
+    );
+}
+
+#[tokio::test]
 async fn enabling_a_rule_set_needs_catalog_settings_authority() {
     let harness = bootstrap_media_request_app();
     let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
