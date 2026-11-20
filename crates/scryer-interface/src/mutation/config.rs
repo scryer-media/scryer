@@ -126,6 +126,20 @@ fn download_client_config_fields(
         .unwrap_or_default()
 }
 
+/// The fields that decide which stored values a save keeps when it omits
+/// them. Values a payload redacted for want of field definitions are kept.
+fn download_client_merge_fields(
+    config_fields: Vec<scryer_domain::ConfigFieldDef>,
+    client_type: &str,
+    existing_json: &str,
+) -> Vec<scryer_domain::ConfigFieldDef> {
+    if !config_fields.is_empty() {
+        return config_fields;
+    }
+    scryer_application::download_client_stored_config_fallback_fields(client_type, existing_json)
+        .unwrap_or(config_fields)
+}
+
 fn provider_config_key_looks_secret(key: &str) -> bool {
     let normalized = key.trim().to_ascii_lowercase();
     normalized.contains("password")
@@ -754,7 +768,11 @@ impl ConfigMutations {
         let effective_config_json = match input.config {
             Some(config) => {
                 let config_json = provider_config_values_to_json(config).map_err(to_gql_error)?;
-                let config_fields = download_client_config_fields(&app, &effective_client_type);
+                let config_fields = download_client_merge_fields(
+                    download_client_config_fields(&app, &effective_client_type),
+                    &effective_client_type,
+                    &existing.config_json,
+                );
                 let config_json = merge_omitted_provider_secrets(
                     config_json,
                     &existing.config_json,
@@ -1175,6 +1193,35 @@ mod tests {
 
         assert_eq!(merged["api_key"], "saved-key");
         assert_eq!(merged["password"], "saved-password");
+    }
+
+    #[test]
+    fn saving_a_client_without_field_definitions_keeps_omitted_stored_values() {
+        // The payload showed every stored string as a stored secret, so the
+        // edit form sends back only what the operator typed.
+        let existing =
+            r#"{"host":"h.invalid","cookie":"saved-cookie","label":"tv","use_ssl":true}"#;
+        let fields = download_client_merge_fields(Vec::new(), "synthetic-orphan", existing);
+        let merged = merge_omitted_provider_secrets(
+            r#"{"host":"h2.invalid","use_ssl":false}"#.to_string(),
+            existing,
+            &fields,
+        )
+        .expect("merge stored values");
+        let merged: serde_json::Value = serde_json::from_str(&merged).unwrap();
+
+        assert_eq!(merged["host"], "h2.invalid");
+        assert_eq!(merged["cookie"], "saved-cookie");
+        assert_eq!(merged["label"], "tv");
+        assert_eq!(merged["use_ssl"], false);
+
+        // Built-in clients and loaded plugins keep their own rules.
+        assert!(download_client_merge_fields(Vec::new(), "nzbget", existing).is_empty());
+        let loaded = vec![secret_field("api_key")];
+        assert_eq!(
+            download_client_merge_fields(loaded.clone(), "synthetic-orphan", existing),
+            loaded
+        );
     }
 
     #[test]

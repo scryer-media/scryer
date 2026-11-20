@@ -289,6 +289,9 @@ pub use import::failed_download as failed_download_handler;
 pub use import::post_processing as app_usecase_post_processing;
 pub use import::srrdb::{SRRDB_API_BASE_URL, SrrdbHttpFilenameLookup};
 pub use import::upgrade;
+pub use integration::dynamic_config_fields::{
+    download_client_stored_config_fallback_fields, stored_config_keys_as_secrets,
+};
 pub use integration::indexer_caps_cache::{
     CapsRequestCache, IndexerCapsDiagnostic, IndexerCapsRefreshContext, IndexerCapsSource,
     ResolvedIndexerCaps, cached_indexer_caps,
