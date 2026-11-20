@@ -74,6 +74,8 @@ pub struct ImageProxyRuntime {
     conversions: Arc<ActiveConversions>,
     #[cfg(test)]
     jpeg_source_reads: Arc<AtomicU64>,
+    #[cfg(test)]
+    stale_refreshes_started: Arc<AtomicU64>,
 }
 
 /// Only in-flight conversions are tracked; no permanent per-cache-entry state.
@@ -162,6 +164,8 @@ impl ImageProxyRuntime {
             conversions: Arc::new(ActiveConversions::default()),
             #[cfg(test)]
             jpeg_source_reads: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            stale_refreshes_started: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -205,21 +209,33 @@ impl ImageProxyRuntime {
                 return Some(cached_blob(&entry, bytes));
             }
             if freshness == CacheFreshness::Stale {
-                let runtime = Arc::clone(self);
-                let source_for_refresh = source.clone();
-                let token = token.to_string();
-                let variant = variant.to_string();
-                let observed_fetched_at = entry.fetched_at;
-                tokio::spawn(async move {
-                    let _ = runtime
-                        .refresh_stale_singleflight(
-                            &source_for_refresh,
-                            &token,
-                            &variant,
-                            observed_fetched_at,
-                        )
-                        .await;
-                });
+                // One refresh per image at a time: a stale hit while one is
+                // already running serves the cached bytes and starts nothing.
+                if let Some(fetch) = self
+                    .reserve_stale_refresh(format!("{token}:{variant}"))
+                    .await
+                {
+                    #[cfg(test)]
+                    self.stale_refreshes_started.fetch_add(1, Ordering::Relaxed);
+                    let runtime = Arc::clone(self);
+                    let source_for_refresh = source.clone();
+                    let token = token.to_string();
+                    let variant = variant.to_string();
+                    let observed_fetched_at = entry.fetched_at;
+                    // The task owns the reservation, so it is released however
+                    // the task ends: finished, panicked or dropped.
+                    tokio::spawn(async move {
+                        let _ = runtime
+                            .refresh_stale_singleflight(
+                                fetch,
+                                &source_for_refresh,
+                                &token,
+                                &variant,
+                                observed_fetched_at,
+                            )
+                            .await;
+                    });
+                }
                 return Some(cached_blob(&entry, bytes));
             }
         }
@@ -379,13 +395,13 @@ impl ImageProxyRuntime {
 
     async fn refresh_stale_singleflight(
         self: &Arc<Self>,
+        fetch: Arc<InflightFetch>,
         source: &ImageProxySourceRecord,
         token: &str,
         variant: &str,
         observed_fetched_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let lifecycle_guard = self.cache_lifecycle.clone().read_owned().await;
-        let fetch = self.inflight_fetch(format!("{token}:{variant}")).await;
         let result = fetch
             .get_or_init(move || async move {
                 let existing = self
@@ -405,6 +421,20 @@ impl ImageProxyRuntime {
             })
             .await;
         clone_shared_fetch_result(result).map(|_| ())
+    }
+
+    /// Claims the fetch slot for `key` for a stale refresh, or returns `None`
+    /// when a fetch for that image is already in flight. The slot is held by
+    /// the returned `Arc` and frees itself when the last holder drops it.
+    async fn reserve_stale_refresh(&self, key: String) -> Option<Arc<InflightFetch>> {
+        let mut inflight = self.inflight.lock().await;
+        inflight.retain(|_, fetch| fetch.strong_count() > 0);
+        if inflight.get(&key).and_then(Weak::upgrade).is_some() {
+            return None;
+        }
+        let created = Arc::new(OnceCell::new());
+        inflight.insert(key, Arc::downgrade(&created));
+        Some(created)
     }
 
     async fn inflight_fetch(&self, key: String) -> Arc<InflightFetch> {
@@ -1184,7 +1214,7 @@ fn cache_failure(action: &'static str) -> impl FnOnce(DiskError) -> AppError {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Weak};
     use std::time::Duration;
 
     /// Polls `condition` until it holds, panicking after a 30 s hang guard.
@@ -2156,6 +2186,143 @@ mod tests {
         );
         assert_eq!(title_images.reads.load(Ordering::Relaxed), 0);
         assert!(image_repository.cache_deletes.load(Ordering::Relaxed) >= 1);
+    }
+
+    async fn stale_cache_fixture(
+        token: &str,
+        bytes: &[u8],
+    ) -> (tempfile::TempDir, Arc<ImageProxyRuntime>) {
+        let stale_at = Utc::now() - chrono::Duration::days(8);
+        let image_repository = Arc::new(TestImageRepository {
+            source: ImageProxySourceRecord {
+                token: token.to_string(),
+                upstream_url: None,
+                owner_type: Some("episode".to_string()),
+                owner_id: Some("episode-1".to_string()),
+                image_kind: "episode_still".to_string(),
+                fallback_class: "landscape".to_string(),
+                last_seen_at: Utc::now(),
+            },
+            cache_entries: Mutex::new(vec![ImageProxyCacheEntryRecord {
+                token: token.to_string(),
+                variant: "original".to_string(),
+                content_type: "image/png".to_string(),
+                byte_size: bytes.len() as i64,
+                upstream_etag: None,
+                upstream_last_modified: None,
+                fetched_at: stale_at,
+                last_accessed_at: Utc::now(),
+            }]),
+            cache_reads: AtomicUsize::new(0),
+            cache_read_gate: None,
+            cache_write_started: None,
+            cache_write_release: None,
+            cache_deletes: AtomicUsize::new(0),
+            cache_clears: AtomicUsize::new(0),
+            memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
+            orphan_sweeps: AtomicUsize::new(0),
+        });
+        let title_images = Arc::new(TestTitleImageRepository {
+            blob: TitleImageBlob {
+                content_type: "image/avif".to_string(),
+                etag: "\"unused\"".to_string(),
+                bytes: Vec::new(),
+            },
+            reads: AtomicUsize::new(0),
+        });
+        let temp = tempfile::tempdir().expect("temporary image cache");
+        let mut runtime = ImageProxyRuntime::new(image_repository, title_images, temp.path());
+        runtime.environment_override_bytes = None;
+        let runtime = Arc::new(runtime);
+        tokio::fs::create_dir_all(&runtime.cache_dir)
+            .await
+            .expect("create image cache");
+        tokio::fs::write(runtime.cache_path(token, "original"), bytes)
+            .await
+            .expect("write cached image");
+        (temp, runtime)
+    }
+
+    #[tokio::test]
+    async fn a_stale_image_starts_one_refresh_at_a_time_and_serves_stale_bytes() {
+        let token = "d".repeat(64);
+        let bytes = b"stale-bytes".to_vec();
+        let (_temp, runtime) = stale_cache_fixture(&token, &bytes).await;
+        let key = format!("{token}:original");
+        let refreshes = || runtime.stale_refreshes_started.load(Ordering::Relaxed);
+
+        // A fetch for this image is already in flight.
+        let held = runtime.inflight_fetch(key.clone()).await;
+        for _ in 0..8 {
+            let blob = runtime
+                .resolve(&token, "original")
+                .await
+                .expect("stale bytes are served while a refresh runs");
+            assert_eq!(blob.bytes, bytes);
+        }
+        assert_eq!(refreshes(), 0);
+
+        drop(held);
+        let blob = runtime
+            .resolve(&token, "original")
+            .await
+            .expect("stale bytes are served");
+        assert_eq!(blob.bytes, bytes);
+        assert_eq!(refreshes(), 1);
+
+        // The refresh has no upstream to reach, finishes, and frees its slot,
+        // so the next stale hit may refresh again.
+        wait_until("the refresh slot is released", || {
+            runtime
+                .inflight
+                .try_lock()
+                .is_ok_and(|inflight| inflight.get(&key).and_then(Weak::upgrade).is_none())
+        })
+        .await;
+        let blob = runtime
+            .resolve(&token, "original")
+            .await
+            .expect("stale bytes are served");
+        assert_eq!(blob.bytes, bytes);
+        assert_eq!(refreshes(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_stale_refresh_slot_frees_itself_when_its_task_panics_or_is_dropped() {
+        let token = "d".repeat(64);
+        let (_temp, runtime) = stale_cache_fixture(&token, b"stale-bytes").await;
+        let key = "fixture-token:original".to_string();
+
+        let slot = runtime
+            .reserve_stale_refresh(key.clone())
+            .await
+            .expect("slot is free");
+        assert!(runtime.reserve_stale_refresh(key.clone()).await.is_none());
+        let panicked = tokio::spawn(async move {
+            let _slot = slot;
+            panic!("synthetic refresh failure");
+        })
+        .await
+        .expect_err("task should panic");
+        assert!(panicked.is_panic());
+
+        let slot = runtime
+            .reserve_stale_refresh(key.clone())
+            .await
+            .expect("a panicked refresh frees its slot");
+        let cancelled = tokio::spawn(async move {
+            let _slot = slot;
+            std::future::pending::<()>().await;
+        });
+        cancelled.abort();
+        assert!(cancelled.await.expect_err("task is aborted").is_cancelled());
+        assert!(
+            runtime.reserve_stale_refresh(key).await.is_some(),
+            "a dropped refresh frees its slot"
+        );
     }
 
     #[tokio::test]

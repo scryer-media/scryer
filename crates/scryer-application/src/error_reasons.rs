@@ -1121,6 +1121,13 @@ pub mod security {
     /// This backup bundle is encrypted and requires a password.
     pub const BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD: &str =
         "SECURITY_BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD";
+    /// A backup payload has more entries than a backup bundle holds.
+    pub const BACKUP_BUNDLE_TOO_MANY_ENTRIES: &str = "SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES";
+    /// A backup payload holds an entry that is not a regular file or directory.
+    pub const BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED: &str =
+        "SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED";
+    /// Unpacking a backup would leave too little free space for restore scratch.
+    pub const BACKUP_BUNDLE_SCRATCH_SPACE_LOW: &str = "SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW";
     /// Login verification challenge is unavailable.
     pub const LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE: &str =
         "SECURITY_LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE";
@@ -1481,6 +1488,9 @@ pub mod security {
         BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG,
         BACKUP_EXPORT_REQUIRES_NON_EMPTY_PASSWORD,
         BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD,
+        BACKUP_BUNDLE_TOO_MANY_ENTRIES,
+        BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED,
+        BACKUP_BUNDLE_SCRATCH_SPACE_LOW,
         LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE,
         LOGIN_VERIFICATION_CHALLENGE_EXPIRED,
         REQUESTED_LOGIN_VERIFICATION_FACTOR_UNAVAILABLE,

@@ -34,6 +34,40 @@ use super::{
 /// lookups. Sonarr's equivalent bound is 60.
 const SABNZBD_HISTORY_PAGE_SIZE: usize = 100;
 
+/// Largest reply read for a call whose answer does not grow with the queue or
+/// the history: an add, a status, the config, the categories, a mutation.
+/// Those answer in kilobytes; a reply past this is not one and is treated as
+/// a reply that could not be read.
+const SABNZBD_MAX_REPLY_BYTES: usize = 32 * 1024 * 1024;
+
+/// The reply limit for one API call. `mode=queue` answers with the whole queue
+/// and `mode=history` with pages a caller may size by the history it is
+/// listing, so both legitimately grow with what the backend holds and are read
+/// whole, as before.
+fn sab_reply_limit(request_mode: Option<&str>) -> Option<usize> {
+    match request_mode {
+        Some("queue" | "history") => None,
+        _ => Some(SABNZBD_MAX_REPLY_BYTES),
+    }
+}
+
+/// A reply body as text, refused once it passes `limit` bytes.
+async fn read_sab_reply(
+    response: reqwest::Response,
+    limit: Option<usize>,
+) -> Result<String, String> {
+    let Some(limit) = limit else {
+        return response.text().await.map_err(|err| err.to_string());
+    };
+    match scryer_outbound_http::read_body_bounded(response, limit).await {
+        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(scryer_outbound_http::BoundedBodyError::TooLarge { limit }) => {
+            Err(format!("reply exceeded {limit} bytes"))
+        }
+        Err(scryer_outbound_http::BoundedBodyError::Read(err)) => Err(err.to_string()),
+    }
+}
+
 #[derive(Clone)]
 pub struct SabnzbdDownloadClient {
     base_url: String,
@@ -383,9 +417,11 @@ impl SabnzbdDownloadClient {
             .map_err(|error| map_sabnzbd_outbound_error("sabnzbd api call", error))?;
 
             let status = response.status();
-            let body = response.text().await.map_err(|err| {
-                sab_transport_failure(&format!("sabnzbd response read failed: {err}"))
-            })?;
+            let body = read_sab_reply(response, sab_reply_limit(request_mode))
+                .await
+                .map_err(|err| {
+                    sab_transport_failure(&format!("sabnzbd response read failed: {err}"))
+                })?;
 
             match evaluate_sab_api_response("sabnzbd api", request_mode, status, &body) {
                 SabApiResponseEvaluation::Success(json) => {
@@ -951,14 +987,17 @@ impl SabnzbdDownloadClient {
             .map_err(|error| map_sabnzbd_addfile_send_error("sabnzbd addfile call", error))?;
 
         let status = response.status();
-        let body = response.text().await.map_err(|err| {
-            // The request was fully sent; a failure while reading the response
-            // body means we cannot tell whether SABnzbd enqueued the job.
-            AppError::DownloadSubmitAmbiguous(format!(
-                "sabnzbd addfile response body was lost after the upload was sent: {}",
-                redact_sab_secret_values(&err.to_string())
-            ))
-        })?;
+        let body = read_sab_reply(response, Some(SABNZBD_MAX_REPLY_BYTES))
+            .await
+            .map_err(|err| {
+                // The request was fully sent; a reply that cannot be read, or
+                // one too large to be an add reply, means we cannot tell
+                // whether SABnzbd enqueued the job.
+                AppError::DownloadSubmitAmbiguous(format!(
+                    "sabnzbd addfile response body was lost after the upload was sent: {}",
+                    redact_sab_secret_values(&err)
+                ))
+            })?;
 
         Ok((status, body))
     }
@@ -3157,6 +3196,97 @@ mod tests {
             assert_eq!(fields.get("mode").map(String::as_str), Some("retry"));
             assert_eq!(fields.get("value").map(String::as_str), Some("old-job"));
         }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_addfile_reply_is_reconciled_like_a_lost_one() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "queue": { "slots": [
+                    { "nzo_id": "SABnzbd_nzo_reconciled", "filename": "Test Release" }
+                ] }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![
+                b' ';
+                super::SABNZBD_MAX_REPLY_BYTES
+                    + 1
+            ]))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let staged_nzb_dir = tempfile::tempdir().expect("staged nzb directory");
+        let staged_nzb_store = Arc::new(
+            FileSystemStagedNzbStore::new(staged_nzb_dir.path())
+                .await
+                .expect("staged nzb store"),
+        );
+        let client = SabnzbdDownloadClient::with_staged_nzb_store(
+            server.uri(),
+            "test-api-key".to_string(),
+            staged_nzb_store,
+            Arc::new(Semaphore::new(1)),
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(120),
+            client.submit_download(&test_add_request(
+                "scryer-download:00000000-0000-4000-8000-000000000031",
+            )),
+        )
+        .await
+        .expect("submit finishes")
+        .expect("the job found in the queue is adopted");
+
+        assert_eq!(result.job_id, "SABnzbd_nzo_reconciled");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_reply_to_a_small_call_fails_like_an_unreadable_one() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "get_cats"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![
+                b' ';
+                super::SABNZBD_MAX_REPLY_BYTES
+                    + 1
+            ]))
+            .mount(&server)
+            .await;
+        let client = super::SabnzbdDownloadClient::new(server.uri(), "synthetic-api-key".into());
+        let error = client
+            .discover_categories("client-1")
+            .await
+            .expect_err("an oversized reply is not read");
+        assert_eq!(
+            error.plugin_failure().map(|failure| failure.reason.clone()),
+            Some(scryer_application::PluginFailureReason::UpstreamUnavailable),
+            "{error:?}"
+        );
+
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "get_cats"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "categories": ["*", "movies"] })),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client
+                .discover_categories("client-1")
+                .await
+                .expect("categories"),
+            Some(vec!["*".to_string(), "movies".to_string()])
+        );
     }
 
     fn test_add_request(download_id: &str) -> DownloadClientAddRequest {

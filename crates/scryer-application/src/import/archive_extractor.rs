@@ -1334,14 +1334,16 @@ async fn extract_with_archive_plugin(
     // Scratch is separately capped on the host's actual scratch volume.
     let scratch_dir = std::env::temp_dir();
     let capacity = crate::disk::capacity::StorageCapacity::process();
-    let output_space = capacity
-        .refresh(
-            output_dir.clone(),
-            crate::disk::capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
-        )
-        .await
-        .ok()
-        .map(|space| usable_archive_space(space.available_bytes));
+    let output_space = archive_output_space(
+        &capacity,
+        &output_dir,
+        capacity
+            .refresh(
+                output_dir.clone(),
+                crate::disk::capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
+            )
+            .await,
+    );
     let scratch_space = capacity
         .refresh(
             scratch_dir.clone(),
@@ -1420,6 +1422,30 @@ async fn extract_with_archive_plugin(
         Err(error) if password_rejected => Ok(ArchiveAttempt::PasswordRejected(error)),
         Err(error) => Err(error),
     }
+}
+
+/// The output budget the destination volume allows. When the call for the
+/// output folder fails, the volume's last current figure in the capacity
+/// cache (normally the library root's background sample) stands in for it;
+/// with none, the output is left to the other limits, as before.
+fn archive_output_space(
+    capacity: &crate::disk::capacity::StorageCapacity,
+    output_dir: &Path,
+    probed: std::io::Result<crate::helpers::FilesystemSpace>,
+) -> Option<u64> {
+    let space = match probed {
+        Ok(space) => Some(space),
+        Err(error) => {
+            let fallback = capacity.last_known_space_above(output_dir);
+            tracing::warn!(
+                error = %redact_archive_diagnostic(&error.to_string()),
+                fallback = fallback.is_some(),
+                "archive output free-space check failed"
+            );
+            fallback
+        }
+    };
+    space.map(|space| usable_archive_space(space.available_bytes))
 }
 
 fn usable_archive_space(available: u64) -> u64 {
@@ -2734,6 +2760,37 @@ mod tests {
     use scryer_plugin_sdk::ArchivePluginExtractedFile;
     use std::fs;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_failed_output_space_check_falls_back_to_the_volumes_last_figure() {
+        let capacity = crate::disk::capacity::StorageCapacity::process();
+        let gib = 1024 * 1024 * 1024;
+        let space = |available| crate::helpers::FilesystemSpace {
+            total_bytes: 100 * gib,
+            available_bytes: available,
+        };
+        let failed = || Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "fixture"));
+        let output = Path::new("/srv/fixture-archive-library/.scry-ex/fixture-download/out");
+
+        // A successful check is used as it always was.
+        assert_eq!(
+            archive_output_space(&capacity, output, Ok(space(40 * gib))),
+            Some(usable_archive_space(40 * gib))
+        );
+        // A failed check with nothing known about the volume leaves the
+        // output to the other limits, as before.
+        assert_eq!(archive_output_space(&capacity, output, failed()), None);
+        // With a current figure for the library root, that figure bounds it.
+        capacity.record_for_test(
+            "/srv/fixture-archive-library",
+            chrono::Utc::now(),
+            Some(space(3 * gib)),
+        );
+        assert_eq!(
+            archive_output_space(&capacity, output, failed()),
+            Some(usable_archive_space(3 * gib))
+        );
+    }
 
     #[tokio::test]
     async fn abandoned_archive_releases_only_owned_output_without_pending_subtitles() {

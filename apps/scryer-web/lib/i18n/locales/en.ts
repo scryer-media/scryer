@@ -2528,6 +2528,8 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_IMAGE_DECODE_FAILED": "Failed to decode image.",
   "error.reason.MEDIA_IMAGE_DIMENSIONS_EMPTY":
     "Image dimensions must be non-zero.",
+  "error.reason.MEDIA_IMAGE_DIMENSIONS_TOO_LARGE":
+    "This image has more pixels than artwork may have.",
   "error.reason.MEDIA_IMAGE_FORMAT_DETECTION_FAILED":
     "Failed to detect image format.",
   "error.reason.MEDIA_IMAGE_FORMAT_UNSUPPORTED": "Unsupported image format.",
@@ -3426,14 +3428,20 @@ const en: LocaleDictionary = {
     "Authentication session was invalidated.",
   "error.reason.SECURITY_BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD":
     "This backup bundle is encrypted and requires a password.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED":
+    "This backup holds something other than files and folders, so it cannot be restored.",
   "error.reason.SECURITY_BACKUP_BUNDLE_INVALID":
     "The backup bundle is invalid.",
   "error.reason.SECURITY_BACKUP_BUNDLE_NOT_FOUND":
     "Backup bundle was not found.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW":
+    "There is not enough free disk space to unpack this backup for restore.",
   "error.reason.SECURITY_BACKUP_BUNDLE_STILL_BEING_CREATED":
     "Backup bundle is still being created.",
   "error.reason.SECURITY_BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG":
     "The backup's tables do not match what this version of Scryer can restore.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES":
+    "This backup holds more entries than a Scryer backup has, so it cannot be restored.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MANIFEST_INCOMPLETE":
     "The backup checksum manifest is incomplete.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MISMATCH":
