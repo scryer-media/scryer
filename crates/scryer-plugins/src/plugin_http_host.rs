@@ -18,6 +18,12 @@ use scryer_application::{
 const DEFAULT_MAX_HTTP_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
 const PLUGIN_HTTP_WORKER_RESPONSE_GRACE: Duration = Duration::from_secs(1);
 const PINNED_REQUEST_CLIENT_TTL: Duration = Duration::from_secs(5 * 60);
+/// Most origin dispatchers one host keeps alive at once. A plugin talks to a
+/// handful of origins; past this the least recently used idle dispatcher is
+/// let go so a plugin that walks many ports cannot pile up threads. A request
+/// is never refused because of it: the evicted origin gets a fresh dispatcher
+/// on its next request.
+const MAX_PLUGIN_HTTP_WORKERS: usize = 64;
 type HostResult<T> = Result<T, HostHttpError>;
 
 /// Host-owned transport facts remain typed until the guest interface mapping.
@@ -125,7 +131,49 @@ struct PluginHttpRuntimeState {
 #[derive(Clone)]
 pub(crate) struct PluginHttpHost {
     state: Arc<Mutex<PluginHttpHostState>>,
-    workers: Arc<Mutex<HashMap<PluginHttpRequestClientKey, mpsc::SyncSender<PluginHttpWork>>>>,
+    workers: Arc<Mutex<PluginHttpWorkers>>,
+}
+
+/// The origin dispatchers a host keeps, with what eviction needs to pick one.
+#[derive(Default)]
+struct PluginHttpWorkers {
+    entries: HashMap<PluginHttpRequestClientKey, PluginHttpWorkerEntry>,
+    next_use: u64,
+}
+
+struct PluginHttpWorkerEntry {
+    sender: mpsc::SyncSender<PluginHttpWork>,
+    last_use: u64,
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Marks one request as in flight on a dispatcher until it is dropped.
+struct PluginHttpInFlight(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for PluginHttpInFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl PluginHttpWorkers {
+    /// Lets go of one dispatcher so a new origin fits: the least recently
+    /// used idle one, or the least recently used one when every dispatcher is
+    /// busy. Dropping the map's sender only ends the dispatcher once the
+    /// requests already handed to it have answered, so nothing in flight is
+    /// cut short.
+    fn evict_one(&mut self) {
+        let victim = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.in_flight.load(std::sync::atomic::Ordering::Acquire) == 0)
+            .min_by_key(|(_, entry)| entry.last_use)
+            .or_else(|| self.entries.iter().min_by_key(|(_, entry)| entry.last_use))
+            .map(|(key, _)| key.clone());
+        if let Some(key) = victim {
+            self.entries.remove(&key);
+        }
+    }
 }
 
 struct PluginHttpHostState {
@@ -502,7 +550,7 @@ impl PluginHttpHost {
                 indexer_request_accounting: None,
                 indexer_error_capture: None,
             })),
-            workers: Arc::new(Mutex::new(HashMap::new())),
+            workers: Arc::new(Mutex::new(PluginHttpWorkers::default())),
         }
     }
 
@@ -522,7 +570,7 @@ impl PluginHttpHost {
             .clone();
         enforce_allowed_hosts(allowed_hosts.as_deref(), &request.url)?;
         let (response_sender, response_receiver) = mpsc::sync_channel(1);
-        let worker = self.worker_sender(worker_key.clone())?;
+        let (worker, _in_flight) = self.worker_sender(worker_key.clone())?;
         worker
             .send(PluginHttpWork {
                 plugin_id: plugin_id.to_string(),
@@ -623,13 +671,25 @@ impl PluginHttpHost {
     fn worker_sender(
         &self,
         worker_key: PluginHttpRequestClientKey,
-    ) -> HostResult<mpsc::SyncSender<PluginHttpWork>> {
+    ) -> HostResult<(mpsc::SyncSender<PluginHttpWork>, PluginHttpInFlight)> {
         let mut workers = self
             .workers
             .lock()
             .map_err(|error| format!("plugin HTTP worker lock poisoned: {error}"))?;
-        if let Some(sender) = workers.get(&worker_key) {
-            return Ok(sender.clone());
+        workers.next_use = workers.next_use.wrapping_add(1);
+        let use_stamp = workers.next_use;
+        if let Some(entry) = workers.entries.get_mut(&worker_key) {
+            entry.last_use = use_stamp;
+            entry
+                .in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            return Ok((
+                entry.sender.clone(),
+                PluginHttpInFlight(Arc::clone(&entry.in_flight)),
+            ));
+        }
+        while workers.entries.len() >= MAX_PLUGIN_HTTP_WORKERS {
+            workers.evict_one();
         }
 
         let (sender, receiver) = mpsc::sync_channel::<PluginHttpWork>(32);
@@ -689,13 +749,21 @@ impl PluginHttpHost {
                 }
             })
             .map_err(|error| format!("failed to start plugin HTTP worker: {error}"))?;
-        workers.insert(worker_key, sender.clone());
-        Ok(sender)
+        let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        workers.entries.insert(
+            worker_key,
+            PluginHttpWorkerEntry {
+                sender: sender.clone(),
+                last_use: use_stamp,
+                in_flight: Arc::clone(&in_flight),
+            },
+        );
+        Ok((sender, PluginHttpInFlight(in_flight)))
     }
 
     fn reset_worker(&self, worker_key: &PluginHttpRequestClientKey) {
         if let Ok(mut workers) = self.workers.lock() {
-            workers.remove(worker_key);
+            workers.entries.remove(worker_key);
         }
     }
 
@@ -3743,6 +3811,170 @@ mod tests {
             merged.as_deref(),
             Some("auth=secret; cf_clearance=fresh; theme=dark; bot_session=ready")
         );
+    }
+
+    fn worker_fixture_host() -> PluginHttpHost {
+        PluginHttpHost::new(
+            vec!["origin.example".to_string(), "127.0.0.1".to_string()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        )
+    }
+
+    fn worker_fixture_key(port: u16) -> PluginHttpRequestClientKey {
+        plugin_http_request_client_key(&format!("http://origin.example:{port}/"))
+            .expect("fixture URL is valid")
+    }
+
+    fn worker_count(host: &PluginHttpHost) -> usize {
+        host.workers.lock().expect("worker lock").entries.len()
+    }
+
+    fn has_worker(host: &PluginHttpHost, key: &PluginHttpRequestClientKey) -> bool {
+        host.workers
+            .lock()
+            .expect("worker lock")
+            .entries
+            .contains_key(key)
+    }
+
+    #[test]
+    fn origin_dispatchers_stay_bounded_and_the_least_recently_used_idle_one_goes() {
+        let host = worker_fixture_host();
+        let max = MAX_PLUGIN_HTTP_WORKERS as u16;
+        for port in 1..=max {
+            drop(
+                host.worker_sender(worker_fixture_key(port))
+                    .expect("worker"),
+            );
+        }
+        assert_eq!(worker_count(&host), MAX_PLUGIN_HTTP_WORKERS);
+
+        // Port 1 is used again, so port 2 is now the least recently used.
+        drop(host.worker_sender(worker_fixture_key(1)).expect("worker"));
+        drop(
+            host.worker_sender(worker_fixture_key(max + 1))
+                .expect("worker"),
+        );
+
+        assert_eq!(worker_count(&host), MAX_PLUGIN_HTTP_WORKERS);
+        assert!(has_worker(&host, &worker_fixture_key(1)));
+        assert!(!has_worker(&host, &worker_fixture_key(2)));
+        assert!(has_worker(&host, &worker_fixture_key(max + 1)));
+
+        // Many more origins never grow the map past the bound.
+        for port in (max + 2)..(max * 4) {
+            drop(
+                host.worker_sender(worker_fixture_key(port))
+                    .expect("worker"),
+            );
+        }
+        assert_eq!(worker_count(&host), MAX_PLUGIN_HTTP_WORKERS);
+    }
+
+    #[test]
+    fn a_busy_origin_dispatcher_is_kept_over_idle_ones() {
+        let host = worker_fixture_host();
+        let max = MAX_PLUGIN_HTTP_WORKERS as u16;
+        let busy = host.worker_sender(worker_fixture_key(1)).expect("worker");
+        for port in 2..=max {
+            drop(
+                host.worker_sender(worker_fixture_key(port))
+                    .expect("worker"),
+            );
+        }
+        drop(
+            host.worker_sender(worker_fixture_key(max + 1))
+                .expect("worker"),
+        );
+
+        assert!(has_worker(&host, &worker_fixture_key(1)));
+        assert!(!has_worker(&host, &worker_fixture_key(2)));
+        drop(busy);
+    }
+
+    #[tokio::test]
+    async fn an_evicted_origin_dispatcher_still_answers_its_request_in_flight() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture listener");
+        let port = listener.local_addr().expect("listener address").port();
+        let (received_tx, received_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept fixture request");
+            let mut buffer = [0_u8; 4096];
+            let mut seen = Vec::new();
+            while !seen.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).expect("read fixture request");
+                assert!(read > 0, "client closed before sending its request");
+                seen.extend_from_slice(&buffer[..read]);
+            }
+            received_tx.send(()).expect("signal request received");
+            release_rx.recv().expect("wait for release");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nserved",
+                )
+                .expect("write fixture response");
+        });
+
+        let host = worker_fixture_host();
+        let url = format!("http://127.0.0.1:{port}/slow");
+        let request_key = plugin_http_request_client_key(&url).expect("fixture URL is valid");
+        let request = tokio::task::spawn_blocking({
+            let host = host.clone();
+            move || {
+                host.request(
+                    "fixture",
+                    PluginHttpRequest {
+                        url,
+                        method: Some("GET".to_string()),
+                        headers: BTreeMap::new(),
+                    },
+                    None,
+                    Duration::from_secs(60),
+                )
+            }
+        });
+
+        let evicted = tokio::task::spawn_blocking({
+            let host = host.clone();
+            move || {
+                received_rx
+                    .recv_timeout(Duration::from_secs(60))
+                    .expect("fixture request should arrive");
+                // Every other dispatcher is busy too, so the oldest one, the
+                // origin with the request in flight, is the one let go.
+                let max = MAX_PLUGIN_HTTP_WORKERS as u16;
+                let mut busy = Vec::new();
+                for port in 1..=max {
+                    busy.push(
+                        host.worker_sender(worker_fixture_key(port))
+                            .expect("worker"),
+                    );
+                }
+                let evicted = !has_worker(&host, &request_key);
+                assert_eq!(worker_count(&host), MAX_PLUGIN_HTTP_WORKERS);
+                release_tx.send(()).expect("release fixture response");
+                drop(busy);
+                evicted
+            }
+        })
+        .await
+        .expect("eviction task should join");
+        assert!(evicted, "the in-flight origin should have been evicted");
+
+        let body = tokio::time::timeout(Duration::from_secs(60), request)
+            .await
+            .expect("request should answer")
+            .expect("blocking task should join")
+            .expect("the in-flight request should still succeed");
+        assert_eq!(body, b"served");
+        server.join().expect("fixture server should finish");
     }
 
     #[test]
