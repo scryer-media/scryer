@@ -455,16 +455,8 @@ export function settingsRequestRuleDeleteId(ruleSetId: string): string {
   return selectorId("settings-request-rule-delete", ruleSetId);
 }
 
-export function settingsRequestRuleLibraryId(libraryId: string): string {
-  return selectorId("settings-request-rule-library", libraryId);
-}
-
 export function settingsRequestTemplateId(templateId: string): string {
   return selectorId("settings-request-template", templateId);
-}
-
-export function settingsRequestUserId(userId: string): string {
-  return selectorId("settings-request-user", userId);
 }
 
 export function settingsRequestPreviewTitleResultId(key: string): string {

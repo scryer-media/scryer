@@ -2476,6 +2476,7 @@ const ko: LocaleDictionary = {
   "nav.rules": "규칙",
   "settings.rulesScoring": "점수 규칙",
   "settings.lifecycleNavRules": "규칙",
+  "settings.lifecycleNavTry": "규칙 시험",
   "settings.lifecycleNavHistory": "기록",
   "settings.lifecycleRuleAction": "작업",
   "settings.lifecycleRuleView": "보기",
@@ -3147,15 +3148,6 @@ const ko: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "저장하지 않은 변경을 버릴까요?",
   "settings.requestRuleConfirmDiscardDescription":
     "편집기의 매처가 저장되지 않았습니다. 계속하면 대체됩니다.",
-  "settings.requestRuleRequesters": "이 규칙에서 사람 지정",
-  "settings.requestRuleRequestersHelp":
-    "이 규칙이 대상으로 하는 계정을 선택하고 적용하세요. 편집기의 매처가 다시 작성되므로 저장 전에 읽어볼 수 있습니다.",
-  "settings.requestRuleRequestersApply": "이 이름들을 매처에 쓰기",
-  "settings.requestRuleRequestersPlaceholder": "계정 선택",
-  "settings.requestRuleRequestersUnavailable":
-    "계정 목록을 보려면 이 페이지에 없는 권한이 필요합니다. 이름은 매처에 직접 입력해야 합니다.",
-  "settings.requestRuleRequestersNoTarget":
-    "이 매처는 아무도 지정하지 않아서 선택한 계정을 쓸 곳이 없습니다. 먼저 requesters 집합이나 사용자 이름 비교를 추가하세요.",
   "settings.requestPreviewTitle": "이 규칙을 요청으로 시험하기",
   "settings.requestPreviewSubtitle":
     "직접 설명한 요청에 매처 하나를 실행합니다. 제출되지도 기록되지도 않습니다.",

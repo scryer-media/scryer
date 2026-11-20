@@ -2335,6 +2335,7 @@ const zh_CN: LocaleDictionary = {
   "nav.rules": "规则",
   "settings.rulesScoring": "评分规则",
   "settings.lifecycleNavRules": "规则",
+  "settings.lifecycleNavTry": "试运行规则",
   "settings.lifecycleNavHistory": "历史",
   "settings.lifecycleRuleAction": "操作",
   "settings.lifecycleRuleView": "查看",
@@ -2962,15 +2963,6 @@ const zh_CN: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "放弃未保存的更改？",
   "settings.requestRuleConfirmDiscardDescription":
     "编辑器中的匹配器尚未保存，继续将会替换它。",
-  "settings.requestRuleRequesters": "在此规则中指定人员",
-  "settings.requestRuleRequestersHelp":
-    "勾选此规则针对的账户并应用。编辑器中的匹配器会被改写，您可以在保存前先读一遍。",
-  "settings.requestRuleRequestersApply": "把这些名字写入匹配器",
-  "settings.requestRuleRequestersPlaceholder": "选择账户",
-  "settings.requestRuleRequestersUnavailable":
-    "列出账户需要本页面不具备的权限，因此名字需要手动写入匹配器。",
-  "settings.requestRuleRequestersNoTarget":
-    "此匹配器没有指定任何人，所选账户无处写入。请先添加 requesters 集合或用户名比较。",
   "settings.requestPreviewTitle": "用一个请求试运行此规则",
   "settings.requestPreviewSubtitle":
     "针对您描述的请求运行一个匹配器。不会提交任何内容，也不会留下记录。",

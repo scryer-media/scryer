@@ -332,6 +332,45 @@
       },
       {
         "field": "input.release.raw_title",
+        "operator": "IS_ONE_OF",
+        "value": "Sample\nExtra",
+        "lines": [
+          "input.release.raw_title in {\"Sample\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "Sample",
+            "expected": true
+          },
+          {
+            "value": "Elsewhere",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.raw_title",
+        "operator": "IS_NOT_ONE_OF",
+        "value": "Sample\nExtra",
+        "lines": [
+          "is_string(input.release.raw_title)",
+          "not input.release.raw_title in {\"Sample\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "Sample",
+            "expected": false
+          },
+          {
+            "value": "Elsewhere",
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.raw_title",
         "operator": "NOT_EQUALS",
         "value": "Sample",
         "lines": [
@@ -364,6 +403,47 @@
           {
             "value": "Other",
             "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.edition",
+        "operator": "IS_ONE_OF",
+        "value": "Sample\nExtra",
+        "lines": [
+          "input.release.edition in {\"Sample\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "Sample",
+            "expected": true
+          },
+          {
+            "value": "Elsewhere",
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.edition",
+        "operator": "IS_NOT_ONE_OF",
+        "value": "Sample\nExtra",
+        "lines": [
+          "is_string(input.release.edition)",
+          "not input.release.edition in {\"Sample\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "Sample",
+            "expected": false
+          },
+          {
+            "value": "Elsewhere",
+            "expected": true
           }
         ],
         "null": false,
@@ -441,6 +521,53 @@
               "ja"
             ],
             "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.languages_audio",
+        "operator": "CONTAINS_ANY",
+        "value": "en\nExtra",
+        "lines": [
+          "count([item | some item in input.release.languages_audio; item in {\"en\", \"Extra\"}]) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "en"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.languages_audio",
+        "operator": "CONTAINS_NONE",
+        "value": "en\nExtra",
+        "lines": [
+          "is_array(input.release.languages_audio)",
+          "count([item | some item in input.release.languages_audio; item in {\"en\", \"Extra\"}]) == 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "en"
+            ],
+            "expected": false
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": true
           }
         ],
         "absent": false
@@ -846,6 +973,45 @@
       },
       {
         "field": "input.facts.country",
+        "operator": "IS_ONE_OF",
+        "value": "US\nExtra",
+        "lines": [
+          "input.facts.country in {\"US\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "US",
+            "expected": true
+          },
+          {
+            "value": "Elsewhere",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.country",
+        "operator": "IS_NOT_ONE_OF",
+        "value": "US\nExtra",
+        "lines": [
+          "is_string(input.facts.country)",
+          "not input.facts.country in {\"US\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "US",
+            "expected": false
+          },
+          {
+            "value": "Elsewhere",
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.country",
         "operator": "NOT_EQUALS",
         "value": "US",
         "lines": [
@@ -878,6 +1044,47 @@
           {
             "value": "NONE",
             "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.monitor_type",
+        "operator": "IS_ONE_OF",
+        "value": "ALL\nExtra",
+        "lines": [
+          "input.request.monitor_type in {\"ALL\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "ALL",
+            "expected": true
+          },
+          {
+            "value": "Elsewhere",
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.monitor_type",
+        "operator": "IS_NOT_ONE_OF",
+        "value": "ALL\nExtra",
+        "lines": [
+          "is_string(input.request.monitor_type)",
+          "not input.request.monitor_type in {\"ALL\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "ALL",
+            "expected": false
+          },
+          {
+            "value": "Elsewhere",
+            "expected": true
           }
         ],
         "null": false,
@@ -999,6 +1206,53 @@
       },
       {
         "field": "input.facts.exists_in_library_ids",
+        "operator": "CONTAINS_ANY",
+        "value": "sample\nExtra",
+        "lines": [
+          "count([item | some item in input.facts.exists_in_library_ids; item in {\"sample\", \"Extra\"}]) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.exists_in_library_ids",
+        "operator": "CONTAINS_NONE",
+        "value": "sample\nExtra",
+        "lines": [
+          "is_array(input.facts.exists_in_library_ids)",
+          "count([item | some item in input.facts.exists_in_library_ids; item in {\"sample\", \"Extra\"}]) == 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": false
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.exists_in_library_ids",
         "operator": "NOT_CONTAINS",
         "value": "sample",
         "lines": [
@@ -1088,6 +1342,52 @@
       },
       {
         "field": "input.facts.genres",
+        "operator": "CONTAINS_ANY",
+        "value": "Sample\nExtra",
+        "lines": [
+          "count([item | some item in input.facts.genres; item in {\"Sample\", \"Extra\"}]) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "Sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.genres",
+        "operator": "CONTAINS_NONE",
+        "value": "Sample\nExtra",
+        "lines": [
+          "count([item | some item in input.facts.genres; item in {\"Sample\", \"Extra\"}]) == 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "Sample"
+            ],
+            "expected": false
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": true
+          }
+        ],
+        "absent": true
+      },
+      {
+        "field": "input.facts.genres",
         "operator": "NOT_CONTAINS",
         "value": "Sample",
         "lines": [
@@ -1171,6 +1471,56 @@
               "jpn"
             ],
             "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "CONTAINS_ANY",
+        "value": "eng\nExtra",
+        "lines": [
+          "is_array(input.request.required_audio_languages)",
+          "count([item | some item in input.request.required_audio_languages; item in {\"eng\", \"Extra\"}]) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "eng"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "CONTAINS_NONE",
+        "value": "eng\nExtra",
+        "lines": [
+          "is_array(input.request.required_audio_languages)",
+          "count([item | some item in input.request.required_audio_languages; item in {\"eng\", \"Extra\"}]) == 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "eng"
+            ],
+            "expected": false
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": true
           }
         ],
         "null": false,
@@ -1492,6 +1842,45 @@
       },
       {
         "field": "input.facts.added_by_username",
+        "operator": "IS_ONE_OF",
+        "value": "sample\nExtra",
+        "lines": [
+          "input.facts.added_by_username in {\"sample\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "sample",
+            "expected": true
+          },
+          {
+            "value": "Elsewhere",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_by_username",
+        "operator": "IS_NOT_ONE_OF",
+        "value": "sample\nExtra",
+        "lines": [
+          "is_string(input.facts.added_by_username)",
+          "not input.facts.added_by_username in {\"sample\", \"Extra\"}"
+        ],
+        "present": [
+          {
+            "value": "sample",
+            "expected": false
+          },
+          {
+            "value": "Elsewhere",
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_by_username",
         "operator": "NOT_EQUALS",
         "value": "sample",
         "lines": [
@@ -1559,6 +1948,53 @@
               "other"
             ],
             "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.tags",
+        "operator": "CONTAINS_ANY",
+        "value": "sample\nExtra",
+        "lines": [
+          "count([item | some item in input.facts.tags; item in {\"sample\", \"Extra\"}]) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.tags",
+        "operator": "CONTAINS_NONE",
+        "value": "sample\nExtra",
+        "lines": [
+          "is_array(input.facts.tags)",
+          "count([item | some item in input.facts.tags; item in {\"sample\", \"Extra\"}]) == 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": false
+          },
+          {
+            "value": [
+              "Elsewhere"
+            ],
+            "expected": true
           }
         ],
         "absent": false

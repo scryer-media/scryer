@@ -25,11 +25,11 @@ import {
 } from "@/components/views/settings/rule-side-panels";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { HelpLabel } from "@/components/common/info-help";
+import { LibrarySelect } from "@/components/common/facet-select";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   Input,
@@ -115,7 +115,11 @@ import {
   PaneSection,
 } from "@/components/views/settings/rule-pane-section";
 
-export type LifecycleLibraryOption = { id: string; name: string };
+export type LifecycleLibraryOption = {
+  id: string;
+  name: string;
+  facet: string;
+};
 
 type SettingsLifecycleRulesSectionProps = {
   isEditorOpen: boolean;
@@ -900,16 +904,26 @@ export function SettingsLifecycleRulesSection({
     </div>
   );
 
-  // Candidates and history are one pane each, in the same column width as the
-  // rule list so the tabs do not move when switching between them. There is
-  // no editor to sit beside and no rule being written for the side panels
-  // to describe.
+  // Trying a rule, candidates and history are one pane each, in the same
+  // column width as the rule list so the tabs do not move when switching
+  // between them. A draft open in the rule editor stays open, so it can still
+  // be tried here.
   if (section !== "rules") {
     return (
       <div id="settings-lifecycle-rules-section" className="text-sm">
         <div className="mx-auto w-full max-w-[1280px] space-y-6">
           {pageHead}
-          <div className="space-y-8">{operationsPanels}</div>
+          {section === "try" ? (
+            <LifecyclePreviewPanel
+              isEditorOpen={isEditorOpen}
+              draftName={ruleSetDraft.name}
+              ruleSetRecords={ruleSetRecords}
+              libraries={libraries}
+              {...previewProps}
+            />
+          ) : (
+            <div className="space-y-8">{operationsPanels}</div>
+          )}
         </div>
       </div>
     );
@@ -1408,46 +1422,20 @@ export function SettingsLifecycleRulesSection({
 
                   <div>
                     <Label className="mb-2 block">
-                      <HelpLabel
-                        label={t("settings.lifecycleRuleLibraries")}
-                        help={t("settings.lifecycleRuleLibrariesHelp")}
-                      />
+                      {t("settings.lifecycleRuleLibraries")}
                     </Label>
-                    <div className="flex flex-wrap items-center gap-4">
-                      {libraries.length === 0 ? (
-                        <span className="text-xs text-muted-foreground">
-                          {t("settings.lifecycleRuleLibrariesAll")}
-                        </span>
-                      ) : null}
-                      {libraries.map((library) => (
-                        <label
-                          key={library.id}
-                          className="flex items-center gap-2"
-                        >
-                          <Checkbox
-                            id={selectorId(
-                              "settings-lifecycle-rule-library",
-                              library.id,
-                            )}
-                            checked={ruleSetDraft.libraryIds.includes(
-                              library.id,
-                            )}
-                            onCheckedChange={(value) => {
-                              setRuleSetDraft((prev) => ({
-                                ...prev,
-                                libraryIds:
-                                  value === true
-                                    ? [...prev.libraryIds, library.id]
-                                    : prev.libraryIds.filter(
-                                        (id) => id !== library.id,
-                                      ),
-                              }));
-                            }}
-                          />
-                          <span className="text-sm">{library.name}</span>
-                        </label>
-                      ))}
-                    </div>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      {t("settings.lifecycleRuleLibrariesHelp")}
+                    </p>
+                    <LibrarySelect
+                      idPrefix="settings-lifecycle-rule-library"
+                      libraries={libraries}
+                      selected={ruleSetDraft.libraryIds}
+                      emptyLabel={t("settings.lifecycleRuleLibrariesAll")}
+                      onChange={(libraryIds) =>
+                        setRuleSetDraft((prev) => ({ ...prev, libraryIds }))
+                      }
+                    />
                   </div>
                 </fieldset>
 
@@ -1488,14 +1476,6 @@ export function SettingsLifecycleRulesSection({
             disabled={mutatingRuleSetId !== null}
           />
         </div>
-
-        <LifecyclePreviewPanel
-          isEditorOpen={isEditorOpen}
-          draftName={ruleSetDraft.name}
-          ruleSetRecords={ruleSetRecords}
-          libraries={libraries}
-          {...previewProps}
-        />
 
         {operationsPanels}
       </div>

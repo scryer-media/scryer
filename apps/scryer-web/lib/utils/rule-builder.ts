@@ -55,13 +55,15 @@ export type RuleBuilderModel = {
 // ── Schema ────────────────────────────────────────────────────────────
 
 /// What a comparison takes as its value: nothing, a decimal number, a whole
-/// number of days, free text, or one of the field's known values.
+/// number of days, free text, one of the field's known values, or a set of
+/// texts (kept one per line in the condition's value).
 export type RuleBuilderConditionValue =
-  "none" | "number" | "days" | "text" | "choice";
+  "none" | "number" | "days" | "text" | "choice" | "text_set";
 
 /// One comparison. `template` is the Rego it writes, one body line per line
 /// of the template: `{path}` is the field's input path and `{value}` the
-/// value's literal (a number as typed, anything else as a string literal).
+/// value's literal (a number as typed, a set as a Rego set of strings,
+/// anything else as a string literal).
 export type RuleBuilderOperator = {
   id: string;
   labelKey: string;
@@ -498,6 +500,10 @@ export const RULE_BUILDER_OPERATOR_LABEL_KEYS = {
   LESS_THAN_DAYS_AGO: "settings.ruleBuilderOpLessThanDaysAgo",
   HAS_VALUE: "settings.ruleBuilderOpHasValue",
   HAS_NO_VALUE: "settings.ruleBuilderOpHasNoValue",
+  IS_ONE_OF: "settings.ruleBuilderOpIsOneOf",
+  IS_NOT_ONE_OF: "settings.ruleBuilderOpIsNotOneOf",
+  CONTAINS_ANY: "settings.ruleBuilderOpContainsAny",
+  CONTAINS_NONE: "settings.ruleBuilderOpContainsNone",
 } as const;
 
 export type RuleBuilderOperatorId =
@@ -1123,6 +1129,16 @@ function fill(template: string, values: Readonly<Record<string, string>>) {
 
 // ── Conditions ────────────────────────────────────────────────────────
 
+/// The items of a set value, one per line; blank lines are not items.
+export function ruleBuilderSetItems(value: string): string[] {
+  return value.split("\n").filter((item) => item.trim() !== "");
+}
+
+/// A set value holding `items`, as a condition stores it.
+export function ruleBuilderSetValue(items: readonly string[]): string {
+  return items.join("\n");
+}
+
 function checkCondition(
   schema: RuleBuilderSchema,
   condition: RuleBuilderCondition,
@@ -1164,6 +1180,18 @@ function checkCondition(
       const problem = textProblem(value);
       if (problem) return { problem };
       literal = regoString(value);
+      break;
+    }
+    case "text_set": {
+      const items = ruleBuilderSetItems(value);
+      if (items.length === 0) return { problem: "BUILDER_VALUE_REQUIRED" };
+      for (const item of items) {
+        const problem = textProblem(item);
+        if (problem) return { problem };
+      }
+      if (new Set(items).size !== items.length)
+        return { problem: "BUILDER_VALUE_DUPLICATE" };
+      literal = `{${items.map(regoString).join(", ")}}`;
       break;
     }
   }

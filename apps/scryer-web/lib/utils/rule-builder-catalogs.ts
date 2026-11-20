@@ -1,6 +1,7 @@
 import type { Client } from "urql";
 import {
   qualityProfileOptionsQuery,
+  ruleBuilderLibraryOptionsQuery,
   ruleBuilderListOptionsQuery,
   ruleBuilderTagLabelsQuery,
   ruleBuilderUserOptionsQuery,
@@ -47,6 +48,20 @@ export async function loadUserIdOptions(
   if (error) throw error;
   const users: { id: string; username: string }[] = data?.users ?? [];
   return users.map((user) => ({ value: user.id, label: user.username }));
+}
+
+export async function loadLibraryIdOptions(
+  client: Client,
+): Promise<RuleBuilderOptionValue[]> {
+  const { data, error } = await client
+    .query(ruleBuilderLibraryOptionsQuery, {})
+    .toPromise();
+  if (error) throw error;
+  const libraries: { id: string; name: string }[] = data?.libraries ?? [];
+  return libraries.map((library) => ({
+    value: library.id,
+    label: library.name,
+  }));
 }
 
 export async function loadListIdOptions(

@@ -4895,6 +4895,7 @@ const cs: LocaleDictionary = {
   "nav.rules": "Pravidla",
   "settings.rulesScoring": "Pravidla hodnocení",
   "settings.lifecycleNavRules": "Pravidla",
+  "settings.lifecycleNavTry": "Vyzkoušet pravidlo",
   "settings.lifecycleNavHistory": "Historie",
   "settings.lifecycleRuleAction": "Akce",
   "settings.lifecycleActionSequence": "Posloupnost akcí",
@@ -5629,6 +5630,12 @@ const cs: LocaleDictionary = {
   "settings.ruleBuilderOpHasValue": "má hodnotu",
   "settings.ruleBuilderOpHasNoValue": "nemá hodnotu",
   "settings.ruleBuilderProblemNoConditions": "Přidejte alespoň jednu podmínku.",
+  "settings.ruleBuilderOpIsOneOf": "je jedno z",
+  "settings.ruleBuilderOpIsNotOneOf": "není žádné z",
+  "settings.ruleBuilderOpContainsAny": "obsahuje některé z",
+  "settings.ruleBuilderOpContainsNone": "neobsahuje žádné z",
+  "settings.ruleBuilderValues": "Hodnoty",
+  "settings.ruleBuilderValuesPerLine": "Jedna hodnota na řádek",
   "settings.ruleBuilderProblemNoOutputs": "Vyberte alespoň jeden výsledek.",
   "settings.ruleBuilderProblemFactRequired": "Vyberte údaj.",
   "settings.ruleBuilderProblemFactUnknown":
@@ -5801,15 +5808,6 @@ const cs: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "Zahodit neuložené změny?",
   "settings.requestRuleConfirmDiscardDescription":
     "Podmínka v editoru nebyla uložena. Pokračováním ji nahradíte.",
-  "settings.requestRuleRequesters": "Jmenovat lidi v tomto pravidle",
-  "settings.requestRuleRequestersHelp":
-    "Zaškrtněte účty, kterých se toto pravidlo týká, a použijte je. Podmínka v editoru se přepíše, takže si ji před uložením můžete přečíst.",
-  "settings.requestRuleRequestersApply": "Zapsat tato jména do podmínky",
-  "settings.requestRuleRequestersPlaceholder": "Vyberte účty",
-  "settings.requestRuleRequestersUnavailable":
-    "Výpis účtů vyžaduje oprávnění, které tato stránka nemá, takže jména je nutné zapsat do podmínky ručně.",
-  "settings.requestRuleRequestersNoTarget":
-    "Tato podmínka nikoho nejmenuje, takže není kam zapsat vybrané účty. Nejdřív přidejte množinu žadatelů nebo porovnání uživatelského jména.",
   "settings.requestPreviewTitle": "Vyzkoušet toto pravidlo na žádosti",
   "settings.requestPreviewSubtitle":
     "Spustí jednu podmínku na žádosti, kterou popíšete. Nic se neodešle ani nezaznamená.",

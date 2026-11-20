@@ -2616,6 +2616,7 @@ const it: LocaleDictionary = {
   "nav.rules": "Regole",
   "settings.rulesScoring": "Regole di punteggio",
   "settings.lifecycleNavRules": "Regole",
+  "settings.lifecycleNavTry": "Prova una regola",
   "settings.lifecycleNavHistory": "Cronologia",
   "settings.lifecycleRuleAction": "Azione",
   "settings.lifecycleRuleView": "Visualizza",
@@ -3306,15 +3307,6 @@ const it: LocaleDictionary = {
     "Scartare le modifiche non salvate?",
   "settings.requestRuleConfirmDiscardDescription":
     "Il matcher nell'editor non è stato salvato. Continuando lo sostituisci.",
-  "settings.requestRuleRequesters": "Nomina persone in questa regola",
-  "settings.requestRuleRequestersHelp":
-    "Seleziona gli account a cui si riferisce la regola e applicali. Il matcher nell'editor viene riscritto così puoi leggerlo prima di salvare.",
-  "settings.requestRuleRequestersApply": "Scrivi questi nomi nel matcher",
-  "settings.requestRuleRequestersPlaceholder": "Scegli account",
-  "settings.requestRuleRequestersUnavailable":
-    "Elencare gli account richiede un permesso che questa pagina non ha: i nomi vanno scritti a mano nel matcher.",
-  "settings.requestRuleRequestersNoTarget":
-    "Questo matcher non nomina nessuno, quindi gli account scelti non hanno dove andare. Aggiungi prima un insieme requesters o un confronto sul nome utente.",
   "settings.requestPreviewTitle": "Prova questa regola su una richiesta",
   "settings.requestPreviewSubtitle":
     "Esegue un matcher su una richiesta che descrivi tu. Non viene inviato né registrato nulla.",

@@ -4202,6 +4202,7 @@ const zh_HK: LocaleDictionary = {
   "nav.rules": "規則",
   "settings.rulesScoring": "評分規則",
   "settings.lifecycleNavRules": "規則",
+  "settings.lifecycleNavTry": "試運行規則",
   "settings.lifecycleNavHistory": "歷史",
   "settings.lifecycleRuleAction": "操作",
   "settings.lifecycleActionSequence": "行動順序",
@@ -4878,6 +4879,12 @@ const zh_HK: LocaleDictionary = {
   "settings.ruleBuilderOpHasValue": "有值",
   "settings.ruleBuilderOpHasNoValue": "冇值",
   "settings.ruleBuilderProblemNoConditions": "請至少新增一個條件。",
+  "settings.ruleBuilderOpIsOneOf": "是以下其中之一",
+  "settings.ruleBuilderOpIsNotOneOf": "不是以下任何一個",
+  "settings.ruleBuilderOpContainsAny": "包含以下任何一個",
+  "settings.ruleBuilderOpContainsNone": "不包含以下任何一個",
+  "settings.ruleBuilderValues": "值",
+  "settings.ruleBuilderValuesPerLine": "每行一個值",
   "settings.ruleBuilderProblemNoOutputs": "請至少揀一個結果。",
   "settings.ruleBuilderProblemFactRequired": "請揀選事實。",
   "settings.ruleBuilderProblemFactUnknown": "呢條規則用唔到呢項事實。",
@@ -5018,15 +5025,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "放棄未儲存的更改？",
   "settings.requestRuleConfirmDiscardDescription":
     "編輯器中的匹配器尚未儲存，繼續將會替換它。",
-  "settings.requestRuleRequesters": "在此規則中指定人員",
-  "settings.requestRuleRequestersHelp":
-    "勾選此規則針對的賬户並應用。編輯器中的匹配器會被改寫，您可以在儲存前先讀一遍。",
-  "settings.requestRuleRequestersApply": "把這些名字寫入匹配器",
-  "settings.requestRuleRequestersPlaceholder": "選擇帳戶",
-  "settings.requestRuleRequestersUnavailable":
-    "列出賬户需要本頁面不具備的權限，因此名字需要手動寫入匹配器。",
-  "settings.requestRuleRequestersNoTarget":
-    "此匹配器沒有指定任何人，所選賬户無處寫入。請先添加 requesters 集合或用戶名比較。",
   "settings.requestPreviewTitle": "用一個請求試運行此規則",
   "settings.requestPreviewSubtitle":
     "針對您描述的請求運行一個匹配器。不會提交任何內容，也不會留下記錄。",

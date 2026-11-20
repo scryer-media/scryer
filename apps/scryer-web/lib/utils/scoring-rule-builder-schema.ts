@@ -34,7 +34,11 @@ export const SCORING_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   conditionSources: [
     { section: "input.release", label: "path" },
     { section: "input.release.stereoscopy", label: "path" },
-    { section: "input.profile", label: "path" },
+    {
+      section: "input.profile",
+      label: "path",
+      fields: { id: { options: "qualityProfileIds" } },
+    },
     { section: "input.profile.scoring_overrides", label: "path" },
     { section: "input.context", label: "path" },
     { section: "input.builtin_score", label: "path" },

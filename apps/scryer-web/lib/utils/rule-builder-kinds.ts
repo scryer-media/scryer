@@ -1,4 +1,7 @@
-import { ruleBuilderOperator as op, type RuleBuilderKind } from "./rule-builder.ts";
+import {
+  ruleBuilderOperator as op,
+  type RuleBuilderKind,
+} from "./rule-builder.ts";
 
 /// The comparisons every family builds its kinds from. No comparison is
 /// satisfied by a field that is missing or `null` unless its label asks about
@@ -6,7 +9,9 @@ import { ruleBuilderOperator as op, type RuleBuilderKind } from "./rule-builder.
 /// `{path}` is true for `null` in Rego, and an ordering or a negative
 /// comparison first checks the value has the type it compares, because Rego
 /// orders `null` below every number and a negation is true of a missing
-/// value.
+/// value. A set comparison matches when the value, or any item of a list, is
+/// one of the chosen values; its comprehension keeps `item` local to the
+/// condition.
 export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
   Record<string, RuleBuilderKind>
 > = {
@@ -42,12 +47,24 @@ export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
     operators: [
       op("EQUALS", "text", "{path} == {value}"),
       op("NOT_EQUALS", "text", "{path} != {value}"),
+      op("IS_ONE_OF", "text_set", "{path} in {value}"),
+      op(
+        "IS_NOT_ONE_OF",
+        "text_set",
+        "is_string({path})\nnot {path} in {value}",
+      ),
     ],
   },
   nullable_string: {
     operators: [
       op("EQUALS", "text", "{path} == {value}"),
       op("NOT_EQUALS", "text", "is_string({path})\n{path} != {value}"),
+      op("IS_ONE_OF", "text_set", "{path} in {value}"),
+      op(
+        "IS_NOT_ONE_OF",
+        "text_set",
+        "is_string({path})\nnot {path} in {value}",
+      ),
       op("HAS_VALUE", "none", "{path} != null"),
       op("HAS_NO_VALUE", "none", "not {path} != null"),
     ],
@@ -62,6 +79,16 @@ export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
     operators: [
       op("CONTAINS", "text", "{value} in {path}"),
       op("NOT_CONTAINS", "text", "is_array({path})\nnot {value} in {path}"),
+      op(
+        "CONTAINS_ANY",
+        "text_set",
+        "count([item | some item in {path}; item in {value}]) > 0",
+      ),
+      op(
+        "CONTAINS_NONE",
+        "text_set",
+        "is_array({path})\ncount([item | some item in {path}; item in {value}]) == 0",
+      ),
       op("IS_EMPTY", "none", "count({path}) == 0"),
       op("IS_NOT_EMPTY", "none", "count({path}) > 0"),
     ],
@@ -72,6 +99,17 @@ export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
     operators: [
       op("CONTAINS", "text", "{value} in {path}"),
       op("NOT_CONTAINS", "text", "not {value} in {path}"),
+      op(
+        "CONTAINS_ANY",
+        "text_set",
+        "count([item | some item in {path}; item in {value}]) > 0",
+      ),
+      // A missing list holds none of the values.
+      op(
+        "CONTAINS_NONE",
+        "text_set",
+        "count([item | some item in {path}; item in {value}]) == 0",
+      ),
       op("IS_EMPTY", "none", "not count({path}) > 0"),
       op("IS_NOT_EMPTY", "none", "count({path}) > 0"),
     ],
@@ -80,6 +118,16 @@ export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
     operators: [
       op("CONTAINS", "text", "is_array({path})\n{value} in {path}"),
       op("NOT_CONTAINS", "text", "is_array({path})\nnot {value} in {path}"),
+      op(
+        "CONTAINS_ANY",
+        "text_set",
+        "is_array({path})\ncount([item | some item in {path}; item in {value}]) > 0",
+      ),
+      op(
+        "CONTAINS_NONE",
+        "text_set",
+        "is_array({path})\ncount([item | some item in {path}; item in {value}]) == 0",
+      ),
       op("IS_EMPTY", "none", "{path} == []"),
       op("IS_NOT_EMPTY", "none", "is_array({path})\ncount({path}) > 0"),
       op("HAS_VALUE", "none", "{path} != null"),

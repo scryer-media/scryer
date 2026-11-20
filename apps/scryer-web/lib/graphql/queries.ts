@@ -4278,6 +4278,14 @@ export const ruleBuilderUserOptionsQuery = `query RuleBuilderUserOptions {
 }`;
 
 /// Lists a condition on a list-id fact picks from.
+/** Libraries by id, for a rule condition on a fact that holds a library id. */
+export const ruleBuilderLibraryOptionsQuery = `query RuleBuilderLibraryOptions {
+  libraries {
+    id
+    name
+  }
+}`;
+
 export const ruleBuilderListOptionsQuery = `query RuleBuilderListOptions {
   listSubscriptions {
     id

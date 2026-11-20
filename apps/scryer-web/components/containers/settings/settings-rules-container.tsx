@@ -39,7 +39,10 @@ import {
   updateRuleSetInput,
 } from "@/lib/utils/rule-sets";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
-import { loadQualityProfileNames } from "@/lib/utils/rule-builder-catalogs";
+import {
+  loadQualityProfileIdOptions,
+  loadQualityProfileNames,
+} from "@/lib/utils/rule-builder-catalogs";
 import {
   isIncompleteRuleBuilderDraft,
   openRuleTemplateDraft,
@@ -149,7 +152,10 @@ export function SettingsRulesContainer({
     [setGlobalStatus, t],
   );
   const builderOptionLoaders = useMemo(
-    () => ({ qualityProfiles: () => loadQualityProfileNames(client) }),
+    () => ({
+      qualityProfiles: () => loadQualityProfileNames(client),
+      qualityProfileIds: () => loadQualityProfileIdOptions(client),
+    }),
     [client],
   );
   const servedSchema = useRuleBuilderSchema(

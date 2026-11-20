@@ -2605,6 +2605,7 @@ const pt_BR: LocaleDictionary = {
   "nav.rules": "Regras",
   "settings.rulesScoring": "Regras de pontuação",
   "settings.lifecycleNavRules": "Regras",
+  "settings.lifecycleNavTry": "Testar uma regra",
   "settings.lifecycleNavHistory": "Histórico",
   "settings.lifecycleRuleAction": "Ação",
   "settings.lifecycleRuleView": "Ver",
@@ -3290,15 +3291,6 @@ const pt_BR: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "Descartar alterações não salvas?",
   "settings.requestRuleConfirmDiscardDescription":
     "O comparador no editor não foi salvo. Continuar substitui ele.",
-  "settings.requestRuleRequesters": "Nomear pessoas nesta regra",
-  "settings.requestRuleRequestersHelp":
-    "Marque as contas às quais esta regra se refere e aplique-as. O comparador no editor é reescrito para que você o leia antes de salvar.",
-  "settings.requestRuleRequestersApply": "Escrever esses nomes no comparador",
-  "settings.requestRuleRequestersPlaceholder": "Escolher contas",
-  "settings.requestRuleRequestersUnavailable":
-    "Listar contas exige uma permissão que esta página não tem, então os nomes precisam ser digitados no comparador à mão.",
-  "settings.requestRuleRequestersNoTarget":
-    "Este comparador não nomeia ninguém, então não há onde escrever as contas escolhidas. Adicione primeiro um conjunto requesters ou uma comparação de nome de usuário.",
   "settings.requestPreviewTitle": "Testar esta regra em uma solicitação",
   "settings.requestPreviewSubtitle":
     "Executa um comparador em uma solicitação que você descreve. Nada é enviado e nada é registrado.",

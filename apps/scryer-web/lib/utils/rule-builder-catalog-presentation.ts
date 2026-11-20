@@ -23,6 +23,9 @@ export const RULE_BUILDER_CATALOGS: Readonly<
   },
   users: { placeholderKey: "settings.ruleBuilderUserPlaceholder" },
   lists: { placeholderKey: "settings.ruleBuilderListPlaceholder" },
+  libraryIds: {
+    placeholderKey: "settings.lifecycleBuilderLibraryPlaceholder",
+  },
   libraries: { placeholderKey: "settings.lifecycleBuilderLibraryPlaceholder" },
   roots: {
     placeholderKey: "settings.lifecycleBuilderRootPlaceholder",

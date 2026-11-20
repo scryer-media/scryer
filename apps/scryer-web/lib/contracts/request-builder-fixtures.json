@@ -846,5 +846,339 @@
         "expected": false
       }
     ]
+  },
+  {
+    "id": "all-set-matches",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "request",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.facts.country",
+          "operator": "IS_ONE_OF",
+          "value": "US\nExtra"
+        },
+        {
+          "field": "input.request.monitor_type",
+          "operator": "IS_ONE_OF",
+          "value": "ALL\nExtra"
+        },
+        {
+          "field": "input.facts.exists_in_library_ids",
+          "operator": "CONTAINS_ANY",
+          "value": "sample\nExtra"
+        },
+        {
+          "field": "input.facts.genres",
+          "operator": "CONTAINS_ANY",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.request.required_audio_languages",
+          "operator": "CONTAINS_ANY",
+          "value": "eng\nExtra"
+        }
+      ],
+      "outputs": {
+        "APPROVE": true,
+        "SET_QUALITY_PROFILE": "Sample Profile",
+        "SET_LEASE_DAYS": "30",
+        "REASONS": [
+          "sample_family_friendly"
+        ]
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.country in {\"US\", \"Extra\"}\n\tinput.request.monitor_type in {\"ALL\", \"Extra\"}\n\tcount([item | some item in input.facts.exists_in_library_ids; item in {\"sample\", \"Extra\"}]) > 0\n\tcount([item | some item in input.facts.genres; item in {\"Sample\", \"Extra\"}]) > 0\n\tis_array(input.request.required_audio_languages)\n\tcount([item | some item in input.request.required_audio_languages; item in {\"eng\", \"Extra\"}]) > 0\n}\n\napprove if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nset_lease_days := 30 if rule_applies\n\nreasons contains \"sample_family_friendly\" if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "facts": {
+            "country": "US",
+            "exists_in_library_ids": [
+              "sample"
+            ],
+            "genres": [
+              "Sample"
+            ]
+          },
+          "request": {
+            "monitor_type": "ALL",
+            "required_audio_languages": [
+              "eng"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "Elsewhere",
+            "exists_in_library_ids": [
+              "sample"
+            ],
+            "genres": [
+              "Sample"
+            ]
+          },
+          "request": {
+            "monitor_type": "ALL",
+            "required_audio_languages": [
+              "eng"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "US",
+            "exists_in_library_ids": [
+              "sample"
+            ],
+            "genres": [
+              "Sample"
+            ]
+          },
+          "request": {
+            "monitor_type": "Elsewhere",
+            "required_audio_languages": [
+              "eng"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "US",
+            "exists_in_library_ids": [
+              "Elsewhere"
+            ],
+            "genres": [
+              "Sample"
+            ]
+          },
+          "request": {
+            "monitor_type": "ALL",
+            "required_audio_languages": [
+              "eng"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "US",
+            "exists_in_library_ids": [
+              "sample"
+            ],
+            "genres": [
+              "Elsewhere"
+            ]
+          },
+          "request": {
+            "monitor_type": "ALL",
+            "required_audio_languages": [
+              "eng"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "US",
+            "exists_in_library_ids": [
+              "sample"
+            ],
+            "genres": [
+              "Sample"
+            ]
+          },
+          "request": {
+            "monitor_type": "ALL",
+            "required_audio_languages": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "all-set-exclusions",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "request",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.facts.country",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "US\nExtra"
+        },
+        {
+          "field": "input.request.monitor_type",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "ALL\nExtra"
+        },
+        {
+          "field": "input.facts.exists_in_library_ids",
+          "operator": "CONTAINS_NONE",
+          "value": "sample\nExtra"
+        },
+        {
+          "field": "input.facts.genres",
+          "operator": "CONTAINS_NONE",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.request.required_audio_languages",
+          "operator": "CONTAINS_NONE",
+          "value": "eng\nExtra"
+        }
+      ],
+      "outputs": {
+        "APPROVE": true,
+        "SET_QUALITY_PROFILE": "Sample Profile",
+        "SET_LEASE_DAYS": "30",
+        "REASONS": [
+          "sample_family_friendly"
+        ]
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_string(input.facts.country)\n\tnot input.facts.country in {\"US\", \"Extra\"}\n\tis_string(input.request.monitor_type)\n\tnot input.request.monitor_type in {\"ALL\", \"Extra\"}\n\tis_array(input.facts.exists_in_library_ids)\n\tcount([item | some item in input.facts.exists_in_library_ids; item in {\"sample\", \"Extra\"}]) == 0\n\tcount([item | some item in input.facts.genres; item in {\"Sample\", \"Extra\"}]) == 0\n\tis_array(input.request.required_audio_languages)\n\tcount([item | some item in input.request.required_audio_languages; item in {\"eng\", \"Extra\"}]) == 0\n}\n\napprove if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nset_lease_days := 30 if rule_applies\n\nreasons contains \"sample_family_friendly\" if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "facts": {
+            "country": "Elsewhere",
+            "exists_in_library_ids": [
+              "Elsewhere"
+            ],
+            "genres": [
+              "Elsewhere"
+            ]
+          },
+          "request": {
+            "monitor_type": "Elsewhere",
+            "required_audio_languages": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "US",
+            "exists_in_library_ids": [
+              "Elsewhere"
+            ],
+            "genres": [
+              "Elsewhere"
+            ]
+          },
+          "request": {
+            "monitor_type": "Elsewhere",
+            "required_audio_languages": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "Elsewhere",
+            "exists_in_library_ids": [
+              "Elsewhere"
+            ],
+            "genres": [
+              "Elsewhere"
+            ]
+          },
+          "request": {
+            "monitor_type": "ALL",
+            "required_audio_languages": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "Elsewhere",
+            "exists_in_library_ids": [
+              "sample"
+            ],
+            "genres": [
+              "Elsewhere"
+            ]
+          },
+          "request": {
+            "monitor_type": "Elsewhere",
+            "required_audio_languages": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "Elsewhere",
+            "exists_in_library_ids": [
+              "Elsewhere"
+            ],
+            "genres": [
+              "Sample"
+            ]
+          },
+          "request": {
+            "monitor_type": "Elsewhere",
+            "required_audio_languages": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "facts": {
+            "country": "Elsewhere",
+            "exists_in_library_ids": [
+              "Elsewhere"
+            ],
+            "genres": [
+              "Elsewhere"
+            ]
+          },
+          "request": {
+            "monitor_type": "Elsewhere",
+            "required_audio_languages": [
+              "eng"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
   }
 ]

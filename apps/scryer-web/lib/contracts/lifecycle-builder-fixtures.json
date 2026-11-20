@@ -1237,5 +1237,169 @@
         "expected": false
       }
     ]
+  },
+  {
+    "id": "all-set-matches",
+    "model": {
+      "version": 2,
+      "family": "lifecycle",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.facts.added_by_username",
+          "operator": "IS_ONE_OF",
+          "value": "sample\nExtra"
+        },
+        {
+          "field": "input.facts.tags",
+          "operator": "CONTAINS_ANY",
+          "value": "sample\nExtra"
+        }
+      ],
+      "outputs": {
+        "REMOVE_TAGS": [
+          "sample-fresh"
+        ],
+        "ADD_TAGS": [
+          "sample-review",
+          "sample-stale"
+        ]
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "ADD_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "REMOVE_TAGS",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.added_by_username in {\"sample\", \"Extra\"}\n\tcount([item | some item in input.facts.tags; item in {\"sample\", \"Extra\"}]) > 0\n}\n\nadd_tags := [\"sample-review\", \"sample-stale\"] if rule_applies\n\nremove_tags := [\"sample-fresh\"] if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "sample",
+            "tags": [
+              "sample"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "Elsewhere",
+            "tags": [
+              "sample"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "sample",
+            "tags": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "all-set-exclusions",
+    "model": {
+      "version": 2,
+      "family": "lifecycle",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.facts.added_by_username",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "sample\nExtra"
+        },
+        {
+          "field": "input.facts.tags",
+          "operator": "CONTAINS_NONE",
+          "value": "sample\nExtra"
+        }
+      ],
+      "outputs": {
+        "REMOVE_TAGS": [
+          "sample-fresh"
+        ],
+        "ADD_TAGS": [
+          "sample-review",
+          "sample-stale"
+        ]
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "ADD_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "REMOVE_TAGS",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_string(input.facts.added_by_username)\n\tnot input.facts.added_by_username in {\"sample\", \"Extra\"}\n\tis_array(input.facts.tags)\n\tcount([item | some item in input.facts.tags; item in {\"sample\", \"Extra\"}]) == 0\n}\n\nadd_tags := [\"sample-review\", \"sample-stale\"] if rule_applies\n\nremove_tags := [\"sample-fresh\"] if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "Elsewhere",
+            "tags": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "sample",
+            "tags": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "Elsewhere",
+            "tags": [
+              "sample"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
   }
 ]

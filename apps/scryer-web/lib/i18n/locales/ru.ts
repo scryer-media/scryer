@@ -4669,6 +4669,7 @@ const ru: LocaleDictionary = {
   "nav.rules": "Правила",
   "settings.rulesScoring": "Правила оценки",
   "settings.lifecycleNavRules": "Правила",
+  "settings.lifecycleNavTry": "Проверить правило",
   "settings.lifecycleNavHistory": "История",
   "settings.lifecycleRuleAction": "Действия",
   "settings.lifecycleRuleGraceDays": "Дни отсрочки",
@@ -5319,6 +5320,12 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderOpHasValue": "задано",
   "settings.ruleBuilderOpHasNoValue": "не задано",
   "settings.ruleBuilderProblemNoConditions": "Добавьте хотя бы одно условие.",
+  "settings.ruleBuilderOpIsOneOf": "одно из",
+  "settings.ruleBuilderOpIsNotOneOf": "ни одно из",
+  "settings.ruleBuilderOpContainsAny": "содержит любое из",
+  "settings.ruleBuilderOpContainsNone": "не содержит ни одного из",
+  "settings.ruleBuilderValues": "Значения",
+  "settings.ruleBuilderValuesPerLine": "По одному значению в строке",
   "settings.ruleBuilderProblemNoOutputs": "Выберите хотя бы один результат.",
   "settings.ruleBuilderProblemFactRequired": "Выберите факт.",
   "settings.ruleBuilderProblemFactUnknown":
@@ -5486,15 +5493,6 @@ const ru: LocaleDictionary = {
     "Отменить несохранённые изменения?",
   "settings.requestRuleConfirmDiscardDescription":
     "Сопоставитель в редакторе не сохранён. Продолжение заменит его.",
-  "settings.requestRuleRequesters": "Назовите людей в этом правиле",
-  "settings.requestRuleRequestersHelp":
-    "Отметьте учётные записи, о которых это правило, и примените их. Сопоставитель в редакторе будет переписан, чтобы вы прочитали его перед сохранением.",
-  "settings.requestRuleRequestersApply": "Вписать эти имена в сопоставитель",
-  "settings.requestRuleRequestersPlaceholder": "Выберите учётные записи",
-  "settings.requestRuleRequestersUnavailable":
-    "Для списка учётных записей нужны права, которых у этой страницы нет, поэтому имена придётся вписать в сопоставитель вручную.",
-  "settings.requestRuleRequestersNoTarget":
-    "Этот сопоставитель никого не называет, поэтому выбранные учётные записи некуда вписать. Сначала добавьте набор requesters или сравнение по имени пользователя.",
   "settings.requestPreviewTitle": "Проверить правило на запросе",
   "settings.requestPreviewSubtitle":
     "Выполняет один сопоставитель на запросе, который вы опишете. Ничего не отправляется и не записывается.",

@@ -493,10 +493,13 @@ export function SettingsLifecycleRulesContainer({
       if (!libraryList.error) {
         const catalogLibraries = libraryList.data?.libraries ?? [];
         setLibraries(
-          catalogLibraries.map((library: { id: string; name: string }) => ({
-            id: library.id,
-            name: library.name,
-          })),
+          catalogLibraries.map(
+            (library: { id: string; name: string; facet: string }) => ({
+              id: library.id,
+              name: library.name,
+              facet: library.facet,
+            }),
+          ),
         );
         setRootPaths(
           catalogLibraries.flatMap((library: { roots?: { path: string }[] }) =>

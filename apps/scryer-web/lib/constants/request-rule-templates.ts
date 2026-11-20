@@ -18,9 +18,6 @@ export type RequestRuleTemplate = {
   /// one of these unless the author can manage permissions, and the gallery
   /// says so before the operator spends time on it.
   personTargeted?: boolean;
-  /// True when the matcher names specific people, which is what the user picker
-  /// rewrites. A template without it has nowhere for the picker to write.
-  namesRequesters?: boolean;
   regoSource: string;
 };
 
@@ -31,7 +28,6 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateNamedRequestersTitle",
     descriptionKey: "settings.requestTemplateNamedRequestersDescription",
     personTargeted: true,
-    namesRequesters: true,
     regoSource:
       'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := ["family"] if {\n\tinput.facts.certification_rank <= 1\n}\n',
   },
@@ -41,7 +37,6 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateShortLeaseTitle",
     descriptionKey: "settings.requestTemplateShortLeaseDescription",
     personTargeted: true,
-    namesRequesters: true,
     regoSource:
       'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "bob"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n',
   },
@@ -51,7 +46,6 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateLowResolutionTitle",
     descriptionKey: "settings.requestTemplateLowResolutionDescription",
     personTargeted: true,
-    namesRequesters: true,
     regoSource:
       'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "alice"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n',
   },

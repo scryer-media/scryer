@@ -3,15 +3,7 @@ import {
   regoDiagnostics,
 } from "@/lib/utils/rego-diagnostics";
 import * as React from "react";
-import {
-  BookOpen,
-  Copy,
-  Edit,
-  Plus,
-  Sparkles,
-  Trash2,
-  Users,
-} from "lucide-react";
+import { BookOpen, Copy, Edit, Plus, Sparkles, Trash2 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { HelpLabel } from "@/components/common/info-help";
 import {
@@ -42,7 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
+import { LibrarySelect } from "@/components/common/facet-select";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   Input,
@@ -87,7 +79,6 @@ import {
   requestDecisionOutcomeLabelKey,
   requestFallbackReasonLabelKey,
   isPersonTargetingRefusal,
-  requestRuleNamesRequesters,
   requestRuleReadsRequester,
   requestVoteBadgeTone,
   requestVoteLabelKey,
@@ -111,11 +102,9 @@ import {
   settingsRequestRuleDeleteId,
   settingsRequestRuleEditId,
   settingsRequestRuleEnabledId,
-  settingsRequestRuleLibraryId,
   settingsRequestRuleNameId,
   settingsRequestRuleRowId,
   settingsRequestTemplateId,
-  settingsRequestUserId,
   selectorId,
 } from "@/lib/utils/dom-ids";
 
@@ -173,16 +162,14 @@ type SettingsRequestRulesSectionProps = {
   ruleSetRecords: RequestRuleSetRecord[];
   libraries: LibraryRecord[];
   qualityProfiles: RequestQualityProfileOption[];
-  /// Accounts the picker can write into a matcher. Empty when the reader may
-  /// not list users, which is a permission answer rather than a page failure.
+  /// Accounts a preview can run as. Empty when the reader may not list users,
+  /// which is a permission answer rather than a page failure.
   users: RequestRuleUserOption[];
   copyRuleSet: (record: RequestRuleSetRecord) => void;
   editRuleSet: (record: RequestRuleSetRecord) => void;
   deleteRuleSet: (record: RequestRuleSetRecord) => void;
   validating: boolean;
   validationResult: RequestRuleValidationResult | null;
-  /// Rewrite whichever way the draft names people with these usernames.
-  applyRequesters: (usernames: string[]) => void;
   setRuleEnabled: (record: RequestRuleSetRecord, enabled: boolean) => void;
   /// Saving a rule that reads requester fields needs Manage permissions; the
   /// editor warns before save rather than after the API refuses.
@@ -394,82 +381,6 @@ function RequestTemplateGallery({
           />
         ))}
       </div>
-    </div>
-  );
-}
-
-/// Names the people a matcher is about. The picker never edits the matcher on
-/// its own: the operator ticks accounts and presses apply, and the rewrite lands
-/// in the editor where they can read it before saving.
-function RequestUserPicker({
-  users,
-  regoSource,
-  applyRequesters,
-  disabled,
-}: {
-  users: RequestRuleUserOption[];
-  regoSource: string;
-  applyRequesters: (usernames: string[]) => void;
-  disabled: boolean;
-}) {
-  const t = useTranslate();
-  const [selected, setSelected] = React.useState<string[]>([]);
-  const writable = requestRuleNamesRequesters(regoSource);
-
-  return (
-    <div id="settings-request-users-picker" className="space-y-2">
-      <Label className="block">
-        <HelpLabel
-          label={t("settings.requestRuleRequesters")}
-          help={t("settings.requestRuleRequestersHelp")}
-        />
-      </Label>
-      {users.length === 0 ? (
-        <p
-          id="settings-request-users-empty"
-          className="text-xs text-muted-foreground"
-        >
-          {t("settings.requestRuleRequestersUnavailable")}
-        </p>
-      ) : (
-        <MultiSelectDropdown
-          id="settings-request-users"
-          optionIdPrefix="settings-request-user"
-          className="md:max-w-[50%]"
-          triggerLabel={
-            selected.length > 0
-              ? selected.join(", ")
-              : t("settings.requestRuleRequestersPlaceholder")
-          }
-          ariaLabel={t("settings.requestRuleRequesters")}
-          options={users.map((user) => ({
-            value: user.username,
-            label: user.username,
-            id: settingsRequestUserId(user.id),
-          }))}
-          selectedValues={selected}
-          onSelectedValuesChange={setSelected}
-        />
-      )}
-      {!writable && selected.length > 0 ? (
-        <p
-          id="settings-request-users-no-target"
-          className="text-xs text-[var(--scry-warning-text)]"
-        >
-          {t("settings.requestRuleRequestersNoTarget")}
-        </p>
-      ) : null}
-      <Button
-        id="settings-request-users-apply"
-        type="button"
-        variant="secondary"
-        size="sm"
-        disabled={disabled || selected.length === 0 || !writable}
-        onClick={() => applyRequesters(selected)}
-      >
-        <Users className="h-4 w-4" />
-        {t("settings.requestRuleRequestersApply")}
-      </Button>
     </div>
   );
 }
@@ -1107,7 +1018,6 @@ export function SettingsRequestRulesSection({
   deleteRuleSet,
   validating,
   validationResult,
-  applyRequesters,
   setRuleEnabled,
   canManagePermissions,
   decisions,
@@ -1455,50 +1365,22 @@ export function SettingsRequestRulesSection({
                   warnings={validationResult?.warnings ?? []}
                 />
 
-                <RequestUserPicker
-                  users={users}
-                  regoSource={ruleSetDraft.regoSource}
-                  applyRequesters={applyRequesters}
-                  disabled={mutatingRuleSetId !== null}
-                />
-
                 <div>
                   <Label className="mb-2 block">
-                    <HelpLabel
-                      label={t("settings.requestRuleLibraries")}
-                      help={t("settings.requestRuleLibrariesHelp")}
-                    />
+                    {t("settings.requestRuleLibraries")}
                   </Label>
-                  <div className="flex flex-wrap items-center gap-4">
-                    {libraries.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">
-                        {t("settings.requestRuleLibrariesAll")}
-                      </span>
-                    ) : null}
-                    {libraries.map((library) => (
-                      <label
-                        key={library.id}
-                        className="flex items-center gap-2"
-                      >
-                        <Checkbox
-                          id={settingsRequestRuleLibraryId(library.id)}
-                          checked={ruleSetDraft.libraryIds.includes(library.id)}
-                          onCheckedChange={(value) => {
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              libraryIds:
-                                value === true
-                                  ? [...prev.libraryIds, library.id]
-                                  : prev.libraryIds.filter(
-                                      (id) => id !== library.id,
-                                    ),
-                            }));
-                          }}
-                        />
-                        <span className="text-sm">{library.name}</span>
-                      </label>
-                    ))}
-                  </div>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    {t("settings.requestRuleLibrariesHelp")}
+                  </p>
+                  <LibrarySelect
+                    idPrefix="settings-request-rule-library"
+                    libraries={libraries}
+                    selected={ruleSetDraft.libraryIds}
+                    emptyLabel={t("settings.requestRuleLibrariesAll")}
+                    onChange={(libraryIds) =>
+                      setRuleSetDraft((prev) => ({ ...prev, libraryIds }))
+                    }
+                  />
                 </div>
 
                 {!canManagePermissions &&

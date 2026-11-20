@@ -2531,6 +2531,7 @@ const ja: LocaleDictionary = {
   "nav.rules": "ルール",
   "settings.rulesScoring": "スコアリングルール",
   "settings.lifecycleNavRules": "ルール",
+  "settings.lifecycleNavTry": "ルールを試す",
   "settings.lifecycleNavHistory": "履歴",
   "settings.lifecycleRuleAction": "アクション",
   "settings.lifecycleRuleView": "表示",
@@ -3208,15 +3209,6 @@ const ja: LocaleDictionary = {
     "保存していない変更を破棄しますか？",
   "settings.requestRuleConfirmDiscardDescription":
     "エディタのマッチャーは保存されていません。続行すると置き換えられます。",
-  "settings.requestRuleRequesters": "このルールで人を指定する",
-  "settings.requestRuleRequestersHelp":
-    "対象のアカウントをチェックして適用します。エディタのマッチャーが書き換えられるので、保存前に内容を確認できます。",
-  "settings.requestRuleRequestersApply": "これらの名前をマッチャーに書き込む",
-  "settings.requestRuleRequestersPlaceholder": "アカウントを選択",
-  "settings.requestRuleRequestersUnavailable":
-    "アカウント一覧の取得にはこのページにない権限が必要です。名前はマッチャーに手で入力してください。",
-  "settings.requestRuleRequestersNoTarget":
-    "このマッチャーは誰も指定していないため、選んだアカウントを書き込む場所がありません。先に requesters セットかユーザー名の比較を追加してください。",
   "settings.requestPreviewTitle": "このルールをリクエストで試す",
   "settings.requestPreviewSubtitle":
     "あなたが記述したリクエストに対してマッチャーを 1 つ実行します。送信も記録もされません。",

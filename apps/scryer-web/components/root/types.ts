@@ -57,7 +57,7 @@ export type RulesSection = "scoring" | "lifecycle" | "request";
 /// what a bare lifecycle-rules link always meant. Exclusions live with the
 /// gates because both answer "what is this instance allowed to do", not "what
 /// would a rule match".
-export type LifecycleRulesSection = "rules" | "candidates" | "history";
+export type LifecycleRulesSection = "rules" | "try" | "candidates" | "history";
 
 /// Panes of the Request Rules page: the rules themselves, a request to try
 /// them against, and the decisions they made.

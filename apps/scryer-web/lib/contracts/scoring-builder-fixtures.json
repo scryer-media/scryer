@@ -683,5 +683,171 @@
         "expected": false
       }
     ]
+  },
+  {
+    "id": "all-set-matches",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.release.raw_title",
+          "operator": "IS_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.edition",
+          "operator": "IS_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.languages_audio",
+          "operator": "CONTAINS_ANY",
+          "value": "en\nExtra"
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_penalty",
+          "points": "-75"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.raw_title in {\"Sample\", \"Extra\"}\n\tinput.release.edition in {\"Sample\", \"Extra\"}\n\tcount([item | some item in input.release.languages_audio; item in {\"en\", \"Extra\"}]) > 0\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Sample",
+            "languages_audio": [
+              "en"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Sample",
+            "languages_audio": [
+              "en"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Elsewhere",
+            "languages_audio": [
+              "en"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Sample",
+            "languages_audio": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "all-set-exclusions",
+    "scope": null,
+    "model": {
+      "version": 2,
+      "family": "scoring",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.release.raw_title",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.edition",
+          "operator": "IS_NOT_ONE_OF",
+          "value": "Sample\nExtra"
+        },
+        {
+          "field": "input.release.languages_audio",
+          "operator": "CONTAINS_NONE",
+          "value": "en\nExtra"
+        }
+      ],
+      "outputs": {
+        "ADJUST_SCORE": {
+          "code": "sample_penalty",
+          "points": "-75"
+        }
+      }
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_string(input.release.raw_title)\n\tnot input.release.raw_title in {\"Sample\", \"Extra\"}\n\tis_string(input.release.edition)\n\tnot input.release.edition in {\"Sample\", \"Extra\"}\n\tis_array(input.release.languages_audio)\n\tcount([item | some item in input.release.languages_audio; item in {\"en\", \"Extra\"}]) == 0\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Elsewhere",
+            "languages_audio": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample",
+            "edition": "Elsewhere",
+            "languages_audio": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Sample",
+            "languages_audio": [
+              "Elsewhere"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Elsewhere",
+            "edition": "Elsewhere",
+            "languages_audio": [
+              "en"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
   }
 ]

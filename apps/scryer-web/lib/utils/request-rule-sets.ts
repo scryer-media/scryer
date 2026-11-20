@@ -354,66 +354,6 @@ export function updateRequestRuleMetadataInput(
   };
 }
 
-// ── Naming people in a matcher ───────────────────────────────────────────
-
-/// A Rego string literal for one username. Only the two characters Rego escapes
-/// inside a double-quoted string are touched; a username carrying anything else
-/// is written through unchanged, because rewriting it would name a different
-/// person than the one the operator picked.
-function regoStringLiteral(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-const REQUESTERS_SET_PATTERN = /(requesters\s*:=\s*\{)[^}]*(\})/;
-const USERNAME_LITERAL_PATTERN =
-  /(input\.requester\.username\s*)(==|in)(\s*)(\{[^}]*\}|"(?:[^"\\]|\\.)*")/;
-
-/// Whether a matcher has somewhere for the user picker to write. A rule that
-/// names nobody has no set and no literal, and rewriting it would mean guessing
-/// where the author wanted the names.
-export function requestRuleNamesRequesters(source: string): boolean {
-  return (
-    REQUESTERS_SET_PATTERN.test(source) || USERNAME_LITERAL_PATTERN.test(source)
-  );
-}
-
-/// Rewrite whichever way a matcher names people with the usernames the picker
-/// selected. The `requesters := {…}` set wins when both shapes are present,
-/// because that is the form the shipped templates use and the one an author
-/// edits deliberately. A single `== "name"` comparison becomes an `in {…}` set
-/// membership once more than one person is selected, which is the only honest
-/// way to say "any of these" with an equality operator.
-///
-/// Returns null when there is nothing to rewrite, so the caller can say so
-/// rather than silently leaving the matcher naming the template's placeholder.
-export function applyRequestersToSource(
-  source: string,
-  usernames: string[],
-): string | null {
-  const names = usernames.map((name) => name.trim()).filter(Boolean);
-  const literals = names.map(regoStringLiteral);
-
-  if (REQUESTERS_SET_PATTERN.test(source)) {
-    return source.replace(
-      REQUESTERS_SET_PATTERN,
-      (_match, open: string, close: string) =>
-        `${open}${literals.join(", ")}${close}`,
-    );
-  }
-
-  if (USERNAME_LITERAL_PATTERN.test(source)) {
-    return source.replace(
-      USERNAME_LITERAL_PATTERN,
-      (_match, head: string, _operator: string, space: string) =>
-        literals.length === 1
-          ? `${head}==${space}${literals[0]}`
-          : `${head}in${space}{${literals.join(", ")}}`,
-    );
-  }
-
-  return null;
-}
-
 // ── Labels and tones ─────────────────────────────────────────────────────
 
 const DECISION_OUTCOME_LABEL_KEYS: Record<RequestDecisionOutcome, string> = {

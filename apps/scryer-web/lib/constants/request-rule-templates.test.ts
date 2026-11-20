@@ -4,10 +4,6 @@ import test from "node:test";
 import requestInputContract from "../contracts/request-input-contract.json" with { type: "json" };
 import en from "../i18n/locales/en.ts";
 import ru from "../i18n/locales/ru.ts";
-import {
-  applyRequestersToSource,
-  requestRuleNamesRequesters,
-} from "../utils/request-rule-sets.ts";
 import { REQUEST_RULE_TEMPLATES } from "./request-rule-templates.ts";
 
 /// The seven worked examples, byte-for-byte as `REQUEST_RULE_EXAMPLES` pins them
@@ -99,11 +95,6 @@ test("person-targeted templates are the ones that read the requester", () => {
       template.regoSource.includes("input.requester."),
       `${template.id} disagrees with its matcher about naming people`,
     );
-    assert.equal(
-      template.namesRequesters === true,
-      requestRuleNamesRequesters(template.regoSource),
-      `${template.id} disagrees about whether the user picker can write to it`,
-    );
   }
 
   assert.deepEqual(
@@ -116,37 +107,6 @@ test("person-targeted templates are the ones that read the requester", () => {
       "low-resolution-approval",
     ],
   );
-});
-
-test("the user picker rewrites both ways a template names people", () => {
-  const set = REQUEST_RULE_TEMPLATES.find(
-    (template) => template.id === "named-requesters-family-rated",
-  )!;
-  assert.equal(
-    applyRequestersToSource(set.regoSource, ["dana"]),
-    set.regoSource.replace('{"alice", "bob", "carol"}', '{"dana"}'),
-  );
-
-  const literal = REQUEST_RULE_TEMPLATES.find(
-    (template) => template.id === "short-lease-approval",
-  )!;
-  assert.equal(
-    applyRequestersToSource(literal.regoSource, ["dana"]),
-    literal.regoSource.replace('== "bob"', '== "dana"'),
-  );
-  /// One name stays an equality; several become a set membership, which is the
-  /// only honest way to say "any of these" with an equality operator.
-  assert.equal(
-    applyRequestersToSource(literal.regoSource, ["dana", "erin"]),
-    literal.regoSource.replace('== "bob"', 'in {"dana", "erin"}'),
-  );
-
-  /// A matcher that names nobody has nowhere to write, and says so rather than
-  /// leaving the placeholder in place.
-  const contentOnly = REQUEST_RULE_TEMPLATES.find(
-    (template) => template.id === "deny-adult-content",
-  )!;
-  assert.equal(applyRequestersToSource(contentOnly.regoSource, ["dana"]), null);
 });
 
 test("every template key resolves in the default locale and in Russian", () => {

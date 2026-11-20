@@ -239,8 +239,7 @@ export type RequestRuleSetDraft = {
   builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
 
-/// One account the user picker can write into a matcher. Only the id and the
-/// username matter: a rule names people by username.
+/// One account a preview can run as.
 export type RequestRuleUserOption = {
   id: string;
   username: string;

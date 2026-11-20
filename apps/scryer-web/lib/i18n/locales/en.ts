@@ -9800,6 +9800,7 @@ const en: LocaleDictionary = {
   "nav.rules": "Rules",
   "settings.rulesScoring": "Scoring Rules",
   "settings.lifecycleNavRules": "Rules",
+  "settings.lifecycleNavTry": "Try a rule",
   "settings.lifecycleNavHistory": "History",
   "settings.lifecycleRuleAction": "Actions",
   "settings.lifecycleActionSequence": "Action sequence",
@@ -9823,9 +9824,8 @@ const en: LocaleDictionary = {
     "Each rule runs on its own schedule. A run evaluates the rule, then applies its candidates whose grace period has ended. Changing the schedule keeps the rule's state. Daily, weekly and cron times use the server's local time.",
   "settings.lifecycleRuleScheduleManualHelp":
     "This rule never runs on its own. Start it from Runs and history.",
-  "settings.lifecycleRuleLibraries": "Library scope",
-  "settings.lifecycleRuleLibrariesHelp":
-    "Leave every library unchecked to scope the rule to the whole collection.",
+  "settings.lifecycleRuleLibraries": "Applied Libraries",
+  "settings.lifecycleRuleLibrariesHelp": "Leave empty to apply to all libraries.",
   "settings.lifecycleRuleLibrariesAll": "All libraries",
   "settings.lifecycleRuleCreate": "Create lifecycle rule",
   "settings.lifecycleRuleUpdate": "Update lifecycle rule",
@@ -10622,6 +10622,12 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderOpHasValue": "has a value",
   "settings.ruleBuilderOpHasNoValue": "has no value",
   "settings.ruleBuilderProblemNoConditions": "Add at least one condition.",
+  "settings.ruleBuilderOpIsOneOf": "is one of",
+  "settings.ruleBuilderOpIsNotOneOf": "is not one of",
+  "settings.ruleBuilderOpContainsAny": "contains any of",
+  "settings.ruleBuilderOpContainsNone": "contains none of",
+  "settings.ruleBuilderValues": "Values",
+  "settings.ruleBuilderValuesPerLine": "One value per line",
   "settings.ruleBuilderProblemNoOutputs": "Choose at least one outcome.",
   "settings.ruleBuilderProblemFactRequired": "Choose a fact.",
   "settings.ruleBuilderProblemFactUnknown":
@@ -10770,10 +10776,9 @@ const en: LocaleDictionary = {
   "settings.requestRuleEnabledUpdated": "Updated {{name}}.",
   "settings.requestRuleRequesterFieldsHint":
     "This rule reads requester fields and needs Manage permissions to save.",
-  "settings.requestRuleLibraries": "Libraries",
+  "settings.requestRuleLibraries": "Applied Libraries",
   "settings.requestRuleLibrariesAll": "All libraries",
-  "settings.requestRuleLibrariesHelp":
-    "Leave every box unticked to apply this rule to requests in every library.",
+  "settings.requestRuleLibrariesHelp": "Leave empty to apply to all libraries.",
   "settings.requestRuleRevision": "Revision",
   "settings.requestRuleDecisionCount": "Decisions",
   "settings.requestRuleCopy": "Copy rule",
@@ -10791,15 +10796,6 @@ const en: LocaleDictionary = {
   "settings.requestRuleConfirmDiscardTitle": "Discard unsaved changes?",
   "settings.requestRuleConfirmDiscardDescription":
     "The matcher in the editor has not been saved. Continuing replaces it.",
-  "settings.requestRuleRequesters": "Name people in this rule",
-  "settings.requestRuleRequestersHelp":
-    "Tick the accounts this rule is about and apply them. The matcher in the editor is rewritten so you can read it before saving.",
-  "settings.requestRuleRequestersApply": "Write these names into the matcher",
-  "settings.requestRuleRequestersPlaceholder": "Choose accounts",
-  "settings.requestRuleRequestersUnavailable":
-    "Listing accounts needs permission this page does not carry, so names have to be typed into the matcher by hand.",
-  "settings.requestRuleRequestersNoTarget":
-    "This matcher does not name anybody, so there is nowhere to write the accounts you picked. Add a requesters set or a username comparison first.",
 
   "settings.requestPreviewTitle": "Try this rule against a request",
   "settings.requestPreviewSubtitle":

@@ -2689,6 +2689,7 @@ const fr: LocaleDictionary = {
   "nav.rules": "Règles",
   "settings.rulesScoring": "Règles de notation",
   "settings.lifecycleNavRules": "Règles",
+  "settings.lifecycleNavTry": "Essayer une règle",
   "settings.lifecycleNavHistory": "Historique",
   "settings.lifecycleRuleAction": "Action",
   "settings.lifecycleRuleView": "Voir",
@@ -3384,15 +3385,6 @@ const fr: LocaleDictionary = {
     "Abandonner les modifications non enregistrées ?",
   "settings.requestRuleConfirmDiscardDescription":
     "Le filtre présent dans l'éditeur n'a pas été enregistré. Continuer le remplace.",
-  "settings.requestRuleRequesters": "Nommer des personnes dans cette règle",
-  "settings.requestRuleRequestersHelp":
-    "Cochez les comptes concernés puis appliquez-les. Le filtre de l'éditeur est réécrit pour que vous puissiez le relire avant d'enregistrer.",
-  "settings.requestRuleRequestersApply": "Écrire ces noms dans le filtre",
-  "settings.requestRuleRequestersPlaceholder": "Choisir des comptes",
-  "settings.requestRuleRequestersUnavailable":
-    "Lister les comptes exige un droit dont cette page ne dispose pas ; les noms doivent être saisis à la main dans le filtre.",
-  "settings.requestRuleRequestersNoTarget":
-    "Ce filtre ne nomme personne : les comptes choisis n'ont nulle part où aller. Ajoutez d'abord un ensemble requesters ou une comparaison de nom d'utilisateur.",
   "settings.requestPreviewTitle": "Essayer cette règle sur une demande",
   "settings.requestPreviewSubtitle":
     "Exécute un filtre sur une demande que vous décrivez. Rien n'est envoyé et rien n'est consigné.",

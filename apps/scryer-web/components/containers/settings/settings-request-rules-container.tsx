@@ -39,7 +39,6 @@ import {
   REQUEST_FILTER_ALL,
   requestRuleBuilder,
   REQUEST_SHAPING_MONITOR_TYPES,
-  applyRequestersToSource,
   requestMonitorTypeLabelKey,
   clampRequestLeaseDays,
   copyRequestRuleDraft,
@@ -54,15 +53,21 @@ import {
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
 import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
-import { REQUEST_RULE_BUILDER_BASE } from "@/lib/utils/request-rule-builder-schema";
 import {
+  REQUEST_RULE_BUILDER_BASE,
+  REQUEST_RULE_BUILDER_BASE_WITHOUT_REQUESTER,
+} from "@/lib/utils/request-rule-builder-schema";
+import {
+  loadLibraryIdOptions,
+  loadListIdOptions,
+  loadUserIdOptions,
+  loadQualityProfileIdOptions,
   loadQualityProfileNames,
   loadTitleTagLabels,
 } from "@/lib/utils/rule-builder-catalogs";
 import {
   isIncompleteRuleBuilderDraft,
   openRuleTemplateDraft,
-  withRuleSourceEdit,
 } from "@/lib/utils/rule-builder-mode";
 import { ruleTemplateBuilderModel } from "@/lib/constants/rule-template-builder-models";
 import { audioLanguageOptions } from "@/lib/constants/audio-languages";
@@ -118,9 +123,14 @@ export function SettingsRequestRulesContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const sessionUser = useSessionUser();
   const canManagePermissions = hasAppPermission(
-    useSessionUser(),
+    sessionUser,
     APP_PERMISSIONS.managePermissions,
+  );
+  const canListUsers = hasAppPermission(
+    sessionUser,
+    APP_PERMISSIONS.manageUsers,
   );
 
   const [ruleSetRecords, setRuleSetRecords] = useState<RequestRuleSetRecord[]>(
@@ -185,8 +195,12 @@ export function SettingsRequestRulesContainer({
     () => ({
       titleTags: () => loadTitleTagLabels(client),
       qualityProfiles: () => loadQualityProfileNames(client),
+      qualityProfileIds: () => loadQualityProfileIdOptions(client),
+      libraryIds: () => loadLibraryIdOptions(client),
+      lists: () => loadListIdOptions(client),
+      ...(canListUsers ? { users: () => loadUserIdOptions(client) } : {}),
     }),
-    [client],
+    [client, canListUsers],
   );
   /// Monitoring and audio languages are fixed vocabularies, written as their
   /// codes and shown by their labels.
@@ -202,7 +216,11 @@ export function SettingsRequestRulesContainer({
     }),
     [t],
   );
-  const servedSchema = useRuleBuilderSchema(REQUEST_RULE_BUILDER_BASE);
+  const servedSchema = useRuleBuilderSchema(
+    canManagePermissions
+      ? REQUEST_RULE_BUILDER_BASE
+      : REQUEST_RULE_BUILDER_BASE_WITHOUT_REQUESTER,
+  );
   const builderBinding = useMemo(
     () => requestRuleBuilder(servedSchema.schema),
     [servedSchema.schema],
@@ -451,8 +469,8 @@ export function SettingsRequestRulesContainer({
   }, [client, setGlobalStatus, t]);
 
   /// Libraries, quality profiles and accounts. Listing users needs a permission
-  /// this page does not otherwise require, so a refusal leaves the picker empty
-  /// and says so rather than failing the section.
+  /// this page does not otherwise require, so a refusal leaves the account list
+  /// empty rather than failing the section.
   const refreshCatalogs = useCallback(async () => {
     try {
       const [libraryList, profiles, userList] = await Promise.all([
@@ -529,18 +547,6 @@ export function SettingsRequestRulesContainer({
       void refreshDecisions();
     }
   }, [refreshDecisions, section]);
-
-  const applyRequesters = useCallback(
-    (usernames: string[]) => {
-      setRuleSetDraft((prev) => {
-        const next = applyRequestersToSource(prev.regoSource, usernames);
-        // Only a draft the builder no longer holds takes a source edit.
-        return next === null ? prev : withRuleSourceEdit(prev, next);
-      });
-      setValidationResult(null);
-    },
-    [setValidationResult],
-  );
 
   const confirmDeleteRuleSet = useCallback(async () => {
     if (!pendingDeleteRuleSet) return;
@@ -785,7 +791,6 @@ export function SettingsRequestRulesContainer({
         deleteRuleSet={setPendingDeleteRuleSet}
         validating={validating}
         validationResult={validationResult}
-        applyRequesters={applyRequesters}
         setRuleEnabled={(record, enabled) =>
           void setRuleEnabled(record, enabled)
         }

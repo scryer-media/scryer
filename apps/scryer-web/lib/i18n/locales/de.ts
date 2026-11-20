@@ -2587,6 +2587,7 @@ const de: LocaleDictionary = {
   "nav.rules": "Regeln",
   "settings.rulesScoring": "Bewertungsregeln",
   "settings.lifecycleNavRules": "Regeln",
+  "settings.lifecycleNavTry": "Regel ausprobieren",
   "settings.lifecycleNavHistory": "Verlauf",
   "settings.lifecycleRuleAction": "Aktion",
   "settings.lifecycleRuleView": "Ansehen",
@@ -3277,15 +3278,6 @@ const de: LocaleDictionary = {
     "Ungespeicherte Änderungen verwerfen?",
   "settings.requestRuleConfirmDiscardDescription":
     "Der Matcher im Editor wurde nicht gespeichert. Fortfahren ersetzt ihn.",
-  "settings.requestRuleRequesters": "Personen in dieser Regel benennen",
-  "settings.requestRuleRequestersHelp":
-    "Wählen Sie die Konten aus, um die es geht, und übernehmen Sie sie. Der Matcher im Editor wird umgeschrieben, damit Sie ihn vor dem Speichern lesen können.",
-  "settings.requestRuleRequestersApply": "Diese Namen in den Matcher schreiben",
-  "settings.requestRuleRequestersPlaceholder": "Konten auswählen",
-  "settings.requestRuleRequestersUnavailable":
-    "Das Auflisten von Konten erfordert Rechte, die diese Seite nicht hat; Namen müssen von Hand in den Matcher eingetragen werden.",
-  "settings.requestRuleRequestersNoTarget":
-    "Dieser Matcher benennt niemanden, daher gibt es keine Stelle für die gewählten Konten. Fügen Sie zuerst ein requesters-Set oder einen Benutzernamensvergleich hinzu.",
   "settings.requestPreviewTitle": "Diese Regel an einer Anfrage ausprobieren",
   "settings.requestPreviewSubtitle":
     "Führt einen Matcher an einer von Ihnen beschriebenen Anfrage aus. Es wird nichts abgeschickt und nichts festgehalten.",

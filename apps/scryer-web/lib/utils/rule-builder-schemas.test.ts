@@ -12,6 +12,7 @@ import ru from "../i18n/locales/ru.ts";
 import zhHK from "../i18n/locales/zh_HK.ts";
 import zhTW from "../i18n/locales/zh_TW.ts";
 import { RULE_BUILDER_CATALOGS } from "./rule-builder-catalog-presentation.ts";
+import { REQUEST_RULE_BUILDER_BASE_WITHOUT_REQUESTER } from "./request-rule-builder-schema.ts";
 import {
   LIFECYCLE_CONTRACT_SCHEMA,
   LIFECYCLE_SERVED_PAYLOAD,
@@ -25,6 +26,7 @@ import {
   generateRuleSource,
   parseRuleBuilderModel,
   ruleBuilderFields,
+  ruleBuilderSchemaFromPayload,
   ruleBuilderSubjectFields,
   type RuleBuilderModel,
   type RuleBuilderSchema,
@@ -105,7 +107,11 @@ for (const family of FAMILIES) {
     const offered = new Map<string, string>();
     for (const variant of family.variants)
       for (const subject of family.schema.subjects ?? [null])
-        for (const field of ruleBuilderSubjectFields(family.schema, variant, subject))
+        for (const field of ruleBuilderSubjectFields(
+          family.schema,
+          variant,
+          subject,
+        ))
           offered.set(field.path, field.kind);
     const expected = new Set<string>();
     for (const kind of new Set(offered.values()))
@@ -119,7 +125,9 @@ for (const family of FAMILIES) {
       const model = parsed(family, entry);
       joins.add(model.join);
       for (const id of Object.keys(model.outputs)) outputs.add(id);
-      const rowConditions = (model.actions ?? []).flatMap((row) => row.conditions);
+      const rowConditions = (model.actions ?? []).flatMap(
+        (row) => row.conditions,
+      );
       for (const condition of [...model.conditions, ...rowConditions]) {
         const kind = offered.get(condition.field);
         assert.ok(kind, `${entry.id}: ${condition.field}`);
@@ -145,11 +153,19 @@ for (const family of FAMILIES) {
   test(`every ${family.name} fixture has cases on both sides of its rule`, () => {
     for (const entry of family.fixtures) {
       assert.ok(Array.isArray(entry.cases), entry.id);
-      assert.ok(entry.cases.some((entry) => entry.expected === true), entry.id);
-      assert.ok(entry.cases.some((entry) => entry.expected === false), entry.id);
+      assert.ok(
+        entry.cases.some((entry) => entry.expected === true),
+        entry.id,
+      );
+      assert.ok(
+        entry.cases.some((entry) => entry.expected === false),
+        entry.id,
+      );
       for (const entryCase of entry.cases) {
         assert.deepEqual(
-          Object.keys(entryCase).filter((key) => key !== "rule").sort(),
+          Object.keys(entryCase)
+            .filter((key) => key !== "rule")
+            .sort(),
           ["expected", "input"],
           entry.id,
         );
@@ -159,7 +175,11 @@ for (const family of FAMILIES) {
         assert.equal(typeof entryCase.input, "object", entry.id);
         // `days_since` reads the clock from the input.
         if (family.name === "lifecycle")
-          assert.equal(typeof entryCase.input.evaluation_time, "string", entry.id);
+          assert.equal(
+            typeof entryCase.input.evaluation_time,
+            "string",
+            entry.id,
+          );
       }
     }
   });
@@ -216,7 +236,10 @@ const SEMANTICS_ACTIONS: Record<string, Pick<RuleBuilderModel, "actions">> = {
 /// Operators that ask about a missing value, so may hold for one.
 const ASKS_ABOUT_MISSING = new Set(["HAS_NO_VALUE"]);
 
-function contractType(schema: RuleBuilderSchema, path: string): string | undefined {
+function contractType(
+  schema: RuleBuilderSchema,
+  path: string,
+): string | undefined {
   for (const section of schema.contract.sections)
     for (const field of section.fields)
       if (`${section.path}.${field.field}` === path) return field.type;
@@ -235,14 +258,18 @@ for (const family of FAMILIES) {
           version: 2,
           family: family.schema.family,
           join: "ALL",
-          conditions: [{ field: row.field, operator: row.operator, value: row.value }],
+          conditions: [
+            { field: row.field, operator: row.operator, value: row.value },
+          ],
           outputs: SEMANTICS_OUTPUT[family.name],
           ...SEMANTICS_ACTIONS[family.name],
         } as RuleBuilderModel,
         semantics.variant,
       );
       assert.ok(result.ok, `${row.field} ${row.operator}`);
-      const body = result.source.split(`${family.schema.helperRule} if {\n`)[1].split("\n}\n")[0];
+      const body = result.source
+        .split(`${family.schema.helperRule} if {\n`)[1]
+        .split("\n}\n")[0];
       assert.deepEqual(
         body.split("\n").map((line) => line.replace(/^\t/, "")),
         row.lines,
@@ -270,39 +297,50 @@ for (const family of FAMILIES) {
   test(`${family.name} comparisons hold for a missing or null value only when they ask about one`, () => {
     for (const row of semantics.rows) {
       const label = `${row.field} ${row.operator}`;
-      const outcomes = [...row.present.map((entry) => entry.expected), row.null, row.absent];
+      const outcomes = [
+        ...row.present.map((entry) => entry.expected),
+        row.null,
+        row.absent,
+      ];
       assert.ok(outcomes.includes(true) && outcomes.includes(false), label);
-      const nullable = contractType(family.schema, row.field)?.endsWith("?") ?? false;
+      const nullable =
+        contractType(family.schema, row.field)?.endsWith("?") ?? false;
       assert.equal(row.null !== undefined, nullable, label);
-      const omittedList =
-        family.schema.conditionSources.some(
-          (source) =>
-            row.field.startsWith(`${source.section}.`) &&
-            source.fields?.[row.field.slice(source.section.length + 1)]?.kind ===
-              "omitted_when_empty_string_list",
-        );
+      const omittedList = family.schema.conditionSources.some(
+        (source) =>
+          row.field.startsWith(`${source.section}.`) &&
+          source.fields?.[row.field.slice(source.section.length + 1)]?.kind ===
+            "omitted_when_empty_string_list",
+      );
       // A list the input leaves out when empty is an empty list, so it lacks
       // every value and is empty; nothing else holds for a missing value
       // unless it asks about one.
       const holdsWhenMissing =
         ASKS_ABOUT_MISSING.has(row.operator) ||
-        (omittedList && (row.operator === "NOT_CONTAINS" || row.operator === "IS_EMPTY"));
+        (omittedList &&
+          ["NOT_CONTAINS", "CONTAINS_NONE", "IS_EMPTY"].includes(row.operator));
       assert.equal(row.absent, holdsWhenMissing, label);
-      if (row.null !== undefined) assert.equal(row.null, ASKS_ABOUT_MISSING.has(row.operator), label);
+      if (row.null !== undefined)
+        assert.equal(row.null, ASKS_ABOUT_MISSING.has(row.operator), label);
     }
   });
 }
 
 test("a moment still to come is never some days ago", () => {
   const rows = SEMANTICS.lifecycle.rows.filter(
-    (row) => row.operator === "MORE_THAN_DAYS_AGO" || row.operator === "LESS_THAN_DAYS_AGO",
+    (row) =>
+      row.operator === "MORE_THAN_DAYS_AGO" ||
+      row.operator === "LESS_THAN_DAYS_AGO",
   );
   assert.equal(rows.length, 2);
   const now = Date.parse(SEMANTICS.lifecycle.evaluationTime ?? "");
   for (const row of rows) {
-    const future = row.present.filter((entry) => Date.parse(String(entry.value)) > now);
+    const future = row.present.filter(
+      (entry) => Date.parse(String(entry.value)) > now,
+    );
     assert.ok(future.length > 0, row.operator);
-    for (const entry of future) assert.equal(entry.expected, false, row.operator);
+    for (const entry of future)
+      assert.equal(entry.expected, false, row.operator);
   }
   assert.ok(
     rows
@@ -313,7 +351,9 @@ test("a moment still to come is never some days ago", () => {
 
 test("a false flag is written as a comparison, so a missing one is not false", () => {
   for (const family of FAMILIES) {
-    const row = SEMANTICS[family.name].rows.find((entry) => entry.operator === "IS_FALSE");
+    const row = SEMANTICS[family.name].rows.find(
+      (entry) => entry.operator === "IS_FALSE",
+    );
     assert.ok(row, family.name);
     assert.deepEqual(row.lines, [`${row.field} == false`]);
     assert.equal(row.absent, false);
@@ -326,12 +366,16 @@ for (const family of FAMILIES) {
   test(`every ${family.name} schema reference exists in its input contract`, () => {
     const { contract } = family.schema;
     const types = new Set(
-      contract.sections.flatMap((section) => section.fields.map((field) => field.type)),
+      contract.sections.flatMap((section) =>
+        section.fields.map((field) => field.type),
+      ),
     );
     for (const rule of family.schema.typeRules)
       assert.ok(types.has(rule.type), `type ${rule.type}`);
     for (const source of family.schema.conditionSources) {
-      const section = contract.sections.find((entry) => entry.path === source.section);
+      const section = contract.sections.find(
+        (entry) => entry.path === source.section,
+      );
       assert.ok(section, source.section);
       const names = new Set(section.fields.map((field) => field.field));
       for (const name of source.exclude ?? [])
@@ -340,7 +384,10 @@ for (const family of FAMILIES) {
         assert.ok(names.has(name), `${source.section}.${name}`);
     }
     for (const variant of family.variants)
-      assert.ok(ruleBuilderFields(family.schema, variant).length > 0, String(variant));
+      assert.ok(
+        ruleBuilderFields(family.schema, variant).length > 0,
+        String(variant),
+      );
   });
 }
 
@@ -357,13 +404,25 @@ for (const [name, payload] of SERVED) {
     assert.equal(new Set(ids).size, ids.length);
     assert.equal(new Set(heads).size, heads.length);
     for (const output of payload.outputs) {
-      assert.equal(output.labelKey, `ruleOutput.${name}.${output.head}`, output.id);
-      if (output.helpKey) assert.equal(output.helpKey, `${output.labelKey}.help`, output.id);
-      for (const other of output.conflictsWith) assert.ok(ids.includes(other), output.id);
+      assert.equal(
+        output.labelKey,
+        `ruleOutput.${name}.${output.head}`,
+        output.id,
+      );
+      if (output.helpKey)
+        assert.equal(output.helpKey, `${output.labelKey}.help`, output.id);
+      for (const other of output.conflictsWith)
+        assert.ok(ids.includes(other), output.id);
       if (output.options)
-        assert.ok(Object.hasOwn(RULE_BUILDER_CATALOGS, output.options), output.options);
+        assert.ok(
+          Object.hasOwn(RULE_BUILDER_CATALOGS, output.options),
+          output.options,
+        );
     }
-    const schema = name === "lifecycle" ? LIFECYCLE_CONTRACT_SCHEMA : REQUEST_CONTRACT_SCHEMA;
+    const schema =
+      name === "lifecycle"
+        ? LIFECYCLE_CONTRACT_SCHEMA
+        : REQUEST_CONTRACT_SCHEMA;
     assert.deepEqual(
       schema.outputs.map((output) => output.id),
       ids,
@@ -372,7 +431,10 @@ for (const [name, payload] of SERVED) {
 }
 
 /// Facts the server does not collect yet: a condition on one is always unknown.
-const UNCOLLECTED_LIFECYCLE_FACTS = new Set(["last_upgraded_at", "active_downloads"]);
+const UNCOLLECTED_LIFECYCLE_FACTS = new Set([
+  "last_upgraded_at",
+  "active_downloads",
+]);
 
 test("lifecycle conditions offer every collected fact except object lists", () => {
   const section = LIFECYCLE_CONTRACT_SCHEMA.contract.sections.find(
@@ -388,7 +450,11 @@ test("lifecycle conditions offer every collected fact except object lists", () =
   for (const field of section.fields) {
     const objectList = field.type.endsWith("[]") && field.type !== "string[]";
     const uncollected = UNCOLLECTED_LIFECYCLE_FACTS.has(field.field);
-    assert.equal(offered.has(field.field), !objectList && !uncollected, field.field);
+    assert.equal(
+      offered.has(field.field),
+      !objectList && !uncollected,
+      field.field,
+    );
   }
   assert.equal(offered.get("added_at"), "timestamp");
   assert.equal(offered.get("tags"), "string_list");
@@ -401,8 +467,24 @@ test("scoring outputs call only helpers the Rego reference lists", () => {
       assert.ok(helpers.has(call), `${output.id}: ${call}`);
 });
 
-test("request rules leave requester fields out of the builder", () => {
-  for (const field of ruleBuilderFields(REQUEST_CONTRACT_SCHEMA, null))
+test("request rules pick the requester by account, and only for an author who may name people", () => {
+  const requester = ruleBuilderFields(REQUEST_CONTRACT_SCHEMA, null).filter(
+    (field) => field.path.startsWith("input.requester."),
+  );
+  assert.equal(
+    requester.find((field) => field.path === "input.requester.user_id")
+      ?.options,
+    "users",
+  );
+  assert.equal(
+    requester.some((field) => field.path === "input.requester.username"),
+    false,
+  );
+  const withoutRequester = ruleBuilderSchemaFromPayload(
+    REQUEST_RULE_BUILDER_BASE_WITHOUT_REQUESTER,
+    REQUEST_SERVED_PAYLOAD,
+  );
+  for (const field of ruleBuilderFields(withoutRequester, null))
     assert.equal(field.path.startsWith("input.requester"), false, field.path);
 });
 
@@ -418,7 +500,9 @@ const BUILDER_LOCALES: [string, Record<string, string>][] = [
 ];
 
 function builderKeys(schema: RuleBuilderSchema): string[] {
-  const keys = new Set<string>(Object.values(schema.labels).filter(Boolean) as string[]);
+  const keys = new Set<string>(
+    Object.values(schema.labels).filter(Boolean) as string[],
+  );
   for (const kind of Object.values(schema.kinds))
     for (const operator of kind.operators) keys.add(operator.labelKey);
   for (const source of schema.conditionSources)
@@ -457,7 +541,10 @@ for (const family of FAMILIES) {
 test("every served output's label and help tag is translated in every builder locale", () => {
   for (const [, payload] of SERVED)
     for (const output of payload.outputs) {
-      const keys = [output.labelKey, ...(output.helpKey ? [output.helpKey] : [])];
+      const keys = [
+        output.labelKey,
+        ...(output.helpKey ? [output.helpKey] : []),
+      ];
       // A placeholder is optional, but once English has one every locale does.
       const placeholder = `${output.labelKey}.placeholder`;
       if ((en as Record<string, string>)[placeholder]) keys.push(placeholder);
@@ -469,7 +556,10 @@ test("every served output's label and help tag is translated in every builder lo
 
 test("every catalog the builder presents has its strings in every builder locale", () => {
   for (const presentation of Object.values(RULE_BUILDER_CATALOGS))
-    for (const key of [presentation.placeholderKey, presentation.emptyKey].filter(Boolean) as string[])
+    for (const key of [
+      presentation.placeholderKey,
+      presentation.emptyKey,
+    ].filter(Boolean) as string[])
       for (const [name, strings] of BUILDER_LOCALES)
         assert.ok(strings[key], `${name}: ${key}`);
 });

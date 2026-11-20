@@ -80,6 +80,7 @@ export const LIFECYCLE_RULES_SECTION_PATH: Record<
   string
 > = {
   rules: "",
+  try: "try",
   candidates: "candidates",
   history: "history",
 };
@@ -89,6 +90,7 @@ const LIFECYCLE_RULES_SECTION_BY_SEGMENT: Record<
   LifecycleRulesSection
 > = {
   rules: "rules",
+  try: "try",
   candidates: "candidates",
   history: "history",
   runs: "history",

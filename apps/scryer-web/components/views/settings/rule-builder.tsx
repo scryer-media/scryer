@@ -25,6 +25,9 @@ import {
   ruleBuilderActionRows,
   ruleBuilderFields,
   ruleBuilderOperators,
+  ruleBuilderSetItems,
+  ruleBuilderSetValue,
+  type RuleBuilderConditionValue,
   ruleBuilderRowSubject,
   ruleBuilderSubjectFields,
   removeRuleBuilderAction,
@@ -119,7 +122,12 @@ function ProblemText({
   );
 }
 
-const FIELD_LABEL_CLASS = "block text-sm font-medium text-[var(--scry-ink2)]";
+/// The builder's tables: conditions, actions and outputs share one frame.
+const TABLE_FRAME_CLASS =
+  "overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]";
+const TABLE_HEAD_CLASS =
+  "px-2 py-1.5 text-left text-xs font-medium text-[var(--scry-muted2)]";
+const TABLE_CELL_CLASS = "px-2 py-1.5 align-top";
 
 /// Problems a condition row shows under its fact or comparison control. A
 /// value problem shows under the value control, and anything else under the
@@ -181,7 +189,10 @@ function ConditionRow({
   // An id is picked by name from the field's catalog once it has loaded with
   // something in it; until then, and for a catalog the page cannot supply, it
   // is typed in.
-  const catalog = valueKind === "text" ? field?.options : undefined;
+  const catalog =
+    valueKind === "text" || valueKind === "text_set"
+      ? field?.options
+      : undefined;
   const catalogNames =
     catalog && Object.hasOwn(options, catalog) ? options[catalog] : undefined;
   const catalogPresentation = catalog
@@ -191,6 +202,8 @@ function ConditionRow({
     catalogPresentation !== undefined &&
     catalogNames !== undefined &&
     (catalogNames === null || catalogNames.length > 0);
+  const setItems =
+    valueKind === "text_set" ? ruleBuilderSetItems(condition.value) : [];
   const factProblems = problems.filter((p) => FACT_PROBLEM_CODES.has(p.code));
   const operatorProblems = problems.filter((p) =>
     OPERATOR_PROBLEM_CODES.has(p.code),
@@ -205,190 +218,251 @@ function ConditionRow({
       !valueProblems.includes(p),
   );
 
-  return (
-    <div
-      id={selectorId(idBase, ...keys)}
-      className="space-y-1 rounded border border-border p-2"
-    >
-      {/* Every column is a label over a control, top-aligned, so the
-          controls line up whatever text sits under each one. */}
-      <div className="grid gap-2 md:grid-cols-[minmax(0,0.72fr)_minmax(0,0.4fr)_minmax(0,1fr)_auto] md:items-start">
-        <div className="min-w-0 space-y-1.5">
-          <label
-            htmlFor={factId}
-            className={cn(FIELD_LABEL_CLASS, readOnly && "opacity-60")}
-          >
-            {t("settings.ruleBuilderFact")}
-          </label>
-          <FilterableSelect
-            id={factId}
-            placeholder={t("settings.ruleBuilderFactPlaceholder")}
-            optionIdPrefix={factId}
-            valueKind="code"
-            value={condition.field}
-            disabled={readOnly}
-            onValueChange={(path) => {
-              const next = fields.find((candidate) => candidate.path === path);
-              onChange({
-                field: path,
-                operator: next
-                  ? (ruleBuilderOperators(schema, next.kind)[0]?.id ?? "")
-                  : "",
-                value: "",
-              });
-            }}
-            options={[
-              ...fields
-                .map((candidate) => ({
-                  value: candidate.path,
-                  label: candidate.label,
-                  detail: t(candidate.descKey),
-                }))
-                .sort((a, b) => a.label.localeCompare(b.label)),
-              // A field this row cannot read stays visible, flagged below,
-              // rather than vanishing from the condition.
-              ...(condition.field && !field
-                ? [
-                    {
-                      value: condition.field,
-                      label: condition.field.replace(/^input\./, ""),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-          {field ? (
-            <p className="text-xs text-muted-foreground">{t(field.descKey)}</p>
-          ) : null}
-          <ProblemText
-            id={selectorId(`${idBase}-fact-problem`, ...keys)}
-            schema={schema}
-            problems={factProblems}
-          />
-        </div>
-        <div className="min-w-0 space-y-1.5">
-          <SingleSelectField
-            id={selectorId(`${idBase}-operator`, ...keys)}
-            label={t("settings.ruleBuilderOperator")}
-            value={condition.operator}
-            disabled={readOnly || !field}
-            onValueChange={(next) => {
-              const nextOperator = operators.find(
-                (candidate) => candidate.id === next,
-              );
-              onChange({
-                ...condition,
-                operator: next,
-                value: nextOperator?.value === valueKind ? condition.value : "",
-              });
-            }}
-            options={operators.map((candidate) => ({
-              value: candidate.id,
-              label: t(candidate.labelKey),
-            }))}
-          />
-          <ProblemText
-            id={selectorId(`${idBase}-operator-problem`, ...keys)}
-            schema={schema}
-            problems={operatorProblems}
-          />
-        </div>
-        {valueKind === "choice" ? (
-          <div className="min-w-0 space-y-1.5">
-            <SingleSelectField
-              id={valueId}
-              label={t("settings.ruleBuilderValue")}
-              value={condition.value}
-              disabled={readOnly}
-              onValueChange={(value) => onChange({ ...condition, value })}
-              options={(field?.choices ?? []).map((choice) => ({
-                value: choice.value,
-                label: t(choice.labelKey),
-              }))}
-            />
-            <ProblemText
-              id={selectorId(`${idBase}-value-problem`, ...keys)}
-              schema={schema}
-              problems={valueProblems}
-            />
-          </div>
-        ) : hasValue && pickFromCatalog ? (
-          <div className="min-w-0 space-y-1.5">
-            <label
-              htmlFor={valueId}
-              className={cn(FIELD_LABEL_CLASS, readOnly && "opacity-60")}
-            >
-              {t("settings.ruleBuilderValue")}
-            </label>
-            <FilterableSelect
-              id={valueId}
-              optionIdPrefix={valueId}
-              value={condition.value}
-              disabled={readOnly || catalogNames === null}
-              placeholder={
-                catalogNames === null
-                  ? t("label.loading")
-                  : t(catalogPresentation.placeholderKey)
-              }
-              onValueChange={(value) => onChange({ ...condition, value })}
-              options={pickerOptions(catalogNames ?? [], [
-                condition.value,
-              ]).sort((a, b) => a.label.localeCompare(b.label))}
-            />
-            <ProblemText
-              id={selectorId(`${idBase}-value-problem`, ...keys)}
-              schema={schema}
-              problems={valueProblems}
-            />
-          </div>
-        ) : hasValue ? (
-          <div className="min-w-0 space-y-1.5">
-            <label
-              htmlFor={valueId}
-              className={cn(FIELD_LABEL_CLASS, readOnly && "opacity-60")}
-            >
-              {valueKind === "days"
-                ? t("settings.ruleBuilderDays")
-                : t("settings.ruleBuilderValue")}
-            </label>
-            <Input
-              id={valueId}
-              value={condition.value}
-              readOnly={readOnly}
-              inputMode={valueKind === "text" ? undefined : "decimal"}
-              onChange={(event) =>
-                onChange({ ...condition, value: event.target.value })
-              }
-            />
-            <ProblemText
-              id={selectorId(`${idBase}-value-problem`, ...keys)}
-              schema={schema}
-              problems={valueProblems}
-            />
-          </div>
-        ) : null}
-        {/* Level with the controls: a label line plus its gap above, and the
-            control's height to center in. With no value to enter, it takes
-            the value's column, right beside the comparison. */}
-        <div className="flex h-10 items-center md:mt-[calc(1.25rem+0.375rem)]">
-          <IconButton
-            id={selectorId(`${idBase}-remove`, ...keys)}
-            label={t("label.remove")}
-            tone="delete"
-            disabled={readOnly}
-            onClick={onRemove}
-          >
-            <Trash2 className="h-4 w-4" />
-          </IconButton>
-        </div>
-      </div>
-      <ProblemText
-        id={selectorId(`${idBase}-problem`, ...keys)}
-        schema={schema}
-        problems={rowProblems}
-      />
-    </div>
+  const valueProblemText = (
+    <ProblemText
+      id={selectorId(`${idBase}-value-problem`, ...keys)}
+      schema={schema}
+      problems={valueProblems}
+    />
   );
+  const valueLabel = (key: string) => (
+    <label htmlFor={valueId} className="sr-only">
+      {t(key)}
+    </label>
+  );
+
+  let valueControl: React.ReactNode = null;
+  if (valueKind === "choice") {
+    valueControl = (
+      <SingleSelectField
+        id={valueId}
+        size="compact"
+        label={t("settings.ruleBuilderValue")}
+        labelClassName="sr-only"
+        value={condition.value}
+        disabled={readOnly}
+        onValueChange={(value) => onChange({ ...condition, value })}
+        options={(field?.choices ?? []).map((choice) => ({
+          value: choice.value,
+          label: t(choice.labelKey),
+        }))}
+      />
+    );
+  } else if (valueKind === "text" && pickFromCatalog) {
+    valueControl = (
+      <>
+        {valueLabel("settings.ruleBuilderValue")}
+        <FilterableSelect
+          id={valueId}
+          size="compact"
+          optionIdPrefix={valueId}
+          value={condition.value}
+          disabled={readOnly || catalogNames === null}
+          placeholder={
+            catalogNames === null
+              ? t("label.loading")
+              : t(catalogPresentation.placeholderKey)
+          }
+          onValueChange={(value) => onChange({ ...condition, value })}
+          options={pickerOptions(catalogNames ?? [], [condition.value]).sort(
+            (a, b) => a.label.localeCompare(b.label),
+          )}
+        />
+      </>
+    );
+  } else if (valueKind === "text_set") {
+    valueControl = (
+      <>
+        {valueLabel("settings.ruleBuilderValues")}
+        {pickFromCatalog ? (
+          <MultiSelectDropdown
+            id={valueId}
+            size="compact"
+            optionIdPrefix={valueId}
+            disabled={readOnly || catalogNames === null}
+            triggerLabel={
+              catalogNames === null
+                ? t("label.loading")
+                : setItems.length > 0
+                  ? pickerLabels(catalogNames ?? [], setItems)
+                  : t(catalogPresentation.placeholderKey)
+            }
+            ariaLabel={t(catalogPresentation.placeholderKey)}
+            options={pickerOptions(catalogNames ?? [], setItems).sort((a, b) =>
+              a.label.localeCompare(b.label),
+            )}
+            selectedValues={setItems}
+            onSelectedValuesChange={(items) =>
+              onChange({ ...condition, value: ruleBuilderSetValue(items) })
+            }
+          />
+        ) : (
+          <Textarea
+            id={valueId}
+            value={condition.value}
+            readOnly={readOnly}
+            rows={2}
+            className="min-h-0 text-sm"
+            placeholder={t("settings.ruleBuilderValuesPerLine")}
+            onChange={(event) =>
+              onChange({ ...condition, value: event.target.value })
+            }
+          />
+        )}
+      </>
+    );
+  } else if (hasValue) {
+    valueControl = (
+      <>
+        {valueLabel(
+          valueKind === "days"
+            ? "settings.ruleBuilderDays"
+            : "settings.ruleBuilderValue",
+        )}
+        <Input
+          id={valueId}
+          className="h-8 text-sm"
+          value={condition.value}
+          readOnly={readOnly}
+          placeholder={
+            valueKind === "days" ? t("settings.ruleBuilderDays") : undefined
+          }
+          inputMode={valueKind === "text" ? undefined : "decimal"}
+          onChange={(event) =>
+            onChange({ ...condition, value: event.target.value })
+          }
+        />
+      </>
+    );
+  }
+
+  // The column headers are said once, in the table's head; each cell keeps
+  // its label for assistive technology.
+  return (
+    <tr id={selectorId(idBase, ...keys)}>
+      <td className={cn(TABLE_CELL_CLASS, "min-w-56")}>
+        <label htmlFor={factId} className="sr-only">
+          {t("settings.ruleBuilderFact")}
+        </label>
+        <FilterableSelect
+          id={factId}
+          size="compact"
+          placeholder={t("settings.ruleBuilderFactPlaceholder")}
+          optionIdPrefix={factId}
+          valueKind="code"
+          value={condition.field}
+          disabled={readOnly}
+          onValueChange={(path) => {
+            const next = fields.find((candidate) => candidate.path === path);
+            onChange({
+              field: path,
+              operator: next ? defaultOperator(schema, next) : "",
+              value: "",
+            });
+          }}
+          options={[
+            ...fields
+              .map((candidate) => ({
+                value: candidate.path,
+                label: candidate.label,
+                detail: t(candidate.descKey),
+              }))
+              .sort((a, b) => a.label.localeCompare(b.label)),
+            // A field this row cannot read stays visible, flagged below,
+            // rather than vanishing from the condition.
+            ...(condition.field && !field
+              ? [
+                  {
+                    value: condition.field,
+                    label: condition.field.replace(/^input\./, ""),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        <ProblemText
+          id={selectorId(`${idBase}-fact-problem`, ...keys)}
+          schema={schema}
+          problems={factProblems}
+        />
+        <ProblemText
+          id={selectorId(`${idBase}-problem`, ...keys)}
+          schema={schema}
+          problems={rowProblems}
+        />
+      </td>
+      <td className={cn(TABLE_CELL_CLASS, "min-w-36")}>
+        <SingleSelectField
+          id={selectorId(`${idBase}-operator`, ...keys)}
+          size="compact"
+          label={t("settings.ruleBuilderOperator")}
+          labelClassName="sr-only"
+          value={condition.operator}
+          disabled={readOnly || !field}
+          onValueChange={(next) => {
+            const nextOperator = operators.find(
+              (candidate) => candidate.id === next,
+            );
+            onChange({
+              ...condition,
+              operator: next,
+              value: carriesValue(valueKind, nextOperator?.value)
+                ? condition.value
+                : "",
+            });
+          }}
+          options={operators.map((candidate) => ({
+            value: candidate.id,
+            label: t(candidate.labelKey),
+          }))}
+        />
+        <ProblemText
+          id={selectorId(`${idBase}-operator-problem`, ...keys)}
+          schema={schema}
+          problems={operatorProblems}
+        />
+      </td>
+      <td className={cn(TABLE_CELL_CLASS, "min-w-56")}>
+        {valueControl}
+        {valueControl ? valueProblemText : null}
+      </td>
+      <td className={cn(TABLE_CELL_CLASS, "w-0")}>
+        <IconButton
+          id={selectorId(`${idBase}-remove`, ...keys)}
+          label={t("label.remove")}
+          tone="delete"
+          className="size-8"
+          disabled={readOnly}
+          onClick={onRemove}
+        >
+          <Trash2 className="h-4 w-4" />
+        </IconButton>
+      </td>
+    </tr>
+  );
+}
+
+/// The comparison a new condition on `field` starts on: a fact picked by name
+/// starts on "is one of" (or "contains any of"), anything else on its kind's
+/// first comparison.
+function defaultOperator(
+  schema: RuleBuilderSchema,
+  field: RuleBuilderField,
+): string {
+  const operators = ruleBuilderOperators(schema, field.kind);
+  const set = field.options
+    ? operators.find((operator) => operator.value === "text_set")
+    : undefined;
+  return (set ?? operators[0])?.id ?? "";
+}
+
+/// Whether a value still means the same after switching comparisons: a single
+/// text is a one-item set, so it carries into a set comparison.
+function carriesValue(
+  from: RuleBuilderConditionValue,
+  to: RuleBuilderConditionValue | undefined,
+): boolean {
+  return to === from || (from === "text" && to === "text_set");
 }
 
 function Loading() {
@@ -851,46 +925,82 @@ function ConditionList({
         ) : null}
         {trailing ? <div className="ml-auto">{trailing}</div> : null}
       </div>
-      {conditions.map((condition, index) => (
-        <ConditionRow
-          key={index}
-          schema={schema}
-          fields={fields}
-          idBase={idBase}
-          keys={[...keys, index]}
-          condition={condition}
-          options={options}
-          readOnly={readOnly}
-          problems={problems.filter(
-            (problem) => problem.conditionIndex === index,
-          )}
-          onChange={(next) =>
-            onChange({
-              conditions: conditions.map((existing, at) =>
-                at === index ? next : existing,
-              ),
-            })
-          }
-          onRemove={() =>
-            onChange({ conditions: conditions.filter((_, at) => at !== index) })
-          }
-        />
-      ))}
-      <Button
-        id={selectorId(`${idBase}-add`, ...keys)}
-        type="button"
-        size="sm"
-        variant="secondary"
-        disabled={readOnly}
-        onClick={() =>
-          onChange({
-            conditions: [...conditions, { field: "", operator: "", value: "" }],
-          })
-        }
-      >
-        <Plus className="mr-1 h-4 w-4" />
-        {t("settings.ruleBuilderAddCondition")}
-      </Button>
+      <div className={TABLE_FRAME_CLASS}>
+        <table
+          id={selectorId(`${idBase}-table`, ...keys)}
+          className="w-full border-collapse"
+        >
+          {conditions.length > 0 ? (
+            <thead className="border-b border-[var(--scry-border3)]">
+              <tr>
+                <th className={TABLE_HEAD_CLASS}>
+                  {t("settings.ruleBuilderFact")}
+                </th>
+                <th className={TABLE_HEAD_CLASS}>
+                  {t("settings.ruleBuilderOperator")}
+                </th>
+                <th className={TABLE_HEAD_CLASS}>
+                  {t("settings.ruleBuilderValue")}
+                </th>
+                <th className={TABLE_HEAD_CLASS}>
+                  <span className="sr-only">{t("label.remove")}</span>
+                </th>
+              </tr>
+            </thead>
+          ) : null}
+          <tbody className="divide-y divide-[var(--scry-border3)]">
+            {conditions.map((condition, index) => (
+              <ConditionRow
+                key={index}
+                schema={schema}
+                fields={fields}
+                idBase={idBase}
+                keys={[...keys, index]}
+                condition={condition}
+                options={options}
+                readOnly={readOnly}
+                problems={problems.filter(
+                  (problem) => problem.conditionIndex === index,
+                )}
+                onChange={(next) =>
+                  onChange({
+                    conditions: conditions.map((existing, at) =>
+                      at === index ? next : existing,
+                    ),
+                  })
+                }
+                onRemove={() =>
+                  onChange({
+                    conditions: conditions.filter((_, at) => at !== index),
+                  })
+                }
+              />
+            ))}
+            <tr>
+              <td colSpan={4} className="px-1 py-1">
+                <Button
+                  id={selectorId(`${idBase}-add`, ...keys)}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={readOnly}
+                  onClick={() =>
+                    onChange({
+                      conditions: [
+                        ...conditions,
+                        { field: "", operator: "", value: "" },
+                      ],
+                    })
+                  }
+                >
+                  <Plus className="mr-1 h-4 w-4" />
+                  {t("settings.ruleBuilderAddCondition")}
+                </Button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -936,125 +1046,137 @@ function ActionRow({
     (problem) => problem.conditionIndex === undefined,
   );
   return (
-    <div
+    <tbody
       id={selectorId(`${prefix}-action-row`, index)}
-      className="space-y-2 rounded border border-border p-2"
+      className="border-b border-[var(--scry-border3)] last:border-b-0"
     >
-      <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] md:items-start">
-        <SingleSelectField
-          id={selectorId(`${prefix}-action-subject`, index)}
-          label={t("settings.ruleBuilderActionSubject")}
-          value={subject?.id ?? row.subject ?? ""}
-          disabled={readOnly}
-          onValueChange={(next) =>
-            onChange(setRuleBuilderActionSubject(schema, model, index, next))
-          }
-          options={(schema.subjects ?? []).map((entry) => ({
-            value: entry.id,
-            label: translatedOr(t, entry.labelKey, entry.id),
-          }))}
-        />
-        <SingleSelectField
-          id={selectorId(`${prefix}-action-output`, index)}
-          label={t("settings.ruleBuilderAction")}
-          placeholder={t("settings.ruleBuilderActionPlaceholder")}
-          value={row.output}
-          disabled={readOnly || !subject}
-          onValueChange={(next) =>
-            onChange(setRuleBuilderActionOutput(schema, model, index, next))
-          }
-          options={offered.map((entry) => ({
-            value: entry.id,
-            label: ruleBuilderActionLabel(t, entry),
-          }))}
-        />
-        <div className="flex h-10 items-center md:mt-[calc(1.25rem+0.375rem)]">
+      <tr>
+        <td className={cn(TABLE_CELL_CLASS, "min-w-40")}>
+          <SingleSelectField
+            id={selectorId(`${prefix}-action-subject`, index)}
+            size="compact"
+            label={t("settings.ruleBuilderActionSubject")}
+            labelClassName="sr-only"
+            value={subject?.id ?? row.subject ?? ""}
+            disabled={readOnly}
+            onValueChange={(next) =>
+              onChange(setRuleBuilderActionSubject(schema, model, index, next))
+            }
+            options={(schema.subjects ?? []).map((entry) => ({
+              value: entry.id,
+              label: translatedOr(t, entry.labelKey, entry.id),
+            }))}
+          />
+        </td>
+        <td className={cn(TABLE_CELL_CLASS, "min-w-52")}>
+          <SingleSelectField
+            id={selectorId(`${prefix}-action-output`, index)}
+            size="compact"
+            label={t("settings.ruleBuilderAction")}
+            labelClassName="sr-only"
+            placeholder={t("settings.ruleBuilderActionPlaceholder")}
+            value={row.output}
+            disabled={readOnly || !subject}
+            onValueChange={(next) =>
+              onChange(setRuleBuilderActionOutput(schema, model, index, next))
+            }
+            options={offered.map((entry) => ({
+              value: entry.id,
+              label: ruleBuilderActionLabel(t, entry),
+            }))}
+          />
+          {help ? (
+            <p className="mt-1 text-xs text-muted-foreground">{help}</p>
+          ) : null}
+          <ProblemText
+            id={selectorId(`${prefix}-action-row-problem`, index)}
+            schema={schema}
+            problems={rowProblems}
+          />
+        </td>
+        <td className={cn(TABLE_CELL_CLASS, "min-w-56")}>
+          {output && output.value.kind !== "flag" ? (
+            <OutputValuePicker
+              schema={schema}
+              output={output}
+              value={
+                model.outputs[output.id] ??
+                initialRuleBuilderOutputValue(output)
+              }
+              options={options}
+              readOnly={readOnly}
+              compact
+              onChange={(value) =>
+                onChange({
+                  ...model,
+                  outputs: { ...model.outputs, [output.id]: value },
+                })
+              }
+            />
+          ) : null}
+        </td>
+        <td className={cn(TABLE_CELL_CLASS, "w-0")}>
           <IconButton
             id={selectorId(`${prefix}-action-remove`, index)}
             label={t("label.remove")}
             tone="delete"
+            className="size-8"
             disabled={readOnly}
             onClick={() => onChange(removeRuleBuilderAction(model, index))}
           >
             <Trash2 className="h-4 w-4" />
           </IconButton>
-        </div>
-      </div>
-      {help ? <p className="text-xs text-muted-foreground">{help}</p> : null}
-      {output && output.value.kind !== "flag" ? (
-        <div
-          className={cn(output.value.kind !== "structured" && "md:max-w-[50%]")}
-        >
-          <OutputValuePicker
-            schema={schema}
-            output={output}
-            value={
-              model.outputs[output.id] ?? initialRuleBuilderOutputValue(output)
-            }
-            options={options}
-            readOnly={readOnly}
-            onChange={(value) =>
-              onChange({
-                ...model,
-                outputs: { ...model.outputs, [output.id]: value },
-              })
-            }
-          />
-        </div>
-      ) : null}
-      <ProblemText
-        id={selectorId(`${prefix}-action-row-problem`, index)}
-        schema={schema}
-        problems={rowProblems}
-      />
-      {row.conditions.length > 0 ? (
-        // Set apart from the rule's own conditions: these narrow this action
-        // alone.
-        <div className="border-l-2 border-border pl-3">
-          <ConditionList
-            schema={schema}
-            fields={ruleBuilderSubjectFields(schema, variant, subject)}
-            idBase={`${prefix}-action-condition`}
-            keys={[index]}
-            options={options}
-            joinId={selectorId(`${prefix}-action-join`, index)}
-            join={row.join}
-            conditions={row.conditions}
-            problems={problems.filter(
-              (problem) => problem.conditionIndex !== undefined,
-            )}
-            readOnly={readOnly}
-            label={
-              <HelpLabel
-                label={t("settings.ruleBuilderActionConditions")}
-                help={t("settings.ruleBuilderActionConditionsHelp")}
-              />
-            }
-            onChange={(change) =>
-              onChange(setRuleBuilderActionConditions(model, index, change))
-            }
-          />
-        </div>
-      ) : (
-        <Button
-          id={selectorId(`${prefix}-action-condition-add`, index)}
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={readOnly}
-          onClick={() =>
-            onChange(
-              setRuleBuilderActionConditions(model, index, {
-                conditions: [{ field: "", operator: "", value: "" }],
-              }),
-            )
-          }
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          {t("settings.ruleBuilderAddActionCondition")}
-        </Button>
-      )}
-    </div>
+        </td>
+      </tr>
+      <tr>
+        {/* Indented under its action: these narrow this action alone. */}
+        <td colSpan={4} className="px-2 pb-2 pl-8">
+          {row.conditions.length > 0 ? (
+            <ConditionList
+              schema={schema}
+              fields={ruleBuilderSubjectFields(schema, variant, subject)}
+              idBase={`${prefix}-action-condition`}
+              keys={[index]}
+              options={options}
+              joinId={selectorId(`${prefix}-action-join`, index)}
+              join={row.join}
+              conditions={row.conditions}
+              problems={problems.filter(
+                (problem) => problem.conditionIndex !== undefined,
+              )}
+              readOnly={readOnly}
+              label={
+                <HelpLabel
+                  label={t("settings.ruleBuilderActionConditions")}
+                  help={t("settings.ruleBuilderActionConditionsHelp")}
+                />
+              }
+              onChange={(change) =>
+                onChange(setRuleBuilderActionConditions(model, index, change))
+              }
+            />
+          ) : (
+            <Button
+              id={selectorId(`${prefix}-action-condition-add`, index)}
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={readOnly}
+              onClick={() =>
+                onChange(
+                  setRuleBuilderActionConditions(model, index, {
+                    conditions: [{ field: "", operator: "", value: "" }],
+                  }),
+                )
+              }
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              {t("settings.ruleBuilderAddActionCondition")}
+            </Button>
+          )}
+        </td>
+      </tr>
+    </tbody>
   );
 }
 
@@ -1127,37 +1249,61 @@ export function RuleBuilder({
           />
         </Label>
         {hasSubjects ? (
-          <div className="space-y-2">
-            {ruleBuilderActionRows(model).map((row, index) => (
-              <ActionRow
-                key={index}
-                schema={schema}
-                variant={variant}
-                model={model}
-                row={row}
-                index={index}
-                options={options}
-                readOnly={readOnly}
-                problems={problems.filter(
-                  (problem) => problem.actionIndex === index,
-                )}
-                onChange={onChange}
-              />
-            ))}
-            <Button
-              id={`${prefix}-action-add`}
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={readOnly}
-              onClick={() => onChange(addRuleBuilderAction(model))}
-            >
-              <Plus className="mr-1 h-4 w-4" />
-              {t("settings.ruleBuilderAddAction")}
-            </Button>
+          <div className={TABLE_FRAME_CLASS}>
+            <table id={`${prefix}-actions`} className="w-full border-collapse">
+              <thead className="border-b border-[var(--scry-border3)]">
+                <tr>
+                  <th className={TABLE_HEAD_CLASS}>
+                    {t("settings.ruleBuilderActionSubject")}
+                  </th>
+                  <th className={TABLE_HEAD_CLASS}>
+                    {t("settings.ruleBuilderAction")}
+                  </th>
+                  <th className={TABLE_HEAD_CLASS}>
+                    {t("settings.ruleBuilderValue")}
+                  </th>
+                  <th className={TABLE_HEAD_CLASS}>
+                    <span className="sr-only">{t("label.remove")}</span>
+                  </th>
+                </tr>
+              </thead>
+              {ruleBuilderActionRows(model).map((row, index) => (
+                <ActionRow
+                  key={index}
+                  schema={schema}
+                  variant={variant}
+                  model={model}
+                  row={row}
+                  index={index}
+                  options={options}
+                  readOnly={readOnly}
+                  problems={problems.filter(
+                    (problem) => problem.actionIndex === index,
+                  )}
+                  onChange={onChange}
+                />
+              ))}
+              <tfoot className="border-t border-[var(--scry-border3)]">
+                <tr>
+                  <td colSpan={4} className="px-1 py-1">
+                    <Button
+                      id={`${prefix}-action-add`}
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={readOnly}
+                      onClick={() => onChange(addRuleBuilderAction(model))}
+                    >
+                      <Plus className="mr-1 h-4 w-4" />
+                      {t("settings.ruleBuilderAddAction")}
+                    </Button>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
         ) : (
-          <div className="max-w-3xl overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]">
+          <div className={cn(TABLE_FRAME_CLASS, "max-w-3xl")}>
             <table id={`${prefix}-outputs`} className="w-full border-collapse">
               <tbody className="divide-y divide-[var(--scry-border3)]">
                 {outputTableRows(schema).map((row) =>

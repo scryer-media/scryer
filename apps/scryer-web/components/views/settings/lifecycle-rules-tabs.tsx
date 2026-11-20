@@ -1,4 +1,4 @@
-import { History, ListChecks } from "lucide-react";
+import { FlaskConical, History, ListChecks } from "lucide-react";
 import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -15,6 +15,12 @@ const LIFECYCLE_RULES_TABS: readonly RulePaneTab<LifecycleRulesSection>[] = [
     labelKey: "settings.lifecycleNavRules",
     icon: LifecycleRulesIcon,
     to: buildRulesPath("lifecycle", "rules"),
+  },
+  {
+    section: "try",
+    labelKey: "settings.lifecycleNavTry",
+    icon: FlaskConical,
+    to: buildRulesPath("lifecycle", "try"),
   },
   {
     section: "candidates",
