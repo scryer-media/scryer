@@ -3212,6 +3212,7 @@ const ja: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "対象のアカウントをチェックして適用します。エディタのマッチャーが書き換えられるので、保存前に内容を確認できます。",
   "settings.requestRuleRequestersApply": "これらの名前をマッチャーに書き込む",
+  "settings.requestRuleRequestersPlaceholder": "アカウントを選択",
   "settings.requestRuleRequestersUnavailable":
     "アカウント一覧の取得にはこのページにない権限が必要です。名前はマッチャーに手で入力してください。",
   "settings.requestRuleRequestersNoTarget":

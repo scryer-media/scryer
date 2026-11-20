@@ -1,4 +1,4 @@
-import { FlaskConical, ListChecks, Wrench } from "lucide-react";
+import { FlaskConical, Inbox, ListChecks } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { buildRulesPath } from "@/lib/utils/routing";
@@ -12,7 +12,7 @@ const REQUEST_RULES_TABS: readonly RulePaneTab<RequestRulesSection>[] = [
   {
     section: "rules",
     labelKey: "settings.requestNavRules",
-    icon: Wrench,
+    icon: Inbox,
     to: buildRulesPath("request", "rules"),
   },
   {

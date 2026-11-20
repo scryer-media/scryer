@@ -2966,6 +2966,7 @@ const zh_CN: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "勾选此规则针对的账户并应用。编辑器中的匹配器会被改写，您可以在保存前先读一遍。",
   "settings.requestRuleRequestersApply": "把这些名字写入匹配器",
+  "settings.requestRuleRequestersPlaceholder": "选择账户",
   "settings.requestRuleRequestersUnavailable":
     "列出账户需要本页面不具备的权限，因此名字需要手动写入匹配器。",
   "settings.requestRuleRequestersNoTarget":

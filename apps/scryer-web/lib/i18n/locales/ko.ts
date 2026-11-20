@@ -3151,6 +3151,7 @@ const ko: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "이 규칙이 대상으로 하는 계정을 선택하고 적용하세요. 편집기의 매처가 다시 작성되므로 저장 전에 읽어볼 수 있습니다.",
   "settings.requestRuleRequestersApply": "이 이름들을 매처에 쓰기",
+  "settings.requestRuleRequestersPlaceholder": "계정 선택",
   "settings.requestRuleRequestersUnavailable":
     "계정 목록을 보려면 이 페이지에 없는 권한이 필요합니다. 이름은 매처에 직접 입력해야 합니다.",
   "settings.requestRuleRequestersNoTarget":

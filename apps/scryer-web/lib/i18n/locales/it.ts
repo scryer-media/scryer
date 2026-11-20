@@ -3310,6 +3310,7 @@ const it: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "Seleziona gli account a cui si riferisce la regola e applicali. Il matcher nell'editor viene riscritto così puoi leggerlo prima di salvare.",
   "settings.requestRuleRequestersApply": "Scrivi questi nomi nel matcher",
+  "settings.requestRuleRequestersPlaceholder": "Scegli account",
   "settings.requestRuleRequestersUnavailable":
     "Elencare gli account richiede un permesso che questa pagina non ha: i nomi vanno scritti a mano nel matcher.",
   "settings.requestRuleRequestersNoTarget":

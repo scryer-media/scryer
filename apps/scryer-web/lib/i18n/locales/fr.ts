@@ -3388,6 +3388,7 @@ const fr: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "Cochez les comptes concernés puis appliquez-les. Le filtre de l'éditeur est réécrit pour que vous puissiez le relire avant d'enregistrer.",
   "settings.requestRuleRequestersApply": "Écrire ces noms dans le filtre",
+  "settings.requestRuleRequestersPlaceholder": "Choisir des comptes",
   "settings.requestRuleRequestersUnavailable":
     "Lister les comptes exige un droit dont cette page ne dispose pas ; les noms doivent être saisis à la main dans le filtre.",
   "settings.requestRuleRequestersNoTarget":

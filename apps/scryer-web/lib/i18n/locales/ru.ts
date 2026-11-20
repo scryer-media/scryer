@@ -5490,6 +5490,7 @@ const ru: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "Отметьте учётные записи, о которых это правило, и примените их. Сопоставитель в редакторе будет переписан, чтобы вы прочитали его перед сохранением.",
   "settings.requestRuleRequestersApply": "Вписать эти имена в сопоставитель",
+  "settings.requestRuleRequestersPlaceholder": "Выберите учётные записи",
   "settings.requestRuleRequestersUnavailable":
     "Для списка учётных записей нужны права, которых у этой страницы нет, поэтому имена придётся вписать в сопоставитель вручную.",
   "settings.requestRuleRequestersNoTarget":

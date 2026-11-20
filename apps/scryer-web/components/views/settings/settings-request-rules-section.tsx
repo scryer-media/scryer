@@ -42,6 +42,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   Input,
@@ -431,24 +432,24 @@ function RequestUserPicker({
           {t("settings.requestRuleRequestersUnavailable")}
         </p>
       ) : (
-        <div className="flex flex-wrap items-center gap-4">
-          {users.map((user) => (
-            <label key={user.id} className="flex items-center gap-2">
-              <Checkbox
-                id={settingsRequestUserId(user.id)}
-                checked={selected.includes(user.username)}
-                onCheckedChange={(value) =>
-                  setSelected((prev) =>
-                    value === true
-                      ? [...prev, user.username]
-                      : prev.filter((name) => name !== user.username),
-                  )
-                }
-              />
-              <span className="text-sm">{user.username}</span>
-            </label>
-          ))}
-        </div>
+        <MultiSelectDropdown
+          id="settings-request-users"
+          optionIdPrefix="settings-request-user"
+          className="md:max-w-[50%]"
+          triggerLabel={
+            selected.length > 0
+              ? selected.join(", ")
+              : t("settings.requestRuleRequestersPlaceholder")
+          }
+          ariaLabel={t("settings.requestRuleRequesters")}
+          options={users.map((user) => ({
+            value: user.username,
+            label: user.username,
+            id: settingsRequestUserId(user.id),
+          }))}
+          selectedValues={selected}
+          onSelectedValuesChange={setSelected}
+        />
       )}
       {!writable && selected.length > 0 ? (
         <p

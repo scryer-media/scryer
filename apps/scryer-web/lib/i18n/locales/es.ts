@@ -3318,6 +3318,7 @@ const es: LocaleDictionary = {
     "Marque las cuentas a las que se refiere esta regla y aplíquelas. El comparador del editor se reescribe para que pueda leerlo antes de guardar.",
   "settings.requestRuleRequestersApply":
     "Escribir estos nombres en el comparador",
+  "settings.requestRuleRequestersPlaceholder": "Elegir cuentas",
   "settings.requestRuleRequestersUnavailable":
     "Listar cuentas requiere un permiso que esta página no tiene, así que los nombres deben escribirse a mano en el comparador.",
   "settings.requestRuleRequestersNoTarget":

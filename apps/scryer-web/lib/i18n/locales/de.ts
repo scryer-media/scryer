@@ -3281,6 +3281,7 @@ const de: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "Wählen Sie die Konten aus, um die es geht, und übernehmen Sie sie. Der Matcher im Editor wird umgeschrieben, damit Sie ihn vor dem Speichern lesen können.",
   "settings.requestRuleRequestersApply": "Diese Namen in den Matcher schreiben",
+  "settings.requestRuleRequestersPlaceholder": "Konten auswählen",
   "settings.requestRuleRequestersUnavailable":
     "Das Auflisten von Konten erfordert Rechte, die diese Seite nicht hat; Namen müssen von Hand in den Matcher eingetragen werden.",
   "settings.requestRuleRequestersNoTarget":

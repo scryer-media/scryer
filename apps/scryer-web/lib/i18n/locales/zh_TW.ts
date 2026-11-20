@@ -5032,6 +5032,7 @@ const zh_TW: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "勾選此規則針對的賬戶並應用。編輯器中的匹配器會被改寫，您可以在儲存前先讀一遍。",
   "settings.requestRuleRequestersApply": "把這些名字寫入匹配器",
+  "settings.requestRuleRequestersPlaceholder": "選擇帳戶",
   "settings.requestRuleRequestersUnavailable":
     "列出賬戶需要本頁面不具備的許可權，因此名字需要手動寫入匹配器。",
   "settings.requestRuleRequestersNoTarget":

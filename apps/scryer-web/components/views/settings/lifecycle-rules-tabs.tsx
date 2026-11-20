@@ -1,4 +1,5 @@
-import { History, ListChecks, Wrench } from "lucide-react";
+import { History, ListChecks } from "lucide-react";
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { buildRulesPath } from "@/lib/utils/routing";
@@ -12,7 +13,7 @@ const LIFECYCLE_RULES_TABS: readonly RulePaneTab<LifecycleRulesSection>[] = [
   {
     section: "rules",
     labelKey: "settings.lifecycleNavRules",
-    icon: Wrench,
+    icon: LifecycleRulesIcon,
     to: buildRulesPath("lifecycle", "rules"),
   },
   {

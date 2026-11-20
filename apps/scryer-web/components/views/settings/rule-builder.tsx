@@ -1,4 +1,5 @@
 import * as React from "react";
+import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { Plus, Trash2 } from "lucide-react";
 import { EditorValidationPlacement } from "@/components/common/editor-validation-status";
 import { HelpLabel } from "@/components/common/info-help";
@@ -667,6 +668,120 @@ function OutputRow({
   );
 }
 
+type OutputTableRow =
+  | { kind: "output"; output: RuleBuilderOutput }
+  | { kind: "choice"; outputs: RuleBuilderOutput[] };
+
+/// The outputs table in schema order. Flags the schema allows at most one of,
+/// such as a request's approve, deny and hold, share one row as a choice.
+function outputTableRows(schema: RuleBuilderSchema): OutputTableRow[] {
+  const byId = new Map(schema.outputs.map((output) => [output.id, output]));
+  const groupOf = new Map<string, RuleBuilderOutput[]>();
+  for (const rule of schema.outputRules) {
+    if (rule.rule === "at_least_one") continue;
+    const members = rule.of.flatMap((id) => {
+      const output = byId.get(id);
+      return output ? [output] : [];
+    });
+    if (
+      members.length < 2 ||
+      members.some((output) => output.value.kind !== "flag")
+    )
+      continue;
+    for (const output of members) groupOf.set(output.id, members);
+  }
+  const rows: OutputTableRow[] = [];
+  const placed = new Set<RuleBuilderOutput[]>();
+  for (const output of schema.outputs) {
+    const group = groupOf.get(output.id);
+    if (!group) rows.push({ kind: "output", output });
+    else if (!placed.has(group)) {
+      placed.add(group);
+      rows.push({ kind: "choice", outputs: group });
+    }
+  }
+  return rows;
+}
+
+/// One row for flags that exclude each other. Pressing the chosen one again
+/// clears it.
+function OutputChoiceRow({
+  schema,
+  variant,
+  members,
+  outputs,
+  readOnly,
+  problems,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  variant: string | null;
+  members: RuleBuilderOutput[];
+  outputs: RuleBuilderModel["outputs"];
+  readOnly: boolean;
+  problems: RuleBuilderProblem[];
+  onChange: (outputs: RuleBuilderModel["outputs"]) => void;
+}) {
+  const t = useTranslate();
+  const prefix = schema.idPrefix;
+  const chosen = members.find((output) => Object.hasOwn(outputs, output.id));
+
+  const choose = (id: string) => {
+    const next = { ...outputs };
+    for (const output of members) delete next[output.id];
+    const output = members.find((entry) => entry.id === id);
+    if (output) next[output.id] = initialRuleBuilderOutputValue(output);
+    onChange(next);
+  };
+
+  return (
+    <tr className={cn(chosen && "bg-[var(--scry-surfC)]")}>
+      <td className="w-9 py-1.5 pr-1 pl-3" />
+      <td colSpan={2} className="py-1.5 pr-3 align-middle">
+        <ToggleGroupPrimitive.Root
+          type="single"
+          aria-label={members
+            .map((output) => ruleBuilderOutputLabel(t, output))
+            .join(" / ")}
+          className="inline-flex flex-wrap gap-1 rounded-md border border-border p-1"
+          value={chosen?.id ?? ""}
+          disabled={readOnly}
+          onValueChange={choose}
+        >
+          {members.map((output) => (
+            <ToggleGroupPrimitive.Item
+              key={output.id}
+              value={output.id}
+              asChild
+              disabled={
+                chosen?.id !== output.id &&
+                !isRuleBuilderOutputInVariant(output, variant)
+              }
+            >
+              <Button
+                type="button"
+                size="sm"
+                id={selectorId(`${prefix}-action`, output.id)}
+                variant={chosen?.id === output.id ? "default" : "ghost"}
+              >
+                {ruleBuilderOutputLabel(t, output)}
+              </Button>
+            </ToggleGroupPrimitive.Item>
+          ))}
+        </ToggleGroupPrimitive.Root>
+        <ProblemText
+          id={selectorId(
+            `${prefix}-action-problem`,
+            chosen?.id ?? members[0].id,
+          )}
+          schema={schema}
+          problems={problems}
+        />
+      </td>
+    </tr>
+  );
+}
+
 /// A list of conditions with its join and its add button.
 function ConditionList({
   schema,
@@ -1031,21 +1146,38 @@ export function RuleBuilder({
           <div className="overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]">
             <table id={`${prefix}-outputs`} className="w-full border-collapse">
               <tbody className="divide-y divide-[var(--scry-border3)]">
-                {schema.outputs.map((output) => (
-                  <OutputRow
-                    key={output.id}
-                    schema={schema}
-                    variant={variant}
-                    output={output}
-                    outputs={model.outputs}
-                    options={options}
-                    readOnly={readOnly}
-                    problems={problems.filter(
-                      (problem) => problem.output === output.id,
-                    )}
-                    onChange={(outputs) => onChange({ ...model, outputs })}
-                  />
-                ))}
+                {outputTableRows(schema).map((row) =>
+                  row.kind === "choice" ? (
+                    <OutputChoiceRow
+                      key={row.outputs[0].id}
+                      schema={schema}
+                      variant={variant}
+                      members={row.outputs}
+                      outputs={model.outputs}
+                      readOnly={readOnly}
+                      problems={problems.filter((problem) =>
+                        row.outputs.some(
+                          (output) => output.id === problem.output,
+                        ),
+                      )}
+                      onChange={(outputs) => onChange({ ...model, outputs })}
+                    />
+                  ) : (
+                    <OutputRow
+                      key={row.output.id}
+                      schema={schema}
+                      variant={variant}
+                      output={row.output}
+                      outputs={model.outputs}
+                      options={options}
+                      readOnly={readOnly}
+                      problems={problems.filter(
+                        (problem) => problem.output === row.output.id,
+                      )}
+                      onChange={(outputs) => onChange({ ...model, outputs })}
+                    />
+                  ),
+                )}
               </tbody>
             </table>
           </div>

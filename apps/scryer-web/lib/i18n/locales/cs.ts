@@ -5805,6 +5805,7 @@ const cs: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "Zaškrtněte účty, kterých se toto pravidlo týká, a použijte je. Podmínka v editoru se přepíše, takže si ji před uložením můžete přečíst.",
   "settings.requestRuleRequestersApply": "Zapsat tato jména do podmínky",
+  "settings.requestRuleRequestersPlaceholder": "Vyberte účty",
   "settings.requestRuleRequestersUnavailable":
     "Výpis účtů vyžaduje oprávnění, které tato stránka nemá, takže jména je nutné zapsat do podmínky ručně.",
   "settings.requestRuleRequestersNoTarget":

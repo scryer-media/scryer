@@ -10795,6 +10795,7 @@ const en: LocaleDictionary = {
   "settings.requestRuleRequestersHelp":
     "Tick the accounts this rule is about and apply them. The matcher in the editor is rewritten so you can read it before saving.",
   "settings.requestRuleRequestersApply": "Write these names into the matcher",
+  "settings.requestRuleRequestersPlaceholder": "Choose accounts",
   "settings.requestRuleRequestersUnavailable":
     "Listing accounts needs permission this page does not carry, so names have to be typed into the matcher by hand.",
   "settings.requestRuleRequestersNoTarget":
