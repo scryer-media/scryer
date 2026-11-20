@@ -27,6 +27,9 @@ pub(crate) const LIBRARY_SCAN_METADATA_SEARCH_BATCH_SIZE: usize = 50;
 const MOVIE_ENTRY_PREP_CONCURRENCY: usize = 8;
 const RADARR_MOVIE_NFO_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const PLEXMATCH_MAX_BYTES: u64 = 1024 * 1024;
+/// A show NFO carries cast, ratings and sometimes an episode guide, which stays
+/// within a few megabytes; anything past this is not one and reads as absent.
+const TVSHOW_NFO_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MetadataIdentitySource {
@@ -222,7 +225,7 @@ pub(crate) async fn read_valid_movie_nfo_metadata(
 }
 
 async fn read_tvshow_nfo_metadata(folder: PathBuf) -> Option<crate::nfo::NfoMetadata> {
-    let content = read_small_file(&folder.join("tvshow.nfo"), u64::MAX).await?;
+    let content = read_small_file(&folder.join("tvshow.nfo"), TVSHOW_NFO_MAX_BYTES).await?;
     Some(parse_nfo(&content))
 }
 
@@ -2509,6 +2512,29 @@ mod tests {
             keys.first().and_then(|key| key.tvdb_id.as_deref()),
             Some("12345")
         );
+    }
+
+    #[tokio::test]
+    async fn a_tvshow_nfo_past_the_size_limit_reads_as_missing() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let ordinary = tempdir.path().join("Harbor Lantern");
+        std::fs::create_dir(&ordinary).expect("create ordinary folder");
+        let nfo = r#"<tvshow><title>Harbor Lantern</title><tvdbid>900011</tvdbid></tvshow>"#;
+        std::fs::write(ordinary.join("tvshow.nfo"), nfo).expect("write ordinary nfo");
+
+        let meta = read_tvshow_nfo_metadata(ordinary.clone())
+            .await
+            .expect("an ordinary tvshow.nfo is read");
+        assert_eq!(meta.tvdb_id.as_deref(), Some("900011"));
+
+        let oversized = tempdir.path().join("Harbor Lantern Oversized");
+        std::fs::create_dir(&oversized).expect("create oversized folder");
+        let file = std::fs::File::create(oversized.join("tvshow.nfo")).expect("create nfo");
+        std::io::Write::write_all(&mut &file, nfo.as_bytes()).expect("write nfo head");
+        file.set_len(TVSHOW_NFO_MAX_BYTES + 1).expect("extend nfo");
+        drop(file);
+
+        assert!(read_tvshow_nfo_metadata(oversized).await.is_none());
     }
 
     #[tokio::test]
