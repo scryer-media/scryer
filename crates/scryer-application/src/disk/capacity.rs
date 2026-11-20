@@ -432,6 +432,29 @@ impl StorageCapacity {
         }
     }
 
+    /// The newest current figure for the volume holding `path`, from the cache
+    /// alone: the nearest of `path` and its ancestors with a known reading.
+    /// For a guard whose own call for `path` just failed, so it can still go
+    /// by the figure the sampler took of the library root above it. Never
+    /// touches the disk.
+    #[cfg_attr(not(feature = "runtime-archives"), allow(dead_code))]
+    pub(crate) fn last_known_space_above(&self, path: &Path) -> Option<FilesystemSpace> {
+        let now = self.inner.clock.now();
+        path.ancestors().find_map(
+            |ancestor| match self.reading(&ancestor.to_string_lossy(), now) {
+                StorageCapacityReading::Known {
+                    available_bytes,
+                    total_bytes,
+                    ..
+                } => Some(FilesystemSpace {
+                    total_bytes: total_bytes as u64,
+                    available_bytes: available_bytes as u64,
+                }),
+                _ => None,
+            },
+        )
+    }
+
     /// Make `roots` the library roots the sampler keeps current. A root no
     /// longer listed becomes an ordinary cached path, dropped when the cache
     /// needs room.
@@ -821,6 +844,34 @@ mod tests {
         }
         assert_eq!(capacity.disk_calls(), calls);
         assert_eq!(disk.calls().len(), 1);
+    }
+
+    #[test]
+    fn the_last_known_space_above_a_path_comes_from_its_nearest_known_ancestor() {
+        let clock = ManualClock::at(at(0));
+        let (capacity, disk) = owner(&clock);
+        let output = Path::new("/srv/fixture-library/.scry-ex/fixture-download/out");
+        assert_eq!(capacity.last_known_space_above(output), None);
+
+        capacity.record_for_test("/srv/fixture-library", at(0), Some(space(25, 100)));
+        // The output folder's own call failed; that sample is not a figure.
+        capacity.record_for_test(&output.to_string_lossy(), at(0), None);
+        assert_eq!(
+            capacity.last_known_space_above(output),
+            Some(space(25, 100))
+        );
+
+        // A nearer known ancestor wins over the library root.
+        capacity.record_for_test("/srv/fixture-library/.scry-ex", at(0), Some(space(10, 100)));
+        assert_eq!(
+            capacity.last_known_space_above(output),
+            Some(space(10, 100))
+        );
+
+        // A figure past the staleness bound is not used.
+        clock.set(at(1) + storage_sample_max_age());
+        assert_eq!(capacity.last_known_space_above(output), None);
+        assert!(disk.calls().is_empty(), "the lookup never calls the disk");
     }
 
     #[test]
