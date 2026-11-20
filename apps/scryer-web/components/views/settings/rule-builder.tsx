@@ -602,52 +602,52 @@ function OutputRow({
     onChange(next);
   };
 
+  const checkboxId = selectorId(`${prefix}-action`, output.id);
+  const showValue = chosen && output.value.kind !== "flag";
+
   return (
-    <div className="space-y-1">
-      <label
-        className={cn(
-          "flex items-center gap-2",
-          blocked && "text-muted-foreground",
-        )}
-      >
+    <tr className={cn(chosen && "bg-[var(--scry-surfC)]")}>
+      <td className="w-9 py-1.5 pr-1 pl-3 align-middle">
         <Checkbox
-          id={selectorId(`${prefix}-action`, output.id)}
+          id={checkboxId}
           checked={chosen}
           disabled={readOnly || blocked}
           onCheckedChange={(value) => toggle(value === true)}
         />
-        <span className="text-sm">
+      </td>
+      <td
+        className={cn(
+          "py-1.5 pr-3 align-middle text-sm whitespace-nowrap md:w-[34%]",
+          blocked && "text-muted-foreground",
+        )}
+      >
+        <label htmlFor={checkboxId} className="cursor-pointer">
           {help ? <HelpLabel label={label} help={help} /> : label}
-        </span>
-      </label>
-      {!inVariant ? (
-        <p
-          id={selectorId(`${prefix}-action-scope`, output.id)}
-          className="pl-6 text-xs text-muted-foreground"
-        >
-          {schema.labels.outputNotInVariant
-            ? t(schema.labels.outputNotInVariant)
-            : null}
-        </p>
-      ) : conflicts.length > 0 ? (
-        <p
-          id={selectorId(`${prefix}-action-conflict`, output.id)}
-          className="pl-6 text-xs text-muted-foreground"
-        >
-          {t("settings.ruleBuilderOutputConflict", {
-            outputs: conflicts
-              .map((other) => outputLabel(schema, other, t))
-              .join(", "),
-          })}
-        </p>
-      ) : null}
-      {chosen && output.value.kind !== "flag" ? (
-        <div
-          className={cn(
-            "pl-6",
-            output.value.kind !== "structured" && "md:max-w-[50%]",
-          )}
-        >
+        </label>
+      </td>
+      <td className="py-1 pr-3 align-middle">
+        {!inVariant ? (
+          <p
+            id={selectorId(`${prefix}-action-scope`, output.id)}
+            className="text-xs text-muted-foreground"
+          >
+            {schema.labels.outputNotInVariant
+              ? t(schema.labels.outputNotInVariant)
+              : null}
+          </p>
+        ) : conflicts.length > 0 ? (
+          <p
+            id={selectorId(`${prefix}-action-conflict`, output.id)}
+            className="text-xs text-muted-foreground"
+          >
+            {t("settings.ruleBuilderOutputConflict", {
+              outputs: conflicts
+                .map((other) => outputLabel(schema, other, t))
+                .join(", "),
+            })}
+          </p>
+        ) : null}
+        {showValue ? (
           <OutputValuePicker
             schema={schema}
             output={output}
@@ -656,16 +656,14 @@ function OutputRow({
             readOnly={readOnly}
             onChange={(value) => onChange({ ...outputs, [output.id]: value })}
           />
-        </div>
-      ) : null}
-      <div className="pl-6">
+        ) : null}
         <ProblemText
           id={selectorId(`${prefix}-action-problem`, output.id)}
           schema={schema}
           problems={problems}
         />
-      </div>
-    </div>
+      </td>
+    </tr>
   );
 }
 
@@ -1030,22 +1028,26 @@ export function RuleBuilder({
             </Button>
           </div>
         ) : (
-          <div className="grid gap-2 md:grid-cols-2">
-            {schema.outputs.map((output) => (
-              <OutputRow
-                key={output.id}
-                schema={schema}
-                variant={variant}
-                output={output}
-                outputs={model.outputs}
-                options={options}
-                readOnly={readOnly}
-                problems={problems.filter(
-                  (problem) => problem.output === output.id,
-                )}
-                onChange={(outputs) => onChange({ ...model, outputs })}
-              />
-            ))}
+          <div className="overflow-x-auto rounded-[12px] border border-[var(--scry-border3)]">
+            <table id={`${prefix}-outputs`} className="w-full border-collapse">
+              <tbody className="divide-y divide-[var(--scry-border3)]">
+                {schema.outputs.map((output) => (
+                  <OutputRow
+                    key={output.id}
+                    schema={schema}
+                    variant={variant}
+                    output={output}
+                    outputs={model.outputs}
+                    options={options}
+                    readOnly={readOnly}
+                    problems={problems.filter(
+                      (problem) => problem.output === output.id,
+                    )}
+                    onChange={(outputs) => onChange({ ...model, outputs })}
+                  />
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
