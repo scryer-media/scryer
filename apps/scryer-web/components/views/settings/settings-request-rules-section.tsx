@@ -1228,7 +1228,7 @@ export function SettingsRequestRulesSection({
               ruleKind="request decision"
               inputContract={requestInputContract}
               outputContract={
-                'Define at least one vote or change. Votes are approve if { ... }, deny if { ... } and manual if { ... }. Changes to an approval are plain literals: set_quality_profile := "Profile name", set_lease_days := 30 (0 keeps it forever, otherwise 1 to 3650), set_monitor := "FUTURE_EPISODES" (MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime), set_required_audio_languages := ["eng"] and set_preferred_audio_languages := ["jpn", "eng"] (ISO 639-2 codes). add_tags := ["tag"] tags the title and notify := "message text" sends a notification. You may add reasons contains "stable_reason" if { ... }. A rule defining only reasons or notify is refused. Request rules have no schedule.'
+                'At least one vote or change. Votes: approve, deny, manual if { ... }. Changes, literals only: set_quality_profile := "name"; set_lease_days := 30 (0 forever, else 1-3650); set_monitor := MONITORED|UNMONITORED (movies), FUTURE_EPISODES|MISSING_AND_FUTURE_EPISODES|ALL_EPISODES|NONE (series, anime); set_required_audio_languages, set_preferred_audio_languages := ["eng"] (ISO 639-2); add_tags := ["tag"]; notify := "text". Optional reasons contains "id" if { ... }. Only reasons or notify is refused. No schedule.'
               }
             />
           </div>

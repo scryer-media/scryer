@@ -1021,7 +1021,7 @@ export function SettingsRulesSection({
                 ruleKind="scoring"
                 inputContract={ruleInputContract}
                 outputContract={
-                  'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'
+                  'One or more score_entry["stable_id"] := 100 if { ... }'
                 }
               />
               <TextActionButton
