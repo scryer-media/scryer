@@ -25219,6 +25219,13 @@ mod held_sources {
                 self.inner.get(client_id, client_item_id).await
             }
 
+            async fn get_many(
+                &self,
+                keys: &[(String, String)],
+            ) -> AppResult<Vec<crate::ArchiveExtractionRecord>> {
+                self.inner.get_many(keys).await
+            }
+
             async fn save(&self, record: &crate::ArchiveExtractionRecord) -> AppResult<()> {
                 self.count(1);
                 self.inner.save(record).await
@@ -25598,6 +25605,186 @@ mod held_sources {
             assert!(!workspace.exists());
             assert!(download.key.record_in(app).await.is_none());
             assert!(download.archive.exists());
+        }
+
+        /// Extraction records that make one download live again right after
+        /// the settled listing, as a manual import between the listing and
+        /// its removal would, and note whether each record the sweep deletes
+        /// or defers is still held for removal when it is written.
+        #[derive(Default)]
+        struct RevivedAfterListing {
+            inner: crate::InMemoryArchiveExtractionRepository,
+            revive: std::sync::Mutex<Option<(String, String)>>,
+            in_flight:
+                std::sync::OnceLock<crate::import::archive_extraction::ArchiveExtractionsInFlight>,
+            unheld_writes: std::sync::Mutex<Vec<(String, String)>>,
+        }
+
+        impl RevivedAfterListing {
+            fn note_unheld(&self, keys: &[(String, String)]) {
+                let in_flight = self.in_flight.get().expect("in-flight set");
+                for (client_id, item_id) in keys {
+                    let key = crate::import::archive_extraction::DownloadExtractionKey::new(
+                        Some(client_id.as_str()),
+                        item_id,
+                    )
+                    .unwrap();
+                    if in_flight.claim(&key).is_some() {
+                        self.unheld_writes
+                            .lock()
+                            .unwrap()
+                            .push((client_id.clone(), item_id.clone()));
+                    }
+                }
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl crate::ArchiveExtractionRepository for RevivedAfterListing {
+            async fn get(
+                &self,
+                client_id: &str,
+                client_item_id: &str,
+            ) -> AppResult<Option<crate::ArchiveExtractionRecord>> {
+                self.inner.get(client_id, client_item_id).await
+            }
+
+            async fn get_many(
+                &self,
+                keys: &[(String, String)],
+            ) -> AppResult<Vec<crate::ArchiveExtractionRecord>> {
+                self.inner.get_many(keys).await
+            }
+
+            async fn save(&self, record: &crate::ArchiveExtractionRecord) -> AppResult<()> {
+                self.inner.save(record).await
+            }
+
+            async fn delete(&self, client_id: &str, client_item_id: &str) -> AppResult<()> {
+                self.inner.delete(client_id, client_item_id).await
+            }
+
+            async fn settle(
+                &self,
+                keys: &[(String, String)],
+                at: chrono::DateTime<Utc>,
+            ) -> AppResult<()> {
+                self.inner.settle(keys, at).await
+            }
+
+            async fn defer_settled(
+                &self,
+                keys: &[(String, String)],
+                at: chrono::DateTime<Utc>,
+            ) -> AppResult<()> {
+                self.note_unheld(keys);
+                self.inner.defer_settled(keys, at).await
+            }
+
+            async fn list_settled_before(
+                &self,
+                before: chrono::DateTime<Utc>,
+                limit: usize,
+            ) -> AppResult<Vec<crate::ArchiveExtractionRecord>> {
+                let listed = self.inner.list_settled_before(before, limit).await?;
+                let revive = self.revive.lock().unwrap().take();
+                if let Some((client_id, item_id)) = revive {
+                    let record = self.inner.get(&client_id, &item_id).await?.unwrap();
+                    self.inner
+                        .save(&crate::ArchiveExtractionRecord {
+                            settled_at: None,
+                            ..record
+                        })
+                        .await?;
+                }
+                Ok(listed)
+            }
+
+            async fn delete_many(&self, keys: &[(String, String)]) -> AppResult<()> {
+                self.note_unheld(keys);
+                self.inner.delete_many(keys).await
+            }
+
+            async fn list_unsettled_after(
+                &self,
+                after: Option<(String, String)>,
+                changed_before: chrono::DateTime<Utc>,
+                limit: usize,
+            ) -> AppResult<Vec<crate::UnsettledArchiveExtraction>> {
+                self.inner
+                    .list_unsettled_after(after, changed_before, limit)
+                    .await
+            }
+
+            async fn recorded_workspace_names(
+                &self,
+                names: &[String],
+            ) -> AppResult<std::collections::HashSet<String>> {
+                self.inner.recorded_workspace_names(names).await
+            }
+
+            async fn scratch_summary(&self) -> AppResult<crate::ArchiveScratchSummary> {
+                self.inner.scratch_summary().await
+            }
+        }
+
+        #[tokio::test]
+        async fn a_download_made_live_after_the_settled_listing_keeps_its_workspace() {
+            let download = archive_download("Revived Settled Movie").await;
+            let repository = Arc::new(RevivedAfterListing::default());
+            let app = download.fixture.app.with_test_overrides(|services| {
+                services.with_archive_extractions(repository.clone())
+            });
+            let in_flight = app.runtime.imports.archive_extractions_in_flight.clone();
+            assert!(repository.in_flight.set(in_flight.clone()).is_ok());
+            let clock = Clock::start(&app);
+            let mut downloads = Vec::new();
+            for item_id in ["revived-synthetic-item", "settled-synthetic-item"] {
+                let key = crate::import::archive_extraction::DownloadExtractionKey::new(
+                    Some(&download.fixture.completed.client_id),
+                    item_id,
+                )
+                .unwrap();
+                let workspace = crate::archive_extractor::create_test_download_workspace(
+                    &key.destination(download.library_root()),
+                );
+                std::fs::write(workspace.join("Synthetic.Feature.mkv"), b"output").unwrap();
+                let mut record = key.test_record(
+                    &workspace,
+                    crate::ArchiveExtractionState::Extracted,
+                    clock.now(),
+                );
+                record.settled_at = Some(clock.now());
+                key.save_in(&app, &record).await;
+                downloads.push((key, workspace));
+            }
+            let [(revived, revived_workspace), (settled, settled_workspace)] =
+                <[_; 2]>::try_from(downloads).unwrap();
+            *repository.revive.lock().unwrap() = Some(revived.pair());
+
+            clock.advance(&app, chrono::Duration::days(2));
+            let swept = sweep(&app).await;
+
+            assert_eq!(swept.removed, 1, "only the download still settled");
+            assert_eq!(swept.deferred, 0, "a live download is not deferred");
+            assert!(
+                revived_workspace.join("Synthetic.Feature.mkv").exists(),
+                "made live after the listing: kept"
+            );
+            let record = revived.record_in(&app).await.expect("its record stays");
+            assert_eq!(record.settled_at, None);
+            assert!(!settled_workspace.exists());
+            assert!(settled.record_in(&app).await.is_none());
+            assert!(
+                repository.unheld_writes.lock().unwrap().is_empty(),
+                "each record is written while its download is held"
+            );
+            assert!(
+                in_flight.claim(&revived).is_some() && in_flight.claim(&settled).is_some(),
+                "nothing is held once the sweep is done"
+            );
+            assert!(download.archive.exists());
+            assert!(download.unrelated.exists());
         }
 
         /// The extraction folder of the download's library root.

@@ -132,6 +132,9 @@ pub trait ArchiveExtractionRepository: Send + Sync {
         client_id: &str,
         client_item_id: &str,
     ) -> AppResult<Option<ArchiveExtractionRecord>>;
+    /// The records of these downloads, in no particular order; a key without
+    /// a record is left out.
+    async fn get_many(&self, keys: &[(String, String)]) -> AppResult<Vec<ArchiveExtractionRecord>>;
     /// Insert or replace the download's row.
     async fn save(&self, record: &ArchiveExtractionRecord) -> AppResult<()>;
     async fn delete(&self, client_id: &str, client_item_id: &str) -> AppResult<()>;
@@ -183,6 +186,16 @@ impl ArchiveExtractionRepository for InMemoryArchiveExtractionRepository {
             .await
             .get(&(client_id.to_string(), client_item_id.to_string()))
             .cloned())
+    }
+
+    async fn get_many(&self, keys: &[(String, String)]) -> AppResult<Vec<ArchiveExtractionRecord>> {
+        let rows = self.rows.lock().await;
+        Ok(keys
+            .iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter_map(|key| rows.get(key).cloned())
+            .collect())
     }
 
     async fn save(&self, record: &ArchiveExtractionRecord) -> AppResult<()> {
@@ -1285,28 +1298,62 @@ pub(crate) struct SettledSweep {
 /// [`SETTLED_WORKSPACE_RETENTION`] ago, oldest first and a bounded number per
 /// pass. A workspace that cannot be removed now is tried again after another
 /// retention period. A pass with nothing due only reads.
+///
+/// Each download is held for removal before its record is read again, and
+/// stays held until its record is deleted or deferred: one made live between
+/// the listing and its hold keeps its workspace and its record.
 pub(crate) async fn sweep_settled_download_extractions(
     app: &AppUseCase,
 ) -> AppResult<SettledSweep> {
     let repository = &app.services.workflow.archive_extractions;
     let now = app.runtime.environment.now();
+    let cutoff = now - SETTLED_WORKSPACE_RETENTION;
     let due = repository
-        .list_settled_before(now - SETTLED_WORKSPACE_RETENTION, SETTLED_SWEEP_LIMIT)
+        .list_settled_before(cutoff, SETTLED_SWEEP_LIMIT)
         .await?;
     let in_flight = &app.runtime.imports.archive_extractions_in_flight;
     let mut sweep = SettledSweep::default();
-    let mut done = Vec::new();
-    let mut retry = Vec::new();
+    let mut claims = Vec::with_capacity(due.len());
     for record in &due {
         let key = DownloadExtractionKey::of_record(record);
         // A running extraction or a reader keeps its workspace; still due
         // next pass.
-        let Some(_claim) = in_flight.claim_for_removal(&key) else {
-            sweep.deferred += 1;
+        match in_flight.claim_for_removal(&key) {
+            Some(claim) => claims.push((key, claim)),
+            None => sweep.deferred += 1,
+        }
+    }
+    if claims.is_empty() {
+        return Ok(sweep);
+    }
+    let claimed: Vec<_> = claims.iter().map(|(key, _)| key.pair()).collect();
+    let mut current: std::collections::HashMap<(String, String), ArchiveExtractionRecord> =
+        repository
+            .get_many(&claimed)
+            .await?
+            .into_iter()
+            .map(|record| {
+                (
+                    (record.client_id.clone(), record.client_item_id.clone()),
+                    record,
+                )
+            })
+            .collect();
+    // Only downloads still settled before the cutoff stay held; one made
+    // live, or gone, since the listing is left as it is.
+    claims.retain(|(key, _)| {
+        current
+            .get(&key.pair())
+            .is_some_and(|record| record.settled_at.is_some_and(|at| at <= cutoff))
+    });
+    let mut done = Vec::new();
+    let mut retry = Vec::new();
+    for (key, _claim) in &claims {
+        let Some(record) = current.remove(&key.pair()) else {
             continue;
         };
         let root = crate::stored_paths::stored_path_to_path_buf(&record.workspace_path);
-        match remove_settled_workspace(&root, &key).await {
+        match remove_settled_workspace(&root, key).await {
             SettledRemoval::Gone => {
                 sweep.removed += 1;
                 done.push(key.pair());
@@ -1323,6 +1370,7 @@ pub(crate) async fn sweep_settled_download_extractions(
     }
     repository.delete_many(&done).await?;
     repository.defer_settled(&retry, now).await?;
+    drop(claims);
     Ok(sweep)
 }
 
