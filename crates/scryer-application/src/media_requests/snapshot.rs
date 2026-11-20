@@ -15,7 +15,7 @@ use scryer_domain::CanonicalMediaTag;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{ContentRating, MdblistSummary, TitleAward, TitleRatingSummary};
-use crate::{MovieMetadata, SeriesMetadata};
+use crate::{EpisodeMetadata, MovieMetadata, SeriesMetadata};
 
 /// Bump when a stored snapshot's *meaning* changes, not when a field is added — every field is
 /// `serde(default)`, so an older document still reads correctly into a newer struct.
@@ -95,15 +95,14 @@ pub struct SnapshotSeriesShape {
 }
 
 impl SnapshotSeriesShape {
-    pub fn from_series(series: &SeriesMetadata, captured_at: DateTime<Utc>) -> Self {
+    /// Built from the hydration's episode list. The series copy a hydration
+    /// hands back for the snapshot carries no episodes, so a shape read from it
+    /// would report a known zero for every count.
+    pub fn from_episodes(episodes: &[EpisodeMetadata], captured_at: DateTime<Utc>) -> Self {
         let capture_day = captured_at.date_naive();
         let mut seasons = std::collections::BTreeSet::new();
         let mut shape = Self::default();
-        for episode in series
-            .episodes
-            .iter()
-            .filter(|episode| episode.season_number != 0)
-        {
+        for episode in episodes.iter().filter(|episode| episode.season_number != 0) {
             seasons.insert(episode.season_number);
             shape.episode_count += 1;
             match parse_metadata_day(&episode.aired) {
@@ -246,7 +245,11 @@ impl MediaRequestMetadataSnapshot {
         }
     }
 
-    pub fn from_series(series: &SeriesMetadata, captured_at: DateTime<Utc>) -> Self {
+    pub fn from_series(
+        series: &SeriesMetadata,
+        episodes: &[EpisodeMetadata],
+        captured_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             schema_version: MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION,
             captured_at: Some(captured_at),
@@ -272,7 +275,7 @@ impl MediaRequestMetadataSnapshot {
             first_aired: non_empty(series.first_aired.clone()),
             awards: series.awards.clone(),
             is_adult: series.canonical_tags.iter().any(|tag| tag.is_adult),
-            series_shape: Some(SnapshotSeriesShape::from_series(series, captured_at)),
+            series_shape: Some(SnapshotSeriesShape::from_episodes(episodes, captured_at)),
             release_dates: None,
         }
     }

@@ -2525,9 +2525,11 @@ impl AppUseCase {
                         snapshot.source = Some((*source).to_string());
                         snapshot
                     }
-                    (None, Some(series)) => {
-                        MediaRequestMetadataSnapshot::from_series(series, captured_at)
-                    }
+                    (None, Some(series)) => MediaRequestMetadataSnapshot::from_series(
+                        series,
+                        &result.episodes,
+                        captured_at,
+                    ),
                     // Hydration succeeded but carried no raw metadata for this facet. That is a
                     // wiring fault, not an SMG answer, so it is partial rather than empty.
                     (None, None) => {

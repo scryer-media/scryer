@@ -1233,12 +1233,7 @@ impl AppUseCase {
         evaluation_time: DateTime<Utc>,
     ) -> AppResult<RequestRequesterDoc> {
         let mut app_permissions = Vec::new();
-        for permission in [
-            AppPermission::ManageUsers,
-            AppPermission::ManagePermissions,
-            AppPermission::ManageSystemSettings,
-            AppPermission::ManageCatalogSettings,
-        ] {
+        for &permission in AppPermission::ALL {
             if self.has_app_permission(actor, permission).await? {
                 app_permissions.push(permission.as_str().to_string());
             }

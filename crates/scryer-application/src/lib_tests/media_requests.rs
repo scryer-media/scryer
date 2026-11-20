@@ -2658,7 +2658,7 @@ fn media_request_snapshot_round_trips_a_series() {
     widen_series_for_snapshot(&mut series);
     let captured_at = chrono::Utc::now();
 
-    let snapshot = crate::MediaRequestMetadataSnapshot::from_series(&series, captured_at);
+    let snapshot = crate::MediaRequestMetadataSnapshot::from_series(&series, &[], captured_at);
 
     assert!(!snapshot.partial);
     assert_eq!(snapshot.source.as_deref(), Some("smg_series"));
@@ -2677,6 +2677,59 @@ fn media_request_snapshot_round_trips_a_series() {
 
     let reparsed = crate::MediaRequestMetadataSnapshot::parse(&snapshot.to_json());
     assert_eq!(reparsed, snapshot);
+}
+
+fn snapshot_episode(
+    season_number: i32,
+    episode_number: i32,
+    aired: &str,
+) -> crate::EpisodeMetadata {
+    crate::EpisodeMetadata {
+        tvdb_id: i64::from(season_number * 100 + episode_number),
+        tmdb_id: None,
+        episode_number,
+        name: format!("Episode {season_number}x{episode_number}"),
+        aired: aired.to_string(),
+        runtime_minutes: 24,
+        is_filler: false,
+        is_recap: false,
+        overview: String::new(),
+        absolute_number: String::new(),
+        contiguous_absolute_number: None,
+        season_number,
+        image_url: String::new(),
+    }
+}
+
+/// The shape comes from the hydration's episode list, not from the series copy
+/// it hands back for the snapshot, which carries no episodes.
+#[test]
+fn media_request_snapshot_series_shape_counts_the_hydrated_episodes() {
+    let mut series = make_series_metadata(92_003, "Shaped Series");
+    series.episodes = vec![
+        snapshot_episode(0, 1, "2020-01-01"),
+        snapshot_episode(1, 1, "2020-01-01"),
+        snapshot_episode(1, 2, "2020-01-08"),
+        snapshot_episode(2, 1, "2099-01-01"),
+        snapshot_episode(2, 2, ""),
+    ];
+    let hydrated = crate::catalog::facets::handler::series_to_hydration_result(series, "eng");
+    let raw = hydrated
+        .raw_series
+        .as_ref()
+        .expect("series hydration keeps raw metadata");
+    let captured_at = chrono::Utc::now();
+
+    let snapshot =
+        crate::MediaRequestMetadataSnapshot::from_series(raw, &hydrated.episodes, captured_at);
+
+    let shape = snapshot
+        .series_shape
+        .expect("a series snapshot has a shape");
+    assert_eq!(shape.season_count, 2, "specials are not a season");
+    assert_eq!(shape.episode_count, 4, "regular episodes only");
+    assert_eq!(shape.aired_at_capture, 2);
+    assert_eq!(shape.upcoming_air_dates, vec!["2099-01-01".to_string()]);
 }
 
 #[test]

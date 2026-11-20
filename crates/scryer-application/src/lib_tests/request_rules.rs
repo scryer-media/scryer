@@ -740,6 +740,37 @@ async fn deleting_a_rule_set_keeps_the_decisions_it_made() {
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
 }
 
+/// Every application permission the account holds reaches the rule, not a
+/// hand-picked subset of them.
+#[tokio::test]
+async fn previewing_lists_every_app_permission_the_requester_holds() {
+    let mut harness = bootstrap_media_request_app();
+    harness.user.authorization.app = scryer_domain::AppPermissionMask::MANAGE_LISTS;
+    harness.users.store.lock().await.push(harness.user.clone());
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preview = harness
+        .app
+        .preview_request_rule(
+            &harness.manager,
+            RequestRulePreviewRequest {
+                source: RequestRulePreviewSource::Inline {
+                    rego_source: APPROVE_EVERYTHING.to_string(),
+                },
+                sample: sample(&harness, &library_id, 9043),
+            },
+        )
+        .await
+        .expect("inline preview should evaluate");
+
+    let input: serde_json::Value =
+        serde_json::from_str(&preview.input_json).expect("the rendered input is JSON");
+    assert_eq!(
+        input["requester"]["app_permissions"],
+        serde_json::json!(["manage_lists"])
+    );
+}
+
 #[tokio::test]
 async fn previewing_reports_the_vote_the_tags_and_the_rendered_input() {
     let harness = bootstrap_media_request_app();
