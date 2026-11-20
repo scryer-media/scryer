@@ -42,10 +42,12 @@ use crate::jellyfin::JellyfinAuth;
 /// not block the sweep for a minute.
 const PLAYBACK_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The most bytes a session answer may decode to. A session list is a few
-/// kilobytes per playing client; the limit only stops an answer that never
-/// ends, which reads as an unreadable response.
-const PLAYBACK_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// The most bytes a session answer may decode to. A session list is usually a
+/// few kilobytes per client, but a server can attach each client's whole play
+/// queue to its session, so a busy shared server answers in megabytes. The
+/// limit only stops an answer that never ends, which reads as an unreadable
+/// response.
+const PLAYBACK_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Plex's own service host. A Plex connection whose base URL is still this has
 /// no selected server, so there is no session endpoint to ask.
