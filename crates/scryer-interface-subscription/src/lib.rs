@@ -475,8 +475,13 @@ impl SubscriptionRoot {
         };
         let event_types = live_feed_domain_event_types();
         let stream = unfold(
-            (receiver, initial_after, VecDeque::<DomainEvent>::new()),
-            move |(mut receiver, mut cursor, mut pending)| {
+            (
+                receiver,
+                initial_after,
+                VecDeque::<DomainEvent>::new(),
+                None::<i64>,
+            ),
+            move |(mut receiver, mut cursor, mut pending, mut resume)| {
                 let app = app.clone();
                 let actor = actor.clone();
                 let event_types = event_types.clone();
@@ -484,11 +489,19 @@ impl SubscriptionRoot {
                     loop {
                         if let Some(event) = pending.pop_front() {
                             cursor = event.sequence;
-                            return Some((from_domain_event(event), (receiver, cursor, pending)));
+                            return Some((
+                                from_domain_event(event),
+                                (receiver, cursor, pending, resume),
+                            ));
+                        }
+                        // A read that stopped at its page budget examined
+                        // events past the last one it returned.
+                        if let Some(resume_after) = resume.take() {
+                            cursor = cursor.max(resume_after);
                         }
 
                         let events = match app
-                            .list_domain_events(
+                            .list_domain_events_within_budget(
                                 &actor,
                                 &scryer_domain::DomainEventFilter {
                                     after_sequence: Some(cursor),
@@ -499,7 +512,19 @@ impl SubscriptionRoot {
                             )
                             .await
                         {
-                            Ok(events) if !events.is_empty() => events,
+                            Ok(page) if !page.events.is_empty() => {
+                                resume = page.resume_after_sequence;
+                                page.events
+                            }
+                            // Nothing visible yet within the budget: carry on
+                            // from where the read stopped, without waiting.
+                            Ok(scryer_application::DomainEventFeedPage {
+                                resume_after_sequence: Some(resume_after),
+                                ..
+                            }) => {
+                                cursor = resume_after;
+                                continue;
+                            }
                             Ok(_) => match receiver.recv().await {
                                 Ok(sequence) => {
                                     let mut earliest_sequence_after_cursor =

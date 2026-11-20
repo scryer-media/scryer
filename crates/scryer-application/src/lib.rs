@@ -477,6 +477,7 @@ pub use event_views::{
 };
 pub use events::activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
 pub use events::activity_api::{
+    DOMAIN_EVENT_FEED_SOURCE_PAGE_BUDGET, DomainEventFeedPage,
     is_supported_title_history_event_type, supported_title_history_event_types,
 };
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
