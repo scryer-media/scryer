@@ -453,7 +453,9 @@ impl AppUseCase {
             operation_type: plan.header.operation_type,
             mode: plan.header.mode,
             state: LocationOperationState::Queued,
-            initiated_by_user_id: Some(actor.id.clone()),
+            // The synthetic system actor (a lifecycle rule's move) has no
+            // `users` row for this column to reference.
+            initiated_by_user_id: (!actor.is_system_execution_actor()).then(|| actor.id.clone()),
             source_library_id: plan.header.source_library_id.clone(),
             destination_library_id: plan.header.destination_library_id.clone(),
             source_root_id: plan.header.source_root_id.clone(),
@@ -2004,7 +2006,9 @@ impl LocationJobRunActor<'_> {
 
     fn actor_user_id(&self) -> Option<String> {
         match self {
-            Self::Confirmed(actor) => Some(actor.id.clone()),
+            Self::Confirmed(actor) => {
+                (!actor.is_system_execution_actor()).then(|| actor.id.clone())
+            }
             Self::Resumed(user_id) => user_id.clone(),
         }
     }
@@ -2279,6 +2283,12 @@ impl AppUseCase {
                 .iter()
                 .map(|root| root.id.clone())
                 .collect(),
+            default_root_id: destination_library
+                .roots
+                .iter()
+                .find(|root| root.is_default)
+                .or_else(|| destination_library.roots.first())
+                .map(|root| root.id.clone()),
         };
 
         // FR-055: what the destination library already holds, for the titles

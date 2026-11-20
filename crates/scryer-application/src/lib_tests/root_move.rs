@@ -2642,6 +2642,64 @@ async fn a_started_move_opens_an_activity_job_run_and_closes_it_when_the_move_fi
     );
 }
 
+#[tokio::test]
+async fn a_move_the_system_actor_starts_stores_no_user_id() {
+    // A lifecycle rule's move runs as the synthetic system actor, which has no
+    // `users` row; both columns reference one.
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "System Subject",
+            2018,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "System Subject (2018)",
+            &[("System.Subject.2018.mkv", 1024)],
+        )
+        .await;
+    let actor = User::system_execution_actor();
+    let request = RootMovePreviewRequest {
+        title_ids: vec![title.id.clone()],
+        destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+    };
+    let preview = fixture
+        .app
+        .preview_root_move(&actor, request)
+        .await
+        .expect("preview root move as the system actor");
+    let accepted = fixture
+        .app
+        .start_root_move(
+            &actor,
+            StartRootMoveRequest {
+                title_ids: vec![title.id.clone()],
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await
+        .expect("start root move as the system actor");
+
+    let persisted = fixture
+        .app
+        .location_operation(&accepted.operation.id)
+        .await
+        .expect("read operation")
+        .expect("operation row");
+    assert_eq!(persisted.initiated_by_user_id, None);
+    let run_id = persisted
+        .job_run_id
+        .clone()
+        .expect("the operation names its run");
+    assert_eq!(fixture.job_run(&run_id).await.actor_user_id, None);
+
+    let settled = fixture.settle(&accepted.operation.id).await;
+    assert_eq!(settled.state, LocationOperationState::Completed);
+}
+
 /// T036 + FR-092: a cancel is a safe stop, not a failure. The operation settles
 /// as canceled and its Activity run closes as a warning, with a summary that
 /// says finished titles were left alone and no error text at all.
@@ -3675,6 +3733,54 @@ mod lifecycle_moves {
                 .await
                 .unwrap(),
             LifecycleMoveOutcome::AlreadyThere
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rule_move_to_another_library_lands_the_title_there() {
+        let fixture = RootMoveFixture::new().await;
+        std::fs::create_dir_all(fixture.root_c()).expect("create root c");
+        let archive = fixture
+            .app
+            .create_library(
+                &fixture.user,
+                MediaFacet::Movie,
+                "Archive".to_string(),
+                vec![LibraryRootDraft {
+                    id: None,
+                    path: fixture.root_c().to_string_lossy().to_string(),
+                    is_default: true,
+                }],
+                None,
+            )
+            .await
+            .expect("create the archive library");
+        let title = fixture
+            .seed_title(
+                "Synthetic Library Move",
+                2022,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Library Move (2022)",
+                &[("Synthetic.Library.Move.2022.1080p.mkv", 1024)],
+            )
+            .await;
+
+        let outcome = fixture
+            .app
+            .lifecycle_move_title(&title, LifecycleMoveTarget::Library("Archive"))
+            .await
+            .expect("ask for the move");
+        let operation = fixture.settle(&started_operation(outcome).await).await;
+        assert_eq!(operation.state, LocationOperationState::Completed);
+        let moved = fixture.title(&title.id).await;
+        assert_eq!(moved.library_id, archive.id);
+        assert!(
+            fixture
+                .root_c()
+                .join("Synthetic Library Move (2022)")
+                .join("Synthetic.Library.Move.2022.1080p.mkv")
+                .exists()
         );
     }
 
