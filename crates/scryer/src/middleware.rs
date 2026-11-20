@@ -45,7 +45,8 @@ use crate::http_error::ErrorResponse;
 use crate::rate_limit::{
     AuthenticationRequestAnalysis, GraphqlRateLimitClass, HttpRateLimitClass, RateLimitDecision,
     RateLimitKey, ScryerRateLimiter, analyze_authentication_request, classify_graphql,
-    classify_graphql_request, rate_limited_graphql_error, rate_limited_graphql_response,
+    classify_graphql_request, graphql_batch_search_cost, graphql_search_cost,
+    rate_limited_graphql_error, rate_limited_graphql_response,
     rate_limited_graphql_single_response,
 };
 
@@ -1589,10 +1590,13 @@ fn check_graphql_request_rate_limits(
     request: &GraphQLRequest,
     authentication: &AuthenticationRequestAnalysis,
 ) -> Result<(), RateLimitDecision> {
-    rate_limiter.check_graphql(
-        graphql_request_rate_limit_class(request, authentication),
-        rate_limit_key,
-    )?;
+    let class = graphql_request_rate_limit_class(request, authentication);
+    let cells = if class == GraphqlRateLimitClass::Search {
+        graphql_search_cost(request)
+    } else {
+        1
+    };
+    rate_limiter.check_graphql_cells(class, cells, rate_limit_key)?;
     if let Some(principal) = authentication.principal.as_ref() {
         rate_limiter.check_login_principal(rate_limit_key, principal)?;
     }
@@ -2167,6 +2171,11 @@ pub(crate) async fn graphql_handler(
     };
     let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
     let rate_limit_class = classify_graphql(&batch);
+    let rate_limit_cells = if rate_limit_class == GraphqlRateLimitClass::Search {
+        graphql_batch_search_cost(&batch)
+    } else {
+        1
+    };
     let authentication_requests = batch
         .iter()
         .map(analyze_authentication_request)
@@ -2271,8 +2280,9 @@ pub(crate) async fn graphql_handler(
     let login_attempt_limiter = login_attempt_limiter(state.rate_limiter.clone(), rate_limit_key);
     if let Some(actor) = actor.as_ref()
         && !has_authentication_request
-        && let Err(decision) = state.rate_limiter.check_graphql(
+        && let Err(decision) = state.rate_limiter.check_graphql_cells(
             rate_limit_class,
+            rate_limit_cells,
             &rate_limit_provenance.key(Some(&actor.user.id)),
         )
     {
