@@ -24,8 +24,9 @@ use scryer_domain::{ActorCapabilityMask, AppPermissionMask, Id};
 use scryer_interface::RequestLoaders;
 use scryer_interface::context::{
     ApiKeyManagementSession, AuthRuntimeStateHandle, AuthlessDefaultSession, ConnectionAuthEpoch,
-    InteractiveSession, LoginAttemptLimiter, MfaVerification, OAuthActorSession, RequestClientIp,
-    RequestHost, RequestSessionPersistence, to_gql_error,
+    ConnectionUserRevocation, InteractiveSession, LoginAttemptLimiter, MfaVerification,
+    OAuthActorSession, RequestClientIp, RequestHost, RequestSessionPersistence,
+    UserRevocationWatch, to_gql_error,
 };
 use scryer_logging::{ActorContext, LogContext, RequestContext, context_span, update_context};
 use std::collections::HashMap;
@@ -1294,6 +1295,9 @@ pub(crate) async fn graphql_ws_handler(
     // Subscribed before the upgrade, so an invalidation that lands while the
     // connection is being set up still closes it.
     let auth_epoch = auth_runtime.subscribe_epoch();
+    // Noted before any user or permission is read, so a revocation that lands
+    // while this connection resolves its user still closes it.
+    let user_revocation_mark = auth_runtime.user_revocation_mark();
     if let Err(error) = state.ws_origin_policy.check(&headers) {
         if state
             .ws_origin_policy
@@ -1355,7 +1359,7 @@ pub(crate) async fn graphql_ws_handler(
     );
     // Authentication markers come only from connection_init. Initial data is merged,
     // so inserting browser privileges here would survive explorer restrictions.
-    let initial_data = graphql_ws_connection_data(connection_epoch, None);
+    let initial_data = graphql_ws_connection_data(connection_epoch, None, None);
     let oauth_session = Arc::new(StdRwLock::new(if authless_proof_required {
         None
     } else {
@@ -1373,6 +1377,8 @@ pub(crate) async fn graphql_ws_handler(
     let oauth_session_for_init = oauth_session.clone();
     let rate_limit_user_id_for_init = rate_limit_user_id.clone();
     let (explorer_sender, explorer_session) = tokio::sync::watch::channel(None);
+    let (user_revocation_sender, user_revocation) = tokio::sync::watch::channel(None);
+    let auth_runtime_for_init = auth_runtime.clone();
 
     ws.max_message_size(GRAPHQL_MAX_MESSAGE_BYTES)
         .max_frame_size(GRAPHQL_MAX_MESSAGE_BYTES)
@@ -1416,6 +1422,8 @@ pub(crate) async fn graphql_ws_handler(
                     let proof_state = proof_state.clone();
                     let headers_for_init = headers_for_init.clone();
                     let explorer_sender = explorer_sender.clone();
+                    let user_revocation_sender = user_revocation_sender.clone();
+                    let auth_runtime = auth_runtime_for_init.clone();
                     async move {
                         let auth_value = value.get("Authorization").and_then(|v| v.as_str());
                         let proof_value = value
@@ -1479,7 +1487,15 @@ pub(crate) async fn graphql_ws_handler(
                                 updated_context.clone();
                             update_context(&connection_span, updated_context);
                         }
-                        Ok(graphql_ws_connection_data(connection_epoch, actor))
+                        let revocation = actor.as_ref().map(|actor| {
+                            auth_runtime.watch_user_revocation(&actor.user.id, user_revocation_mark)
+                        });
+                        user_revocation_sender.send_replace(revocation.clone());
+                        Ok(graphql_ws_connection_data(
+                            connection_epoch,
+                            actor,
+                            revocation,
+                        ))
                     }
                 })
                 .serve()
@@ -1494,8 +1510,27 @@ pub(crate) async fn graphql_ws_handler(
                 // reconnects with fresh credentials instead of resubscribing
                 // on it forever.
                 _ = until_auth_epoch_moves_past(auth_epoch, connection_epoch) => {}
+                // A permission change or deletion of this connection's user
+                // closes only that user's connections the same way.
+                _ = until_connection_user_revoked(user_revocation) => {}
             }
         })
+}
+
+/// Resolves once the user this connection authenticated as is revoked. Never
+/// resolves before connection_init names a user, or for a connection without
+/// one.
+async fn until_connection_user_revoked(
+    mut revocation: tokio::sync::watch::Receiver<Option<UserRevocationWatch>>,
+) {
+    let watch = match revocation.wait_for(Option::is_some).await {
+        Ok(watch) => watch.clone(),
+        Err(_) => None,
+    };
+    match watch {
+        Some(watch) => watch.until_revoked().await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 /// Resolves once the auth epoch differs from `connection_epoch`. Never
@@ -3040,9 +3075,16 @@ impl ResolvedActor {
     }
 }
 
-fn graphql_ws_connection_data(connection_epoch: u64, actor: Option<ResolvedActor>) -> Data {
+fn graphql_ws_connection_data(
+    connection_epoch: u64,
+    actor: Option<ResolvedActor>,
+    revocation: Option<UserRevocationWatch>,
+) -> Data {
     let mut data = Data::default();
     data.insert(ConnectionAuthEpoch(connection_epoch));
+    if let Some(revocation) = revocation {
+        data.insert(ConnectionUserRevocation(revocation));
+    }
     if let Some(actor) = actor {
         data.insert(actor.mfa_verification());
         if actor.is_interactive_session() {
@@ -3474,6 +3516,48 @@ mod ws_origin_tests {
         tokio::time::timeout(Duration::from_secs(30), until_stale)
             .await
             .expect("a later invalidation still closes it");
+    }
+
+    /// A permission change for one user closes that user's connection and
+    /// leaves another user's connection, and the auth epoch, alone.
+    #[tokio::test]
+    async fn user_revocation_closes_only_that_users_connection() {
+        use futures_util::FutureExt;
+        let auth_runtime = AuthRuntimeStateHandle::new(super::tests::auth_enabled_snapshot());
+        let epoch = auth_runtime.snapshot().epoch;
+
+        // As `graphql_ws_handler` does: mark at the upgrade, watch at init.
+        let mark = auth_runtime.user_revocation_mark();
+        let (target_sender, target_receiver) = tokio::sync::watch::channel(None);
+        let (bystander_sender, bystander_receiver) = tokio::sync::watch::channel(None);
+        let mut target = Box::pin(until_connection_user_revoked(target_receiver));
+        let mut bystander = Box::pin(until_connection_user_revoked(bystander_receiver));
+        assert!((&mut target).now_or_never().is_none());
+        target_sender.send_replace(Some(
+            auth_runtime.watch_user_revocation("user-target", mark),
+        ));
+        bystander_sender.send_replace(Some(
+            auth_runtime.watch_user_revocation("user-bystander", mark),
+        ));
+        assert!((&mut target).now_or_never().is_none());
+
+        auth_runtime.revoke_user_connections("user-target");
+        tokio::time::timeout(Duration::from_secs(30), target)
+            .await
+            .expect("the revoked user's connection closes");
+        assert!((&mut bystander).now_or_never().is_none());
+        assert_eq!(auth_runtime.snapshot().epoch, epoch);
+
+        let data = graphql_ws_connection_data(
+            epoch,
+            None,
+            Some(auth_runtime.watch_user_revocation("user-target", mark)),
+        );
+        assert!(
+            data.get(&std::any::TypeId::of::<ConnectionUserRevocation>())
+                .is_some(),
+            "operations on the connection can see the revocation"
+        );
     }
 
     #[tokio::test]

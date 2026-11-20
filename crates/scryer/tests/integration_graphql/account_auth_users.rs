@@ -1905,6 +1905,97 @@ async fn graphql_set_user_login_enabled_updates_status_and_auth_epoch() {
     assert_eq!(ctx.auth_runtime.snapshot().epoch, previous_epoch + 1);
 }
 
+/// Runs `query` the way an operation on an open WebSocket does: with the
+/// user, epoch and revocation watch the connection captured when it opened.
+async fn ws_connection_exec(
+    ctx: &TestContext,
+    query: &str,
+    user: &User,
+    revocation: &scryer_interface::context::UserRevocationWatch,
+) -> Value {
+    let request = async_graphql::Request::new(query)
+        .data(user.clone())
+        .data(scryer_interface::context::ConnectionAuthEpoch(
+            ctx.auth_runtime.snapshot().epoch,
+        ))
+        .data(scryer_interface::context::ConnectionUserRevocation(
+            revocation.clone(),
+        ));
+    serde_json::to_value(ctx.schema.execute(request).await).expect("serialize gql response")
+}
+
+#[tokio::test]
+async fn permission_edits_and_deletion_revoke_only_the_edited_users_connections() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let library_id = scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Movie);
+    let mut users = Vec::new();
+    for username in [
+        "revoke-app-user",
+        "revoke-library-user",
+        "revoke-deleted-user",
+    ] {
+        let user = ctx
+            .app
+            .create_user(
+                &admin,
+                username.to_string(),
+                "s3cr3t!!".to_string(),
+                AppPermissionMask::NONE,
+                vec![],
+            )
+            .await
+            .expect("create user");
+        users.push(ctx.app.attach_user_authorization(user).await.unwrap());
+    }
+    let epoch = ctx.auth_runtime.snapshot().epoch;
+    let mark = ctx.auth_runtime.user_revocation_mark();
+    let watches = users
+        .iter()
+        .map(|user| ctx.auth_runtime.watch_user_revocation(&user.id, mark))
+        .collect::<Vec<_>>();
+    let admin_watch = ctx.auth_runtime.watch_user_revocation(&admin.id, mark);
+    for (user, watch) in users.iter().zip(&watches) {
+        let body = ws_connection_exec(&ctx, "{ me { id } }", user, watch).await;
+        assert_eq!(body["data"]["me"]["id"], user.id.as_str(), "{body}");
+    }
+
+    let edits = [
+        format!(
+            r#"mutation {{ setUserAppPermissions(input: {{ userId: "{}", permissions: [] }}) {{ id }} }}"#,
+            users[0].id
+        ),
+        format!(
+            r#"mutation {{ setUserLibraryPermissions(input: {{ userId: "{}", grants: [{{ libraryId: "{library_id}", permissions: [VIEW] }}] }}) {{ id }} }}"#,
+            users[1].id
+        ),
+        format!(
+            r#"mutation {{ deleteUser(id: "{}") {{ id }} }}"#,
+            users[2].id
+        ),
+    ];
+    for (index, edit) in edits.iter().enumerate() {
+        assert!(!watches[index].is_revoked());
+        let body = schema_exec(&ctx, edit, Some(admin.clone())).await;
+        assert_no_errors(&body);
+        assert!(watches[index].is_revoked(), "edit {index} revokes its user");
+        for later in &watches[index + 1..] {
+            assert!(!later.is_revoked(), "edit {index} leaves other users alone");
+        }
+        let stale = ws_connection_exec(&ctx, "{ me { id } }", &users[index], &watches[index]).await;
+        assert!(
+            stale["data"]["me"].is_null(),
+            "the old connection cannot run an operation as the edited user: {stale}"
+        );
+    }
+    assert!(!admin_watch.is_revoked());
+    assert_eq!(
+        ctx.auth_runtime.snapshot().epoch,
+        epoch,
+        "permission edits close no other user's connection"
+    );
+}
+
 #[tokio::test]
 async fn graphql_reset_user_mfa_clears_all_authentication_factors() {
     let ctx = TestContext::new().await;
