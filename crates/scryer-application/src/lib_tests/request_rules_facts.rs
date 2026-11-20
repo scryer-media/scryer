@@ -861,6 +861,7 @@ async fn assembled_request(
             full_snapshot(),
             evaluation_time(),
             None,
+            true,
         )
         .await
         .expect("a list read failure must not stop the request from evaluating");
@@ -982,6 +983,14 @@ async fn assembled_document(
     harness: &super::MediaRequestTestHarness,
     draft: &crate::request_rules::RequestDraft,
 ) -> serde_json::Value {
+    assembled_document_reading(harness, draft, true).await
+}
+
+async fn assembled_document_reading(
+    harness: &super::MediaRequestTestHarness,
+    draft: &crate::request_rules::RequestDraft,
+    read_watchlist: bool,
+) -> serde_json::Value {
     let context = harness
         .app
         .assemble_request_input_context(
@@ -991,6 +1000,7 @@ async fn assembled_document(
             full_snapshot(),
             evaluation_time(),
             None,
+            read_watchlist,
         )
         .await
         .expect("the request evaluates");
@@ -1106,6 +1116,51 @@ async fn a_title_on_the_requesters_synced_watchlist_counts_its_days() {
 
     assert_eq!(document["facts"]["on_requester_watchlist"], true);
     assert_eq!(document["facts"]["requester_watchlist_days"], 9);
+}
+
+#[tokio::test]
+async fn skipping_the_watchlist_read_changes_only_the_watchlist_facts() {
+    let harness = super::bootstrap_media_request_app();
+    *harness.lists.subscriptions.lock().unwrap() = vec![linked_watchlist(
+        &harness.user.id,
+        evaluation_time() - chrono::Duration::hours(2),
+    )];
+    let mut row = crate::lists::test_support::membership(
+        "watchlist-own",
+        "glass-harbor",
+        scryer_domain::ListMembershipState::Pending,
+    );
+    row.external_ids = vec![crate::lists::test_support::tmdb("glass-harbor")];
+    row.first_seen_at = evaluation_time() - chrono::Duration::days(9);
+    harness.lists.insert_rows(vec![row]);
+
+    let read = assembled_document_reading(&harness, &watchlisted_draft(), true).await;
+    let skipped = assembled_document_reading(&harness, &watchlisted_draft(), false).await;
+
+    // A rule that names a watchlist fact always gets the read, and with it the
+    // same values as before.
+    assert_eq!(read["facts"]["on_requester_watchlist"], true);
+    assert_eq!(read["facts"]["requester_watchlist_days"], 9);
+    for fact in crate::request_rules::facts::WATCHLIST_FACT_NAMES {
+        assert_eq!(status_of(&skipped, fact), "unknown");
+        assert_eq!(reason_of(&skipped, fact), fact_reason::NOT_YET_COLLECTED);
+    }
+
+    // Everything no rule can be denied by is identical either way.
+    let without_watchlist = |mut document: serde_json::Value| {
+        for section in ["facts", "observations"] {
+            if let Some(object) = document
+                .get_mut(section)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for fact in crate::request_rules::facts::WATCHLIST_FACT_NAMES {
+                    object.remove(*fact);
+                }
+            }
+        }
+        document
+    };
+    assert_eq!(without_watchlist(read), without_watchlist(skipped));
 }
 
 #[tokio::test]

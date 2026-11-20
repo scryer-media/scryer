@@ -123,6 +123,10 @@ pub mod fact_reason {
     ];
 }
 
+/// The facts drawn from the requester's watch-later lists.
+pub(crate) const WATCHLIST_FACT_NAMES: &[&str] =
+    &["on_requester_watchlist", "requester_watchlist_days"];
+
 /// A watch-later list is fresh for eight of its sync intervals, and never
 /// less than two days: the same window lifecycle watchlist facts use.
 fn watchlist_freshness_window(interval_seconds: i64) -> chrono::Duration {
@@ -947,6 +951,10 @@ impl AppUseCase {
     /// account links are the exception: their document shape has no unknown
     /// state, so a failed read must reach the evaluation fallback rather than
     /// fabricate an empty provider list.
+    ///
+    /// Without `read_watchlist` the requester's lists are not read and the
+    /// watchlist facts read unknown as not yet collected: for an evaluation
+    /// whose rules cannot read them.
     pub(crate) async fn assemble_request_input_context(
         &self,
         actor: &User,
@@ -955,6 +963,7 @@ impl AppUseCase {
         snapshot: MediaRequestMetadataSnapshot,
         evaluation_time: DateTime<Utc>,
         excluding_request_id: Option<&str>,
+        read_watchlist: bool,
     ) -> AppResult<RequestInputContext> {
         let requester = self
             .request_requester_doc(actor, &library.id, evaluation_time)
@@ -969,9 +978,12 @@ impl AppUseCase {
             .request_history_context(actor, evaluation_time, excluding_request_id)
             .await;
         let library_title_count = self.request_library_title_count(&library.id).await;
-        let watchlist = self
-            .request_watchlist_context(actor, draft, evaluation_time)
-            .await;
+        let watchlist = if read_watchlist {
+            self.request_watchlist_context(actor, draft, evaluation_time)
+                .await
+        } else {
+            RequestWatchlistContext::Unavailable(fact_reason::NOT_YET_COLLECTED)
+        };
         let list_excluded = self.request_list_excluded(draft).await;
         let requester_titles_in_library_count = self
             .request_requester_titles_in_library_count(actor, &library.id)
