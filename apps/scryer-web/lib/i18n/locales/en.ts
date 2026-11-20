@@ -2520,6 +2520,8 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_IMAGE_DECODE_FAILED": "Failed to decode image.",
   "error.reason.MEDIA_IMAGE_DIMENSIONS_EMPTY":
     "Image dimensions must be non-zero.",
+  "error.reason.MEDIA_IMAGE_DIMENSIONS_TOO_LARGE":
+    "This image has more pixels than artwork may have.",
   "error.reason.MEDIA_IMAGE_FORMAT_DETECTION_FAILED":
     "Failed to detect image format.",
   "error.reason.MEDIA_IMAGE_FORMAT_UNSUPPORTED": "Unsupported image format.",

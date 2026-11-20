@@ -9518,6 +9518,8 @@ const ru: LocaleDictionary = {
     "Не удалось декодировать изображение.",
   "error.reason.MEDIA_IMAGE_DIMENSIONS_EMPTY":
     "Размеры изображения должны быть ненулевыми.",
+  "error.reason.MEDIA_IMAGE_DIMENSIONS_TOO_LARGE":
+    "В изображении больше пикселей, чем допускается для обложки.",
   "error.reason.MEDIA_IMAGE_FORMAT_DETECTION_FAILED":
     "Не удалось определить формат изображения.",
   "error.reason.MEDIA_IMAGE_FORMAT_UNSUPPORTED":
