@@ -110,6 +110,10 @@ import {
 } from "@/components/views/settings/lifecycle-rule-schedule";
 import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
 import { LifecycleRulesTabs } from "@/components/views/settings/lifecycle-rules-tabs";
+import {
+  FORM_SHELL,
+  PaneSection,
+} from "@/components/views/settings/rule-pane-section";
 
 export type LifecycleLibraryOption = { id: string; name: string };
 
@@ -508,16 +512,12 @@ function LifecyclePreviewPanel({
     (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          <HelpLabel
-            label={t("settings.lifecyclePreviewTitle")}
-            help={t("settings.lifecyclePreviewSubtitle")}
-          />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <PaneSection
+      id="settings-lifecycle-preview-section"
+      title={t("settings.lifecyclePreviewTitle")}
+      help={t("settings.lifecyclePreviewSubtitle")}
+    >
+      <div className={FORM_SHELL}>
         <div className="grid gap-3 md:grid-cols-4">
           <SingleSelectField
             id="settings-lifecycle-preview-source"
@@ -768,8 +768,8 @@ function LifecyclePreviewPanel({
             </div>
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </PaneSection>
   );
 }
 

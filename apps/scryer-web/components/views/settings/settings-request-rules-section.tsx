@@ -26,6 +26,18 @@ import {
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import type { RequestRulesSection } from "@/components/root/types";
 import { RequestRulesTabs } from "@/components/views/settings/request-rules-tabs";
+import {
+  FORM_SHELL,
+  PaneEmpty,
+  PaneError,
+  PaneSection,
+  RefreshButton,
+  TABLE_SHELL,
+  TOOLBAR_SELECT_LABEL,
+  TOOLBAR_SHELL,
+} from "@/components/views/settings/rule-pane-section";
+import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { formatUiDateTime } from "@/lib/utils/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -580,16 +592,12 @@ function RequestPreviewPanel({
   const decision = previewResult?.decision ?? null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          <HelpLabel
-            label={t("settings.requestPreviewTitle")}
-            help={t("settings.requestPreviewSubtitle")}
-          />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <PaneSection
+      id="settings-request-preview-section"
+      title={t("settings.requestPreviewTitle")}
+      help={t("settings.requestPreviewSubtitle")}
+    >
+      <div className={FORM_SHELL}>
         <div className="grid gap-3 md:grid-cols-3">
           <SingleSelectField
             id="settings-request-preview-source"
@@ -892,8 +900,8 @@ function RequestPreviewPanel({
             ) : null}
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </PaneSection>
   );
 }
 
@@ -936,139 +944,137 @@ function RequestDecisionsPanel({
   | "refreshDecisions"
 >) {
   const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          {t("settings.requestDecisionsTitle")}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <SingleSelectField
-            id="settings-request-decisions-outcome"
-            label={t("settings.requestDecisionsOutcomeFilter")}
-            value={decisionOutcomeFilter}
-            onValueChange={setDecisionOutcomeFilter}
-            options={DECISION_OUTCOME_FILTERS.map((outcome) => {
-              const labelKey =
-                outcome === REQUEST_FILTER_ALL
-                  ? "settings.requestDecisionsOutcomeAll"
-                  : requestDecisionOutcomeLabelKey(outcome);
-              return {
-                value: outcome,
-                ariaLabel: outcome,
-                label: labelKey ? t(labelKey) : outcome,
-              };
-            })}
-          />
-          <Button
-            id="settings-request-decisions-refresh"
-            type="button"
-            variant="secondary"
-            onClick={refreshDecisions}
-            disabled={decisionsLoading}
-          >
-            {decisionsLoading ? t("label.refreshing") : t("label.refresh")}
-          </Button>
-        </div>
+    <PaneSection
+      id="settings-request-decisions-section"
+      title={t("settings.requestDecisionsTitle")}
+      count={
+        decisionsLoading && decisions.length === 0
+          ? undefined
+          : decisions.length
+      }
+      actions={
+        <RefreshButton
+          id="settings-request-decisions-refresh"
+          loading={decisionsLoading}
+          onClick={refreshDecisions}
+        />
+      }
+    >
+      <div className={TOOLBAR_SHELL}>
+        <SingleSelectField
+          id="settings-request-decisions-outcome"
+          label={t("settings.requestDecisionsOutcomeFilter")}
+          labelClassName={TOOLBAR_SELECT_LABEL}
+          size="compact"
+          chrome="toolbar"
+          className="md:w-[240px]"
+          value={decisionOutcomeFilter}
+          onValueChange={setDecisionOutcomeFilter}
+          options={DECISION_OUTCOME_FILTERS.map((outcome) => {
+            const labelKey =
+              outcome === REQUEST_FILTER_ALL
+                ? "settings.requestDecisionsOutcomeAll"
+                : requestDecisionOutcomeLabelKey(outcome);
+            return {
+              value: outcome,
+              ariaLabel: outcome,
+              label: labelKey ? t(labelKey) : outcome,
+            };
+          })}
+        />
+      </div>
 
-        {decisionsError ? (
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono text-[12px] leading-5 text-[var(--scry-danger-text)]">
-            {decisionsError}
-          </pre>
-        ) : null}
+      <PaneError message={decisionsError} />
 
-        <div className="overflow-x-auto">
-          <Table id="settings-request-decisions">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[190px]">
-                  {t("settings.requestDecisionsColTime")}
-                </TableHead>
-                <TableHead className="w-[150px]">
-                  {t("settings.requestDecisionsColOutcome")}
-                </TableHead>
-                <TableHead>{t("settings.requestDecisionsColVotes")}</TableHead>
-                <TableHead>
-                  {t("settings.requestDecisionsColReasons")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {decisions.map((decision, index) => {
-                const fallbackKey = decision.fallbackReason
-                  ? requestFallbackReasonLabelKey(decision.fallbackReason)
-                  : null;
-                return (
-                  <TableRow
-                    key={decision.id ?? `${decision.evaluatedAt}:${index}`}
-                    data-ui="settings-table-row"
-                    id={settingsRequestDecisionRowId(index)}
-                    data-request-decision-outcome={decision.effectiveOutcome}
-                  >
-                    <TableCell className="text-muted-foreground">
-                      {decision.evaluatedAt}
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <OutcomeBadge outcome={decision.effectiveOutcome} />
-                        {decision.policyOutcome !==
-                        decision.effectiveOutcome ? (
-                          <p className="text-xs text-muted-foreground">
-                            {t("settings.requestDecisionsPolicySaid", {
-                              outcome: decision.policyOutcome,
-                            })}
-                          </p>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <DecisionVotes decision={decision} />
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      <div className="space-y-1">
-                        {decision.reasons.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {decision.reasons.map((reason) => (
-                              <code
-                                key={`${reason.ruleName}:${reason.code}`}
-                                data-code-font
-                                className="rounded bg-muted px-1 py-0.5 text-xs"
-                              >
-                                {reason.code}
-                              </code>
-                            ))}
-                          </div>
-                        ) : null}
-                        {decision.fallbackReason ? (
-                          <p className="text-xs">
-                            {fallbackKey
-                              ? t(fallbackKey)
-                              : decision.fallbackReason}
-                          </p>
-                        ) : null}
-                        {decision.reasons.length === 0 &&
-                        !decision.fallbackReason
-                          ? "—"
-                          : null}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {decisions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
-                    {t("settings.requestDecisionsEmpty")}
+      {decisions.length === 0 ? (
+        <PaneEmpty
+          id="settings-request-decisions-empty"
+          loading={decisionsLoading}
+        >
+          {t("settings.requestDecisionsEmpty")}
+        </PaneEmpty>
+      ) : (
+        <Table id="settings-request-decisions" wrapperClassName={TABLE_SHELL}>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[190px]">
+                {t("settings.requestDecisionsColTime")}
+              </TableHead>
+              <TableHead className="w-[150px]">
+                {t("settings.requestDecisionsColOutcome")}
+              </TableHead>
+              <TableHead>{t("settings.requestDecisionsColVotes")}</TableHead>
+              <TableHead>{t("settings.requestDecisionsColReasons")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {decisions.map((decision, index) => {
+              const fallbackKey = decision.fallbackReason
+                ? requestFallbackReasonLabelKey(decision.fallbackReason)
+                : null;
+              return (
+                <TableRow
+                  key={decision.id ?? `${decision.evaluatedAt}:${index}`}
+                  data-ui="settings-table-row"
+                  id={settingsRequestDecisionRowId(index)}
+                  data-request-decision-outcome={decision.effectiveOutcome}
+                >
+                  <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
+                    {formatUiDateTime(decision.evaluatedAt, dateTimeFormat, {
+                      fallback: decision.evaluatedAt,
+                    })}
+                  </TableCell>
+                  <TableCell>
+                    <div className="space-y-1">
+                      <OutcomeBadge outcome={decision.effectiveOutcome} />
+                      {decision.policyOutcome !== decision.effectiveOutcome ? (
+                        <p className="text-xs text-muted-foreground">
+                          {t("settings.requestDecisionsPolicySaid", {
+                            outcome: decision.policyOutcome,
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <DecisionVotes decision={decision} />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <div className="space-y-1">
+                      {decision.reasons.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {decision.reasons.map((reason) => (
+                            <code
+                              key={`${reason.ruleName}:${reason.code}`}
+                              data-code-font
+                              className="rounded bg-muted px-1 py-0.5 text-xs"
+                            >
+                              {reason.code}
+                            </code>
+                          ))}
+                        </div>
+                      ) : null}
+                      {decision.fallbackReason ? (
+                        <p className="text-xs">
+                          {fallbackKey
+                            ? t(fallbackKey)
+                            : decision.fallbackReason}
+                        </p>
+                      ) : null}
+                      {decision.reasons.length === 0 && !decision.fallbackReason
+                        ? "—"
+                        : null}
+                    </div>
                   </TableCell>
                 </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </PaneSection>
   );
 }
 
