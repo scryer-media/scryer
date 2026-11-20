@@ -970,7 +970,8 @@ impl AppUseCase {
             return Ok(LifecycleEvaluationTrigger {
                 started: false,
                 message: Some(
-                    "both instance effect gates are off, so no actions can execute".to_string(),
+                    "lifecycle actions are paused for this instance, so nothing was acted on"
+                        .to_string(),
                 ),
             });
         }
