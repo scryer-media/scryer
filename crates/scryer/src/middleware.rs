@@ -25,7 +25,7 @@ use scryer_interface::RequestLoaders;
 use scryer_interface::context::{
     ApiKeyManagementSession, AuthRuntimeStateHandle, AuthlessDefaultSession, ConnectionAuthEpoch,
     InteractiveSession, LoginAttemptLimiter, MfaVerification, OAuthActorSession, RequestClientIp,
-    RequestSessionPersistence, to_gql_error,
+    RequestHost, RequestSessionPersistence, to_gql_error,
 };
 use scryer_logging::{ActorContext, LogContext, RequestContext, context_span, update_context};
 use std::collections::HashMap;
@@ -83,6 +83,181 @@ pub(crate) struct AuthlessAccessGuardState {
     pub(crate) auth_runtime: AuthRuntimeStateHandle,
     pub(crate) policy: AuthlessAccessPolicy,
     pub(crate) allowlist: AuthlessAccessAllowlist,
+    pub(crate) local_trust: LocalTrustContext,
+}
+
+/// The opt-in limits on local trust, with the policies they are judged
+/// against. The default holds both settings off, which decides every request
+/// as before they existed.
+#[derive(Clone, Default)]
+pub(crate) struct LocalTrustContext {
+    local_trust: scryer_application::local_trust::LocalTrustRuntime,
+    trusted_proxies: scryer_application::rate_limit_proxy_policy::TrustedProxyRuntime,
+    public_url: scryer_application::public_url::PublicUrlRuntime,
+}
+
+impl LocalTrustContext {
+    pub(crate) fn from_app(app: &AppUseCase) -> Self {
+        Self {
+            local_trust: app.local_trust_runtime(),
+            trusted_proxies: app.trusted_proxy_runtime(),
+            public_url: app.public_url_runtime(),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        allowed_hosts: &[&str],
+        restrict_to_trusted_proxies: bool,
+        trusted_proxies: &[&str],
+        public_url: Option<&str>,
+    ) -> Self {
+        use scryer_application::public_url::{PublicUrlPolicy, PublicUrlRuntime};
+        use scryer_application::rate_limit_proxy_policy::{
+            TrustedProxyPolicy, TrustedProxyRuntime,
+        };
+        Self {
+            local_trust: scryer_application::local_trust::LocalTrustRuntime::new(
+                scryer_application::local_trust::LocalTrustPolicy {
+                    allowed_hosts: allowed_hosts.iter().map(|host| host.to_string()).collect(),
+                    restrict_to_trusted_proxies,
+                },
+            ),
+            trusted_proxies: TrustedProxyRuntime::new(
+                TrustedProxyPolicy::new(
+                    trusted_proxies
+                        .iter()
+                        .map(|value| value.to_string())
+                        .collect(),
+                    None,
+                )
+                .expect("trusted proxies"),
+            ),
+            public_url: PublicUrlRuntime::new(
+                PublicUrlPolicy::new(None, public_url),
+                Default::default(),
+            ),
+        }
+    }
+
+    fn snapshot(&self) -> LocalTrustSnapshot {
+        LocalTrustSnapshot {
+            policy: self.local_trust.snapshot(),
+            trusted_proxies: self.trusted_proxies.snapshot(),
+            public_url: self.public_url.clone(),
+        }
+    }
+}
+
+/// One request's view of the local-trust limits.
+struct LocalTrustSnapshot {
+    policy: Arc<scryer_application::local_trust::LocalTrustPolicy>,
+    trusted_proxies: Arc<scryer_application::rate_limit_proxy_policy::TrustedProxyPolicy>,
+    public_url: scryer_application::public_url::PublicUrlRuntime,
+}
+
+impl LocalTrustSnapshot {
+    fn host_check_enabled(&self) -> bool {
+        !self.policy.allowed_hosts.is_empty()
+    }
+
+    /// Whether the request's `Host` may receive local trust. Always true
+    /// while the allowed-host list is empty.
+    fn allows_host(&self, headers: &HeaderMap) -> bool {
+        if !self.host_check_enabled() {
+            return true;
+        }
+        let public_url_host = self
+            .public_url
+            .snapshot()
+            .url()
+            .and_then(|url| url.host_str().map(str::to_string));
+        self.policy
+            .allows_host(request_host_header(headers), public_url_host.as_deref())
+    }
+
+    /// Whether the request reaches Scryer the way local trust expects when
+    /// the restriction to listed proxies is on: a listed proxy forwarding an
+    /// all-local client chain, or a local client sending no forwarding headers.
+    /// Off, this is the long-standing provenance rule.
+    fn has_trusted_local_provenance(
+        &self,
+        headers: &HeaderMap,
+        remote_addr: Option<SocketAddr>,
+    ) -> bool {
+        if !self.policy.restrict_to_trusted_proxies {
+            return request_has_trusted_local_provenance(headers, remote_addr);
+        }
+        let Some(peer_ip) = remote_addr.map(|addr| addr.ip().to_canonical()) else {
+            return false;
+        };
+        let forwarded = has_proxy_forwarding_headers(headers);
+        if self.trusted_proxies.matches(peer_ip) {
+            return forwarded
+                && forwarded_client_ip_chain(headers)
+                    .is_ok_and(|client_ips| client_ips.into_iter().all(is_local_network_ip));
+        }
+        !forwarded && is_local_network_ip(peer_ip)
+    }
+}
+
+/// Whether a request naming this `Host` may be served as the default actor
+/// without a credential. True while the allowed-host list is empty.
+pub(crate) fn local_trust_allows_request_host(app: &AppUseCase, headers: &HeaderMap) -> bool {
+    LocalTrustContext::from_app(app)
+        .snapshot()
+        .allows_host(headers)
+}
+
+/// The `Host` a request named. A guard copies the URI authority into a
+/// missing `Host` (HTTP/2 carries it there) while the host check is on.
+fn request_host_header(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+}
+
+/// Copies an HTTP/2 request's authority into `Host` when it has none, so
+/// handlers that read only headers judge the host the client named.
+fn fill_missing_host_from_authority(request: &mut Request<Body>) {
+    if request.headers().contains_key(header::HOST) {
+        return;
+    }
+    let Some(value) = request
+        .uri()
+        .authority()
+        .and_then(|authority| http::HeaderValue::from_str(authority.as_str()).ok())
+    else {
+        return;
+    };
+    request.headers_mut().insert(header::HOST, value);
+}
+
+/// Requests the guard lets through to a check of their own: credentials,
+/// which never receive local trust, routes whose callers present a secret in
+/// the body, health checks, and the WebSocket, whose actor resolution applies
+/// the host check itself. Handlers that hand out the default actor without a
+/// credential check the host again.
+fn local_trust_host_check_exempt(request: &Request<Body>) -> bool {
+    let headers = request.headers();
+    if headers.contains_key(header::AUTHORIZATION) || headers.contains_key("x-api-key") {
+        return true;
+    }
+    matches!(
+        request.uri().path(),
+        "/health" | "/health/ready" | "/oauth/token" | "/oauth/revoke" | "/graphql/ws"
+    )
+}
+
+fn local_trust_host_refused_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "Scryer does not serve this host name without a login; open it at an allowed host or sign in",
+            "reason": crate::error_reasons::HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED,
+        })),
+    )
+        .into_response()
 }
 
 #[derive(Clone)]
@@ -96,6 +271,7 @@ pub(crate) struct AuthlessWebClientProofRouteState {
     pub(crate) policy: AuthlessAccessPolicy,
     pub(crate) proof: AuthlessWebClientProofState,
     pub(crate) allowlist: AuthlessAccessAllowlist,
+    pub(crate) local_trust: LocalTrustContext,
 }
 
 #[derive(Clone)]
@@ -416,6 +592,11 @@ pub(crate) async fn authless_web_client_proof_handler(
     State(state): State<AuthlessWebClientProofRouteState>,
     request: Request<Body>,
 ) -> Response {
+    let mut request = request;
+    let local_trust = state.local_trust.snapshot();
+    if local_trust.host_check_enabled() {
+        fill_missing_host_from_authority(&mut request);
+    }
     let (parts, _) = request.into_parts();
     let remote_addr = parts
         .extensions
@@ -428,11 +609,23 @@ pub(crate) async fn authless_web_client_proof_handler(
         &snapshot,
         state.policy,
         &state.allowlist,
+        &local_trust,
         &headers,
         remote_addr,
     )
     .await
     {
+        if reason == AuthlessAccessRejectReason::HostNotAllowed {
+            // With form login on, this is a remote browser that signs in as usual.
+            if snapshot.effective_form_login_enabled {
+                tracing::debug!("Authless web client proof unavailable: {reason}");
+            } else {
+                warn!("Rejecting authless web client proof request: {reason}");
+            }
+            let mut response = local_trust_host_refused_response();
+            apply_authless_web_client_response_headers(&mut response);
+            return response;
+        }
         // A rejected proof is a routine access-control outcome, not an error:
         // the logged-out web client probes for authless (public) access on its
         // GraphQL requests and the server declines per policy; the client
@@ -484,6 +677,7 @@ async fn authless_web_client_proof_decision(
     snapshot: &scryer_interface::context::AuthRuntimeStateSnapshot,
     policy: AuthlessAccessPolicy,
     allowlist: &AuthlessAccessAllowlist,
+    local_trust: &LocalTrustSnapshot,
     headers: &HeaderMap,
     remote_addr: Option<SocketAddr>,
 ) -> AuthlessAccessDecision {
@@ -495,7 +689,13 @@ async fn authless_web_client_proof_decision(
         return AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::CrossSiteRequest);
     }
 
-    if local_ip_bypass_active(snapshot, headers, remote_addr) {
+    let login_skippable =
+        !snapshot.effective_form_login_enabled || snapshot.skip_login_for_local_ips;
+    if login_skippable && !local_trust.allows_host(headers) {
+        return AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::HostNotAllowed);
+    }
+
+    if local_ip_bypass_active_with(snapshot, local_trust, headers, remote_addr) {
         return AuthlessAccessDecision::Allow;
     }
 
@@ -503,7 +703,15 @@ async fn authless_web_client_proof_decision(
         return AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::AuthRequired);
     }
 
-    authless_access_decision_with_allowlist(snapshot, policy, allowlist, headers, remote_addr).await
+    authless_access_decision_with_local_trust(
+        snapshot,
+        policy,
+        allowlist,
+        local_trust,
+        headers,
+        remote_addr,
+    )
+    .await
 }
 
 fn request_is_cross_site(headers: &HeaderMap) -> bool {
@@ -1075,7 +1283,12 @@ pub(crate) async fn graphql_ws_handler(
     let auth_runtime = state.auth_runtime.clone();
     let auth_snapshot = auth_runtime.snapshot();
     let auth_enabled = auth_snapshot.effective_form_login_enabled;
-    let local_bypass_active = local_ip_bypass_active(&auth_snapshot, &headers, Some(remote_addr));
+    let local_bypass_active = local_ip_bypass_active_with(
+        &auth_snapshot,
+        &LocalTrustContext::from_app(&state.app).snapshot(),
+        &headers,
+        Some(remote_addr),
+    );
     let connection_epoch = auth_snapshot.epoch;
     // Subscribed before the upgrade, so an invalidation that lands while the
     // connection is being set up still closes it.
@@ -1887,6 +2100,7 @@ fn restore_control_refusal(maintenance_active: bool) -> Response {
 pub(crate) async fn graphql_handler(
     State(state): State<AuthState>,
     headers: HeaderMap,
+    uri: Uri,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     setup_admission: Option<axum::Extension<crate::initial_auth::SetupAdmission>>,
     body: async_graphql_axum::GraphQLBatchRequest,
@@ -2076,6 +2290,12 @@ pub(crate) async fn graphql_handler(
         session_persistence,
         login_attempt_limiter,
         client_ip,
+        host: request_host_header(&headers)
+            .map(str::to_string)
+            .or_else(|| {
+                uri.authority()
+                    .map(|authority| authority.as_str().to_string())
+            }),
     };
     let caller = actor.as_ref().zip(loaders.as_ref());
     let batch = match batch {
@@ -2154,6 +2374,8 @@ struct GraphqlRequestFacts {
     session_persistence: RequestSessionPersistence,
     login_attempt_limiter: LoginAttemptLimiter,
     client_ip: IpAddr,
+    /// The `Host` header, or the HTTP/2 authority when there is none.
+    host: Option<String>,
 }
 
 /// Attach the actor and request data an HTTP GraphQL operation runs with.
@@ -2189,6 +2411,7 @@ fn attach_graphql_request_data(
         .data(facts.session_persistence)
         .data(facts.login_attempt_limiter.clone())
         .data(RequestClientIp(facts.client_ip))
+        .data(RequestHost(facts.host.clone()))
         .data(list_account_origin_policy.request_context())
 }
 
@@ -2201,6 +2424,7 @@ pub(crate) struct ApiKeyCaller {
     provenance: RateLimitProvenance,
     client_ip: IpAddr,
     default_persist_session: bool,
+    host: Option<String>,
 }
 
 impl ApiKeyCaller {
@@ -2273,6 +2497,7 @@ pub(crate) async fn admit_api_key_caller(
         provenance: rate_limit_provenance(headers, remote_addr, &state.rate_limiter),
         client_ip: request_client_ip(headers, Some(remote_addr)).unwrap_or(remote_addr.ip()),
         default_persist_session: default_persist_session_for_request(headers, Some(remote_addr)),
+        host: request_host_header(headers).map(str::to_string),
     })
 }
 
@@ -2334,6 +2559,7 @@ pub(crate) async fn execute_graphql_as_api_key_caller(
         },
         login_attempt_limiter: login_attempt_limiter(state.rate_limiter.clone(), user_key),
         client_ip: caller.client_ip,
+        host: caller.host.clone(),
     };
     let request = attach_graphql_request_data(
         request,
@@ -2466,10 +2692,30 @@ pub(crate) async fn enforce_authless_access_guard(
     if crate::nab_api::is_endpoint(request.uri().path()) {
         return next.run(request).await;
     }
-    let decision = authless_access_decision_with_allowlist(
-        &state.auth_runtime.snapshot(),
+    let mut request = request;
+    let local_trust = state.local_trust.snapshot();
+    if local_trust.host_check_enabled() {
+        fill_missing_host_from_authority(&mut request);
+    }
+    let auth_snapshot = state.auth_runtime.snapshot();
+    if !auth_snapshot.effective_form_login_enabled
+        && !local_trust_host_check_exempt(&request)
+        && !local_trust.allows_host(request.headers())
+    {
+        tracing::warn!(
+            remote_addr = %remote_addr,
+            method = %request.method(),
+            path = %request.uri().path(),
+            reason = %AuthlessAccessRejectReason::HostNotAllowed,
+            "rejecting auth-disabled request for a host outside the allowed list"
+        );
+        return local_trust_host_refused_response();
+    }
+    let decision = authless_access_decision_with_local_trust(
+        &auth_snapshot,
         state.policy,
         &state.allowlist,
+        &local_trust,
         request.headers(),
         Some(remote_addr),
     )
@@ -2931,7 +3177,8 @@ pub(crate) async fn resolve_actor(
     remote_addr: Option<SocketAddr>,
 ) -> AppResult<Option<ResolvedActor>> {
     let snapshot = state.auth_runtime.snapshot();
-    let local_bypass = local_ip_bypass_active(&snapshot, headers, remote_addr);
+    let local_trust = LocalTrustContext::from_app(&state.app).snapshot();
+    let local_bypass = local_ip_bypass_active_with(&snapshot, &local_trust, headers, remote_addr);
     let actor = match authorization_token_from_headers(headers) {
         Ok(Some(token)) if is_api_key_bearer(token) => {
             match state.app.authenticate_api_key(token).await {
@@ -2966,6 +3213,9 @@ pub(crate) async fn resolve_actor(
             }
             Err(error) => return Err(error),
         },
+        Ok(None) if !snapshot.effective_form_login_enabled && !local_trust.allows_host(headers) => {
+            None
+        }
         Ok(None) if !snapshot.effective_form_login_enabled => {
             resolve_default_user(&state.app, true).await.map(|user| {
                 (
@@ -3256,8 +3506,24 @@ mod ws_origin_tests {
     }
 }
 
+/// The local-IP login skip with both local-trust settings off.
+#[cfg(test)]
 fn local_ip_bypass_active(
     snapshot: &scryer_interface::context::AuthRuntimeStateSnapshot,
+    headers: &HeaderMap,
+    remote_addr: Option<SocketAddr>,
+) -> bool {
+    local_ip_bypass_active_with(
+        snapshot,
+        &LocalTrustContext::default().snapshot(),
+        headers,
+        remote_addr,
+    )
+}
+
+fn local_ip_bypass_active_with(
+    snapshot: &scryer_interface::context::AuthRuntimeStateSnapshot,
+    local_trust: &LocalTrustSnapshot,
     headers: &HeaderMap,
     remote_addr: Option<SocketAddr>,
 ) -> bool {
@@ -3265,7 +3531,8 @@ fn local_ip_bypass_active(
         return false;
     }
 
-    request_has_trusted_local_provenance(headers, remote_addr)
+    local_trust.allows_host(headers)
+        && local_trust.has_trusted_local_provenance(headers, remote_addr)
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -3283,6 +3550,13 @@ enum AuthlessAccessRejectReason {
     PublicPeer(IpAddr),
     PublicForwardedClient(IpAddr),
     MalformedForwardedClient,
+    /// The request named a host outside the local-trust allowed-host list.
+    HostNotAllowed,
+    /// A listed trusted proxy sent no forwarding headers, so the client is unknown.
+    TrustedProxyWithoutForwardedClient(IpAddr),
+    /// A peer outside the trusted proxy list sent forwarding headers while
+    /// local trust is restricted to listed proxies.
+    UntrustedForwardingPeer(IpAddr),
 }
 
 impl std::fmt::Display for AuthlessAccessRejectReason {
@@ -3303,6 +3577,16 @@ impl std::fmt::Display for AuthlessAccessRejectReason {
             Self::MalformedForwardedClient => {
                 f.write_str("forwarding headers are present but no valid client IP was found")
             }
+            Self::HostNotAllowed => {
+                f.write_str("the request host is not in the local-trust allowed-host list")
+            }
+            Self::TrustedProxyWithoutForwardedClient(ip) => {
+                write!(f, "trusted proxy {ip} did not forward a client address")
+            }
+            Self::UntrustedForwardingPeer(ip) => write!(
+                f,
+                "peer {ip} sent forwarding headers but is not a listed trusted proxy"
+            ),
         }
     }
 }
@@ -3377,25 +3661,92 @@ async fn authless_access_decision_with_allowlist(
     }
 
     if has_proxy_forwarding_headers(headers) {
-        return match forwarded_client_ip_chain(headers) {
-            Ok(client_ips) => {
-                for public_ip in client_ips
-                    .into_iter()
-                    .filter(|client_ip| !is_local_network_ip(*client_ip))
-                {
-                    if !allowlist_configured || !allowlist.allows_public_ip(public_ip).await {
-                        return AuthlessAccessDecision::Reject(
-                            AuthlessAccessRejectReason::PublicForwardedClient(public_ip),
-                        );
-                    }
-                }
+        return forwarded_chain_authless_decision(allowlist, allowlist_configured, headers).await;
+    }
 
-                AuthlessAccessDecision::Allow
+    AuthlessAccessDecision::Allow
+}
+
+/// Judges a forwarded client chain: every public hop must be allowlisted.
+async fn forwarded_chain_authless_decision(
+    allowlist: &AuthlessAccessAllowlist,
+    allowlist_configured: bool,
+    headers: &HeaderMap,
+) -> AuthlessAccessDecision {
+    match forwarded_client_ip_chain(headers) {
+        Ok(client_ips) => {
+            for public_ip in client_ips
+                .into_iter()
+                .filter(|client_ip| !is_local_network_ip(*client_ip))
+            {
+                if !allowlist_configured || !allowlist.allows_public_ip(public_ip).await {
+                    return AuthlessAccessDecision::Reject(
+                        AuthlessAccessRejectReason::PublicForwardedClient(public_ip),
+                    );
+                }
             }
-            Err(()) => {
-                AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::MalformedForwardedClient)
-            }
-        };
+
+            AuthlessAccessDecision::Allow
+        }
+        Err(()) => {
+            AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::MalformedForwardedClient)
+        }
+    }
+}
+
+/// The authless guard's decision with the local-trust restriction applied.
+/// With the restriction off this is exactly
+/// [`authless_access_decision_with_allowlist`]. On, forwarding headers count
+/// only from a listed trusted proxy, and a listed proxy must forward one.
+async fn authless_access_decision_with_local_trust(
+    snapshot: &scryer_interface::context::AuthRuntimeStateSnapshot,
+    policy: AuthlessAccessPolicy,
+    allowlist: &AuthlessAccessAllowlist,
+    local_trust: &LocalTrustSnapshot,
+    headers: &HeaderMap,
+    remote_addr: Option<SocketAddr>,
+) -> AuthlessAccessDecision {
+    if snapshot.effective_form_login_enabled || !local_trust.policy.restrict_to_trusted_proxies {
+        return authless_access_decision_with_allowlist(
+            snapshot,
+            policy,
+            allowlist,
+            headers,
+            remote_addr,
+        )
+        .await;
+    }
+
+    let allowlist_configured = allowlist.is_configured();
+    if policy.allow_unauthenticated_public_access && !allowlist_configured {
+        return AuthlessAccessDecision::Allow;
+    }
+
+    let Some(peer_ip) = remote_addr.map(|addr| addr.ip()) else {
+        return AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::MissingRemoteAddress);
+    };
+    let forwarded = has_proxy_forwarding_headers(headers);
+
+    if local_trust.trusted_proxies.matches(peer_ip.to_canonical()) {
+        if !forwarded {
+            return AuthlessAccessDecision::Reject(
+                AuthlessAccessRejectReason::TrustedProxyWithoutForwardedClient(peer_ip),
+            );
+        }
+        return forwarded_chain_authless_decision(allowlist, allowlist_configured, headers).await;
+    }
+
+    if !is_local_network_ip(peer_ip) {
+        if allowlist_configured && allowlist.allows_public_ip(peer_ip).await {
+            return AuthlessAccessDecision::Allow;
+        }
+        return AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::PublicPeer(peer_ip));
+    }
+
+    if forwarded {
+        return AuthlessAccessDecision::Reject(
+            AuthlessAccessRejectReason::UntrustedForwardingPeer(peer_ip),
+        );
     }
 
     AuthlessAccessDecision::Allow
@@ -5663,6 +6014,7 @@ mod tests {
             auth_runtime: AuthRuntimeStateHandle::new(snapshot),
             policy,
             allowlist,
+            local_trust: LocalTrustContext::default(),
         };
         Router::new()
             .route("/graphql", get(|| async { "graphql ok" }))
@@ -5694,6 +6046,7 @@ mod tests {
             policy,
             proof: AuthlessWebClientProofState::new(),
             allowlist,
+            local_trust: LocalTrustContext::default(),
         };
         Router::new().route(
             "/authless-client",
@@ -5959,6 +6312,7 @@ mod tests {
                 auth_runtime: AuthRuntimeStateHandle::new(auth_disabled_snapshot()),
                 policy: protected_authless_policy(),
                 allowlist: AuthlessAccessAllowlist::default(),
+                local_trust: LocalTrustContext::default(),
             },
             enforce_authless_access_guard,
         ));
@@ -6036,6 +6390,346 @@ mod tests {
             env_override_active: false,
             env_override_description: None,
             epoch: 1,
+        }
+    }
+
+    fn host_headers(host: Option<&str>, forwarded_for: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(host) = host {
+            headers.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+        }
+        if let Some(forwarded_for) = forwarded_for {
+            headers.insert(
+                "x-forwarded-for",
+                HeaderValue::from_str(forwarded_for).unwrap(),
+            );
+        }
+        headers
+    }
+
+    fn peer(ip: [u8; 4]) -> Option<SocketAddr> {
+        Some(SocketAddr::from((Ipv4Addr::from(ip), 41_000)))
+    }
+
+    #[test]
+    fn default_local_trust_context_keeps_the_long_standing_bypass_rule() {
+        let snapshot = local_bypass_snapshot();
+        let local_trust = LocalTrustContext::default().snapshot();
+        let cases = [
+            (
+                host_headers(Some("attacker.example"), None),
+                peer([192, 168, 1, 20]),
+            ),
+            (host_headers(None, None), peer([127, 0, 0, 1])),
+            (
+                host_headers(Some("scryer.lan"), Some("192.168.1.30")),
+                peer([10, 0, 0, 2]),
+            ),
+            (
+                host_headers(Some("scryer.lan"), Some("8.8.8.8")),
+                peer([10, 0, 0, 2]),
+            ),
+            (host_headers(Some("scryer.lan"), None), peer([8, 8, 8, 8])),
+            (host_headers(Some("scryer.lan"), None), None),
+        ];
+        for (headers, remote_addr) in cases {
+            assert_eq!(
+                local_ip_bypass_active_with(&snapshot, &local_trust, &headers, remote_addr),
+                request_has_trusted_local_provenance(&headers, remote_addr),
+                "{headers:?} {remote_addr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_host_list_refuses_rebinding_hosts_for_the_local_bypass() {
+        let snapshot = local_bypass_snapshot();
+        let local_trust = LocalTrustContext::for_test(
+            &["scryer.lan"],
+            false,
+            &[],
+            Some("https://media.example.com"),
+        )
+        .snapshot();
+        let lan = peer([192, 168, 1, 20]);
+        for host in [
+            "scryer.lan",
+            "scryer.lan:7878",
+            "192.168.1.5:7878",
+            "localhost:7878",
+            "media.example.com",
+        ] {
+            assert!(
+                local_ip_bypass_active_with(
+                    &snapshot,
+                    &local_trust,
+                    &host_headers(Some(host), None),
+                    lan
+                ),
+                "{host} should keep the bypass"
+            );
+        }
+        for host in [
+            Some("attacker.example"),
+            Some("scryer.lan.attacker.example"),
+            None,
+        ] {
+            assert!(
+                !local_ip_bypass_active_with(
+                    &snapshot,
+                    &local_trust,
+                    &host_headers(host, None),
+                    lan
+                ),
+                "{host:?} should lose the bypass"
+            );
+        }
+    }
+
+    #[test]
+    fn restricted_local_trust_judges_each_proxy_branch_for_the_bypass() {
+        let snapshot = local_bypass_snapshot();
+        let restricted = LocalTrustContext::for_test(&[], true, &["10.0.0.2"], None).snapshot();
+        let unrestricted = LocalTrustContext::for_test(&[], false, &["10.0.0.2"], None).snapshot();
+        let listed = peer([10, 0, 0, 2]);
+        let unlisted_lan = peer([192, 168, 1, 40]);
+        let bypass = |local_trust: &LocalTrustSnapshot, forwarded: Option<&str>, remote_addr| {
+            local_ip_bypass_active_with(
+                &snapshot,
+                local_trust,
+                &host_headers(Some("192.168.1.5"), forwarded),
+                remote_addr,
+            )
+        };
+
+        // A listed proxy must forward an all-local chain.
+        assert!(bypass(&restricted, Some("192.168.1.30"), listed));
+        assert!(!bypass(&restricted, Some("192.168.1.30, 8.8.8.8"), listed));
+        assert!(!bypass(&restricted, None, listed));
+        // A peer outside the list is not honored as a proxy.
+        assert!(!bypass(&restricted, Some("192.168.1.30"), unlisted_lan));
+        // A local peer sending nothing is a direct LAN client.
+        assert!(bypass(&restricted, None, unlisted_lan));
+        assert!(!bypass(&restricted, None, peer([8, 8, 8, 8])));
+        assert!(!bypass(&restricted, None, None));
+
+        // Off, a local proxy without forwarding headers and any local
+        // forwarding peer keep today's treatment.
+        assert!(bypass(&unrestricted, None, listed));
+        assert!(bypass(&unrestricted, Some("192.168.1.30"), unlisted_lan));
+    }
+
+    #[tokio::test]
+    async fn restricted_local_trust_judges_each_proxy_branch_for_the_authless_guard() {
+        let snapshot = auth_disabled_snapshot();
+        let allowlist = AuthlessAccessAllowlist::default();
+        let restricted = LocalTrustContext::for_test(&[], true, &["10.0.0.2"], None).snapshot();
+        let unrestricted = LocalTrustContext::for_test(&[], false, &["10.0.0.2"], None).snapshot();
+        async fn decide(
+            local_trust: &LocalTrustSnapshot,
+            forwarded: Option<&str>,
+            remote_addr: Option<SocketAddr>,
+        ) -> AuthlessAccessDecision {
+            authless_access_decision_with_local_trust(
+                &auth_disabled_snapshot(),
+                protected_authless_policy(),
+                &AuthlessAccessAllowlist::default(),
+                local_trust,
+                &host_headers(Some("192.168.1.5"), forwarded),
+                remote_addr,
+            )
+            .await
+        }
+        let listed = peer([10, 0, 0, 2]);
+        let unlisted_lan = peer([192, 168, 1, 40]);
+
+        assert_eq!(
+            decide(&restricted, Some("192.168.1.30"), listed).await,
+            AuthlessAccessDecision::Allow
+        );
+        assert_eq!(
+            decide(&restricted, Some("8.8.8.8"), listed).await,
+            AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::PublicForwardedClient(
+                "8.8.8.8".parse().unwrap()
+            ))
+        );
+        assert_eq!(
+            decide(&restricted, None, listed).await,
+            AuthlessAccessDecision::Reject(
+                AuthlessAccessRejectReason::TrustedProxyWithoutForwardedClient(
+                    "10.0.0.2".parse().unwrap()
+                )
+            )
+        );
+        assert_eq!(
+            decide(&restricted, Some("192.168.1.30"), unlisted_lan).await,
+            AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::UntrustedForwardingPeer(
+                "192.168.1.40".parse().unwrap()
+            ))
+        );
+        assert_eq!(
+            decide(&restricted, None, unlisted_lan).await,
+            AuthlessAccessDecision::Allow
+        );
+        assert_eq!(
+            decide(&restricted, None, peer([8, 8, 8, 8])).await,
+            AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::PublicPeer(
+                "8.8.8.8".parse().unwrap()
+            ))
+        );
+        assert_eq!(
+            decide(&restricted, None, None).await,
+            AuthlessAccessDecision::Reject(AuthlessAccessRejectReason::MissingRemoteAddress)
+        );
+
+        // Off, the decision is the allowlist decision, whatever the peer.
+        for (forwarded, remote_addr) in [
+            (None, listed),
+            (Some("192.168.1.30"), unlisted_lan),
+            (Some("8.8.8.8"), listed),
+            (None, peer([8, 8, 8, 8])),
+        ] {
+            assert_eq!(
+                decide(&unrestricted, forwarded, remote_addr).await,
+                authless_access_decision_with_allowlist(
+                    &snapshot,
+                    protected_authless_policy(),
+                    &allowlist,
+                    &host_headers(Some("192.168.1.5"), forwarded),
+                    remote_addr,
+                )
+                .await
+            );
+        }
+    }
+
+    fn local_trust_guard_app(
+        snapshot: scryer_interface::context::AuthRuntimeStateSnapshot,
+        local_trust: LocalTrustContext,
+    ) -> Router {
+        Router::new()
+            .route("/graphql", get(|| async { "graphql ok" }))
+            .route("/health", get(|| async { "health ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                AuthlessAccessGuardState {
+                    auth_runtime: AuthRuntimeStateHandle::new(snapshot),
+                    policy: protected_authless_policy(),
+                    allowlist: AuthlessAccessAllowlist::default(),
+                    local_trust,
+                },
+                enforce_authless_access_guard,
+            ))
+    }
+
+    async fn response_reason(response: Response) -> Option<String> {
+        let body = to_bytes(response.into_body(), 64 * 1024).await.ok()?;
+        serde_json::from_slice::<serde_json::Value>(&body).ok()?["reason"]
+            .as_str()
+            .map(str::to_string)
+    }
+
+    #[tokio::test]
+    async fn authless_guard_refuses_hosts_outside_the_allowed_list() {
+        let app = local_trust_guard_app(
+            auth_disabled_snapshot(),
+            LocalTrustContext::for_test(&["scryer.lan"], false, &[], None),
+        );
+        let lan = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 20), 41_000));
+        let send = |uri: &str, host: Option<&str>, authorization: bool| {
+            let mut request = request_with_peer(uri, lan);
+            if let Some(host) = host {
+                request
+                    .headers_mut()
+                    .insert(header::HOST, HeaderValue::from_str(host).unwrap());
+            }
+            if authorization {
+                request.headers_mut().insert(
+                    header::AUTHORIZATION,
+                    HeaderValue::from_static("Bearer some-token"),
+                );
+            }
+            app.clone().oneshot(request)
+        };
+
+        let refused = send("/graphql", Some("attacker.example:7878"), false)
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_reason(refused).await.as_deref(),
+            Some(crate::error_reasons::HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED)
+        );
+        let missing = send("/graphql", None, false).await.unwrap();
+        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+        for host in ["scryer.lan:7878", "192.168.1.5", "localhost"] {
+            let allowed = send("/graphql", Some(host), false).await.unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK, "{host}");
+        }
+        // An HTTP/2 request carries its host in the URI authority.
+        let authority = send("http://scryer.lan:7878/graphql", None, false)
+            .await
+            .unwrap();
+        assert_eq!(authority.status(), StatusCode::OK);
+        // Credentials and health checks have checks of their own.
+        let credential = send("/graphql", Some("attacker.example"), true)
+            .await
+            .unwrap();
+        assert_eq!(credential.status(), StatusCode::OK);
+        let health = send("/health", Some("attacker.example"), false)
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn authless_guard_ignores_the_host_with_the_default_policy_or_form_login() {
+        let lan = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 20), 41_000));
+        for app in [
+            local_trust_guard_app(auth_disabled_snapshot(), LocalTrustContext::default()),
+            local_trust_guard_app(
+                auth_enabled_snapshot(),
+                LocalTrustContext::for_test(&["scryer.lan"], false, &[], None),
+            ),
+        ] {
+            let mut request = request_with_peer("/graphql", lan);
+            request
+                .headers_mut()
+                .insert(header::HOST, HeaderValue::from_static("attacker.example"));
+            assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+        }
+    }
+
+    #[tokio::test]
+    async fn authless_proof_is_refused_for_hosts_outside_the_allowed_list() {
+        for snapshot in [auth_disabled_snapshot(), local_bypass_snapshot()] {
+            let app = Router::new().route(
+                "/authless-client",
+                get(authless_web_client_proof_handler).with_state(
+                    AuthlessWebClientProofRouteState {
+                        auth_runtime: AuthRuntimeStateHandle::new(snapshot),
+                        policy: protected_authless_policy(),
+                        proof: AuthlessWebClientProofState::new(),
+                        allowlist: AuthlessAccessAllowlist::default(),
+                        local_trust: LocalTrustContext::for_test(&["scryer.lan"], false, &[], None),
+                    },
+                ),
+            );
+            let lan = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 20), 41_000));
+            let send = |host: &'static str| {
+                let mut request = request_with_peer("/authless-client", lan);
+                request
+                    .headers_mut()
+                    .insert(header::HOST, HeaderValue::from_static(host));
+                app.clone().oneshot(request)
+            };
+            let refused = send("attacker.example").await.unwrap();
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response_reason(refused).await.as_deref(),
+                Some(crate::error_reasons::HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED)
+            );
+            assert_eq!(send("scryer.lan").await.unwrap().status(), StatusCode::OK);
         }
     }
 

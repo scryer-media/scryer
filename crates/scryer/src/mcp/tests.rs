@@ -605,6 +605,9 @@ async fn set_mcp_enabled(fixture: &Fixture, enabled: bool) {
                 mfa_require_password_login: current.mfa_require_password_login,
                 totp_require_jellyfin_login: current.totp_require_jellyfin_login,
                 totp_require_emby_login: None,
+                local_trust_allowed_hosts: None,
+                restrict_local_trust_to_trusted_proxies: None,
+                request_host: None,
             },
         )
         .await

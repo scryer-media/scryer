@@ -565,6 +565,9 @@ async fn form_login_prevents_disabling_last_usable_full_admin() {
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(false),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -594,6 +597,9 @@ async fn form_login_transition_requires_usable_admin_and_repairs_default_identit
         mfa_require_password_login: false,
         totp_require_jellyfin_login: false,
         totp_require_emby_login: Some(false),
+        local_trust_allowed_hosts: None,
+        restrict_local_trust_to_trusted_proxies: None,
+        request_host: None,
     };
 
     assert!(
@@ -716,6 +722,9 @@ async fn update_security_settings_preserves_api_key_policy_when_omitted() {
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(false),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -750,6 +759,9 @@ async fn update_security_settings_preserves_api_key_policy_when_omitted() {
                 mfa_require_password_login: false,
                 totp_require_jellyfin_login: false,
                 totp_require_emby_login: Some(false),
+                local_trust_allowed_hosts: None,
+                restrict_local_trust_to_trusted_proxies: None,
+                request_host: None,
             },
         )
         .await

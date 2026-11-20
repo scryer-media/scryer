@@ -184,6 +184,9 @@ async fn existing_short_password_remains_valid_after_minimum_is_raised() {
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(false),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -291,6 +294,9 @@ async fn emby_totp_requirement_round_trips_through_settings_values() {
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
             totp_require_emby_login: Some(true),
+            local_trust_allowed_hosts: None,
+            restrict_local_trust_to_trusted_proxies: None,
+            request_host: None,
         },
     )
     .await
@@ -593,12 +599,6 @@ async fn token_signed_without_auth_session_version_authenticates() {
 }
 
 #[tokio::test]
-async fn issue_mfa_enrollment_token_sets_enrollment_scope() {
-    let (app, _) = bootstrap();
-    let user = User {
-        id: "user-jwt-mfa-enroll".to_string(),
-        username: "jwt_mfa_enroll".to_string(),
-#[tokio::test]
 async fn token_forged_with_the_credential_salt_is_rejected() {
     let (app, _) = bootstrap();
     assert_ne!(app.auth.jwt_signing_salt, app.auth.session_signing_salt);
@@ -693,6 +693,12 @@ fn session_signing_salt_follows_explicit_secret_or_master_key() {
     );
 }
 
+#[tokio::test]
+async fn issue_mfa_enrollment_token_sets_enrollment_scope() {
+    let (app, _) = bootstrap();
+    let user = User {
+        id: "user-jwt-mfa-enroll".to_string(),
+        username: "jwt_mfa_enroll".to_string(),
         password_hash: Some(TEST_PASSWORD_HASH.to_string()),
         password_change_required: false,
         account_kind: Default::default(),
@@ -2827,4 +2833,264 @@ async fn a_listening_address_pinned_by_the_environment_is_read_only() {
         .expect("the setup choice is ignored, not refused");
     assert!(outcome.ignored_because_pinned);
     assert!(!outcome.restart_required);
+}
+
+fn local_trust_change(
+    hosts: Option<&[&str]>,
+    restrict: Option<bool>,
+    request_host: Option<&str>,
+) -> UpdateSecuritySettings {
+    UpdateSecuritySettings {
+        session_duration_days: None,
+        form_login_enabled: false,
+        password_min_length: 8,
+        skip_login_for_local_ips: false,
+        api_keys_restrict_to_system_settings_users: None,
+        mcp_enabled: None,
+        mfa_require_config_step_up: false,
+        mfa_require_password_login: false,
+        totp_require_jellyfin_login: false,
+        totp_require_emby_login: None,
+        local_trust_allowed_hosts: hosts
+            .map(|hosts| hosts.iter().map(|host| host.to_string()).collect()),
+        restrict_local_trust_to_trusted_proxies: restrict,
+        request_host: request_host.map(str::to_string),
+    }
+}
+
+fn trusted_proxy_change(addresses: Option<&[&str]>) -> UpdateServiceSettings {
+    UpdateServiceSettings {
+        tls_cert_path: None,
+        tls_key_path: None,
+        trusted_proxy_ips: addresses
+            .map(|addresses| addresses.iter().map(|value| value.to_string()).collect()),
+        reset_trusted_proxy_ips: addresses.is_none(),
+        public_url: None,
+        reset_public_url: false,
+        acknowledge_passkey_impact: false,
+        bind_host: None,
+        reset_bind_host: false,
+    }
+}
+
+fn refusal_reason(error: &AppError) -> Option<&str> {
+    error.validation_reason()
+}
+
+#[tokio::test]
+async fn local_trust_settings_default_off_and_a_save_without_them_keeps_them() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        settings.clone(),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    app.initialize_local_trust_policy().await.unwrap();
+    let loaded = app.security_settings().await.unwrap();
+    assert!(loaded.local_trust_allowed_hosts.is_empty());
+    assert!(!loaded.restrict_local_trust_to_trusted_proxies);
+    assert_eq!(
+        *app.local_trust_runtime().snapshot(),
+        crate::local_trust::LocalTrustPolicy::default()
+    );
+
+    let saved = app
+        .update_security_settings(&admin, local_trust_change(None, None, None))
+        .await
+        .unwrap();
+    assert!(saved.local_trust_allowed_hosts.is_empty());
+    assert!(!saved.restrict_local_trust_to_trusted_proxies);
+    assert_eq!(
+        settings
+            .get_value(SETTINGS_SCOPE_SYSTEM, crate::local_trust::ALLOWED_HOSTS_KEY)
+            .await,
+        None
+    );
+    assert_eq!(
+        settings
+            .get_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::local_trust::RESTRICT_TO_TRUSTED_PROXIES_KEY
+            )
+            .await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn allowed_hosts_save_normalizes_installs_and_survives_a_restart() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        settings.clone(),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+
+    let saved = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(
+                Some(&[" Scryer.LAN ", "scryer.lan", "media-box"]),
+                None,
+                Some("scryer.lan:8080"),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.local_trust_allowed_hosts, ["scryer.lan", "media-box"]);
+    assert_eq!(
+        app.local_trust_runtime().snapshot().allowed_hosts,
+        ["scryer.lan", "media-box"]
+    );
+
+    let (restarted, _) = bootstrap_with_settings_repo_and_profiles(
+        settings,
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    restarted.initialize_local_trust_policy().await.unwrap();
+    assert_eq!(
+        restarted.local_trust_runtime().snapshot().allowed_hosts,
+        ["scryer.lan", "media-box"]
+    );
+
+    // Clearing the list turns the check off from any host.
+    let cleared = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(Some(&[]), None, Some("attacker.example")),
+        )
+        .await
+        .unwrap();
+    assert!(cleared.local_trust_allowed_hosts.is_empty());
+    assert!(
+        app.local_trust_runtime()
+            .snapshot()
+            .allowed_hosts
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn allowed_hosts_save_refuses_invalid_names_and_a_list_that_locks_out_the_saver() {
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let invalid = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(Some(&["http://scryer.lan"]), None, Some("scryer.lan")),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&invalid),
+        Some(crate::error_reasons::settings::LOCAL_TRUST_HOST_INVALID)
+    );
+
+    let too_many: Vec<String> = (0..=crate::local_trust::MAX_ALLOWED_HOSTS)
+        .map(|index| format!("host{index}.lan"))
+        .collect();
+    let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
+    let refused = app
+        .update_security_settings(
+            &admin,
+            local_trust_change(Some(&too_many), None, Some("127.0.0.1")),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&refused),
+        Some(crate::error_reasons::settings::LOCAL_TRUST_HOST_INVALID)
+    );
+
+    for request_host in [Some("other.lan:8080"), None] {
+        let locked_out = app
+            .update_security_settings(
+                &admin,
+                local_trust_change(Some(&["scryer.lan"]), None, request_host),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal_reason(&locked_out),
+            Some(crate::error_reasons::settings::LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT),
+            "{request_host:?}"
+        );
+    }
+    assert!(
+        app.local_trust_runtime()
+            .snapshot()
+            .allowed_hosts
+            .is_empty()
+    );
+
+    // An IP literal or localhost always passes, whatever the list holds.
+    for request_host in ["192.168.1.20:8080", "localhost:3000", "[::1]:8080"] {
+        app.update_security_settings(
+            &admin,
+            local_trust_change(Some(&["scryer.lan"]), None, Some(request_host)),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{request_host}: {error}"));
+    }
+}
+
+#[tokio::test]
+async fn restricting_local_trust_to_listed_proxies_needs_a_proxy_list() {
+    let (app, admin) = bootstrap_with_settings_repo_and_profiles(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    app.initialize_trusted_proxy_policy("").await.unwrap();
+    let refused = app
+        .update_security_settings(&admin, local_trust_change(None, Some(true), None))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_reason(&refused),
+        Some(crate::error_reasons::settings::LOCAL_TRUST_PROXY_LIST_EMPTY)
+    );
+    assert!(
+        !app.local_trust_runtime()
+            .snapshot()
+            .restrict_to_trusted_proxies
+    );
+
+    app.update_service_settings(&admin, trusted_proxy_change(Some(&["10.0.0.2"])))
+        .await
+        .unwrap();
+    let saved = app
+        .update_security_settings(&admin, local_trust_change(None, Some(true), None))
+        .await
+        .unwrap();
+    assert!(saved.restrict_local_trust_to_trusted_proxies);
+    assert!(
+        app.local_trust_runtime()
+            .snapshot()
+            .restrict_to_trusted_proxies
+    );
+
+    // The list cannot be emptied, by a save or a reset to an empty
+    // environment, while the restriction is on.
+    for change in [trusted_proxy_change(Some(&[])), trusted_proxy_change(None)] {
+        let refused = app
+            .update_service_settings(&admin, change)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal_reason(&refused),
+            Some(crate::error_reasons::settings::LOCAL_TRUST_PROXY_LIST_EMPTY)
+        );
+    }
+
+    app.update_security_settings(&admin, local_trust_change(None, Some(false), None))
+        .await
+        .unwrap();
+    app.update_service_settings(&admin, trusted_proxy_change(Some(&[])))
+        .await
+        .unwrap();
 }

@@ -2529,6 +2529,10 @@ async fn bootstrap_application(
         tracing::error!(%error, "failed to load trusted proxy configuration");
         std::process::exit(1);
     }
+    if let Err(error) = app_use_case.initialize_local_trust_policy().await {
+        tracing::error!(%error, "failed to load local trust configuration");
+        std::process::exit(1);
+    }
     let rate_limiter = ScryerRateLimiter::from_env(app_use_case.trusted_proxy_runtime());
     if matches!(
         initial_auth_state,
@@ -2577,12 +2581,14 @@ async fn bootstrap_application(
         auth_runtime: auth_runtime.clone(),
         policy: authless_access_policy,
         allowlist: authless_access_allowlist.clone(),
+        local_trust: middleware::LocalTrustContext::from_app(&app_use_case),
     };
     let authless_web_client_proof_route_state = AuthlessWebClientProofRouteState {
         auth_runtime: auth_runtime.clone(),
         policy: authless_access_policy,
         proof: authless_web_client_proof.clone(),
         allowlist: authless_access_allowlist,
+        local_trust: middleware::LocalTrustContext::from_app(&app_use_case),
     };
 
     let cors_for_layer = cors.clone();

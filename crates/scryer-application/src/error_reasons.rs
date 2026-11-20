@@ -3884,6 +3884,14 @@ pub mod settings {
     pub const DELAY_PROFILE_CATALOG_INVALID: &str = "SETTINGS_DELAY_PROFILE_CATALOG_INVALID";
     /// The trusted proxy policy is invalid.
     pub const TRUSTED_PROXY_POLICY_INVALID: &str = "SETTINGS_TRUSTED_PROXY_POLICY_INVALID";
+    /// An allowed-host entry is not a host name or IP literal, or the list is
+    /// longer than the limit.
+    pub const LOCAL_TRUST_HOST_INVALID: &str = "SETTINGS_LOCAL_TRUST_HOST_INVALID";
+    /// The allowed-host list would refuse the host the saving request used.
+    pub const LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT: &str = "SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT";
+    /// Restricting local trust to listed proxies needs a non-empty trusted
+    /// proxy list.
+    pub const LOCAL_TRUST_PROXY_LIST_EMPTY: &str = "SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY";
     /// A required, preferred or optional audio language list names a language
     /// Scryer does not know.
     pub const AUDIO_LANGUAGE_UNKNOWN: &str = "SETTINGS_AUDIO_LANGUAGE_UNKNOWN";
@@ -3895,6 +3903,9 @@ pub mod settings {
     pub const ALL: &[&str] = &[
         DELAY_PROFILE_CATALOG_INVALID,
         TRUSTED_PROXY_POLICY_INVALID,
+        LOCAL_TRUST_HOST_INVALID,
+        LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT,
+        LOCAL_TRUST_PROXY_LIST_EMPTY,
         AUDIO_LANGUAGE_UNKNOWN,
         CATALOG_VIEW_COLUMNS_INVALID,
         DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE,

@@ -31066,6 +31066,15 @@ type SecuritySettingsPayload {
 	Description of the active override, or null when none is active.
 	"""
 	envOverrideDescription: String
+	"""
+	Host names a request served without a login must use, beside IP
+	addresses, localhost and the public URL host. Empty when the check is off.
+	"""
+	localTrustAllowedHosts: [String!]!
+	"""
+	Whether forwarding headers count for local trust only from a listed trusted proxy.
+	"""
+	restrictLocalTrustToTrustedProxies: Boolean!
 }
 
 """
@@ -36655,6 +36664,17 @@ input UpdateSecuritySettingsInput {
 	Deprecated alias for `mfaRequireEmbyLogin`. Omission preserves the saved setting.
 	"""
 	totpRequireEmbyLogin: Boolean @deprecated(reason: "Use mfaRequireEmbyLogin.")
+	"""
+	Host names a request served without a login must use, beside IP
+	addresses, localhost and the public URL host. An empty list turns the
+	check off. Needs system-settings permission; omission preserves the saved list.
+	"""
+	localTrustAllowedHosts: [String!]
+	"""
+	Whether forwarding headers count for local trust only from a listed
+	trusted proxy. Needs system-settings permission; omission preserves the saved setting.
+	"""
+	restrictLocalTrustToTrustedProxies: Boolean
 }
 
 """
