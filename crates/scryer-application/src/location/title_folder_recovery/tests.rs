@@ -65,6 +65,7 @@ async fn file_fixture() -> (tempfile::TempDir, RecoveryFile) {
         destination: path_to_stored_string(destination),
         source_version: Some(recovery_file_version(&source).await.unwrap()),
         expected_hash: None,
+        matched_by_name_and_size: false,
     };
     (temp, file)
 }
@@ -306,6 +307,7 @@ fn catalog_fixture() -> (RecoveryPlan, RecoveryCatalog) {
             destination: "/drive/library/Example/E01.mkv".into(),
             source_version: Some("identity".into()),
             expected_hash: None,
+            matched_by_name_and_size: false,
         }],
         unresolved: None,
     };
@@ -445,13 +447,18 @@ async fn recovery_hash_search_requires_one_match_and_excludes_recycle_and_stagin
     let hash = blake3::hash(b"media").to_hex().to_string();
     let recycle = path_to_stored_string(&recycle);
     assert_eq!(
-        locate_hashed_destination(&folder, 5, &hash, Some(&recycle))
-            .await
-            .unwrap(),
+        locate_hashed_destination(
+            &folder,
+            5,
+            MissingSourceMatch::FullHash(&hash),
+            Some(&recycle)
+        )
+        .await
+        .unwrap(),
         candidate
     );
     assert!(
-        locate_hashed_destination(&folder, 5, &hash, None)
+        locate_hashed_destination(&folder, 5, MissingSourceMatch::FullHash(&hash), None)
             .await
             .is_err()
     );
@@ -459,7 +466,7 @@ async fn recovery_hash_search_requires_one_match_and_excludes_recycle_and_stagin
         locate_hashed_destination(
             &folder,
             5,
-            blake3::hash(b"other").to_hex().as_ref(),
+            MissingSourceMatch::FullHash(blake3::hash(b"other").to_hex().as_ref()),
             Some(&recycle)
         )
         .await
@@ -480,7 +487,7 @@ async fn recovery_hash_search_still_counts_a_name_that_only_looks_like_staging()
         .unwrap();
     let hash = blake3::hash(b"media").to_hex().to_string();
     assert!(
-        locate_hashed_destination(&folder, 5, &hash, None)
+        locate_hashed_destination(&folder, 5, MissingSourceMatch::FullHash(&hash), None)
             .await
             .is_err(),
         "a lookalike name is a second match, not staging"
@@ -580,4 +587,119 @@ async fn recovery_placement_never_replaces_an_existing_destination() {
         tokio::fs::read(&destination).await.unwrap(),
         b"existing file"
     );
+}
+
+/// In a library that keeps the full-hash job off, a missing source with no
+/// recorded hash is found by its file name and catalog length, without
+/// reading any file whole; a second file of that name and length is
+/// ambiguous, and none is reported as such.
+#[tokio::test]
+async fn a_missing_source_is_located_by_name_and_size_without_reading() {
+    crate::disk::Disk::process().count_whole_reads();
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().canonicalize().unwrap();
+    tokio::fs::create_dir_all(folder.join("Season 01"))
+        .await
+        .unwrap();
+    let found = folder.join("Season 01").join("Synthetic Show S01E01.mkv");
+    tokio::fs::write(&found, b"synthetic media").await.unwrap();
+    // Same length under another name, and the same name at another length.
+    tokio::fs::write(folder.join("Other Name.mkv"), b"synthetic media")
+        .await
+        .unwrap();
+    tokio::fs::write(folder.join("Synthetic Show S01E01.mkv.part"), b"x")
+        .await
+        .unwrap();
+    let name = std::ffi::OsStr::new("Synthetic Show S01E01.mkv");
+
+    let located = locate_hashed_destination(&folder, 15, MissingSourceMatch::Name(name), None)
+        .await
+        .unwrap();
+    assert_eq!(located, found);
+    assert_eq!(crate::disk::Disk::process().whole_reads_of(&found), 0);
+
+    assert_eq!(
+        locate_hashed_destination(&folder, 16, MissingSourceMatch::Name(name), None)
+            .await
+            .unwrap_err()
+            .validation_reason(),
+        Some(crate::error_reasons::location::RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND)
+    );
+
+    tokio::fs::write(folder.join("Synthetic Show S01E01.mkv"), b"synthetic media")
+        .await
+        .unwrap();
+    assert_eq!(
+        locate_hashed_destination(&folder, 15, MissingSourceMatch::Name(name), None)
+            .await
+            .unwrap_err()
+            .validation_reason(),
+        Some(crate::error_reasons::location::RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS)
+    );
+}
+
+/// A file the plan matched by name and size is proven again the same way at
+/// either depth, reads neither file whole, and is refused once the
+/// destination's name or length no longer fits.
+#[tokio::test]
+async fn a_name_and_size_match_is_proven_by_name_and_length_at_either_depth() {
+    crate::disk::Disk::process().count_whole_reads();
+    for depth in [VerificationDepth::Quick, VerificationDepth::Full] {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        tokio::fs::create_dir_all(base.join("recovered"))
+            .await
+            .unwrap();
+        let source = base.join("Synthetic Movie (2001).mkv");
+        let destination = base.join("recovered").join("Synthetic Movie (2001).mkv");
+        tokio::fs::write(&destination, b"synthetic media")
+            .await
+            .unwrap();
+        let mut file = RecoveryFile {
+            media: RecoveryMedia {
+                id: "media".into(),
+                title_id: "title".into(),
+                file_path: path_to_stored_string(&source),
+                size_bytes: 15,
+            },
+            destination: path_to_stored_string(&destination),
+            source_version: None,
+            expected_hash: None,
+            matched_by_name_and_size: true,
+        };
+        let proof =
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .unwrap();
+        assert!(proof.is_none());
+        assert_eq!(crate::disk::Disk::process().whole_reads_of(&destination), 0);
+
+        file.media.size_bytes = 16;
+        assert_eq!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .unwrap_err()
+                .validation_reason(),
+            Some(crate::error_reasons::location::RECOVERY_DESTINATION_CONTENT_MISMATCH)
+        );
+        file.media.size_bytes = 15;
+        let renamed = base.join("recovered").join("Renamed.mkv");
+        tokio::fs::rename(&destination, &renamed).await.unwrap();
+        file.destination = path_to_stored_string(&renamed);
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+        assert_eq!(tokio::fs::read(&renamed).await.unwrap(), b"synthetic media");
+
+        // Without the marker a missing source still needs its recorded hash.
+        file.destination = path_to_stored_string(&renamed);
+        file.matched_by_name_and_size = false;
+        assert!(
+            execute::prove_file(&file, crate::location::verify::CopyProgress::none(), depth)
+                .await
+                .is_err()
+        );
+    }
 }

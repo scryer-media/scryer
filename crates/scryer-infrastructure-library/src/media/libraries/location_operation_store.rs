@@ -1875,6 +1875,7 @@ mod tests {
             destination: "/library/title/file.mkv".into(),
             source_version: Some("version".into()),
             expected_hash: None,
+            matched_by_name_and_size: false,
         };
         store
             .reserve_recovery_staging(&op.id, &file, "/library/title/staging")
@@ -1980,6 +1981,7 @@ mod tests {
                     destination: RECOVERY_DESTINATION.into(),
                     source_version: None,
                     expected_hash: None,
+                    matched_by_name_and_size: false,
                 })
                 .collect(),
             unresolved: None,

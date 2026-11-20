@@ -417,6 +417,8 @@ const ru: LocaleDictionary = {
   "settings.securityMcpEnabled": "Разрешить MCP-сервер",
   "settings.securityMcpEnabledHelp":
     "Позволяет агентам для программирования использовать навыки Scryer через MCP по адресу /mcp с ключом API. Если выключено, каждый запрос MCP отклоняется; ключи API продолжают работать с GraphQL API.",
+  "settings.securityMcpEnvOverride":
+    "Задана переменная SCRYER_MCP_ENABLED, и она определяет, отвечает ли MCP-сервер. Сохранённый выбор применится после удаления переменной.",
   "settings.securityPasswordMinLength": "Минимальная длина пароля",
   "settings.securitySessionDuration": "Вход действителен",
   "settings.securitySessionDurationHelp":
@@ -3385,6 +3387,9 @@ const ru: LocaleDictionary = {
   "settings.libraryFullHashBackfillTitle": "Фоновое хеширование",
   "settings.libraryFullHashBackfillLabel": "Хешировать файлы ночью",
   "settings.libraryFullHashBackfillDescription": "Ночью один раз читает каждый файл этой библиотеки, чтобы записать полный хеш его содержимого. Отключите для библиотек на дисках, которые вы держите остановленными; тогда хеш файла читается, только когда он нужен для перемещения, импорта или проверки.",
+  "settings.libraryFullHashBackfillDisableTitle": "Отключить ночное хеширование?",
+  "settings.libraryFullHashBackfillDisableWarning": "Отключение снижает способность Scryer гарантировать, что некоторые перемещения файлов на 100 % безопасны.",
+  "settings.libraryFullHashBackfillDisableConfirm": "Отключить",
   "settings.libraryFullHashBackfillEnabledStatus": "Ночное хеширование для этой библиотеки включено.",
   "settings.libraryFullHashBackfillDisabledStatus": "Ночное хеширование для этой библиотеки отключено.",
   "settings.identityStorageTitle": "Идентификация и хранилище",
@@ -9231,6 +9236,10 @@ const ru: LocaleDictionary = {
     "Несколько файлов назначения соответствуют хешу отсутствующего источника.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_HASH_NOT_FOUND":
     "Не найден файл назначения с хешем полного содержимого, совпадающим с отсутствующим источником.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS":
+    "В папке назначения несколько файлов с именем и размером отсутствующего источника.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND":
+    "В папке назначения нет файла с именем и размером отсутствующего источника.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED":
     "Превышен лимит создаваемой описи места назначения.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_NOT_FOUND":

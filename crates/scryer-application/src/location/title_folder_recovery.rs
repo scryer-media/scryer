@@ -67,6 +67,11 @@ pub struct RecoveryFile {
     pub destination: String,
     pub source_version: Option<String>,
     pub expected_hash: Option<String>,
+    /// The source was missing with no full hash recorded, in a library that
+    /// keeps the full-hash job off, so the destination was found by the
+    /// source's file name and catalog length instead of its content.
+    #[serde(default)]
+    pub matched_by_name_and_size: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -545,10 +550,19 @@ async fn folder_identity_matches(
     Ok(external_ids_match(title, &ids))
 }
 
+/// What identifies a missing source's file in the destination.
+enum MissingSourceMatch<'a> {
+    /// Its recorded full hash; every file of its length is read.
+    FullHash(&'a str),
+    /// Its file name, for a library that keeps the full-hash job off and
+    /// recorded no hash. Nothing is read.
+    Name(&'a std::ffi::OsStr),
+}
+
 async fn locate_hashed_destination(
     folder: &Path,
     size: u64,
-    hash: &str,
+    wanted: MissingSourceMatch<'_>,
     recycle: Option<&str>,
 ) -> AppResult<PathBuf> {
     let mut pending = vec![folder.to_path_buf()];
@@ -590,6 +604,21 @@ async fn locate_hashed_destination(
             if !reading.is(EntryKind::File) || reading.size() != Some(size) {
                 continue;
             }
+            let hash = match wanted {
+                MissingSourceMatch::Name(wanted_name) => {
+                    if path.file_name() == Some(wanted_name) {
+                        if found.is_some() {
+                            return Err(fail(
+                                crate::error_reasons::location::RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS,
+                                "Multiple destination files match the missing source's name and size",
+                            ));
+                        }
+                        found = Some(path);
+                    }
+                    continue;
+                }
+                MissingSourceMatch::FullHash(hash) => hash,
+            };
             let before = recovery_file_version(&path).await?;
             let proof = super::verify::hash_existing_file_with_progress(
                 &path,
@@ -614,11 +643,15 @@ async fn locate_hashed_destination(
         }
         end?;
     }
-    found.ok_or_else(|| {
-        fail(
+    found.ok_or_else(|| match wanted {
+        MissingSourceMatch::FullHash(_) => fail(
             crate::error_reasons::location::RECOVERY_DESTINATION_HASH_NOT_FOUND,
             "No destination matches the missing source's full-content hash",
-        )
+        ),
+        MissingSourceMatch::Name(_) => fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND,
+            "No destination file has the missing source's name and size",
+        ),
     })
 }
 
@@ -858,6 +891,7 @@ impl AppUseCase {
         }
         let destination_path = stored_path_to_path_buf(&destination);
         inspect_path(&destination_path, true).await?;
+        let mut full_hash_backfill_on: Option<bool> = None;
         for media in live {
             let source = stored_path_to_path_buf(&media.file_path);
             let mut target = if stored_path_is_inside_folder(&destination, &media.file_path) {
@@ -907,22 +941,56 @@ impl AppUseCase {
                 .as_ref()
                 .filter(|h| h.hash_computed_at.is_some())
                 .map(|h| h.full_blake3.clone());
+            let mut matched_by_name_and_size = false;
             if source_version.is_none() && expected_hash.is_none() {
-                return Err(fail(
-                    crate::error_reasons::location::RECOVERY_SOURCE_FULL_HASH_REQUIRED,
-                    "Missing source has no attested full hash",
-                ));
-            }
-            if source_version.is_none() {
+                // A library that keeps the full-hash job off records no hash
+                // for a file nothing else read whole; its missing sources are
+                // found by name and length. Elsewhere a hash is required.
+                let backfill_on = match full_hash_backfill_on {
+                    Some(on) => on,
+                    None => {
+                        let on = self
+                            .library_full_hash_backfill_enabled(std::slice::from_ref(
+                                &plan.title.library_id,
+                            ))
+                            .await?
+                            .get(&plan.title.library_id)
+                            .copied()
+                            .unwrap_or(true);
+                        full_hash_backfill_on = Some(on);
+                        on
+                    }
+                };
+                if backfill_on {
+                    return Err(fail(
+                        crate::error_reasons::location::RECOVERY_SOURCE_FULL_HASH_REQUIRED,
+                        "Missing source has no attested full hash",
+                    ));
+                }
+                let name = source.file_name().ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_SOURCE_FILENAME_REQUIRED,
+                        "Source filename is unavailable",
+                    )
+                })?;
                 target = locate_hashed_destination(
                     &destination_path,
                     media.size_bytes.max(0) as u64,
-                    expected_hash.as_deref().ok_or_else(|| {
+                    MissingSourceMatch::Name(name),
+                    custom_recycle.as_deref(),
+                )
+                .await?;
+                matched_by_name_and_size = true;
+            } else if source_version.is_none() {
+                target = locate_hashed_destination(
+                    &destination_path,
+                    media.size_bytes.max(0) as u64,
+                    MissingSourceMatch::FullHash(expected_hash.as_deref().ok_or_else(|| {
                         fail(
                             crate::error_reasons::location::RECOVERY_FULL_HASH_REQUIRED,
                             "Missing full hash",
                         )
-                    })?,
+                    })?),
                     custom_recycle.as_deref(),
                 )
                 .await?;
@@ -937,6 +1005,7 @@ impl AppUseCase {
                 destination: path_to_stored_string(target),
                 source_version,
                 expected_hash,
+                matched_by_name_and_size,
             });
         }
         validate_catalog(plan, catalog)?;
