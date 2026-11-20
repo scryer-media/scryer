@@ -1558,33 +1558,20 @@ fn validate_proxy_timeout(timeout: u32) -> AppResult<u32> {
 const SOLVER_HEALTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
 async fn read_solver_health_body_bounded(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     provider: scryer_domain::ProxyProviderType,
 ) -> AppResult<Vec<u8>> {
-    let unreadable = || {
-        AppError::Repository(
-            crate::challenge_solver::solver_error_message(
-                provider,
-                crate::challenge_solver::SolverErrorKind::Unreadable,
+    scryer_outbound_http::read_body_bounded(response, SOLVER_HEALTH_RESPONSE_MAX_BYTES)
+        .await
+        .map_err(|_| {
+            AppError::Repository(
+                crate::challenge_solver::solver_error_message(
+                    provider,
+                    crate::challenge_solver::SolverErrorKind::Unreadable,
+                )
+                .into(),
             )
-            .into(),
-        )
-    };
-    if response
-        .content_length()
-        .is_some_and(|length| length > SOLVER_HEALTH_RESPONSE_MAX_BYTES as u64)
-    {
-        return Err(unreadable());
-    }
-
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| unreadable())? {
-        if body.len().saturating_add(chunk.len()) > SOLVER_HEALTH_RESPONSE_MAX_BYTES {
-            return Err(unreadable());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+        })
 }
 
 async fn send_solver_probe_request(

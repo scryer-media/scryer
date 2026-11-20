@@ -1,3 +1,4 @@
+mod catalog_paging;
 mod emby;
 pub mod external_identity;
 mod jellyfin;
