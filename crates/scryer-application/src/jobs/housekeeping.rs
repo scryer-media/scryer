@@ -30,6 +30,12 @@ const PREFLIGHT_TRACE_PURGE_BATCH_SIZE: usize = 500;
 /// Batches per housekeeping pass, so one pass holds the writer for a bounded
 /// stretch; whatever is left goes on the next pass.
 const PREFLIGHT_TRACE_PURGE_MAX_BATCHES: usize = 100;
+/// Request rule traces each rule set keeps; older ones are removed.
+pub(crate) const REQUEST_RULE_TRACES_KEPT_PER_RULE_SET: usize = 3;
+/// Superseded request rule traces named per store call.
+const SUPERSEDED_TRACE_PURGE_BATCH_SIZE: usize = 5_000;
+/// Store calls per housekeeping pass; whatever is left goes on the next pass.
+const SUPERSEDED_TRACE_PURGE_MAX_BATCHES: usize = 20;
 /// Staged request metadata records removed per transaction.
 const STAGED_REQUEST_METADATA_PURGE_BATCH_SIZE: usize = 500;
 /// Batches per housekeeping pass; whatever is left goes on the next pass.
@@ -1214,6 +1220,7 @@ impl AppUseCase {
             .await?;
 
         let preflight_traces_purged = self.purge_preflight_request_rule_traces().await;
+        let superseded_traces_purged = self.purge_superseded_request_rule_traces().await;
         let staged_request_metadata_purged =
             self.purge_stale_staged_request_metadata(Utc::now()).await;
 
@@ -1440,6 +1447,7 @@ impl AppUseCase {
             stale_rule_set_history,
             stale_list_sync_runs,
             preflight_traces_purged,
+            superseded_traces_purged,
             staged_request_metadata_purged,
             stale_history_records,
             staged_nzb_artifacts_pruned,
@@ -1472,6 +1480,36 @@ impl AppUseCase {
                 }
                 Err(error) => {
                     warn!(%error, "failed to remove pre-flight request rule traces");
+                    break;
+                }
+            }
+        }
+        purged
+    }
+
+    /// Keep each request rule set's newest traces and remove the rest. A
+    /// trace explains one decision on the request page and in the recent
+    /// decisions list; nothing decides from it. A batch that finds none ends
+    /// the pass without a write.
+    pub(crate) async fn purge_superseded_request_rule_traces(&self) -> usize {
+        let store = &self.services.customization.request_rule_decisions;
+        let mut purged = 0usize;
+        for _ in 0..SUPERSEDED_TRACE_PURGE_MAX_BATCHES {
+            match store
+                .delete_traces_beyond_latest_per_rule_set(
+                    REQUEST_RULE_TRACES_KEPT_PER_RULE_SET,
+                    SUPERSEDED_TRACE_PURGE_BATCH_SIZE,
+                )
+                .await
+            {
+                Ok(removed) => {
+                    purged = purged.saturating_add(removed);
+                    if removed < SUPERSEDED_TRACE_PURGE_BATCH_SIZE {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, "failed to remove superseded request rule traces");
                     break;
                 }
             }

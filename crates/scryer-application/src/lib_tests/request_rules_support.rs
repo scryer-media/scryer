@@ -307,6 +307,47 @@ impl crate::ports::RequestRuleDecisionRepository for InMemoryRequestRuleDecision
         });
         Ok(removed)
     }
+
+    async fn delete_traces_beyond_latest_per_rule_set(
+        &self,
+        keep: usize,
+        limit: usize,
+    ) -> AppResult<usize> {
+        if keep == 0 {
+            return Ok(0);
+        }
+        let voted = |decision: &RequestRuleDecisionRecord| -> Vec<String> {
+            serde_json::from_str::<Vec<serde_json::Value>>(&decision.votes_json)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|vote| vote.get("rule_set_id")?.as_str().map(str::to_string))
+                .collect()
+        };
+        let mut decisions = self.decisions.lock().await;
+        let mut newest_first: Vec<&RequestRuleDecisionRecord> = decisions.iter().collect();
+        newest_first.sort_by(|left, right| {
+            right
+                .evaluated_at
+                .cmp(&left.evaluated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut doomed = std::collections::HashSet::new();
+        for decision in newest_first {
+            let rule_sets = voted(decision);
+            let mut kept_by_any = rule_sets.is_empty();
+            for rule_set in rule_sets {
+                let rank = seen.entry(rule_set).or_default();
+                *rank += 1;
+                kept_by_any |= *rank <= keep;
+            }
+            if !kept_by_any && doomed.len() < limit {
+                doomed.insert(decision.id.clone());
+            }
+        }
+        decisions.retain(|decision| !doomed.contains(&decision.id));
+        Ok(doomed.len())
+    }
 }
 
 impl InMemoryRequestRuleDecisionRepo {

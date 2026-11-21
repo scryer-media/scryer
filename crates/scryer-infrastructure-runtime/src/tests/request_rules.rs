@@ -866,6 +866,111 @@ async fn assert_preflight_traces_purge(store: &dyn RequestRuleDecisionRepository
     Ok(())
 }
 
+/// Seeds traces for two rule sets, one trace both voted in, and one no rule
+/// set voted in, then prunes to the newest three per rule set: a trace goes
+/// only when every rule set that voted in it has three newer ones.
+async fn assert_superseded_traces_prune(
+    store: &dyn RequestRuleDecisionRepository,
+) -> AppResult<()> {
+    let base = Utc::now() - chrono::Duration::days(1);
+    let traced = |id: &str, minute: i64, rule_sets: &[&str]| {
+        let mut record = decision(
+            id,
+            &format!("request-{id}"),
+            RequestDecisionOutcome::AutoApprove,
+        );
+        record.evaluated_at = base + chrono::Duration::minutes(minute);
+        record.created_at = record.evaluated_at;
+        record.votes_json = serde_json::to_string(
+            &rule_sets
+                .iter()
+                .map(|rule_set| serde_json::json!({ "rule_set_id": rule_set, "vote": "approve" }))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        record
+    };
+    // Rule set "keep-a": six traces, a0 oldest.
+    for index in 0..6 {
+        store
+            .record(&traced(&format!("keep-a{index}"), index, &["keep-a"]))
+            .await?;
+    }
+    // Rule set "keep-b": two of its own, plus one shared with "keep-a" that is
+    // older than everything "keep-a" has, so only "keep-b" still counts it.
+    store
+        .record(&traced("keep-shared", -10, &["keep-a", "keep-b"]))
+        .await?;
+    store.record(&traced("keep-b0", 1, &["keep-b"])).await?;
+    store.record(&traced("keep-b1", 2, &["keep-b"])).await?;
+    // No rule set voted: a fallback decision. Older than everything.
+    store.record(&traced("keep-unlinked", -100, &[])).await?;
+
+    assert_eq!(
+        store
+            .delete_traces_beyond_latest_per_rule_set(0, 100)
+            .await?,
+        0
+    );
+    assert_eq!(
+        store.delete_traces_beyond_latest_per_rule_set(3, 0).await?,
+        0
+    );
+    // The limit bounds one call; the rest goes on the next.
+    assert_eq!(
+        store.delete_traces_beyond_latest_per_rule_set(3, 2).await?,
+        2
+    );
+    assert_eq!(
+        store
+            .delete_traces_beyond_latest_per_rule_set(3, 100)
+            .await?,
+        1
+    );
+    assert_eq!(
+        store
+            .delete_traces_beyond_latest_per_rule_set(3, 100)
+            .await?,
+        0
+    );
+
+    let mut kept: Vec<String> = store
+        .list_recent(1000, None)
+        .await?
+        .into_iter()
+        .map(|row| row.id)
+        .filter(|id| id.starts_with("keep-"))
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        vec![
+            "keep-a3",
+            "keep-a4",
+            "keep-a5",
+            "keep-b0",
+            "keep-b1",
+            "keep-shared",
+            "keep-unlinked",
+        ]
+    );
+    // The removed traces took their links with them; the shared trace keeps
+    // its link to both rule sets.
+    assert_eq!(store.count_for_rule_set("keep-a").await?, 4);
+    assert_eq!(store.count_for_rule_set("keep-b").await?, 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn superseded_traces_prune_to_the_newest_per_rule_set() {
+    let (services, db) = temp_services("scryer_request_rule_trace_retention").await;
+    let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
+    assert_superseded_traces_prune(&decisions)
+        .await
+        .expect("superseded traces prune");
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn preflight_traces_purge_leaves_real_traces() {
     let (services, db) = temp_services("scryer_request_rule_preflight_purge").await;
