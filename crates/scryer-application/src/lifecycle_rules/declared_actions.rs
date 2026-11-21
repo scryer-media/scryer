@@ -255,6 +255,33 @@ pub fn decided_heads_in_execution_order(actions: &LifecycleActions) -> Vec<Lifec
         .collect()
 }
 
+/// Whether a candidate's decided actions include `head`, the way the
+/// candidate's reported heads show them. Those heads are always title heads,
+/// so a title head matches a subject of any kind. A season or episode head
+/// matches only a subject of that kind whose decided heads include the title
+/// head it narrows. A candidate without decided actions matches no head.
+///
+/// The candidate store's SQL filter states the same rule over the stored
+/// document; its tests compare the two.
+pub fn decided_actions_include_head(
+    actions: Option<&LifecycleActions>,
+    subject_kind: &str,
+    head: LifecycleActionHead,
+) -> bool {
+    let Some(actions) = actions else {
+        return false;
+    };
+    let level = match head.level() {
+        ScryerSubjectKind::Title => None,
+        ScryerSubjectKind::Season => Some("season"),
+        ScryerSubjectKind::Episode => Some("episode"),
+    };
+    if level.is_some_and(|level| level != subject_kind) {
+        return false;
+    }
+    decided_heads_in_execution_order(actions).contains(&head.base())
+}
+
 /// The step ids [`build_declared_action_sequence`] produces for these
 /// actions, without resolving anything. A finished sequence records its step
 /// ids, so this tells whether a later decision would run different steps.
@@ -358,6 +385,63 @@ mod tests {
 
     fn kinds(sequence: &LifecycleActionSequence) -> Vec<LifecycleActionStepKind> {
         sequence.steps.iter().map(|step| step.kind).collect()
+    }
+
+    #[test]
+    fn decided_head_matching_follows_the_reported_heads_and_the_subject_kind() {
+        let delete = LifecycleActions {
+            delete_files: true,
+            ..LifecycleActions::default()
+        };
+        // Deleting files reports an unmonitor first, so both heads match.
+        assert!(decided_actions_include_head(
+            Some(&delete),
+            "title",
+            LifecycleActionHead::DeleteFiles
+        ));
+        assert!(decided_actions_include_head(
+            Some(&delete),
+            "title",
+            LifecycleActionHead::Unmonitor
+        ));
+        // A season head matches only a season subject.
+        assert!(decided_actions_include_head(
+            Some(&delete),
+            "season",
+            LifecycleActionHead::DeleteSeasonFiles
+        ));
+        assert!(!decided_actions_include_head(
+            Some(&delete),
+            "title",
+            LifecycleActionHead::DeleteSeasonFiles
+        ));
+        assert!(!decided_actions_include_head(
+            Some(&delete),
+            "season",
+            LifecycleActionHead::DeleteEpisodeFiles
+        ));
+        // Deleting the title subsumes deleting its files.
+        let delete_title = LifecycleActions {
+            delete_files: true,
+            delete_title: true,
+            ..LifecycleActions::default()
+        };
+        assert!(!decided_actions_include_head(
+            Some(&delete_title),
+            "title",
+            LifecycleActionHead::DeleteFiles
+        ));
+        assert!(decided_actions_include_head(
+            Some(&delete_title),
+            "title",
+            LifecycleActionHead::DeleteTitle
+        ));
+        for head in LifecycleActionHead::ALL {
+            assert!(
+                !decided_actions_include_head(None, "title", head),
+                "{head:?}"
+            );
+        }
     }
 
     #[test]

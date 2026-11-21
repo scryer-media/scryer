@@ -28,6 +28,7 @@ use scryer_domain::{
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
+use scryer_rules::lifecycle_actions::LifecycleActionHead;
 
 #[derive(Clone)]
 pub struct LifecycleEvaluationStore {
@@ -109,6 +110,146 @@ fn active_state_predicate() -> (String, Vec<SqlArg>) {
         .map(|state| SqlArg::Text((*state).to_string()))
         .collect();
     (format!("state NOT IN ({placeholders})"), args)
+}
+
+/// A subquery yielding each string of a JSON array bound as one text
+/// parameter.
+fn json_text_array_values_sql(datastore: &StoreDatastore) -> &'static str {
+    match datastore {
+        StoreDatastore::Sqlite { .. } => "SELECT value FROM json_each({})",
+        StoreDatastore::Postgres { .. } => {
+            "SELECT value FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS rule_set_ids(value)"
+        }
+    }
+}
+
+/// Reads of the stored decided-actions document, `decided_actions_json`, in
+/// the datastore's dialect. Each yields SQL NULL or false for a candidate
+/// without a document; the callers guard on the document being present.
+struct DecidedActionsJson {
+    postgres: bool,
+}
+
+impl DecidedActionsJson {
+    fn new(datastore: &StoreDatastore) -> Self {
+        Self {
+            postgres: matches!(datastore, StoreDatastore::Postgres { .. }),
+        }
+    }
+
+    /// The boolean `key` is true.
+    fn is_true(&self, key: &str) -> String {
+        if self.postgres {
+            format!("(CAST(decided_actions_json AS JSONB) ->> '{key}') = 'true'")
+        } else {
+            format!("json_extract(decided_actions_json, '$.{key}') = 1")
+        }
+    }
+
+    /// The boolean `key` is false or absent.
+    fn is_not_true(&self, key: &str) -> String {
+        if self.postgres {
+            format!("COALESCE(CAST(decided_actions_json AS JSONB) ->> '{key}', 'false') <> 'true'")
+        } else {
+            format!("COALESCE(json_extract(decided_actions_json, '$.{key}'), 0) <> 1")
+        }
+    }
+
+    /// The optional `key` is present and not null.
+    fn is_set(&self, key: &str) -> String {
+        if self.postgres {
+            format!("(CAST(decided_actions_json AS JSONB) ->> '{key}') IS NOT NULL")
+        } else {
+            format!("json_extract(decided_actions_json, '$.{key}') IS NOT NULL")
+        }
+    }
+
+    /// The list `key` holds at least one value.
+    fn is_non_empty_list(&self, key: &str) -> String {
+        if self.postgres {
+            format!(
+                "(jsonb_typeof(CAST(decided_actions_json AS JSONB) -> '{key}') = 'array'
+                  AND CAST(decided_actions_json AS JSONB) -> '{key}' <> CAST('[]' AS JSONB))"
+            )
+        } else {
+            format!("COALESCE(json_array_length(decided_actions_json, '$.{key}'), 0) > 0")
+        }
+    }
+}
+
+/// SQL that is true when a candidate's stored decided actions include `head`.
+/// It states the rule of
+/// [`scryer_application::lifecycle_rules::decided_actions_include_head`] over
+/// the stored document: a title head matches the heads a candidate reports,
+/// whatever its subject; a season or episode head also requires a subject of
+/// that kind. Deleting files reports an unmonitor first, and deleting the
+/// title subsumes deleting its files.
+fn decided_action_head_sql(json: &DecidedActionsJson, head: LifecycleActionHead) -> String {
+    use LifecycleActionHead as Head;
+    let at_level = |level: &str, base: String| format!("(subject_kind = '{level}' AND {base})");
+    let deletes_files = || {
+        format!(
+            "({} AND {})",
+            json.is_true("delete_files"),
+            json.is_not_true("delete_title")
+        )
+    };
+    let unmonitors = || format!("({} OR {})", json.is_true("unmonitor"), deletes_files());
+    match head {
+        Head::Unmonitor => unmonitors(),
+        Head::DeleteFiles => deletes_files(),
+        Head::DeleteTitle => json.is_true("delete_title"),
+        Head::Search => json.is_true("search"),
+        Head::SetQualityProfile => json.is_set("set_quality_profile"),
+        Head::AddTags => json.is_non_empty_list("add_tags"),
+        Head::RemoveTags => json.is_non_empty_list("remove_tags"),
+        Head::Monitor => json.is_true("monitor"),
+        Head::FetchSubtitles => json.is_true("fetch_subtitles"),
+        Head::MoveToLibrary => json.is_set("move_to_library"),
+        Head::MoveToRoot => json.is_set("move_to_root"),
+        Head::Notify => json.is_set("notify"),
+        Head::MonitorSeason => at_level("season", json.is_true("monitor")),
+        Head::UnmonitorSeason => at_level("season", unmonitors()),
+        Head::DeleteSeasonFiles => at_level("season", deletes_files()),
+        Head::FetchSeasonSubtitles => at_level("season", json.is_true("fetch_subtitles")),
+        Head::NotifySeason => at_level("season", json.is_set("notify")),
+        Head::MonitorEpisode => at_level("episode", json.is_true("monitor")),
+        Head::UnmonitorEpisode => at_level("episode", unmonitors()),
+        Head::DeleteEpisodeFiles => at_level("episode", deletes_files()),
+        Head::FetchEpisodeSubtitles => at_level("episode", json.is_true("fetch_subtitles")),
+        Head::NotifyEpisode => at_level("episode", json.is_set("notify")),
+    }
+}
+
+/// SQL that is true when a candidate's decided actions include any of
+/// `heads`. A candidate without a decided-actions document matches none.
+fn decided_action_heads_predicate(
+    datastore: &StoreDatastore,
+    heads: &[LifecycleActionHead],
+) -> String {
+    let json = DecidedActionsJson::new(datastore);
+    let mut seen = Vec::with_capacity(heads.len());
+    let alternatives = heads
+        .iter()
+        .filter(|head| {
+            let first = !seen.contains(*head);
+            seen.push(**head);
+            first
+        })
+        .map(|head| decided_action_head_sql(&json, *head))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if json.postgres {
+        format!("(decided_actions_json IS NOT NULL AND ({alternatives}))")
+    } else {
+        // SQLite's JSON functions fail the whole statement on malformed text;
+        // the CASE keeps them from reading a document that does not parse,
+        // which, like a missing one, decides nothing.
+        format!(
+            "(decided_actions_json IS NOT NULL
+              AND CASE WHEN json_valid(decided_actions_json) THEN ({alternatives}) ELSE 0 END)"
+        )
+    }
 }
 
 // ── Candidates ──────────────────────────────────────────────────────────────
@@ -204,6 +345,26 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         if let Some(rule_set_id) = query.rule_set_id.as_deref() {
             clauses.push("rule_set_id = {}".to_string());
             args.push(SqlArg::Text(rule_set_id.to_string()));
+        }
+        if let Some(rule_set_ids) = query.rule_set_ids.as_ref() {
+            if rule_set_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            // One array parameter, so any number of rule sets fits one statement.
+            clauses.push(format!(
+                "rule_set_id IN ({})",
+                json_text_array_values_sql(&self.datastore)
+            ));
+            args.push(SqlArg::Text(
+                serde_json::to_string(rule_set_ids)
+                    .map_err(|error| AppError::Repository(error.to_string()))?,
+            ));
+        }
+        if !query.action_heads.is_empty() {
+            clauses.push(decided_action_heads_predicate(
+                &self.datastore,
+                &query.action_heads,
+            ));
         }
         if let Some(library_id) = query.library_id.as_deref() {
             clauses.push("library_id = {}".to_string());

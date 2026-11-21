@@ -11712,12 +11712,20 @@ pub trait LifecycleRuleSetRepository: Send + Sync {
 }
 
 /// Which candidates a read should return. Every field narrows; an empty
-/// `states` means every state.
+/// `states` means every state, and an empty `action_heads` means any decided
+/// actions.
 #[derive(Clone, Debug, Default)]
 pub struct LifecycleCandidateQuery {
     pub rule_set_id: Option<String>,
+    /// Only candidates of these rule sets; `Some` of an empty list matches
+    /// nothing. Any number of ids is accepted.
+    pub rule_set_ids: Option<Vec<String>>,
     pub states: Vec<scryer_domain::LifecycleCandidateState>,
     pub library_id: Option<String>,
+    /// Only candidates whose decided actions include at least one of these
+    /// heads, as [`crate::lifecycle_rules::decided_actions_include_head`]
+    /// judges it. A candidate without decided actions matches none.
+    pub action_heads: Vec<scryer_rules::lifecycle_actions::LifecycleActionHead>,
     pub limit: Option<usize>,
 }
 

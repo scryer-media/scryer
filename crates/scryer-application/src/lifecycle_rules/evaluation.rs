@@ -285,6 +285,15 @@ pub struct LifecycleCandidateFilter {
     pub rule_set_id: Option<String>,
     pub states: Vec<LifecycleCandidateState>,
     pub library_id: Option<String>,
+    /// Only candidates whose decided actions include one of these heads; empty
+    /// means any decided actions.
+    pub action_heads: Vec<scryer_rules::lifecycle_actions::LifecycleActionHead>,
+    /// Only candidates of rules whose state, as the rule list reports it, is
+    /// one of these; empty means rules in any state.
+    pub rule_states: Vec<scryer_domain::LifecycleRuleState>,
+    /// Leaves out each candidate's step sequence and step progress, for a
+    /// reader that shows neither.
+    pub skip_sequence_projection: bool,
 
     pub limit: Option<usize>,
 }
@@ -589,12 +598,31 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let rule_sets = self
-            .services
-            .customization
-            .lifecycle_rule_sets
-            .list_rule_sets()
-            .await?;
+        // A rule's reported state depends on its current revision, so a
+        // rule-state filter reads the rule details and narrows the candidate
+        // read to the rules in those states.
+        let (rule_sets, rule_set_ids) = if filter.rule_states.is_empty() {
+            let rule_sets = self
+                .services
+                .customization
+                .lifecycle_rule_sets
+                .list_rule_sets()
+                .await?;
+            (rule_sets, None)
+        } else {
+            let details = self.list_lifecycle_rule_set_details(actor).await?;
+            let ids = details
+                .iter()
+                .filter(|detail| {
+                    filter
+                        .rule_states
+                        .contains(&crate::lifecycle_rules::lifecycle_rule_state(detail))
+                })
+                .map(|detail| detail.rule_set.id.clone())
+                .collect::<Vec<_>>();
+            let rule_sets = details.into_iter().map(|detail| detail.rule_set).collect();
+            (rule_sets, Some(ids))
+        };
         let rules_by_id: HashMap<String, LifecycleRuleSet> = rule_sets
             .into_iter()
             .map(|rule_set| (rule_set.id.clone(), rule_set))
@@ -606,8 +634,10 @@ impl AppUseCase {
             .lifecycle_evaluation
             .list_candidates(&LifecycleCandidateQuery {
                 rule_set_id: filter.rule_set_id.clone(),
+                rule_set_ids,
                 states: filter.states.clone(),
                 library_id: filter.library_id.clone(),
+                action_heads: filter.action_heads.clone(),
                 limit: filter.limit,
             })
             .await?;
@@ -633,7 +663,11 @@ impl AppUseCase {
                 &mut inventories,
             )
             .await?;
-        let (sequences, sequence_steps) = self.lifecycle_sequence_projection(&visible).await?;
+        let (sequences, sequence_steps) = if filter.skip_sequence_projection {
+            Default::default()
+        } else {
+            self.lifecycle_sequence_projection(&visible).await?
+        };
         Ok(visible
             .into_iter()
             .map(|candidate| LifecycleCandidateView {

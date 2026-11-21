@@ -3325,6 +3325,7 @@ export const myUiSettingsQuery = `query MyUiSettings {
         y
         w
         h
+        settings
       }
     }
   }
@@ -4088,6 +4089,27 @@ export const dashboardRecycleBinQuery = `query DashboardRecycleBin {
       scheduledDeletionAt
     }
     totalCount
+  }
+}`;
+
+/** One upcoming lifecycle actions panel: only what its rows show. */
+export const dashboardLifecycleUpcomingQuery = `query DashboardLifecycleUpcoming($states: [LifecycleCandidateState!], $ruleStates: [LifecycleRuleState!], $actions: [LifecycleActionHead!], $limit: Int) {
+  lifecycleInstanceGates {
+    enabled
+    actionsPaused
+  }
+  lifecycleCandidates(states: $states, ruleStates: $ruleStates, actions: $actions, limit: $limit) {
+    id
+    ruleName
+    subjectKind
+    subjectLabel
+    titleName
+    state
+    actions {
+      heads
+    }
+    dueAt
+    heldSince
   }
 }`;
 

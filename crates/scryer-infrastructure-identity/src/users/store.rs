@@ -673,9 +673,9 @@ impl UserUiSettingsRepository for UserStore {
                 for item in &layout.items {
                     tx.execute(
                         "INSERT INTO user_ui_dashboard_layout_items (
-                             user_id, breakpoint, panel_id, x, y, w, h
+                             user_id, breakpoint, panel_id, x, y, w, h, settings_json
                          )
-                         VALUES ({}, {}, {}, {}, {}, {}, {})",
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(user_id.clone()),
                             SqlArg::Text(breakpoint.clone()),
@@ -684,6 +684,9 @@ impl UserUiSettingsRepository for UserStore {
                             SqlArg::I64(i64::from(item.y)),
                             SqlArg::I64(i64::from(item.w)),
                             SqlArg::I64(i64::from(item.h)),
+                            SqlArg::OptText(
+                                item.settings.as_ref().map(|settings| settings.to_string()),
+                            ),
                         ],
                     )
                     .await?;
@@ -1648,7 +1651,7 @@ async fn load_ui_dashboard_layouts(
     let rows = SqlRuntime::fetch_all(
         exec,
         "SELECT layouts.breakpoint, layouts.column_count,
-                items.panel_id, items.x, items.y, items.w, items.h
+                items.panel_id, items.x, items.y, items.w, items.h, items.settings_json
            FROM user_ui_dashboard_layouts layouts
            LEFT JOIN user_ui_dashboard_layout_items items
              ON items.user_id = layouts.user_id
@@ -1682,10 +1685,19 @@ async fn load_ui_dashboard_layouts(
                 y: row.i32("y")?,
                 w: row.i32("w")?,
                 h: row.i32("h")?,
+                settings: parse_ui_dashboard_panel_settings(row.opt_text("settings_json")?),
             });
         }
     }
     Ok(layouts)
+}
+
+/// Reads a panel's stored settings. Rows saved before panels had settings hold
+/// NULL; text that no longer parses as a JSON object is treated as no settings
+/// so one damaged panel cannot keep the dashboard from loading.
+fn parse_ui_dashboard_panel_settings(value: Option<String>) -> Option<serde_json::Value> {
+    let parsed = serde_json::from_str::<serde_json::Value>(&value?).ok()?;
+    parsed.is_object().then_some(parsed)
 }
 
 fn parse_ui_dashboard_breakpoint(value: String) -> AppResult<UiDashboardBreakpoint> {
@@ -2089,6 +2101,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create dashboard layout tables");
+        sqlx::raw_sql(include_str!(
+            "../../../scryer/src/db/migrations/0362_dashboard_panel_settings.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("add dashboard panel settings");
         sqlx::query(
             "CREATE TABLE user_ui_tours (
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -2636,6 +2654,7 @@ mod tests {
             y,
             w: 2,
             h: 3,
+            settings: None,
         }
     }
 
@@ -2902,6 +2921,54 @@ mod tests {
         ] {
             assert_eq!(count_user_rows(&store, table, &user.id).await, 0, "{table}");
         }
+    }
+
+    #[tokio::test]
+    async fn dashboard_panel_settings_round_trip_and_tolerate_rows_without_them() {
+        let store = test_store().await;
+        let user = UserRepository::create(&store, test_user("panel_settings_user"))
+            .await
+            .expect("create user");
+        let configured = UiDashboardLayoutItem {
+            settings: Some(serde_json::json!({ "actions": ["delete_files"], "name": "Soon" })),
+            ..dashboard_item("lifecycle-upcoming--k3x9a2", 0, 0)
+        };
+        let plain = dashboard_item("panel-one", 4, 0);
+        let saved = UserUiSettingsRepository::set_dashboard_layout(
+            &store,
+            &user.id,
+            UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Lg,
+                columns: 12,
+                items: vec![configured.clone(), plain.clone()],
+            },
+        )
+        .await
+        .expect("save layout");
+        assert_eq!(saved.dashboard_layouts[0].items, vec![configured, plain]);
+
+        // A row whose stored text is not an object reads as a panel without settings.
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "damage_dashboard_panel_settings",
+            "UPDATE user_ui_dashboard_layout_items SET settings_json = {} WHERE panel_id = {}",
+            vec![
+                SqlArg::Text("not json".into()),
+                SqlArg::Text("lifecycle-upcoming--k3x9a2".into()),
+            ],
+        )
+        .await
+        .expect("damage settings");
+        let loaded = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load settings")
+            .expect("settings exist");
+        assert!(
+            loaded.dashboard_layouts[0]
+                .items
+                .iter()
+                .all(|item| item.settings.is_none())
+        );
     }
 
     #[tokio::test]

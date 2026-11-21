@@ -186,6 +186,8 @@ export type UiDashboardLayoutItem = {
   y: number;
   w: number;
   h: number;
+  /** The panel's own settings, a JSON object, or null when it has none. */
+  settings?: Record<string, unknown> | null;
 };
 
 export type UiDashboardLayout = {

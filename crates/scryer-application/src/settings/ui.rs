@@ -53,6 +53,8 @@ const MAX_DASHBOARD_COLUMNS: i32 = 24;
 const MAX_DASHBOARD_ITEMS: usize = 64;
 /// Longest dashboard panel id accepted.
 const MAX_DASHBOARD_PANEL_ID_LEN: usize = 64;
+/// Largest serialized size of one dashboard panel's settings object.
+const MAX_DASHBOARD_PANEL_SETTINGS_BYTES: usize = 2048;
 
 /// Longest guided tour id accepted, e.g. `onboarding` or `release-0.23.0`.
 const MAX_TOUR_ID_LEN: usize = 64;
@@ -259,8 +261,38 @@ fn validate_dashboard_layout(layout: &UiDashboardLayout) -> AppResult<()> {
                 ),
             ));
         }
+        if let Some(panel_settings) = item.settings.as_ref() {
+            validate_dashboard_panel_settings(panel_id, panel_settings)?;
+        }
     }
     Ok(())
+}
+
+/// Accepts a panel's settings when they are a JSON object whose serialized
+/// form fits [`MAX_DASHBOARD_PANEL_SETTINGS_BYTES`]. What the keys mean is the
+/// web's concern.
+fn validate_dashboard_panel_settings(
+    panel_id: &str,
+    panel_settings: &serde_json::Value,
+) -> AppResult<()> {
+    use crate::error_reasons::settings;
+
+    let fits = panel_settings.is_object()
+        && serde_json::to_vec(panel_settings)
+            .is_ok_and(|serialized| serialized.len() <= MAX_DASHBOARD_PANEL_SETTINGS_BYTES);
+    if fits {
+        return Ok(());
+    }
+    Err(AppError::validation_refused_with_facts(
+        settings::DASHBOARD_PANEL_SETTINGS_INVALID,
+        format!(
+            "dashboard panel {panel_id:?} settings must be a JSON object of at most {MAX_DASHBOARD_PANEL_SETTINGS_BYTES} bytes"
+        ),
+        vec![
+            crate::RefusalFact::new("panelId", panel_id),
+            crate::RefusalFact::new("maxBytes", MAX_DASHBOARD_PANEL_SETTINGS_BYTES.to_string()),
+        ],
+    ))
 }
 
 fn validate_ui_settings_update(mut input: UiSettingsUpdate) -> AppResult<UiSettingsUpdate> {
@@ -447,5 +479,85 @@ mod tour_id_tests {
             .collect();
         let error = validate_tour_ids(too_many).expect_err("too many tours");
         assert_eq!(reason(error), Some(settings::UI_TOUR_COUNT_OUT_OF_RANGE));
+    }
+}
+
+#[cfg(test)]
+mod dashboard_layout_tests {
+    use super::{MAX_DASHBOARD_PANEL_SETTINGS_BYTES, validate_dashboard_layout};
+    use crate::{
+        AppError, RefusalFact, UiDashboardBreakpoint, UiDashboardLayout, UiDashboardLayoutItem,
+        error_reasons::settings,
+    };
+
+    fn layout_with(settings: Option<serde_json::Value>) -> UiDashboardLayout {
+        UiDashboardLayout {
+            breakpoint: UiDashboardBreakpoint::Lg,
+            columns: 12,
+            items: vec![UiDashboardLayoutItem {
+                panel_id: "lifecycle-upcoming--a1b2c3".into(),
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 3,
+                settings,
+            }],
+        }
+    }
+
+    fn reason(error: &AppError) -> Option<&'static str> {
+        error.validation_reason()
+    }
+
+    #[test]
+    fn panels_without_settings_or_with_an_object_are_accepted() {
+        validate_dashboard_layout(&layout_with(None)).expect("no settings");
+        validate_dashboard_layout(&layout_with(Some(serde_json::json!({
+            "actions": ["delete_files"],
+            "name": "Soon"
+        }))))
+        .expect("object settings");
+    }
+
+    #[test]
+    fn non_object_panel_settings_are_refused_with_a_reason() {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!("text"),
+            serde_json::json!(3),
+            serde_json::json!(["delete_files"]),
+        ] {
+            let error = validate_dashboard_layout(&layout_with(Some(value.clone())))
+                .expect_err("non-object settings");
+            assert_eq!(
+                reason(&error),
+                Some(settings::DASHBOARD_PANEL_SETTINGS_INVALID),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_panel_settings_are_refused_with_the_limit_as_a_fact() {
+        let fits =
+            serde_json::json!({ "name": "x".repeat(MAX_DASHBOARD_PANEL_SETTINGS_BYTES - 11) });
+        assert_eq!(
+            serde_json::to_vec(&fits).unwrap().len(),
+            MAX_DASHBOARD_PANEL_SETTINGS_BYTES
+        );
+        validate_dashboard_layout(&layout_with(Some(fits))).expect("settings at the limit");
+
+        let oversized =
+            serde_json::json!({ "name": "x".repeat(MAX_DASHBOARD_PANEL_SETTINGS_BYTES - 10) });
+        let error =
+            validate_dashboard_layout(&layout_with(Some(oversized))).expect_err("oversized");
+        assert_eq!(
+            reason(&error),
+            Some(settings::DASHBOARD_PANEL_SETTINGS_INVALID)
+        );
+        assert!(error.refusal_facts().contains(&RefusalFact::new(
+            "maxBytes",
+            MAX_DASHBOARD_PANEL_SETTINGS_BYTES.to_string()
+        )));
     }
 }
