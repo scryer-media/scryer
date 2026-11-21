@@ -1945,6 +1945,7 @@ async fn stale_sequence_worker_cannot_finish_a_newer_execution_lease() {
                 first_lease_at,
                 LifecycleCandidateState::Blocked,
                 "unknown_at_execution",
+                None,
                 replacement_lease_at + chrono::Duration::seconds(1),
             )
             .await

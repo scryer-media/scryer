@@ -3009,6 +3009,7 @@ impl AppUseCase {
                 now,
                 LifecycleCandidateState::Blocked,
                 reason,
+                None,
                 Utc::now(),
             )
             .await?
