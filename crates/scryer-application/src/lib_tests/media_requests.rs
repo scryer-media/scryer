@@ -3142,6 +3142,54 @@ async fn a_stale_staged_record_is_not_reused() {
 }
 
 #[tokio::test]
+async fn a_staged_outage_stops_answering_within_minutes() {
+    let (harness, app, detail_calls, input) = staging_app(92_047, true);
+    let normalized = normalize_media_request_external_ids(input.external_ids.clone())
+        .expect("request external ids should normalize");
+    let key = crate::media_requests::media_request_staging_key(&MediaFacet::Movie, &normalized);
+
+    let staged = app
+        .stage_request_metadata(&MediaFacet::Movie, normalized.clone(), false)
+        .await;
+    assert!(staged.snapshot.partial);
+    let reads_after_staging = smg_reads(&detail_calls);
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_some(),
+        "the outage answers while it is recent, so a preview and its submit agree"
+    );
+
+    // Age the outage past its short window, well inside the 24 hours a
+    // record that established something answers for.
+    {
+        let mut records = harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock");
+        let record = records.get_mut(&key).expect("the outage is staged");
+        record.staged_at = Utc::now()
+            - crate::media_requests::STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR
+            - chrono::Duration::minutes(1);
+    }
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_none(),
+        "an old outage no longer answers"
+    );
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("a metadata outage must never fail a submission");
+    assert!(
+        smg_reads(&detail_calls) > reads_after_staging,
+        "a later submit asks SMG again instead of reusing the old outage"
+    );
+}
+
+#[tokio::test]
 async fn staging_requires_request_permission_before_smg_is_asked() {
     let (harness, app, detail_calls, input) = staging_app(92_045, false);
     let stranger = library_permission_user("stranger", &input.library_id, &[]);

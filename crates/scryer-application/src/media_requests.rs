@@ -2384,6 +2384,13 @@ impl MediaRequestMetadataEnrichment {
 /// reaches new requests within a day.
 pub const STAGED_REQUEST_METADATA_FRESH_FOR: chrono::Duration = chrono::Duration::hours(24);
 
+/// How long a staged record that established nothing answers. Long enough
+/// that a preview and the submit that follows it read the same outage; short
+/// enough that an SMG outage does not hold every later request for the
+/// subject once SMG is back.
+pub const STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR: chrono::Duration =
+    chrono::Duration::minutes(5);
+
 /// How long a staged record is kept before housekeeping removes it. A request
 /// row carries its own copy, so nothing reads a record this old.
 pub const STAGED_REQUEST_METADATA_RETENTION: chrono::Duration = chrono::Duration::days(7);
@@ -2414,7 +2421,8 @@ impl AppUseCase {
     /// fresh. Reads the store only: it never asks SMG and never writes, so a
     /// preview can call it on every change. `None` covers a subject never
     /// staged, a stale record, an unreadable one and a store that could not
-    /// be read.
+    /// be read. A record that established nothing goes stale within minutes,
+    /// so an SMG outage is not remembered for the subject's whole window.
     pub(crate) async fn staged_request_metadata(
         &self,
         facet: &MediaFacet,
@@ -2434,10 +2442,16 @@ impl AppUseCase {
                 return None;
             }
         };
-        if Utc::now() - record.staged_at >= STAGED_REQUEST_METADATA_FRESH_FOR {
+        let age = Utc::now() - record.staged_at;
+        if age >= STAGED_REQUEST_METADATA_FRESH_FOR {
             return None;
         }
-        serde_json::from_str(&record.payload_json).ok()
+        let staged: MediaRequestMetadataEnrichment =
+            serde_json::from_str(&record.payload_json).ok()?;
+        if staged.is_unavailable() && age >= STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR {
+            return None;
+        }
+        Some(staged)
     }
 
     /// Stage a subject's metadata: answer from the fresh staged record when
