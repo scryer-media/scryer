@@ -381,6 +381,32 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         phase: &'static str,
         selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
+        self.evaluate_document_where(
+            |limits| {
+                if F::BOUND_INPUT {
+                    runtime::bounded_input_document(input, limits)
+                } else {
+                    Ok(serde_json::to_value(input)?)
+                }
+            },
+            ctx,
+            phase,
+            selected,
+        )
+    }
+
+    /// [`Self::evaluate_policies_where`] over an input document the caller
+    /// builds, so a caller that evaluates one input in several phases can
+    /// serialize it once and patch the document between them. `document` is
+    /// not called when no rule is loaded, and the family's input bound is the
+    /// caller's to apply.
+    pub(crate) fn evaluate_document_where(
+        &mut self,
+        document: impl FnOnce(&RuntimeLimits) -> Result<serde_json::Value, RulesError>,
+        ctx: &F::EvalContext,
+        phase: &'static str,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
+    ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
 
         if self.rules.is_empty() {
@@ -389,11 +415,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
 
         let input_timer =
             PolicyTimer::new(&self.observer, F::NAME, "input_prepare", phase, "", "none");
-        let document = if F::BOUND_INPUT {
-            runtime::bounded_input_document(input, &self.limits)?
-        } else {
-            serde_json::to_value(input)?
-        };
+        let document = document(&self.limits)?;
         let unobservable = if F::TRACKS_REFERENCED_FACTS {
             unobservable_facts_in(&document, F::NESTED_FACT_SECTIONS)
         } else {
