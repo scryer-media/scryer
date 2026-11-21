@@ -4,6 +4,9 @@ pub(super) struct MockLibraryRepo {
     pub(super) libraries: Arc<Mutex<Vec<Library>>>,
     pub(super) app_permissions: Arc<Mutex<HashMap<String, AppPermissionMask>>>,
     pub(super) grants: Arc<Mutex<HashMap<String, Vec<LibraryGrant>>>>,
+    /// How many times each user's app permissions were read: one per
+    /// authorization load.
+    pub(super) app_permission_reads: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
 impl MockLibraryRepo {
@@ -12,6 +15,7 @@ impl MockLibraryRepo {
             libraries: Arc::new(Mutex::new(libraries)),
             app_permissions: Arc::new(Mutex::new(HashMap::new())),
             grants: Arc::new(Mutex::new(HashMap::new())),
+            app_permission_reads: Arc::default(),
         }
     }
 
@@ -232,6 +236,12 @@ impl LibraryRepository for MockLibraryRepo {
     }
 
     async fn app_permission_mask_for_user(&self, user_id: &str) -> AppResult<AppPermissionMask> {
+        *self
+            .app_permission_reads
+            .lock()
+            .unwrap()
+            .entry(user_id.to_string())
+            .or_default() += 1;
         Ok(self
             .app_permissions
             .lock()

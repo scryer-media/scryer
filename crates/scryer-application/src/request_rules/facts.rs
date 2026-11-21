@@ -1232,15 +1232,16 @@ impl AppUseCase {
         library_id: &str,
         evaluation_time: DateTime<Utc>,
     ) -> AppResult<RequestRequesterDoc> {
-        let mut app_permissions = Vec::new();
-        for &permission in AppPermission::ALL {
-            if self.has_app_permission(actor, permission).await? {
-                app_permissions.push(permission.as_str().to_string());
-            }
-        }
+        // One authorization read answers every permission below, exactly as
+        // each `has_*_permission` call would have answered it.
+        let authorization = self.authorization_for_actor(actor).await?;
+        let app_permissions: Vec<String> = AppPermission::ALL
+            .iter()
+            .filter(|&&permission| authorization.has_app_permission(permission))
+            .map(|permission| permission.as_str().to_string())
+            .collect();
 
-        let mut library_permissions = Vec::new();
-        for permission in [
+        let library_permissions: Vec<String> = [
             LibraryPermission::View,
             LibraryPermission::ManageTitles,
             LibraryPermission::ResolveImports,
@@ -1248,14 +1249,17 @@ impl AppUseCase {
             LibraryPermission::Request,
             LibraryPermission::AutoApproveRequests,
             LibraryPermission::ManageSubtitles,
-        ] {
-            if self
-                .has_library_permission(actor, library_id, permission)
-                .await?
-            {
-                library_permissions.push(permission.as_str().to_string());
-            }
-        }
+        ]
+        .into_iter()
+        .filter(|&permission| {
+            crate::authorization::effective_library_permission(
+                &authorization,
+                library_id,
+                permission,
+            )
+        })
+        .map(|permission| permission.as_str().to_string())
+        .collect();
 
         // Verified links only: a pending claim is an assertion nobody has
         // confirmed, and a rule that trusted it would let anyone grant

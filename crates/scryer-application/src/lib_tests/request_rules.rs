@@ -3319,3 +3319,92 @@ fn an_approver_tag_list_is_checked_like_a_rule_tag() {
         );
     }
 }
+
+/// A list request is submitted as the list's owner, whose authorization the
+/// owner row does not carry. It is read once for the whole submission, the
+/// rule check and the requester document included, and every permission the
+/// owner holds still reaches the rules.
+#[tokio::test]
+async fn a_list_request_reads_its_owners_authorization_once() {
+    use crate::lists::AppListActions;
+    use crate::lists::act::ListActions;
+
+    const APPROVE_FOR_GRANTED_REQUESTERS: &str = r#"package rules
+import rego.v1
+
+approve if {
+	"request" in input.requester.library_permissions
+	"view" in input.requester.library_permissions
+	not "manage_library" in input.requester.library_permissions
+	"manage_lists" in input.requester.app_permissions
+}
+"#;
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(
+        &harness,
+        "Approve granted requesters",
+        APPROVE_FOR_GRANTED_REQUESTERS,
+    )
+    .await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut owner = harness.user.clone();
+    owner.id = "list-owner-fixture".to_string();
+    owner.username = "list_owner_fixture".to_string();
+    owner.authorization = scryer_domain::UserAuthorization {
+        loaded: false,
+        ..Default::default()
+    };
+    harness.users.store.lock().await.push(owner.clone());
+    harness
+        .libraries
+        .set_app_permission_mask_for_user(&owner.id, AppPermissionMask::MANAGE_LISTS)
+        .await
+        .unwrap();
+    harness
+        .libraries
+        .set_grants_for_user(
+            &owner.id,
+            vec![scryer_domain::LibraryGrant {
+                user_id: owner.id.clone(),
+                library_id: library_id.clone(),
+                permissions: scryer_domain::LibraryPermissionMask::from_permissions([
+                    scryer_domain::LibraryPermission::View,
+                    scryer_domain::LibraryPermission::Request,
+                ]),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let mut list = crate::lists::test_support::subscription("public-list-one");
+    list.owner_user_id = owner.id.clone();
+    let route = crate::lists::test_support::route(MediaFacet::Movie, &library_id);
+    let mut item = crate::lists::test_support::resolved_item("alpha");
+    item.external_ids = vec![ExternalId::new("tvdb", "9056")];
+
+    AppListActions::new(&harness.app)
+        .submit_request(&list, &route, &item, false)
+        .await
+        .expect("list request admitted");
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].status,
+        MediaRequestStatus::Approved,
+        "the rule saw every permission the owner holds"
+    );
+    drop(requests);
+    assert_eq!(
+        harness
+            .libraries
+            .app_permission_reads
+            .lock()
+            .unwrap()
+            .get(&owner.id)
+            .copied(),
+        Some(1)
+    );
+}
