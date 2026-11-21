@@ -1570,6 +1570,79 @@ async fn housekeeping_purges_only_preflight_traces() {
 }
 
 #[tokio::test]
+async fn housekeeping_keeps_the_newest_three_traces_of_each_rule_set() {
+    let harness = bootstrap_media_request_app();
+    let base = chrono::Utc::now() - chrono::Duration::days(1);
+    let trace = |id: String, minute: i64, votes_json: &str| {
+        let evaluated_at = base + chrono::Duration::minutes(minute);
+        scryer_domain::RequestRuleDecisionRecord {
+            request_id: format!("request-{id}"),
+            id,
+            evaluated_at,
+            effective_outcome: RequestDecisionOutcome::AutoApprove,
+            policy_outcome: RequestDecisionOutcome::AutoApprove,
+            fallback_reason: None,
+            votes_json: votes_json.to_string(),
+            tags: Vec::new(),
+            shaping_json: None,
+            input_hash: String::new(),
+            input_schema_version: 1,
+            created_at: evaluated_at,
+        }
+    };
+    // More than one store call's worth for one rule set, so the pass loops.
+    for index in 0..5_010 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("busy-{index:05}"),
+                index,
+                r#"[{"rule_set_id":"busy"}]"#,
+            ))
+            .await;
+    }
+    for index in 0..2 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("quiet-{index}"),
+                -50 + index,
+                r#"[{"rule_set_id":"quiet"}]"#,
+            ))
+            .await;
+    }
+    harness
+        .request_rule_decisions
+        .seed(trace("unlinked".to_string(), -500, "[]"))
+        .await;
+
+    assert_eq!(
+        harness.app.purge_superseded_request_rule_traces().await,
+        5_007
+    );
+    assert_eq!(harness.app.purge_superseded_request_rule_traces().await, 0);
+    let mut kept: Vec<String> = harness
+        .request_rule_decisions
+        .recorded()
+        .await
+        .into_iter()
+        .map(|trace| trace.id)
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        vec![
+            "busy-05007",
+            "busy-05008",
+            "busy-05009",
+            "quiet-0",
+            "quiet-1",
+            "unlinked",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn preflight_requires_the_request_permission() {
     let harness = bootstrap_media_request_app();
     let mut stranger = test_admin_user();
