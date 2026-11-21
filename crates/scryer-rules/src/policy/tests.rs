@@ -526,3 +526,85 @@ fn held_reason_codes_are_deduplicated_in_fact_name_order() {
         ]
     );
 }
+
+/// The template is prepared once at build, so its clones skip regorus's
+/// module analysis. They must decide exactly as the clones of an unprepared
+/// template did: the same records and errors, input after input, from every
+/// clone, whichever evaluated first.
+#[test]
+fn a_prepared_template_decides_as_an_unprepared_one_from_every_clone() {
+    let policies = [
+        policy(
+            "prepared_rated",
+            "normal",
+            "allow if {\n  input.facts.age_rating <= 13\n}\n\n\
+             reasons contains \"age_ok\" if {\n  input.facts.age_rating <= 13\n}\n\n\
+             tags contains g if {\n  some g in input.facts.genres\n}\n",
+        ),
+        policy(
+            "prepared_held",
+            "normal",
+            "allow := true\n\nhold if {\n  input.facts.age_rating > 16\n}\n",
+        ),
+        policy(
+            "prepared_broken",
+            "normal",
+            "allow if {\n  lower(1) == \"x\"\n}\n",
+        ),
+    ];
+    let inputs = [
+        known_input(),
+        ProbeInput {
+            facts: ProbeFacts {
+                age_rating: Observation::known(18),
+                genres: Observation::known(vec!["drama".to_string(), "war".to_string()]),
+            },
+        },
+        ProbeInput {
+            facts: ProbeFacts {
+                age_rating: Observation::unknown("not_collected"),
+                genres: Observation::known(Vec::new()),
+            },
+        },
+    ];
+    let limits = <ProbeFamily as PolicyFamily>::limits();
+    let prepared = ProbeEngine::build(&policies).expect("probe policies should compile");
+    let unprepared = ProbeEngine::build_unprepared_for_test(&policies, limits)
+        .expect("probe policies should compile");
+
+    let run = |engine: &ProbeEngine, input: &ProbeInput| {
+        let outcome = engine
+            .evaluator()
+            .evaluate_policies(input, "normal")
+            .expect("evaluation should succeed");
+        (
+            outcome
+                .records
+                .into_iter()
+                .map(|record| (record.rule_set_id, record.decision))
+                .collect::<Vec<_>>(),
+            outcome.errors,
+        )
+    };
+    for _round in 0..3 {
+        for input in &inputs {
+            assert_eq!(run(&prepared, input), run(&unprepared, input));
+        }
+    }
+    // One evaluator, reused across inputs, also agrees.
+    let mut reused = prepared.evaluator();
+    for input in &inputs {
+        let outcome = reused
+            .evaluate_policies(input, "normal")
+            .expect("evaluation should succeed");
+        let got = (
+            outcome
+                .records
+                .into_iter()
+                .map(|record| (record.rule_set_id, record.decision))
+                .collect::<Vec<_>>(),
+            outcome.errors,
+        );
+        assert_eq!(got, run(&unprepared, input));
+    }
+}
