@@ -2180,7 +2180,7 @@ const nl: LocaleDictionary = {
   "settings.ruleLibraryAll": "Alles",
   "settings.ruleLibraryCommunityEmpty":
     "Geen community-regelpakketten beschikbaar. Ververs de plugin registry om te controleren op nieuwe packs.",
-  "settings.arrImportAction": "Arr custom format importeren",
+  "settings.arrImportAction": "Importeren uit Arr",
   "settings.arrImportTitle": "Arr custom formats importeren",
   "settings.arrImportDescription":
     "Plak een Sonarr- of Radarr-custom-format-export om een nieuw Rego-regelconcept te maken.",

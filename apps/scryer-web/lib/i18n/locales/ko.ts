@@ -2508,7 +2508,6 @@ const ko: LocaleDictionary = {
     "수명 주기 규칙 편집기에 저장되지 않은 변경 사항이 있으며 사라집니다.",
   "settings.lifecycleRuleDeleting": "수명 주기 규칙 {{name}}을(를) 삭제할까요?",
   "settings.noLifecycleRulesFound": "아직 수명 주기 규칙이 없습니다.",
-  "settings.lifecycleRuleRevision": "리비전",
   "settings.lifecycleActionDoNothing": "아무 작업도 하지 않음",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "범위 모니터링 해제, 파일 유지",
@@ -3132,7 +3131,6 @@ const ko: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "모든 라이브러리",
   "settings.requestRuleLibrariesHelp":
     "모든 항목을 선택하지 않으면 이 규칙이 모든 라이브러리의 요청에 적용됩니다.",
-  "settings.requestRuleRevision": "리비전",
   "settings.requestRuleDecisionCount": "결정 수",
   "settings.requestRuleCopy": "규칙 복사",
   "settings.requestRuleCreate": "규칙 만들기",

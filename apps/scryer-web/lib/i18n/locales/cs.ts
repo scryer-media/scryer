@@ -2635,7 +2635,7 @@ const cs: LocaleDictionary = {
   "settings.ruleLibraryAll": "Vše",
   "settings.ruleLibraryCommunityEmpty":
     "Nejsou dostupné žádné komunitní balíčky pravidel. Obnovte registr pluginů a zkontrolujte nové balíčky.",
-  "settings.arrImportAction": "Importovat vlastní formát z Arr",
+  "settings.arrImportAction": "Importovat z Arr",
   "settings.ruleAiPrompt": "AI prompt",
   "settings.ruleAiPromptTitle": "Vytvořit pravidlo pomocí AI",
   "settings.ruleAiPromptDescription":
@@ -4940,7 +4940,6 @@ const cs: LocaleDictionary = {
     "Editor pravidla životního cyklu obsahuje neuložené změny, které budou ztraceny.",
   "settings.lifecycleRuleDeleting": "Smazat pravidlo životního cyklu {{name}}?",
   "settings.noLifecycleRulesFound": "Zatím žádná pravidla životního cyklu.",
-  "settings.lifecycleRuleRevision": "Revize",
   "settings.lifecycleActionDoNothing": "Neprovádět nic",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Zrušit sledování rozsahu, soubory zachovat",
@@ -5783,7 +5782,6 @@ const cs: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Všechny knihovny",
   "settings.requestRuleLibrariesHelp":
     "Ponecháním všech políček nezaškrtnutých uplatníte toto pravidlo na žádosti ve všech knihovnách.",
-  "settings.requestRuleRevision": "Revize",
   "settings.requestRuleDecisionCount": "Rozhodnutí",
   "settings.requestRuleCopy": "Kopírovat pravidlo",
   "settings.requestRuleCreate": "Vytvořit pravidlo",

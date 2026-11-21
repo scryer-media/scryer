@@ -2291,7 +2291,7 @@ const zh_HK: LocaleDictionary = {
   "settings.ruleLibraryAll": "全部",
   "settings.ruleLibraryCommunityEmpty":
     "沒有可用的社區規則包。重新整理插件註冊表以檢查新包。",
-  "settings.arrImportAction": "導入 Arr 自訂格式",
+  "settings.arrImportAction": "從 Arr 導入",
   "settings.ruleAiPrompt": "AI 提示詞",
   "settings.ruleAiPromptTitle": "使用 AI 建立規則",
   "settings.ruleAiPromptDescription":
@@ -4240,7 +4240,6 @@ const zh_HK: LocaleDictionary = {
     "生命週期規則編輯器中有未儲存的更改，將會丟失。",
   "settings.lifecycleRuleDeleting": "刪除生命週期規則 {{name}}？",
   "settings.noLifecycleRulesFound": "暫無生命週期規則。",
-  "settings.lifecycleRuleRevision": "修訂版",
   "settings.lifecycleActionDoNothing": "不執行任何操作",
   "settings.lifecycleActionUnmonitorScopeKeepFiles": "取消監控該範圍，保留檔案",
   "settings.lifecycleActionDeleteTitleAndFiles": "刪除該標題及其檔案",
@@ -5001,7 +5000,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "所有庫",
   "settings.requestRuleLibrariesHelp":
     "全部不勾選，則此規則適用於所有庫中的請求。",
-  "settings.requestRuleRevision": "修訂版",
   "settings.requestRuleDecisionCount": "決策數",
   "settings.requestRuleCopy": "複製規則",
   "settings.requestRuleCreate": "創建規則",

@@ -4711,7 +4711,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRuleDeleting":
     "Удалить правило жизненного цикла {{name}}?",
   "settings.noLifecycleRulesFound": "Правил жизненного цикла пока нет.",
-  "settings.lifecycleRuleRevision": "Ревизия",
   "settings.lifecycleActionDoNothing": "Ничего не делать",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Снять отслеживание области, сохранить файлы",
@@ -5478,7 +5477,6 @@ const ru: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Все библиотеки",
   "settings.requestRuleLibrariesHelp":
     "Оставьте все флажки снятыми, чтобы правило применялось к запросам во всех библиотеках.",
-  "settings.requestRuleRevision": "Ревизия",
   "settings.requestRuleDecisionCount": "Решений",
   "settings.requestRuleCopy": "Копировать правило",
   "settings.requestRuleCreate": "Создать правило",
@@ -12115,7 +12113,7 @@ const ru: LocaleDictionary = {
     "Это отзовёт активные сеансы пользователя {{name}} и потребует выбрать новый пароль после локального входа.",
   "settings.advancedConfig": "Расширенные настройки",
   "settings.indexerRateLimits": "Ограничения частоты запросов",
-  "settings.arrImportAction": "Импортировать пользовательский формат Arr",
+  "settings.arrImportAction": "Импорт из Arr",
   "settings.ruleAiPrompt": "Запрос для ИИ",
   "settings.ruleAiPromptTitle": "Создать правило с помощью ИИ",
   "settings.ruleAiPromptDescription":

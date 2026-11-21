@@ -8,7 +8,6 @@ import {
   ChevronDown,
   Copy,
   Edit,
-  FileInput,
   Library,
   Plus,
   Power,
@@ -35,6 +34,15 @@ import {
 } from "@/lib/constants/rule-templates";
 import { CommunityRulePacksSection } from "@/components/views/settings/community-rule-packs-section";
 import { ScoringRulesTabs } from "@/components/views/settings/scoring-rules-tabs";
+import { RuleTablePager } from "@/components/views/settings/rule-table-pager";
+import { SortableHead } from "@/components/views/lists/sortable-head";
+import {
+  nextRuleTableSort,
+  ruleTablePage,
+  sortScoringRules,
+  type RuleTableSort,
+  type ScoringRuleSortKey,
+} from "@/lib/utils/rule-table";
 import type { ScoringRulesSection } from "@/components/root/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +90,7 @@ import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surfa
 import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
 import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import { trashLocalePacks } from "@/lib/utils/trash-packs";
+import { productLogoUrl } from "@/components/setup/import/import-instance-pill";
 
 type SettingsRulesSectionProps = {
   canManageTrackedPacks: boolean;
@@ -714,6 +723,16 @@ export function SettingsRulesSection({
     onTerminal: () => void refreshRuleSets(),
   });
   const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
+  // The rule list arrives whole; sorting and paging stay in the page.
+  const [ruleSort, setRuleSort] = React.useState<
+    RuleTableSort<ScoringRuleSortKey>
+  >({ key: "name", descending: false });
+  const [rulePageIndex, setRulePageIndex] = React.useState(0);
+  const userRules = React.useMemo(
+    () => sortScoringRules(ruleSetRecords.filter(isUserOwnedRuleSet), ruleSort),
+    [ruleSetRecords, ruleSort],
+  );
+  const rulePage = ruleTablePage(userRules, rulePageIndex);
   const validationDiagnostics = React.useMemo(
     () => regoDiagnostics(ruleSetDraft.regoSource, validationResult, t),
     [ruleSetDraft.regoSource, validationResult, t],
@@ -793,7 +812,21 @@ export function SettingsRulesSection({
                     size="default"
                     onClick={() => setIsArrImportOpen(true)}
                     disabled={mutatingRuleSetId !== null}
-                    leadingIcon={<FileInput className="h-4 w-4" />}
+                    leadingIcon={
+                      <span aria-hidden className="flex items-center gap-0.5">
+                        <img
+                          src={productLogoUrl("SONARR") ?? undefined}
+                          alt=""
+                          className="h-4 w-4"
+                        />
+                        <span className="text-xs opacity-60">/</span>
+                        <img
+                          src={productLogoUrl("RADARR") ?? undefined}
+                          alt=""
+                          className="h-4 w-4"
+                        />
+                      </span>
+                    }
                     label={t("settings.arrImportAction")}
                   />
                 </div>
@@ -802,19 +835,44 @@ export function SettingsRulesSection({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t("label.name")}</TableHead>
-                      <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
-                      <TableHead className="text-center">
-                        {t("label.enabled")}
-                      </TableHead>
+                      {(
+                        [
+                          ["name", t("label.name"), undefined],
+                          [
+                            "description",
+                            t("settings.ruleDescription"),
+                            undefined,
+                          ],
+                          [
+                            "appliedFacets",
+                            t("settings.ruleAppliedFacets"),
+                            undefined,
+                          ],
+                          ["enabled", t("label.enabled"), "text-center"],
+                        ] as const
+                      ).map(([key, label, className]) => (
+                        <SortableHead
+                          key={key}
+                          id={selectorId("settings-rules-sort", key)}
+                          label={label}
+                          className={className}
+                          active={ruleSort.key === key}
+                          descending={ruleSort.descending}
+                          onSort={() => {
+                            setRuleSort((current) =>
+                              nextRuleTableSort(current, key),
+                            );
+                            setRulePageIndex(0);
+                          }}
+                        />
+                      ))}
                       <TableHead className="text-right">
                         {t("label.actions")}
                       </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
+                    {rulePage.rows.map((record) => (
                       <TableRow
                         data-ui="settings-table-row"
                         key={record.id}
@@ -909,7 +967,7 @@ export function SettingsRulesSection({
                         </TableCell>
                       </TableRow>
                     ))}
-                    {ruleSetRecords.length === 0 ? (
+                    {userRules.length === 0 ? (
                       <TableRow>
                         <TableCell
                           colSpan={5}
@@ -922,6 +980,11 @@ export function SettingsRulesSection({
                   </TableBody>
                 </Table>
               </div>
+              <RuleTablePager
+                idPrefix="settings-rules"
+                page={rulePage}
+                onPageChange={setRulePageIndex}
+              />
             </div>
 
             {isEditorOpen ? (

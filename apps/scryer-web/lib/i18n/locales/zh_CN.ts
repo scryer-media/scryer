@@ -2364,7 +2364,6 @@ const zh_CN: LocaleDictionary = {
     "生命周期规则编辑器中有未保存的更改，将会丢失。",
   "settings.lifecycleRuleDeleting": "删除生命周期规则 {{name}}？",
   "settings.noLifecycleRulesFound": "暂无生命周期规则。",
-  "settings.lifecycleRuleRevision": "修订版",
   "settings.lifecycleActionDoNothing": "不执行任何操作",
   "settings.lifecycleActionUnmonitorScopeKeepFiles": "取消监控该范围，保留文件",
   "settings.lifecycleActionDeleteTitleAndFiles": "删除该标题及其文件",
@@ -2948,7 +2947,6 @@ const zh_CN: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "所有库",
   "settings.requestRuleLibrariesHelp":
     "全部不勾选，则此规则适用于所有库中的请求。",
-  "settings.requestRuleRevision": "修订版",
   "settings.requestRuleDecisionCount": "决策数",
   "settings.requestRuleCopy": "复制规则",
   "settings.requestRuleCreate": "创建规则",

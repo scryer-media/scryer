@@ -2651,7 +2651,6 @@ const it: LocaleDictionary = {
     "Eliminare la regola del ciclo di vita {{name}}?",
   "settings.noLifecycleRulesFound":
     "Nessuna regola del ciclo di vita al momento.",
-  "settings.lifecycleRuleRevision": "Revisione",
   "settings.lifecycleActionDoNothing": "Non fare nulla",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Smetti di monitorare l'ambito, mantieni i file",
@@ -3292,7 +3291,6 @@ const it: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Tutte le librerie",
   "settings.requestRuleLibrariesHelp":
     "Lascia tutte le caselle deselezionate per applicare questa regola alle richieste di ogni libreria.",
-  "settings.requestRuleRevision": "Revisione",
   "settings.requestRuleDecisionCount": "Decisioni",
   "settings.requestRuleCopy": "Copia regola",
   "settings.requestRuleCreate": "Crea regola",

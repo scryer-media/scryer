@@ -2620,7 +2620,6 @@ const de: LocaleDictionary = {
     "Der Lebenszyklusregel-Editor enthält nicht gespeicherte Änderungen, die verloren gehen.",
   "settings.lifecycleRuleDeleting": "Lebenszyklusregel {{name}} löschen?",
   "settings.noLifecycleRulesFound": "Noch keine Lebenszyklusregeln.",
-  "settings.lifecycleRuleRevision": "Revision",
   "settings.lifecycleActionDoNothing": "Nichts tun",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Bereich nicht mehr überwachen, Dateien behalten",
@@ -3262,7 +3261,6 @@ const de: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Alle Bibliotheken",
   "settings.requestRuleLibrariesHelp":
     "Lassen Sie alle Felder unmarkiert, damit diese Regel für Anfragen in jeder Bibliothek gilt.",
-  "settings.requestRuleRevision": "Revision",
   "settings.requestRuleDecisionCount": "Entscheidungen",
   "settings.requestRuleCopy": "Regel kopieren",
   "settings.requestRuleCreate": "Regel erstellen",

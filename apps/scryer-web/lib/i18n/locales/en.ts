@@ -7354,7 +7354,7 @@ const en: LocaleDictionary = {
   "settings.rulePackInstalling": "Installing…",
   "settings.ruleLibraryCommunityEmpty":
     "No community rule packs available. Refresh the plugin registry to check for new packs.",
-  "settings.arrImportAction": "Import Arr custom format",
+  "settings.arrImportAction": "Import from Arr",
   "settings.ruleAiPrompt": "AI prompt",
   "settings.ruleAiPromptTitle": "Create a rule with AI",
   "settings.ruleAiPromptDescription":
@@ -9871,7 +9871,6 @@ const en: LocaleDictionary = {
     "The lifecycle rule editor has unsaved changes that will be lost.",
   "settings.lifecycleRuleDeleting": "Delete the lifecycle rule {{name}}?",
   "settings.noLifecycleRulesFound": "No lifecycle rules yet.",
-  "settings.lifecycleRuleRevision": "Revision",
   "settings.lifecycleActionDoNothing": "Do nothing",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Unmonitor the scope, keep files",
@@ -10802,7 +10801,6 @@ const en: LocaleDictionary = {
   "settings.requestRuleLibraries": "Applied Libraries",
   "settings.requestRuleLibrariesAll": "All libraries",
   "settings.requestRuleLibrariesHelp": "Leave empty to apply to all libraries.",
-  "settings.requestRuleRevision": "Revision",
   "settings.requestRuleDecisionCount": "Decisions",
   "settings.requestRuleCopy": "Copy rule",
   "settings.requestRuleCreate": "Create rule",

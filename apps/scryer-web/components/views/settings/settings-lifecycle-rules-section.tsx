@@ -56,6 +56,7 @@ import {
 } from "@/components/ui/table";
 import type { LifecycleRulesSection } from "@/components/root/types";
 import { SortableHead } from "@/components/views/lists/sortable-head";
+import { RuleTablePager } from "@/components/views/settings/rule-table-pager";
 import {
   lifecycleRulePage,
   nextLifecycleRuleSort,
@@ -952,12 +953,6 @@ export function SettingsLifecycleRulesSection({
                         "w-[240px]",
                         t("settings.lifecycleRuleStateHelp"),
                       ],
-                      [
-                        "revision",
-                        t("settings.lifecycleRuleRevision"),
-                        "text-center",
-                        undefined,
-                      ],
                     ] as const
                   ).map(([key, label, className, help]) => (
                     <SortableHead
@@ -1067,9 +1062,6 @@ export function SettingsLifecycleRulesSection({
                           ) : null}
                         </div>
                       </TableCell>
-                      <TableCell className="text-center">
-                        {record.currentRevisionNumber}
-                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           {/* A built-in rule is viewed and its state set from
@@ -1133,7 +1125,7 @@ export function SettingsLifecycleRulesSection({
                 })}
                 {ruleSetRecords.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
+                    <TableCell colSpan={6} className="text-muted-foreground">
                       {t("settings.noLifecycleRulesFound")}
                     </TableCell>
                   </TableRow>
@@ -1141,45 +1133,11 @@ export function SettingsLifecycleRulesSection({
               </TableBody>
             </Table>
           </div>
-          {rulePage.pageCount > 1 ? (
-            <div
-              id="settings-lifecycle-rules-pager"
-              className="flex items-center justify-between gap-3 border-t border-border px-3 py-2"
-            >
-              <p
-                id="settings-lifecycle-rules-page-range"
-                className="text-[12.5px] text-[var(--scry-muted3)]"
-              >
-                {t("pendingImports.pageRange", {
-                  start: rulePage.start,
-                  end: rulePage.end,
-                  total: rulePage.total,
-                })}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  id="settings-lifecycle-rules-previous-page"
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={rulePage.page === 0}
-                  onClick={() => setRulePageIndex(rulePage.page - 1)}
-                >
-                  {t("pendingImports.prev")}
-                </Button>
-                <Button
-                  id="settings-lifecycle-rules-next-page"
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={rulePage.page >= rulePage.pageCount - 1}
-                  onClick={() => setRulePageIndex(rulePage.page + 1)}
-                >
-                  {t("pendingImports.next")}
-                </Button>
-              </div>
-            </div>
-          ) : null}
+          <RuleTablePager
+            idPrefix="settings-lifecycle-rules"
+            page={rulePage}
+            onPageChange={setRulePageIndex}
+          />
         </div>
 
         {isEditorOpen ? (

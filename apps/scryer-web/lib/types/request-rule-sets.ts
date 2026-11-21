@@ -72,7 +72,6 @@ export type RequestRuleSetRecord = {
   description: string;
   enabled: boolean;
   libraryIds: string[];
-  currentRevisionNumber: number;
   /// How many stored decisions name this rule set. Read per rule set rather
   /// than batched, so the number on a row is the number the API holds.
   decisionCount: number;

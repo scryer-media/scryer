@@ -211,7 +211,7 @@ export function ArrRuleImportConnectPanel({
               <Input
                 id="settings-rules-arr-connect-api-key"
                 type="password"
-                autoComplete="off"
+                ignorePasswordManagers
                 value={apiKey}
                 disabled={busy}
                 onChange={(event) => setApiKey(event.target.value)}

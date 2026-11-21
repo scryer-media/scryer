@@ -56,6 +56,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
+import { RuleTablePager } from "@/components/views/settings/rule-table-pager";
+import { SortableHead } from "@/components/views/lists/sortable-head";
+import {
+  nextRuleTableSort,
+  ruleTablePage,
+  sortRequestRules,
+  type RequestRuleSortKey,
+  type RuleTableSort,
+} from "@/lib/utils/rule-table";
 import requestInputContract from "@/lib/contracts/request-input-contract.json";
 import {
   REQUEST_RULE_TEMPLATES,
@@ -1121,6 +1130,29 @@ export function SettingsRequestRulesSection({
     panelProps: sidePanelProps,
     close: closeSidePanel,
   } = useRuleSidePanels<RequestSidePanel>(section === "rules");
+  // The rule list arrives whole; sorting and paging stay in the page.
+  const [ruleSort, setRuleSort] = React.useState<
+    RuleTableSort<RequestRuleSortKey>
+  >({ key: "name", descending: false });
+  const [rulePageIndex, setRulePageIndex] = React.useState(0);
+  const libraryNameById = React.useMemo(
+    () => new Map(libraries.map((library) => [library.id, library.name])),
+    [libraries],
+  );
+  const libraryLabel = React.useCallback(
+    (record: RequestRuleSetRecord) =>
+      record.libraryIds.length === 0
+        ? t("settings.requestRuleLibrariesAll")
+        : record.libraryIds
+            .map((libraryId) => libraryNameById.get(libraryId) ?? libraryId)
+            .join(", "),
+    [libraryNameById, t],
+  );
+  const sortedRules = React.useMemo(
+    () => sortRequestRules(ruleSetRecords, ruleSort, libraryLabel),
+    [ruleSetRecords, ruleSort, libraryLabel],
+  );
+  const rulePage = ruleTablePage(sortedRules, rulePageIndex);
   const validationStatus = (
     <EditorValidationStatus
       id="settings-request-rule-validation"
@@ -1230,39 +1262,57 @@ export function SettingsRequestRulesSection({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t("label.name")}</TableHead>
-                  <TableHead>{t("settings.ruleDescription")}</TableHead>
-                  <TableHead className="w-[1%] text-center">
-                    {t("label.enabled")}
-                  </TableHead>
-                  <TableHead>{t("settings.requestRuleLibraries")}</TableHead>
+                  {(
+                    [
+                      ["name", t("label.name"), undefined],
+                      ["description", t("settings.ruleDescription"), undefined],
+                      ["enabled", t("label.enabled"), "w-[1%] text-center"],
+                      [
+                        "libraries",
+                        t("settings.requestRuleLibraries"),
+                        undefined,
+                      ],
+                    ] as const
+                  ).map(([key, label, className]) => (
+                    <SortableHead
+                      key={key}
+                      id={selectorId("settings-request-rules-sort", key)}
+                      label={label}
+                      className={className}
+                      active={ruleSort.key === key}
+                      descending={ruleSort.descending}
+                      onSort={() => {
+                        setRuleSort((current) =>
+                          nextRuleTableSort(current, key),
+                        );
+                        setRulePageIndex(0);
+                      }}
+                    />
+                  ))}
                   <TableHead>
                     {t("settings.requestDeclaredActionsTitle")}
                   </TableHead>
-                  <TableHead className="text-center">
-                    {t("settings.requestRuleRevision")}
-                  </TableHead>
-                  <TableHead className="text-center">
-                    {t("settings.requestRuleDecisionCount")}
-                  </TableHead>
+                  <SortableHead
+                    id={selectorId("settings-request-rules-sort", "decisions")}
+                    label={t("settings.requestRuleDecisionCount")}
+                    className="text-center"
+                    active={ruleSort.key === "decisions"}
+                    descending={ruleSort.descending}
+                    onSort={() => {
+                      setRuleSort((current) =>
+                        nextRuleTableSort(current, "decisions"),
+                      );
+                      setRulePageIndex(0);
+                    }}
+                  />
                   <TableHead className="text-right">
                     {t("label.actions")}
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {ruleSetRecords.map((record) => {
-                  const libraryNames =
-                    record.libraryIds.length === 0
-                      ? t("settings.requestRuleLibrariesAll")
-                      : record.libraryIds
-                          .map(
-                            (libraryId) =>
-                              libraries.find(
-                                (library) => library.id === libraryId,
-                              )?.name ?? libraryId,
-                          )
-                          .join(", ");
+                {rulePage.rows.map((record) => {
+                  const libraryNames = libraryLabel(record);
                   return (
                     <TableRow
                       data-ui="settings-table-row"
@@ -1307,9 +1357,6 @@ export function SettingsRequestRulesSection({
                         ) : null}
                       </TableCell>
                       <TableCell className="text-center">
-                        {record.currentRevisionNumber}
-                      </TableCell>
-                      <TableCell className="text-center">
                         {record.decisionCount}
                       </TableCell>
                       <TableCell className="text-right">
@@ -1346,7 +1393,7 @@ export function SettingsRequestRulesSection({
                 })}
                 {ruleSetRecords.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground">
+                    <TableCell colSpan={7} className="text-muted-foreground">
                       {t("settings.noRequestRulesFound")}
                     </TableCell>
                   </TableRow>
@@ -1354,6 +1401,11 @@ export function SettingsRequestRulesSection({
               </TableBody>
             </Table>
           </div>
+          <RuleTablePager
+            idPrefix="settings-request-rules"
+            page={rulePage}
+            onPageChange={setRulePageIndex}
+          />
         </div>
 
         {isEditorOpen ? (

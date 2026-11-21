@@ -17,7 +17,6 @@ function rule(id: string, overrides: Partial<Rule> = {}): Rule {
     graceDays: 7,
     nextRunAt: null,
     state: "DISABLED",
-    currentRevisionNumber: 1,
     ...overrides,
   };
 }
@@ -86,9 +85,9 @@ test("pressing the active column reverses it; another column starts ascending", 
     descending: true,
   });
   assert.deepEqual(
-    nextLifecycleRuleSort({ key: "name", descending: true }, "revision"),
+    nextLifecycleRuleSort({ key: "name", descending: true }, "state"),
     {
-      key: "revision",
+      key: "state",
       descending: false,
     },
   );

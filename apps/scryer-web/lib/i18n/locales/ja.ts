@@ -2565,7 +2565,6 @@ const ja: LocaleDictionary = {
   "settings.lifecycleRuleDeleting":
     "ライフサイクルルール {{name}} を削除しますか？",
   "settings.noLifecycleRulesFound": "ライフサイクルルールはまだありません。",
-  "settings.lifecycleRuleRevision": "リビジョン",
   "settings.lifecycleActionDoNothing": "何もしない",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "対象のモニタリングを解除し、ファイルは保持",
@@ -3194,7 +3193,6 @@ const ja: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "すべてのライブラリ",
   "settings.requestRuleLibrariesHelp":
     "すべてのチェックを外すと、このルールはすべてのライブラリのリクエストに適用されます。",
-  "settings.requestRuleRevision": "リビジョン",
   "settings.requestRuleDecisionCount": "判定数",
   "settings.requestRuleCopy": "ルールをコピー",
   "settings.requestRuleCreate": "ルールを作成",

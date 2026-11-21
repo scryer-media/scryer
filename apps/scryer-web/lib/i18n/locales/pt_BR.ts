@@ -2638,7 +2638,6 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecycleRuleDeleting":
     "Excluir a regra de ciclo de vida {{name}}?",
   "settings.noLifecycleRulesFound": "Ainda não há regras de ciclo de vida.",
-  "settings.lifecycleRuleRevision": "Revisão",
   "settings.lifecycleActionDoNothing": "Não fazer nada",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Parar de monitorar o escopo, manter arquivos",
@@ -3278,7 +3277,6 @@ const pt_BR: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Todas as bibliotecas",
   "settings.requestRuleLibrariesHelp":
     "Deixe todas as caixas desmarcadas para aplicar esta regra às solicitações de todas as bibliotecas.",
-  "settings.requestRuleRevision": "Revisão",
   "settings.requestRuleDecisionCount": "Decisões",
   "settings.requestRuleCopy": "Copiar regra",
   "settings.requestRuleCreate": "Criar regra",
