@@ -1,9 +1,10 @@
 //! Pre-flight: tell a requester what will happen before they submit.
 //!
-//! The dialog calls this as the requester changes library, profile, monitor, or
-//! lease. It runs the *same* enrichment and the *same* evaluation the submit
-//! will run — literally the same functions, through the same cache — so the
-//! banner and the outcome cannot disagree.
+//! The dialog stages the subject's metadata once when it opens, then calls the
+//! preview as the requester changes library, profile, monitor, or lease. The
+//! preview reads that staged record and runs the *same* evaluation the submit
+//! will run over the same record, so the banner and the outcome cannot
+//! disagree, and a preview never reaches SMG.
 //!
 //! Two things it deliberately does not do:
 //!
@@ -52,7 +53,63 @@ pub struct RequestPreflight {
     pub shaping: crate::request_rules::ArbitratedShaping,
 }
 
+/// What staging a request subject established.
+#[derive(Clone, Debug)]
+pub struct StagedRequestMetadata {
+    /// True when the metadata could not be fully established, so a preview
+    /// or a submit will read some facts as unknown.
+    pub metadata_partial: bool,
+}
+
 impl AppUseCase {
+    /// Stage the metadata of a subject the requester picked: the one SMG read
+    /// every preview and the submit then share.
+    ///
+    /// Requires what a preview requires, [`LibraryPermission::Request`] on the
+    /// target library, and refuses before SMG is asked.
+    pub async fn stage_my_request_metadata(
+        &self,
+        actor: &User,
+        library_id: &str,
+        facet: scryer_domain::MediaFacet,
+        external_ids: Vec<scryer_domain::ExternalId>,
+    ) -> AppResult<StagedRequestMetadata> {
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id.trim())
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::LIBRARY_NOT_FOUND,
+                    "library not found",
+                )
+            })?;
+        if library.facet != facet {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::LIBRARY_FACET_MISMATCH,
+                "library facet does not match requested media facet",
+            ));
+        }
+        self.require_library_permission(actor, &library.id, LibraryPermission::Request)
+            .await?;
+        let external_ids =
+            crate::media_requests::normalize_media_request_external_ids(external_ids)?;
+        if external_ids.is_empty() {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::MEDIA_REQUESTS_INVALID,
+                "media requests must include SMG external identifiers",
+            ));
+        }
+        let staged = self
+            .stage_request_metadata(&facet, external_ids, true)
+            .await;
+        Ok(StagedRequestMetadata {
+            metadata_partial: staged.snapshot.partial,
+        })
+    }
+
     /// Evaluate a draft without persisting it.
     ///
     /// Requires exactly what submit requires — [`LibraryPermission::Request`] on
@@ -103,9 +160,20 @@ impl AppUseCase {
                 input.requested_preferred_audio_languages.clone(),
             )?;
 
-        // The same read-through cache the submit uses, so the two share one SMG
-        // call and therefore one set of facts.
-        let enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
+        // The record the staging step stored, which is the one the submit
+        // reads: no SMG call and no write here, however often the dialog
+        // asks. A subject nobody staged has no metadata to judge, which reads
+        // as unavailable rather than as a reason to ask SMG.
+        let enrichment = match self
+            .staged_request_metadata(&input.facet, &external_ids)
+            .await
+        {
+            Some(staged) => staged,
+            None => crate::media_requests::MediaRequestMetadataEnrichment::unavailable(
+                external_ids,
+                crate::media_requests::SNAPSHOT_SOURCE_NOT_STAGED,
+            ),
+        };
         let external_ids = enrichment.external_ids.clone();
 
         // The profile is resolved exactly as submit resolves it, including the

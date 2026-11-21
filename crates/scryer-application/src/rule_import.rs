@@ -1023,8 +1023,7 @@ impl AppUseCase {
         &self,
         fetched: &RuleImportFetched,
     ) -> AppResult<RuleImportPlanContext> {
-        let mut context = RuleImportPlanContext::default();
-        context.quality_profile_names = self
+        let quality_profile_names = self
             .services
             .config
             .quality_profiles
@@ -1033,17 +1032,21 @@ impl AppUseCase {
             .into_iter()
             .map(|profile| profile.name)
             .collect();
-        if matches!(fetched, RuleImportFetched::Maintainerr(_)) {
-            context.usernames = self
-                .services
+        let usernames = if matches!(fetched, RuleImportFetched::Maintainerr(_)) {
+            self.services
                 .identity
                 .users
                 .list_usernames()
                 .await?
                 .into_iter()
-                .collect();
-        }
-        Ok(context)
+                .collect()
+        } else {
+            Default::default()
+        };
+        Ok(RuleImportPlanContext {
+            quality_profile_names,
+            usernames,
+        })
     }
 
     /// Loads, once per run, whatever saves need to decide each item.

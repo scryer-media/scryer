@@ -513,23 +513,25 @@ impl StorageCapacity {
     /// A root whose previous call is still out is not called again; it reads
     /// unreachable until that call returns. Returns the calls made.
     pub(crate) async fn sample_roots(&self) -> usize {
-        let pass = self.inner.passes.fetch_add(1, Ordering::SeqCst);
-        let full = pass % FULL_PASS_EVERY == 0;
-        let roots: Vec<(String, PathBuf, Option<(u64, u64)>, Arc<Mutex<()>>)> =
-            read(&self.inner.entries)
-                .iter()
-                .filter(|(_, entry)| entry.root)
-                .map(|(key, entry)| {
-                    (
-                        key.clone(),
-                        entry.path.clone(),
-                        entry.sample.as_ref().and_then(Sample::group),
-                        entry.flight.clone(),
-                    )
-                })
-                .collect();
+        type RootProbe = (String, PathBuf, Option<(u64, u64)>, Arc<Mutex<()>>);
+        type ProbeGroup = (Option<(u64, u64)>, Vec<(String, PathBuf)>);
 
-        let mut groups: Vec<(Option<(u64, u64)>, Vec<(String, PathBuf)>)> = Vec::new();
+        let pass = self.inner.passes.fetch_add(1, Ordering::SeqCst);
+        let full = pass.is_multiple_of(FULL_PASS_EVERY);
+        let roots: Vec<RootProbe> = read(&self.inner.entries)
+            .iter()
+            .filter(|(_, entry)| entry.root)
+            .map(|(key, entry)| {
+                (
+                    key.clone(),
+                    entry.path.clone(),
+                    entry.sample.as_ref().and_then(Sample::group),
+                    entry.flight.clone(),
+                )
+            })
+            .collect();
+
+        let mut groups: Vec<ProbeGroup> = Vec::new();
         for (key, path, group, flight) in roots {
             if flight.try_lock().is_err() {
                 self.store(
@@ -649,10 +651,11 @@ impl StorageCapacity {
         if entry.root && recovered {
             info!(root = %key, "library root capacity readings recovered");
         }
-        if entry.root && failed {
-            if let Err(failure) = &sample.outcome {
-                warn!(root = %key, error = %failure.message, "library root capacity reading unavailable");
-            }
+        if entry.root
+            && failed
+            && let Err(failure) = &sample.outcome
+        {
+            warn!(root = %key, error = %failure.message, "library root capacity reading unavailable");
         }
         entry.sample = Some(sample);
     }
@@ -1143,6 +1146,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "The held lock simulates a capacity probe that has yet to return"
+    )]
     async fn a_root_whose_call_is_still_out_reads_unreachable_and_is_not_called_again() {
         let clock = ManualClock::at(at(0));
         let (capacity, disk) = owner(&clock);

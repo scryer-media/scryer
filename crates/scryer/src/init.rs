@@ -63,13 +63,7 @@ fn create_new_file(
         .map_err(CreateFailure::Create)?;
     file.write_all(contents).map_err(CreateFailure::Write)?;
     #[cfg(unix)]
-    let mode = {
-        use std::os::unix::fs::PermissionsExt;
-        // The handle's own metadata, not another look at the path.
-        file.metadata()
-            .ok()
-            .map(|metadata| metadata.permissions().mode() & 0o777)
-    };
+    let mode = disk.opened_file_mode_blocking(&file);
     #[cfg(not(unix))]
     let mode = None;
     disk.finish_blocking(path, file)

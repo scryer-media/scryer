@@ -104,9 +104,7 @@ impl FileResolution {
         // compares with the destination's.
         let source_read = Disk::process().fingerprint(&source).await;
         let destination_version = file_version(&destination).await.ok();
-        let Some(expected) = self.destination_version.as_deref() else {
-            return None;
-        };
+        let expected = self.destination_version.as_deref()?;
         let held = |held: bool, source: SourceName| held.then_some(source);
         if source_read
             .as_ref()

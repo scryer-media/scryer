@@ -44,6 +44,7 @@ mod lifecycle_rule_sets;
 mod media_request_history_key;
 mod media_request_policy;
 mod media_request_requesters;
+mod media_request_staged_metadata;
 mod media_server_signals;
 mod migrations;
 mod oauth;

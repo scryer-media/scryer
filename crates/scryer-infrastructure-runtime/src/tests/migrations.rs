@@ -6381,7 +6381,7 @@ async fn migration_0278_postgres_rekeys_search_terms_by_language() -> AppResult<
         })?;
 
     let result = async {
-        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(277)).await?;
+        postgres_history::replay_historical_postgres(&pool, 277).await?;
         sqlx::query(
             "INSERT INTO titles (
                 id, library_id, name, name_normalized, facet, root_folder_id,
@@ -6679,7 +6679,7 @@ async fn migration_0279_postgres_carries_text_learning_into_v3_and_applies_the_c
         })?;
 
     let result = async {
-        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(278)).await?;
+        postgres_history::replay_historical_postgres(&pool, 278).await?;
         for statement in migration_0279_seed_statements(true) {
             sqlx::query(sqlx::AssertSqlSafe(statement))
                 .execute(&pool)

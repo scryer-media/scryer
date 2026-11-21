@@ -434,7 +434,7 @@ async fn unsettled_library_files_are_read_kept_and_settled_once() {
     );
     assert!(
         !store
-            .record_library_files_unsettled("missing-import", &[first.clone()])
+            .record_library_files_unsettled("missing-import", std::slice::from_ref(&first))
             .await
             .unwrap()
     );
@@ -481,7 +481,7 @@ async fn unsettled_library_files_are_read_kept_and_settled_once() {
     let (store, cleanup, claim, _) = retry_fixture().await;
     assert!(
         store
-            .record_library_files_unsettled(&claim.import_id, &[first.clone()])
+            .record_library_files_unsettled(&claim.import_id, std::slice::from_ref(&first))
             .await
             .unwrap()
     );

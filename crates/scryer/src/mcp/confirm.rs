@@ -14,7 +14,7 @@
 //! client's own tool approval, which `run_mutation`'s destructive annotation
 //! asks for, is the human check; this makes that check name the real effect.
 //!
-//! Tokens are 256 random bits from the system generator. Only their SHA-256
+//! Tokens are 256 random bits from the system generator. Only their BLAKE3
 //! digest is kept, in memory, so a token never sits in the table, a log or a
 //! lookup timing. They expire after [`CONFIRM_TTL`] and are lost on restart,
 //! which only means asking again. The table is capped per key and in total;
@@ -25,8 +25,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use aws_lc_rs::digest::{SHA256, digest};
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+use scryer_application::{HashDomain, blake3_identity_bytes};
 use serde_json::{Map, Value};
 
 use super::catalog::{Operation, OperationKind};
@@ -92,7 +92,7 @@ pub(crate) fn binding(operation: &Operation, variables: Option<&Value>) -> [u8; 
         variables.unwrap_or(&Value::Object(Map::new())),
         &mut canonical_text,
     );
-    sha256(canonical_text.as_bytes())
+    blake3_identity_bytes(HashDomain::McpConfirmationBinding, canonical_text)
 }
 
 /// `value` as JSON with every object's keys sorted. `serde_json` keeps
@@ -151,12 +151,6 @@ pub(crate) fn redacted(value: &Value) -> Value {
 fn is_secret_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     SECRET_NAMES.iter().any(|secret| lower.ends_with(secret))
-}
-
-fn sha256(bytes: &[u8]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(digest(&SHA256, bytes).as_ref());
-    out
 }
 
 struct Pending {
@@ -226,7 +220,7 @@ impl Confirmations {
             remove_oldest(&mut pending, |_| true);
         }
         pending.insert(
-            sha256(token.as_bytes()),
+            blake3_identity_bytes(HashDomain::McpConfirmationToken, &token),
             Pending {
                 key_id: key_id.to_owned(),
                 user_id: user_id.to_owned(),
@@ -245,7 +239,7 @@ impl Confirmations {
         binding: [u8; 32],
         now: Instant,
     ) -> Redemption {
-        let id = sha256(token.as_bytes());
+        let id = blake3_identity_bytes(HashDomain::McpConfirmationToken, token);
         let mut pending = self
             .pending
             .lock()

@@ -6,8 +6,8 @@ use scryer_interface_media::mappers::{
 };
 use scryer_interface_media::types::{
     ApproveMediaRequestInput, ApproveMediaRequestPayload, MediaRequestActionPayload,
-    MediaRequestPayload, SubmitMediaRequestInput, SubmitMediaRequestPayload,
-    UpdateMediaRequestInput,
+    MediaRequestPayload, StageMediaRequestMetadataInput, StageMediaRequestMetadataPayload,
+    SubmitMediaRequestInput, SubmitMediaRequestPayload, UpdateMediaRequestInput,
 };
 
 /// Resolve an approver's lease override into the application layer's
@@ -41,6 +41,37 @@ pub struct MediaRequestMutations;
 
 #[Object]
 impl MediaRequestMutations {
+    /// Read a request subject's metadata once and keep it for the previews and the submit that follow; requires request permission on the target library.
+    ///
+    /// The request dialog calls this when it opens. `previewMyRequestDecision`
+    /// reads the staged record and never fetches metadata itself, so a subject
+    /// that was not staged previews as metadata unavailable.
+    async fn stage_my_request_metadata(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Target library, facet, and external identifiers of the subject.")]
+        input: StageMediaRequestMetadataInput,
+    ) -> GqlResult<StageMediaRequestMetadataPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let staged = app
+            .stage_my_request_metadata(
+                &actor,
+                input.library_id.as_ref(),
+                input.facet.into_domain(),
+                input
+                    .external_ids
+                    .into_iter()
+                    .map(|external_id| external_id.into_domain())
+                    .collect(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(StageMediaRequestMetadataPayload {
+            metadata_partial: staged.metadata_partial,
+        })
+    }
+
     /// Create a media request with the requested metadata and acquisition preferences.
     async fn submit_media_request(
         &self,

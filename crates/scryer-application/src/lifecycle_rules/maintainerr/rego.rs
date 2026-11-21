@@ -1243,8 +1243,8 @@ fn compare(first: Operand, action: i64, second: Second) -> Option<Comparison> {
         }
         Shape::Bool => {
             let rhs = match second {
-                Second::Custom(Custom::Number(n)) if n == 1.0 => "true".to_string(),
-                Second::Custom(Custom::Number(n)) if n == 0.0 => "false".to_string(),
+                Second::Custom(Custom::Number(1.0)) => "true".to_string(),
+                Second::Custom(Custom::Number(0.0)) => "false".to_string(),
                 Second::Other(other) if other.shape == Shape::Bool => other.into_lines(&mut lines),
                 _ => return None,
             };

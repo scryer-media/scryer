@@ -1317,6 +1317,9 @@ mod tests {
         }
         // 0357 lets import history read the newest imports first.
         assert!(indexes.insert("idx_imports_created_at".to_string()));
+        // 0360 replaces the title-only index with the title and release-name index.
+        assert!(indexes.remove("idx_blocklist_title_id"));
+        assert!(indexes.insert("idx_blocklist_title_release_name".to_string()));
         // 0348 drops the operator-keep claim index, which nothing writes, and
         // renames the lifecycle rule tables' indexes.
         assert!(indexes.remove("idx_lifecycle_claims_live_operator_keep"));

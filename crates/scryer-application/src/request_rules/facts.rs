@@ -1137,6 +1137,10 @@ impl AppUseCase {
     /// Only the families `reads` names are read. The facts of the rest read
     /// unknown as not yet collected: for an evaluation whose rules cannot read
     /// them.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Both evaluations supply their draft, snapshot, time, exclusion, and fact selection"
+    )]
     pub(crate) async fn assemble_request_input_context(
         &self,
         actor: &User,

@@ -945,8 +945,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Background grabs add the startGrab mutation root: mutation 297->298.
     // External rule imports start with `startExternalRuleImport`: 298->299.
     assert!(mutation_field_names.contains(&"startExternalRuleImport"));
+    // Each library can control its background hash backfill: 299->300.
+    assert!(mutation_field_names.contains(&"setLibraryFullHashBackfill"));
     assert_eq!(
-        mutation_field_count, 299,
+        mutation_field_count, 300,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1576,7 +1578,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     }
     assert_eq!(
         public_types.len(),
-        1059,
+        1060,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 577);
@@ -1584,7 +1586,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
-    assert_eq!(kind_count("INPUT_OBJECT"), 251);
+    assert!(public_type_names.contains(&"SetLibraryFullHashBackfillInput"));
+    assert_eq!(kind_count("INPUT_OBJECT"), 252);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     assert_eq!(kind_count("ENUM"), 219);

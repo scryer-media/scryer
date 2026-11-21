@@ -236,6 +236,25 @@ pub struct SubmitMediaRequestPayload {
     pub request_id: ID,
 }
 
+/// The subject a requester picked, staged before the request dialog previews it.
+#[derive(InputObject, Clone)]
+pub struct StageMediaRequestMetadataInput {
+    /// Library the request would target.
+    pub library_id: ID,
+    /// Requested media facet.
+    pub facet: MediaFacetValue,
+    /// External provider identifiers of the subject, as a submit would send them.
+    pub external_ids: Vec<ExternalIdInput>,
+}
+
+/// What staging a request subject's metadata established.
+#[derive(SimpleObject, Clone)]
+pub struct StageMediaRequestMetadataPayload {
+    /// True when the metadata could not be fully established, so a preview
+    /// or a submit of this subject reads some facts as unknown.
+    pub metadata_partial: bool,
+}
+
 #[derive(InputObject, Clone)]
 /// Metadata and preferences submitted with a media request.
 pub struct SubmitMediaRequestInput {

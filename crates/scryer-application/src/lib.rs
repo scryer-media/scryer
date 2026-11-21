@@ -602,10 +602,10 @@ pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 24;
 pub use acquisition::release_search::release_strategy_kind_for_label;
 pub use helpers::{
     HashDomain, MAX_USER_TAGS_PER_TITLE, MAX_USER_TITLE_TAG_LEN, RESERVED_TITLE_TAG_PREFIX,
-    accepted_inputs_for_client, background_worker_priority, blake3_identity_hex,
-    http_capabilities_for_client, indexer_listing_page_fingerprint, is_password_protection_marker,
-    is_reserved_title_tag, nice_thread, normalize_release_name, normalize_release_password,
-    normalize_user_title_tag, normalize_user_title_tags,
+    accepted_inputs_for_client, background_worker_priority, blake3_identity_bytes,
+    blake3_identity_hex, http_capabilities_for_client, indexer_listing_page_fingerprint,
+    is_password_protection_marker, is_reserved_title_tag, nice_thread, normalize_release_name,
+    normalize_release_password, normalize_user_title_tag, normalize_user_title_tags,
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,
@@ -768,10 +768,10 @@ pub use ports::{
     RuntimePluginLoad, SEARCH_STRATEGY_CONTAINED, SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN,
     STALLED_IMPORT_PASSES_TRACKED_STATE_REASON, ScopeCoverageRow, ScopeIndexerCoverageRepository,
     SeedingProfileRepository, SettingsRepository, ShowRepository, SrrdbFilenameLookup, SrrdbOutage,
-    StagedNzbStore, SubtitleDownloadRepository, SubtitlePluginProvider, SubtitleProviderClient,
-    SubtitleProviderConfigRepository, SystemInfoProvider, TitleHistoryTitleScope,
-    TitleImageProcessor, TitleImageRepository, TitleListProjection, TitleNameBucketQuery,
-    TitleNameCandidate, TitleRepository, TitleRowProjection, TotpRepository,
+    StagedMediaRequestMetadata, StagedNzbStore, SubtitleDownloadRepository, SubtitlePluginProvider,
+    SubtitleProviderClient, SubtitleProviderConfigRepository, SystemInfoProvider,
+    TitleHistoryTitleScope, TitleImageProcessor, TitleImageRepository, TitleListProjection,
+    TitleNameBucketQuery, TitleNameCandidate, TitleRepository, TitleRowProjection, TotpRepository,
     UserExternalAccountRepository, UserRepository, VerifiedExternalIdentity, WebauthnRepository,
     WorkflowOperationInfo, WorkflowOperationRepository,
 };

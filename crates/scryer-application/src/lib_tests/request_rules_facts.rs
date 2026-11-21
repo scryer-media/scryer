@@ -1196,7 +1196,8 @@ fn an_unread_family_reads_unknown_and_leaves_every_other_fact_alone() {
         WATCHLIST_FACT_NAMES,
     };
     let full = document(context_with(full_snapshot()));
-    let families: [(&[&str], fn(&mut RequestFactReads)); 7] = [
+    type DisableFactFamily = fn(&mut RequestFactReads);
+    let families: [(&[&str], DisableFactFamily); 7] = [
         (QUALITY_FACT_NAMES, |reads| reads.quality = false),
         (CATALOG_FACT_NAMES, |reads| reads.catalog = false),
         (REQUESTER_HISTORY_FACT_NAMES, |reads| {

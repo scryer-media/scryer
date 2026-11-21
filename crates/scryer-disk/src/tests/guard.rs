@@ -179,13 +179,13 @@ fn code(text: &str) -> Vec<Cow<'_, str>> {
             if opened.starts_with("//") {
                 break;
             }
-            if opened.starts_with("/*") {
-                (within, rest) = (Within::Comment(1), &opened[2..]);
-            } else if opened.starts_with('"') {
+            if let Some(comment) = opened.strip_prefix("/*") {
+                (within, rest) = (Within::Comment(1), comment);
+            } else if let Some(text) = opened.strip_prefix('"') {
                 let hashes = before.len() - before.trim_end_matches('#').len();
                 let raw = before[..before.len() - hashes].ends_with('r');
                 let hashes = if raw { hashes } else { 0 };
-                (within, rest) = (Within::Text { raw, hashes }, &opened[1..]);
+                (within, rest) = (Within::Text { raw, hashes }, text);
             } else if opened.starts_with("'\\") {
                 // An escaped character: past the escape, then its quote.
                 let end = opened[3..].find('\'').map_or(opened.len(), |end| end + 4);
@@ -676,9 +676,8 @@ fn direct_filesystem_lines_carry_a_marker_and_markers_do_not_grow() {
         let lines = borrowed(&lines);
         let counted = counted(&lines);
         markers += counted.len();
-        let raw = raw(&lines);
-        for at in 0..lines.len() {
-            if raw[at] && !covered(&lines, at, &counted) {
+        for (at, is_raw) in raw(&lines).into_iter().enumerate() {
+            if is_raw && !covered(&lines, at, &counted) {
                 unmarked.entry(shown.clone()).or_default().push(at + 1);
             }
         }

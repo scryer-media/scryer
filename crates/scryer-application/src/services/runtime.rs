@@ -75,91 +75,10 @@ pub struct AppRuntimeCatalogState {
     pub(crate) artwork_wait_reason: Arc<tokio::sync::RwLock<String>>,
     pub title_image_maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub title_image_cache_clear_scheduled: Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) media_request_enrichment: MediaRequestEnrichmentCache,
     /// Test seam: times the hydration worker yielded to a scan-owned facet,
     /// mirroring `scryer_title_metadata_hydration_scan_owned_yields_total`.
     #[cfg(test)]
     pub(crate) title_hydration_scan_yields: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-/// How long one media-request enrichment stays reusable. Long enough that a requester who
-/// previews a decision, changes their profile a few times, and then submits is judged against one
-/// SMG read (FR-021); short enough that a metadata correction shows up in the next request.
-pub const MEDIA_REQUEST_ENRICHMENT_CACHE_TTL: std::time::Duration =
-    std::time::Duration::from_secs(300);
-
-/// Upper bound on cached enrichments. This is a per-process convenience cache, not a store: the
-/// bound is what keeps a burst of distinct drafts from turning it into a leak.
-pub const MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY: usize = 256;
-
-/// Read-through cache in front of SMG for media-request enrichment.
-///
-/// Deliberately a `std::sync::Mutex<HashMap<..>>` rather than a new dependency: entries are
-/// small, the map is bounded at [`MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY`], and every operation
-/// is a few pointer moves with no await inside the lock.
-///
-/// It does **not** single-flight: two simultaneous first calls for the same subject both reach
-/// SMG and the second insert wins. That is a duplicate read, never a wrong answer, and the
-/// alternative (a per-key lock held across an SMG round trip) is a far worse failure mode.
-#[derive(Clone, Default)]
-pub(crate) struct MediaRequestEnrichmentCache {
-    entries: Arc<std::sync::Mutex<MediaRequestEnrichmentEntries>>,
-}
-
-/// One cached enrichment: when it was stored, and what was stored.
-type MediaRequestEnrichmentEntry = (
-    std::time::Instant,
-    Arc<crate::media_requests::MediaRequestMetadataEnrichment>,
-);
-
-/// The cache's map, keyed by the enrichment subject.
-type MediaRequestEnrichmentEntries = HashMap<String, MediaRequestEnrichmentEntry>;
-
-impl MediaRequestEnrichmentCache {
-    pub(crate) fn get(
-        &self,
-        key: &str,
-    ) -> Option<Arc<crate::media_requests::MediaRequestMetadataEnrichment>> {
-        let now = std::time::Instant::now();
-        let mut entries = self.entries.lock().ok()?;
-        match entries.get(key) {
-            Some((stored_at, value))
-                if now.duration_since(*stored_at) < MEDIA_REQUEST_ENRICHMENT_CACHE_TTL =>
-            {
-                Some(Arc::clone(value))
-            }
-            Some(_) => {
-                entries.remove(key);
-                None
-            }
-            None => None,
-        }
-    }
-
-    pub(crate) fn insert(
-        &self,
-        key: String,
-        value: Arc<crate::media_requests::MediaRequestMetadataEnrichment>,
-    ) {
-        let now = std::time::Instant::now();
-        let Ok(mut entries) = self.entries.lock() else {
-            return;
-        };
-        entries.retain(|_, (stored_at, _)| {
-            now.duration_since(*stored_at) < MEDIA_REQUEST_ENRICHMENT_CACHE_TTL
-        });
-        while entries.len() >= MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY {
-            let Some(oldest) = entries
-                .iter()
-                .min_by_key(|(_, (stored_at, _))| *stored_at)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            entries.remove(&oldest);
-        }
-        entries.insert(key, (now, value));
-    }
 }
 
 pub const DOWNLOAD_QUEUE_SNAPSHOT_STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -2696,7 +2615,6 @@ impl AppRuntimeState {
                 title_image_cache_clear_scheduled: Arc::new(std::sync::atomic::AtomicBool::new(
                     false,
                 )),
-                media_request_enrichment: MediaRequestEnrichmentCache::default(),
                 #[cfg(test)]
                 title_hydration_scan_yields: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },

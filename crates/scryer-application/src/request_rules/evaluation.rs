@@ -223,7 +223,7 @@ impl AppUseCase {
     ///
     /// The caller passes the *enrichment's* snapshot rather than a request row,
     /// so pre-flight and submit share one metadata read — the caller
-    /// obtained it through `enrich_request_draft`, which is cached.
+    /// obtained it from the staged record, so this read is shared.
     pub(crate) async fn evaluate_request_draft(
         &self,
         actor: &User,

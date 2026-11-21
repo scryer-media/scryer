@@ -518,7 +518,7 @@ fn the_early_look_reads_the_source_once() {
         let (disk, backend) = scripted();
         backend.stat_is(SOURCE, source_read);
         let alias = disk.entry_alias_blocking(&source, &dest, &mark(dest_read));
-        assert_eq!(backend.paths_of("lstat"), [source.clone()]);
+        assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&source));
         assert_eq!(backend.calls.lock().unwrap().len(), 1);
         alias
     };

@@ -104,6 +104,23 @@ async fn remove_safely(path: &Path, what: Remove, if_exists: bool) -> AppResult<
     )))
 }
 
+/// Place a journaled recovery copy without the claim-and-replace fallback.
+/// On volumes without exclusive rename, retain the staging link as well.
+/// If neither operation is supported, preserve everything and refuse.
+pub(crate) async fn promote_recovery_staged_file(staged: &Path, dest: &Path) -> io::Result<()> {
+    let disk = Disk::process();
+    if disk.move_onto_free_name(staged, dest).await? == FreeNameMove::Moved {
+        return Ok(());
+    }
+    match disk.link(staged, dest, Link::Hard).await? {
+        LinkOutcome::Linked => Ok(()),
+        LinkOutcome::NotPossible => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the volume offers neither an exclusive rename nor a hard link",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,22 +249,5 @@ mod tests {
         assert!(remove_file_safely(&lone).await.is_err());
         assert!(remove_dir_safely(&neighbour).await.is_err());
         assert!(neighbour.join("keep.mkv").exists());
-    }
-}
-
-/// Place a journaled recovery copy without the claim-and-replace fallback.
-/// On volumes without exclusive rename, retain the staging link as well.
-/// If neither operation is supported, preserve everything and refuse.
-pub(crate) async fn promote_recovery_staged_file(staged: &Path, dest: &Path) -> io::Result<()> {
-    let disk = Disk::process();
-    if disk.move_onto_free_name(staged, dest).await? == FreeNameMove::Moved {
-        return Ok(());
-    }
-    match disk.link(staged, dest, Link::Hard).await? {
-        LinkOutcome::Linked => Ok(()),
-        LinkOutcome::NotPossible => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "the volume offers neither an exclusive rename nor a hard link",
-        )),
     }
 }

@@ -1469,6 +1469,16 @@ impl Disk {
         result.map_err(|error| DiskError::new(open.verb(), path, error))
     }
 
+    /// Reads the permission bits of an open handle without looking up its path.
+    #[cfg(unix)]
+    pub fn opened_file_mode_blocking(&self, file: &std::fs::File) -> Option<u32> {
+        use std::os::unix::fs::PermissionsExt;
+
+        self.call("handle_stat", || file.metadata())
+            .ok()
+            .map(|metadata| metadata.permissions().mode() & 0o777)
+    }
+
     /// [`Self::open_blocking`] off the runtime. Opening to read is bounded
     /// under a configured root; opening to write never is. Reads and writes
     /// through the handle afterwards are not bounded.

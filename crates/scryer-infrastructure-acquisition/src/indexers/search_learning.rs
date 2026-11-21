@@ -3841,6 +3841,17 @@ pub(crate) mod tests {
         .execute(&pool)
         .await
         .map_err(repo_err)?;
+        sqlx::query(
+            "CREATE TEMP TABLE indexer_search_run_candidate_sources (
+                run_id TEXT NOT NULL REFERENCES indexer_search_runs(id) ON DELETE CASCADE,
+                source_id TEXT NOT NULL REFERENCES indexer_search_candidate_sources(id) ON DELETE CASCADE,
+                search_session_id TEXT NOT NULL,
+                PRIMARY KEY (run_id, source_id)
+            ) ON COMMIT PRESERVE ROWS",
+        )
+        .execute(&pool)
+        .await
+        .map_err(repo_err)?;
         // Cleanup also retires listing state; keep its production schema local
         // to this fixture's single connection.
         let listing_schema = include_str!(
@@ -3861,13 +3872,20 @@ pub(crate) mod tests {
         let old_candidate = Utc::now() - chrono::Duration::days(8);
         let old_run = Utc::now() - chrono::Duration::days(91);
         for ordinal in 0..2 {
+            // Match the source and run ordering so each bounded sweep ages out one pair.
+            let offset = chrono::Duration::seconds(ordinal);
+            let candidate_at = old_candidate + offset;
+            let run_at = old_run + offset;
+            let candidate_id = format!("candidate-{ordinal}");
+            let source_id = format!("source-{ordinal}");
+            let run_id = format!("run-{ordinal}");
             sqlx::query(
                 "INSERT INTO indexer_search_candidates (id, created_at, expires_at)
                  VALUES ($1, $2, $3)",
             )
-            .bind(format!("candidate-{ordinal}"))
-            .bind(old_candidate)
-            .bind(old_candidate)
+            .bind(&candidate_id)
+            .bind(candidate_at)
+            .bind(candidate_at)
             .execute(&pool)
             .await
             .map_err(repo_err)?;
@@ -3878,10 +3896,10 @@ pub(crate) mod tests {
                     (id, candidate_id, first_seen_at, expires_at)
                  VALUES ($1, $2, $3, $4)",
             )
-            .bind(format!("source-{ordinal}"))
-            .bind(format!("candidate-{ordinal}"))
-            .bind(old_candidate)
-            .bind(old_candidate)
+            .bind(&source_id)
+            .bind(&candidate_id)
+            .bind(candidate_at)
+            .bind(candidate_at)
             .execute(&pool)
             .await
             .map_err(repo_err)?;
@@ -3889,8 +3907,17 @@ pub(crate) mod tests {
                 "INSERT INTO indexer_search_runs (id, created_at)
                  VALUES ($1, $2)",
             )
-            .bind(format!("run-{ordinal}"))
-            .bind(old_run)
+            .bind(&run_id)
+            .bind(run_at)
+            .execute(&pool)
+            .await
+            .map_err(repo_err)?;
+            sqlx::query(
+                "INSERT INTO indexer_search_run_candidate_sources (run_id, source_id, search_session_id)
+                 VALUES ($1, $2, 'fixture-session')",
+            )
+            .bind(&run_id)
+            .bind(&source_id)
             .execute(&pool)
             .await
             .map_err(repo_err)?;

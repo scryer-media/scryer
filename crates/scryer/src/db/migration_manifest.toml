@@ -4449,6 +4449,23 @@ file = "postgres/migrations/0365_request_rule_preflight_trace_index.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 366
+description = "media request staged metadata"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0366_media_request_staged_metadata.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0366_media_request_staged_metadata.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

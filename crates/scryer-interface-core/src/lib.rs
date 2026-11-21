@@ -213,40 +213,36 @@ impl AuthRuntimeStateHandle {
         form_login_enabled: bool,
         skip_login_for_local_ips: bool,
     ) -> AuthRuntimeStateSnapshot {
-        let next_snapshot = {
-            let mut snapshot = self
-                .snapshot
-                .write()
-                .expect("auth runtime snapshot lock poisoned");
-            let previous_policy = (
-                snapshot.effective_form_login_enabled,
-                snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
-                snapshot.passkey_enabled,
-            );
-            snapshot.form_login_enabled = form_login_enabled;
-            snapshot.skip_login_for_local_ips =
-                skip_login_for_local_ips && !self.local_login_bypass_disabled;
-            if !snapshot.env_override_active {
-                snapshot.effective_form_login_enabled = form_login_enabled;
-            }
-            snapshot.passkey_enabled =
-                snapshot.webauthn_configured && snapshot.effective_form_login_enabled;
-            let next_policy = (
-                snapshot.effective_form_login_enabled,
-                snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
-                snapshot.passkey_enabled,
-            );
-            if next_policy != previous_policy {
-                snapshot.epoch += 1;
-            }
-            // Stored even when no connection is listening, and under the
-            // snapshot lock, so a later connection never reads an epoch the
-            // watch has not reached.
-            self.epoch_tx.send_replace(snapshot.epoch);
-            snapshot.clone()
-        };
-
-        next_snapshot
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .expect("auth runtime snapshot lock poisoned");
+        let previous_policy = (
+            snapshot.effective_form_login_enabled,
+            snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
+            snapshot.passkey_enabled,
+        );
+        snapshot.form_login_enabled = form_login_enabled;
+        snapshot.skip_login_for_local_ips =
+            skip_login_for_local_ips && !self.local_login_bypass_disabled;
+        if !snapshot.env_override_active {
+            snapshot.effective_form_login_enabled = form_login_enabled;
+        }
+        snapshot.passkey_enabled =
+            snapshot.webauthn_configured && snapshot.effective_form_login_enabled;
+        let next_policy = (
+            snapshot.effective_form_login_enabled,
+            snapshot.effective_form_login_enabled && snapshot.skip_login_for_local_ips,
+            snapshot.passkey_enabled,
+        );
+        if next_policy != previous_policy {
+            snapshot.epoch += 1;
+        }
+        // Stored even when no connection is listening, and under the
+        // snapshot lock, so a later connection never reads an epoch the
+        // watch has not reached.
+        self.epoch_tx.send_replace(snapshot.epoch);
+        snapshot.clone()
     }
 
     pub fn subscribe_epoch(&self) -> watch::Receiver<u64> {
@@ -254,17 +250,14 @@ impl AuthRuntimeStateHandle {
     }
 
     pub fn invalidate_connections(&self) -> u64 {
-        let next_epoch = {
-            let mut snapshot = self
-                .snapshot
-                .write()
-                .expect("auth runtime snapshot lock poisoned");
-            snapshot.epoch += 1;
-            // See `apply_saved_security_settings`.
-            self.epoch_tx.send_replace(snapshot.epoch);
-            snapshot.epoch
-        };
-        next_epoch
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .expect("auth runtime snapshot lock poisoned");
+        snapshot.epoch += 1;
+        // See `apply_saved_security_settings`.
+        self.epoch_tx.send_replace(snapshot.epoch);
+        snapshot.epoch
     }
 
     pub fn user_revocation_mark(&self) -> UserRevocationMark {

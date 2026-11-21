@@ -195,7 +195,7 @@ impl AppUseCase {
                 &rule.taken_names,
             )
             .await;
-        if matches!(created, Ok(_)) {
+        if created.is_ok() {
             // Saved now, or by someone else since the run loaded the names.
             context
                 .existing_lifecycle_names

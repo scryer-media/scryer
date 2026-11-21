@@ -44,7 +44,7 @@ impl LocalTrustPolicy {
             || public_url_host
                 .and_then(request_host_name)
                 .is_some_and(|public_host| public_host == host)
-            || self.allowed_hosts.iter().any(|allowed| *allowed == host)
+            || self.allowed_hosts.contains(&host)
     }
 }
 

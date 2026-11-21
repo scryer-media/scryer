@@ -2554,7 +2554,7 @@ pub(crate) fn charge_api_key_call(
     state: &AuthState,
     caller: &ApiKeyCaller,
     class: crate::rate_limit::GraphqlRateLimitClass,
-) -> Result<(), GraphQLResponse> {
+) -> Result<(), Box<GraphQLResponse>> {
     state
         .rate_limiter
         .check_graphql(class, &caller.provenance.key(None))
@@ -2563,7 +2563,7 @@ pub(crate) fn charge_api_key_call(
                 .rate_limiter
                 .check_graphql(class, &caller.provenance.key(Some(&caller.actor.user.id)))
         })
-        .map_err(|decision| rate_limited_graphql_single_response(&decision))
+        .map_err(|decision| Box::new(rate_limited_graphql_single_response(&decision)))
 }
 
 /// Run one GraphQL operation as an admitted API-key caller whose tool call

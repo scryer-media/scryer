@@ -464,9 +464,12 @@ fn request_rules_postgres_matches_sqlite_statement_for_statement() {
 /// The `idx_maintenance_*` indexes that exist before 0348, from one engine's
 /// earlier migrations in order: created and not dropped since.
 fn live_maintenance_indexes(directory: &str) -> BTreeSet<String> {
-    let mut files: Vec<(u32, std::path::PathBuf)> = std::fs::read_dir(directory)
+    let disk = scryer_application::disk::Disk::process();
+    let mut files: Vec<(u32, std::path::PathBuf)> = disk
+        .list_blocking(std::path::Path::new(directory))
         .unwrap_or_else(|error| panic!("{directory}: {error}"))
-        .map(|entry| entry.unwrap().path())
+        .into_iter()
+        .map(|entry| entry.path)
         .filter_map(|path| {
             let name = path.file_name()?.to_str()?.to_string();
             let version: u32 = name.get(..4)?.parse().ok()?;
@@ -476,7 +479,7 @@ fn live_maintenance_indexes(directory: &str) -> BTreeSet<String> {
     files.sort();
     let mut live = BTreeSet::new();
     for (_, path) in files {
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = disk.read_to_string_blocking(&path).unwrap();
         let text = text
             .lines()
             .map(|line| line.split("--").next().unwrap_or_default())
