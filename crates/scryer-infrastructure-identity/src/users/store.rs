@@ -198,6 +198,17 @@ impl UserRepository for UserStore {
         .transpose()
     }
 
+    async fn record_sign_in(&self, user_id: &str, at: chrono::DateTime<Utc>) -> AppResult<()> {
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "record_user_sign_in",
+            "UPDATE users SET last_login_at = {} WHERE id = {}",
+            vec![SqlArg::Timestamp(at), SqlArg::Text(user_id.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),

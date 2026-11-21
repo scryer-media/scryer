@@ -3836,9 +3836,11 @@ const pt_BR: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "Numeração de episódios ambígua",
   "settings.lifecycleExecutionReason.playbackHold":
-    "Em espera: algo está sendo reproduzido em um servidor de mídia.",
+    "Em espera: este título está sendo reproduzido em um servidor de mídia.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Em espera: não foi possível perguntar a um servidor de mídia se algo está sendo reproduzido.",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "Em espera: um servidor de mídia está reproduzindo algo que o Scryer não conseguiu associar a nenhum título, então nada é excluído até a reprodução terminar.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Em espera: o servidor de mídia mostra uma reprodução mais recente que o histórico salvo.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

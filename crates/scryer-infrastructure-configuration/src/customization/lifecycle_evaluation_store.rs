@@ -45,30 +45,32 @@ impl LifecycleEvaluationStore {
 const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, source_content_hash, title_id,
     library_id, facet, subject_kind, subject_id, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
-    held_since, action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json";
+    held_since, action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json,
+    state_cause_code";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
         (id, rule_set_id, revision_number, source_content_hash, title_id, library_id, facet,
          subject_kind, subject_id, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
-         action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json,
+         state_cause_code)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const ACTION_RUN_COLUMNS: &str =
     "id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id,
     action_kind, match_generation, idempotency_key, attempt, status, hold_reason, error,
-    detail, started_at, finished_at, created_at";
+    detail, started_at, finished_at, created_at, cause_code";
 
 const INSERT_ACTION_RUN_SQL: &str = "INSERT INTO lifecycle_action_runs
         (id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id, action_kind,
          match_generation, idempotency_key, attempt, status, hold_reason, error, detail,
-         started_at, finished_at, created_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         started_at, finished_at, created_at, cause_code)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const ACTION_STEP_COLUMNS: &str = "candidate_id, match_generation, revision_number, step_id,
     rule_set_id, title_id, subject_kind, subject_id, sequence_content_hash, step_kind,
     intent_json, before_state_json, target_identity_json, provenance_json, state, attempt,
-    lease_id, lease_expires_at, hold_reason, error, created_at, updated_at, finished_at";
+    lease_id, lease_expires_at, hold_reason, error, created_at, updated_at, finished_at, cause_code";
 
 const ACTION_JOB_RECEIPT_COLUMNS: &str = "candidate_id, match_generation, revision_number,
     step_id, dispatch_attempt, schema_version, logical_request_key, request_hash, job_run_id,
@@ -467,7 +469,8 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
             .join(", ");
         let sql = format!(
             "UPDATE lifecycle_candidates
-                SET state = {{}}, state_reason = {{}}, last_evaluated_at = {{}}, updated_at = {{}}
+                SET state = {{}}, state_reason = {{}}, state_cause_code = NULL,
+                    last_evaluated_at = {{}}, updated_at = {{}}
               WHERE id = {{}} AND state IN ({placeholders})"
         );
         let mut args = vec![
@@ -563,11 +566,13 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         expected_lease_updated_at: DateTime<Utc>,
         state: LifecycleCandidateState,
         state_reason: &str,
+        state_cause_code: Option<&str>,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool> {
         let args = vec![
             SqlArg::Text(state.as_storage_str().to_string()),
             SqlArg::Text(state_reason.to_string()),
+            SqlArg::OptText(state_cause_code.map(str::to_string)),
             SqlArg::Timestamp(finished_at),
             SqlArg::Timestamp(finished_at),
             SqlArg::Text(id.to_string()),
@@ -587,7 +592,8 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE lifecycle_candidates
-                SET state = {}, state_reason = {}, last_evaluated_at = {}, updated_at = {}
+                SET state = {}, state_reason = {}, state_cause_code = {}, last_evaluated_at = {},
+                    updated_at = {}
               WHERE id = {} AND state = {} AND updated_at = {}",
                         &args,
                     )
@@ -724,7 +730,7 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         // caller can move the row into `executing`, and a crashed lease is
         // reclaimable only once its `updated_at` has gone stale.
         let sql = "UPDATE lifecycle_candidates
-                      SET state = {}, state_reason = {}, updated_at = {}
+                      SET state = {}, state_reason = {}, state_cause_code = NULL, updated_at = {}
                     WHERE id = {}
                       AND (state = {} OR (state = {} AND updated_at < {}))";
         let args = vec![
@@ -776,12 +782,14 @@ impl LifecycleActionRunRepository for LifecycleEvaluationStore {
             &self.datastore,
             "finish_lifecycle_action_run",
             "UPDATE lifecycle_action_runs
-                SET status = {}, hold_reason = {}, error = {}, detail = {}, finished_at = {}
+                SET status = {}, hold_reason = {}, error = {}, cause_code = {}, detail = {},
+                    finished_at = {}
               WHERE id = {}",
             vec![
                 SqlArg::Text(run.status.as_storage_str().to_string()),
                 SqlArg::OptText(run.hold_reason.clone()),
                 SqlArg::OptText(run.error.clone()),
+                SqlArg::OptText(run.cause_code.clone()),
                 SqlArg::Text(run.detail.clone()),
                 SqlArg::OptTimestamp(run.finished_at),
                 SqlArg::Text(run.id.clone()),
@@ -977,6 +985,7 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
         claimed.finished_at = None;
         claimed.hold_reason = None;
         claimed.error = None;
+        claimed.cause_code = None;
         let key = claimed.key.clone();
         let lease_id = lease_id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "claim_lifecycle_action_step", move |tx| {
@@ -1007,8 +1016,8 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
                           title_id, subject_kind, subject_id, sequence_content_hash, step_kind,
                           intent_json, before_state_json, target_identity_json, provenance_json,
                           state, attempt, lease_id, lease_expires_at, hold_reason, error,
-                          created_at, updated_at, finished_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                          created_at, updated_at, finished_at, cause_code)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
                          ON CONFLICT(candidate_id, match_generation, revision_number, step_id) DO NOTHING",
                         &action_step_args(&claimed),
                     )
@@ -1087,13 +1096,14 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
                     resumed.lease_expires_at = claimed.lease_expires_at;
                     resumed.hold_reason = None;
                     resumed.error = None;
+                    resumed.cause_code = None;
                     resumed.updated_at = claimed.updated_at;
                     resumed.finished_at = None;
                     let affected = SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE lifecycle_action_steps
                             SET state = {}, lease_id = {}, lease_expires_at = {}, hold_reason = NULL,
-                                error = NULL, updated_at = {}, finished_at = NULL
+                                error = NULL, cause_code = NULL, updated_at = {}, finished_at = NULL
                           WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
                             AND step_id = {} AND state = {} AND updated_at = {}",
                         &[
@@ -1126,6 +1136,7 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
                 retried.lease_expires_at = claimed.lease_expires_at;
                 retried.hold_reason = None;
                 retried.error = None;
+                retried.cause_code = None;
                 retried.updated_at = claimed.updated_at;
                 retried.finished_at = None;
                 let affected = SqlRuntime::execute(
@@ -1133,7 +1144,7 @@ impl LifecycleActionStepRepository for LifecycleEvaluationStore {
                     "UPDATE lifecycle_action_steps
                         SET intent_json = {}, before_state_json = {}, target_identity_json = {},
                             provenance_json = {}, state = {}, attempt = {}, lease_id = {},
-                            lease_expires_at = {}, hold_reason = NULL, error = NULL,
+                            lease_expires_at = {}, hold_reason = NULL, error = NULL, cause_code = NULL,
                             updated_at = {}, finished_at = NULL
                       WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
                         AND step_id = {} AND state = {} AND updated_at = {}",
@@ -1502,7 +1513,8 @@ impl LifecycleSequenceCompletionRepository for LifecycleEvaluationStore {
                     let affected = SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE lifecycle_candidates
-                            SET state = {}, state_reason = {}, updated_at = {}
+                            SET state = {}, state_reason = {}, state_cause_code = NULL,
+                                updated_at = {}
                           WHERE id = {} AND revision_number = {} AND match_generation = {}
                             AND state = {} AND updated_at = {}",
                         &[
@@ -1833,6 +1845,7 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::Timestamp(candidate.updated_at),
         SqlArg::OptText(candidate.decided_actions_json.clone()),
         SqlArg::OptText(actions_conflict_text(candidate.actions_conflict.as_ref())?),
+        SqlArg::OptText(candidate.state_cause_code.clone()),
     ])
 }
 
@@ -1873,6 +1886,7 @@ fn action_run_args(run: &LifecycleActionRun) -> Vec<SqlArg> {
         SqlArg::Timestamp(run.started_at),
         SqlArg::OptTimestamp(run.finished_at),
         SqlArg::Timestamp(run.created_at),
+        SqlArg::OptText(run.cause_code.clone()),
     ]
 }
 
@@ -1910,6 +1924,7 @@ fn action_step_args(step: &LifecycleActionStepRun) -> Vec<SqlArg> {
         SqlArg::Timestamp(step.created_at),
         SqlArg::Timestamp(step.updated_at),
         SqlArg::OptTimestamp(step.finished_at),
+        SqlArg::OptText(step.cause_code.clone()),
     ]
 }
 
@@ -2027,7 +2042,7 @@ async fn update_running_action_step(
                         "UPDATE lifecycle_action_steps
                         SET before_state_json = {}, target_identity_json = {}, provenance_json = {},
                             state = {}, lease_id = NULL, lease_expires_at = NULL, hold_reason = {},
-                            error = {}, updated_at = {}, finished_at = {}
+                            error = {}, cause_code = {}, updated_at = {}, finished_at = {}
                       WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
                         AND step_id = {} AND state = {} AND lease_id = {}",
                         vec![
@@ -2037,6 +2052,7 @@ async fn update_running_action_step(
                             SqlArg::Text(step.state.as_storage_str().to_string()),
                             SqlArg::OptText(step.hold_reason.clone()),
                             SqlArg::OptText(step.error.clone()),
+                            SqlArg::OptText(step.cause_code.clone()),
                             SqlArg::Timestamp(step.updated_at),
                             SqlArg::OptTimestamp(step.finished_at),
                             SqlArg::Text(step.key.candidate_id.clone()),
@@ -2096,7 +2112,7 @@ async fn update_open_action_step_attempt(
         (
             "UPDATE lifecycle_action_step_attempts
                 SET before_state_json = {}, target_identity_json = {}, provenance_json = {}, state = {},
-                    hold_reason = {}, error = {}, finished_at = {}, updated_at = {}
+                    hold_reason = {}, error = {}, cause_code = {}, finished_at = {}, updated_at = {}
               WHERE id = (
                   SELECT id FROM lifecycle_action_step_attempts
                    WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
@@ -2110,6 +2126,7 @@ async fn update_open_action_step_attempt(
                 SqlArg::Text(step.state.as_storage_str().to_string()),
                 SqlArg::OptText(step.hold_reason.clone()),
                 SqlArg::OptText(step.error.clone()),
+                SqlArg::OptText(step.cause_code.clone()),
                 SqlArg::OptTimestamp(step.finished_at),
                 SqlArg::Timestamp(step.updated_at),
                 SqlArg::Text(step.key.candidate_id.clone()),
@@ -2398,6 +2415,7 @@ fn row_to_action_step(row: &SqlRow) -> AppResult<LifecycleActionStepRun> {
         lease_expires_at: row.opt_timestamp("lease_expires_at")?,
         hold_reason: row.opt_text("hold_reason")?,
         error: row.opt_text("error")?,
+        cause_code: row.opt_text("cause_code")?,
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
         finished_at: row.opt_timestamp("finished_at")?,
@@ -2485,6 +2503,7 @@ fn row_to_action_run(row: &SqlRow) -> AppResult<LifecycleActionRun> {
         status: LifecycleActionRunStatus::parse_storage(&row.text("status")?).unwrap_or_default(),
         hold_reason: row.opt_text("hold_reason")?,
         error: row.opt_text("error")?,
+        cause_code: row.opt_text("cause_code")?,
         detail: row.text("detail")?,
         started_at: row.timestamp("started_at")?,
         finished_at: row.opt_timestamp("finished_at")?,
@@ -2510,6 +2529,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         // the only safe reading a dark build can give it.
         state: LifecycleCandidateState::parse_storage(&row.text("state")?).unwrap_or_default(),
         state_reason: row.text("state_reason")?,
+        state_cause_code: row.opt_text("state_cause_code")?,
         reason_codes: reason_codes(row)?,
         action_kind: row.text("action_kind")?,
         decided_actions_json: row.opt_text("decided_actions_json")?,

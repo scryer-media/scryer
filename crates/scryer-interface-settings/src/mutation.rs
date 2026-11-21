@@ -447,6 +447,19 @@ fn from_totp_enrollment_complete(
     }
 }
 
+/// Why a login payload is being issued. Only a sign-in that establishes the
+/// full session records the account's last sign-in time; a restricted token
+/// (MFA enrollment, required password change) waits for the step that
+/// completes the sign-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionIssue {
+    /// A sign-in: a first factor, the second factor or enrollment that
+    /// finishes one, or the required password change after one.
+    SignIn,
+    /// A step-up or factor check that re-issues an existing session.
+    Reissue,
+}
+
 async fn login_payload_from_user(
     app: &scryer_application::AppUseCase,
     user: scryer_domain::User,
@@ -454,7 +467,7 @@ async fn login_payload_from_user(
     mfa_step_up_verified_until: Option<chrono::DateTime<Utc>>,
     persist_session: bool,
     expected_auth_session_version: Option<&Option<String>>,
-    _password_change_required: bool,
+    issue: SessionIssue,
 ) -> Result<LoginPayload, Error> {
     let user = app
         .load_user_for_auth_payload(&user)
@@ -493,6 +506,9 @@ async fn login_payload_from_user(
         }
     }
     .map_err(to_gql_error)?;
+    if issue == SessionIssue::SignIn && !password_change_required {
+        app.record_interactive_sign_in(&user.id).await;
+    }
     let auth_factor_status = app
         .user_auth_factor_status(&user.id)
         .await
@@ -2113,7 +2129,7 @@ impl SettingsMutations {
             None,
             mfa.persist_session,
             Some(&mfa.auth_session_version),
-            mfa.password_change_required_after_enrollment,
+            SessionIssue::SignIn,
         )
         .await?;
         Ok(LoginPasskeyEnrollmentCompletePayload {
@@ -2182,7 +2198,7 @@ impl SettingsMutations {
             None,
             mfa.persist_session,
             Some(&mfa.auth_session_version),
-            mfa.password_change_required_after_enrollment,
+            SessionIssue::SignIn,
         )
         .await?;
         Ok(LoginMfaEnrollmentCompletePayload {
@@ -2213,7 +2229,7 @@ impl SettingsMutations {
             Some(mfa_step_up_verified_until),
             mfa.persist_session,
             Some(&mfa.auth_session_version),
-            false,
+            SessionIssue::Reissue,
         )
         .await
     }
@@ -2240,7 +2256,7 @@ impl SettingsMutations {
             None,
             mfa.persist_session,
             Some(&mfa.auth_session_version),
-            false,
+            SessionIssue::Reissue,
         )
         .await
     }
@@ -2289,7 +2305,7 @@ impl SettingsMutations {
             None,
             mfa.persist_session,
             Some(&mfa.auth_session_version),
-            false,
+            SessionIssue::Reissue,
         )
         .await
     }
@@ -2428,7 +2444,7 @@ impl SettingsMutations {
             None,
             persist_session,
             Some(&auth_session_version),
-            false,
+            SessionIssue::SignIn,
         )
         .await
     }
@@ -2463,7 +2479,7 @@ impl SettingsMutations {
         let form_login_enabled = auth_runtime_from_ctx(ctx)
             .snapshot()
             .effective_form_login_enabled;
-        let (user, verified_until, persist_session, auth_session_version, password_change_required) =
+        let (user, verified_until, persist_session, auth_session_version, _password_change_required) =
             app.login_verification_passkey_complete(
                 input.login_challenge_id.as_ref(),
                 input.webauthn_challenge_id.as_ref(),
@@ -2479,7 +2495,7 @@ impl SettingsMutations {
             None,
             persist_session,
             Some(&auth_session_version),
-            password_change_required,
+            SessionIssue::SignIn,
         )
         .await
     }
@@ -2494,7 +2510,7 @@ impl SettingsMutations {
         input: LoginVerificationTotpCompleteInput,
     ) -> GqlResult<LoginPayload> {
         let app = app_from_ctx(ctx)?;
-        let (user, verified_until, persist_session, auth_session_version, password_change_required) =
+        let (user, verified_until, persist_session, auth_session_version, _password_change_required) =
             app.complete_login_verification_totp(input.login_challenge_id.as_ref(), &input.code)
                 .await
                 .map_err(to_gql_error)?;
@@ -2505,7 +2521,7 @@ impl SettingsMutations {
             None,
             persist_session,
             Some(&auth_session_version),
-            password_change_required,
+            SessionIssue::SignIn,
         )
         .await
     }
@@ -2667,7 +2683,6 @@ impl SettingsMutations {
             .map_err(to_gql_error)?
         {
             LoginVerificationRequirement::Satisfied(satisfied) => {
-                let password_change_required = user.password_change_required;
                 login_payload_from_user(
                     &app,
                     user,
@@ -2675,7 +2690,7 @@ impl SettingsMutations {
                     None,
                     persist_session,
                     Some(&satisfied.auth_session_version),
-                    password_change_required,
+                    SessionIssue::SignIn,
                 )
                 .await
             }
@@ -2749,7 +2764,7 @@ impl SettingsMutations {
                     None,
                     default_persist_session_from_ctx(ctx),
                     None,
-                    false,
+                    SessionIssue::SignIn,
                 )
                 .await?,
             )
@@ -2817,7 +2832,7 @@ impl SettingsMutations {
             mfa_step_up_verified_until,
             claims.persist_session,
             Some(&auth_session_version),
-            false,
+            SessionIssue::SignIn,
         )
         .await
     }

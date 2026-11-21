@@ -4611,6 +4611,17 @@ pub trait UserRepository: Send + Sync {
     ) -> AppResult<Option<crate::types::UserAccountTimestamps>> {
         Ok(Some(crate::types::UserAccountTimestamps::default()))
     }
+    /// Stamps the account's last sign-in time. Called once when an
+    /// interactive sign-in establishes a full session; never for an
+    /// authenticated request, a session re-issue or API-key use. A store that
+    /// keeps no such column records nothing.
+    async fn record_sign_in(
+        &self,
+        _user_id: &str,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn get_login_snapshot_by_username(
         &self,
         username: &str,
@@ -11866,13 +11877,16 @@ pub trait LifecycleCandidateRepository: Send + Sync {
     /// Finish a candidate only while this worker still owns the exact
     /// `Executing` lease it acquired. Sequence holds and retryable failures
     /// must use this stronger form so a stale worker cannot overwrite a newer
-    /// execution lease.
+    /// execution lease. `state_cause_code` is the underlying code behind
+    /// `state_reason`, such as the location planner's refusal behind
+    /// `move_refused`; every other state write clears it.
     async fn finish_leased_candidate(
         &self,
         id: &str,
         expected_lease_updated_at: DateTime<Utc>,
         state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
+        state_cause_code: Option<&str>,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 

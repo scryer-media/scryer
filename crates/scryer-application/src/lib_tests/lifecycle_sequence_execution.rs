@@ -203,6 +203,7 @@ async fn seed_stale_running_step(
         lease_expires_at: Some(abandoned_at),
         hold_reason: None,
         error: None,
+        cause_code: None,
         created_at: abandoned_at,
         updated_at: abandoned_at,
         finished_at: None,

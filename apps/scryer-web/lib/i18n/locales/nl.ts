@@ -4582,9 +4582,11 @@ const nl: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
   "settings.lifecycleExecutionReason.playbackHold":
-    "Aangehouden: er wordt iets afgespeeld op een mediaserver.",
+    "Aangehouden: deze titel wordt afgespeeld op een mediaserver.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Aangehouden: een mediaserver kon niet worden gevraagd of er iets wordt afgespeeld.",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "Aangehouden: een mediaserver speelt iets af dat Scryer aan geen enkele titel kon koppelen, dus er wordt niets verwijderd tot het afspelen stopt.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

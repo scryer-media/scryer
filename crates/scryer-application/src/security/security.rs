@@ -721,6 +721,26 @@ impl AppUseCase {
         Utc::now() + Duration::minutes(5)
     }
 
+    /// Records that `user_id` just finished an interactive sign-in.
+    ///
+    /// Call this once, when a sign-in establishes the full session: after a
+    /// password, passkey or media-server login, after the second factor that
+    /// completes one, or after the enrollment or password change that a login
+    /// required. Never call it for an authenticated request, a step-up that
+    /// re-issues an existing session, an OAuth client's token or API-key use.
+    /// A failed write is logged and does not fail the sign-in it describes.
+    pub async fn record_interactive_sign_in(&self, user_id: &str) {
+        if let Err(error) = self
+            .services
+            .identity
+            .users
+            .record_sign_in(user_id, Utc::now())
+            .await
+        {
+            tracing::warn!(user_id, error = %error, "could not record the sign-in time");
+        }
+    }
+
     pub async fn issue_access_token(&self, actor: &User) -> AppResult<String> {
         self.issue_access_token_with_mfa(actor, None, None).await
     }

@@ -7702,9 +7702,11 @@ const cs: LocaleDictionary = {
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
   "settings.lifecycleExecutionReason.playbackHold":
-    "Pozdrženo: na mediálním serveru se něco přehrává.",
+    "Pozdrženo: tento titul se přehrává na mediálním serveru.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Pozdrženo: mediálního serveru se nepodařilo zjistit, zda se něco přehrává.",
+  "settings.lifecycleExecutionReason.playbackUnattributed":
+    "Pozdrženo: mediální server přehrává něco, co Scryer nedokázal přiřadit k žádnému titulu, takže se nic nesmaže, dokud přehrávání neskončí.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

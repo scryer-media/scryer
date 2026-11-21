@@ -228,6 +228,7 @@ async fn persist_succeeded_step_with_before(
         lease_expires_at: Some(now + Duration::minutes(5)),
         hold_reason: None,
         error: None,
+        cause_code: None,
         created_at: now,
         updated_at: now,
         finished_at: None,

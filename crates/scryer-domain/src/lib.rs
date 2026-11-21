@@ -6279,6 +6279,12 @@ pub struct LifecycleCandidate {
     pub match_generation: i64,
     pub state: LifecycleCandidateState,
     pub state_reason: String,
+    /// The underlying code behind `state_reason`, when the step or check that
+    /// set it was refused for a coded reason of its own, such as the location
+    /// planner's refusal behind `move_refused`. Cleared whenever the state
+    /// reason changes.
+    #[serde(default)]
+    pub state_cause_code: Option<String>,
     pub reason_codes: Vec<String>,
     /// Action the revision authorizes, as its stored catalog wire name. The
     /// closed action enum lives in the application layer, so the domain row
@@ -6455,6 +6461,10 @@ pub struct LifecycleActionRun {
     pub status: LifecycleActionRunStatus,
     pub hold_reason: Option<String>,
     pub error: Option<String>,
+    /// The underlying code behind `hold_reason` or `error`, when the refusal
+    /// or failure carried one of its own.
+    #[serde(default)]
+    pub cause_code: Option<String>,
     /// Versioned JSON evidence (preview fingerprints, profile ids, …).
     pub detail: String,
     pub started_at: DateTime<Utc>,
@@ -6585,6 +6595,11 @@ pub struct LifecycleActionStepRun {
     pub lease_expires_at: Option<DateTime<Utc>>,
     pub hold_reason: Option<String>,
     pub error: Option<String>,
+    /// The underlying code behind `hold_reason` or `error`, when the refusal
+    /// or failure carried one of its own, such as the location planner's
+    /// `stale_plan` behind `move_refused`.
+    #[serde(default)]
+    pub cause_code: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
