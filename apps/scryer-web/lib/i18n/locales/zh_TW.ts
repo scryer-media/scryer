@@ -4688,12 +4688,6 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleFactsStudio": "製作作品的工作室",
   "settings.refLifecycleFactsCountry": "出品國家",
   "settings.refLifecycleFactsPopularity": "中繼資料提供者給出的熱門度分數",
-  "settings.refLifecycleFactsTheatricalReleaseDate":
-    "電影院線上映日期（YYYY-MM-DD）",
-  "settings.refLifecycleFactsDigitalReleaseDate":
-    "電影數位發行日期（YYYY-MM-DD）",
-  "settings.refLifecycleFactsPhysicalReleaseDate":
-    "電影實體發行日期（YYYY-MM-DD）",
   "settings.refLifecycleFactsDaysSinceAdded": "主體加入後經過的完整天數",
   "settings.refLifecycleFactsMaxVideoHeight":
     "主體檔案中最高的視訊串流高度（像素）",
@@ -4763,12 +4757,6 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleFactsCountryValue": "出品國家；提供者未給出值時缺失",
   "settings.refLifecycleFactsPopularityValue":
     "熱門度分數；提供者未給出值時缺失",
-  "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "院線上映日期（YYYY-MM-DD）：取發行市場的最早日期，否則取任一市場的最早日期。影集或沒有院線日期時缺失；在取得電影的發行日期之前為 unknown，原因為 not_yet_collected",
-  "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "數位發行日期（YYYY-MM-DD）：取發行市場的最早日期，否則取任一市場的最早日期，再否則取作品上的數位日期。影集或沒有數位日期時缺失；在取得電影的發行日期之前且作品沒有數位日期時為 unknown，原因為 not_yet_collected",
-  "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "實體發行日期（YYYY-MM-DD）：取發行市場的最早日期，否則取任一市場的最早日期。影集或沒有實體日期時缺失；在取得電影的發行日期之前為 unknown，原因為 not_yet_collected",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "主體加入後經過的完整天數，依評估時鐘計算",
   "settings.refLifecycleFactsMaxVideoHeightValue":

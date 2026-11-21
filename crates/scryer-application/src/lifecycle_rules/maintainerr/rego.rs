@@ -978,7 +978,10 @@ fn zero_plays_satisfy(action: i64, second: &Second) -> bool {
 }
 
 fn is_drifting(fidelity: Fidelity) -> bool {
-    matches!(fidelity, Fidelity::LaterDate | Fidelity::EitherDate)
+    matches!(
+        fidelity,
+        Fidelity::LaterDate | Fidelity::EarlierDate | Fidelity::EitherDate
+    )
 }
 
 /// Whether an ordering of `first` against `second` could hold in Scryer
@@ -986,8 +989,9 @@ fn is_drifting(fidelity: Fidelity) -> bool {
 /// after" on its own side and "at or before" on the other; a window widens
 /// whenever either side drifts.
 fn date_widens(action: i64, first: Fidelity, second: Fidelity) -> bool {
-    let can_be_later = is_drifting;
-    let can_be_earlier = |fidelity| fidelity == Fidelity::EitherDate;
+    let can_be_later = |fidelity| matches!(fidelity, Fidelity::LaterDate | Fidelity::EitherDate);
+    let can_be_earlier =
+        |fidelity| matches!(fidelity, Fidelity::EarlierDate | Fidelity::EitherDate);
     match action {
         BEFORE | SMALLER => can_be_earlier(first) || can_be_later(second),
         AFTER | BIGGER => can_be_later(first) || can_be_earlier(second),
@@ -1149,23 +1153,6 @@ fn operand(
                     format!("count({var}_found) > 0"),
                 ],
                 vec![format!("{var} := {var}_found[0]")],
-            )
-        }
-        Source::EarliestDay(facts_read) => {
-            let parts = facts_read
-                .iter()
-                .map(|fact| format!("[d | d := {facts}.{fact}; is_string(d)]"))
-                .collect::<Vec<_>>();
-            let mut joined = parts[0].clone();
-            for part in &parts[1..] {
-                joined = format!("array.concat({joined}, {part})");
-            }
-            (
-                vec![
-                    format!("{var}_days := {joined}"),
-                    format!("count({var}_days) > 0"),
-                ],
-                vec![format!("{var} := min({var}_days)")],
             )
         }
         Source::LatestFileAddedAt => (

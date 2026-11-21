@@ -10365,12 +10365,8 @@ const en: LocaleDictionary = {
   "settings.refLifecycleFactsCountry": "Country of origin",
   "settings.refLifecycleFactsPopularity":
     "Popularity score from the metadata provider",
-  "settings.refLifecycleFactsTheatricalReleaseDate":
-    "Theatrical release date of a movie (YYYY-MM-DD)",
-  "settings.refLifecycleFactsDigitalReleaseDate":
-    "Digital release date of a movie (YYYY-MM-DD)",
-  "settings.refLifecycleFactsPhysicalReleaseDate":
-    "Physical release date of a movie (YYYY-MM-DD)",
+  "settings.refLifecycleFactsReleaseDate":
+    "Release date of a movie (YYYY-MM-DD)",
   "settings.refLifecycleFactsDaysSinceAdded":
     "Whole days since the subject was added",
   "settings.refLifecycleFactsMaxVideoHeight":
@@ -10463,12 +10459,8 @@ const en: LocaleDictionary = {
     "Country of origin; absent when the provider gave no value",
   "settings.refLifecycleFactsPopularityValue":
     "Popularity score; absent when the provider gave no value",
-  "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "Theatrical release date (YYYY-MM-DD): the earliest for the release market, otherwise the earliest from any market. Absent for a show, or when there is no theatrical date; unknown with reason not_yet_collected until the movie's release dates have been fetched",
-  "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "Digital release date (YYYY-MM-DD): the earliest for the release market, otherwise the earliest from any market, otherwise the digital date on the title. Absent for a show, or when there is no digital date; unknown with reason not_yet_collected until the movie's release dates have been fetched and the title has no digital date",
-  "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "Physical release date (YYYY-MM-DD): the earliest for the release market, otherwise the earliest from any market. Absent for a show, or when there is no physical date; unknown with reason not_yet_collected until the movie's release dates have been fetched",
+  "settings.refLifecycleFactsReleaseDateValue":
+    "Release date (YYYY-MM-DD): the earliest release date Scryer knows for the movie, of any kind and from any market. Absent for a show, or when the fetched release dates hold none; unknown with reason not_yet_collected while the movie has no date and its release dates have not been fetched",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "Whole days since the subject was added, counted against the evaluation clock",
   "settings.refLifecycleFactsMaxVideoHeightValue":

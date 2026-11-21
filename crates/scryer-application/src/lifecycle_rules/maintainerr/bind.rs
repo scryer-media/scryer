@@ -49,8 +49,6 @@ pub(super) enum Source {
     /// The title's first stored rating from the given source: its own value,
     /// or its vote count when `votes` is set.
     TitleRating { source: &'static str, votes: bool },
-    /// The earliest of the given `YYYY-MM-DD` facts that are present.
-    EarliestDay(&'static [&'static str]),
     /// When Scryer recorded the subject's newest file.
     LatestFileAddedAt,
 }
@@ -74,6 +72,8 @@ pub(super) enum Fidelity {
     PartialFlag,
     /// A date that can be later than Maintainerr's.
     LaterDate,
+    /// A date that can be earlier than Maintainerr's.
+    EarlierDate,
     /// A date that can be earlier or later than Maintainerr's.
     EitherDate,
 }
@@ -128,7 +128,7 @@ const OWN_STATUS: &str = "Scryer reads the show's status from its own metadata p
 const FILE_RECORDED: &str =
     "Scryer uses when it recorded the newest file, not when Radarr imported it";
 const OWN_RELEASE_DATES: &str =
-    "Scryer reads the digital and physical release dates from its own metadata";
+    "Scryer reads one release date, the earliest it knows for the movie, from its own metadata";
 const ADDED_TO_SCRYER: &str =
     "Scryer uses when the title was added to Scryer, not when it was added to Sonarr or Radarr";
 const OWN_TAGS: &str =
@@ -341,13 +341,20 @@ const ENTRIES: &[Entry] = &[
         Source::Fact("monitored"),
         Shape::Bool,
     ),
-    entry(
-        &["radarr"],
-        "inCinemas",
-        DATE,
-        &[MediaLevel::Movie],
-        Source::Fact("theatrical_release_date"),
-        Shape::Day,
+    fidelity(
+        caveat(
+            entry(
+                &["radarr"],
+                "inCinemas",
+                DATE,
+                &[MediaLevel::Movie],
+                Source::Fact("release_date"),
+                Shape::Day,
+            ),
+            OWN_RELEASE_DATES,
+        ),
+        // The earliest known date is on or before the theatrical one.
+        Fidelity::EarlierDate,
     ),
     entry(
         &["radarr"],
@@ -364,7 +371,7 @@ const ENTRIES: &[Entry] = &[
                 "releaseDate",
                 DATE,
                 &[MediaLevel::Movie],
-                Source::EarliestDay(&["digital_release_date", "physical_release_date"]),
+                Source::Fact("release_date"),
                 Shape::Day,
             ),
             OWN_RELEASE_DATES,

@@ -370,8 +370,15 @@ pub struct LifecycleFactsDoc {
     pub studio: Observation<String>,
     pub country: Observation<String>,
     pub popularity: Observation<f64>,
+    /// A movie's release date: the earliest release date Scryer knows for
+    /// it, of any kind and from any market.
+    pub release_date: Observation<String>,
+    /// Retired: always unknown (`fact_retired`), so a saved rule that still
+    /// reads one is held instead of reading a missing date as "no release".
     pub theatrical_release_date: Observation<String>,
+    /// Retired; see [`Self::theatrical_release_date`].
     pub digital_release_date: Observation<String>,
+    /// Retired; see [`Self::theatrical_release_date`].
     pub physical_release_date: Observation<String>,
     /// Whole days since the subject was added, against the evaluation clock.
     pub days_since_added: Observation<i64>,
@@ -1108,9 +1115,10 @@ pub fn synthetic_title_input() -> LifecycleInput {
             studio: Observation::known("Fixture Studio".to_string()),
             country: Observation::known("us".to_string()),
             popularity: Observation::known(12.5),
-            theatrical_release_date: Observation::known("2023-11-10".to_string()),
-            digital_release_date: Observation::known("2024-01-05".to_string()),
-            physical_release_date: Observation::known("2024-02-20".to_string()),
+            release_date: Observation::known("2023-11-10".to_string()),
+            theatrical_release_date: Observation::unknown("fact_retired"),
+            digital_release_date: Observation::unknown("fact_retired"),
+            physical_release_date: Observation::unknown("fact_retired"),
             days_since_added: Observation::known(120),
             max_video_height: Observation::known(2160),
             season_count: Observation::known(3),

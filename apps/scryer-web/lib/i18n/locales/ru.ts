@@ -5047,12 +5047,8 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsCountry": "Страна производства",
   "settings.refLifecycleFactsPopularity":
     "Оценка популярности от поставщика метаданных",
-  "settings.refLifecycleFactsTheatricalReleaseDate":
-    "Дата выхода фильма в кинотеатрах (YYYY-MM-DD)",
-  "settings.refLifecycleFactsDigitalReleaseDate":
-    "Дата цифрового релиза фильма (YYYY-MM-DD)",
-  "settings.refLifecycleFactsPhysicalReleaseDate":
-    "Дата выхода фильма на физических носителях (YYYY-MM-DD)",
+  "settings.refLifecycleFactsReleaseDate":
+    "Дата выхода фильма (YYYY-MM-DD)",
   "settings.refLifecycleFactsDaysSinceAdded":
     "Полных дней с момента добавления субъекта",
   "settings.refLifecycleFactsMaxVideoHeight":
@@ -5145,12 +5141,8 @@ const ru: LocaleDictionary = {
     "Страна производства; отсутствует, если поставщик не дал значения",
   "settings.refLifecycleFactsPopularityValue":
     "Оценка популярности; отсутствует, если поставщик не дал значения",
-  "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "Дата выхода в кинотеатрах (YYYY-MM-DD): самая ранняя для рынка релиза, иначе самая ранняя на любом рынке. Отсутствует для сериала или если даты выхода в кинотеатрах нет; unknown с причиной not_yet_collected, пока даты выхода фильма не получены",
-  "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "Дата цифрового релиза (YYYY-MM-DD): самая ранняя для рынка релиза, иначе самая ранняя на любом рынке, иначе цифровая дата, указанная у тайтла. Отсутствует для сериала или если цифровой даты нет; unknown с причиной not_yet_collected, пока даты выхода фильма не получены и у тайтла нет цифровой даты",
-  "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "Дата выхода на физических носителях (YYYY-MM-DD): самая ранняя для рынка релиза, иначе самая ранняя на любом рынке. Отсутствует для сериала или если даты выхода на физических носителях нет; unknown с причиной not_yet_collected, пока даты выхода фильма не получены",
+  "settings.refLifecycleFactsReleaseDateValue":
+    "Дата выхода (YYYY-MM-DD): самая ранняя известная Scryer дата выхода фильма любого типа и в любой стране. absent для сериала или если в полученных датах выхода нет ни одной; unknown с причиной not_yet_collected, пока у фильма нет даты и его даты выхода не получены",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "Полных дней с момента добавления субъекта по часам оценки",
   "settings.refLifecycleFactsMaxVideoHeightValue":

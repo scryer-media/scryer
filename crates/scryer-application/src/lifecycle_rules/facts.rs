@@ -123,6 +123,11 @@ pub mod unknown_reason {
     /// Scryer looked and there is nobody to ask about.
     pub const TITLE_NOT_REQUESTED: &str = "title_not_requested";
 
+    /// The fact is no longer collected. It stays in the document as unknown
+    /// so a saved rule that still reads it is held, never matched on a
+    /// missing value.
+    pub const FACT_RETIRED: &str = "fact_retired";
+
     /// A requester holds no verified linked account on any enabled signal-sync
     /// connection. Their watch state is unknowable, so neither requester
     /// rollup can be honest about them.
@@ -308,6 +313,7 @@ pub mod unknown_reason {
         SIGNAL_IDENTITY_MISSING,
         NEVER_WATCHED,
         TITLE_NOT_REQUESTED,
+        FACT_RETIRED,
         REQUESTER_NOT_LINKED,
         NO_LINKED_PARTICIPANTS,
         PARTICIPANTS_NOT_YET_SWEPT,
@@ -742,9 +748,10 @@ fn build_facts(
         studio: optional_text(title.studio.as_deref()),
         country: optional_text(title.country.as_deref()),
         popularity: optional_known(title.popularity.filter(|value| value.is_finite())),
-        theatrical_release_date: release_date_observation(title, ReleaseKind::Theatrical),
-        digital_release_date: release_date_observation(title, ReleaseKind::Digital),
-        physical_release_date: release_date_observation(title, ReleaseKind::Physical),
+        release_date: release_date_observation(title),
+        theatrical_release_date: Observation::unknown(unknown_reason::FACT_RETIRED),
+        digital_release_date: Observation::unknown(unknown_reason::FACT_RETIRED),
+        physical_release_date: Observation::unknown(unknown_reason::FACT_RETIRED),
         days_since_added: days_since(evaluation_time, title.created_at),
         max_video_height: max_video_height_observation(files),
         season_count: episode_shape_default(&title.facet),
@@ -834,46 +841,44 @@ fn max_video_height_observation(files: &[TitleMediaFile]) -> Observation<i64> {
     )
 }
 
-#[derive(Clone, Copy)]
-enum ReleaseKind {
-    Theatrical,
-    Digital,
-    Physical,
-}
-
-/// A movie's earliest release of one kind: the release market's first date,
-/// else the first date from any market. Absent for a show and for a movie
-/// whose fetched dates hold none of that kind; unknown for a movie whose
-/// release dates were never fetched.
-///
-/// The title row's `digital_release_date` is never read here: hydration
-/// fills it with TMDB's primary release date, which is the theatrical date,
-/// so it is not evidence of a digital release.
-fn release_date_observation(title: &Title, kind: ReleaseKind) -> Observation<String> {
+/// A movie's release date: the earliest release date Scryer knows for it, of
+/// any kind and from any market, including the TMDB primary date the title
+/// row carries. Absent for a show and for a movie whose fetched dates hold
+/// none; unknown for a movie with no date on the row whose release dates were
+/// never fetched.
+fn release_date_observation(title: &Title) -> Observation<String> {
     if !matches!(title.facet, MediaFacet::Movie) {
         return Observation::absent();
     }
-    let Some(dates) = title
+    let fetched = title
         .movie_release_dates
         .as_ref()
-        .filter(|dates| dates.fetched)
-    else {
-        return Observation::unknown(unknown_reason::NOT_YET_COLLECTED);
-    };
-    let (market, any_market) = match kind {
-        ReleaseKind::Theatrical => (&dates.theatrical_dates, &dates.any_market_theatrical_dates),
-        ReleaseKind::Digital => (&dates.digital_dates, &dates.any_market_digital_dates),
-        ReleaseKind::Physical => (&dates.physical_dates, &dates.any_market_physical_dates),
-    };
-    let earliest = |dates: &Vec<String>| {
-        dates
-            .iter()
-            .map(|date| date.trim())
-            .filter(|date| !date.is_empty())
-            .min()
-            .map(str::to_string)
-    };
-    optional_known(earliest(market).or_else(|| earliest(any_market)))
+        .filter(|dates| dates.fetched);
+    let fetched_dates = fetched.into_iter().flat_map(|dates| {
+        [
+            &dates.theatrical_dates,
+            &dates.digital_dates,
+            &dates.physical_dates,
+            &dates.any_market_theatrical_dates,
+            &dates.any_market_digital_dates,
+            &dates.any_market_physical_dates,
+        ]
+        .into_iter()
+        .flatten()
+    });
+    let earliest = fetched_dates
+        .map(String::as_str)
+        .chain(title.digital_release_date.as_deref())
+        .filter_map(|date| {
+            let day = date.trim().get(..10)?;
+            chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+        })
+        .min();
+    match earliest {
+        Some(day) => Observation::known(day.format("%Y-%m-%d").to_string()),
+        None if fetched.is_some() => Observation::absent(),
+        None => Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+    }
 }
 
 /// Plays of the subject by every account, summed, behind the audience gate.
@@ -3589,17 +3594,17 @@ pub(crate) mod tests {
         movie.country = Some(String::new());
         movie.popularity = Some(12.5);
         movie.created_at = Utc::now() - chrono::Duration::days(40);
-        // Hydration stores TMDB's primary (theatrical) date in this column; it
-        // must never surface as a digital release.
-        movie.digital_release_date = Some("2024-02-01".to_string());
+        // The title row carries TMDB's primary date; it counts as a known
+        // release date alongside the fetched ones.
+        movie.digital_release_date = Some("2024-02-10".to_string());
         movie.movie_release_dates = Some(scryer_domain::MovieReleaseDates {
             market: "US".to_string(),
             fetched: true,
-            theatrical_dates: vec!["2024-03-08".to_string(), "2024-02-01".to_string()],
+            theatrical_dates: vec!["2024-03-08".to_string()],
             digital_dates: vec![],
             physical_dates: vec![],
             any_market_theatrical_dates: vec![],
-            any_market_digital_dates: vec!["2024-05-01".to_string()],
+            any_market_digital_dates: vec!["2024-02-01".to_string()],
             any_market_physical_dates: vec![],
             any_market_home_dates_unusable: false,
         });
@@ -3611,15 +3616,22 @@ pub(crate) mod tests {
         assert_eq!(doc["observations"]["country"]["status"], "absent");
         assert_eq!(facts["popularity"], 12.5);
         assert_eq!(facts["days_since_added"], 40);
-        assert_eq!(facts["theatrical_release_date"], "2024-02-01");
         assert_eq!(
-            facts["digital_release_date"], "2024-05-01",
-            "no market date falls back to the earliest from any market"
+            facts["release_date"], "2024-02-01",
+            "the earliest known date of any kind and market"
         );
-        assert_eq!(
-            doc["observations"]["physical_release_date"]["status"],
-            "absent"
-        );
+        for retired in [
+            "theatrical_release_date",
+            "digital_release_date",
+            "physical_release_date",
+        ] {
+            assert_eq!(
+                doc["observations"][retired]["reason"],
+                unknown_reason::FACT_RETIRED,
+                "{retired} holds a saved rule instead of reading as missing"
+            );
+            assert!(facts.get(retired).is_none(), "{retired}");
+        }
         assert_eq!(
             doc["observations"]["series_status"]["status"], "absent",
             "a movie has no series status"
@@ -3628,20 +3640,22 @@ pub(crate) mod tests {
         movie.movie_release_dates = None;
         let doc = document(&movie, None, &HashMap::new());
         assert_eq!(
-            doc["observations"]["theatrical_release_date"]["reason"],
-            unknown_reason::NOT_YET_COLLECTED,
-            "release dates never fetched are unknown, not absent"
+            doc["facts"]["release_date"], "2024-02-10",
+            "the row's date stands before the release dates are fetched"
         );
+
+        movie.digital_release_date = None;
+        let doc = document(&movie, None, &HashMap::new());
         assert_eq!(
-            doc["observations"]["digital_release_date"]["reason"],
+            doc["observations"]["release_date"]["reason"],
             unknown_reason::NOT_YET_COLLECTED,
-            "the stored theatrical date is not a digital release"
+            "no date and nothing fetched is unknown, not absent"
         );
 
         movie.movie_release_dates = Some(scryer_domain::MovieReleaseDates {
             market: "US".to_string(),
             fetched: true,
-            theatrical_dates: vec!["2024-02-01".to_string()],
+            theatrical_dates: vec![],
             digital_dates: vec![],
             physical_dates: vec![],
             any_market_theatrical_dates: vec![],
@@ -3651,8 +3665,8 @@ pub(crate) mod tests {
         });
         let doc = document(&movie, None, &HashMap::new());
         assert_eq!(
-            doc["observations"]["digital_release_date"]["status"], "absent",
-            "fetched dates with no digital release have none"
+            doc["observations"]["release_date"]["status"], "absent",
+            "fetched dates with none at all have no release date"
         );
 
         let mut show = faceted_title(None, MediaFacet::Series);
@@ -3661,10 +3675,7 @@ pub(crate) mod tests {
         let doc = document(&show, None, &HashMap::new());
         assert_eq!(doc["facts"]["series_status"], "continuing");
         assert_eq!(doc["facts"]["network"], "Fixture Network");
-        assert_eq!(
-            doc["observations"]["theatrical_release_date"]["status"],
-            "absent"
-        );
+        assert_eq!(doc["observations"]["release_date"]["status"], "absent");
     }
 
     #[test]

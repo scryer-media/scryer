@@ -460,19 +460,9 @@
           "descKey": "settings.refLifecycleFactsPopularity"
         },
         {
-          "field": "theatrical_release_date",
+          "field": "release_date",
           "type": "string",
-          "descKey": "settings.refLifecycleFactsTheatricalReleaseDate"
-        },
-        {
-          "field": "digital_release_date",
-          "type": "string",
-          "descKey": "settings.refLifecycleFactsDigitalReleaseDate"
-        },
-        {
-          "field": "physical_release_date",
-          "type": "string",
-          "descKey": "settings.refLifecycleFactsPhysicalReleaseDate"
+          "descKey": "settings.refLifecycleFactsReleaseDate"
         },
         {
           "field": "days_since_added",
@@ -1193,19 +1183,9 @@
           "descKey": "settings.refLifecycleFactsPopularity"
         },
         {
-          "field": "theatrical_release_date",
+          "field": "release_date",
           "type": "object",
-          "descKey": "settings.refLifecycleFactsTheatricalReleaseDate"
-        },
-        {
-          "field": "digital_release_date",
-          "type": "object",
-          "descKey": "settings.refLifecycleFactsDigitalReleaseDate"
-        },
-        {
-          "field": "physical_release_date",
-          "type": "object",
-          "descKey": "settings.refLifecycleFactsPhysicalReleaseDate"
+          "descKey": "settings.refLifecycleFactsReleaseDate"
         },
         {
           "field": "days_since_added",
@@ -2946,8 +2926,8 @@
       ]
     },
     {
-      "titleKey": "settings.refLifecycleFactsTheatricalReleaseDate",
-      "path": "input.observations.theatrical_release_date",
+      "titleKey": "settings.refLifecycleFactsReleaseDate",
+      "path": "input.observations.release_date",
       "fields": [
         {
           "field": "status",
@@ -2957,59 +2937,7 @@
         {
           "field": "value",
           "type": "string",
-          "descKey": "settings.refLifecycleFactsTheatricalReleaseDateValue"
-        },
-        {
-          "field": "observed_at",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsObservedAt"
-        },
-        {
-          "field": "reason",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsReason"
-        }
-      ]
-    },
-    {
-      "titleKey": "settings.refLifecycleFactsDigitalReleaseDate",
-      "path": "input.observations.digital_release_date",
-      "fields": [
-        {
-          "field": "status",
-          "type": "string",
-          "descKey": "settings.refLifecycleObsStatus"
-        },
-        {
-          "field": "value",
-          "type": "string",
-          "descKey": "settings.refLifecycleFactsDigitalReleaseDateValue"
-        },
-        {
-          "field": "observed_at",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsObservedAt"
-        },
-        {
-          "field": "reason",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsReason"
-        }
-      ]
-    },
-    {
-      "titleKey": "settings.refLifecycleFactsPhysicalReleaseDate",
-      "path": "input.observations.physical_release_date",
-      "fields": [
-        {
-          "field": "status",
-          "type": "string",
-          "descKey": "settings.refLifecycleObsStatus"
-        },
-        {
-          "field": "value",
-          "type": "string",
-          "descKey": "settings.refLifecycleFactsPhysicalReleaseDateValue"
+          "descKey": "settings.refLifecycleFactsReleaseDateValue"
         },
         {
           "field": "observed_at",

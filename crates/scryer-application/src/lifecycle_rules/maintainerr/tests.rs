@@ -526,7 +526,16 @@ fn the_live_shape_translates_group_by_group() {
             ),
             // Radarr's file date before its release date: Scryer's release
             // date can be later than Radarr's.
-            (7, Failed, vec![codes::COMPARATOR_DATE_DRIFT_WIDENS]),
+            // Its in-cinemas comparison now reads the earliest release date,
+            // which can be earlier than Maintainerr's theatrical date.
+            (
+                7,
+                Failed,
+                vec![
+                    codes::COMPARATOR_DATE_DRIFT_WIDENS,
+                    codes::COMPARATOR_DATE_DRIFT_WIDENS
+                ]
+            ),
             // No watchers, where Scryer knows only some of them.
             (
                 8,
@@ -1115,10 +1124,8 @@ fn date_comparators_match_maintainerr() {
         false,
     );
     // A date-only fact is midnight UTC.
-    input.facts.theatrical_release_date = Observation::known("2023-01-01".to_string());
+    input.facts.release_date = Observation::known("2023-01-01".to_string());
     check(RADARR_IN_CINEMAS, AFTER, date("2022-12-31"), &input, true);
-    check(RADARR_IN_CINEMAS, BEFORE, date("2023-01-01"), &input, true);
-    check(RADARR_IN_CINEMAS, BEFORE, date("2022-12-31"), &input, false);
     input.facts.last_watched_by_anyone_at = Observation::absent();
     check(
         JELLYFIN_LAST_VIEWED,
@@ -1508,7 +1515,7 @@ fn list_comparators_match_maintainerr() {
 fn a_second_property_compares_like_a_custom_value() {
     let mut input = movie();
     input.facts.last_watched_by_anyone_at = Observation::known("2022-12-01T00:00:00Z".to_string());
-    input.facts.theatrical_release_date = Observation::known("2023-01-01".to_string());
+    input.facts.release_date = Observation::known("2023-01-01".to_string());
     let earlier = rule(
         None,
         JELLYFIN_LAST_VIEWED,
@@ -1522,12 +1529,15 @@ fn a_second_property_compares_like_a_custom_value() {
         With::Last(RADARR_IN_CINEMAS),
     );
     let earlier = translated("movie", 3, &[earlier]);
-    let later = translated("movie", 3, &[later]);
     assert!(fires(&earlier.rego_source, &input));
-    assert!(!fires(&later.rego_source, &input));
-    input.facts.theatrical_release_date = Observation::absent();
+    input.facts.release_date = Observation::absent();
     assert!(!fires(&earlier.rego_source, &input));
-    assert!(!fires(&later.rego_source, &input));
+    // The release date can be earlier than Maintainerr's theatrical date, so
+    // "after" it could match movies Maintainerr would not.
+    assert_eq!(
+        failed_with("movie", 3, &[later]),
+        vec![codes::COMPARATOR_DATE_DRIFT_WIDENS]
+    );
 
     let mut input = movie();
     input.facts.total_file_size_bytes = Observation::known(10 * MIB);
@@ -2102,10 +2112,9 @@ fn imdb_and_tmdb_ratings_read_the_stored_rating_of_that_source() {
 }
 
 #[test]
-fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
+fn radarr_release_date_reads_the_one_release_date() {
     let mut input = movie();
-    input.facts.digital_release_date = Observation::known("2023-05-02".to_string());
-    input.facts.physical_release_date = Observation::known("2023-03-10".to_string());
+    input.facts.release_date = Observation::known("2023-03-10".to_string());
     check_at(
         "movie",
         &input,
@@ -2114,16 +2123,7 @@ fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
         With::Nothing,
         true,
     );
-    input.facts.physical_release_date = Observation::absent();
-    check_at(
-        "movie",
-        &input,
-        RADARR_RELEASE_DATE,
-        EXISTS,
-        With::Nothing,
-        true,
-    );
-    input.facts.digital_release_date = Observation::absent();
+    input.facts.release_date = Observation::absent();
     check_at(
         "movie",
         &input,
@@ -2133,8 +2133,8 @@ fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
         false,
     );
 
-    // Scryer's release dates come from its own metadata and can be earlier or
-    // later than Radarr's, so only their presence translates.
+    // Scryer's release date comes from its own metadata and can be earlier or
+    // later than Radarr's, so only its presence translates.
     for (action, value) in [
         (BEFORE, date("2023-04-01")),
         (AFTER, date("2023-04-01")),
@@ -2156,6 +2156,25 @@ fn radarr_release_date_is_the_earlier_of_digital_and_physical() {
             "action {action}"
         );
     }
+}
+
+/// The one release date is the earliest Scryer knows, so it is on or before
+/// the theatrical date: "in cinemas after" still translates, while "before"
+/// could match movies Maintainerr would not.
+#[test]
+fn radarr_in_cinemas_reads_the_earliest_release_date() {
+    let mut input = movie();
+    input.facts.release_date = Observation::known("2023-01-01".to_string());
+    check(RADARR_IN_CINEMAS, AFTER, date("2022-12-31"), &input, true);
+    check(RADARR_IN_CINEMAS, AFTER, date("2023-01-02"), &input, false);
+    assert_eq!(
+        failed_with(
+            "movie",
+            3,
+            &[rule(None, RADARR_IN_CINEMAS, BEFORE, date("2023-04-01"))]
+        ),
+        vec![codes::COMPARATOR_DATE_DRIFT_WIDENS]
+    );
 }
 
 #[test]

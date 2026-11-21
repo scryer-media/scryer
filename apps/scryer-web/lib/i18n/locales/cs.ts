@@ -5415,12 +5415,6 @@ const cs: LocaleDictionary = {
   "settings.refLifecycleFactsCountry": "Země původu",
   "settings.refLifecycleFactsPopularity":
     "Skóre popularity od poskytovatele metadat",
-  "settings.refLifecycleFactsTheatricalReleaseDate":
-    "Datum uvedení filmu v kinech (YYYY-MM-DD)",
-  "settings.refLifecycleFactsDigitalReleaseDate":
-    "Datum digitálního vydání filmu (YYYY-MM-DD)",
-  "settings.refLifecycleFactsPhysicalReleaseDate":
-    "Datum fyzického vydání filmu (YYYY-MM-DD)",
   "settings.refLifecycleFactsDaysSinceAdded": "Celé dny od přidání subjektu",
   "settings.refLifecycleFactsMaxVideoHeight":
     "Nejvyšší video stopa mezi soubory subjektu, v pixelech",
@@ -5499,12 +5493,6 @@ const cs: LocaleDictionary = {
     "Země původu; chybí, pokud poskytovatel hodnotu neuvedl",
   "settings.refLifecycleFactsPopularityValue":
     "Skóre popularity; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refLifecycleFactsTheatricalReleaseDateValue":
-    "Datum uvedení v kinech (YYYY-MM-DD): nejdřívější pro trh vydání, jinak nejdřívější z libovolného trhu. Chybí u seriálu nebo pokud datum uvedení v kinech neexistuje; unknown s důvodem not_yet_collected, dokud nebudou načtena data vydání filmu",
-  "settings.refLifecycleFactsDigitalReleaseDateValue":
-    "Datum digitálního vydání (YYYY-MM-DD): nejdřívější pro trh vydání, jinak nejdřívější z libovolného trhu, jinak digitální datum uvedené u titulu. Chybí u seriálu nebo pokud digitální datum neexistuje; unknown s důvodem not_yet_collected, dokud nebudou načtena data vydání filmu a titul nemá digitální datum",
-  "settings.refLifecycleFactsPhysicalReleaseDateValue":
-    "Datum fyzického vydání (YYYY-MM-DD): nejdřívější pro trh vydání, jinak nejdřívější z libovolného trhu. Chybí u seriálu nebo pokud datum fyzického vydání neexistuje; unknown s důvodem not_yet_collected, dokud nebudou načtena data vydání filmu",
   "settings.refLifecycleFactsDaysSinceAddedValue":
     "Celé dny od přidání subjektu, počítané podle hodin vyhodnocení",
   "settings.refLifecycleFactsMaxVideoHeightValue":
