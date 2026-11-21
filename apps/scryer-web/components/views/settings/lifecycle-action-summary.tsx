@@ -67,6 +67,9 @@ function ActionEntryBadge({
       id={id}
       {...{ [`data-${vocabulary.family}-action-head`]: entry.head }}
       tone={
+        // Red marks lifecycle actions that remove files. A request head
+        // such as a lease only sets up a later rule, so it stays neutral.
+        vocabulary.family === "lifecycle" &&
         isRuleOutputDestructive(vocabulary.descriptors, entry.head)
           ? "negative"
           : "neutral"
