@@ -45,7 +45,11 @@ export function useRuleBuilderSchema(
   const family = base.family;
   const snapshot = () => servedRuleBuilderState(family);
   // The store is module state, so a static render reads it as the page does.
-  const state = useSyncExternalStore(subscribeServedRuleBuilder, snapshot, snapshot);
+  const state = useSyncExternalStore(
+    subscribeServedRuleBuilder,
+    snapshot,
+    snapshot,
+  );
   const fetch = useMemo(() => fetchServedSchema(client), [client]);
 
   useEffect(() => {
@@ -76,7 +80,11 @@ export function useRuleBuilderSchema(
   );
 
   const status: RuleBuilderSchemaStatus =
-    schema !== null ? "ready" : state?.status === "failed" ? "failed" : "loading";
+    schema !== null
+      ? "ready"
+      : state?.status === "failed"
+        ? "failed"
+        : "loading";
   return { status, schema, whenReady };
 }
 
@@ -92,7 +100,11 @@ export function useRuleOutputDescriptors(
   const client = useClient();
   const snapshot = () => servedRuleBuilderState(family);
   // The store is module state, so a static render reads it as the page does.
-  const state = useSyncExternalStore(subscribeServedRuleBuilder, snapshot, snapshot);
+  const state = useSyncExternalStore(
+    subscribeServedRuleBuilder,
+    snapshot,
+    snapshot,
+  );
   const fetch = useMemo(() => fetchServedSchema(client), [client]);
   useEffect(() => {
     void loadServedRuleBuilder(family, fetch);

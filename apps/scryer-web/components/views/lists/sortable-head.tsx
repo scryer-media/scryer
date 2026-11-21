@@ -30,17 +30,17 @@ export function SortableHead({
   const Icon = !active ? ArrowUpDown : descending ? ArrowDown : ArrowUp;
   const button = (
     <button
-        id={id}
-        type="button"
-        className="inline-flex items-center gap-1.5 rounded-sm text-left font-medium transition-colors hover:text-[var(--scry-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
-        onClick={onSort}
-      >
-        <span>{label}</span>
-        <Icon
-          aria-hidden="true"
-          className={cn("h-3.5 w-3.5", !active && "text-[var(--scry-faint2)]")}
-        />
-      </button>
+      id={id}
+      type="button"
+      className="inline-flex items-center gap-1.5 rounded-sm text-left font-medium transition-colors hover:text-[var(--scry-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
+      onClick={onSort}
+    >
+      <span>{label}</span>
+      <Icon
+        aria-hidden="true"
+        className={cn("h-3.5 w-3.5", !active && "text-[var(--scry-faint2)]")}
+      />
+    </button>
   );
   return (
     <TableHead

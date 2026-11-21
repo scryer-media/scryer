@@ -242,10 +242,7 @@ export function useLifecycleRuleState({
                   })}
                 </p>
               ) : null}
-              <p
-                id="settings-lifecycle-arming-count"
-                className="font-semibold"
-              >
+              <p id="settings-lifecycle-arming-count" className="font-semibold">
                 {pendingArming.candidateCount === 0
                   ? t("settings.lifecycleArmDestructiveNoCandidates")
                   : t("settings.lifecycleArmDestructiveCount", {

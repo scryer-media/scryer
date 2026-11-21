@@ -2089,12 +2089,17 @@ const fr: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Fichiers sidecar",
   "settings.libraryFullHashBackfillTitle": "Hachage en arrière-plan",
   "settings.libraryFullHashBackfillLabel": "Hacher les fichiers la nuit",
-  "settings.libraryFullHashBackfillDescription": "Lit chaque fichier de cette bibliothèque une fois, pendant la nuit, pour enregistrer l'empreinte complète de son contenu. Désactivez-le pour les bibliothèques sur des disques que vous laissez en veille ; l'empreinte d'un fichier n'est alors lue que lorsqu'un déplacement, une importation ou une vérification en a besoin.",
-  "settings.libraryFullHashBackfillDisableTitle": "Désactiver le hachage nocturne ?",
-  "settings.libraryFullHashBackfillDisableWarning": "Désactiver cette option réduit la capacité de Scryer à garantir que certains déplacements de fichiers sont sûrs à 100 %.",
+  "settings.libraryFullHashBackfillDescription":
+    "Lit chaque fichier de cette bibliothèque une fois, pendant la nuit, pour enregistrer l'empreinte complète de son contenu. Désactivez-le pour les bibliothèques sur des disques que vous laissez en veille ; l'empreinte d'un fichier n'est alors lue que lorsqu'un déplacement, une importation ou une vérification en a besoin.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Désactiver le hachage nocturne ?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Désactiver cette option réduit la capacité de Scryer à garantir que certains déplacements de fichiers sont sûrs à 100 %.",
   "settings.libraryFullHashBackfillDisableConfirm": "Désactiver",
-  "settings.libraryFullHashBackfillEnabledStatus": "Hachage nocturne activé pour cette bibliothèque.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Hachage nocturne désactivé pour cette bibliothèque.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Hachage nocturne activé pour cette bibliothèque.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Hachage nocturne désactivé pour cette bibliothèque.",
   "settings.nfoWriteOnImportLabel": "Écrire les NFO à l'importation",
   "settings.nfoWriteOnImportDescription":
     "Écrire des fichiers de métadonnées .nfo compatibles Kodi/Jellyfin/Emby à côté des médias importés ; un fichier .nfo existant n'est jamais écrasé",
@@ -2708,8 +2713,7 @@ const fr: LocaleDictionary = {
   "settings.lifecycleRuleCreate": "Créer une règle de cycle de vie",
   "settings.lifecycleRuleUpdate": "Mettre à jour la règle de cycle de vie",
   "settings.lifecycleRuleCopy": "Copier comme nouvelle règle",
-  "settings.lifecycleRuleCreateNew":
-    "Créer une nouvelle règle de cycle de vie",
+  "settings.lifecycleRuleCreateNew": "Créer une nouvelle règle de cycle de vie",
   "settings.lifecycleRuleValidationRequired":
     "Le nom, la source du filtre et une action sont requis.",
   "settings.lifecycleRuleConfirmDiscardTitle":
@@ -2748,8 +2752,7 @@ const fr: LocaleDictionary = {
   "settings.lifecyclePreviewLibraryPlaceholder":
     "Sélectionner une bibliothèque",
   "settings.lifecyclePreviewLimit": "Titres",
-  "settings.lifecyclePreviewLimitHelp":
-    "Jusqu'à {{max}} titres par exécution.",
+  "settings.lifecyclePreviewLimitHelp": "Jusqu'à {{max}} titres par exécution.",
   "settings.lifecyclePreviewRun": "Lancer l'aperçu",
   "settings.lifecyclePreviewRunning": "Aperçu en cours...",
   "settings.lifecyclePreviewNoTitles": "Aucun titre n'a été évalué.",
@@ -3500,8 +3503,7 @@ const fr: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Films de série",
   "settings.lifecycleActionAddTags": "Ajouter des tags",
   "settings.lifecycleActionRemoveTags": "Retirer des tags",
-  "settings.lifecycleTemplateTaggedForRemovalTitle":
-    "Marqué pour suppression",
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Marqué pour suppression",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
   "settings.lifecycleTemplateFlagForReviewTitle": "Marquer pour révision",

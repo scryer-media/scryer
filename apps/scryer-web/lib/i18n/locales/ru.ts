@@ -3402,12 +3402,17 @@ const ru: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Дополнительные файлы",
   "settings.libraryFullHashBackfillTitle": "Фоновое хеширование",
   "settings.libraryFullHashBackfillLabel": "Хешировать файлы ночью",
-  "settings.libraryFullHashBackfillDescription": "Ночью один раз читает каждый файл этой библиотеки, чтобы записать полный хеш его содержимого. Отключите для библиотек на дисках, которые вы держите остановленными; тогда хеш файла читается, только когда он нужен для перемещения, импорта или проверки.",
-  "settings.libraryFullHashBackfillDisableTitle": "Отключить ночное хеширование?",
-  "settings.libraryFullHashBackfillDisableWarning": "Отключение снижает способность Scryer гарантировать, что некоторые перемещения файлов на 100 % безопасны.",
+  "settings.libraryFullHashBackfillDescription":
+    "Ночью один раз читает каждый файл этой библиотеки, чтобы записать полный хеш его содержимого. Отключите для библиотек на дисках, которые вы держите остановленными; тогда хеш файла читается, только когда он нужен для перемещения, импорта или проверки.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Отключить ночное хеширование?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Отключение снижает способность Scryer гарантировать, что некоторые перемещения файлов на 100 % безопасны.",
   "settings.libraryFullHashBackfillDisableConfirm": "Отключить",
-  "settings.libraryFullHashBackfillEnabledStatus": "Ночное хеширование для этой библиотеки включено.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Ночное хеширование для этой библиотеки отключено.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Ночное хеширование для этой библиотеки включено.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Ночное хеширование для этой библиотеки отключено.",
   "settings.identityStorageTitle": "Идентификация и хранилище",
   "settings.mediaProfilesTitle": "Профили медиа",
   "settings.mediaProfilesHelp":
@@ -5047,8 +5052,7 @@ const ru: LocaleDictionary = {
   "settings.refLifecycleFactsCountry": "Страна производства",
   "settings.refLifecycleFactsPopularity":
     "Оценка популярности от поставщика метаданных",
-  "settings.refLifecycleFactsReleaseDate":
-    "Дата выхода фильма (YYYY-MM-DD)",
+  "settings.refLifecycleFactsReleaseDate": "Дата выхода фильма (YYYY-MM-DD)",
   "settings.refLifecycleFactsDaysSinceAdded":
     "Полных дней с момента добавления субъекта",
   "settings.refLifecycleFactsMaxVideoHeight":

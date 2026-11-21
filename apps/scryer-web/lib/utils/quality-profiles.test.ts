@@ -136,8 +136,11 @@ test("pack thresholds survive profile editing and mutation serialization", () =>
 
 test("absent or out-of-range pack thresholds read as the defaults", () => {
   const raw = makeEntry("packs", "Pack thresholds");
-  const { min_missing_episodes_for_pack, min_missing_percent_for_series_pack, ...rest } =
-    raw.criteria;
+  const {
+    min_missing_episodes_for_pack,
+    min_missing_percent_for_series_pack,
+    ...rest
+  } = raw.criteria;
   void min_missing_episodes_for_pack;
   void min_missing_percent_for_series_pack;
   const absent = normalizeQualityProfileEntry({ ...raw, criteria: rest });

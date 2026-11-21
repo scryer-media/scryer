@@ -26408,7 +26408,7 @@ mod held_sources {
             let clock = Clock::start(&app);
             let output_dirs = OutputDirs::default();
             let provider = extracting_provider(&download.video_name, &output_dirs);
-            let workspace = download
+            download
                 .extract(&app, Some(provider))
                 .await
                 .unwrap()
@@ -26463,7 +26463,7 @@ mod held_sources {
             let provider = extracting_provider(&download.video_name, &output_dirs);
             let app = with_provider(&download, provider.clone());
             let clock = Clock::start(&app);
-            let workspace = download
+            download
                 .extract(&app, Some(provider))
                 .await
                 .unwrap()

@@ -1,63 +1,7 @@
 import assert from "node:assert/strict";
-import test, { after, before } from "node:test";
-import { fileURLToPath } from "node:url";
+import test from "node:test";
 import type { DownloadQueueItem } from "../types/download-queue.ts";
-import { createServer, type ViteDevServer } from "vite";
-
-const WEB_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-
-type DownloadQueueModule = {
-  buildQueueStatusDetail: (
-    item: DownloadQueueItem,
-    t?: (key: string) => string,
-  ) => string;
-  importRetrySucceeded: (
-    result:
-      { decision?: string; skipReason?: string | null } | null | undefined,
-  ) => boolean;
-  IMPORT_ATTENTION_STATUSES: string[];
-  sameDownloadQueueItem: (
-    current: DownloadQueueItem,
-    next: DownloadQueueItem,
-  ) => boolean;
-  reconcileDownloadQueueItems: (
-    current: DownloadQueueItem[],
-    next: DownloadQueueItem[],
-  ) => DownloadQueueItem[];
-  isManualImportRequiredQueueItem: (item: DownloadQueueItem) => boolean;
-  mergeAuthoritativeQueueItems: (
-    authoritativeItems: DownloadQueueItem[],
-    previousItems: DownloadQueueItem[],
-  ) => DownloadQueueItem[];
-  matchesActivityStatuses: (
-    item: Pick<DownloadQueueItem, "displayState">,
-    statuses: string[],
-  ) => boolean;
-  matchesImportStatuses: (
-    item: Pick<DownloadQueueItem, "displayState">,
-    statuses: string[],
-  ) => boolean;
-  sortDownloadQueueItems: (items: DownloadQueueItem[]) => DownloadQueueItem[];
-};
-
-let server: ViteDevServer;
-let downloadQueue: DownloadQueueModule;
-
-before(async () => {
-  server = await createServer({
-    root: WEB_ROOT,
-    server: { middlewareMode: true },
-    appType: "custom",
-    logLevel: "silent",
-  });
-  downloadQueue = (await server.ssrLoadModule(
-    "/lib/utils/download-queue.ts",
-  )) as unknown as DownloadQueueModule;
-});
-
-after(async () => {
-  await server.close();
-});
+import * as downloadQueue from "./download-queue.ts";
 
 function queueItem(
   overrides: Partial<DownloadQueueItem> = {},

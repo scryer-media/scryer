@@ -115,7 +115,11 @@ enum Attempt {
 impl Stuck {
     /// What one retry settled, or the hold back to try again, keeping the
     /// latest rename failure.
-    fn after(mut self, source: &Path, attempt: Attempt) -> Result<AsideRemoval, Self> {
+    fn after(
+        mut self: Box<Self>,
+        source: &Path,
+        attempt: Attempt,
+    ) -> Result<AsideRemoval, Box<Self>> {
         match attempt {
             Attempt::PutBack => {
                 tracing::info!(
@@ -334,7 +338,7 @@ impl super::Disk {
         let mut stuck =
             match self.remove_source_beside_once(source, source_mark, kept, kept_mark, settle) {
                 Ok(answer) => return answer,
-                Err(stuck) => *stuck,
+                Err(stuck) => stuck,
             };
         for pause in PUT_BACK_RETRY_PAUSES {
             self.inner.clock.pause(pause);
@@ -378,7 +382,7 @@ impl super::Disk {
         };
         let mut stuck = match once {
             Ok(answer) => return answer,
-            Err(stuck) => *stuck,
+            Err(stuck) => stuck,
         };
         for pause in PUT_BACK_RETRY_PAUSES {
             tokio::time::sleep(pause).await;

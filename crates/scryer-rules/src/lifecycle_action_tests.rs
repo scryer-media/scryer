@@ -1214,11 +1214,9 @@ fn a_read_of_data_outside_the_rule_package_is_refused_with_its_position() {
     }
 
     let scan = scan_lifecycle_action_heads(
-        &format!(
-            "package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n\
-             import data.scryer.lifecycle.user.other_rule\n\
-             unmonitor if other_rule.match\n"
-        ),
+        "package scryer.lifecycle.user.fixture_rule\nimport rego.v1\n\
+         import data.scryer.lifecycle.user.other_rule\n\
+         unmonitor if other_rule.match\n",
         "fixture_rule",
     )
     .expect("source parses");

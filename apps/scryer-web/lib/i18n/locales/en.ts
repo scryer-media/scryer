@@ -8454,12 +8454,16 @@ const en: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Sidecar Files",
   "settings.libraryFullHashBackfillTitle": "Background hashing",
   "settings.libraryFullHashBackfillLabel": "Hash files nightly",
-  "settings.libraryFullHashBackfillDescription": "Reads every file in this library once, overnight, to record its full content hash. Turn this off for libraries on disks you keep spun down; a file's hash is then read only when a move, import or check needs it.",
+  "settings.libraryFullHashBackfillDescription":
+    "Reads every file in this library once, overnight, to record its full content hash. Turn this off for libraries on disks you keep spun down; a file's hash is then read only when a move, import or check needs it.",
   "settings.libraryFullHashBackfillDisableTitle": "Turn off nightly hashing?",
-  "settings.libraryFullHashBackfillDisableWarning": "Disabling this reduces Scryer's ability to ensure certain file moves are 100% safe.",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Disabling this reduces Scryer's ability to ensure certain file moves are 100% safe.",
   "settings.libraryFullHashBackfillDisableConfirm": "Turn off",
-  "settings.libraryFullHashBackfillEnabledStatus": "Nightly hashing turned on for this library.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Nightly hashing turned off for this library.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Nightly hashing turned on for this library.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Nightly hashing turned off for this library.",
   "settings.identityStorageTitle": "Identity & storage",
   "settings.mediaProfilesTitle": "Media profiles",
   "settings.mediaProfilesHelp":
@@ -9845,7 +9849,8 @@ const en: LocaleDictionary = {
   "settings.lifecycleRuleScheduleManualHelp":
     "This rule never runs on its own. Start it from Runs and history.",
   "settings.lifecycleRuleLibraries": "Applied Libraries",
-  "settings.lifecycleRuleLibrariesHelp": "Leave empty to apply to all libraries.",
+  "settings.lifecycleRuleLibrariesHelp":
+    "Leave empty to apply to all libraries.",
   "settings.lifecycleRuleLibrariesAll": "All libraries",
   "settings.lifecycleRuleCreate": "Create lifecycle rule",
   "settings.lifecycleRuleUpdate": "Update lifecycle rule",

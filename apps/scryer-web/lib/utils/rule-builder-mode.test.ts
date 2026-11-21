@@ -194,10 +194,7 @@ const lifecycle: Family<ReturnType<typeof initialLifecycleRuleDraft>> = {
       LIFECYCLE_BUILDER,
     ),
   copy: (source, model) =>
-    copyLifecycleRuleDraft(
-      lifecycleDetail(source, model),
-      LIFECYCLE_BUILDER,
-    ),
+    copyLifecycleRuleDraft(lifecycleDetail(source, model), LIFECYCLE_BUILDER),
   createModel: (draft) =>
     createLifecycleRuleSetInput(draft, LIFECYCLE_BUILDER).builderModel,
   updateModel: (draft) =>

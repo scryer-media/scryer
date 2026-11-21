@@ -87,7 +87,9 @@ test("the shared conditions and a title row read only title facts", () => {
   );
   const season = SCHEMA.subjects!.find((subject) => subject.id === "SEASON")!;
   const seasonFields = ruleBuilderSubjectFields(SCHEMA, null, season);
-  assert.ok(seasonFields.some((field) => field.path === "input.facts.monitored"));
+  assert.ok(
+    seasonFields.some((field) => field.path === "input.facts.monitored"),
+  );
   assert.ok(
     seasonFields.some((field) => field.path === "input.season.facts.monitored"),
   );
@@ -112,7 +114,10 @@ test("each action is offered only under its own subject", () => {
     conditions: [],
   };
   model.actions![1] = { ...model.actions![1]!, output: "ADD_TAGS" };
-  const codes = problems(model).map((problem) => [problem.code, problem.actionIndex]);
+  const codes = problems(model).map((problem) => [
+    problem.code,
+    problem.actionIndex,
+  ]);
   assert.deepEqual(codes.slice(0, 2), [
     ["BUILDER_OUTPUT_NOT_IN_SCOPE", 0],
     ["BUILDER_OUTPUT_NOT_IN_SCOPE", 1],
@@ -143,7 +148,10 @@ test("moving a row keeps an action the new subject has and clears one it lacks",
   assert.equal(Object.hasOwn(moved.outputs, "UNMONITOR"), false);
   assert.equal(moved.outputs.UNMONITOR_SEASON, true);
   // The other row is untouched.
-  assert.deepEqual(ruleBuilderActionRows(moved)[1], ruleBuilderActionRows(model)[1]);
+  assert.deepEqual(
+    ruleBuilderActionRows(moved)[1],
+    ruleBuilderActionRows(model)[1],
+  );
 
   const cleared = setRuleBuilderActionSubject(SCHEMA, moved, 1, "EPISODE");
   assert.deepEqual(ruleBuilderActionRows(cleared)[1], {
@@ -165,7 +173,11 @@ test("a condition the new subject cannot read is reported against its row, not d
   assert.equal(row.output, "DELETE_EPISODE_FILES");
   assert.deepEqual(row.conditions, [SEASON_UNMONITORED]);
   assert.deepEqual(
-    problems(moved).map((problem) => [problem.code, problem.actionIndex, problem.conditionIndex]),
+    problems(moved).map((problem) => [
+      problem.code,
+      problem.actionIndex,
+      problem.conditionIndex,
+    ]),
     [["BUILDER_FACT_UNKNOWN", 1, 0]],
   );
 });
@@ -178,7 +190,13 @@ function twoRows(
     subject === "SEASON"
       ? [{ ...SEASON_UNMONITORED }]
       : subject === "EPISODE"
-        ? [{ field: "input.episode.facts.monitored", operator: "IS_FALSE", value: "" }]
+        ? [
+            {
+              field: "input.episode.facts.monitored",
+              operator: "IS_FALSE",
+              value: "",
+            },
+          ]
         : [];
   return {
     version: 2,
@@ -200,8 +218,18 @@ test("rows of different subjects conflict the way rows of one subject do", () =>
     { subject: "TITLE", output: "UNMONITOR" },
   );
   assert.deepEqual(problems(sameLevel), [
-    { code: "BUILDER_OUTPUTS_CONFLICT", output: "MONITOR", outputs: ["UNMONITOR"], actionIndex: 0 },
-    { code: "BUILDER_OUTPUTS_CONFLICT", output: "UNMONITOR", outputs: ["MONITOR"], actionIndex: 1 },
+    {
+      code: "BUILDER_OUTPUTS_CONFLICT",
+      output: "MONITOR",
+      outputs: ["UNMONITOR"],
+      actionIndex: 0,
+    },
+    {
+      code: "BUILDER_OUTPUTS_CONFLICT",
+      output: "UNMONITOR",
+      outputs: ["MONITOR"],
+      actionIndex: 1,
+    },
   ]);
 
   const crossLevel = twoRows(

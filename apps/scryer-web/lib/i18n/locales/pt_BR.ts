@@ -2008,12 +2008,16 @@ const pt_BR: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Arquivos sidecar",
   "settings.libraryFullHashBackfillTitle": "Hash em segundo plano",
   "settings.libraryFullHashBackfillLabel": "Calcular hash dos arquivos à noite",
-  "settings.libraryFullHashBackfillDescription": "Lê cada arquivo desta biblioteca uma vez, durante a noite, para registrar o hash completo do conteúdo. Desative para bibliotecas em discos que você mantém em repouso; o hash de um arquivo só será lido quando uma movimentação, importação ou verificação precisar dele.",
+  "settings.libraryFullHashBackfillDescription":
+    "Lê cada arquivo desta biblioteca uma vez, durante a noite, para registrar o hash completo do conteúdo. Desative para bibliotecas em discos que você mantém em repouso; o hash de um arquivo só será lido quando uma movimentação, importação ou verificação precisar dele.",
   "settings.libraryFullHashBackfillDisableTitle": "Desativar o hash noturno?",
-  "settings.libraryFullHashBackfillDisableWarning": "Desativar isto reduz a capacidade do Scryer de garantir que certas movimentações de arquivos sejam 100% seguras.",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Desativar isto reduz a capacidade do Scryer de garantir que certas movimentações de arquivos sejam 100% seguras.",
   "settings.libraryFullHashBackfillDisableConfirm": "Desativar",
-  "settings.libraryFullHashBackfillEnabledStatus": "Hash noturno ativado para esta biblioteca.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Hash noturno desativado para esta biblioteca.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Hash noturno ativado para esta biblioteca.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Hash noturno desativado para esta biblioteca.",
   "settings.nfoWriteOnImportLabel": "Gravar NFO ao importar",
   "settings.nfoWriteOnImportDescription":
     "Gravar arquivos de metadados .nfo compatíveis com Kodi/Jellyfin/Emby junto à mídia importada; um arquivo .nfo existente nunca é sobrescrito",
@@ -2631,7 +2635,8 @@ const pt_BR: LocaleDictionary = {
     "Descartar as alterações não salvas?",
   "settings.lifecycleRuleConfirmDiscardDescription":
     "O editor de regras de ciclo de vida tem alterações não salvas que serão perdidas.",
-  "settings.lifecycleRuleDeleting": "Excluir a regra de ciclo de vida {{name}}?",
+  "settings.lifecycleRuleDeleting":
+    "Excluir a regra de ciclo de vida {{name}}?",
   "settings.noLifecycleRulesFound": "Ainda não há regras de ciclo de vida.",
   "settings.lifecycleRuleRevision": "Revisão",
   "settings.lifecycleActionDoNothing": "Não fazer nada",
@@ -2672,8 +2677,7 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecyclePreviewOutcomeError": "ERRO",
   "settings.lifecyclePreviewMeta": "Avaliado {{time}} · comparador {{hash}}",
   "settings.lifecyclePreviewRuleSelect": "Regra",
-  "settings.lifecyclePreviewRuleSelectPlaceholder":
-    "Selecione uma regra salva",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "Selecione uma regra salva",
   "settings.lifecycleRuleUpdated": "Regra de ciclo de vida atualizada.",
   "settings.lifecycleRuleCreated":
     "Regra de ciclo de vida criada e salva desativada.",
@@ -2782,7 +2786,8 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "Por que este título é excluído (opcional)",
   "settings.lifecycleExcludeConfirm": "Excluir",
-  "settings.lifecycleExcluded": "{{title}} excluído das regras de ciclo de vida.",
+  "settings.lifecycleExcluded":
+    "{{title}} excluído das regras de ciclo de vida.",
   "move.dialogTitle": "Mover títulos",
   "move.destinationLibrary": "Biblioteca de destino",
   "move.destinationRoot": "Raiz de destino",
@@ -3714,7 +3719,8 @@ const pt_BR: LocaleDictionary = {
     "Nomes das listas públicas ativadas que ainda incluem o item",
   "settings.refLifecycleFactsListsLeftAll":
     "Se todas as listas que já incluíram o item o removeram",
-  "settings.refLifecycleFactsListsLeftAt": "Quando a última lista removeu o item",
+  "settings.refLifecycleFactsListsLeftAt":
+    "Quando a última lista removeu o item",
   "settings.refLifecycleFactsListsLastListName":
     "A lista pública da qual o item saiu mais recentemente",
   "settings.refLifecycleFactsListsAddedByListValue":

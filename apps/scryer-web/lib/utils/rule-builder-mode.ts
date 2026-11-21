@@ -48,7 +48,9 @@ export function nextRuleEditorMode(
   current: RuleEditorMode,
   requested: "simple" | "view",
 ): RuleEditorMode {
-  return draft.builderModel !== null && current !== "edit" ? requested : current;
+  return draft.builderModel !== null && current !== "edit"
+    ? requested
+    : current;
 }
 
 /// Apply a builder change: the source becomes exactly what the builder writes
@@ -59,7 +61,11 @@ export function withRuleBuilderModel<D extends RuleBuilderDraft>(
   model: RuleBuilderModel,
 ): D {
   if (!binding.schema) return draft;
-  const result = generateRuleSource(binding.schema, model, binding.variant(draft));
+  const result = generateRuleSource(
+    binding.schema,
+    model,
+    binding.variant(draft),
+  );
   return {
     ...draft,
     builderModel: model,
@@ -74,7 +80,11 @@ export function withNewRuleBuilderModel<D extends RuleBuilderDraft>(
   draft: D,
 ): D {
   if (!binding.schema) return draft;
-  return withRuleBuilderModel(binding, draft, emptyRuleBuilderModel(binding.schema));
+  return withRuleBuilderModel(
+    binding,
+    draft,
+    emptyRuleBuilderModel(binding.schema),
+  );
 }
 
 /// A template's draft, filled in from the template's builder model. The draft
@@ -156,8 +166,12 @@ export function withRuleSourceEdit<D extends RuleBuilderDraft>(
 /// True when editing the draft as Rego gives up something the operator chose
 /// in the builder, so they confirm it first. An untouched builder loses
 /// nothing.
-export function ruleRegoEditorNeedsConfirmation(draft: RuleBuilderDraft): boolean {
-  return draft.builderModel !== null && !isBlankRuleBuilderModel(draft.builderModel);
+export function ruleRegoEditorNeedsConfirmation(
+  draft: RuleBuilderDraft,
+): boolean {
+  return (
+    draft.builderModel !== null && !isBlankRuleBuilderModel(draft.builderModel)
+  );
 }
 
 /// Detach the draft for editing as Rego, whatever its source. The generated
@@ -170,7 +184,8 @@ export function withRuleRegoEditor<D extends RuleBuilderDraft>(
   if (draft.builderModel === null) return draft;
   return {
     ...draft,
-    regoSource: draft.regoSource === "" ? binding.starterSource : draft.regoSource,
+    regoSource:
+      draft.regoSource === "" ? binding.starterSource : draft.regoSource,
     builderModel: null,
   };
 }
@@ -202,8 +217,11 @@ export function isIncompleteRuleBuilderDraft<D extends RuleBuilderDraft>(
   if (draft.builderModel === null) return false;
   return (
     !binding.schema ||
-    !generateRuleSource(binding.schema, draft.builderModel, binding.variant(draft))
-      .ok
+    !generateRuleSource(
+      binding.schema,
+      draft.builderModel,
+      binding.variant(draft),
+    ).ok
   );
 }
 
@@ -218,7 +236,8 @@ export function attachedRuleBuilderModel(
 ): RuleBuilderModel | null {
   if (!schema) return null;
   const model = parseRuleBuilderModel(schema, stored);
-  return model !== null && isRuleBuilderSource(schema, model, variant, regoSource)
+  return model !== null &&
+    isRuleBuilderSource(schema, model, variant, regoSource)
     ? model
     : null;
 }

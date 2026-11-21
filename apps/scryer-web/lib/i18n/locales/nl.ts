@@ -2436,7 +2436,8 @@ const nl: LocaleDictionary = {
     "Geverifieerd audioprofiel of extensielabel per stroom",
   "settings.refAudioStreamChannels": "Aantal kanalen per stroom",
   "settings.refAudioStreamLanguage": "Taalcode per stroom",
-  "settings.refAudioStreamName": "Titel van audiotrack per stroom, indien beschikbaar",
+  "settings.refAudioStreamName":
+    "Titel van audiotrack per stroom, indien beschikbaar",
   "settings.refAudioStreamBitrateKbps": "Bitrate in kbps per stroom",
 
   "settings.refSectionSubtitleStreams":
@@ -2941,12 +2942,17 @@ const nl: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Sidecar-bestanden",
   "settings.libraryFullHashBackfillTitle": "Hashen op de achtergrond",
   "settings.libraryFullHashBackfillLabel": "Bestanden 's nachts hashen",
-  "settings.libraryFullHashBackfillDescription": "Leest elk bestand in deze bibliotheek één keer 's nachts om de volledige inhoudshash vast te leggen. Zet dit uit voor bibliotheken op schijven die je in slaapstand houdt; de hash van een bestand wordt dan alleen gelezen wanneer een verplaatsing, import of controle die nodig heeft.",
-  "settings.libraryFullHashBackfillDisableTitle": "Nachtelijk hashen uitschakelen?",
-  "settings.libraryFullHashBackfillDisableWarning": "Als je dit uitschakelt, kan Scryer minder goed garanderen dat bepaalde bestandsverplaatsingen 100% veilig zijn.",
+  "settings.libraryFullHashBackfillDescription":
+    "Leest elk bestand in deze bibliotheek één keer 's nachts om de volledige inhoudshash vast te leggen. Zet dit uit voor bibliotheken op schijven die je in slaapstand houdt; de hash van een bestand wordt dan alleen gelezen wanneer een verplaatsing, import of controle die nodig heeft.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Nachtelijk hashen uitschakelen?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Als je dit uitschakelt, kan Scryer minder goed garanderen dat bepaalde bestandsverplaatsingen 100% veilig zijn.",
   "settings.libraryFullHashBackfillDisableConfirm": "Uitschakelen",
-  "settings.libraryFullHashBackfillEnabledStatus": "Nachtelijk hashen ingeschakeld voor deze bibliotheek.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Nachtelijk hashen uitgeschakeld voor deze bibliotheek.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Nachtelijk hashen ingeschakeld voor deze bibliotheek.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Nachtelijk hashen uitgeschakeld voor deze bibliotheek.",
   "settings.identityStorageTitle": "Identiteit & opslag",
   "settings.mediaProfilesTitle": "Mediaprofielen",
   "settings.mediaProfilesHelp":

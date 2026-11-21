@@ -12,6 +12,11 @@
 //! path here that may not replace either refuses in the same call that would
 //! have written, or reserves the name first.
 
+#![expect(
+    clippy::result_large_err,
+    reason = "Placement callers receive the public refusal with file evidence and recovery paths"
+)]
+
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -422,6 +427,14 @@ struct Answered {
     folder_lane: Option<String>,
 }
 
+#[derive(Default)]
+struct PlacementAdmission<'a> {
+    permit: Option<CopyPermit>,
+    staged_free: bool,
+    prove: Option<(&'a Mark, LinkProof)>,
+    answered: Option<Answered>,
+}
+
 /// A placement's first reads, of the source's name and the destination's
 /// folder, taken once for placements that share both. See
 /// [`Disk::read_before_placing`].
@@ -533,7 +546,7 @@ impl Disk {
         policy: Placement,
         watch: &Watch,
     ) -> Result<Placed, PlaceRefusal> {
-        self.place_admitted(source, dest, policy, watch, None, false, None, None)
+        self.place_admitted(source, dest, policy, watch, PlacementAdmission::default())
     }
 
     /// [`Self::place_blocking`] for a hard link that must prove itself.
@@ -584,16 +597,15 @@ impl Disk {
         seen: &Mark,
         proof: LinkProof,
     ) -> Result<Placed, PlaceRefusal> {
-        let prove = Some((seen, proof));
         self.place_admitted(
             source,
             dest,
             policy,
             &Watch::nobody(),
-            None,
-            false,
-            prove,
-            None,
+            PlacementAdmission {
+                prove: Some((seen, proof)),
+                ..Default::default()
+            },
         )
     }
 
@@ -613,10 +625,17 @@ impl Disk {
             Err(fail) => return Err(refused_before_it_ran(policy, fail)),
         };
         let job = move || {
-            let prove = Some((&seen, proof));
             let nobody = Watch::nobody();
             disk.place_admitted(
-                &source, &dest, policy, &nobody, None, false, prove, answered,
+                &source,
+                &dest,
+                policy,
+                &nobody,
+                PlacementAdmission {
+                    prove: Some((&seen, proof)),
+                    answered,
+                    ..Default::default()
+                },
             )
         };
         match offload(None, job).await {
@@ -678,11 +697,14 @@ impl Disk {
         dest: &Path,
         policy: Placement,
         watch: &Watch,
-        permit: Option<CopyPermit>,
-        staged_free: bool,
-        prove: Option<(&Mark, LinkProof)>,
-        answered: Option<Answered>,
+        admission: PlacementAdmission<'_>,
     ) -> Result<Placed, PlaceRefusal> {
+        let PlacementAdmission {
+            permit,
+            staged_free,
+            prove,
+            answered,
+        } = admission;
         let job = Job {
             disk: self,
             source,
@@ -886,8 +908,18 @@ impl Disk {
             _ => None,
         };
         let job = move || {
-            let (free, read) = (staged_free, answered);
-            disk.place_admitted(&source, &dest, policy, &watch, permit, free, None, read)
+            disk.place_admitted(
+                &source,
+                &dest,
+                policy,
+                &watch,
+                PlacementAdmission {
+                    permit,
+                    staged_free,
+                    answered,
+                    ..Default::default()
+                },
+            )
         };
         match offload(None, job).await {
             Offloaded::Done(result) => result,

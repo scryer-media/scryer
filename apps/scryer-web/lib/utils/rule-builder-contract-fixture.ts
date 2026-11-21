@@ -27,7 +27,10 @@ export const LIFECYCLE_CONTRACT_SCHEMA: RuleBuilderSchema =
   );
 
 export const REQUEST_CONTRACT_SCHEMA: RuleBuilderSchema =
-  ruleBuilderSchemaFromPayload(REQUEST_RULE_BUILDER_BASE, REQUEST_SERVED_PAYLOAD);
+  ruleBuilderSchemaFromPayload(
+    REQUEST_RULE_BUILDER_BASE,
+    REQUEST_SERVED_PAYLOAD,
+  );
 
 /// Scoring serves no outputs, so its builder is the static schema.
 export const SCORING_CONTRACT_SCHEMA: RuleBuilderSchema =

@@ -112,8 +112,7 @@ export function LifecycleUpcomingPanel({
 
   const gates = data?.lifecycleInstanceGates;
   const candidates = data?.lifecycleCandidates ?? [];
-  const headLabel = (head: string) =>
-    ruleOutputHeadLabel(t, descriptors, head);
+  const headLabel = (head: string) => ruleOutputHeadLabel(t, descriptors, head);
   const title = settings.name || t("dashboard.lifecycleUpcoming");
   const shownGroups = settings.actions.slice(0, MAX_GROUP_PILLS);
   const hiddenGroups = settings.actions.length - shownGroups.length;
@@ -178,14 +177,22 @@ export function LifecycleUpcomingPanel({
           <ul id={selectorId(idPrefix, "list")}>
             {candidates.map((candidate) => {
               const timing = lifecycleUpcomingTiming(candidate, now);
-              const exactDue = formatUiDateTime(candidate.dueAt, dateTimeFormat, {
-                fallback: candidate.dueAt,
-              });
+              const exactDue = formatUiDateTime(
+                candidate.dueAt,
+                dateTimeFormat,
+                {
+                  fallback: candidate.dueAt,
+                },
+              );
               const held = candidate.heldSince
                 ? t("settings.lifecycleCandidatesHeldSince", {
-                    time: formatUiDateTime(candidate.heldSince, dateTimeFormat, {
-                      fallback: candidate.heldSince,
-                    }),
+                    time: formatUiDateTime(
+                      candidate.heldSince,
+                      dateTimeFormat,
+                      {
+                        fallback: candidate.heldSince,
+                      },
+                    ),
                   })
                 : null;
               const subject =

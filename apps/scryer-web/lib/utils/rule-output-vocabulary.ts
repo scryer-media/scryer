@@ -1,4 +1,7 @@
-import { translatedOr, type RuleBuilderOutputDescriptor } from "./rule-builder.ts";
+import {
+  translatedOr,
+  type RuleBuilderOutputDescriptor,
+} from "./rule-builder.ts";
 
 /// Everything a summary, reference table or editor says about a rule
 /// family's heads comes from the descriptors the server serves, keyed by the
@@ -51,7 +54,9 @@ export function sortByRuleOutputOrder<T>(
   items: readonly T[],
   idOf: (item: T) => string,
 ): T[] {
-  const rank = new Map(descriptors.map((descriptor, at) => [descriptor.id, at]));
+  const rank = new Map(
+    descriptors.map((descriptor, at) => [descriptor.id, at]),
+  );
   const last = descriptors.length;
   return items
     .map((item, at) => ({ item, at, rank: rank.get(idOf(item)) ?? last }))
@@ -65,7 +70,9 @@ export function isRuleOutputInVariant(
   descriptor: Pick<RuleBuilderOutputDescriptor, "variants">,
   variant: string | null | undefined,
 ): boolean {
-  return !variant || !descriptor.variants || descriptor.variants.includes(variant);
+  return (
+    !variant || !descriptor.variants || descriptor.variants.includes(variant)
+  );
 }
 
 /// The Rego head names in apply order, for help text that lists them.
@@ -81,30 +88,40 @@ function sampleValue(descriptor: RuleBuilderOutputDescriptor): string {
 
 /// How a head is written in source, from its template: the helper becomes
 /// `{ ... }` and each value an example literal.
-export function ruleOutputSyntax(descriptor: RuleBuilderOutputDescriptor): string {
+export function ruleOutputSyntax(
+  descriptor: RuleBuilderOutputDescriptor,
+): string {
   const sample = sampleValue(descriptor);
-  return descriptor.template.replace(/\{(head|helper|value|items|item|part\.[\w]+)\}/g, (_, token: string) => {
-    if (token === "head") return descriptor.head;
-    if (token === "helper") return "{ ... }";
-    if (token.startsWith("part.")) return token.slice(5);
-    return sample;
-  });
+  return descriptor.template.replace(
+    /\{(head|helper|value|items|item|part\.[\w]+)\}/g,
+    (_, token: string) => {
+      if (token === "head") return descriptor.head;
+      if (token === "helper") return "{ ... }";
+      if (token.startsWith("part.")) return token.slice(5);
+      return sample;
+    },
+  );
 }
 
 /// A completion snippet for a head, from its template, in the editor's snippet
 /// syntax. Each value is a tab stop and the helper becomes a body holding one
 /// placeholder condition, so the inserted rule is valid Rego as it stands.
-export function ruleOutputSnippet(descriptor: RuleBuilderOutputDescriptor): string {
+export function ruleOutputSnippet(
+  descriptor: RuleBuilderOutputDescriptor,
+): string {
   let stop = 0;
   const field = (placeholder: string) => `\${${++stop}:${placeholder}}`;
-  return descriptor.template.replace(/\{(head|helper|value|items|item|part\.[\w]+)\}/g, (_, token: string) => {
-    if (token === "head") return descriptor.head;
-    if (token === "helper") return `{\n\t${field("true")}\n}`;
-    if (token.startsWith("part.")) return field(token.slice(5));
-    if (descriptor.valueKind === "NUMBER")
-      return field(String(descriptor.min ?? 0));
-    return `"${field("")}"`;
-  });
+  return descriptor.template.replace(
+    /\{(head|helper|value|items|item|part\.[\w]+)\}/g,
+    (_, token: string) => {
+      if (token === "head") return descriptor.head;
+      if (token === "helper") return `{\n\t${field("true")}\n}`;
+      if (token.startsWith("part.")) return field(token.slice(5));
+      if (descriptor.valueKind === "NUMBER")
+        return field(String(descriptor.min ?? 0));
+      return `"${field("")}"`;
+    },
+  );
 }
 
 /// The ids among `known` that a shipped template's source defines, in apply
@@ -114,7 +131,9 @@ export function templateRuleOutputs(
   source: string,
   descriptors: Descriptors,
 ): string[] {
-  const byHead = new Map(descriptors.map((descriptor) => [descriptor.head, descriptor.id]));
+  const byHead = new Map(
+    descriptors.map((descriptor) => [descriptor.head, descriptor.id]),
+  );
   const ids = new Set<string>();
   for (const match of source.matchAll(/^([a-z_]+)\b/gm)) {
     const id = byHead.get(match[1]);

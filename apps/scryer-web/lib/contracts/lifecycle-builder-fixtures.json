@@ -124,13 +124,8 @@
         }
       ],
       "outputs": {
-        "REMOVE_TAGS": [
-          "sample-fresh"
-        ],
-        "ADD_TAGS": [
-          "sample-review",
-          "sample-stale"
-        ]
+        "REMOVE_TAGS": ["sample-fresh"],
+        "ADD_TAGS": ["sample-review", "sample-stale"]
       },
       "actions": [
         {
@@ -153,12 +148,8 @@
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
-            "tags": [
-              "sample-archive"
-            ],
-            "lists_names": [
-              "Sample List"
-            ],
+            "tags": ["sample-archive"],
+            "lists_names": ["Sample List"],
             "requested_by_usernames": []
           }
         },
@@ -168,12 +159,8 @@
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
-            "tags": [
-              "sample-other"
-            ],
-            "lists_names": [
-              "Sample List"
-            ],
+            "tags": ["sample-other"],
+            "lists_names": ["Sample List"],
             "requested_by_usernames": []
           }
         },
@@ -183,13 +170,8 @@
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
-            "tags": [
-              "sample-archive",
-              "sample-keep"
-            ],
-            "lists_names": [
-              "Sample List"
-            ],
+            "tags": ["sample-archive", "sample-keep"],
+            "lists_names": ["Sample List"],
             "requested_by_usernames": []
           }
         },
@@ -199,9 +181,7 @@
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
-            "lists_names": [
-              "Sample List"
-            ],
+            "lists_names": ["Sample List"],
             "requested_by_usernames": []
           }
         },
@@ -211,9 +191,7 @@
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
-            "tags": [
-              "sample-archive"
-            ],
+            "tags": ["sample-archive"],
             "lists_names": [],
             "requested_by_usernames": []
           }
@@ -736,10 +714,7 @@
       ],
       "outputs": {
         "NOTIFY": "Say \"hi\" to C:\\sample\\path",
-        "ADD_TAGS": [
-          "sample.tag one",
-          "sample-tag_2"
-        ]
+        "ADD_TAGS": ["sample.tag one", "sample-tag_2"]
       },
       "actions": [
         {
@@ -763,9 +738,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "sample \"quoted\" \\ user",
-            "tags": [
-              "Ünïcødé 標籤 😀"
-            ]
+            "tags": ["Ünïcødé 標籤 😀"]
           }
         },
         "expected": true
@@ -775,9 +748,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "sample quoted user",
-            "tags": [
-              "Ünïcødé 標籤 😀"
-            ]
+            "tags": ["Ünïcødé 標籤 😀"]
           }
         },
         "expected": false
@@ -787,9 +758,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "sample \"quoted\" \\ user",
-            "tags": [
-              "Unicode"
-            ]
+            "tags": ["Unicode"]
           }
         },
         "expected": false
@@ -816,12 +785,8 @@
         "FETCH_SUBTITLES": true,
         "SEARCH": true,
         "SET_QUALITY_PROFILE": "Sample Profile",
-        "REMOVE_TAGS": [
-          "sample-old"
-        ],
-        "ADD_TAGS": [
-          "sample-new"
-        ]
+        "REMOVE_TAGS": ["sample-old"],
+        "ADD_TAGS": ["sample-new"]
       },
       "actions": [
         {
@@ -916,9 +881,7 @@
         }
       ],
       "outputs": {
-        "ADD_TAGS": [
-          "Reviewed"
-        ],
+        "ADD_TAGS": ["Reviewed"],
         "UNMONITOR_SEASON": true,
         "DELETE_SEASON_FILES": true,
         "NOTIFY_SEASON": "Season removed",
@@ -1257,13 +1220,8 @@
         }
       ],
       "outputs": {
-        "REMOVE_TAGS": [
-          "sample-fresh"
-        ],
-        "ADD_TAGS": [
-          "sample-review",
-          "sample-stale"
-        ]
+        "REMOVE_TAGS": ["sample-fresh"],
+        "ADD_TAGS": ["sample-review", "sample-stale"]
       },
       "actions": [
         {
@@ -1287,9 +1245,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "sample",
-            "tags": [
-              "sample"
-            ]
+            "tags": ["sample"]
           }
         },
         "expected": true
@@ -1299,9 +1255,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "Elsewhere",
-            "tags": [
-              "sample"
-            ]
+            "tags": ["sample"]
           }
         },
         "expected": false
@@ -1311,9 +1265,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "sample",
-            "tags": [
-              "Elsewhere"
-            ]
+            "tags": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1339,13 +1291,8 @@
         }
       ],
       "outputs": {
-        "REMOVE_TAGS": [
-          "sample-fresh"
-        ],
-        "ADD_TAGS": [
-          "sample-review",
-          "sample-stale"
-        ]
+        "REMOVE_TAGS": ["sample-fresh"],
+        "ADD_TAGS": ["sample-review", "sample-stale"]
       },
       "actions": [
         {
@@ -1369,9 +1316,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "Elsewhere",
-            "tags": [
-              "Elsewhere"
-            ]
+            "tags": ["Elsewhere"]
           }
         },
         "expected": true
@@ -1381,9 +1326,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "sample",
-            "tags": [
-              "Elsewhere"
-            ]
+            "tags": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1393,9 +1336,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "added_by_username": "Elsewhere",
-            "tags": [
-              "sample"
-            ]
+            "tags": ["sample"]
           }
         },
         "expected": false
