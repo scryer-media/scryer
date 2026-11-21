@@ -32,7 +32,6 @@ function request(id: string, overrides: Partial<RequestRule> = {}) {
     name: id,
     description: null,
     enabled: true,
-    decisionCount: 0,
     libraries: "All libraries",
     ...overrides,
   } satisfies RequestRule;
@@ -76,19 +75,15 @@ test("enabled sorts disabled rules first, then by name", () => {
   ]);
 });
 
-test("request rules sort by the library text shown and by decision count", () => {
+test("request rules sort by the library text shown", () => {
   const rules = [
-    request("one", { libraries: "Movies", decisionCount: 4 }),
-    request("two", { libraries: "Anime", decisionCount: 9 }),
-    request("three", { libraries: "TV", decisionCount: 1 }),
+    request("one", { libraries: "Movies" }),
+    request("two", { libraries: "Anime" }),
+    request("three", { libraries: "TV" }),
   ];
   const label = (rule: RequestRule) => rule.libraries;
   assert.deepEqual(
     ids(sortRequestRules(rules, requestSort("libraries"), label)),
-    ["two", "one", "three"],
-  );
-  assert.deepEqual(
-    ids(sortRequestRules(rules, requestSort("decisions", true), label)),
     ["two", "one", "three"],
   );
 });

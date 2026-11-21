@@ -3291,7 +3291,6 @@ const it: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Tutte le librerie",
   "settings.requestRuleLibrariesHelp":
     "Lascia tutte le caselle deselezionate per applicare questa regola alle richieste di ogni libreria.",
-  "settings.requestRuleDecisionCount": "Decisioni",
   "settings.requestRuleCopy": "Copia regola",
   "settings.requestRuleCreate": "Crea regola",
   "settings.requestRuleUpdate": "Aggiorna regola",

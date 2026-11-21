@@ -3131,7 +3131,6 @@ const ko: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "모든 라이브러리",
   "settings.requestRuleLibrariesHelp":
     "모든 항목을 선택하지 않으면 이 규칙이 모든 라이브러리의 요청에 적용됩니다.",
-  "settings.requestRuleDecisionCount": "결정 수",
   "settings.requestRuleCopy": "규칙 복사",
   "settings.requestRuleCreate": "규칙 만들기",
   "settings.requestRuleUpdate": "규칙 업데이트",

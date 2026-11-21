@@ -10801,7 +10801,6 @@ const en: LocaleDictionary = {
   "settings.requestRuleLibraries": "Applied Libraries",
   "settings.requestRuleLibrariesAll": "All libraries",
   "settings.requestRuleLibrariesHelp": "Leave empty to apply to all libraries.",
-  "settings.requestRuleDecisionCount": "Decisions",
   "settings.requestRuleCopy": "Copy rule",
   "settings.requestRuleCreate": "Create rule",
   "settings.requestRuleUpdate": "Update rule",

@@ -3277,7 +3277,6 @@ const pt_BR: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Todas as bibliotecas",
   "settings.requestRuleLibrariesHelp":
     "Deixe todas as caixas desmarcadas para aplicar esta regra às solicitações de todas as bibliotecas.",
-  "settings.requestRuleDecisionCount": "Decisões",
   "settings.requestRuleCopy": "Copiar regra",
   "settings.requestRuleCreate": "Criar regra",
   "settings.requestRuleUpdate": "Atualizar regra",

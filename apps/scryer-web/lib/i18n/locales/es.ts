@@ -3299,7 +3299,6 @@ const es: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Todas las bibliotecas",
   "settings.requestRuleLibrariesHelp":
     "Deje todas las casillas sin marcar para aplicar esta regla a las solicitudes de todas las bibliotecas.",
-  "settings.requestRuleDecisionCount": "Decisiones",
   "settings.requestRuleCopy": "Copiar regla",
   "settings.requestRuleCreate": "Crear regla",
   "settings.requestRuleUpdate": "Actualizar regla",

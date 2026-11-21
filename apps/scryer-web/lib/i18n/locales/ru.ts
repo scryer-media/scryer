@@ -5477,7 +5477,6 @@ const ru: LocaleDictionary = {
   "settings.requestRuleLibrariesAll": "Все библиотеки",
   "settings.requestRuleLibrariesHelp":
     "Оставьте все флажки снятыми, чтобы правило применялось к запросам во всех библиотеках.",
-  "settings.requestRuleDecisionCount": "Решений",
   "settings.requestRuleCopy": "Копировать правило",
   "settings.requestRuleCreate": "Создать правило",
   "settings.requestRuleUpdate": "Обновить правило",

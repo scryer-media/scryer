@@ -4498,7 +4498,6 @@ export const REQUEST_RULE_SET_FIELDS = `
     description
     enabled
     libraryIds
-    decisionCount
     declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
     }
     createdAt
