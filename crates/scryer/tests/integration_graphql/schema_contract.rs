@@ -947,8 +947,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"startExternalRuleImport"));
     // Each library can control its background hash backfill: 299->300.
     assert!(mutation_field_names.contains(&"setLibraryFullHashBackfill"));
+    // Staging a request subject's metadata adds `stageMyRequestMetadata`:
+    // 300->301.
+    assert!(mutation_field_names.contains(&"stageMyRequestMetadata"));
     assert_eq!(
-        mutation_field_count, 300,
+        mutation_field_count, 301,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1576,18 +1579,27 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Request metadata staging adds StageMediaRequestMetadataInput and
+    // StageMediaRequestMetadataPayload: OBJECT 577->578, INPUT_OBJECT
+    // 252->253, public types 1060->1062.
+    for name in [
+        "StageMediaRequestMetadataInput",
+        "StageMediaRequestMetadataPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1060,
+        1062,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 577);
+    assert_eq!(kind_count("OBJECT"), 578);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
     assert!(public_type_names.contains(&"SetLibraryFullHashBackfillInput"));
-    assert_eq!(kind_count("INPUT_OBJECT"), 252);
+    assert_eq!(kind_count("INPUT_OBJECT"), 253);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
     assert_eq!(kind_count("ENUM"), 219);
