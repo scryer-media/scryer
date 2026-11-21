@@ -71,8 +71,9 @@ pub mod unknown_reason {
     /// least one episode has no parseable air date.
     pub const EPISODE_AIR_DATE_UNRESOLVED: &str = "episode_air_date_unresolved";
 
-    /// The media-server snapshot contains no row for an aired episode. That is
-    /// not the same as an explicitly unplayed row, so completion must hold.
+    /// No longer raised: once the watch gate is fresh, an aired episode with
+    /// no row in the media-server snapshot counts as unwatched. Kept because a
+    /// released code is never reused.
     pub const EPISODE_WATCH_HISTORY_MISSING: &str = "episode_watch_history_missing";
 
     /// A played episode lacks a timestamp. `last_watched_at` is informative,
@@ -1822,32 +1823,42 @@ fn scoped_watch_observations(
             last_watched_by_anyone_at: anyone.1,
         };
     }
+    // One pass over the signals, grouped by the in-scope episode they belong
+    // to, instead of rescanning every signal for each episode.
+    let mut signals_by_episode: HashMap<&str, Vec<UserMediaSignal>> = HashMap::new();
+    for signal in watch
+        .signals
+        .unwrap_or_default()
+        .iter()
+        .filter(|signal| watch.context.observes(&signal.connection_id))
+    {
+        if let Some(episode_id) = signal.scryer_episode_id.as_deref()
+            && let Some(&episode_id) = episode_ids.get(episode_id)
+        {
+            signals_by_episode
+                .entry(episode_id)
+                .or_default()
+                .push(signal.clone());
+        }
+    }
     let mut complete: Option<BTreeSet<String>> = None;
     let mut plays: BTreeMap<String, WatcherPlays> = BTreeMap::new();
     let mut latest = None;
     let mut missing_play_time = false;
     for episode in episodes {
-        let signals: Vec<UserMediaSignal> = watch
-            .signals
-            .unwrap_or_default()
-            .iter()
-            .filter(|signal| watch.context.observes(&signal.connection_id))
-            .filter(|signal| signal.scryer_episode_id.as_deref() == Some(&episode.id))
-            .cloned()
-            .collect();
-        // A catalog episode missing from the server's snapshot has no known
-        // history. Explicit unplayed signals are confirmed absence instead.
-        if signals.is_empty() {
-            return WatchObservations::all_unknown(unknown_reason::EPISODE_WATCH_HISTORY_MISSING)
-                .with_audience(anyone);
-        }
+        // The watch gate above is fresh, and sync reads every played item. An
+        // aired episode with no row was not played by anyone it observes, so
+        // it counts as unwatched: it has no watchers and breaks completion.
+        let signals: &[UserMediaSignal] = signals_by_episode
+            .get(episode.id.as_str())
+            .map_or(&[], Vec::as_slice);
         let observed = watch_observations(
             &MediaFacet::Movie,
             requesters,
             people.usernames,
             LifecycleTitleWatch {
                 context: watch.context,
-                signals: Some(&signals),
+                signals: Some(signals),
                 audience: None,
             },
         );
@@ -1863,7 +1874,7 @@ fn scoped_watch_observations(
             None => watchers,
             Some(previous) => previous.intersection(&watchers).cloned().collect(),
         });
-        for signal in &signals {
+        for signal in signals {
             if signal.played
                 && let Some(user_id) = signal_user_id(signal)
             {
@@ -2987,8 +2998,7 @@ pub(crate) mod tests {
     /// The per-episode pass reads the signal rows a second time, so it has to
     /// apply the same roster as the title pass: a play a since-disabled
     /// connection left behind for an episode is not this run's evidence, and
-    /// with nothing else on record the episode's history is missing, not
-    /// complete.
+    /// with nothing else on record the episode is unwatched, not complete.
     #[test]
     fn a_retired_connections_episode_play_does_not_complete_a_season() {
         let subject = scoped_season(&[Some("2024-01-01")]);
@@ -3009,11 +3019,82 @@ pub(crate) mod tests {
         assert!(
             matches!(
                 observed.watched_by_user_ids,
-                Observation::Unknown { ref reason, .. }
-                    if reason == unknown_reason::EPISODE_WATCH_HISTORY_MISSING
+                Observation::Known { ref value, .. } if value.is_empty()
             ),
             "a disabled connection's row is not evidence for this run: {:?}",
             observed.watched_by_user_ids
+        );
+    }
+
+    /// Sync reads every played item, so once the watch gate is fresh an aired
+    /// episode with no row is unwatched: it breaks completion instead of
+    /// holding the whole season as unknown.
+    #[test]
+    fn an_aired_episode_with_no_row_is_unwatched() {
+        let subject = scoped_season(&[Some("2024-01-01"), Some("2024-01-02")]);
+        let context = fresh_context(&["alice"]);
+        let requesters = vec!["alice".to_string()];
+
+        let observed = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            people_without_names(Some(&requesters)),
+            LifecycleTitleWatch {
+                context: &context,
+                signals: Some(&[episode_signal(0, Some("alice"), true)]),
+                audience: None,
+            },
+        );
+        assert!(
+            matches!(
+                observed.watched_by_user_ids,
+                Observation::Known { ref value, .. } if value.is_empty()
+            ),
+            "alice has not watched the second episode: {:?}",
+            observed.watched_by_user_ids
+        );
+        assert!(
+            matches!(
+                observed.watched_by_all_requesters,
+                Observation::Known { value: false, .. }
+            ),
+            "{:?}",
+            observed.watched_by_all_requesters
+        );
+        assert!(
+            matches!(observed.last_watched_at, Observation::Known { .. }),
+            "the first episode's play still dates the season: {:?}",
+            observed.last_watched_at
+        );
+
+        let mut episode = scoped_season(&[Some("2024-01-02")]);
+        episode.kind = scryer_domain::LifecycleRuleSubjectKind::Episode;
+        let observed = scoped_watch_observations(
+            Utc::now(),
+            &episode,
+            people_without_names(Some(&requesters)),
+            LifecycleTitleWatch {
+                context: &context,
+                signals: Some(&[]),
+                audience: None,
+            },
+        );
+        assert!(
+            matches!(
+                observed.watched_by_user_ids,
+                Observation::Known { ref value, .. } if value.is_empty()
+            ),
+            "{:?}",
+            observed.watched_by_user_ids
+        );
+        assert!(
+            matches!(
+                observed.last_watched_at,
+                Observation::Absent { ref reason, .. }
+                    if reason.as_deref() == Some(unknown_reason::NEVER_WATCHED)
+            ),
+            "an episode nobody played was never watched: {:?}",
+            observed.last_watched_at
         );
     }
 
@@ -3181,7 +3262,9 @@ pub(crate) mod tests {
     fn lifecycle_scope_watch_unknown_is_distinct_from_unplayed_and_empty_seasons() {
         let mut subject = scoped_season(&[Some("2026-01-01")]);
         let context = fresh_context(&["alice"]);
-        let unknown = scoped_watch_observations(
+        // No rows at all for the title, behind a fresh gate, is a confirmed
+        // "nobody watched it", the same as for a movie.
+        let no_rows = scoped_watch_observations(
             Utc::now(),
             &subject,
             people_without_names(None),
@@ -3192,8 +3275,8 @@ pub(crate) mod tests {
             },
         );
         assert!(matches!(
-            unknown.watched_by_user_ids,
-            Observation::Unknown { .. }
+            no_rows.watched_by_user_ids,
+            Observation::Known { ref value, .. } if value.is_empty()
         ));
         let signals = vec![episode_signal(0, Some("alice"), false)];
         let confirmed = scoped_watch_observations(
