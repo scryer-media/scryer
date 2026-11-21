@@ -177,40 +177,16 @@ fn ffprobe_primary_stream<'a>(json: &'a Value, codec_type: &str) -> Option<&'a V
     if codec_type != "audio" {
         return candidates.into_iter().next();
     }
-    candidates
-        .into_iter()
-        .enumerate()
-        .filter(|(_, stream)| stream["disposition"]["comment"] != 1)
-        .max_by_key(|(ordinal, stream)| {
-            (
-                reference_audio_rank(stream),
-                stream["channels"].as_u64().unwrap_or(0),
-                std::cmp::Reverse(*ordinal),
-            )
-        })
-        .map(|(_, stream)| stream)
-}
-
-fn reference_audio_rank(stream: &Value) -> i32 {
-    match (
-        stream["codec_name"].as_str().unwrap_or_default(),
-        stream["profile"].as_str().unwrap_or_default(),
-    ) {
-        ("truehd", profile) if profile.contains("Atmos") => 100,
-        ("dts", profile) if profile.contains("DTS:X") => 95,
-        ("truehd", _) => 90,
-        ("dts", "DTS-HD MA") => 85,
-        ("flac", _) => 80,
-        ("eac3", profile) if profile.contains("Atmos") => 75,
-        ("eac3", _) => 70,
-        ("dts", "DTS-HD HRA") => 65,
-        ("dts", _) => 60,
-        ("ac3", _) => 50,
-        ("aac" | "opus", _) => 40,
-        ("mp3" | "vorbis", _) => 30,
-        (codec, _) if codec.starts_with("pcm_") => 20,
-        _ => 10,
-    }
+    // The product's own rule: the default stream that is not commentary, or
+    // the first that is not. Codec and channel count never pick the stream.
+    scryer_media_types::primary_audio_stream_index(candidates.iter().map(|stream| {
+        (
+            stream["disposition"]["default"] == 1,
+            stream["disposition"]["comment"] == 1,
+            stream["tags"]["title"].as_str(),
+        )
+    }))
+    .map(|index| candidates[index])
 }
 
 fn belongs_to_selected_program(json: &Value, stream: &Value) -> bool {
