@@ -427,9 +427,11 @@ function DecisionVoteItem({
 function DecisionVotes({
   decision,
   expanded,
+  onExpand,
 }: {
   decision: RequestRuleDecisionRecord;
   expanded: boolean;
+  onExpand?: () => void;
 }) {
   const t = useTranslate();
   const { signal, rest } = partitionRequestVotes(decision.votes);
@@ -462,9 +464,13 @@ function DecisionVotes({
         </ul>
       ) : null}
       {rest.length > 0 && !expanded ? (
-        <p className="text-xs text-muted-foreground">
+        <button
+          type="button"
+          onClick={onExpand}
+          className="text-xs text-[var(--scry-accent-text)] underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+        >
           {t("settings.requestDecisionOtherRules", { count: rest.length })}
-        </p>
+        </button>
       ) : null}
     </div>
   );
@@ -505,7 +511,7 @@ function DecisionRow({
       data-ui="settings-table-row"
       id={rowId}
       data-request-decision-outcome={decision.effectiveOutcome}
-      className="[&>td]:align-top"
+      className="[&>td]:align-middle"
     >
       <TableCell className="w-[1%] pr-0">
         {discloses ? (
@@ -535,7 +541,11 @@ function DecisionRow({
         </div>
       </TableCell>
       <TableCell>
-        <DecisionVotes decision={decision} expanded={expanded} />
+        <DecisionVotes
+          decision={decision}
+          expanded={expanded}
+          onExpand={onToggle}
+        />
       </TableCell>
       <TableCell className="text-muted-foreground">
         <div className="space-y-1">
