@@ -109,6 +109,24 @@ export default defineConfig(({ command, mode }) => ({
       // Prebundle their CommonJS dependencies before the GraphQL worker starts.
       "graphql-language-service",
       "picomatch-browser",
+      // The code editor is lazy-loaded, and Vite otherwise finds CodeMirror
+      // only when the editor first opens. The re-bundle that follows changes
+      // every CodeMirror URL, so a page that already loaded fails its import
+      // with "Failed to fetch dynamically imported module".
+      "@codemirror/autocomplete",
+      "@codemirror/commands",
+      "@codemirror/lang-go",
+      "@codemirror/lang-javascript",
+      "@codemirror/lang-python",
+      "@codemirror/language",
+      "@codemirror/legacy-modes/mode/javascript",
+      "@codemirror/legacy-modes/mode/powershell",
+      "@codemirror/legacy-modes/mode/shell",
+      "@codemirror/legacy-modes/mode/xml",
+      "@codemirror/lint",
+      "@codemirror/state",
+      "@codemirror/theme-one-dark",
+      "@codemirror/view",
     ],
     // Worker query imports need Vite's worker transform, not dependency prebundling.
     exclude: ["graphiql/setup-workers/vite"],
