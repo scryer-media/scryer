@@ -2,7 +2,6 @@ import * as React from "react";
 import { useClient } from "urql";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -41,8 +40,8 @@ type PackTemplates =
 
 /**
  * The registry's scoring rule packs that are not installed yet. Opening a row
- * lists the pack's rules, so the operator picks which to enable before
- * installing it.
+ * lists the pack's rules, each with its own Install, which installs the pack
+ * with that rule enabled.
  */
 export function CommunityRulePacksSection({
   installedPackIds,
@@ -64,9 +63,6 @@ export function CommunityRulePacksSection({
   );
   const [templatesByPack, setTemplatesByPack] = React.useState<
     Map<string, PackTemplates>
-  >(() => new Map());
-  const [selectedByPack, setSelectedByPack] = React.useState<
-    Map<string, string[]>
   >(() => new Map());
 
   React.useEffect(() => {
@@ -144,21 +140,18 @@ export function CommunityRulePacksSection({
                 {t("settings.rulePackAuthor")}
               </TableHead>
               <TableHead className="w-28">{t("label.version")}</TableHead>
-              <TableHead className="w-36 text-right">
-                {t("label.actions")}
-              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {!loaded ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground">
+                <TableCell colSpan={4} className="text-muted-foreground">
                   {t("label.loading")}
                 </TableCell>
               </TableRow>
             ) : available.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground">
+                <TableCell colSpan={4} className="text-muted-foreground">
                   {packs.length === 0
                     ? t("settings.ruleLibraryCommunityEmpty")
                     : t("settings.communityRulePacksAllInstalled")}
@@ -172,12 +165,6 @@ export function CommunityRulePacksSection({
                   expanded={expandedPackIds.has(pack.id)}
                   onExpandedChange={(next) => setExpanded(pack.id, next)}
                   templates={templatesByPack.get(pack.id)}
-                  selectedTemplateIds={selectedByPack.get(pack.id) ?? []}
-                  onSelectedTemplateIdsChange={(ids) =>
-                    setSelectedByPack((current) =>
-                      new Map(current).set(pack.id, ids),
-                    )
-                  }
                   canManage={canManage}
                   installing={installingPackId === pack.id}
                   installDisabled={installingPackId !== null}
@@ -197,8 +184,6 @@ function CommunityPackRow({
   expanded,
   onExpandedChange,
   templates,
-  selectedTemplateIds,
-  onSelectedTemplateIdsChange,
   canManage,
   installing,
   installDisabled,
@@ -208,8 +193,6 @@ function CommunityPackRow({
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   templates: PackTemplates | undefined;
-  selectedTemplateIds: string[];
-  onSelectedTemplateIdsChange: (ids: string[]) => void;
   canManage: boolean;
   installing: boolean;
   installDisabled: boolean;
@@ -220,6 +203,13 @@ function CommunityPackRow({
   const detailId = `${rowId}-details`;
   const customizable = pack.customizable !== false;
   const ready = templates?.status === "ready" ? templates.templates : null;
+  // The rule whose Install was pressed, so only its card says "Installing…".
+  const [installingTemplateId, setInstallingTemplateId] = React.useState<
+    string | null
+  >(null);
+  React.useEffect(() => {
+    if (!installing) setInstallingTemplateId(null);
+  }, [installing]);
 
   return (
     <>
@@ -258,24 +248,10 @@ function CommunityPackRow({
         <TableCell className="tabular-nums text-muted-foreground">
           {pack.version}
         </TableCell>
-        <TableCell className="text-right">
-          {canManage && !expanded ? (
-            <Button
-              id={`${rowId}-choose`}
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={installDisabled}
-              onClick={() => onExpandedChange(true)}
-            >
-              {t("settings.rulePackInstall")}
-            </Button>
-          ) : null}
-        </TableCell>
       </TableRow>
       {expanded ? (
         <TableRow id={detailId} data-ui="settings-table-row">
-          <TableCell colSpan={5} className="p-4">
+          <TableCell colSpan={4} className="p-4">
             <div className="@container space-y-3">
               {ready === null ? (
                 <p className="text-sm text-muted-foreground">
@@ -284,13 +260,7 @@ function CommunityPackRow({
               ) : (
                 <>
                   <div className="space-y-1 text-xs text-muted-foreground">
-                    <p>
-                      {t(
-                        customizable
-                          ? "rules.packChooseCustomizable"
-                          : "rules.packChooseManaged",
-                      )}
-                    </p>
+                    <p>{t("settings.rulePackInstallRuleHelp")}</p>
                     <p>
                       {t(
                         "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled",
@@ -298,83 +268,62 @@ function CommunityPackRow({
                     </p>
                   </div>
                   <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2 @[900px]:grid-cols-3">
-                    {ready.map((template) => {
-                      const checked = selectedTemplateIds.includes(template.id);
-                      return (
-                        <label
-                          key={template.id}
-                          className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3"
-                        >
-                          <Checkbox
-                            id={selectorId(
-                              "settings-rules-library-template-install",
-                              template.id,
-                            )}
-                            checked={checked}
-                            disabled={!canManage}
-                            onCheckedChange={(value) =>
-                              onSelectedTemplateIdsChange(
-                                value === true
-                                  ? [...selectedTemplateIds, template.id]
-                                  : selectedTemplateIds.filter(
-                                      (id) => id !== template.id,
-                                    ),
-                              )
-                            }
-                          />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium">
-                              {template.title}
-                            </span>
-                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">
-                              {template.description}
-                            </span>
-                            <span className="mt-2 flex flex-wrap gap-1">
-                              <Badge tone="neutral" className="text-[10px]">
-                                {template.category}
-                              </Badge>
-                              {template.appliedFacets.map((facet) => (
-                                <Badge
-                                  key={facet}
-                                  tone="info"
-                                  className="text-[10px]"
-                                >
-                                  {facet}
-                                </Badge>
-                              ))}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {canManage ? (
-                    <div className="flex gap-2">
-                      <Button
+                    {ready.map((template) => (
+                      <div
+                        key={template.id}
                         id={selectorId(
-                          "settings-rules-library-pack-install",
-                          pack.id,
+                          "settings-community-rule-pack-template",
+                          template.id,
                         )}
-                        type="button"
-                        disabled={installDisabled}
-                        onClick={() =>
-                          void onInstall(pack.id, selectedTemplateIds)
-                        }
+                        className="flex flex-col gap-3 rounded-lg border border-border bg-card/50 p-3"
                       >
-                        {installing
-                          ? t("settings.rulePackInstalling")
-                          : t("settings.rulePackInstall")}
-                      </Button>
-                      <Button
-                        id={`${rowId}-cancel`}
-                        type="button"
-                        variant="secondary"
-                        onClick={() => onExpandedChange(false)}
-                      >
-                        {t("label.cancel")}
-                      </Button>
-                    </div>
-                  ) : null}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">
+                            {template.title}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                            {template.description}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            <Badge tone="neutral" className="text-[10px]">
+                              {template.category}
+                            </Badge>
+                            {template.appliedFacets.map((facet) => (
+                              <Badge
+                                key={facet}
+                                tone="info"
+                                className="text-[10px]"
+                              >
+                                {facet}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                        {canManage ? (
+                          <div className="flex justify-end">
+                            <Button
+                              id={selectorId(
+                                "settings-rules-library-template-install",
+                                template.id,
+                              )}
+                              type="button"
+                              size="sm"
+                              disabled={installDisabled}
+                              onClick={() => {
+                                setInstallingTemplateId(template.id);
+                                void onInstall(pack.id, [template.id]);
+                              }}
+                            >
+                              {installing &&
+                              installingTemplateId === template.id
+                                ? t("settings.rulePackInstalling")
+                                : t("settings.rulePackInstall")}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
                 </>
               )}
             </div>

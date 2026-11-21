@@ -7347,9 +7347,13 @@ const en: LocaleDictionary = {
   "settings.scoringNavRules": "Rules",
   "settings.scoringNavCommunity": "Community",
   "settings.communityRulePacks": "Available rule packs",
-  "settings.communityRulePacksDescription": "Community rule packs you can install. Open a pack to choose which of its rules to enable.",
-  "settings.communityRulePacksAllInstalled": "Every community rule pack is already installed.",
+  "settings.communityRulePacksDescription":
+    "Community rule packs you can install. Open a pack to see its rules.",
+  "settings.communityRulePacksAllInstalled":
+    "Every community rule pack is already installed.",
   "settings.rulePackAuthor": "Author",
+  "settings.rulePackInstallRuleHelp":
+    "Install a rule to add its pack with that rule turned on. The pack's other rules arrive turned off; turn them on under Installed rule packs.",
   "settings.rulePackInstall": "Install",
   "settings.rulePackInstalling": "Installing…",
   "settings.ruleLibraryCommunityEmpty":
@@ -13066,10 +13070,6 @@ const en: LocaleDictionary = {
     "Scoring preview only. This does not save this rule, admit a download, or create history.",
   "rules.previewDraftSafety":
     "Scoring preview only. This does not save this draft, admit a download, or create history.",
-  "rules.packChooseCustomizable":
-    "Choose the rules to enable after installation. Rules stay managed and can be copied individually for customization.",
-  "rules.packChooseManaged":
-    "Choose the rules to enable after installation. Rules stay managed.",
   "uiAttr.18_and_over": "18 and over",
   "uiAttr.My_Indexer": "My Indexer",
   "uiAttr.Select_provider": "Select provider",

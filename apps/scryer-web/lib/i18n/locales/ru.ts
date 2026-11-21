@@ -2580,9 +2580,13 @@ const ru: LocaleDictionary = {
   "settings.scoringNavRules": "Правила",
   "settings.scoringNavCommunity": "Сообщество",
   "settings.communityRulePacks": "Доступные пакеты правил",
-  "settings.communityRulePacksDescription": "Пакеты правил сообщества, которые можно установить. Откройте пакет, чтобы выбрать, какие правила из него включить.",
-  "settings.communityRulePacksAllInstalled": "Все пакеты правил сообщества уже установлены.",
+  "settings.communityRulePacksDescription":
+    "Пакеты правил сообщества, которые можно установить. Откройте пакет, чтобы увидеть его правила.",
+  "settings.communityRulePacksAllInstalled":
+    "Все пакеты правил сообщества уже установлены.",
   "settings.rulePackAuthor": "Автор",
+  "settings.rulePackInstallRuleHelp":
+    "Установите правило, чтобы добавить его пакет с этим правилом включённым. Остальные правила пакета будут выключены; включить их можно в разделе установленных пакетов правил.",
   "settings.rulePackInstall": "Установить",
   "settings.rulePackInstalling": "Установка…",
   "settings.ruleLibraryCommunityEmpty":
@@ -13637,10 +13641,6 @@ const ru: LocaleDictionary = {
     "Только предварительная оценка. Она не сохраняет это правило, не разрешает загрузку и не создаёт историю.",
   "rules.previewDraftSafety":
     "Только предварительная оценка. Она не сохраняет этот черновик, не разрешает загрузку и не создаёт историю.",
-  "rules.packChooseCustomizable":
-    "Выберите правила, которые нужно включить после установки. Правила остаются управляемыми; каждое из них можно скопировать для собственной настройки.",
-  "rules.packChooseManaged":
-    "Выберите правила, которые нужно включить после установки. Правила остаются управляемыми.",
   "uiAttr.18_and_over": "Только для совершеннолетних",
   "uiAttr.My_Indexer": "Мой индексатор",
   "uiAttr.Select_provider": "Выберите провайдера",
