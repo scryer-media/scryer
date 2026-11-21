@@ -21,6 +21,9 @@ use crate::storage::sql::json::{canonical_json_text, json_text_or};
 use crate::workflow::stores::append_domain_event_tx;
 
 /// Staged records removed per transaction at most; one bind each.
+/// Staging keys bound per read, far under both dialects' bind limits.
+const STAGED_METADATA_READ_CHUNK: usize = 500;
+
 const STAGED_METADATA_DELETE_CHUNK: usize = 500;
 
 #[derive(Clone)]
@@ -915,6 +918,72 @@ impl MediaRequestRepository for MediaRequestStore {
                 .map(|_| ())
             })
         })
+        .await
+    }
+
+    async fn staged_metadata_many(
+        &self,
+        staging_keys: &[String],
+    ) -> AppResult<Vec<StagedMediaRequestMetadata>> {
+        let mut records = Vec::with_capacity(staging_keys.len());
+        for chunk in staging_keys.chunks(STAGED_METADATA_READ_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT staging_key, payload_json, staged_at
+                   FROM media_request_staged_metadata
+                  WHERE staging_key IN ({placeholders})"
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                records.push(StagedMediaRequestMetadata {
+                    staging_key: row.text("staging_key")?,
+                    payload_json: row.text("payload_json")?,
+                    staged_at: row.timestamp("staged_at")?,
+                });
+            }
+        }
+        Ok(records)
+    }
+
+    async fn stage_metadata_many(&self, records: &[StagedMediaRequestMetadata]) -> AppResult<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<Vec<SqlArg>> = records
+            .iter()
+            .map(|record| {
+                vec![
+                    SqlArg::Text(record.staging_key.clone()),
+                    SqlArg::Text(record.payload_json.clone()),
+                    SqlArg::Timestamp(record.staged_at),
+                ]
+            })
+            .collect();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "stage_media_request_metadata_batch",
+            move |tx| {
+                let rows = rows.clone();
+                Box::pin(async move {
+                    for args in &rows {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO media_request_staged_metadata
+                                 (staging_key, payload_json, staged_at)
+                             VALUES ({}, {}, {})
+                             ON CONFLICT (staging_key) DO UPDATE SET
+                                 payload_json = excluded.payload_json,
+                                 staged_at = excluded.staged_at",
+                            args,
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
         .await
     }
 

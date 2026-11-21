@@ -506,6 +506,35 @@ impl ListActions for AppListActions<'_> {
         Ok(committed.request_id)
     }
 
+    async fn stage_requests(
+        &self,
+        subscription: &ListSubscription,
+        items: &[(&ListRoute, &ResolvedItem)],
+    ) {
+        // A disabled owner's requests are refused before any metadata is read.
+        if !matches!(self.owner_is_enabled(subscription).await, Ok(true)) {
+            return;
+        }
+        // Each subject as `submit_request`'s submit stages it: a series
+        // movie under the movie facet with the item's own ids, anything else
+        // under the route's facet with the request's normalized ids.
+        let subjects = items
+            .iter()
+            .filter_map(|(route, item)| {
+                if item.series_movie.is_some() {
+                    return Some((MediaFacet::Movie, item.external_ids.clone()));
+                }
+                crate::media_requests::normalize_media_request_external_ids(
+                    item.external_ids.clone(),
+                )
+                .ok()
+                .filter(|external_ids| !external_ids.is_empty())
+                .map(|external_ids| (route.kind.clone(), external_ids))
+            })
+            .collect();
+        self.app.stage_request_metadata_batch(subjects).await;
+    }
+
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()> {
         self.app
             .set_title_monitored(&User::system_execution_actor(), title_id, monitored)

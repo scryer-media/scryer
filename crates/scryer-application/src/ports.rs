@@ -4139,6 +4139,29 @@ pub trait MediaRequestRepository: Send + Sync {
     /// for that subject before.
     async fn stage_metadata(&self, record: &StagedMediaRequestMetadata) -> AppResult<()>;
 
+    /// The staged metadata of every key in `staging_keys` that has a record,
+    /// in no particular order. A store answers a batch in bind-safe reads,
+    /// not one read per key.
+    async fn staged_metadata_many(
+        &self,
+        staging_keys: &[String],
+    ) -> AppResult<Vec<StagedMediaRequestMetadata>> {
+        let mut records = Vec::new();
+        for staging_key in staging_keys {
+            records.extend(self.staged_metadata(staging_key).await?);
+        }
+        Ok(records)
+    }
+
+    /// Store a batch of staged records as [`Self::stage_metadata`] would each
+    /// one. A store writes the batch in one transaction.
+    async fn stage_metadata_many(&self, records: &[StagedMediaRequestMetadata]) -> AppResult<()> {
+        for record in records {
+            self.stage_metadata(record).await?;
+        }
+        Ok(())
+    }
+
     /// Remove up to `limit` staged records staged before `cutoff`. Returns how
     /// many went. A call that finds none writes nothing. Request rows keep
     /// their own copy of the metadata and are never touched.

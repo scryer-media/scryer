@@ -3189,6 +3189,161 @@ async fn a_staged_outage_stops_answering_within_minutes() {
     );
 }
 
+/// A request app over three movies and three series, one of the series known
+/// to SMG only by a TMDB id until it is resolved.
+fn batch_staging_app(
+    fail_detail: bool,
+) -> (
+    MediaRequestTestHarness,
+    AppUseCase,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::Mutex<Vec<(String, bool)>>>,
+) {
+    let harness = bootstrap_media_request_app();
+    let mut movies = HashMap::new();
+    for tvdb_id in [93_001, 93_002, 93_003] {
+        let mut movie = make_movie_metadata(tvdb_id, &format!("Batch Movie {tvdb_id}"));
+        widen_movie_for_snapshot(&mut movie);
+        movies.insert(tvdb_id, movie);
+    }
+    let mut series = HashMap::new();
+    for tvdb_id in [94_001, 94_002, 94_003] {
+        let mut item = make_series_metadata(tvdb_id, &format!("Batch Series {tvdb_id}"));
+        item.smg_id = Some(tvdb_id + 1_000_000);
+        item.tmdb_id = Some(tvdb_id + 2_000_000);
+        series.insert(tvdb_id, item);
+    }
+    let detail_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let resolve_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            movies,
+            series,
+            fail_detail,
+            detail_calls: detail_calls.clone(),
+            resolve_calls: resolve_calls.clone(),
+        }))
+    });
+    (harness, app, detail_calls, resolve_calls)
+}
+
+/// Movies and series a list would request together: known ones, one of each
+/// that SMG does not have, a series named only by a TMDB id, and a subject
+/// that names nothing SMG can look up.
+fn batch_staging_subjects() -> Vec<(MediaFacet, Vec<ExternalId>)> {
+    vec![
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_001)]),
+        (MediaFacet::Series, vec![external_id("tvdb", 94_001)]),
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_002)]),
+        (MediaFacet::Anime, vec![external_id("tvdb", 94_002)]),
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_999)]),
+        (MediaFacet::Series, vec![external_id("tvdb", 94_999)]),
+        (MediaFacet::Series, vec![external_id("tmdb", 2_094_003)]),
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_003)]),
+        (MediaFacet::Series, vec![external_id("mal", 7)]),
+        // Named twice: staged once.
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_001)]),
+    ]
+}
+
+/// A staged payload without the instants it was captured at, which differ
+/// between two runs of the same read.
+fn staged_payload_without_instants(payload_json: &str) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("captured_at");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_str(payload_json).expect("a staged payload is JSON");
+    strip(&mut value);
+    value
+}
+
+#[tokio::test]
+async fn a_staging_batch_reads_smg_once_per_kind_and_stages_what_single_staging_would() {
+    let (batch_harness, batch_app, batch_reads, batch_resolves) = batch_staging_app(false);
+    batch_app
+        .stage_request_metadata_batch(batch_staging_subjects())
+        .await;
+    assert_eq!(
+        smg_reads(&batch_reads),
+        2,
+        "one movie read and one series read for the whole batch"
+    );
+    assert_eq!(
+        batch_resolves.lock().expect("resolve calls lock").len(),
+        1,
+        "the one series named only by a provider id is resolved in one call"
+    );
+
+    // The same subjects staged one at a time, as each submit used to.
+    let (single_harness, single_app, single_reads, _) = batch_staging_app(false);
+    for (facet, external_ids) in batch_staging_subjects() {
+        single_app
+            .stage_request_metadata(&facet, external_ids, false)
+            .await;
+    }
+    assert!(smg_reads(&single_reads) > smg_reads(&batch_reads));
+
+    let payloads = |harness: &MediaRequestTestHarness| {
+        harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .iter()
+            .map(|(key, record)| {
+                (
+                    key.clone(),
+                    staged_payload_without_instants(&record.payload_json),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let batch_payloads = payloads(&batch_harness);
+    let mut single_payloads = payloads(&single_harness);
+    // The batch leaves a subject that names nothing to its submit, which
+    // settles it without SMG; single staging stores that answer.
+    let unidentifiable = crate::media_requests::media_request_staging_key(
+        &MediaFacet::Series,
+        &[external_id("mal", 7)],
+    );
+    assert!(single_payloads.remove(&unidentifiable).is_some());
+    assert_eq!(batch_payloads.len(), 8);
+    assert_eq!(batch_payloads, single_payloads);
+
+    // Every staged subject now answers without SMG, as a submit would read it.
+    let reads_after_batch = smg_reads(&batch_reads);
+    for (facet, external_ids) in batch_staging_subjects() {
+        batch_app
+            .stage_request_metadata(&facet, external_ids, false)
+            .await;
+    }
+    batch_app
+        .stage_request_metadata_batch(batch_staging_subjects())
+        .await;
+    assert_eq!(smg_reads(&batch_reads), reads_after_batch);
+}
+
+#[tokio::test]
+async fn a_staging_batch_that_cannot_reach_smg_stages_nothing() {
+    let (harness, app, reads, _) = batch_staging_app(true);
+    app.stage_request_metadata_batch(batch_staging_subjects())
+        .await;
+    assert_eq!(smg_reads(&reads), 2);
+    assert_eq!(
+        staged_record_count(&harness),
+        0,
+        "an outage of the batched read is not recorded against every subject; each submit asks for its own"
+    );
+}
+
 #[tokio::test]
 async fn staging_requires_request_permission_before_smg_is_asked() {
     let (harness, app, detail_calls, input) = staging_app(92_045, false);
