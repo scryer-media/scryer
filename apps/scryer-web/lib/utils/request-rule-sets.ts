@@ -410,6 +410,36 @@ export function requestVoteBadgeTone(
   }
 }
 
+/// The votes that carried the decision, strongest first: approve, then deny,
+/// then review. A rule that failed to run comes next, since a failure sends the
+/// request to a person too. Every other vote is `rest`. Each bucket is sorted
+/// by rule name.
+export function partitionRequestVotes<
+  V extends { ruleSetName: string; vote: string | null; error: string | null },
+>(votes: readonly V[]): { signal: V[]; rest: V[] } {
+  const rank = (vote: V): number | null => {
+    switch (vote.vote) {
+      case "APPROVE":
+        return 0;
+      case "DENY":
+        return 1;
+      case "MANUAL":
+        return 2;
+      default:
+        return vote.error ? 3 : null;
+    }
+  };
+  const byName = (a: V, b: V) => a.ruleSetName.localeCompare(b.ruleSetName);
+  const signal: V[] = [];
+  const rest: V[] = [];
+  for (const vote of votes) {
+    (rank(vote) === null ? rest : signal).push(vote);
+  }
+  signal.sort((a, b) => rank(a)! - rank(b)! || byName(a, b));
+  rest.sort(byName);
+  return { signal, rest };
+}
+
 /// Fallback reasons the arbitration records when no rule decided outright.
 /// Anything this build does not know renders as the raw code, which is more
 /// useful than hiding it.

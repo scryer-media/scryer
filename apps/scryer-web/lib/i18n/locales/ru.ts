@@ -5527,6 +5527,7 @@ const ru: LocaleDictionary = {
   "settings.requestDecisionsEmpty": "Решений пока не записано.",
   "settings.requestDecisionsPolicySaid": "Правила сказали {{outcome}}.",
   "settings.requestDecisionNoVotes": "Ни одно правило не проголосовало.",
+  "settings.requestDecisionOtherRules": "Другие проверенные правила: {{count}}",
   "settings.requestDecisionHeld": "удержано",
   "settings.requestTemplateGallery": "Готовые правила",
   "settings.requestTemplateGalleryTagNote":
@@ -5636,12 +5637,15 @@ const ru: LocaleDictionary = {
   "requests.voteManual": "рассмотреть",
   "requests.voteAbstain": "воздержался",
   "requests.voteNone": "нет голоса",
+  "requests.voteFailed": "не выполнилось",
   "requests.fallbackRuleManual":
     "Правило попросило человека посмотреть на это.",
   "requests.fallbackHeld":
     "Правило не смогло решить, потому что что-то из читаемого им неизвестно.",
   "requests.fallbackError":
     "Правило не выполнилось, поэтому запрос ушёл к человеку.",
+  "requests.fallbackErrorRules":
+    "Не выполнились правила: {{rules}}. Запрос ушёл к человеку.",
   "requests.fallbackNoRuleMatched":
     "Ни одно правило не подошло к этому запросу.",
   "requests.approvedLease": "Хранить",

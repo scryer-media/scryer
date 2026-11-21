@@ -5,6 +5,7 @@ import en from "../i18n/locales/en.ts";
 import type { RequestShaping } from "../types/request-rule-sets.ts";
 import {
   REQUEST_STARTER_SOURCE,
+  partitionRequestVotes,
   requestApprovalPrefill,
   requestFallbackReasonLabelKey,
   requestDeclaredActionEntries,
@@ -240,4 +241,33 @@ test("every fallback a decision can carry is said in words", () => {
     assert.ok(translations[key], `${key} has English text`);
   }
   assert.equal(requestFallbackReasonLabelKey("something_newer"), null);
+});
+
+test("votes sort approve, deny, review, then failed, each by name, with the rest apart", () => {
+  const vote = (
+    ruleSetName: string,
+    v: string | null,
+    error: string | null = null,
+  ) => ({
+    ruleSetName,
+    vote: v,
+    error,
+  });
+  const { signal, rest } = partitionRequestVotes([
+    vote("zeta", "ABSTAIN"),
+    vote("broken", null, "boom"),
+    vote("beta", "MANUAL"),
+    vote("alpha", null),
+    vote("omega", "APPROVE"),
+    vote("delta", "DENY"),
+    vote("gamma", "APPROVE"),
+  ]);
+  assert.deepEqual(
+    signal.map((v) => v.ruleSetName),
+    ["gamma", "omega", "delta", "beta", "broken"],
+  );
+  assert.deepEqual(
+    rest.map((v) => v.ruleSetName),
+    ["alpha", "zeta"],
+  );
 });

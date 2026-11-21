@@ -55,6 +55,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
 import requestInputContract from "@/lib/contracts/request-input-contract.json";
 import {
   REQUEST_RULE_TEMPLATES,
@@ -72,6 +73,7 @@ import type {
   RequestRuleSetRecord,
   RequestRuleUserOption,
   RequestRuleValidationResult,
+  RequestRuleVoteRecord,
 } from "@/lib/types/request-rule-sets";
 import {
   REQUEST_FILTER_ALL,
@@ -81,6 +83,7 @@ import {
   requestFallbackReasonLabelKey,
   isPersonTargetingRefusal,
   requestRuleReadsRequester,
+  partitionRequestVotes,
   requestVoteBadgeTone,
   requestVoteLabelKey,
   REQUEST_STARTER_SOURCE,
@@ -384,34 +387,176 @@ function RequestTemplateGallery({
   );
 }
 
-function DecisionVotes({ decision }: { decision: RequestRuleDecisionRecord }) {
+function DecisionVoteItem({
+  vote,
+  showError,
+}: {
+  vote: RequestRuleVoteRecord;
+  showError: boolean;
+}) {
   const t = useTranslate();
-  if (decision.votes.length === 0) {
-    return (
-      <span className="text-muted-foreground">
-        {t("settings.requestDecisionNoVotes")}
-      </span>
-    );
-  }
+  const failed = vote.vote === null && vote.error !== null;
+  const labelKey = failed
+    ? "requests.voteFailed"
+    : requestVoteLabelKey(vote.vote);
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {decision.votes.map((vote) => {
-        const labelKey = requestVoteLabelKey(vote.vote);
-        return (
-          <Badge
-            key={`${vote.ruleSetId}:${vote.revisionNumber}`}
-            tone={requestVoteBadgeTone(vote.vote)}
-            className="text-[10px]"
-            title={vote.error ?? undefined}
-          >
-            {vote.ruleSetName}
-            {": "}
-            {labelKey ? t(labelKey) : (vote.vote ?? "—")}
-            {vote.held ? ` · ${t("settings.requestDecisionHeld")}` : ""}
-          </Badge>
-        );
-      })}
+    <li>
+      <span className="text-[var(--scry-ink2)]">{vote.ruleSetName}</span>{" "}
+      <Badge
+        tone={failed ? "negative" : requestVoteBadgeTone(vote.vote)}
+        className="text-[10px]"
+        title={vote.error ?? undefined}
+      >
+        {labelKey ? t(labelKey) : (vote.vote ?? "—")}
+        {vote.held ? ` · ${t("settings.requestDecisionHeld")}` : ""}
+      </Badge>
+      {vote.error && showError ? (
+        <p
+          data-code-font
+          className="mt-0.5 whitespace-pre-wrap text-xs text-[var(--scry-muted3)] [overflow-wrap:anywhere]"
+        >
+          {vote.error}
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
+/// The votes that decided, always shown; every other rule's vote only once the
+/// row is opened.
+function DecisionVotes({
+  decision,
+  expanded,
+}: {
+  decision: RequestRuleDecisionRecord;
+  expanded: boolean;
+}) {
+  const t = useTranslate();
+  const { signal, rest } = partitionRequestVotes(decision.votes);
+  return (
+    <div className="space-y-1.5">
+      {signal.length > 0 ? (
+        <ul className="list-disc space-y-1 pl-4 text-sm">
+          {signal.map((vote) => (
+            <DecisionVoteItem
+              key={`${vote.ruleSetId}:${vote.revisionNumber}`}
+              vote={vote}
+              showError={expanded}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">
+          {t("settings.requestDecisionNoVotes")}
+        </p>
+      )}
+      {rest.length > 0 && expanded ? (
+        <ul className="list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+          {rest.map((vote) => (
+            <DecisionVoteItem
+              key={`${vote.ruleSetId}:${vote.revisionNumber}`}
+              vote={vote}
+              showError={expanded}
+            />
+          ))}
+        </ul>
+      ) : null}
+      {rest.length > 0 && !expanded ? (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.requestDecisionOtherRules", { count: rest.length })}
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+function DecisionRow({
+  decision,
+  index,
+  expanded,
+  onToggle,
+}: {
+  decision: RequestRuleDecisionRecord;
+  index: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
+  const { rest } = partitionRequestVotes(decision.votes);
+  const discloses =
+    rest.length > 0 || decision.votes.some((vote) => vote.error !== null);
+  const failedRules = decision.votes
+    .filter((vote) => vote.error !== null)
+    .map((vote) => vote.ruleSetName)
+    .sort((a, b) => a.localeCompare(b));
+  const fallbackText =
+    decision.fallbackReason === "error" && failedRules.length > 0
+      ? t("requests.fallbackErrorRules", { rules: failedRules.join(", ") })
+      : decision.fallbackReason
+        ? (() => {
+            const key = requestFallbackReasonLabelKey(decision.fallbackReason);
+            return key ? t(key) : decision.fallbackReason;
+          })()
+        : null;
+  const rowId = settingsRequestDecisionRowId(index);
+  return (
+    <TableRow
+      data-ui="settings-table-row"
+      id={rowId}
+      data-request-decision-outcome={decision.effectiveOutcome}
+      className="[&>td]:align-top"
+    >
+      <TableCell className="w-[1%] pr-0">
+        {discloses ? (
+          <TableDisclosureButton
+            id={`${rowId}-toggle`}
+            expanded={expanded}
+            aria-label={t("settings.requestDecisionsColVotes")}
+            onClick={onToggle}
+          />
+        ) : null}
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
+        {formatUiDateTime(decision.evaluatedAt, dateTimeFormat, {
+          fallback: decision.evaluatedAt,
+        })}
+      </TableCell>
+      <TableCell>
+        <div className="space-y-1">
+          <OutcomeBadge outcome={decision.effectiveOutcome} />
+          {decision.policyOutcome !== decision.effectiveOutcome ? (
+            <p className="text-xs text-muted-foreground">
+              {t("settings.requestDecisionsPolicySaid", {
+                outcome: decision.policyOutcome,
+              })}
+            </p>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell>
+        <DecisionVotes decision={decision} expanded={expanded} />
+      </TableCell>
+      <TableCell className="text-muted-foreground">
+        <div className="space-y-1">
+          {decision.reasons.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {decision.reasons.map((reason) => (
+                <code
+                  key={`${reason.ruleName}:${reason.code}`}
+                  data-code-font
+                  className="rounded bg-muted px-1 py-0.5 text-xs"
+                >
+                  {reason.code}
+                </code>
+              ))}
+            </div>
+          ) : null}
+          {fallbackText ? <p className="text-xs">{fallbackText}</p> : null}
+          {decision.reasons.length === 0 && !fallbackText ? "—" : null}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -711,7 +856,7 @@ function RequestPreviewPanel({
                 </Badge>
               ) : null}
             </div>
-            <DecisionVotes decision={decision} />
+            <DecisionVotes decision={decision} expanded />
             <RequestShapingSummary
               shaping={decision.shaping}
               idPrefix="settings-request-preview-shaping"
@@ -823,7 +968,16 @@ function RequestDecisionsPanel({
   | "refreshDecisions"
 >) {
   const t = useTranslate();
-  const dateTimeFormat = useUiDateTimeFormat();
+  const [expandedDecisions, setExpandedDecisions] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const toggleDecision = (key: string) =>
+    setExpandedDecisions((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   return (
     <PaneSection
       id="settings-request-decisions-section"
@@ -878,76 +1032,30 @@ function RequestDecisionsPanel({
         <Table id="settings-request-decisions" wrapperClassName={TABLE_SHELL}>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[1%]" />
               <TableHead className="w-[190px]">
                 {t("settings.requestDecisionsColTime")}
               </TableHead>
               <TableHead className="w-[150px]">
                 {t("settings.requestDecisionsColOutcome")}
               </TableHead>
-              <TableHead>{t("settings.requestDecisionsColVotes")}</TableHead>
+              <TableHead className="min-w-[320px]">
+                {t("settings.requestDecisionsColVotes")}
+              </TableHead>
               <TableHead>{t("settings.requestDecisionsColReasons")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {decisions.map((decision, index) => {
-              const fallbackKey = decision.fallbackReason
-                ? requestFallbackReasonLabelKey(decision.fallbackReason)
-                : null;
+              const key = decision.id ?? `${decision.evaluatedAt}:${index}`;
               return (
-                <TableRow
-                  key={decision.id ?? `${decision.evaluatedAt}:${index}`}
-                  data-ui="settings-table-row"
-                  id={settingsRequestDecisionRowId(index)}
-                  data-request-decision-outcome={decision.effectiveOutcome}
-                >
-                  <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
-                    {formatUiDateTime(decision.evaluatedAt, dateTimeFormat, {
-                      fallback: decision.evaluatedAt,
-                    })}
-                  </TableCell>
-                  <TableCell>
-                    <div className="space-y-1">
-                      <OutcomeBadge outcome={decision.effectiveOutcome} />
-                      {decision.policyOutcome !== decision.effectiveOutcome ? (
-                        <p className="text-xs text-muted-foreground">
-                          {t("settings.requestDecisionsPolicySaid", {
-                            outcome: decision.policyOutcome,
-                          })}
-                        </p>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <DecisionVotes decision={decision} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    <div className="space-y-1">
-                      {decision.reasons.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {decision.reasons.map((reason) => (
-                            <code
-                              key={`${reason.ruleName}:${reason.code}`}
-                              data-code-font
-                              className="rounded bg-muted px-1 py-0.5 text-xs"
-                            >
-                              {reason.code}
-                            </code>
-                          ))}
-                        </div>
-                      ) : null}
-                      {decision.fallbackReason ? (
-                        <p className="text-xs">
-                          {fallbackKey
-                            ? t(fallbackKey)
-                            : decision.fallbackReason}
-                        </p>
-                      ) : null}
-                      {decision.reasons.length === 0 && !decision.fallbackReason
-                        ? "—"
-                        : null}
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <DecisionRow
+                  key={key}
+                  decision={decision}
+                  index={index}
+                  expanded={expandedDecisions.has(key)}
+                  onToggle={() => toggleDecision(key)}
+                />
               );
             })}
           </TableBody>

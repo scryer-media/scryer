@@ -10852,6 +10852,7 @@ const en: LocaleDictionary = {
   "settings.requestDecisionsEmpty": "No decisions recorded yet.",
   "settings.requestDecisionsPolicySaid": "The rules said {{outcome}}.",
   "settings.requestDecisionNoVotes": "No rule voted.",
+  "settings.requestDecisionOtherRules": "Other rules evaluated: {{count}}",
   "settings.requestDecisionHeld": "held",
 
   "settings.requestTemplateGallery": "Starter rules",
@@ -10969,12 +10970,15 @@ const en: LocaleDictionary = {
   "requests.voteManual": "review",
   "requests.voteAbstain": "no opinion",
   "requests.voteNone": "no vote",
+  "requests.voteFailed": "failed to run",
 
   "requests.fallbackRuleManual": "A rule asked for a person to look at this.",
   "requests.fallbackHeld":
     "A rule could not decide, because something it reads was unknown.",
   "requests.fallbackError":
     "A rule failed to run, so the request went to a person.",
+  "requests.fallbackErrorRules":
+    "{{rules}} failed to run, so the request went to a person.",
   "requests.fallbackNoRuleMatched": "No rule matched this request.",
   "requests.fallbackLibraryPermission":
     "Approved by the requester's Auto-Approve Requests permission.",
