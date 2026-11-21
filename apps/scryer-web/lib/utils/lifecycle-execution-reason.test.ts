@@ -3,7 +3,9 @@ import test from "node:test";
 
 import en from "../i18n/locales/en.ts";
 import {
+  LIFECYCLE_EXECUTION_CAUSE_KEYS,
   LIFECYCLE_EXECUTION_REASON_KEYS,
+  lifecycleExecutionCauseText,
   lifecycleExecutionReasonText,
 } from "./lifecycle-execution-reason.ts";
 
@@ -72,4 +74,15 @@ test("the client translates exactly the server's execution reasons", () => {
     "watch_recheck_uncredited_play",
     "watch_recheck_unmapped",
   ]);
+});
+
+test("a move refusal's cause is said in translation, an unknown one as written", () => {
+  for (const [code, key] of Object.entries(LIFECYCLE_EXECUTION_CAUSE_KEYS)) {
+    assert.equal(typeof dictionary[key], "string", `${code} → ${key}`);
+    assert.equal(lifecycleExecutionCauseText(t, code), dictionary[key]);
+  }
+  assert.equal(
+    lifecycleExecutionCauseText(t, "LIBRARY_ROOT_UNREACHABLE"),
+    "LIBRARY_ROOT_UNREACHABLE",
+  );
 });

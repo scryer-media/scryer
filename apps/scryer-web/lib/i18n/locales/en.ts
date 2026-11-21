@@ -12780,6 +12780,12 @@ const en: LocaleDictionary = {
     "Held: the root folder this move names is not a root of the title's library.",
   "settings.lifecycleExecutionReason.moveRefused":
     "Held: the move was refused or its plan went stale. The files stay where they are and the move retries.",
+  "settings.lifecycleExecutionCause.staleMovePlan":
+    "The move plan changed before it could start. It is planned again on the next pass.",
+  "settings.lifecycleExecutionCause.blockedItems":
+    "Some files need a decision before they can move.",
+  "settings.lifecycleExecutionCause.insufficientSpace":
+    "The destination does not have room for these files.",
   "error.ruleActionRequired":
     "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
   "error.ruleActionHeadFunction":

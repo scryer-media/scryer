@@ -927,7 +927,7 @@ test("search history stays waiting or skipped until a durable receipt is accepte
   assert.equal(
     lifecycleSearchHistoryState({
       step: { id: "search" },
-      run: { state: "skipped", holdReason: null, error: null },
+      run: { state: "skipped", holdReason: null, error: null, causeCode: null },
       receipts: [],
     } satisfies LifecycleActionStepProgress),
     "skipped",

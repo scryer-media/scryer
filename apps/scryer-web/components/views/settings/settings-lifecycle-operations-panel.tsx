@@ -1,5 +1,8 @@
 import { formatBytes } from "@/lib/utils/activity-utils";
-import { lifecycleExecutionReasonText } from "@/lib/utils/lifecycle-execution-reason";
+import {
+  lifecycleExecutionCauseText,
+  lifecycleExecutionReasonText,
+} from "@/lib/utils/lifecycle-execution-reason";
 import { useState } from "react";
 import type * as React from "react";
 import { Ban, Play, Trash2, Zap } from "lucide-react";
@@ -176,6 +179,11 @@ function LifecycleSequenceProgress({
             {entry?.run?.holdReason ? (
               <span className="text-[var(--scry-warning-text)]">
                 {lifecycleExecutionReasonText(t, entry.run.holdReason)}
+              </span>
+            ) : null}
+            {entry?.run?.causeCode ? (
+              <span className="text-[var(--scry-warning-text)]">
+                {lifecycleExecutionCauseText(t, entry.run.causeCode)}
               </span>
             ) : null}
             {entry?.run?.error ? (
@@ -401,6 +409,11 @@ function CandidateDetail({ candidate }: { candidate: LifecycleCandidate }) {
         {candidate.stateReason ? (
           <p className="text-xs text-[var(--scry-warning-text)]">
             {lifecycleExecutionReasonText(t, candidate.stateReason)}
+          </p>
+        ) : null}
+        {candidate.stateCauseCode ? (
+          <p className="text-xs text-[var(--scry-warning-text)]">
+            {lifecycleExecutionCauseText(t, candidate.stateCauseCode)}
           </p>
         ) : null}
       </div>
@@ -722,11 +735,13 @@ function runCounts(run: LifecycleEvaluationRun, t: Translate): string {
 function RunOutcome({
   status,
   holdReason,
+  causeCode,
   error,
   children,
 }: {
   status: string;
   holdReason?: string | null;
+  causeCode?: string | null;
   error: string | null;
   children?: React.ReactNode;
 }) {
@@ -737,6 +752,11 @@ function RunOutcome({
       {holdReason ? (
         <span className="text-xs text-[var(--scry-warning-text)]">
           {lifecycleExecutionReasonText(t, holdReason)}
+        </span>
+      ) : null}
+      {causeCode ? (
+        <span className="text-xs text-[var(--scry-warning-text)]">
+          {lifecycleExecutionCauseText(t, causeCode)}
         </span>
       ) : null}
       {error ? (
@@ -1022,6 +1042,7 @@ export function LifecycleRunsPanel({
                     <RunOutcome
                       status={run.status}
                       holdReason={run.holdReason}
+                      causeCode={run.causeCode}
                       error={run.error}
                     >
                       <LifecycleFileResults detail={run.detail} />

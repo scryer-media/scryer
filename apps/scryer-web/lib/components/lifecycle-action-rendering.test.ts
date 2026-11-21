@@ -137,6 +137,7 @@ function candidate(
     titleName: "Synthetic Movie",
     state: "PENDING_ACTION",
     stateReason: "",
+    stateCauseCode: null,
     reasonCodes: [],
     actions: null,
     actionSequence: null,

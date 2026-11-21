@@ -91,6 +91,7 @@ pub fn from_lifecycle_action_run(
         status: run.status.as_storage_str().to_string(),
         hold_reason: run.hold_reason,
         error: run.error,
+        cause_code: run.cause_code,
         started_at: run.started_at,
         finished_at: run.finished_at,
     })
@@ -112,6 +113,7 @@ fn from_lifecycle_action_step_progress(
             attempt: to_graphql_int(run.attempt),
             hold_reason: run.hold_reason.clone(),
             error: run.error.clone(),
+            cause_code: run.cause_code.clone(),
             created_at: run.created_at.to_owned(),
             updated_at: run.updated_at.to_owned(),
             finished_at: run.finished_at.to_owned(),
@@ -444,6 +446,7 @@ pub fn from_lifecycle_candidate(
         facet: candidate.facet,
         state: lifecycle_candidate_state_value(candidate.state),
         state_reason: candidate.state_reason,
+        state_cause_code: candidate.state_cause_code,
         reason_codes: candidate.reason_codes,
         action_kind: LifecycleActionKind::ActionSequence,
         actions,

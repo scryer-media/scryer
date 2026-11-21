@@ -232,6 +232,8 @@ export type LifecycleActionStepRun = {
   state: string;
   holdReason: string | null;
   error: string | null;
+  /// Stable code behind the hold or failure, when its cause carried one.
+  causeCode: string | null;
 };
 
 /// Durable evidence for a job requested by a sequence step. An accepted
@@ -265,6 +267,8 @@ export type LifecycleCandidate = {
   titleName: string;
   state: LifecycleCandidateState;
   stateReason: string;
+  /// Stable code for what caused that state, when it has one.
+  stateCauseCode: string | null;
   reasonCodes: string[];
   /// What the rule decided for this subject.
   actions: LifecycleDecidedActions | null;
@@ -313,6 +317,8 @@ export type LifecycleActionRun = {
   /// Why a safety precondition held the action back, when one did.
   holdReason: string | null;
   error: string | null;
+  /// Stable code behind the hold or failure, when its cause carried one.
+  causeCode: string | null;
   startedAt: string;
 };
 

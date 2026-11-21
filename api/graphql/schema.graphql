@@ -12037,6 +12037,10 @@ type LifecycleActionRun {
 	"""
 	error: String
 	"""
+	Stable code behind the hold or failure, when the cause carried one.
+	"""
+	causeCode: String
+	"""
 	UTC start time of the attempt.
 	"""
 	startedAt: DateTime!
@@ -12211,6 +12215,10 @@ type LifecycleActionStepRun {
 	"""
 	error: String
 	"""
+	Stable code behind the hold or failure, when the cause carried one.
+	"""
+	causeCode: String
+	"""
 	UTC time the step checkpoint was created.
 	"""
 	createdAt: DateTime!
@@ -12317,6 +12325,12 @@ type LifecycleCandidate {
 	Why the candidate is in that state.
 	"""
 	stateReason: String!
+	"""
+	Stable code for what caused that state, when it has one beyond
+	`stateReason`: the refusal code a move gave, or the code of the
+	failure a retrying step hit.
+	"""
+	stateCauseCode: String
 	"""
 	Reason codes the matcher emitted on the most recent match.
 	"""

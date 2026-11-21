@@ -40,7 +40,13 @@ use crate::{AcquisitionSearchRequest, AppError, AppResult, AppUseCase, WantedKin
 enum SequenceOutcome {
     Completed,
     Held(&'static str),
-    RetryingFailed,
+    /// Held for `reason`, with the underlying code that caused it.
+    HeldBecause {
+        reason: &'static str,
+        cause: &'static str,
+    },
+    /// A step failed and will retry; `cause` is the failure's code, if any.
+    RetryingFailed(Option<&'static str>),
     Failed { step_id: String },
     Canceled(&'static str),
     Excluded,
@@ -50,6 +56,11 @@ enum SequenceOutcome {
 enum SequenceStepResult {
     Finished(LifecycleActionStepState),
     Held(&'static str),
+    /// Held for `reason`, with the underlying refusal code when one exists.
+    HeldBecause {
+        reason: &'static str,
+        cause: Option<&'static str>,
+    },
     Canceled(&'static str),
     Excluded,
 }
@@ -335,6 +346,7 @@ impl AppUseCase {
                         now,
                         LifecycleCandidateState::Blocked,
                         execution_reason::UNKNOWN_AT_EXECUTION,
+                        None,
                         Utc::now(),
                     )
                     .await?
@@ -371,6 +383,7 @@ impl AppUseCase {
                         now,
                         LifecycleCandidateState::Blocked,
                         execution_reason::UNKNOWN_AT_EXECUTION,
+                        None,
                         Utc::now(),
                     )
                     .await?
@@ -470,13 +483,19 @@ impl AppUseCase {
                     Ok(CandidateOutcome::LeaseLost)
                 }
             }
-            SequenceOutcome::Held(reason) => {
+            outcome @ (SequenceOutcome::Held(_) | SequenceOutcome::HeldBecause { .. }) => {
+                let (reason, cause) = match outcome {
+                    SequenceOutcome::HeldBecause { reason, cause } => (reason, Some(cause)),
+                    SequenceOutcome::Held(reason) => (reason, None),
+                    _ => unreachable!("matched a held outcome"),
+                };
                 if candidates
                     .finish_leased_candidate(
                         &candidate.id,
                         now,
                         LifecycleCandidateState::Blocked,
                         reason,
+                        cause,
                         Utc::now(),
                     )
                     .await?
@@ -494,13 +513,14 @@ impl AppUseCase {
                     Ok(CandidateOutcome::LeaseLost)
                 }
             }
-            SequenceOutcome::RetryingFailed => {
+            SequenceOutcome::RetryingFailed(cause) => {
                 if candidates
                     .finish_leased_candidate(
                         &candidate.id,
                         now,
                         LifecycleCandidateState::Blocked,
                         execution_reason::RETRY_PENDING,
+                        cause,
                         Utc::now(),
                     )
                     .await?
@@ -528,6 +548,7 @@ impl AppUseCase {
                         now,
                         LifecycleCandidateState::Canceled,
                         reason,
+                        None,
                         Utc::now(),
                     )
                     .await?
@@ -552,6 +573,7 @@ impl AppUseCase {
                         now,
                         LifecycleCandidateState::Excluded,
                         crate::lifecycle_rules::evaluation::candidate_reason::EXCLUDED,
+                        None,
                         Utc::now(),
                     )
                     .await?
@@ -1135,9 +1157,17 @@ impl AppUseCase {
                         execution_reason::UNKNOWN_AT_EXECUTION,
                     ));
                 }
-                Ok(SequenceStepResult::Held(reason)) => {
+                Ok(
+                    held @ (SequenceStepResult::Held(_) | SequenceStepResult::HeldBecause { .. }),
+                ) => {
+                    let (reason, cause) = match held {
+                        SequenceStepResult::HeldBecause { reason, cause } => (reason, cause),
+                        SequenceStepResult::Held(reason) => (reason, None),
+                        _ => unreachable!("matched a held step"),
+                    };
                     run.state = LifecycleActionStepState::Held;
                     run.hold_reason = Some(reason.to_string());
+                    run.cause_code = cause.map(str::to_string);
                     run.finished_at = Some(Utc::now());
                     run.updated_at = Utc::now();
                     if !self
@@ -1149,7 +1179,10 @@ impl AppUseCase {
                     {
                         return Ok(SequenceOutcome::LeaseLost);
                     }
-                    return Ok(SequenceOutcome::Held(reason));
+                    return Ok(match cause {
+                        Some(cause) => SequenceOutcome::HeldBecause { reason, cause },
+                        None => SequenceOutcome::Held(reason),
+                    });
                 }
                 Ok(SequenceStepResult::Canceled(reason)) => {
                     run.state = LifecycleActionStepState::Held;
@@ -1187,8 +1220,10 @@ impl AppUseCase {
                 }
                 Err(error) => {
                     budget.record_failed_dispatch();
+                    let cause = super::title_actions::refusal_cause_code(&error);
                     run.state = LifecycleActionStepState::Failed;
                     run.error = Some(error.to_string());
+                    run.cause_code = cause.map(str::to_string);
                     run.finished_at = Some(Utc::now());
                     run.updated_at = Utc::now();
                     if !self
@@ -1220,7 +1255,7 @@ impl AppUseCase {
                             step_id: step.id.clone(),
                         });
                     }
-                    return Ok(SequenceOutcome::RetryingFailed);
+                    return Ok(SequenceOutcome::RetryingFailed(cause));
                 }
             }
         }
@@ -1638,6 +1673,9 @@ impl AppUseCase {
                     Err(super::title_actions::LifecycleMoveOutcome::Held(reason)) => {
                         return Ok(SequenceStepResult::Held(reason));
                     }
+                    Err(super::title_actions::LifecycleMoveOutcome::Refused { reason, cause }) => {
+                        return Ok(SequenceStepResult::HeldBecause { reason, cause });
+                    }
                     Err(super::title_actions::LifecycleMoveOutcome::Started { .. }) => {
                         return Ok(SequenceStepResult::Held(
                             execution_reason::UNKNOWN_AT_EXECUTION,
@@ -1690,6 +1728,9 @@ impl AppUseCase {
                     }
                     super::title_actions::LifecycleMoveOutcome::Held(reason) => {
                         Ok(SequenceStepResult::Held(reason))
+                    }
+                    super::title_actions::LifecycleMoveOutcome::Refused { reason, cause } => {
+                        Ok(SequenceStepResult::HeldBecause { reason, cause })
                     }
                 }
             }

@@ -381,9 +381,28 @@ impl AppUseCase {
                 .or_else(|| steps.iter().rev().find_map(|step| step.run.error.clone()))
                 .or_else(|| Some("sequence step failed".to_string()));
         }
+        // The sequence row names the code behind its hold or failure: the
+        // failing step's, else the last step that stopped with one.
+        let cause_code = failing_step_id
+            .as_deref()
+            .and_then(|step_id| {
+                steps
+                    .iter()
+                    .find(|step| step.run.key.step_id == step_id)
+                    .and_then(|step| step.run.cause_code.clone())
+            })
+            .or_else(|| {
+                matches!(
+                    status,
+                    LifecycleActionRunStatus::Held | LifecycleActionRunStatus::Failed
+                )
+                .then(|| steps.iter().rev().find_map(|step| step.run.cause_code.clone()))
+                .flatten()
+            });
         run.status = status;
         run.hold_reason = hold_reason.clone();
         run.error = error.clone();
+        run.cause_code = cause_code;
         run.detail = serde_json::to_string(&SequenceHistoryDetail {
             schema_version: SEQUENCE_HISTORY_SCHEMA_VERSION,
             maintenance_sequence_history: true,

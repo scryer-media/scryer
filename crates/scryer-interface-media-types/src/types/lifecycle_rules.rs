@@ -488,6 +488,10 @@ pub struct LifecycleCandidate {
     pub state: LifecycleCandidateState,
     /// Why the candidate is in that state.
     pub state_reason: String,
+    /// Stable code for what caused that state, when it has one beyond
+    /// `stateReason`: the refusal code a move gave, or the code of the
+    /// failure a retrying step hit.
+    pub state_cause_code: Option<String>,
     /// Reason codes the matcher emitted on the most recent match.
     pub reason_codes: Vec<String>,
     /// How the candidate records its actions.
@@ -539,6 +543,8 @@ pub struct LifecycleActionStepRun {
     pub hold_reason: Option<String>,
     /// Failure message for the latest step attempt, when any.
     pub error: Option<String>,
+    /// Stable code behind the hold or failure, when the cause carried one.
+    pub cause_code: Option<String>,
     /// UTC time the step checkpoint was created.
     pub created_at: DateTime<Utc>,
     /// UTC time the step checkpoint was last updated.
@@ -693,6 +699,8 @@ pub struct LifecycleActionRun {
     pub hold_reason: Option<String>,
     /// Error text of a failed attempt; null otherwise.
     pub error: Option<String>,
+    /// Stable code behind the hold or failure, when the cause carried one.
+    pub cause_code: Option<String>,
     /// UTC start time of the attempt.
     pub started_at: DateTime<Utc>,
     /// UTC finish time; null while the attempt is running.

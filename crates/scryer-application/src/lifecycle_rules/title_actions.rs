@@ -46,6 +46,13 @@ pub(crate) enum LifecycleMoveOutcome {
     },
     /// Nothing was started, for the coded reason.
     Held(&'static str),
+    /// The move declined this plan. `reason` is the lifecycle hold reason and
+    /// `cause` is the refusal code the move itself gave, so the operator sees
+    /// why the planner said no.
+    Refused {
+        reason: &'static str,
+        cause: Option<&'static str>,
+    },
 }
 
 /// A root path compared the way an operator writes it: a trailing separator
@@ -438,7 +445,10 @@ impl AppUseCase {
         {
             Ok(preview) => preview,
             Err(error) if move_refusal(&error) => {
-                return Ok(LifecycleMoveOutcome::Held(execution_reason::MOVE_REFUSED));
+                return Ok(LifecycleMoveOutcome::Refused {
+                    reason: execution_reason::MOVE_REFUSED,
+                    cause: refusal_cause_code(&error),
+                });
             }
             Err(error) => return Err(error),
         };
@@ -465,9 +475,10 @@ impl AppUseCase {
             // Nothing to move (a title the plan cannot place), a stale plan,
             // or a destination the move refuses: the files stay where they
             // are and the step retries on a later pass.
-            Err(error) if move_refusal(&error) => {
-                Ok(LifecycleMoveOutcome::Held(execution_reason::MOVE_REFUSED))
-            }
+            Err(error) if move_refusal(&error) => Ok(LifecycleMoveOutcome::Refused {
+                reason: execution_reason::MOVE_REFUSED,
+                cause: refusal_cause_code(&error),
+            }),
             Err(error) => Err(error),
         }
     }
@@ -483,6 +494,17 @@ fn move_refusal(error: &AppError) -> bool {
             | AppError::LocationPlanRefused { .. }
             | AppError::LocationRootRefused { .. }
     )
+}
+
+/// The stable code an error carries, if any: the refusal code of a location
+/// plan or root refusal, or the validation or repository reason. This is what
+/// a held or failed lifecycle step records as its cause.
+pub(crate) fn refusal_cause_code(error: &AppError) -> Option<&'static str> {
+    match error {
+        AppError::LocationPlanRefused { code, .. } => Some(code.as_str()),
+        AppError::LocationRootRefused { code, .. } => Some(code),
+        other => other.reason(),
+    }
 }
 
 #[cfg(test)]

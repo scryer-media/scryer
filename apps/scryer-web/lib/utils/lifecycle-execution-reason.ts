@@ -77,3 +77,28 @@ export function lifecycleExecutionReasonText(
   }
   return code;
 }
+
+/**
+ * The executor records the stable code behind a hold or failure as a step's
+ * or run's `causeCode` and a candidate's `stateCauseCode`: the refusal code a
+ * move gave, or the code of the failure a step hit. The codes listed here are
+ * said in the viewer's language; any other code is shown as the server wrote
+ * it.
+ */
+export const LIFECYCLE_EXECUTION_CAUSE_KEYS: Readonly<Record<string, string>> =
+  {
+    stale_plan: "settings.lifecycleExecutionCause.staleMovePlan",
+    blocked_items: "settings.lifecycleExecutionCause.blockedItems",
+    insufficient_space: "settings.lifecycleExecutionCause.insufficientSpace",
+  };
+
+/** A hold or failure cause for display: translated when known, else as given. */
+export function lifecycleExecutionCauseText(
+  t: Translate,
+  code: string,
+): string {
+  if (Object.hasOwn(LIFECYCLE_EXECUTION_CAUSE_KEYS, code)) {
+    return t(LIFECYCLE_EXECUTION_CAUSE_KEYS[code]);
+  }
+  return code;
+}

@@ -4350,6 +4350,7 @@ const LIFECYCLE_SEQUENCE_FIELDS = `
         state
         holdReason
         error
+        causeCode
       }
       receipts {
         jobRunId
@@ -4373,6 +4374,7 @@ export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: I
     titleName
     state
     stateReason
+    stateCauseCode
     reasonCodes
     actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
     }${LIFECYCLE_SEQUENCE_FIELDS}
@@ -4423,6 +4425,7 @@ export const lifecycleActionRunsQuery = `query LifecycleActionRuns($ruleSetId: I
     status
     holdReason
     error
+    causeCode
     startedAt
   }
 }`;
