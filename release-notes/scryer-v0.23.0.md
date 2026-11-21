@@ -1,6 +1,6 @@
 # Scryer 0.23.0 release notes
 
-These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
+These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
 
 ## Highlights
 
@@ -18,6 +18,7 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
 - **Security hardening**: sessions are signed with a key derived from the instance's master key, open admin mode and Skip for local IPs can be narrowed to listed host names and trusted proxies, and replies from every outside service are read within a size limit.
 - **Dolby Vision is detected** in real Matroska and MP4 files.
 - **Grabs and searches run in the background**: a grab button no longer holds a request open, and episode, series-movie and cutoff searches wait in line instead of running twice.
+- **Upcoming lifecycle actions on the dashboard**: a new panel lists what enabled lifecycle rules are about to do, soonest first.
 - **Built-in MCP endpoint**: Scryer serves `/mcp` so an MCP client can run the operator skills' operations with an API key. A mutation with lasting effects runs only after the client confirms it.
 
 ## Upgrade notes
@@ -42,6 +43,8 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
 - Working files and folders take short `.scry-` names. Names written by earlier releases are still recognised.
 - Database indexes that no query used are dropped, and the indexes that common lookups were missing are added.
 - Guided tour progress and monthly indexer usage are kept in backups.
+- The built-in expired request leases rule is view-only. It is listed with the lifecycle rules, where it can be turned on or off, and no longer has its own card on the Request Rules page.
+- Request decision traces are kept to the newest three per rule. Housekeeping removes older traces, and the traces earlier builds wrote for every preview in the request dialog.
 
 ## Lifecycle rules
 
@@ -57,10 +60,13 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
   - storage facts for every library root, with free space sampled by the storage capacity module
   - when a title was first requested (`requested_at`), and who watched it, by name (`watched_by_usernames`) and with each user's plays (`watched_by_users`)
   - content ratings (`age_rating`, `certifications`, `certification_label`, `certification_rank`) and awards (`award_count`, `awards`), in the same shapes request rules read
+  - a movie's `release_date`: the earliest release date Scryer knows, of any kind and in any market. It replaces the theatrical, digital and physical date facts, which now read as unknown, so a rule that still reads one holds its titles.
 - A rule loads only the fact groups it names.
 - A title whose ratings or awards are not stored yet reads them as unknown (`metadata_not_stored`), never as empty.
 - A rule that deletes files to free space checks the free space again after each deletion, and stops once the space it freed satisfies it.
 - A title deleted by a lifecycle rule is excluded from every public list that added it, so the list does not add it back.
+- An aired episode nobody has played counts as unwatched, instead of holding every watch fact as unknown.
+- A playback session holds only the title it is playing. A session that matches no title holds nothing. A media server that cannot be reached holds deletions on every title until it answers, and lets reversible actions run.
 - A rule holds a title when a fact it needs cannot be known. `max_video_height` is unknown until every file of the title has been scanned. A new series or season favorite holds an action that would remove it.
 - Conflicting actions across a title, its seasons and its episodes hold each other, and the Simple builder refuses to save them.
 - Act now runs one selected rule and evaluates it first. Only a rule's own run acts on its candidates.
@@ -68,10 +74,13 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
 - Titles past a rule's maximum per run wait for the next run.
 - A rule whose only action is a season or episode notification counts as notify-only, so its notification is sent.
 - Validation reports the undefined tags, quality profiles and move targets that a save would refuse.
-- Every hold and state reason shows translated text.
+- Every hold and state reason shows translated text, and a held or failed step shows the cause behind it, such as a move refused for lack of space.
+- A rule's move to another library lands each title on that library's default root, and moves and searches started by a rule no longer fail.
 - The rule builder no longer offers facts the server never collects.
 - The Rules page lists Scoring, Lifecycle and Request Rules under the sidebar's Rules entry. Lifecycle's Rules, Leaving soon and History are page tabs. The command palette still finds the page when searched as "maintenance".
 - The rule table sorts by any column and pages after 15 rules.
+- A new rule can be created enabled or disabled. Creating a rule enabled that deletes files still asks for confirmation.
+- Each action run is one row. A run that changed files opens a table of those files beneath it.
 - Leaving soon and History lay out like Lists, with a filter bar, bordered tables and expandable candidate detail.
 - Starter templates and the input reference open as slide-out panels.
 
@@ -86,6 +95,10 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
 - A denial stands when the tag registry cannot be read.
 - Preflight and the rule tester read the monitor type and selection the way a submitted request does, so a rule sees the same value in all three.
 - Request dialogs put lease, tag and release help behind info icons.
+- The Request Rules page has Rules, Try a request and Decisions tabs. Its rule table sorts and pages like the lifecycle table, and no longer shows a decision count.
+- Each decision lists the votes that decided it, approve, then deny, then review, then any rule that failed to run, each by name. The other rules and failure text open under the row.
+- The request dialog reads a title's metadata once when it opens, and its previews and the submit use that read. A list sync reads its new requests' metadata in batches. A metadata outage is retried after five minutes.
+- Series shape facts count the episodes Scryer has loaded.
 
 ## Rule builder
 
@@ -100,16 +113,21 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..41df4aa8e`.
 - Scoring and request rule libraries and references open as slide-out panels, and reference tables fit the panel.
 - Rule input references match what each engine provides. `input.file.audio_streams[].name` is in the scoring reference, and the 4K x264 template matches the lower-case quality the parser emits.
 - Rule refusals read as sentences in every area.
+- The Rules pages order Scoring, Request, Lifecycle. Scoring rules have Rules and Community tabs: Community holds the installed rule packs and the registry packs not yet installed, and each pack rule installs from its own card.
+- Scoring and request rule tables sort by any column and page like the lifecycle table.
+- Try a rule picks a saved rule from a type-to-filter list, and groups libraries by facet.
+- The AI prompt for writing a rule is a fraction of its former size.
+- Builder problems are shown when saving, and decisions and changes sit in a compact table.
 
 ## Rule imports
 
-- The scoring rules import dialog gains a Connect tab beside paste: give a Sonarr or Radarr URL and API key, and each custom format is saved as a disabled scoring rule set.
+- The scoring rules import button reads Import from Arr. The import dialog gains a Connect tab beside paste: give a Sonarr or Radarr URL and API key, and each custom format is saved as a disabled scoring rule set.
 - Profiles that agree on a format's score give a literal score. Profiles that disagree score by Scryer quality profile name when every name matches. Otherwise the rule is saved for review, scoring 0, with the score table commented out.
 - Lifecycle rules import Maintainerr rule groups from its URL, one disabled lifecycle rule per group. Properties, sections and AND/OR follow Maintainerr's meaning, and actions map onto lifecycle actions.
 - A Maintainerr comparison that Scryer's facts could make match more titles than Maintainerr would fails its group instead of translating loosely. A group tied to one library warns that it now applies to every library.
 - A group or format with no faithful translation is saved as a failed placeholder or not at all, and the report lists each finding.
 - Imports run as background jobs. The report survives closing the dialog and switching tabs, and a run can be retried when its report fails to load.
-- A rule whose name already exists is skipped. The connection details are stored encrypted for the run and removed after the fetch.
+- A rule whose name already exists is skipped. The connection details are stored encrypted for the run and removed after the fetch. Password managers are asked not to fill the API key field.
 - Sonarr and Radarr imports need Manage catalog settings; Maintainerr imports need Manage system settings.
 
 ## Guided tours
@@ -219,6 +237,7 @@ All filesystem work now goes through one disk service.
 - The leftover-folder sweep continues from where it stopped and wraps around, so folders that sort late are reached. A download's workspace is never swept by age.
 - A settled workspace is removed only after its download is checked again under a removal hold, so a download that became live meanwhile keeps its workspace.
 - When the free-space check for an extraction fails, the volume's last known free space is used.
+- A download's workspace is never removed or replaced while an import reads it, and an import waits while its workspace is being cleared.
 
 ## Libraries
 
@@ -302,6 +321,8 @@ All filesystem work now goes through one disk service.
 
 - Acquisition is listed under Settings at `/settings/acquisition`. The old address redirects.
 - A dropped connection while a page loads no longer leaves "Failed to fetch dynamically imported module" on screen. The page retries with back-off, waits while offline, and later pages load from the cache.
+- The navigation sidebar stays docked down to 1024 px wide, where it used to become a drawer below 1280 px.
+- A dashboard panel lists the lifecycle actions coming up. It can be placed more than once, each with its own name and choice of action groups.
 - Back to list and Escape return to the poster grid at the same scroll position, without reloading the list.
 - The diagnostics bundle download says the bundle is sanitized on a best-effort basis: safe to share in a Discord ticket, but not recommended on GitHub issues or public Discord channels.
 
@@ -332,6 +353,9 @@ All filesystem work now goes through one disk service.
 - Passes that find nothing to do stop repeating reads, writes and hashing: hash backfill refuses a size mismatch before reading the file, a download's pending attempt is settled in place, pending-release and RSS passes ask existence questions, and library refresh writes only rows that changed.
 - Each activity feed read is bounded to twenty source pages and resumes from the last event it scanned.
 - A failed origin lookup keeps a download's state instead of treating it as unowned.
+- Lifecycle rules evaluate a show's seasons and episodes against one shared read of the show, and read files, plays and candidates in batches.
+- Scoring reuses its rule evaluator, compiles the live rules off the runtime and reads each library once per page.
+- Request rules run only the rules in scope, read only the facts a loaded rule may use and count decisions only when asked.
 
 ## Translations
 
@@ -436,6 +460,9 @@ This release contains breaking GraphQL changes.
 - Import and acquisition reasons: `IMPORT_RETRY_LIMIT_REACHED`, `IMPORT_UNPARSEABLE_EPISODE_MEMBER`, `IMPORT_INCUMBENT_PLACED_BY_THIS_DOWNLOAD`, `IMPORT_UPGRADE_PREPARATION_FAILED`, `ADMISSION_QUEUED_ITEM_BLOCKS_UPGRADE`, `BLOCKLIST_IMPORT_NOT_AN_UPGRADE`, `DOWNLOAD_FAILURE_UNWANTED_EXECUTABLES`, `DOWNLOAD_ORIGIN_LOOKUP_FAILED` and `LOCATION_BACKFILL_SIZE_MISMATCH`.
 - Backups and media: `SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES`, `SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED`, `SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW` and `MEDIA_IMAGE_DIMENSIONS_TOO_LARGE`.
 - Request rules: the `awards` fact.
+- Requests: `stageMyRequestMetadata(input: StageMediaRequestMetadataInput)` (`libraryId`, `facet`, `externalIds`) returns `StageMediaRequestMetadataPayload`. `previewMyRequestDecision` reads the staged metadata, and a subject that was not staged previews as metadata unavailable. A pre-flight returns no decision id.
+- Lifecycle: `lifecycleCandidates` gains `actions` and `ruleStates` filters; `causeCode` on `LifecycleActionRun` and `LifecycleActionStepRun`, and `stateCauseCode` on `LifecycleCandidate`. System-owned rules refuse every source and metadata edit with `LIFECYCLE_SYSTEM_RULE_READ_ONLY`.
+- Dashboard: `settings` on `UiDashboardLayoutItem` and `UiDashboardLayoutItemInput` (at most 2048 bytes), refused with `SETTINGS_DASHBOARD_PANEL_SETTINGS_INVALID` when malformed.
 
 - Quality profiles: `minMissingEpisodesForPack` and `minMissingPercentForSeriesPack` on `QualityProfileCriteriaInput` and `QualityProfileCriteriaPayload`.
 - Titles: `TitlePayload.contentRatings` and `TitlePayload.certificationLabel`.
