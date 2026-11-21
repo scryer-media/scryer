@@ -482,21 +482,35 @@ pub(crate) fn is_download_workspace_path(root: &Path) -> bool {
 
 /// Downloads whose workspace is in use in this process: an extraction or a
 /// removal holds a download exclusively, and import passes and manual imports
-/// reading its workspace hold it as readers. A record left `Extracting` by a
-/// download no extraction here holds was interrupted.
+/// reading its workspace hold it as readers. While anything removes a
+/// workspace, no reader or extraction may take it. A record left `Extracting`
+/// by a download no extraction here holds was interrupted.
 #[derive(Clone, Default)]
-pub(crate) struct ArchiveExtractionsInFlight(
-    Arc<std::sync::Mutex<std::collections::HashMap<DownloadExtractionKey, WorkspaceHolders>>>,
-);
+pub(crate) struct ArchiveExtractionsInFlight(Arc<std::sync::Mutex<InFlightState>>);
+
+#[derive(Default)]
+struct InFlightState {
+    holders: std::collections::HashMap<DownloadExtractionKey, WorkspaceHolders>,
+    /// Names of unrecorded workspaces an orphan sweep is removing; no key
+    /// names them, so they are held by name.
+    removing_orphans: std::collections::HashSet<String>,
+}
+
+impl InFlightState {
+    fn orphan_removal_holds(&self, key: &DownloadExtractionKey) -> bool {
+        !self.removing_orphans.is_empty() && self.removing_orphans.contains(&key.workspace_name())
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 struct WorkspaceHolders {
     exclusive: bool,
+    /// The exclusive holder is removing the workspace's files.
+    removing: bool,
     readers: usize,
 }
 
-type HoldersGuard<'a> =
-    std::sync::MutexGuard<'a, std::collections::HashMap<DownloadExtractionKey, WorkspaceHolders>>;
+type HoldersGuard<'a> = std::sync::MutexGuard<'a, InFlightState>;
 
 impl ArchiveExtractionsInFlight {
     fn holders(&self) -> HoldersGuard<'_> {
@@ -508,8 +522,11 @@ impl ArchiveExtractionsInFlight {
     /// Hold the download for an extraction. Readers do not stop one: they
     /// read only a completed extraction, which an extraction reuses.
     pub(crate) fn claim(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
-        let mut holders = self.holders();
-        let entry = holders.entry(key.clone()).or_default();
+        let mut state = self.holders();
+        if state.orphan_removal_holds(key) {
+            return None;
+        }
+        let entry = state.holders.entry(key.clone()).or_default();
         if entry.exclusive {
             return None;
         }
@@ -523,14 +540,15 @@ impl ArchiveExtractionsInFlight {
     /// Hold the download to remove its workspace: refused while anything
     /// extracts or reads it.
     fn claim_for_removal(&self, key: &DownloadExtractionKey) -> Option<InFlightClaim> {
-        let mut holders = self.holders();
-        if holders.contains_key(key) {
+        let mut state = self.holders();
+        if state.holders.contains_key(key) || state.orphan_removal_holds(key) {
             return None;
         }
-        holders.insert(
+        state.holders.insert(
             key.clone(),
             WorkspaceHolders {
                 exclusive: true,
+                removing: true,
                 readers: 0,
             },
         );
@@ -541,40 +559,136 @@ impl ArchiveExtractionsInFlight {
     }
 
     /// Read the download's workspace until the reader is dropped; its
-    /// removal waits for a later sweep meanwhile.
-    pub(crate) fn read(&self, key: &DownloadExtractionKey) -> WorkspaceReader {
-        self.holders().entry(key.clone()).or_default().readers += 1;
-        WorkspaceReader {
+    /// removal waits for a later sweep meanwhile. Refused while the
+    /// workspace is being removed, before the caller reads any of it.
+    pub(crate) fn read(&self, key: &DownloadExtractionKey) -> AppResult<WorkspaceReader> {
+        let mut state = self.holders();
+        if state.orphan_removal_holds(key)
+            || state
+                .holders
+                .get(key)
+                .is_some_and(|holders| holders.removing)
+        {
+            return Err(workspace_removing_error());
+        }
+        state.holders.entry(key.clone()).or_default().readers += 1;
+        Ok(WorkspaceReader {
             set: self.clone(),
             key: key.clone(),
-        }
+        })
     }
 
     /// Whether an extraction or a removal holds the download.
     fn contains(&self, key: &DownloadExtractionKey) -> bool {
-        self.holders()
-            .get(key)
-            .is_some_and(|holders| holders.exclusive)
+        let state = self.holders();
+        state.orphan_removal_holds(key)
+            || state
+                .holders
+                .get(key)
+                .is_some_and(|holders| holders.exclusive)
     }
 
     /// Whether anything holds the download whose workspace has this name.
     fn holds_workspace(&self, name: &str) -> bool {
-        self.holders()
-            .keys()
-            .any(|key| key.workspace_name() == name)
+        let state = self.holders();
+        state.removing_orphans.contains(name)
+            || state.holders.keys().any(|key| key.workspace_name() == name)
+    }
+
+    /// Under the caller's extraction claim, mark its workspace as being
+    /// removed so no reader takes it meanwhile. Refused while a reader other
+    /// than the caller's own (`own_readers` of them) reads it.
+    fn begin_replacement(
+        &self,
+        key: &DownloadExtractionKey,
+        own_readers: usize,
+    ) -> Option<ReplacementHold> {
+        let mut state = self.holders();
+        let entry = state.holders.get_mut(key)?;
+        if !entry.exclusive || entry.readers > own_readers {
+            return None;
+        }
+        entry.removing = true;
+        Some(ReplacementHold {
+            set: self.clone(),
+            key: key.clone(),
+        })
+    }
+
+    /// Hold each of these unrecorded workspaces against any extraction or
+    /// reader; a name something already holds is left out.
+    fn claim_orphans_for_removal<'a>(
+        &self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> OrphanRemovalClaim {
+        let mut state = self.holders();
+        let mut claimed = std::collections::HashSet::new();
+        for name in names {
+            let held = state.removing_orphans.contains(name)
+                || state.holders.keys().any(|key| key.workspace_name() == name);
+            if !held {
+                state.removing_orphans.insert(name.to_string());
+                claimed.insert(name.to_string());
+            }
+        }
+        OrphanRemovalClaim {
+            set: self.clone(),
+            names: claimed,
+        }
     }
 
     fn release(&self, key: &DownloadExtractionKey, exclusive: bool) {
-        let mut holders = self.holders();
-        if let Some(entry) = holders.get_mut(key) {
+        let mut state = self.holders();
+        if let Some(entry) = state.holders.get_mut(key) {
             if exclusive {
                 entry.exclusive = false;
+                entry.removing = false;
             } else {
                 entry.readers = entry.readers.saturating_sub(1);
             }
             if !entry.exclusive && entry.readers == 0 {
-                holders.remove(key);
+                state.holders.remove(key);
             }
+        }
+    }
+}
+
+/// An extraction's removal of its own earlier output; readers are refused
+/// until it is dropped.
+struct ReplacementHold {
+    set: ArchiveExtractionsInFlight,
+    key: DownloadExtractionKey,
+}
+
+impl Drop for ReplacementHold {
+    fn drop(&mut self) {
+        if let Some(entry) = self.set.holders().holders.get_mut(&self.key) {
+            entry.removing = false;
+        }
+    }
+}
+
+/// Unrecorded workspaces an orphan sweep holds while it removes them.
+struct OrphanRemovalClaim {
+    set: ArchiveExtractionsInFlight,
+    names: std::collections::HashSet<String>,
+}
+
+impl OrphanRemovalClaim {
+    fn holds(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    fn names(&self) -> Vec<String> {
+        self.names.iter().cloned().collect()
+    }
+}
+
+impl Drop for OrphanRemovalClaim {
+    fn drop(&mut self) {
+        let mut state = self.set.holders();
+        for name in &self.names {
+            state.removing_orphans.remove(name);
         }
     }
 }
@@ -592,13 +706,15 @@ impl Drop for WorkspaceReader {
 }
 
 /// Hold `completed`'s workspace as a reader for as long as the result lives;
-/// `None` for a download without a key.
+/// `None` for a download without a key. Refused while the workspace is being
+/// removed.
 pub(crate) fn read_download_workspace(
     app: &AppUseCase,
     completed: &crate::CompletedDownload,
-) -> Option<WorkspaceReader> {
+) -> AppResult<Option<WorkspaceReader>> {
     DownloadExtractionKey::for_completed(completed)
         .map(|key| app.runtime.imports.archive_extractions_in_flight.read(&key))
+        .transpose()
 }
 
 /// Process-local state of workspace upkeep.
@@ -803,6 +919,15 @@ async fn unsettle(app: &AppUseCase, record: &ArchiveExtractionRecord) -> AppResu
         .await
 }
 
+/// A reader turned away while the download's workspace is being removed: the
+/// same wait as an extraction in progress, retried by a later pass.
+fn workspace_removing_error() -> AppError {
+    AppError::validation_refused(
+        reasons::IN_PROGRESS,
+        "the download's extraction folder is being cleared; the import waits for it",
+    )
+}
+
 fn in_progress_error() -> AppError {
     AppError::validation_refused(
         reasons::IN_PROGRESS,
@@ -861,7 +986,13 @@ pub(crate) async fn completed_download_extraction(
 /// extract. Nothing is written for a download without archives or without an
 /// extractor for them. A failed or interrupted extraction's workspace is
 /// removed; a path held by anything this download does not own is left as it
-/// is and refused.
+/// is and refused. `own_reader` is the caller's own hold on the workspace, if
+/// it reads it: output made from other archives is replaced only while no one
+/// else reads it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an extraction carries its download, destination, passwords, provider and the caller's reader explicitly"
+)]
 pub(crate) async fn extract_download_archives(
     app: &AppUseCase,
     key: &DownloadExtractionKey,
@@ -870,6 +1001,7 @@ pub(crate) async fn extract_download_archives(
     destination: ArchiveExtractionDestination,
     passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
     archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+    own_reader: Option<&WorkspaceReader>,
 ) -> AppResult<Option<PathBuf>> {
     let Some(_claim) = app.runtime.imports.archive_extractions_in_flight.claim(key) else {
         return Err(in_progress_error());
@@ -898,7 +1030,18 @@ pub(crate) async fn extract_download_archives(
                         return Ok(Some(recorded));
                     }
                     // Made from other archives than the download holds now:
-                    // that output goes, and the download starts afresh.
+                    // that output goes, and the download starts afresh. It
+                    // waits while anyone but the caller still reads it.
+                    let own_readers =
+                        usize::from(own_reader.is_some_and(|reader| reader.key == *key));
+                    let Some(_replacing) = app
+                        .runtime
+                        .imports
+                        .archive_extractions_in_flight
+                        .begin_replacement(key, own_readers)
+                    else {
+                        return Err(in_progress_error());
+                    };
                     if archive_extractor::remove_download_workspace(&recorded, &owner_id).await {
                         repository
                             .delete(&key.client_id, &key.client_item_id)
@@ -1546,26 +1689,36 @@ pub(crate) async fn sweep_orphaned_download_workspaces(app: &AppUseCase) -> AppR
         if old.is_empty() {
             continue;
         }
-        let names: Vec<_> = old.iter().map(|(_, name, _)| name.clone()).collect();
-        let recorded = app
-            .services
-            .workflow
-            .archive_extractions
-            .recorded_workspace_names(&names)
-            .await?;
+        // Hold them first, so no extraction or reader takes one while it
+        // goes, then ask which have records: one recorded before the hold
+        // goes when its download settles instead.
+        let claim =
+            in_flight.claim_orphans_for_removal(old.iter().map(|(_, name, _)| name.as_str()));
+        let names = claim.names();
+        let recorded = if names.is_empty() {
+            Default::default()
+        } else {
+            app.services
+                .workflow
+                .archive_extractions
+                .recorded_workspace_names(&names)
+                .await?
+        };
         for (path, name, owner_id) in old {
-            // A recorded workspace goes when its download settles.
+            if !claim.holds(&name) {
+                sweep.waiting += 1;
+                continue;
+            }
             if recorded.contains(&name) {
                 continue;
             }
-            if !in_flight.holds_workspace(&name)
-                && archive_extractor::remove_download_workspace(&path, &owner_id).await
-            {
+            if archive_extractor::remove_download_workspace(&path, &owner_id).await {
                 sweep.removed += 1;
             } else {
                 sweep.waiting += 1;
             }
         }
+        drop(claim);
     }
     *app.runtime
         .imports
@@ -1942,5 +2095,55 @@ mod tests {
         drop(claim);
         assert!(!in_flight.contains(&key));
         assert!(in_flight.claim(&key).is_some());
+    }
+
+    fn refused_in_progress(result: AppResult<WorkspaceReader>) -> bool {
+        result.err().and_then(|error| error.validation_reason()) == Some(reasons::IN_PROGRESS)
+    }
+
+    #[test]
+    fn no_reader_takes_a_workspace_being_removed() {
+        let in_flight = ArchiveExtractionsInFlight::default();
+        let key = DownloadExtractionKey::new(Some("client-a"), "item-1").unwrap();
+        let removal = in_flight.claim_for_removal(&key).expect("removal claim");
+        assert!(refused_in_progress(in_flight.read(&key)));
+        drop(removal);
+        assert!(in_flight.read(&key).is_ok());
+    }
+
+    #[test]
+    fn a_replacement_waits_for_every_reader_but_the_callers_own() {
+        let in_flight = ArchiveExtractionsInFlight::default();
+        let key = DownloadExtractionKey::new(Some("client-a"), "item-1").unwrap();
+        let own = in_flight.read(&key).unwrap();
+        let claim = in_flight.claim(&key).expect("extraction claim");
+        let other = in_flight.read(&key).unwrap();
+        assert!(in_flight.begin_replacement(&key, 1).is_none());
+        drop(other);
+        let replacing = in_flight.begin_replacement(&key, 1).expect("replacement");
+        assert!(refused_in_progress(in_flight.read(&key)));
+        drop(replacing);
+        assert!(in_flight.read(&key).is_ok());
+        drop(claim);
+        drop(own);
+    }
+
+    #[test]
+    fn an_orphan_being_removed_is_held_against_extraction_and_readers() {
+        let in_flight = ArchiveExtractionsInFlight::default();
+        let key = DownloadExtractionKey::new(Some("client-a"), "item-1").unwrap();
+        let busy = DownloadExtractionKey::new(Some("client-a"), "item-2").unwrap();
+        let reader = in_flight.read(&busy).unwrap();
+        let name = key.workspace_name();
+        let busy_name = busy.workspace_name();
+        let claim = in_flight.claim_orphans_for_removal([name.as_str(), busy_name.as_str()]);
+        assert!(claim.holds(&name));
+        assert!(!claim.holds(&busy_name));
+        assert!(in_flight.claim(&key).is_none());
+        assert!(refused_in_progress(in_flight.read(&key)));
+        assert!(in_flight.claim_for_removal(&key).is_none());
+        drop(claim);
+        assert!(in_flight.claim(&key).is_some());
+        drop(reader);
     }
 }

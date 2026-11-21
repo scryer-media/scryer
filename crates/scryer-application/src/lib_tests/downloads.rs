@@ -24735,6 +24735,7 @@ mod held_sources {
                     self.key.destination(self.library_root()),
                     &Default::default(),
                     provider,
+                    None,
                 )
                 .await
             }
@@ -25123,6 +25124,7 @@ mod held_sources {
                             download.key.destination(download.library_root()),
                             &passwords,
                             Some(provider),
+                            None,
                         )
                         .await
                     }
@@ -26642,8 +26644,8 @@ mod held_sources {
             let in_flight = &app.runtime.imports.archive_extractions_in_flight;
 
             // Imported while a pass reads it: the removal waits, still due.
-            let reader = in_flight.read(&download.key);
-            let second_reader = in_flight.read(&download.key);
+            let reader = in_flight.read(&download.key).unwrap();
+            let second_reader = in_flight.read(&download.key).unwrap();
             settle_as(app, &download, TrackedDownloadState::Imported).await;
             app.runtime
                 .imports
@@ -26998,6 +27000,7 @@ mod held_sources {
                 key.destination(&library_root),
                 &Default::default(),
                 Some(provider),
+                None,
             )
             .await
             .unwrap()

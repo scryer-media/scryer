@@ -2115,8 +2115,8 @@ pub async fn begin_manual_import_selection(
     // imports: one already made is read again, and one running is waited for.
     let download = crate::import::archive_extraction::DownloadExtractionKey::for_completed(&completed);
     // Not removed while the selection is built from it.
-    let _workspace_reader =
-        crate::import::archive_extraction::read_download_workspace(app, &completed);
+    let workspace_reader =
+        crate::import::archive_extraction::read_download_workspace(app, &completed)?;
     let extracted_for_download = match &download {
         Some(download) if archive_extraction_needed => {
             crate::import::archive_extraction::completed_download_extraction(
@@ -2169,6 +2169,7 @@ pub async fn begin_manual_import_selection(
                             destination,
                             &passwords,
                             archive_provider,
+                            workspace_reader.as_ref(),
                         )
                         .await?
                     }
@@ -3692,9 +3693,10 @@ async fn execute_manual_import_with_release_evidence_inner(
     trusted_source_root: Option<PathBuf>,
 ) -> AppResult<Vec<ManualImportFileResult>> {
     // The download's workspace is not removed while this import reads it.
-    let _workspace_reader = completed.and_then(|completed| {
-        crate::import::archive_extraction::read_download_workspace(app, completed)
-    });
+    let _workspace_reader = completed
+        .map(|completed| crate::import::archive_extraction::read_download_workspace(app, completed))
+        .transpose()?
+        .flatten();
     if let Some(submission_title_id) = release_evidence.title_id()
         && submission_title_id != title_id
     {

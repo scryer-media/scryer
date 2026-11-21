@@ -18,8 +18,8 @@ async fn run_import(
     resolved_title_authorization: Option<&User>,
 ) -> AppResult<ImportResult> {
     // The download's workspace is not removed while this pass reads it.
-    let _workspace_reader =
-        crate::import::archive_extraction::read_download_workspace(app, completed);
+    let workspace_reader =
+        crate::import::archive_extraction::read_download_workspace(app, completed)?;
     let mut preparation_permit = Some(match preparation_permit {
         Some(permit) => permit,
         None => {
@@ -40,6 +40,7 @@ async fn run_import(
         archive_password,
         &mut preparation_permit,
         resolved_title_authorization,
+        workspace_reader.as_ref(),
     ))
     .await?
     {
@@ -780,6 +781,10 @@ async fn archive_password_candidates(
     candidates
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the titleless probe carries durable evidence and the pass's workspace reader explicitly"
+)]
 async fn try_match_titleless_archive_from_inner_video(
     app: &AppUseCase,
     import_id: &str,
@@ -788,6 +793,7 @@ async fn try_match_titleless_archive_from_inner_video(
     release_evidence: &ReleaseEvidence,
     archive_password: Option<&str>,
     resolved_title_authorization: Option<&User>,
+    workspace_reader: Option<&crate::import::archive_extraction::WorkspaceReader>,
 ) -> AppResult<Option<TitlelessArchiveMatch>> {
     let is_sample = titleless_sample_rule(completed);
     if !archive_extraction_would_be_needed_best_effort(dest_dir, is_sample) {
@@ -851,6 +857,7 @@ async fn try_match_titleless_archive_from_inner_video(
                         destination,
                         &passwords,
                         archive_provider.clone(),
+                        workspace_reader,
                     )
                     .await?
                 }
@@ -1022,6 +1029,7 @@ async fn resolve_completed_import_target(
     archive_password: Option<&str>,
     preparation_permit: &mut Option<tokio::sync::OwnedSemaphorePermit>,
     resolved_title_authorization: Option<&User>,
+    workspace_reader: Option<&crate::import::archive_extraction::WorkspaceReader>,
 ) -> AppResult<CompletedImportTargetResolution> {
     // 2. TITLE MATCHING
     let mut title = None;
@@ -1085,6 +1093,7 @@ async fn resolve_completed_import_target(
             release_evidence,
             archive_password,
             resolved_title_authorization,
+            workspace_reader,
         )
         .await;
         *preparation_permit = Some(
@@ -1303,6 +1312,7 @@ async fn resolve_completed_import_target(
                         destination,
                         &passwords,
                         archive_provider,
+                        workspace_reader,
                     )
                     .await
                 }

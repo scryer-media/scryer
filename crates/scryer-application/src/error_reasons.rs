@@ -5421,8 +5421,9 @@ pub mod events {
 
 /// Conditions of the one extraction a tracked download's archives get.
 pub mod archive_extraction {
-    /// Another import pass of the same download is extracting its archives
-    /// now; this pass waits and is retried.
+    /// Another import pass of the same download is extracting its archives,
+    /// or its extraction folder is being cleared, now; this pass waits and
+    /// is retried.
     pub const IN_PROGRESS: &str = "ARCHIVE_EXTRACTION_IN_PROGRESS";
     /// An extraction was found unfinished from an earlier run of Scryer; it
     /// counts as a failed attempt and its partial output is removed.
