@@ -2577,6 +2577,14 @@ const ru: LocaleDictionary = {
   "settings.ruleLibraryDescription":
     "Готовые правила, которые можно добавить одним нажатием. Выберите шаблон, чтобы автоматически заполнить редактор.",
   "settings.ruleLibraryAll": "Все",
+  "settings.scoringNavRules": "Правила",
+  "settings.scoringNavCommunity": "Сообщество",
+  "settings.communityRulePacks": "Доступные пакеты правил",
+  "settings.communityRulePacksDescription": "Пакеты правил сообщества, которые можно установить. Откройте пакет, чтобы выбрать, какие правила из него включить.",
+  "settings.communityRulePacksAllInstalled": "Все пакеты правил сообщества уже установлены.",
+  "settings.rulePackAuthor": "Автор",
+  "settings.rulePackInstall": "Установить",
+  "settings.rulePackInstalling": "Установка…",
   "settings.ruleLibraryCommunityEmpty":
     "Пакеты правил сообщества отсутствуют. Обновите реестр плагинов, чтобы проверить наличие новых пакетов.",
   "settings.rulesFacetSection":
@@ -13521,7 +13529,6 @@ const ru: LocaleDictionary = {
   "uiText.thisAccountHasNoAvailableReauthenticationFactorSignOutAndSignInAgainThenRetryTheAccountSecurityChange":
     "У этого аккаунта нет доступного фактора повторной аутентификации. Выйдите и войдите снова, затем повторите изменение параметров безопасности аккаунта.",
   "uiText.community": "Сообщество",
-  "uiText.backToPacks": "← К пакетам",
   "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
     "Выберите правила для включения после установки. Правила остаются управляемыми",
   "uiText.managedByThePackAuthor": "Управляется автором пакета.",

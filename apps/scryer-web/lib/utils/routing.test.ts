@@ -13,6 +13,7 @@ import {
   listsSectionFromPath,
   lifecycleRulesSectionFromPath,
   requestRulesSectionFromPath,
+  scoringRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
   BETA_RULES_SECTIONS,
@@ -369,11 +370,17 @@ test("the rules page carries all three kinds of rule as panes", () => {
   assert.deepEqual(resolveAppRoute("/automation/rules/request/nope"), {
     kind: "not-found",
   });
-  // Scoring rules have no second level of panes, and lifecycle and request
-  // rules stop at one.
+  // Each rule kind stops at one level of panes, and only its own pane names
+  // resolve.
   assert.deepEqual(resolveAppRoute("/automation/rules/scoring/candidates"), {
     kind: "not-found",
   });
+  assert.deepEqual(
+    resolveAppRoute("/automation/rules/scoring/community/extra"),
+    {
+      kind: "not-found",
+    },
+  );
   assert.deepEqual(
     resolveAppRoute("/automation/rules/request/decisions/extra"),
     {
@@ -406,6 +413,17 @@ test("rules pane paths round-trip through the section helpers", () => {
     assert.equal(requestRulesSectionFromPath(path), section, section);
     assert.equal(rulesSectionFromPath(path), "request", section);
   }
+  for (const section of ["rules", "community"] as const) {
+    const path = buildRulesPath("scoring", section);
+    assert.equal(scoringRulesSectionFromPath(path), section, section);
+    assert.equal(rulesSectionFromPath(path), "scoring", section);
+    const route = resolveAppRoute(path);
+    assert.equal(route.kind, "canonical", path);
+  }
+  assert.equal(
+    buildRulesPath("scoring", "community"),
+    "/automation/rules/scoring/community",
+  );
   assert.equal(buildRulesPath("request", "rules"), "/automation/rules/request");
   assert.equal(
     requestRulesSectionFromPath("/automation/rules/request"),

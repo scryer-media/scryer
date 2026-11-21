@@ -59,6 +59,10 @@ export type RulesSection = "scoring" | "lifecycle" | "request";
 /// would a rule match".
 export type LifecycleRulesSection = "rules" | "try" | "candidates" | "history";
 
+/// Panes of the Scoring Rules page: the operator's own rules, and the community
+/// rule packs installed or available to install.
+export type ScoringRulesSection = "rules" | "community";
+
 /// Panes of the Request Rules page: the rules themselves, a request to try
 /// them against, and the decisions they made.
 export type RequestRulesSection = "rules" | "try" | "decisions";

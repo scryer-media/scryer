@@ -8,6 +8,7 @@ import type {
   LifecycleRulesSection,
   RequestRulesSection,
   RulesSection,
+  ScoringRulesSection,
   SettingsSection,
   SystemSection,
   ViewId,
@@ -101,6 +102,18 @@ const LIFECYCLE_RULES_SECTION_BY_SEGMENT: Record<
   exclusions: "candidates",
 };
 
+/// Panes of the Scoring Rules page. The rule list is the default and adds no
+/// segment, so `/automation/rules/scoring` still opens it.
+export const SCORING_RULES_SECTION_PATH: Record<ScoringRulesSection, string> = {
+  rules: "",
+  community: "community",
+};
+
+const SCORING_RULES_SECTION_BY_SEGMENT: Record<string, ScoringRulesSection> = {
+  rules: "rules",
+  community: "community",
+};
+
 /// Panes of the Request Rules page. As on Lifecycle, the rule list is the
 /// default and adds no segment, so `/automation/rules/request` still opens it.
 export const REQUEST_RULES_SECTION_PATH: Record<RequestRulesSection, string> = {
@@ -152,10 +165,15 @@ export function buildRulesPath(
   section: "request",
   subSection?: RequestRulesSection,
 ): string;
+export function buildRulesPath(
+  section: "scoring",
+  subSection?: ScoringRulesSection,
+): string;
 export function buildRulesPath(section: RulesSection): string;
 export function buildRulesPath(
   section: RulesSection,
-  subSection?: LifecycleRulesSection | RequestRulesSection,
+  subSection?:
+    LifecycleRulesSection | RequestRulesSection | ScoringRulesSection,
 ): string {
   const base = `/automation/rules/${RULES_SECTION_PATH[section]}`;
   let segment = "";
@@ -168,6 +186,11 @@ export function buildRulesPath(
     segment =
       REQUEST_RULES_SECTION_PATH[
         (subSection as RequestRulesSection | undefined) ?? "rules"
+      ];
+  } else if (section === "scoring") {
+    segment =
+      SCORING_RULES_SECTION_PATH[
+        (subSection as ScoringRulesSection | undefined) ?? "rules"
       ];
   }
   return segment ? `${base}/${segment}` : base;
@@ -199,6 +222,23 @@ export function lifecycleRulesSectionFromPath(
   }
   return (
     LIFECYCLE_RULES_SECTION_BY_SEGMENT[
+      segments[rulesAt + 2]?.toLowerCase() ?? ""
+    ] ?? "rules"
+  );
+}
+
+export function scoringRulesSectionFromPath(
+  pathname: string,
+): ScoringRulesSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const rulesAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "rules",
+  );
+  if (rulesAt < 0) {
+    return "rules";
+  }
+  return (
+    SCORING_RULES_SECTION_BY_SEGMENT[
       segments[rulesAt + 2]?.toLowerCase() ?? ""
     ] ?? "rules"
   );
@@ -657,8 +697,8 @@ function settingsRoute(section: SettingsSection): ParsedAppRoute {
 ///
 /// A bare `/automation/rules` names the page rather than a pane, so it lands on
 /// Scoring rather than 404ing. Lifecycle and request rules take a further
-/// segment for their own pane, and the rule list is the pane a segment-less
-/// path means.
+/// segment for their own pane, as does Scoring for its Community pane, and
+/// the rule list is the pane a segment-less path means.
 function resolveRulesRoute(
   currentPath: string,
   rawSegments: string[],
@@ -675,22 +715,26 @@ function resolveRulesRoute(
     return { kind: "not-found" };
   }
 
-  // Scoring rules are one page: no second level of panes, so a fourth segment
-  // names nothing.
+  if (rawSegments.length > 4) {
+    return { kind: "not-found" };
+  }
+
   if (rulesSection === "scoring") {
-    if (rawSegments.length !== 3) {
+    const scoringSection =
+      rawSegments.length === 3
+        ? "rules"
+        : SCORING_RULES_SECTION_BY_SEGMENT[normalizedSegments[3] ?? ""];
+    if (!scoringSection) {
       return { kind: "not-found" };
     }
     return canonicalOrRedirect(
       currentPath,
-      settingsRoute("rules"),
+      parsedRoute(buildRulesPath("scoring", scoringSection), "settings", {
+        settingsSection: "rules",
+      }),
       search,
       hash,
     );
-  }
-
-  if (rawSegments.length > 4) {
-    return { kind: "not-found" };
   }
 
   if (rulesSection === "request") {

@@ -7344,6 +7344,14 @@ const en: LocaleDictionary = {
   "settings.ruleLibraryDescription":
     "Pre-built rules you can add with one click. Select a template to populate the editor.",
   "settings.ruleLibraryAll": "All",
+  "settings.scoringNavRules": "Rules",
+  "settings.scoringNavCommunity": "Community",
+  "settings.communityRulePacks": "Available rule packs",
+  "settings.communityRulePacksDescription": "Community rule packs you can install. Open a pack to choose which of its rules to enable.",
+  "settings.communityRulePacksAllInstalled": "Every community rule pack is already installed.",
+  "settings.rulePackAuthor": "Author",
+  "settings.rulePackInstall": "Install",
+  "settings.rulePackInstalling": "Installing…",
   "settings.ruleLibraryCommunityEmpty":
     "No community rule packs available. Refresh the plugin registry to check for new packs.",
   "settings.arrImportAction": "Import Arr custom format",
@@ -12958,7 +12966,6 @@ const en: LocaleDictionary = {
   "uiText.thisAccountHasNoAvailableReauthenticationFactorSignOutAndSignInAgainThenRetryTheAccountSecurityChange":
     "This account has no available reauthentication factor. Sign out and sign in again, then retry the account-security change.",
   "uiText.community": "Community",
-  "uiText.backToPacks": "← Back to packs",
   "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
     "Choose the rules to enable after installation. Rules stay managed",
   "uiText.managedByThePackAuthor": "Managed by the pack author.",

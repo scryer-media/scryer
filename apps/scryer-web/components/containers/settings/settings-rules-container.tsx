@@ -26,6 +26,9 @@ import {
 } from "@/components/views/settings/tracked-rule-packs-section";
 import type { ArrCustomFormatDraft } from "@/components/views/settings/arr-custom-format-import-dialog";
 import { useClient } from "urql";
+import { useNavigate } from "react-router";
+import type { ScoringRulesSection } from "@/components/root/types";
+import { buildRulesPath } from "@/lib/utils/routing";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { RuleSetRecord, RuleSetDraft } from "@/lib/types/rule-sets";
@@ -95,10 +98,13 @@ type PendingRuleEditorAction =
 export function SettingsRulesContainer({
   canManageCatalogSettings,
   canManageSystemSettings,
+  section = "rules",
 }: {
   canManageCatalogSettings: boolean;
   canManageSystemSettings: boolean;
+  section?: ScoringRulesSection;
 }) {
+  const navigate = useNavigate();
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
@@ -902,6 +908,7 @@ export function SettingsRulesContainer({
   return (
     <>
       <SettingsRulesSection
+        section={section}
         canManageTrackedPacks={canManageTrackedPacks}
         isEditorOpen={isEditorOpen}
         editorMode={
@@ -961,9 +968,14 @@ export function SettingsRulesContainer({
             }
             onUninstall={uninstallTrackedRulePack}
             onToggleMember={toggleTrackedRulePackMember}
-            onCopyMember={(member) => void requestTrackedRuleCopy(member)}
+            onCopyMember={(member) => {
+              // The editor lives on the Rules pane, so the copy opens there.
+              navigate(buildRulesPath("scoring", "rules"));
+              void requestTrackedRuleCopy(member);
+            }}
           />
         }
+        installedRulePackIds={trackedRulePacks.map((pack) => pack.packId)}
         installTrackedRulePack={installTrackedRulePack}
         installingRulePackId={mutatingRulePackId}
       />
