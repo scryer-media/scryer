@@ -2057,9 +2057,6 @@ fn write_bundle_payload<W: Write>(_stage_dir: &Path, _writer: W) -> AppResult<W>
 }
 
 #[cfg(feature = "runtime-backups")]
-// disk-guard: the payload is unpacked into the owner's scratch directory; the
-// owner has no archive extraction.
-#[allow(clippy::disallowed_methods)]
 fn extract_bundle_to_tempdir(
     bundle_path: &Path,
     passphrase: Option<&str>,
