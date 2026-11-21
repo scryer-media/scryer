@@ -930,6 +930,64 @@ async fn a_personal_add_list_submits_requests_instead() {
 }
 
 #[tokio::test]
+async fn request_candidates_are_staged_in_one_batch_and_adds_are_not() {
+    let alpha = crate::lists::test_support::resolved_item("alpha");
+    let beta = crate::lists::test_support::resolved_item("beta");
+    let candidates = [&alpha, &beta];
+    let staged = |actions: &RecordingActions| actions.staged_requests.lock().unwrap().clone();
+    let with_mode = |mode, scope| ListSubscription {
+        scope,
+        mode,
+        credential_id: None,
+        ..subscription("list-a")
+    };
+    let both = vec![vec!["alpha".to_string(), "beta".to_string()]];
+
+    // Lists whose candidates become requests stage them all in one call.
+    for (mode, scope) in [
+        (ListMode::Request, ListScope::Personal),
+        (ListMode::Add, ListScope::Personal),
+        (ListMode::Hold, ListScope::Public),
+    ] {
+        let actions = RecordingActions::default();
+        crate::lists::act::stage_candidate_requests(&actions, &with_mode(mode, scope), &candidates)
+            .await;
+        assert_eq!(staged(&actions), both, "{mode:?} {scope:?}");
+        assert!(actions.calls().is_empty(), "staging submits nothing");
+    }
+
+    // An owner who adds the titles, a public add list and a discover list
+    // file no request, so nothing is staged for them.
+    for (mode, scope, owner_manages_titles) in [
+        (ListMode::Request, ListScope::Personal, true),
+        (ListMode::Add, ListScope::Personal, true),
+        (ListMode::Add, ListScope::Public, false),
+        (ListMode::Discover, ListScope::Public, false),
+    ] {
+        let actions = RecordingActions {
+            owner_manages_titles,
+            ..Default::default()
+        };
+        crate::lists::act::stage_candidate_requests(&actions, &with_mode(mode, scope), &candidates)
+            .await;
+        assert!(staged(&actions).is_empty(), "{mode:?} {scope:?}");
+    }
+
+    // Grants that cannot be read stage nothing; the submit decides alone.
+    let actions = RecordingActions {
+        owner_permission_unreadable: true,
+        ..Default::default()
+    };
+    crate::lists::act::stage_candidate_requests(
+        &actions,
+        &with_mode(ListMode::Request, ListScope::Personal),
+        &candidates,
+    )
+    .await;
+    assert!(staged(&actions).is_empty());
+}
+
+#[tokio::test]
 async fn personal_manager_add_adds_and_revoked_grants_request() {
     let list = ListSubscription {
         scope: ListScope::Personal,

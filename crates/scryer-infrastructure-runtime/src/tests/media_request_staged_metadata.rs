@@ -124,3 +124,69 @@ async fn cleanup_removes_only_records_older_than_the_cutoff_in_bounded_batches()
         );
     }
 }
+
+#[tokio::test]
+async fn a_batch_is_staged_together_and_read_back_past_one_bind_chunk() {
+    let (services, _db) = temp_services("scryer_media_request_staged_metadata_batch").await;
+    let store = request_store(&services);
+    let staged_at = Utc::now();
+
+    // An existing record the batch replaces, and one it does not name.
+    store
+        .stage_metadata(&record("movie|tvdb=0", r#"{"overview":"old"}"#, staged_at))
+        .await
+        .expect("stage");
+    store
+        .stage_metadata(&record(
+            "series|tvdb=9",
+            r#"{"overview":"kept"}"#,
+            staged_at,
+        ))
+        .await
+        .expect("stage");
+
+    // More keys than one read binds, so the read spans chunks.
+    let records: Vec<StagedMediaRequestMetadata> = (0..620)
+        .map(|index| {
+            record(
+                &format!("movie|tvdb={index}"),
+                &format!(r#"{{"overview":"batch {index}"}}"#),
+                staged_at,
+            )
+        })
+        .collect();
+    store.stage_metadata_many(&[]).await.expect("empty batch");
+    store.stage_metadata_many(&records).await.expect("batch");
+
+    let mut keys: Vec<String> = records
+        .iter()
+        .map(|record| record.staging_key.clone())
+        .collect();
+    keys.push("movie|tvdb=never-staged".to_string());
+    let mut read = store.staged_metadata_many(&keys).await.expect("read");
+    read.sort_by(|left, right| left.staging_key.cmp(&right.staging_key));
+    let mut expected = records.clone();
+    expected.sort_by(|left, right| left.staging_key.cmp(&right.staging_key));
+    assert_eq!(read.len(), expected.len());
+    for (read, expected) in read.iter().zip(&expected) {
+        assert_eq!(read.staging_key, expected.staging_key);
+        assert_eq!(read.payload_json, expected.payload_json);
+    }
+
+    assert_eq!(
+        store
+            .staged_metadata("series|tvdb=9")
+            .await
+            .expect("read")
+            .expect("untouched")
+            .payload_json,
+        r#"{"overview":"kept"}"#
+    );
+    assert!(
+        store
+            .staged_metadata_many(&[])
+            .await
+            .expect("read")
+            .is_empty()
+    );
+}

@@ -508,6 +508,57 @@ pub struct LifecycleTitleWatch<'a> {
     pub audience: Option<&'a [AudiencePlay]>,
 }
 
+/// One title's plays grouped by the episode they belong to, built once per
+/// title so that none of its seasons or episodes scans every play of the show
+/// for its own.
+///
+/// Only plays on connections the run observes are kept, in the order the
+/// stores returned them; a play with no episode is not in it.
+#[derive(Debug, Default)]
+pub(crate) struct LifecycleEpisodeWatchIndex<'a> {
+    signals: HashMap<&'a str, Vec<UserMediaSignal>>,
+    audience: HashMap<&'a str, Vec<&'a AudiencePlay>>,
+}
+
+impl<'a> LifecycleEpisodeWatchIndex<'a> {
+    pub(crate) fn new(watch: LifecycleTitleWatch<'a>) -> Self {
+        let mut index = Self::default();
+        for signal in watch
+            .signals
+            .unwrap_or_default()
+            .iter()
+            .filter(|signal| watch.context.observes(&signal.connection_id))
+        {
+            if let Some(episode_id) = signal.scryer_episode_id.as_deref() {
+                index
+                    .signals
+                    .entry(episode_id)
+                    .or_default()
+                    .push(signal.clone());
+            }
+        }
+        for play in watch
+            .audience
+            .unwrap_or_default()
+            .iter()
+            .filter(|play| watch.context.observes(&play.connection_id))
+        {
+            if let Some(episode_id) = play.scryer_episode_id.as_deref() {
+                index.audience.entry(episode_id).or_default().push(play);
+            }
+        }
+        index
+    }
+
+    fn signals(&self, episode_id: &str) -> &[UserMediaSignal] {
+        self.signals.get(episode_id).map_or(&[], Vec::as_slice)
+    }
+
+    fn audience(&self, episode_id: &str) -> &[&'a AudiencePlay] {
+        self.audience.get(episode_id).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// Everything the builder needs about one library, resolved once per run.
 #[derive(Clone, Debug)]
 pub struct LifecycleLibraryRef {
@@ -1273,26 +1324,37 @@ fn movie_anyone_observations(
 /// any of `episode_ids`.
 fn scoped_anyone_observations(
     watch: LifecycleTitleWatch<'_>,
+    by_episode: &LifecycleEpisodeWatchIndex<'_>,
     episode_ids: &HashSet<&str>,
 ) -> (Observation<bool>, Observation<String>) {
     if let Some(reason) = watch.context.audience_unavailable_reason() {
         return (Observation::unknown(reason), Observation::unknown(reason));
     }
-    let in_scope = |episode_id: Option<&str>| episode_id.is_some_and(|id| episode_ids.contains(id));
     anyone_observations(
-        watch
-            .signals
-            .unwrap_or_default()
+        episode_ids.iter().flat_map(|id| by_episode.signals(id)),
+        episode_ids
             .iter()
-            .filter(|signal| watch.context.observes(&signal.connection_id))
-            .filter(|signal| in_scope(signal.scryer_episode_id.as_deref())),
-        watch
-            .audience
-            .unwrap_or_default()
-            .iter()
-            .filter(|play| watch.context.observes(&play.connection_id))
-            .filter(|play| in_scope(play.scryer_episode_id.as_deref())),
+            .flat_map(|id| by_episode.audience(id).iter().copied()),
         unknown_reason::EPISODE_PLAY_TIME_MISSING,
+    )
+}
+
+/// Plays of any of `episode_ids` by every account, summed, behind the
+/// audience gate. No play is a known zero, not an absence.
+fn scoped_play_count_total_observation(
+    watch: LifecycleTitleWatch<'_>,
+    by_episode: &LifecycleEpisodeWatchIndex<'_>,
+    episode_ids: &HashSet<&str>,
+) -> Observation<i64> {
+    if let Some(reason) = watch.context.audience_unavailable_reason() {
+        return Observation::unknown(reason);
+    }
+    Observation::known(
+        episode_ids
+            .iter()
+            .flat_map(|id| by_episode.audience(id))
+            .map(|play| play.play_count.max(0))
+            .sum(),
     )
 }
 
@@ -1583,6 +1645,36 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
     series_movies: &[LifecycleSeriesMovieDoc],
     completed_retention_episode_ids: Option<&BTreeSet<String>>,
 ) -> LifecycleInput {
+    build_subject_input_with_episode_watch(
+        evaluation_time,
+        title,
+        library,
+        subject,
+        people,
+        watch,
+        None,
+        claims,
+        series_movies,
+        completed_retention_episode_ids,
+    )
+}
+
+/// [`build_subject_input_with_completed_retention_episodes`] for a caller
+/// that builds many subjects of one title: `by_episode` is that title's
+/// `watch` grouped once, and gives the facts a per-subject grouping would.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_subject_input_with_episode_watch(
+    evaluation_time: DateTime<Utc>,
+    title: &Title,
+    library: &LifecycleLibraryRef,
+    subject: &super::subjects::LifecycleSubject,
+    people: LifecycleTitlePeople<'_>,
+    watch: LifecycleTitleWatch<'_>,
+    by_episode: Option<&LifecycleEpisodeWatchIndex<'_>>,
+    claims: LifecycleTitleClaims<'_>,
+    series_movies: &[LifecycleSeriesMovieDoc],
+    completed_retention_episode_ids: Option<&BTreeSet<String>>,
+) -> LifecycleInput {
     let mut input = build_title_input(
         evaluation_time,
         title,
@@ -1648,7 +1740,16 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
         } else {
             Observation::known(subject.episode_file_count)
         };
-        let watched = scoped_watch_observations(evaluation_time, subject, people, watch);
+        let grouped_here;
+        let by_episode = match by_episode {
+            Some(by_episode) => by_episode,
+            None => {
+                grouped_here = LifecycleEpisodeWatchIndex::new(watch);
+                &grouped_here
+            }
+        };
+        let watched =
+            scoped_watch_observations_from(evaluation_time, subject, people, watch, by_episode);
         input.facts.watched_by_user_ids = watched.watched_by_user_ids;
         input.facts.watched_by_usernames = watched.watched_by_usernames;
         input.facts.watched_by_users = watched.watched_by_users;
@@ -1662,11 +1763,8 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
             .iter()
             .map(|episode| episode.id.as_str())
             .collect();
-        input.facts.play_count_total = play_count_total_observation(watch, |play| {
-            play.scryer_episode_id
-                .as_deref()
-                .is_some_and(|id| episode_ids.contains(id))
-        });
+        input.facts.play_count_total =
+            scoped_play_count_total_observation(watch, by_episode, &episode_ids);
     }
     let (episode_position_by_air_date, season_position_by_air_date) =
         retention_rank_observations(evaluation_time, subject, completed_retention_episode_ids);
@@ -1688,6 +1786,29 @@ pub(crate) fn nest_subject_input(
         return subject_input;
     }
     let mut input = title_input;
+    let (subject_doc, narrow) = narrow_subject_parts(subject_input, subject);
+    input.subject = subject_doc;
+    match kind {
+        LifecycleSubjectKind::Season => input.season = Some(narrow),
+        LifecycleSubjectKind::Episode => input.episode = Some(narrow),
+        LifecycleSubjectKind::Title => unreachable!(),
+    }
+    input
+}
+
+/// The two parts a season's or episode's own input adds to its title's: the
+/// subject's identity, and its facts as the section that sits beside the
+/// title's. [`nest_subject_input`] puts them into a copy of the title's
+/// input; an evaluation pass hands them to the evaluator beside a title
+/// document it prepared once.
+pub(crate) fn narrow_subject_parts(
+    subject_input: LifecycleInput,
+    subject: &super::subjects::LifecycleSubject,
+) -> (
+    LifecycleSubjectDoc,
+    scryer_rules::lifecycle::LifecycleNarrowSubjectDoc,
+) {
+    let kind = subject_input.subject.kind;
     let narrow = scryer_rules::lifecycle::LifecycleNarrowSubjectDoc {
         id: subject_input.subject.subject_id.clone(),
         collection_id: subject_input.subject.collection_id.clone(),
@@ -1702,13 +1823,7 @@ pub(crate) fn nest_subject_input(
             .flatten(),
         facts: subject_input.facts,
     };
-    input.subject = subject_input.subject;
-    match kind {
-        LifecycleSubjectKind::Season => input.season = Some(narrow),
-        LifecycleSubjectKind::Episode => input.episode = Some(narrow),
-        LifecycleSubjectKind::Title => unreachable!(),
-    }
-    input
+    (subject_input.subject, narrow)
 }
 
 fn retention_rank_observations(
@@ -1765,11 +1880,30 @@ pub(crate) fn air_date_has_aired(
         .map(|day| day <= evaluation_day)
 }
 
+/// The scoped watch facts with the title's plays grouped here, for one
+/// subject on its own.
+#[cfg(test)]
 fn scoped_watch_observations(
     evaluation_time: DateTime<Utc>,
     subject: &super::subjects::LifecycleSubject,
     people: LifecycleTitlePeople<'_>,
     watch: LifecycleTitleWatch<'_>,
+) -> WatchObservations {
+    scoped_watch_observations_from(
+        evaluation_time,
+        subject,
+        people,
+        watch,
+        &LifecycleEpisodeWatchIndex::new(watch),
+    )
+}
+
+fn scoped_watch_observations_from(
+    evaluation_time: DateTime<Utc>,
+    subject: &super::subjects::LifecycleSubject,
+    people: LifecycleTitlePeople<'_>,
+    watch: LifecycleTitleWatch<'_>,
+    by_episode: &LifecycleEpisodeWatchIndex<'_>,
 ) -> WatchObservations {
     let requesters = people.requester_user_ids;
     let mut episodes = Vec::new();
@@ -1797,7 +1931,7 @@ fn scoped_watch_observations(
         .iter()
         .map(|&episode| episode.id.as_str())
         .collect();
-    let anyone = scoped_anyone_observations(watch, &episode_ids);
+    let anyone = scoped_anyone_observations(watch, by_episode, &episode_ids);
     // The per-user facts need the watch gate; the anonymous pair has its own.
     if let Some(reason) = watch.context.unavailable_reason() {
         return WatchObservations::all_unknown(reason).with_audience(anyone);
@@ -1815,24 +1949,6 @@ fn scoped_watch_observations(
             last_watched_by_anyone_at: anyone.1,
         };
     }
-    // One pass over the signals, grouped by the in-scope episode they belong
-    // to, instead of rescanning every signal for each episode.
-    let mut signals_by_episode: HashMap<&str, Vec<UserMediaSignal>> = HashMap::new();
-    for signal in watch
-        .signals
-        .unwrap_or_default()
-        .iter()
-        .filter(|signal| watch.context.observes(&signal.connection_id))
-    {
-        if let Some(episode_id) = signal.scryer_episode_id.as_deref()
-            && let Some(&episode_id) = episode_ids.get(episode_id)
-        {
-            signals_by_episode
-                .entry(episode_id)
-                .or_default()
-                .push(signal.clone());
-        }
-    }
     let mut complete: Option<BTreeSet<String>> = None;
     let mut plays: BTreeMap<String, WatcherPlays> = BTreeMap::new();
     let mut latest = None;
@@ -1841,9 +1957,7 @@ fn scoped_watch_observations(
         // The watch gate above is fresh, and sync reads every played item. An
         // aired episode with no row was not played by anyone it observes, so
         // it counts as unwatched: it has no watchers and breaks completion.
-        let signals: &[UserMediaSignal] = signals_by_episode
-            .get(episode.id.as_str())
-            .map_or(&[], Vec::as_slice);
+        let signals = by_episode.signals(&episode.id);
         let observed = watch_observations(
             &MediaFacet::Movie,
             requesters,
@@ -4006,5 +4120,177 @@ pub(crate) mod tests {
             missing_name.watched_by_users,
             Observation::Unknown { ref reason, .. } if reason == unknown_reason::USER_NOT_FOUND
         ));
+    }
+
+    /// A show's plays grouped once give every season and episode the facts a
+    /// scan of all the show's plays gives it.
+    #[test]
+    fn plays_grouped_once_per_title_give_each_subject_the_facts_a_full_scan_does() {
+        let title = faceted_title(None, MediaFacet::Series);
+        let context = fresh_context(&["alice", "bob"]);
+        let names = usernames(&[("alice", "alice-name"), ("bob", "bob-name")]);
+        let requesters = vec!["alice".to_string()];
+        let people = LifecycleTitlePeople {
+            requester_user_ids: Some(&requesters),
+            requested_at: None,
+            usernames: &names,
+        };
+        // Twelve episodes in three seasons; the last has not aired.
+        let dates: Vec<Option<&str>> = (0..11)
+            .map(|_| Some("2024-01-01"))
+            .chain([Some("2099-01-01")])
+            .collect();
+        let all = scoped_title(&dates);
+        let mut subjects = vec![all.clone()];
+        for season in 0..3 {
+            let mut subject = scoped_season(&[]);
+            subject.id = format!("season-{season}");
+            subject.episodes = all.episodes[season * 4..season * 4 + 4].to_vec();
+            subjects.push(subject);
+        }
+        for episode in &all.episodes {
+            let mut subject = scoped_season(&[]);
+            subject.kind = scryer_domain::LifecycleRuleSubjectKind::Episode;
+            subject.id = episode.id.clone();
+            subject.episodes = vec![episode.clone()];
+            subjects.push(subject);
+        }
+
+        let mut signals = Vec::new();
+        for episode in 0..8 {
+            signals.push(episode_signal(episode, Some("alice"), true));
+        }
+        for episode in [0, 1, 2, 3, 5, 9] {
+            let mut row = episode_signal(episode, Some("bob"), true);
+            row.last_played_at = row
+                .last_played_at
+                .map(|at| at + chrono::Duration::days(episode as i64));
+            signals.push(row);
+        }
+        // An unplayed row, a play with no time, a play Scryer cannot place,
+        // and a play a connection this run does not observe left behind.
+        signals.push(episode_signal(8, Some("alice"), false));
+        let mut untimed = episode_signal(10, Some("bob"), true);
+        untimed.last_played_at = None;
+        signals.push(untimed);
+        let mut unplaced = episode_signal(0, Some("bob"), true);
+        unplaced.scryer_episode_id = None;
+        signals.push(unplaced);
+        let mut retired = episode_signal(9, Some("alice"), true);
+        retired.connection_id = "connection-retired".to_string();
+        signals.push(retired);
+
+        let mut audience = Vec::new();
+        for (episode, account, count) in [(0, "guest", 3), (0, "kid", 2), (6, "guest", 1)] {
+            let mut play = audience_row(
+                ENABLED_CONNECTION,
+                account,
+                Some(episode),
+                Some("2026-02-01T00:00:00Z"),
+            );
+            play.play_count = count;
+            audience.push(play);
+        }
+        let mut negative = audience_row(ENABLED_CONNECTION, "odd", Some(4), None);
+        negative.play_count = -5;
+        audience.push(negative);
+        audience.push(audience_row(
+            "connection-retired",
+            "guest",
+            Some(7),
+            Some("2026-03-01T00:00:00Z"),
+        ));
+        audience.push(audience_row(
+            ENABLED_CONNECTION,
+            "guest",
+            None,
+            Some("2026-03-01T00:00:00Z"),
+        ));
+
+        let watch = LifecycleTitleWatch {
+            context: &context,
+            signals: Some(&signals),
+            audience: Some(&audience),
+        };
+        let grouped = LifecycleEpisodeWatchIndex::new(watch);
+        let evaluation_time = Utc::now();
+        let mut play_counts = Vec::new();
+        for subject in &subjects {
+            let build = |by_episode| {
+                serde_json::to_value(build_subject_input_with_episode_watch(
+                    evaluation_time,
+                    &title,
+                    &library(),
+                    subject,
+                    people,
+                    watch,
+                    by_episode,
+                    LifecycleTitleClaims::none(),
+                    &[],
+                    None,
+                ))
+                .expect("input serializes")
+            };
+            let shared = build(Some(&grouped));
+            assert_eq!(shared, build(None), "{}", subject.id);
+
+            // The same two facts, restated as a scan of every play.
+            let in_scope = |episode_id: Option<&str>| {
+                episode_id.is_some_and(|id| subject.episodes.iter().any(|episode| episode.id == id))
+            };
+            let plays: i64 = audience
+                .iter()
+                .filter(|play| play.connection_id == ENABLED_CONNECTION)
+                .filter(|play| in_scope(play.scryer_episode_id.as_deref()))
+                .map(|play| play.play_count.max(0))
+                .sum();
+            assert_eq!(shared["facts"]["play_count_total"], plays, "{}", subject.id);
+            play_counts.push(plays);
+            let aired =
+                |episode_id: Option<&str>| in_scope(episode_id) && episode_id != Some("episode-11");
+            let anyone = signals
+                .iter()
+                .filter(|signal| signal.connection_id == ENABLED_CONNECTION && signal.played)
+                .any(|signal| aired(signal.scryer_episode_id.as_deref()))
+                || audience
+                    .iter()
+                    .filter(|play| play.connection_id == ENABLED_CONNECTION)
+                    .any(|play| aired(play.scryer_episode_id.as_deref()));
+            assert_eq!(
+                shared["facts"]["watched_by_anyone"], anyone,
+                "{}",
+                subject.id
+            );
+        }
+        assert_eq!(play_counts[..4], [6, 5, 1, 0]);
+
+        // Alice finished the first two seasons, Bob only the first.
+        let season = |index: usize| {
+            serde_json::to_value(build_subject_input_with_episode_watch(
+                evaluation_time,
+                &title,
+                &library(),
+                &subjects[index],
+                people,
+                watch,
+                Some(&grouped),
+                LifecycleTitleClaims::none(),
+                &[],
+                None,
+            ))
+            .expect("input serializes")
+        };
+        assert_eq!(
+            season(1)["facts"]["watched_by_user_ids"],
+            serde_json::json!(["alice", "bob"])
+        );
+        assert_eq!(
+            season(2)["facts"]["watched_by_user_ids"],
+            serde_json::json!(["alice"])
+        );
+        assert_eq!(
+            season(3)["facts"]["watched_by_user_ids"],
+            serde_json::json!([])
+        );
     }
 }

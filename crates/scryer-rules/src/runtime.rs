@@ -124,15 +124,21 @@ pub(crate) fn bounded_input_document<T: Serialize + ?Sized>(
     // The document is then built straight from the input: for the bounded
     // families' inputs, which hold no `f32` and no raw JSON, that is the value
     // reading the text back would give.
-    let mut counter = ByteCounter(0);
-    serde_json::to_writer(&mut counter, input)?;
-    if counter.0 > limits.max_input_bytes {
+    let size = serialized_len(input)?;
+    if size > limits.max_input_bytes {
         return Err(RulesError::InputTooLarge {
-            size: counter.0,
+            size,
             limit: limits.max_input_bytes,
         });
     }
     Ok(serde_json::to_value(input)?)
+}
+
+/// The length of a value's serialized text, counted without keeping it.
+pub(crate) fn serialized_len<T: Serialize + ?Sized>(value: &T) -> Result<usize, RulesError> {
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.0)
 }
 
 /// Counts the bytes written to it and keeps none.
