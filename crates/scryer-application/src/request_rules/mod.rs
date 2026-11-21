@@ -62,7 +62,7 @@ pub use facts::{
     content_ratings_age_rating, content_ratings_us_certification_label, snapshot_age_rating,
     us_certification_label,
 };
-pub use preflight::RequestPreflight;
+pub use preflight::{RequestPreflight, StagedRequestMetadata};
 pub use read_model::{
     MediaRequestPolicyFacts, MediaRequestPolicySelection, RequestRuleDecisionView,
 };

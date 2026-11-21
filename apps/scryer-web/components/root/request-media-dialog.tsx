@@ -21,6 +21,8 @@ import {
 } from "@/lib/utils/default-monitor-type";
 import { requestDialogLibraryId } from "@/lib/utils/request-dialog-library";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
+import { stageMyRequestMetadataMutation } from "@/lib/graphql/mutations";
+import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
 import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
 import {
   catalogAudioLanguagesForSubmit,
@@ -316,6 +318,53 @@ export function RequestMediaDialog({
     );
   }, [open, requestProfileOptions, selectedLibrary]);
 
+  /// Have the server read this item's metadata once, when the dialog opens on
+  /// it. Every preview below and the submit then read that one record, so the
+  /// preview waits for this to settle and never fetches metadata itself.
+  ///
+  /// The staged record belongs to the item, not the library: the library only
+  /// says where the requester may ask, so switching library does not stage
+  /// again. A failure settles too. The preview then reports the metadata as
+  /// unavailable, which is the answer the submit would reach.
+  const stagingForRef = React.useRef<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
+  const [stagedFor, setStagedFor] = React.useState<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
+  const stagingLibraryId = selectedLibrary?.id ?? "";
+  React.useEffect(() => {
+    if (!open) {
+      stagingForRef.current = null;
+      setStagedFor(null);
+      return;
+    }
+    if (!stagingLibraryId) return;
+    const staging = stagingForRef.current;
+    if (staging && staging.facet === facet && staging.result === result) return;
+    const subject = { facet, result };
+    stagingForRef.current = subject;
+    const settle = () => {
+      if (stagingForRef.current === subject) setStagedFor(subject);
+    };
+    void client
+      .mutation(stageMyRequestMetadataMutation, {
+        input: {
+          libraryId: stagingLibraryId,
+          facet,
+          externalIds: metadataResultExternalIds(result, facet),
+        },
+      })
+      .toPromise()
+      .then(settle, settle);
+  }, [client, facet, open, result, stagingLibraryId]);
+  const metadataStaged =
+    stagedFor !== null &&
+    stagedFor.facet === facet &&
+    stagedFor.result === result;
+
   /// Ask the server what would happen to this request, debounced on every
   /// choice that can change the answer. The query is the requester's own
   /// pre-flight: it never returns rule internals, and it never errors for an
@@ -324,7 +373,7 @@ export function RequestMediaDialog({
   /// A failure hides the banner entirely rather than blocking the dialog. The
   /// answer is a courtesy; the submit is the thing that matters.
   React.useEffect(() => {
-    if (!open || !selectedLibrary || !qualityProfileId) {
+    if (!open || !selectedLibrary || !qualityProfileId || !metadataStaged) {
       setPreflight(null);
       return;
     }
@@ -374,6 +423,7 @@ export function RequestMediaDialog({
     canRequestMonitorType,
     client,
     facet,
+    metadataStaged,
     monitorSelection,
     monitorType,
     open,

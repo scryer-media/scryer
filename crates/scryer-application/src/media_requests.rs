@@ -335,10 +335,10 @@ impl AppUseCase {
                 .as_ref()
                 .expect("movie selection checked above")
                 .series_movies[0];
-            self.enrich_request_draft(&MediaFacet::Movie, movie.external_ids.clone())
+            self.stage_request_metadata(&MediaFacet::Movie, movie.external_ids.clone(), false)
                 .await
         } else {
-            self.enrich_request_draft(&input.facet, external_ids.clone())
+            self.stage_request_metadata(&input.facet, external_ids.clone(), false)
                 .await
         };
         if !list_movie {
@@ -2339,7 +2339,11 @@ fn series_title_ref_from_external_ids(
     .then_some(series_ref)
 }
 
-#[derive(Clone, Debug)]
+/// The metadata one SMG read established for a request subject, in the shape
+/// a request keeps: what the request row stores and what the request rules
+/// read. It is staged in the store once per subject, and every preview and
+/// submit reads that staged record.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MediaRequestMetadataEnrichment {
     pub(crate) external_ids: Vec<ExternalId>,
     pub(crate) poster_url: Option<String>,
@@ -2354,7 +2358,7 @@ impl MediaRequestMetadataEnrichment {
     /// The enrichment we fall back to when SMG could not be reached or the subject could not be
     /// identified. It keeps today's behaviour for poster/overview/ratings (all absent, so the
     /// caller's own input wins) and says so explicitly in the snapshot.
-    fn unavailable(external_ids: Vec<ExternalId>, reason: &str) -> Self {
+    pub(crate) fn unavailable(external_ids: Vec<ExternalId>, reason: &str) -> Self {
         let mut snapshot = MediaRequestMetadataSnapshot::unavailable(reason);
         snapshot.captured_at = Some(Utc::now());
         Self {
@@ -2366,14 +2370,37 @@ impl MediaRequestMetadataEnrichment {
             snapshot,
         }
     }
+
+    /// True when nothing could be established for the subject.
+    fn is_unavailable(&self) -> bool {
+        self.snapshot
+            .is_missing(crate::media_requests::snapshot::SNAPSHOT_GROUP_ALL)
+    }
 }
 
-/// Cache key for one enrichment: the facet plus the request's normalized external identifiers.
-/// Sorted and joined so two drafts naming the same subject in a different order share one entry.
-pub(crate) fn media_request_enrichment_cache_key(
-    facet: &MediaFacet,
-    external_ids: &[ExternalId],
-) -> String {
+/// How long a staged record answers for its subject. Within it a preview, the
+/// submit that follows and a later request for the same subject read one SMG
+/// answer; after it the next staging asks SMG again, so a metadata correction
+/// reaches new requests within a day.
+pub const STAGED_REQUEST_METADATA_FRESH_FOR: chrono::Duration = chrono::Duration::hours(24);
+
+/// How long a staged record that established nothing answers. Long enough
+/// that a preview and the submit that follows it read the same outage; short
+/// enough that an SMG outage does not hold every later request for the
+/// subject once SMG is back.
+pub const STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR: chrono::Duration =
+    chrono::Duration::minutes(5);
+
+/// How long a staged record is kept before housekeeping removes it. A request
+/// row carries its own copy, so nothing reads a record this old.
+pub const STAGED_REQUEST_METADATA_RETENTION: chrono::Duration = chrono::Duration::days(7);
+
+/// The snapshot source of a preview whose subject was never staged.
+pub const SNAPSHOT_SOURCE_NOT_STAGED: &str = "not_staged";
+
+/// Staging key for one subject: the facet plus the request's normalized external identifiers.
+/// Sorted and joined so two drafts naming the same subject in a different order share one record.
+pub(crate) fn media_request_staging_key(facet: &MediaFacet, external_ids: &[ExternalId]) -> String {
     let mut parts = external_ids
         .iter()
         .map(|external_id| {
@@ -2390,30 +2417,92 @@ pub(crate) fn media_request_enrichment_cache_key(
 }
 
 impl AppUseCase {
-    /// Enrich a request draft, reading through the in-process enrichment cache.
+    /// The metadata staged for a subject, when a record exists and is still
+    /// fresh. Reads the store only: it never asks SMG and never writes, so a
+    /// preview can call it on every change. `None` covers a subject never
+    /// staged, a stale record, an unreadable one and a store that could not
+    /// be read. A record that established nothing goes stale within minutes,
+    /// so an SMG outage is not remembered for the subject's whole window.
+    pub(crate) async fn staged_request_metadata(
+        &self,
+        facet: &MediaFacet,
+        external_ids: &[ExternalId],
+    ) -> Option<MediaRequestMetadataEnrichment> {
+        let key = media_request_staging_key(facet, external_ids);
+        let record = match self
+            .services
+            .catalog
+            .media_requests
+            .staged_metadata(&key)
+            .await
+        {
+            Ok(record) => record?,
+            Err(error) => {
+                tracing::warn!(error = %error, "staged request metadata could not be read");
+                return None;
+            }
+        };
+        let age = Utc::now() - record.staged_at;
+        if age >= STAGED_REQUEST_METADATA_FRESH_FOR {
+            return None;
+        }
+        let staged: MediaRequestMetadataEnrichment =
+            serde_json::from_str(&record.payload_json).ok()?;
+        if staged.is_unavailable() && age >= STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR {
+            return None;
+        }
+        Some(staged)
+    }
+
+    /// Stage a subject's metadata: answer from the fresh staged record when
+    /// there is one, otherwise make the one SMG read and store what it
+    /// returned, a failure included.
     ///
-    /// Pre-flight evaluation and the eventual submit both go through here, so a requester who
-    /// previews a decision and then submits it is judged against **one** SMG read (FR-021) — and
-    /// SMG sees one call, not one per keystroke-debounce.
-    pub(crate) async fn enrich_request_draft(
+    /// A failure is stored too, and deliberately: a preview that said
+    /// "metadata unavailable, will need approval" must not become an
+    /// auto-approval seconds later because the submit caught SMG on a good
+    /// beat. `retry_unavailable` is for the requester's own staging step,
+    /// which asks SMG again rather than reuse a record that established
+    /// nothing; a submit never retries, so it agrees with its preview.
+    ///
+    /// It does not single-flight: two simultaneous first stagings of one
+    /// subject both reach SMG and the later write wins. That is a duplicate
+    /// read, never a wrong answer.
+    pub(crate) async fn stage_request_metadata(
         &self,
         facet: &MediaFacet,
         external_ids: Vec<ExternalId>,
+        retry_unavailable: bool,
     ) -> MediaRequestMetadataEnrichment {
-        let key = media_request_enrichment_cache_key(facet, &external_ids);
-        if let Some(cached) = self.runtime.catalog.media_request_enrichment.get(&key) {
-            return (*cached).clone();
+        if let Some(staged) = self.staged_request_metadata(facet, &external_ids).await
+            && !(retry_unavailable && staged.is_unavailable())
+        {
+            return staged;
         }
+        let key = media_request_staging_key(facet, &external_ids);
         let enrichment = self
             .enrich_media_request_metadata(facet, external_ids)
             .await;
-        // Failures are cached too, and deliberately: a preview that said "metadata unavailable —
-        // will need approval" must not become an auto-approval seconds later just because the
-        // submit happened to catch SMG on a good beat. FR-021 is about agreement, not optimism.
-        self.runtime
-            .catalog
-            .media_request_enrichment
-            .insert(key, std::sync::Arc::new(enrichment.clone()));
+        match serde_json::to_string(&enrichment) {
+            Ok(payload_json) => {
+                if let Err(error) = self
+                    .services
+                    .catalog
+                    .media_requests
+                    .stage_metadata(&crate::StagedMediaRequestMetadata {
+                        staging_key: key,
+                        payload_json,
+                        staged_at: Utc::now(),
+                    })
+                    .await
+                {
+                    tracing::warn!(error = %error, "request metadata could not be staged");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "request metadata could not be serialized");
+            }
+        }
         enrichment
     }
 

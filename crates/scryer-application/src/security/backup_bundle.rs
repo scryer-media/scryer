@@ -1036,6 +1036,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "request_rule_decisions",
         classification: BackupTableClassification::Export,
     },
+    // Staged request metadata is a short-lived copy of an SMG read; a
+    // request row carries its own, and a restored instance stages again.
+    BackupTableCatalogEntry {
+        table: "media_request_staged_metadata",
+        classification: BackupTableClassification::Rebuild,
+    },
     // Which rule sets voted on each decision, written with the decision and
     // read for a rule set's decision count; it goes with the trace.
     BackupTableCatalogEntry {

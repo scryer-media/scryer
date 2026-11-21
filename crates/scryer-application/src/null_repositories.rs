@@ -3549,6 +3549,25 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         Ok(None)
     }
 
+    async fn staged_metadata(
+        &self,
+        _staging_key: &str,
+    ) -> AppResult<Option<crate::StagedMediaRequestMetadata>> {
+        Ok(None)
+    }
+
+    async fn stage_metadata(&self, _record: &crate::StagedMediaRequestMetadata) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn delete_staged_metadata_before(
+        &self,
+        _cutoff: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<usize> {
+        Ok(0)
+    }
+
     /// A no-op rather than a refusal: the caller has already submitted the
     /// request and is only stamping provenance onto it, and a null repository
     /// has no row to stamp. Failing here would turn "no store configured" into

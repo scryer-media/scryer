@@ -512,6 +512,9 @@ pub(super) struct MockMediaRequestRepo {
     pub(super) fail_approvals: AtomicBool,
     pub(super) requests: Arc<Mutex<Vec<MediaRequest>>>,
     pub(super) domain_events: Option<Arc<MockDomainEventRepo>>,
+    /// The staged request metadata, by staging key.
+    pub(super) staged_metadata:
+        Arc<std::sync::Mutex<HashMap<String, crate::StagedMediaRequestMetadata>>>,
 }
 
 impl MockMediaRequestRepo {
@@ -520,6 +523,7 @@ impl MockMediaRequestRepo {
             titles: None,
             requests: Arc::new(Mutex::new(Vec::new())),
             domain_events: Some(domain_events),
+            staged_metadata: Arc::default(),
             fail_policy_tag_rewrites: AtomicBool::new(false),
             fail_approvals: AtomicBool::new(false),
         }
@@ -1012,6 +1016,44 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 .then_with(|| right.id.cmp(&left.id))
         });
         Ok(history)
+    }
+
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<crate::StagedMediaRequestMetadata>> {
+        Ok(self
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .get(staging_key)
+            .cloned())
+    }
+
+    async fn stage_metadata(&self, record: &crate::StagedMediaRequestMetadata) -> AppResult<()> {
+        self.staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .insert(record.staging_key.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: chrono::DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize> {
+        let mut staged = self.staged_metadata.lock().expect("staged metadata lock");
+        let stale: Vec<String> = staged
+            .values()
+            .filter(|record| record.staged_at < cutoff)
+            .take(limit)
+            .map(|record| record.staging_key.clone())
+            .collect();
+        for key in &stale {
+            staged.remove(key);
+        }
+        Ok(stale.len())
     }
 
     async fn latest_request_at_for_user(

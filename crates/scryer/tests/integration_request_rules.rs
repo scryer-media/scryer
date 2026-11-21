@@ -941,6 +941,61 @@ async fn the_requester_preflight_returns_an_outcome_without_any_rule_internals()
     );
 }
 
+#[tokio::test]
+async fn staging_a_subject_lets_the_preflight_read_its_metadata_and_needs_request_permission() {
+    let ctx = TestContext::new().await;
+    let requester = requester(&ctx, "staging-requester").await;
+    mount_title_id_metadata(&ctx).await;
+    let preview = "query($input: SubmitMediaRequestInput!) {
+        previewMyRequestDecision(input: $input) { outcome metadataPartial }
+    }";
+    let stage = "mutation($input: StageMediaRequestMetadataInput!) {
+        stageMyRequestMetadata(input: $input) { metadataPartial }
+    }";
+    let submit = submit_input(None);
+    let stage_input = json!({ "input": {
+        "libraryId": submit["libraryId"],
+        "facet": submit["facet"],
+        "externalIds": submit["externalIds"],
+    }});
+
+    // Nothing staged: the preview answers, and says the metadata is not there.
+    let unstaged = gql_as(&ctx, preview, json!({ "input": submit }), &requester).await;
+    assert_no_errors(&unstaged);
+    assert_eq!(
+        unstaged["data"]["previewMyRequestDecision"]["metadataPartial"],
+        json!(true)
+    );
+
+    let staged = gql_as(&ctx, stage, stage_input.clone(), &requester).await;
+    assert_no_errors(&staged);
+    assert_eq!(
+        staged["data"]["stageMyRequestMetadata"]["metadataPartial"],
+        json!(false)
+    );
+
+    let previewed = gql_as(&ctx, preview, json!({ "input": submit }), &requester).await;
+    assert_no_errors(&previewed);
+    assert_eq!(
+        previewed["data"]["previewMyRequestDecision"]["metadataPartial"],
+        json!(false),
+        "the preview reads the record the staging step stored"
+    );
+
+    let stranger = user_with(
+        &ctx,
+        "no-request-permission-staging",
+        AppPermissionMask::NONE,
+        LibraryPermissionMask::from_permissions([LibraryPermission::View]),
+    )
+    .await;
+    let refused = gql_as(&ctx, stage, stage_input, &stranger).await;
+    assert!(
+        refused.get("errors").is_some(),
+        "a user who may not request may not stage: {refused}"
+    );
+}
+
 // ===========================================================================
 // 6. Enabling a rule
 // ===========================================================================
