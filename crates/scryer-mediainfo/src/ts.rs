@@ -611,7 +611,9 @@ fn parse_descriptor_language(data: &[u8]) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Like FFmpeg, a later Dolby Vision descriptor replaces an earlier one.
 fn extract_dovi_config(descriptors: &[u8]) -> Option<Vec<u8>> {
+    let mut record = None;
     let mut pos = 0;
     while pos + 2 <= descriptors.len() {
         let tag = descriptors[pos];
@@ -630,7 +632,7 @@ fn extract_dovi_config(descriptors: &[u8]) -> Option<Vec<u8>> {
             }
 
             let compat_and_compression = data.get(cursor).copied().unwrap_or(0);
-            return Some(vec![
+            record = Some(vec![
                 data[0],
                 data[1],
                 data[2],
@@ -641,7 +643,7 @@ fn extract_dovi_config(descriptors: &[u8]) -> Option<Vec<u8>> {
 
         pos = desc_end;
     }
-    None
+    record
 }
 
 // ---------------------------------------------------------------------------
@@ -2487,6 +2489,47 @@ mod tests {
         ];
         let dovi = extract_dovi_config(&descriptors).unwrap();
         assert_eq!(dovi, vec![1, 0, 0b0000_1111, 0b0001_1101, 0b1011_0000]);
+    }
+
+    #[test]
+    fn dovi_descriptor_without_base_layer_skips_dependency_pid() {
+        // Profile 7 enhancement-layer stream: bl_present 0, then a 13-bit dependency_pid
+        // (0x1011) with 3 reserved bits, then compatibility id 6.
+        let descriptors = [
+            DOVI_VIDEO_STREAM_DESCRIPTOR,
+            7,
+            1,
+            0,
+            0x0E,
+            0x36,
+            0x80,
+            0x8F,
+            0x60,
+        ];
+        let dovi = extract_dovi_config(&descriptors).unwrap();
+        assert_eq!(dovi, vec![1, 0, 0x0E, 0x36, 0x60]);
+
+        // Without a trailing compatibility byte the id defaults to 0.
+        let mut short = descriptors;
+        short[1] = 6;
+        let dovi = extract_dovi_config(&short[..8]).unwrap();
+        assert_eq!(dovi, vec![1, 0, 0x0E, 0x36, 0x00]);
+    }
+
+    #[test]
+    fn last_dovi_descriptor_wins_and_short_ones_are_ignored() {
+        let profile_7 = [DOVI_VIDEO_STREAM_DESCRIPTOR, 5, 1, 0, 0x0E, 0x37, 0x60];
+        let profile_8 = [DOVI_VIDEO_STREAM_DESCRIPTOR, 5, 1, 0, 0x10, 0x35, 0x10];
+        let short = [DOVI_VIDEO_STREAM_DESCRIPTOR, 3, 1, 0, 0x10];
+        assert_eq!(
+            extract_dovi_config(&[profile_7, profile_8].concat()),
+            Some(vec![1, 0, 0x10, 0x35, 0x10])
+        );
+        assert_eq!(
+            extract_dovi_config(&[&profile_7[..], &short[..]].concat()),
+            Some(vec![1, 0, 0x0E, 0x37, 0x60])
+        );
+        assert_eq!(extract_dovi_config(&short), None);
     }
 
     #[test]

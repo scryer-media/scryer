@@ -19,7 +19,7 @@ const en: LocaleDictionary = {
   "pendingImports.conflict.sampledFiles":
     "Only a sample of paths is shown; the counts include all files.",
   "pendingImports.conflict.ownershipHelp":
-    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders.",
+    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders, or use Fix Match if this folder belongs to a different title.",
   "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
     "Select pending folder conflicts to resolve.",
   "error.reason.LOCATION_CONFLICT_NOT_FOUND":
@@ -206,6 +206,14 @@ const en: LocaleDictionary = {
     "API keys are not supported for WebSocket connections.",
   "error.reason.HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED":
     "Scryer web client proof is required for unauthenticated WebSocket access.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOST_INVALID":
+    "An allowed host name is invalid. Enter up to 64 host names without a scheme, port or path.",
+  "error.reason.SETTINGS_LOCAL_TRUST_HOSTS_WOULD_LOCK_OUT":
+    "This list leaves out the host name this page is using, so saving it would lock this page out. Add that name first.",
+  "error.reason.SETTINGS_LOCAL_TRUST_PROXY_LIST_EMPTY":
+    "Add a trusted proxy before trusting forwarded addresses only from trusted proxies.",
+  "error.reason.HTTP_LOCAL_TRUST_HOST_NOT_ALLOWED":
+    "Scryer was reached through a host name that is not on its allowed host names list.",
 
   "error.reason.PLUGIN_ARTIFACT_DESTINATION_FORBIDDEN":
     "The artifact URL resolves to a private or otherwise forbidden destination.",
@@ -243,6 +251,8 @@ const en: LocaleDictionary = {
     "Archive extractor required",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Archive extraction timed out",
+  "importHistory.skipReason.ARCHIVE_EXTRACTION_BLOCKED":
+    "Archive extraction failed on every attempt",
   "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
     "Title folder needs attention",
 
@@ -441,10 +451,10 @@ const en: LocaleDictionary = {
     "At least one indexer config field must be provided.",
   "error.reason.ACQUISITION_MAGNET_REQUIRES_TORRENT_PROTOCOL":
     "A magnet requires the torrent protocol.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
-    "Maintenance Search dispatch requires an accepted receipt intent.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
-    "Maintenance Search dispatch requires a preallocated job run id.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "Lifecycle Search dispatch requires an accepted receipt intent.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "Lifecycle Search dispatch requires a preallocated job run id.",
   "error.reason.ACQUISITION_MATCHED_TITLE_NO_LONGER_EXISTS_NOT_FOUND":
     "Matched title was not found.",
   "error.reason.ACQUISITION_MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING":
@@ -590,7 +600,7 @@ const en: LocaleDictionary = {
     "API key label must not contain control characters.",
   "error.reason.API_KEY_LABEL_REQUIRED": "API key label is required.",
   "error.reason.API_KEY_LABEL_TOO_LONG":
-    "API key label must not exceed the selected value characters.",
+    "API key label must not exceed 120 characters.",
   "error.reason.API_KEY_OWNER_DISABLED": "API key owner is disabled.",
   "error.reason.API_KEY_OWNER_NO_LONGER_EXISTS":
     "API key owner no longer exists.",
@@ -598,7 +608,7 @@ const en: LocaleDictionary = {
   "error.reason.APPLICATION_UPGRADE_APPLICATION_UPDATE_NOTICE_UNAVAILABLE":
     "The application update notice is not available.",
   "error.reason.APPLICATION_UPGRADE_BACKUP_ALREADY_EXISTS":
-    "Refusing to overwrite existing application backup the selected item.",
+    "Refusing to overwrite an existing application backup.",
   "error.reason.APPLICATION_UPGRADE_EXPECTEDTAG_DOES_NOT_MATCH_CURRENT_APPLICATION_UPDATE_NOTICE":
     "ExpectedTag does not match the current application update notice.",
   "error.reason.APPLICATION_UPGRADE_EXPECTEDTAG_REQUIRED":
@@ -614,13 +624,13 @@ const en: LocaleDictionary = {
   "error.reason.APPLICATION_UPGRADE_INSTALLER_DIGEST_INVALID":
     "Invalid installer digest.",
   "error.reason.APPLICATION_UPGRADE_INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE":
-    "Insufficient free space for application upgrade: need the selected value bytes, have the selected value bytes.",
+    "There is not enough free space for the application upgrade.",
   "error.reason.APPLICATION_UPGRADE_JOB_ALREADY_RUNNING":
     "An application upgrade job is already running.",
   "error.reason.APPLICATION_UPGRADE_JOURNAL_PHASE_UNSUPPORTED":
-    "Unsupported application upgrade journal phase the selected item.",
+    "The application upgrade journal records an unsupported phase.",
   "error.reason.APPLICATION_UPGRADE_JOURNAL_SCHEMA_UNSUPPORTED":
-    "Unsupported application upgrade journal schema the selected item.",
+    "The application upgrade journal uses an unsupported schema.",
   "error.reason.APPLICATION_UPGRADE_NO_APPLICATION_UPDATE_NOTICE_UNAVAILABLE":
     "No application update notice is available.",
   "error.reason.APPLICATION_UPGRADE_RUNNING_EXECUTABLE_NO_PARENT_DIRECTORY":
@@ -660,15 +670,15 @@ const en: LocaleDictionary = {
     "Collection type is required.",
   "error.reason.CATALOG_COLLECTION_TYPE_UNKNOWN": "Unknown collection type.",
   "error.reason.CATALOG_CONFIGURED_QUALITY_PROFILE_MISSING_CATALOG":
-    "Configured quality profile the selected item from the selected value is missing from the catalog.",
+    "A configured quality profile is missing from the catalog.",
   "error.reason.CATALOG_DELETE_PREVIEW_CONFIRMATION_REQUIRED_BEFORE_DELETING_FILES_DISK":
     "Delete preview confirmation is required before deleting files on disk.",
   "error.reason.CATALOG_DOWNLOAD_ALREADY_QUEUED_TITLE":
     "A download is already queued for this title.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_DISABLED":
-    "Download client the selected value is disabled.",
+    "The selected download client is disabled.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_DOES_NOT_EXIST":
-    "Download client the selected value does not exist.",
+    "The selected download client does not exist.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_UNAVAILABLE":
     "Selected download client is not eligible.",
   "error.reason.CATALOG_EPISODE_FIELD_REQUIRED":
@@ -685,17 +695,18 @@ const en: LocaleDictionary = {
   "error.reason.CATALOG_EXISTING_DOWNLOAD_NO_LONGER_SAFE_REPLACE":
     "The existing download is no longer safe to replace.",
   "error.reason.CATALOG_ID_ALREADY_ASSIGNED_TITLE":
-    "The requested value id the selected value is already assigned to title the selected value.",
-  "error.reason.CATALOG_INDEXER_UNKNOWN": "Unknown indexer the selected value.",
+    "This external id is already assigned to another title.",
+  "error.reason.CATALOG_INDEXER_UNKNOWN":
+    "One of the selected indexers is unknown.",
   "error.reason.CATALOG_INTERACTIVE_RELEASE_SEARCH_NOT_FOUND":
     "Interactive release search was not found.",
   "error.reason.CATALOG_LIBRARY_NOT_FOUND": "Library was not found.",
   "error.reason.CATALOG_LISTED_BOTH_ADD_REMOVE":
-    "The selected item is listed both to add and to remove; choose one.",
+    "A tag is listed both to add and to remove; choose one.",
   "error.reason.CATALOG_MAGNET_LINK_NO_FILE_DOWNLOAD":
-    "The requested value is a magnet link and has no file to download.",
+    "This release is a magnet link and has no file to download.",
   "error.reason.CATALOG_MEDIA_FILE_DELETION_ALREADY_RUNNING":
-    "A media file deletion is already running for the selected value.",
+    "A deletion is already running for this media file.",
   "error.reason.CATALOG_MEDIA_FILE_NOT_FOUND": "Media file was not found.",
   "error.reason.CATALOG_METADATA_LANGUAGE_INVALID":
     "Metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces, or rus.",
@@ -704,7 +715,7 @@ const en: LocaleDictionary = {
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_ONLY_VALID_MOVIE_TITLES":
     "Minimum availability is only valid for movie titles.",
   "error.reason.CATALOG_MOST_RELEASES_DOWNLOADED_ONCE":
-    "At most the selected value releases can be downloaded at once.",
+    "At most 50 releases can be downloaded at once.",
   "error.reason.CATALOG_MOVIE_ENTITY_NOT_FOUND": "Movie entity was not found.",
   "error.reason.CATALOG_MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND":
     "Movie metadata response missing title was not found.",
@@ -713,13 +724,13 @@ const en: LocaleDictionary = {
   "error.reason.CATALOG_MOVIE_TITLE_DOES_NOT_CANONICAL_FOLDER_PATH":
     "Movie title does not have a canonical folder path.",
   "error.reason.CATALOG_NOT_DEFINED_TAG":
-    "The selected item is not a defined tag; an administrator has to add it in Settings before it can be applied.",
+    "This is not a defined tag; an administrator has to add it in Settings before it can be applied.",
   "error.reason.CATALOG_NO_QUALITY_PROFILE_NOT_CONFIGURED":
     "No quality profile is configured; choose a global, category, library, or title profile.",
   "error.reason.CATALOG_NO_USABLE_DOWNLOAD_SOURCE":
-    "The requested value has no usable download source.",
+    "This release has no usable download source.",
   "error.reason.CATALOG_PENDING_RENAME_REFERS_MISSING_TITLE_TAG":
-    "Pending rename refers to missing title tag the selected value.",
+    "A pending rename refers to a title tag that no longer exists.",
   "error.reason.CATALOG_PRIMARY_MOVIE_FILE_ONLY_SET_MOVIE_TITLES_SERIES_MOVIE_FILES_EPISODE_FILES":
     "Primary movie file can only be set for movie titles, series movie files, or episode files.",
   "error.reason.CATALOG_PROVIDE_EXACTLY_ONE_TITLE_ID_QUERY":
@@ -753,7 +764,7 @@ const en: LocaleDictionary = {
     "Series movie searches cannot include season or episode.",
   "error.reason.CATALOG_SMG_ID_OUT_OF_RANGE": "Smg id must be positive.",
   "error.reason.CATALOG_SMG_NO_SERIES_NOT_FOUND":
-    "The requested value: SMG has no series for title id the selected value.",
+    "SMG has no series for this title.",
   "error.reason.CATALOG_SNAPSHOT_JSON_COLUMN_INVALID": "Invalid snapshot JSON.",
   "error.reason.CATALOG_SNAPSHOT_TITLE_MISSING_AMBIGUOUS":
     "Snapshot title is missing or ambiguous.",
@@ -762,9 +773,9 @@ const en: LocaleDictionary = {
   "error.reason.CATALOG_TAG_ADD_REMOVE_REQUIRED":
     "At least one tag to add or remove must be provided.",
   "error.reason.CATALOG_TITLES_NO_SERIES_METADATA":
-    "The requested value titles have no series metadata.",
+    "Titles of this type have no series metadata.",
   "error.reason.CATALOG_TITLE_CARRY_MOST_TAGS":
-    "A title can carry at most the selected value tags; this change would leave it with the selected value.",
+    "A title can carry at most 50 tags; this change would leave it with more.",
   "error.reason.CATALOG_TITLE_FACET_UNSUPPORTED": "Unsupported title facet.",
   "error.reason.CATALOG_TITLE_FIELD_REQUIRED":
     "At least one title field must be provided.",
@@ -773,56 +784,50 @@ const en: LocaleDictionary = {
   "error.reason.CATALOG_TITLE_NAME_REQUIRED": "Title name is required.",
   "error.reason.CATALOG_TITLE_REQUIRED": "At least one title must be provided.",
   "error.reason.CATALOG_TITLE_TAG_CHANGED_WHILE_RENAME_PENDING":
-    "Title tag the selected value changed while its rename was pending.",
+    "A title tag changed while its rename was pending.",
   "error.reason.CATALOG_TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES":
     "Too many concurrent interactive searches.",
   "error.reason.CATALOG_TVDB_ID_INVALID": "Tvdb id must be numeric.",
   "error.reason.CONFIGURATION_CANDIDATE_EXPECTED_STATES_REQUIRED":
     "A candidate transition must name the states it expects.",
-  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
-    "A maintenance action step finish must carry an attempt result.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
-    "Maintenance rule already has an active candidate for title.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
-    "Maintenance sequence progress accepts at most 100 candidates per page.",
-  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
-    "Invalid maintenance completion limit.",
-  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
-    "A generic maintenance job dispatch must begin in dispatching state.",
-  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
-    "Failed maintenance sequence marker lacks its failed step id.",
-  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
-    "Invalid maintenance held-attempt release.",
-  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
-    "Accepted maintenance job receipts require a real job run id.",
-  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
-    "Maintenance sequence membership is terminal until a confirmed no-match.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
-    "A maintenance job receipt transition must name expected states.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
-    "Maintenance sequence receipt projection accepts at most 700 steps.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
-    "Maintenance held-attempt release lacks a reason.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
-    "A retried maintenance action step must advance its attempt.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
-    "This maintenance rule has live candidates or action history; disable it instead.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
-    "Maintenance action step does not match its persisted sequence identity.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
-    "A maintenance action step claim must start a non-negative running attempt.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
-    "Failed maintenance sequence marker does not preserve its step prefix.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
-    "A maintenance action step claim has an invalid target identity.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
-    "Successful maintenance sequence marker lacks complete step evidence.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
-    "Maintenance terminal marker does not match persisted step evidence.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
-    "Maintenance sequence terminal marker and candidate terminal state disagree.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
-    "Maintenance sequence terminal marker has invalid expected step ids.",
+  "error.reason.CONFIGURATION_LIFECYCLE_ATTEMPT_RESULT_REQUIRED":
+    "A lifecycle action step finish must carry an attempt result.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_ALREADY_ACTIVE":
+    "Lifecycle rule already has an active candidate for title.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
+    "Lifecycle sequence progress accepts at most 100 candidates per page.",
+  "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
+    "A generic lifecycle job dispatch must begin in dispatching state.",
+  "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
+    "Failed lifecycle sequence marker lacks its failed step id.",
+  "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
+    "Accepted lifecycle job receipts require a real job run id.",
+  "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
+    "Lifecycle sequence membership is terminal until a confirmed no-match.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "A lifecycle job receipt transition must name expected states.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
+    "Lifecycle sequence receipt projection accepts at most 700 steps.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "A retried lifecycle action step must advance its attempt.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
+    "This lifecycle rule has live candidates or action history; disable it instead.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SEQUENCE_IDENTITY_MISMATCH":
+    "Lifecycle action step does not match its persisted sequence identity.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_ATTEMPT_INVALID":
+    "A lifecycle action step claim must start a non-negative running attempt.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_PREFIX_MISMATCH":
+    "Failed lifecycle sequence marker does not preserve its step prefix.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_TARGET_INVALID":
+    "A lifecycle action step claim has an invalid target identity.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "Successful lifecycle sequence marker lacks complete step evidence.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_EVIDENCE_MISMATCH":
+    "Lifecycle terminal marker does not match persisted step evidence.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STATE_MISMATCH":
+    "Lifecycle sequence terminal marker and candidate terminal state disagree.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STEP_IDS_INVALID":
+    "Lifecycle sequence terminal marker has invalid expected step ids.",
   "error.reason.CONFIGURATION_PLUGIN_NOT_INSTALLED":
     "Plugin is no longer installed.",
   "error.reason.CONFIGURATION_PLUGIN_SETTINGS_PLUGIN_REQUIRED":
@@ -920,23 +925,23 @@ const en: LocaleDictionary = {
   "error.reason.DATASTORE_URL_SCHEME_UNSUPPORTED":
     "The datastore URL must use SQLite or PostgreSQL.",
   "error.reason.DISCOVERY_CONTEXT_CHANGE_TYPE_UNSUPPORTED":
-    "Unsupported discovery context change type the selected value.",
+    "A discovery context change type is not supported.",
   "error.reason.DISCOVERY_HOME_HERO_NOT_FOUND":
     "Discovery home hero was not found.",
   "error.reason.DISCOVERY_INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT":
-    "Discovery incremental reload resolves to the selected value changed subjects, above SMG limit the selected value.",
+    "The discovery incremental reload resolves to more than 250 changed subjects, above the SMG limit.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_PREVIOUS_SUBJECT_JSON":
-    "Pending discovery change the selected value has invalid previous subject JSON.",
+    "A pending discovery change has invalid previous subject JSON.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_RAW_SUBJECT_JSON":
-    "Pending discovery change the selected value has invalid raw subject JSON.",
+    "A pending discovery change has invalid raw subject JSON.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_RAW_SUBJECT_JSON":
-    "Pending discovery change the selected value is missing raw subject JSON.",
+    "A pending discovery change is missing its raw subject JSON.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_SUBJECT_KEY":
-    "Pending discovery change the selected value is missing subject key.",
+    "A pending discovery change is missing its subject key.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_REMATCH_MISSING_PREVIOUS_SUBJECT_KEY":
-    "Pending discovery rematch the selected value is missing previous subject key.",
+    "A pending discovery rematch is missing its previous subject key.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY":
-    "Pending discovery removal the selected value is missing subject key.",
+    "A pending discovery removal is missing its subject key.",
   "error.reason.DOWNLOAD_CLIENT_CONFIG_JSON_INVALID":
     "Invalid download client config JSON.",
   "error.reason.DOWNLOAD_PATH_MAPPING_DOWNLOAD_CLIENT_CONFIG_JSON_INVALID":
@@ -944,19 +949,19 @@ const en: LocaleDictionary = {
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_INVALID":
     "Remote_path_mappings must be a string.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_DUPLICATES_EXISTING_REMOTE_PATH_ROOT":
-    "Remote path mappings line the selected value duplicates an existing remote path root.",
+    "A remote path mapping line repeats a remote path that is already mapped.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_INVALID":
-    "Remote path mappings line the selected value must use REMOTE => LOCAL format.",
+    "Each remote path mapping line must use the REMOTE => LOCAL format.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_LOCAL_PATH_INVALID":
-    "Remote path mappings line the selected value local path must be absolute.",
+    "A remote path mapping's local path must be absolute.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_END_WHITESPACE":
-    "Remote path mappings line the selected value remote path cannot end with whitespace.",
+    "A remote path mapping's remote path cannot end with whitespace.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_START_WHITESPACE":
-    "Remote path mappings line the selected value remote path cannot start with whitespace.",
+    "A remote path mapping's remote path cannot start with whitespace.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_LOCAL_PATH":
-    "Remote path mappings line the selected value requires a local path.",
+    "A remote path mapping line is missing its local path.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_REMOTE_PATH":
-    "Remote path mappings line the selected value requires a remote path.",
+    "A remote path mapping line is missing its remote path.",
   "error.reason.EVENTS_ACTIVE_PLUGIN_INSTALL_PROGRESS_NOT_FOUND":
     "No active plugin install progress for was not found.",
   "error.reason.EVENTS_EPISODE_NOT_FOUND": "Episode was not found.",
@@ -967,13 +972,13 @@ const en: LocaleDictionary = {
   "error.reason.EXTERNAL_ACCOUNT_LINKED_ELSEWHERE":
     "This account is already linked to another user.",
   "error.reason.EXTERNAL_IMPORT_API_VERSION_EXPECTED_ONE_UNSUPPORTED":
-    "Unsupported the selected value API version the selected item; expected one of the selected value.",
+    "The external application's API version is not supported.",
   "error.reason.EXTERNAL_IMPORT_COULD_NOT_DETERMINE_VERSION":
-    "Could not determine the selected value version from the selected item.",
+    "Could not determine the version of the external application.",
   "error.reason.EXTERNAL_IMPORT_DID_NOT_REPORT_API_VERSION":
-    "The requested value did not report an API version.",
+    "The external application did not report an API version.",
   "error.reason.EXTERNAL_IMPORT_INVALID_HOST":
-    "The requested value has an invalid host.",
+    "The source URL has an invalid host.",
   "error.reason.EXTERNAL_IMPORT_SESSION_GONE":
     "The import session no longer exists. Connect again.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH":
@@ -981,25 +986,86 @@ const en: LocaleDictionary = {
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_INVALID":
     "The source URL is invalid.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
-    "The requested value must not include a query string or fragment.",
+    "The source URL must not include a query string or fragment.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNREACHABLE":
+    "Could not reach the source application. Check the URL and that it is running.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNAUTHORIZED":
+    "The source application rejected the API key.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RATE_LIMITED":
+    "Too many requests to the source application. Try again shortly.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_ENDPOINT_MISSING":
+    "The source application does not offer the expected API. Check the URL and its base path.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_UNEXPECTED_RESPONSE":
+    "The source application returned a response Scryer could not read.",
+  "error.reason.EXTERNAL_IMPORT_SOURCE_RESPONSE_TOO_LARGE":
+    "The source application returned more data than Scryer accepts.",
+  "error.reason.RULE_IMPORT_INVALID_REQUEST":
+    "This rule import request is not valid.",
+  "error.reason.RULE_IMPORT_REQUEST_CHANGED":
+    "This import was already started with a different source. Start a new import.",
+  "error.reason.RULE_IMPORT_NOT_OWNED":
+    "This rule import does not exist or belongs to another user.",
+  "error.reason.RULE_IMPORT_QUEUE_FULL":
+    "Too many rule imports are running. Wait for one to finish.",
+  "error.reason.RULE_IMPORT_API_KEY_REQUIRED":
+    "An API key is required for this source.",
+  "error.reason.RULE_IMPORT_TRANSLATOR_UNAVAILABLE":
+    "Scryer cannot convert rules from this source yet.",
+  "error.reason.RULE_IMPORT_FETCH_FAILED":
+    "Could not read the rules from the source application.",
+  "error.reason.RULE_IMPORT_TOO_MANY_ITEMS":
+    "The source has more rules than one import accepts.",
+  "error.reason.RULE_IMPORT_INTERRUPTED":
+    "The rule import was interrupted before it finished.",
+  "error.reason.RULE_IMPORT_ALREADY_EXISTS":
+    "A rule with this name already exists, so it was skipped.",
+  "error.reason.RULE_IMPORT_ITEM_FAILED": "This rule could not be imported.",
+  "error.reason.RULE_IMPORT_PROFILES_UNAVAILABLE":
+    "Some quality profiles could not be read from the source.",
+  "error.reason.RULE_IMPORT_TOO_MANY_PROFILE_SOURCES":
+    "The source refers to more connected applications than one import reads.",
+  "error.reason.RULE_IMPORT_FORMAT_UNTRANSLATABLE":
+    "This custom format uses conditions Scryer cannot convert, so no rule was saved.",
+  "error.reason.RULE_IMPORT_FORMAT_UNREADABLE":
+    "This custom format could not be read, so no rule was saved.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_UNMATCHED":
+    "Quality profiles score this format differently and Scryer cannot match some of them to one Scryer quality profile. The rule scores 0 until you review it.",
+  "error.reason.RULE_IMPORT_PLAN_FAILED":
+    "Scryer could not prepare the import from its own settings. No rules were saved.",
+  "error.reason.RULE_IMPORT_PROFILE_SCORES_APPLIED":
+    "The score follows the Scryer quality profile with the same name.",
+  "error.reason.RULE_IMPORT_FORMAT_UNSCORED":
+    "Every quality profile scores this format 0, so the rule scores 0.",
+  "error.reason.RULE_IMPORT_GROUP_UNTRANSLATABLE":
+    "This rule group could not be translated, so it was saved as a starter rule to finish by hand.",
+  "error.reason.MAINTAINERR_IMPORT_JSON_TOO_LARGE":
+    "Maintainerr returned more data than one import reads.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_JSON_INVALID":
+    "Maintainerr's rule groups could not be read.",
+  "error.reason.MAINTAINERR_IMPORT_CONSTANTS_JSON_INVALID":
+    "Maintainerr's rule catalogue could not be read.",
+  "error.reason.MAINTAINERR_IMPORT_GROUPS_TOO_MANY":
+    "Maintainerr holds more rule groups than one import accepts.",
+  "error.reason.MAINTAINERR_IMPORT_PROFILES_JSON_INVALID":
+    "The Sonarr or Radarr quality profiles Maintainerr returned could not be read.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
-    "Unsupported the selected value version the selected item; expected major the selected value or newer.",
+    "This version of the external application is not supported; a newer major version is required.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
     "Cannot claim a library root as a title folder.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE":
-    "Cannot compare folder the selected value with folder the selected value owned by title the selected value.",
+    "Cannot compare the folder with a folder owned by another title.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE":
-    "Cannot inspect folder the selected value owned by another title.",
+    "Cannot inspect a folder owned by another title.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_INSPECT_TITLE_FOLDER":
-    "Cannot inspect title folder the selected value.",
+    "Cannot inspect the title folder.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_RESOLVE_TITLE_FOLDER":
-    "Cannot resolve title folder the selected value.",
+    "Cannot resolve the title folder.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_ALREADY_OWNED_TITLE":
-    "Folder the selected value is already owned by title the selected value.",
+    "The folder is already owned by another title.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_NOT_TITLE_BOUNDARY":
-    "The recorded folder for the selected item is a library root, not a title folder; correct the title's folder first.",
+    "The title's recorded folder is a library root, not a title folder; correct the title's folder first.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_OVERLAPS_FOLDER_OWNED_TITLE":
-    "Folder the selected value overlaps the folder owned by title the selected value.",
+    "The folder overlaps a folder owned by another title.",
   "error.reason.FOLDER_OWNERSHIP_PATH_OUTSIDE_LIBRARY_ROOT":
     "Cannot claim a title folder outside its library roots.",
   "error.reason.FOLDER_OWNERSHIP_RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER":
@@ -1007,7 +1073,7 @@ const en: LocaleDictionary = {
   "error.reason.FOLDER_OWNERSHIP_RECYCLE_RESTORE_PATH_OUTSIDE_TITLE_S_CURRENT_OWNED_FOLDER":
     "Recycle restore path is outside the title's current owned folder; resolve the folder change before restoring.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
-    "Title the selected value already owns another folder.",
+    "This title already owns another folder.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
     "The title's folder changed while this was being saved. Reload and try again.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
@@ -1016,18 +1082,20 @@ const en: LocaleDictionary = {
     "The drive or volume of the title folder is missing.",
   "error.missingDriveNamed":
     "Title folder {{titleFolder}} cannot be reached: drive or volume {{missingDrive}} is missing.",
+  "error.unprovenLinkLeftBehindNamed":
+    "A link made at the destination could not be proven to be the source and could not be removed, so it is still at {{leftBehindPath}}. The source was preserved; check that path before trying again.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Title folder path is required.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":
-    "Configured media root the selected value is empty.",
+    "A configured media root is empty.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY":
-    "Configured media root the selected value is not a directory.",
+    "A configured media root is not a directory.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_SYMLINK":
-    "Configured media root the selected value is a symlink.",
+    "A configured media root is a symlink.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNAVAILABLE":
-    "Configured media root the selected value is unavailable.",
+    "A configured media root is unavailable.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNREADABLE":
-    "Configured media root the selected value is unreadable.",
+    "A configured media root is unreadable.",
   "error.reason.HTTP_API_EXPLORER_DISABLED": "API explorer is disabled.",
   "error.reason.HTTP_API_EXPLORER_MODE_DUPLICATE":
     "Duplicate API explorer access mode.",
@@ -1185,22 +1253,36 @@ const en: LocaleDictionary = {
     "Archive discovery entry limit exceeded.",
   "error.reason.IMPORT_ARCHIVE_ENTRY_ESCAPES_EXTRACTION_DIRECTORY":
     "Archive entry escapes extraction directory.",
+  "error.reason.ARCHIVE_EXTRACTION_IN_PROGRESS":
+    "The download's archives are being extracted; the import waits for them.",
+  "error.reason.ARCHIVE_EXTRACTION_WORKSPACE_OCCUPIED":
+    "The download's extraction folder holds something Scryer did not create for it; it is left in place.",
+  "error.reason.ARCHIVE_EXTRACTION_WAITING":
+    "An earlier extraction of the download's archives failed; the next attempt is not due yet.",
+  "error.reason.ARCHIVE_EXTRACTION_FAILED":
+    "The download's archives failed to extract; the import tries again later.",
+  "error.reason.ARCHIVE_EXTRACTION_TIMED_OUT":
+    "Extracting the download's archives took too long; the import tries again later.",
+  "error.reason.ARCHIVE_EXTRACTION_BLOCKED":
+    "The download's archives failed to extract on every attempt; retry the import to try again.",
+  "error.reason.BLOCKLIST_IMPORT_NOT_AN_UPGRADE":
+    "Downloaded, but the file was no better than the one already in the library. Blocked on every indexer so it is not downloaded again.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
-    "Archive extraction requires a resolved import destination before staging output for the selected value.",
+    "Archive extraction requires a resolved import destination before staging output.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
-    "Archive holds archives nested more than the selected value levels deep.",
+    "The archive holds archives nested more than 2 levels deep.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES":
-    "Archive holds more than the selected value nested archives.",
+    "The archive holds more than 16 nested archives.",
   "error.reason.IMPORT_ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING":
-    "Archive matched title the selected item but extracted workspace the selected value could not be moved to the selected value without copying.",
+    "The archive matched a title, but its extracted files could not be moved to the title's destination without copying.",
   "error.reason.IMPORT_ARCHIVE_OUTPUT_DIRECTORY_NOT_INSIDE_STAGING_WORKSPACE":
-    "Archive output directory the selected value is not inside the staging workspace.",
+    "The archive output directory is not inside the staging workspace.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_EXTRACTION":
-    "Archive plugin does not support the selected value extraction.",
+    "The archive plugin does not support extracting this archive format.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE":
     "Archive plugin manifest output is not a regular file.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH":
-    "Archive plugin manifest size mismatch for the selected value.",
+    "The archive plugin's manifest lists a different size for an extracted file.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_SYMLINK":
     "Archive plugin output contains a symlink.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_DIRECTORIES":
@@ -1210,15 +1292,15 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_FILES":
     "Archive plugin output contains too many files.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_EXCEEDS_BYTES":
-    "Archive plugin output exceeds the selected value bytes.",
+    "The archive plugin's output exceeds the 2 TiB limit.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_NOT_REGULAR_FILE":
     "Archive plugin output is not a regular file.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE":
     "Archive plugin output is too large.",
   "error.reason.IMPORT_ARCHIVE_REEXTRACTION_FAILED":
-    "Archive matched title the selected item but could not be re-extracted under the matched title destination.",
+    "The archive matched a title but could not be extracted again under the title's destination.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_LIES_INSIDE_OWN_EXTRACTION_OUTPUT":
-    "Archive source the selected value lies inside its own extraction output.",
+    "The archive source lies inside its own extraction output.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY":
     "Archive source metadata escapes its source directory.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_METADATA_EXCEEDS_ENTRY_LIMIT":
@@ -1230,7 +1312,7 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_SOURCE_SYMLINK_FORBIDDEN":
     "Archive source must not be a symlink.",
   "error.reason.IMPORT_ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY":
-    "Archive staging output directory the selected value is not empty.",
+    "The archive staging output directory is not empty.",
   "error.reason.IMPORT_ARR_SOURCE_WARMUP_RESULT_NOT_FOUND":
     "No arr source warmup result was not found.",
   "error.reason.IMPORT_CHANGED_WHILE_RETRY_REQUESTED":
@@ -1242,9 +1324,9 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_CLEANUP_STATE_INVALID":
     "The recorded cleanup state is invalid.",
   "error.reason.IMPORT_CLEANUP_TARGET_IS_OUTPUT_ROOT":
-    "Refusing to delete download client output root the selected value.",
+    "Refusing to delete the download client's output root.",
   "error.reason.IMPORT_CLEANUP_TARGET_OVERLAPS_LIBRARY_ROOT":
-    "Refusing to delete download client payload the selected value because it overlaps a configured library root.",
+    "Refusing to delete the download client payload because it overlaps a configured library root.",
   "error.reason.IMPORT_CLIENT_DOES_NOT_REPORT_COMPLETED_DOWNLOAD":
     "The client does not report a completed download; import retry cannot restart a failed or active download.",
   "error.reason.IMPORT_CLIENT_JOB_ID_NOW_BELONGS_DIFFERENT_DOWNLOAD":
@@ -1259,8 +1341,14 @@ const en: LocaleDictionary = {
     "The completed download has not been observed yet; release again once it has.",
   "error.reason.IMPORT_COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY":
     "The completed source has no trustworthy download identity; use manual import.",
+  "error.reason.IMPORT_COPY_KEPT_SOURCE_GONE":
+    "The copy was kept at its destination because the source no longer holds the file.",
+  "error.reason.IMPORT_DESTINATION_ALIAS_UNKNOWN":
+    "Could not tell whether the existing destination is the source file itself. Nothing was removed. If a kept path is shown, the source is there instead of at its own name.",
+  "error.reason.IMPORT_DESTINATION_IS_SOURCE":
+    "The existing destination is the source file itself, so removing the source would remove the only copy. Nothing was removed.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
-    "Refusing to restore old upgrade backup the selected value because destination is occupied.",
+    "A file this import did not place is already at the destination. Nothing there was replaced.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":
     "Disc import targets must exactly match its explicit episode mappings.",
   "error.reason.IMPORT_DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET":
@@ -1280,7 +1368,7 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_DOWNLOAD_BUSY_IMPORT_CHANGED":
     "The download is busy or the import changed; refresh and retry.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_COMPLETED_DOWNLOAD_NOT_FOUND":
-    "Download client completed download the selected value is unavailable for payload cleanup.",
+    "The download client's completed download is unavailable for payload cleanup.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_CONFIGURATION_NO_LONGER_MATCHES_SOURCE":
     "The download client configuration no longer matches this source; use manual import.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_NOT_FOUND":
@@ -1288,31 +1376,31 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PATH_MAPPING_UNUSABLE_LOCAL_ROOT":
     "Download client path mapping has an unusable local root.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY":
-    "Download client payload cleanup checkpoint the selected value is not a directory.",
+    "The download client payload cleanup checkpoint is not a directory.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_REQUIRES_CONFIGURED_CLIENT_ID":
     "Download client payload cleanup requires a configured client id.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_INVALID":
     "Download client payload path must be absolute.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_NOT_FILE_DIRECTORY_SYMLINK":
-    "Download client payload path the selected value is not a file, directory, or symlink.",
+    "The download client payload path is not a file, directory, or symlink.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_OUTSIDE_OUTPUT_ROOT":
-    "Download client payload path the selected value is outside output root the selected value.",
+    "The download client payload path is outside the client's output root.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_TRAVERSES_SYMLINK":
-    "Download client payload path the selected value traverses symlink the selected value.",
+    "The download client payload path passes through a symlink.",
   "error.reason.IMPORT_DOWNLOAD_FAILED":
     "The download failed; retry the download before importing.",
   "error.reason.IMPORT_DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS":
-    "Download holds more than the selected value archive sets.",
+    "The download holds more than 256 archive sets.",
   "error.reason.IMPORT_DOWNLOAD_NO_STABLE_IDENTITY_YET":
     "This download has no stable identity yet; its sources stay held.",
   "error.reason.IMPORT_DOWNLOAD_NO_TITLE_AUTHORIZE_RELEASE_AGAINST":
     "An import of this download has no title to authorize its release against.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_NO_LONGER_REAL_DIRECTORY":
-    "Download payload directory the selected value is no longer a real directory.",
+    "The download payload directory is no longer a real directory.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_TOO_MANY_ENTRIES_INVENTORY_SAFELY":
-    "Download payload directory the selected value has too many entries to inventory safely.",
+    "The download payload directory has too many entries to inventory safely.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_INVENTORY_ENTRY_NOT_SAFE_RELATIVE_PATH":
-    "Download payload inventory entry the selected value is not a safe relative path.",
+    "A download payload inventory entry is not a safe relative path.",
   "error.reason.IMPORT_DOWNLOAD_STATE_UNAVAILABLE":
     "The client's current download state could not be established; try again when its history is available.",
   "error.reason.IMPORT_DOWNLOAD_STILL_BEING_IMPORTED":
@@ -1325,19 +1413,19 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_EPISODIC_DISCS_REQUIRE_PLAYBACK_TITLE_MAPPINGS":
     "Episodic discs require playback-title mappings; movie discs cannot map episodes.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_DEDUPKEY_DUPLICATED":
-    "Duplicate external import setup dedupKey in the selected value.",
+    "The external import setup lists the same entry more than once.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_INSTANCEID_DUPLICATED":
     "Duplicate external import setup instanceId.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_CANNOT_EMPTY":
     "External import setup secret draft cannot be empty; clear the draft instead.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_OUT_OF_RANGE":
-    "External import setup secret draft the selected value must be at most the selected value bytes.",
+    "An external import setup secret is too long.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_REQUIRED":
-    "External import setup secret draft the selected value cannot be empty.",
+    "An external import setup secret cannot be empty.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST":
-    "External import setup secret draft supports at most the selected value the selected value.",
+    "The external import setup supports at most 500 overrides of each kind.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST_INSTANCE_API_KEYS":
-    "External import setup secret draft supports at most the selected value instance API keys.",
+    "The external import setup supports at most 25 instance API keys.",
   "error.reason.IMPORT_EXTRACTED_ARCHIVE_WORKSPACE_UNAVAILABLE":
     "Extracted archive workspace is not accessible.",
   "error.reason.IMPORT_FILE_NOT_FOUND": "The source file was not found.",
@@ -1365,7 +1453,7 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_CANDIDATE_REQUIRED":
     "At least one manual import candidate is required.",
   "error.reason.IMPORT_MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE":
-    "Manual import episode target the selected value does not belong to title the selected value.",
+    "A manual import episode target does not belong to this title.",
   "error.reason.IMPORT_MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE":
     "Manual import episode target is unavailable.",
   "error.reason.IMPORT_MANUAL_IMPORT_FILE_INVALID":
@@ -1387,7 +1475,7 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_REQUEST_MISSING_ACTOR":
     "Manual import request is missing an actor.",
   "error.reason.IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_DOES_NOT_BELONG_TITLE":
-    "Manual import series movie target the selected value does not belong to title the selected value.",
+    "A manual import series movie target does not belong to this title.",
   "error.reason.IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_UNAVAILABLE":
     "Manual import series movie target is unavailable.",
   "error.reason.IMPORT_MANUAL_IMPORT_SOURCE_CONFLICTING_CANONICAL_DOWNLOAD_IDENTITY":
@@ -1403,20 +1491,20 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD":
     "Manual import title does not match the Scryer submission that grabbed this download.",
   "error.reason.IMPORT_MANUAL_TITLE_OUTSIDE_DURABLE_SCRYER_SUBMISSION_TITLE":
-    "Manual title the selected value is outside the durable Scryer submission title the selected value.",
+    "The manually chosen title is not the title this download was submitted for.",
   "error.reason.IMPORT_MAPPED_DISC_EPISODE_NO_LONGER_BELONGS_IMPORT_TITLE":
     "A mapped disc episode no longer belongs to the import title.",
   "error.reason.IMPORT_MEDIA_FILE_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Media file changed before import metadata was published.",
   "error.reason.IMPORT_MEDIA_FILE_NOT_FOUND": "Media file was not found.",
   "error.reason.IMPORT_MEDIA_ROOT_REQUIRED":
-    "Cannot safely upgrade the selected value because no configured media root could be resolved.",
+    "Cannot safely upgrade this file because no configured media root could be resolved.",
   "error.reason.IMPORT_MULTIPLE_SCENE_SUBTITLES_MAP_SAME_DESTINATION":
     "Multiple scene subtitles map to the same destination; sources preserved.",
   "error.reason.IMPORT_NEWER_IMPORT_ATTEMPT_OWNS_DOWNLOAD":
     "A newer import attempt owns this download; refresh its history.",
   "error.reason.IMPORT_NOT_HOLDING_SOURCES":
-    "Import the selected value is not holding its sources.",
+    "This import is not holding its sources.",
   "error.reason.IMPORT_NO_COMPLETED_IMPORT_ATTEMPT_UNAVAILABLE":
     "No completed import attempt is available to retry; use manual import.",
   "error.reason.IMPORT_NZBGET_CLEANUP_IDENTITY_CHANGED":
@@ -1430,7 +1518,7 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_NZBGET_TERMINAL_CLEANUP_METADATA_NOT_FOUND":
     "Nzbget terminal cleanup metadata is unavailable was not found.",
   "error.reason.IMPORT_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Refusing same-path upgrade guard because old file the selected value is outside media root the selected value.",
+    "Refusing to upgrade because the old file is outside the current media roots; keep the old root configured until existing files are moved, replaced, or deleted.",
   "error.reason.IMPORT_PAYLOAD_DIRECTORY_OWNERSHIP_UNVERIFIED":
     "Payload directory ownership is unverified; refusing shared-directory deletion.",
   "error.reason.IMPORT_PAYLOAD_OVERLAPS_RECYCLE_ROOT":
@@ -1444,9 +1532,9 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_RECORD_CONFLICTS_COMPLETED_SOURCE_IDENTITY":
     "The import record conflicts with its completed source identity; use manual import.",
   "error.reason.IMPORT_RECYCLE_BIN_CONFIG_REQUIRED":
-    "Refusing to upgrade the selected value because no recycle bin config could be resolved for old file root the selected value.",
+    "Refusing to upgrade because no recycle bin settings could be resolved for the old file's root.",
   "error.reason.IMPORT_REGULAR_FILE_REQUIRED":
-    "Refusing to dispose old upgrade file the selected value because it is not a regular file.",
+    "Refusing to replace the old file during the upgrade because it is not a regular file.",
   "error.reason.IMPORT_RELEASING_THESE_SOURCES_ALSO_RELEASES_IMPORT_TITLE_MAY_NOT_RESOLVE_IMPORTS":
     "Releasing these sources also releases an import for a title you may not resolve imports for.",
   "error.reason.IMPORT_RESOURCE_NOT_FOUND": "Import was not found.",
@@ -1454,6 +1542,8 @@ const en: LocaleDictionary = {
     "This import retry is already running or awaiting reconciliation.",
   "error.reason.IMPORT_RETRY_IMPORT_RECORD_NOT_FOUND":
     "Retry import record was not found.",
+  "error.reason.IMPORT_RETRY_LIMIT_REACHED":
+    "Automatic import retries stopped: repeated attempts made no progress. Retry the import once the cause is fixed.",
   "error.reason.IMPORT_SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Saved disc selection changed before import metadata was published.",
   "error.reason.IMPORT_SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED":
@@ -1503,11 +1593,13 @@ const en: LocaleDictionary = {
   "error.reason.IMPORT_SOURCE_UNAVAILABLE":
     "The manual import source is unavailable.",
   "error.reason.IMPORT_STATUS_ONLY_FAILED_SKIPPED_IMPORTS_RETRIED":
-    "Import the selected value has status the selected item, only failed or skipped imports can be retried.",
+    "Only failed or skipped imports can be retried.",
   "error.reason.IMPORT_SYMLINK_REFUSED":
-    "Refusing to dispose old upgrade file the selected value because it is a symlink.",
+    "Refusing to replace the old file during the upgrade because it is a symlink.",
   "error.reason.IMPORT_UNAVAILABLE": "The import is no longer cancellable.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH": "Unsafe archive entry path.",
+  "error.reason.IMPORT_UPGRADE_PREPARATION_FAILED":
+    "The existing file was kept because preparing its replacement failed.",
   "error.reason.IMPORT_UPGRADE_RECYCLE_BIN_PATH_UNSAFE":
     "Refusing to upgrade because the recycle bin path is unsafe.",
   "error.reason.INTEGRATION_ACTION_PERMISSION_DENIED":
@@ -1531,13 +1623,13 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_DOWNLOAD_ALREADY_BEING_PROCESSED":
     "This download is already being processed.",
   "error.reason.INTEGRATION_DOWNLOAD_ALREADY_RESOLVED":
-    "Download already resolved as the selected value; nothing to ignore.",
+    "The download is already resolved; nothing to ignore.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONFIG_INVALID":
     "The download client configuration is invalid.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONFIG_NOT_FOUND":
     "Download client config was not found.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_ALL_PROTOCOL_FAMILIES_REQUIRED_INDEXER":
-    "Download client the selected item does not support all protocol families required by indexer the selected item.",
+    "The download client does not support every protocol family the indexer requires.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_PASSWORD_RETRIES":
     "This download client does not support password retries.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_FIELD_REQUIRED":
@@ -1547,7 +1639,7 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_NAME_REQUIRED":
     "Download client name is required.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_TYPE_UNSUPPORTED":
-    "Unsupported download client type the selected item.",
+    "This download client type is not supported.",
   "error.reason.INTEGRATION_DOWNLOAD_NOT_STATE_IMPORTED_HAND_RIGHT_NOW":
     "This download is not in a state that can be imported by hand right now.",
   "error.reason.INTEGRATION_DOWNLOAD_SUBMISSION_NOT_FOUND":
@@ -1556,7 +1648,7 @@ const en: LocaleDictionary = {
     "Download is no longer available for manual import.",
   "error.reason.INTEGRATION_ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE":
     "Enable this proxy before testing its outbound route.",
-  "error.reason.INTEGRATION_FIELD_REQUIRED": "The requested value is required.",
+  "error.reason.INTEGRATION_FIELD_REQUIRED": "A required field is empty.",
   "error.reason.INTEGRATION_HELD_SOURCES_COULD_NOT_SETTLED":
     "Held sources could not be settled.",
   "error.reason.INTEGRATION_HTTP_3_CONNECT_ENDPOINT_INVALID":
@@ -1584,7 +1676,7 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_INDEXER_CONNECTION_URL_REQUIRED":
     "Indexer connection URL is required.",
   "error.reason.INTEGRATION_INDEXER_DOES_NOT_SUPPORT_TORRENTS_SO_SEEDING_PROFILE_CANNOT_ASSIGNED":
-    "Indexer the selected item does not support torrents, so seeding profile the selected item cannot be assigned.",
+    "This indexer does not support torrents, so a seeding profile cannot be assigned to it.",
   "error.reason.INTEGRATION_INDEXER_FIELD_REQUIRED":
     "At least one indexer field must be provided.",
   "error.reason.INTEGRATION_INDEXER_ID_REQUIRED": "Indexer id is required.",
@@ -1593,9 +1685,9 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_INDEXER_PROVIDER_DECLARES_MULTIPLE_CONNECTION_URL_CONFIG_FIELDS":
     "Indexer provider declares multiple connection_url config fields.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY":
-    "Indexer provider the selected item does not declare a supported protocol family.",
+    "The indexer provider does not declare a supported protocol family.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_TYPE_UNSUPPORTED":
-    "Unsupported indexer provider type the selected item.",
+    "This indexer provider type is not supported.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_UNAVAILABLE":
     "Indexer provider is unavailable.",
   "error.reason.INTEGRATION_INDEXER_REQUEST_REJECTED":
@@ -1615,17 +1707,17 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_MANAGED_CHILD_INDEXER_REQUIRES_PARENT":
     "Managed child indexer requires a parent.",
   "error.reason.INTEGRATION_MANAGED_CHILD_PLAN_CONTAINS_DUPLICATE_CHILD_KEY":
-    "Managed child plan contains duplicate child_key the selected item.",
+    "The managed child plan lists the same child key more than once.",
   "error.reason.INTEGRATION_MANAGED_CHILD_PLAN_ENTRIES_REQUIRE_CHILD_KEY":
     "Managed child plan entries require child_key.",
   "error.reason.INTEGRATION_MANAGED_CHILD_REQUIRES_NAME":
-    "Managed child the selected item requires a name.",
+    "A managed child requires a name.",
   "error.reason.INTEGRATION_MANAGED_CHILD_REQUIRES_PROVIDER_TYPE":
-    "Managed child the selected item requires provider_type.",
+    "A managed child requires a provider type.",
   "error.reason.INTEGRATION_MANAGED_CHILD_ROUTING_CONTAINS_DUPLICATE_SCOPE":
-    "Managed child routing contains duplicate scope the selected item.",
+    "Managed child routing lists the same scope more than once.",
   "error.reason.INTEGRATION_MANAGED_CHILD_ROUTING_SCOPE_UNSUPPORTED":
-    "Managed child routing scope the selected item is not supported.",
+    "A managed child routing scope is not supported.",
   "error.reason.INTEGRATION_MANAGED_INDEXERS_CANNOT_USE_PROXY":
     "Managed indexers cannot use a proxy; the managing application owns challenge solving.",
   "error.reason.INTEGRATION_MANUAL_IMPORT_CANDIDATE_UNAVAILABLE":
@@ -1641,19 +1733,27 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD":
     "Manual import title does not match the Scryer submission that grabbed this download.",
   "error.reason.INTEGRATION_MAPPED_DOWNLOAD_CLIENT_NO_LONGER_EXISTS":
-    "Mapped download client the selected item no longer exists.",
+    "A mapped download client no longer exists.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE":
     "Max queries per minute must be at least 1, or empty for no budget.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Max queries per minute is set on each managed indexer, not on the indexer that syncs them.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "This indexer's locally configured monthly request limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "This indexer's locally configured monthly grab limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Monthly indexer usage could not be durably checked; the request was refused.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Monthly request and grab limits must be positive whole numbers, or empty for no limit.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Minimum seeders floor cannot be negative.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
-    "`the selected value` is not a DNS server address; the `DNS` line takes IP addresses.",
+    "A DNS entry is not a DNS server address; the `DNS` line takes IP addresses.",
   "error.reason.INTEGRATION_NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE":
-    "No indexer management client available for provider type the selected item.",
+    "No indexer management client is available for this provider type.",
   "error.reason.INTEGRATION_NO_INDEXER_PROVIDER_AVAILABLE_PROVIDER_TYPE":
-    "No indexer provider available for provider type the selected item.",
+    "No indexer provider is available for this provider type.",
   "error.reason.INTEGRATION_ONLY_SSH_TUNNELS_TAKE_PRIVATE_KEY_PASSPHRASE":
     "Only SSH tunnels take a private key passphrase.",
   "error.reason.INTEGRATION_ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY":
@@ -1667,7 +1767,7 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_PRIVATE_KEY_INVALID":
     "Private key must be a PEM block beginning with -----BEGIN and ending with -----.",
   "error.reason.INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC":
-    "Provider type the selected item does not support managed child sync.",
+    "This provider type does not support managed child sync.",
   "error.reason.INTEGRATION_PROVIDER_TYPE_REQUIRED":
     "Provider type cannot be empty.",
   "error.reason.INTEGRATION_PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS":
@@ -1677,7 +1777,7 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_PROWLARR_MANAGEMENT_PARENTS_CANNOT_MAPPED_DOWNLOAD_CLIENT":
     "Prowlarr management parents cannot be mapped to a download client.",
   "error.reason.INTEGRATION_PROXIES_DO_NOT_USE_CHALLENGE_SOLVER_PROTOCOL":
-    "The requested value proxies do not use a challenge-solver protocol.",
+    "Proxies of this type do not use a challenge-solver protocol.",
   "error.reason.INTEGRATION_PROXY_BASE_URL_HOST_REQUIRED":
     "Proxy base URL must include a host.",
   "error.reason.INTEGRATION_PROXY_BASE_URL_INVALID":
@@ -1687,9 +1787,9 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_PROXY_CONFIGURATION_NOT_FOUND":
     "Proxy configuration was not found.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S":
-    "Proxy config is assigned to the selected value enabled download client(s).",
+    "The proxy is assigned to enabled download clients.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_INDEXER_S":
-    "Proxy config is assigned to the selected value enabled indexer(s).",
+    "The proxy is assigned to enabled indexers.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS":
     "Proxy config is assigned to one or more download clients.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS":
@@ -1710,7 +1810,7 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_PROXY_PASSWORD_REQUIRES_USERNAME":
     "Proxy password requires a username.",
   "error.reason.INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE":
-    "Proxy timeout must be between 1 and the selected value seconds.",
+    "Proxy timeout must be between 1 and 120 seconds.",
   "error.reason.INTEGRATION_PROXY_URL_CREDENTIALS_FORBIDDEN":
     "Proxy base URL must not embed credentials; use the username and password fields.",
   "error.reason.INTEGRATION_REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES":
@@ -1722,7 +1822,7 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_SEEDING_PROFILE_NOT_FOUND":
     "Seeding profile was not found.",
   "error.reason.INTEGRATION_SEEDING_PROFILE_STILL_ASSIGNED":
-    "Seeding profile is still assigned to the selected value.",
+    "The seeding profile is still assigned to an indexer or download client.",
   "error.reason.INTEGRATION_SOCKS4_PROXIES_DO_NOT_CARRY_CREDENTIALS":
     "SOCKS4 proxies do not carry credentials; use SOCKS5 for an authenticated proxy.",
   "error.reason.INTEGRATION_SOCKS4_PROXY_BASE_URL_INVALID":
@@ -1746,11 +1846,13 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_TEST_URL_INVALID":
     "Test URL must use HTTP or HTTPS and contain no credentials.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_BUSY_PROCESSING":
-    "Tracked download the selected value is busy processing.",
+    "This tracked download is busy processing.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND":
     "Tracked download was not found.",
+  "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_IGNORABLE":
+    "Only a download whose import is blocked or failed can be ignored.",
   "error.reason.INTEGRATION_TUNNEL_MTU_OUT_OF_RANGE":
-    "The tunnel MTU must be between the selected value and the selected value; the selected value is outside that range.",
+    "The tunnel MTU is outside the allowed range.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_INVALID":
     "The WireGuard interface address is invalid.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_REQUIRED":
@@ -1768,13 +1870,15 @@ const en: LocaleDictionary = {
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PEER_S_PUBLIC_KEY_PEER_SECTION":
     "WireGuard tunnels require the peer's public key from the `[Peer]` section.",
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY":
-    "WireGuard tunnels require a private key; the selected value.",
+    "WireGuard tunnels require a private key; WireGuard keys are 32 bytes of base64, exactly as `wg genkey` prints them (44 characters ending in `=`).",
+  "error.reason.JOB_RELEASE_GRAB_JOBS_INVALID":
+    "Release grab jobs must be started from the grab mutation.",
   "error.reason.JOB_TASK_FAILED": "The requested background task failed.",
   "error.reason.JOB_ACQUISITION_SEARCH_JOBS_INVALID":
     "Acquisition search jobs must be started from the acquisition search mutation.",
   "error.reason.JOB_ACTION_PERMISSION_DENIED":
     "You do not have permission to perform this action.",
-  "error.reason.JOB_ALREADY_RUNNING": "The selected item is already running.",
+  "error.reason.JOB_ALREADY_RUNNING": "This job is already running.",
   "error.reason.JOB_APPLICATION_UPGRADE_JOBS_INVALID":
     "Application upgrade jobs must be started from the application upgrade mutation.",
   "error.reason.JOB_ARTWORK_ENCODING_SHUTTING_DOWN":
@@ -1801,24 +1905,24 @@ const en: LocaleDictionary = {
     "Location operations must be started from the location operation mutation.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
     "Media file deletion jobs must be started from the media file deletion mutation.",
-  "error.reason.JOB_NO_LIBRARIES": "The requested value has no libraries.",
+  "error.reason.JOB_NO_LIBRARIES": "This job has no libraries to run on.",
   "error.reason.JOB_ONLY_RUN_CONFIGURED_SCHEDULE":
-    "The requested value can only run on its configured schedule.",
+    "This job can only run on its configured schedule.",
   "error.reason.JOB_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Refusing to restore recycle entry the selected value because original path is outside the resolved library roots.",
+    "Refusing to restore this recycle bin entry because its original path is outside the library roots.",
   "error.reason.JOB_RECYCLE_BIN_BATCHES_CANNOT_INCLUDE_SAME_ITEM_MORE_ONCE":
     "Recycle-bin batches cannot include the same item more than once.",
   "error.reason.JOB_RECYCLE_BIN_BATCHES_LIMITED_ITEMS":
-    "Recycle-bin batches are limited to the selected value items.",
+    "Recycle bin batches are limited to 250 items.",
   "error.reason.JOB_RECYCLE_BIN_ITEM_REQUIRED":
     "Select at least one recycle-bin item.",
   "error.reason.JOB_RECYCLE_ENTRY_NOT_FOUND": "Recycle entry was not found.",
   "error.reason.JOB_RECYCLE_OPERATION_ALREADY_RUNNING":
-    "A recycle operation is already running for the selected value.",
+    "An operation is already running for this recycle bin entry.",
   "error.reason.JOB_RECYCLE_PURGE_JOBS_INVALID":
     "Recycle purge jobs must be started from the recycle bin mutation.",
   "error.reason.JOB_RECYCLE_RESTORE_ALREADY_RUNNING":
-    "A recycle restore is already running for the selected value.",
+    "A restore is already running for this recycle bin entry.",
   "error.reason.JOB_RECYCLE_RESTORE_ALREADY_RUNNING_ONE_SELECTED_DESTINATIONS":
     "A recycle restore is already running for one of the selected destinations.",
   "error.reason.JOB_RECYCLE_RESTORE_JOBS_INVALID":
@@ -1826,26 +1930,26 @@ const en: LocaleDictionary = {
   "error.reason.JOB_RECYCLE_RESTORE_PREVIEW_STALE":
     "Recycle restore preview is stale; review the conflict choice again.",
   "error.reason.JOB_REGULAR_FILE_REQUIRED":
-    "Refusing to replace restore destination the selected value because it is not a regular file.",
+    "Refusing to replace the restore destination because it is not a regular file.",
   "error.reason.JOB_REPLACE_RECYCLE_BIN_UNAVAILABLE":
-    "Refusing to replace the selected value because the recycle bin is unavailable.",
+    "Refusing to replace the file because the recycle bin is unavailable.",
   "error.reason.JOB_RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION":
     "Restore destination changed after confirmation; preview and retry this item.",
   "error.reason.JOB_SCHEDULED_SCRIPT_ALREADY_RUNNING":
     "This scheduled script is already running.",
   "error.reason.JOB_SCHEDULED_SCRIPT_DISABLED":
-    "Scheduled script the selected item is disabled.",
+    "This scheduled script is disabled.",
   "error.reason.JOB_SCHEDULED_SCRIPT_NO_LONGER_EXISTS":
-    "Scheduled script the selected value no longer exists.",
+    "This scheduled script no longer exists.",
   "error.reason.JOB_SCRIPT_NOT_FOUND": "Script was not found.",
   "error.reason.JOB_SCRIPT_NOT_SCHEDULED_SCRIPT":
-    "Script the selected item is not a scheduled script.",
+    "This script is not a scheduled script.",
   "error.reason.JOB_SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION":
     "Selected recycle entries cannot share the same restore destination.",
   "error.reason.JOB_SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES":
     "Select files, seasons, or titles to refresh scores.",
   "error.reason.JOB_SYMLINK_REFUSED":
-    "Refusing to replace restore destination the selected value because it is a symlink.",
+    "Refusing to replace the restore destination because it is a symlink.",
   "error.reason.JOB_TITLE_DELETION_JOBS_INVALID":
     "Title deletion jobs must be started from the title deletion mutation.",
   "error.reason.JOB_TITLE_RENAME_JOBS_INVALID":
@@ -1857,9 +1961,9 @@ const en: LocaleDictionary = {
   "error.reason.LIBRARY_BATCH_SIZE_OUT_OF_RANGE":
     "Batch size must be positive.",
   "error.reason.LIBRARY_COLLECTION_DOES_NOT_BELONG_TITLE":
-    "Collection the selected value does not belong to title the selected value.",
+    "The collection does not belong to this title.",
   "error.reason.LIBRARY_CONFIGURED_ROOT_FOLDER_INVALID":
-    "Configured the selected value root folder the selected value is invalid.",
+    "A configured root folder is invalid.",
   "error.reason.LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED":
     "Default libraries cannot be deleted.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
@@ -1867,17 +1971,17 @@ const en: LocaleDictionary = {
   "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
     "Choose a monitoring default supported by this library.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
-    "Refusing to delete directory path the selected value from a single-file delete flow.",
+    "Refusing to delete a directory from a single-file delete.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
-    "Refusing to delete the selected value the selected value because it is outside the configured root folders.",
+    "Refusing to delete this path because it is outside the configured root folders.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
-    "Refusing to delete the selected value the selected value because it has no parent directory.",
+    "Refusing to delete this path because it has no parent directory.",
   "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
     "This library is already being deleted.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Destination folder contains an independent or unresolved title boundary.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
-    "Refusing to restore recycled file the selected value because destination is occupied.",
+    "Refusing to restore this recycled file because its destination is occupied.",
   "error.reason.LIBRARY_EPISODE_FOLDER_OPTIONAL_GROUP_INVALID":
     "Invalid episode folder optional group.",
   "error.reason.LIBRARY_EPISODE_FOLDER_PATTERN_INVALID":
@@ -1898,20 +2002,20 @@ const en: LocaleDictionary = {
     "Folder ownership conflicts cannot be bound or adopted.",
   "error.reason.LIBRARY_LINKED_FOLDER_REQUIRES_EXPLICIT_OWNERSHIP_RESOLUTION_BEFORE_SCANNING":
     "Linked folder requires explicit ownership resolution before scanning.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
-    "Maintenance deletion file changed; re-evaluation required.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
-    "Maintenance deletion fingerprint changed.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
-    "Maintenance deletion targets changed; re-evaluation required.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED":
+    "Lifecycle deletion file changed; re-evaluation required.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED":
+    "Lifecycle deletion fingerprint changed.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
+    "Lifecycle deletion targets changed; re-evaluation required.",
   "error.reason.LIBRARY_MEDIA_FILE_NOT_FOUND": "Media file was not found.",
   "error.reason.LIBRARY_MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER":
     "Media identity conflicts with the proposed title folder.",
   "error.reason.LIBRARY_MEDIA_ROOT_REQUIRED":
-    "Refusing to delete the selected value because no configured media roots are available.",
+    "Refusing to delete or restore this file because no configured media roots are available.",
   "error.reason.LIBRARY_NAME_REQUIRED": "Library name is required.",
   "error.reason.LIBRARY_NO_ROOT_FOLDERS_UNAVAILABLE":
-    "No configured the selected value root folders are available for safe deletion.",
+    "No configured root folders are available for safe deletion.",
   "error.reason.LIBRARY_ONE_MORE_SELECTED_EPISODES_DO_NOT_BELONG_TARGET_TITLE":
     "One or more selected episodes do not belong to the target title.",
   "error.reason.LIBRARY_ONLY_PROVIDER_BACKED_DOWNLOADED_SUBTITLES_BLOCKLISTED":
@@ -1921,13 +2025,13 @@ const en: LocaleDictionary = {
   "error.reason.LIBRARY_PATH_CANNOT_ESCAPE_ROOT":
     "Path cannot escape its root.",
   "error.reason.LIBRARY_PATH_COMPONENT_INVALID":
-    "The requested value must not contain . or .. components.",
+    "The path or naming template contains an invalid path component; use only relative, non-empty components other than . and ..",
   "error.reason.LIBRARY_PATH_INVALID": "Path must be absolute.",
   "error.reason.LIBRARY_PATH_NOT_DIRECTORY": "Library path is not a directory.",
   "error.reason.LIBRARY_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Refusing to delete the selected value because it is outside the configured media roots.",
+    "Refusing to delete or restore this path because it is outside the configured media roots.",
   "error.reason.LIBRARY_PENDING_IMPORT_ALREADY_BEING_RESOLVED":
-    "Pending import the selected value is already being resolved.",
+    "This pending import is already being resolved.",
   "error.reason.LIBRARY_PENDING_IMPORT_DIRECTORY_CONTAINS_NO_FILES_ATTACH":
     "Pending import directory contains no files to attach.",
   "error.reason.LIBRARY_PENDING_IMPORT_DOES_NOT_KNOWN_TITLE":
@@ -1961,14 +2065,14 @@ const en: LocaleDictionary = {
   "error.reason.LIBRARY_RECORDED_SUBTITLE_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER":
     "Recorded subtitle path is outside its title's owned folder.",
   "error.reason.LIBRARY_RECYCLE_BIN_PATH_UNSAFE":
-    "Refusing to recycle the selected value because the recycle bin path is unsafe.",
+    "Refusing to recycle this file because the recycle bin path is unsafe.",
   "error.reason.LIBRARY_RECYCLE_ENTRY_ID_NOT_VALID_OPAQUE_ID":
     "Recycle entry id is not a valid opaque id.",
   "error.reason.LIBRARY_REGULAR_FILE_REQUIRED":
-    "Refusing to restore recycled file the selected value because it is not a regular file.",
+    "Refusing to delete or restore this file because it is not a regular file.",
   "error.reason.LIBRARY_RENAMER_DISABLED": "Renamer_disabled.",
   "error.reason.LIBRARY_RENAME_ALREADY_RUNNING":
-    "A rename is already running for the selected value.",
+    "A rename is already running for this title.",
   "error.reason.LIBRARY_RENAME_FOLDERS_OVERLAP":
     "The selected title folders overlap.",
   "error.reason.LIBRARY_RENAME_PATH_OUTSIDE_ROOT":
@@ -1978,11 +2082,10 @@ const en: LocaleDictionary = {
     "Requested facet does not match title facet.",
   "error.reason.LIBRARY_RESOURCE_NOT_FOUND": "Library was not found.",
   "error.reason.LIBRARY_ROOTS_NOT_CONFIGURED":
-    "The requested value library roots are not configured.",
+    "No library roots are configured for this media type.",
   "error.reason.LIBRARY_ROOT_ALREADY_ASSIGNED":
-    "Library root the selected item is already used by the selected value.",
-  "error.reason.LIBRARY_ROOT_CANNOT_USED":
-    "Library root the selected item cannot be used.",
+    "This library root is already used by another library.",
+  "error.reason.LIBRARY_ROOT_CANNOT_USED": "This library root cannot be used.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Library roots must be unique within a library.",
   "error.reason.LIBRARY_ROOT_ID_DUPLICATED":
@@ -2012,9 +2115,9 @@ const en: LocaleDictionary = {
   "error.reason.LIBRARY_SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT":
     "Selected folder is an organizing folder or mixed title layout; select the title folder containing its media.",
   "error.reason.LIBRARY_SYMLINK_REFUSED":
-    "Refusing to restore recycled file the selected value because it is a symlink.",
+    "Refusing to delete or restore this file because it is a symlink.",
   "error.reason.LIBRARY_TEMPLATE_BRACES_UNBALANCED":
-    "The requested value template contains an unmatched '}}'.",
+    "The naming template contains an unmatched brace.",
   "error.reason.LIBRARY_TEMPLATE_IDENTITY_TOKEN_REQUIRED":
     "The naming template must include an identity token.",
   "error.reason.LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID":
@@ -2064,19 +2167,23 @@ const en: LocaleDictionary = {
   "error.reason.LIST_TITLE_NOT_FOUND": "Title was not found.",
   "error.reason.LIST_USER_NOT_FOUND": "User was not found.",
   "error.reason.LOCATION_CATALOG_CANNOT_MAP_FILE_OUTSIDE_RECORDED_FOLDER":
-    "The catalog cannot map a file outside the recorded folder for the selected value. Correct its folder mapping first.",
+    "The catalog cannot map a file outside the title's recorded folder. Correct its folder mapping first.",
   "error.reason.LOCATION_CATALOG_PATH_AMBIGUOUS":
-    "The catalog path for the selected value is ambiguous. Correct its folder mapping before moving it.",
+    "The catalog path for this title is ambiguous. Correct its folder mapping before moving it.",
   "error.reason.LOCATION_CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE":
-    "The confirmed plan has no instructions for title the selected value.",
+    "The confirmed plan has no instructions for this title.",
   "error.reason.LOCATION_COULD_NOT_COMPARE":
-    "Could not compare the selected value. Check that it is readable and try again; the source was preserved.",
+    "Could not compare the files. Check that they are readable and try again; the source was preserved.",
   "error.reason.LOCATION_DESTINATION_CHANGED_DURING_COMPARISON":
     "The destination changed during comparison. The source was preserved; try again when the files are no longer changing.",
   "error.reason.LOCATION_DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE":
     "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again.",
+  "error.reason.LOCATION_DESTINATION_NO_SPACE":
+    "The destination does not have enough free space for this file. The source was preserved; free space there and try again.",
   "error.reason.LOCATION_DESTINATION_OCCUPIED":
-    "The destination staging path the selected value is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
+    "The destination staging path is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
+  "error.reason.LOCATION_DESTINATION_PERMISSION_DENIED":
+    "Scryer is not allowed to write this file at the destination. The source was preserved; check the folder's permissions and try again.",
   "error.reason.LOCATION_DESTINATION_REQUIRED":
     "Choose a destination library or root.",
   "error.reason.LOCATION_DESTINATION_TITLE_NOT_FOUND":
@@ -2090,13 +2197,13 @@ const en: LocaleDictionary = {
   "error.reason.LOCATION_FILE_CHANGED_WHILE_HASHING":
     "File changed while hashing.",
   "error.reason.LOCATION_FOLDER_ALREADY_OWNED_TITLE":
-    "Folder the selected value is already owned by title the selected value; choose swap or take over.",
+    "The folder is already owned by another title; choose swap or take over.",
   "error.reason.LOCATION_FOLDER_NOT_INSIDE_ROOT_LIBRARY":
-    "Folder the selected value is not inside a root of library the selected value.",
+    "The folder is not inside a root of this library.",
   "error.reason.LOCATION_FOLDER_NOT_OWNED_ANOTHER_TITLE":
-    "Folder the selected value is not owned by another title; resolution the selected value does not apply.",
+    "The folder is not owned by another title, so this resolution does not apply.",
   "error.reason.LOCATION_FOLDER_NOT_TITLE_BOUNDARY":
-    "Folder the selected value is a library root, not a title folder.",
+    "The folder is a library root, not a title folder.",
   "error.reason.LOCATION_FOLDER_PATH_REQUIRED": "Folder path is required.",
   "error.reason.LOCATION_FULL_HASH_BACKFILL_ALREADY_RUNNING":
     "Full-hash backfill is already running.",
@@ -2105,26 +2212,26 @@ const en: LocaleDictionary = {
   "error.reason.LOCATION_LIBRARY_NOT_FOUND": "Library was not found.",
   "error.reason.LOCATION_LIBRARY_ROOT_NOT_FOUND": "Library root was not found.",
   "error.reason.LOCATION_MERGE_TITLE_INTO_BLOCKED":
-    "Merge of title the selected value into the selected value is blocked.",
+    "Merging these titles is blocked.",
   "error.reason.LOCATION_MERGE_UNAVAILABLE":
     "The merge has no valid identity mapping.",
   "error.reason.LOCATION_MORE_ONE_CATALOG_RECORD_WOULD_POINT":
-    "More than one catalog record would point at the selected value. Resolve that catalog conflict before confirming the manual move.",
+    "More than one catalog record would point at the same path. Resolve that catalog conflict before confirming the manual move.",
   "error.reason.LOCATION_OPERATION_NOT_FOUND":
     "Location operation was not found.",
   "error.reason.LOCATION_OPERATION_SOURCE_LIBRARIES_UNAVAILABLE":
     "Location operation source libraries are unavailable.",
   "error.reason.LOCATION_OPERATION_STILL_RUNNING":
-    "Location operation the selected value is still running; cancel it instead of abandoning it.",
+    "This location operation is still running; cancel it or wait for it to stop first.",
   "error.reason.LOCATION_OWNERSHIP_BUSY":
     "A location operation currently owns these items.",
   "error.reason.LOCATION_PATH_COMPONENT_INVALID":
-    "Folder the selected value must not contain . or .. components.",
+    "The folder must not contain . or .. components.",
   "error.reason.LOCATION_PATH_NOT_FOUND": "Path was not found.",
   "error.reason.LOCATION_PATH_OUTSIDE_LIBRARY_ROOT":
     "Selected folder resolves outside its library root.",
   "error.reason.LOCATION_RECORDED_FOLDER_LIBRARY_ROOT_NOT_FOLDER_SWAP":
-    "The recorded folder for the selected value is a library root, not a folder to swap; take over the folder instead.",
+    "The title's recorded folder is a library root, not a folder to swap; take over the folder instead.",
   "error.reason.LOCATION_RECOVERY_ALREADY_RUNNING":
     "Recovery is already running.",
   "error.reason.LOCATION_RECOVERY_COMMIT_RECEIPT_REQUIRED":
@@ -2145,6 +2252,10 @@ const en: LocaleDictionary = {
     "Multiple destination files match the missing source hash.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_HASH_NOT_FOUND":
     "No destination matches the missing source's full-content hash was not found.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_AMBIGUOUS":
+    "More than one destination file has the missing source's name and size.",
+  "error.reason.LOCATION_RECOVERY_DESTINATION_NAME_SIZE_NOT_FOUND":
+    "No destination file has the missing source's name and size.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED":
     "Generated destination inventory limit exceeded.",
   "error.reason.LOCATION_RECOVERY_DESTINATION_NOT_FOUND":
@@ -2266,6 +2377,10 @@ const en: LocaleDictionary = {
     "Selected folder overlaps another title's folder; no ownership was changed.",
   "error.reason.LOCATION_SELECTION_NOTHING_MOVE":
     "This selection has nothing to move.",
+  "error.reason.LOCATION_SET_ASIDE_SOURCE_NOT_PUT_BACK":
+    "A cleanup set the source aside to tell it from its copy, and it could not be put back at its own name. It is kept where it was set aside, and nothing was removed.",
+  "error.setAsideSourceKeptNamed":
+    "A cleanup set the source aside to tell it from its copy, and it could not be put back at its own name. It is kept at {{leftBehindPath}}, and nothing was removed.",
   "error.reason.LOCATION_SOURCE_CHANGED_BEFORE_CLEANUP":
     "Source changed before cleanup; preserved it.",
   "error.reason.LOCATION_SOURCE_CHANGED_DURING_FILE_PLACEMENT":
@@ -2278,103 +2393,84 @@ const en: LocaleDictionary = {
     "Source and destination are the same path.",
   "error.reason.LOCATION_STALE_PLAN": "The plan changed. Preview it again.",
   "error.reason.LOCATION_TITLE_OWNS_NO_FOLDER_SWAP":
-    "Title the selected value owns no folder to swap; take over the folder instead.",
+    "This title owns no folder to swap; take over the folder instead.",
   "error.reason.LOCATION_TITLE_SELECTION_REQUIRED":
     "Select at least one title to move.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NEEDS_VERIFIED_AGAIN_BEFORE_CATALOG_ENTRY_UPDATED":
-    "The transferred file the selected value needs to be verified again before its catalog entry can be updated.",
+    "The transferred file needs to be verified again before its catalog entry can be updated.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION":
-    "The transferred file the selected value has not finished verification. Its catalog entry was left unchanged.",
+    "The transferred file has not finished verification. Its catalog entry was left unchanged.",
+  "error.reason.LOCATION_UNPROVEN_LINK_NOT_REMOVED":
+    "A link made at the destination could not be proven to be the source and could not be removed, so it is still there. The source was preserved; check that path before trying again.",
   "error.reason.LOCATION_VERIFICATION_FAILED":
-    "Verification of the selected value failedthe selected value.",
+    "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "The destination did not pass verification.",
-  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
-    "The maintenance action configuration is invalid.",
-  "error.reason.MAINTENANCE_ACTION_INVALID":
-    "Maintenance action is not valid for a title-scoped rule.",
-  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE":
-    "Maintenance action is not storable.",
-  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
-    "This maintenance action is not supported for titles.",
-  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
-    "The selected item has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
-  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
-    "Ambiguous maintenance file coverage.",
-  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
+    "This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
+    "Ambiguous lifecycle file coverage.",
+  "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "The candidate count changed. Review the current count before arming.",
-  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
     "Child deletion requires an episode or season.",
-  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
-    "The selected item is currently tracking the selected value title(s), and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.",
-  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
+    "This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.",
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
     "DeleteFiles has an incompatible Unmonitor prerequisite.",
-  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
     "DeleteFiles requires an earlier Unmonitor step.",
-  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
-    "Maintenance exclusion was not found.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED":
-    "The requested value must not be empty.",
-  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
-    "Maintenance file ownership changed.",
-  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
-    "Maintenance file targets changed; another evaluation is required.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
+  "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
+    "Lifecycle exclusion was not found.",
+  "error.reason.LIFECYCLE_FIELD_REQUIRED": "A required field is empty.",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "Lifecycle file ownership changed.",
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
+    "Lifecycle file targets changed; another evaluation is required.",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Grace period must be zero or more days.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
-    "Grace period must be at most the selected value days (ten years).",
-  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "A matcher that reads storage facts must select a configured library root.",
-  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
+    "Grace period must be at most 3650 days (ten years).",
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
     "Movie titles do not have an episode inventory.",
-  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+  "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
-    "Preview accepts at most the selected value titles, the selected value were requested.",
-  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
+    "Preview accepts at most 50 titles.",
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
     "Preview requires between one and fifty subjects.",
-  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
     "Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Quality-profile action has no target profile.",
-  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+  "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "The rule changed while confirming; review it again before arming deletion.",
-  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_ARM_CONFIRMATION_STALE":
     "The rule configuration must be reviewed again before arming deletion; reopen the confirmation.",
-  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
-  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
-    "Maintenance rule the selected value failed to compile.",
-  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
-    "Maintenance rule set was not found.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
-    "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED":
+    "The lifecycle rule failed to compile.",
+  "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
+    "Lifecycle rule set was not found.",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
+    "This rule ships with Scryer and cannot be edited. It can be viewed, and its state changed.",
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
     "This rule ships with Scryer and cannot be renamed.",
-  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID":
-    "The maintenance rule source is invalid.",
-  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
+    "The lifecycle rule source is invalid.",
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
     "This rule's action never changes anything, so it can only run as a dry run.",
-  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED": "Rule validation failed.",
-  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
-    "Sequence actions must use the sequence executor.",
-  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
-    "Maintenance sequence step parameters are invalid.",
-  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Storage root the selected item is not configured.",
-  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
-    "Maintenance subject ID is required.",
-  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
-    "Invalid maintenance subject kind.",
-  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
-    "Maintenance subject no longer belongs to this title was not found.",
-  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Tag action has no tags configured.",
-  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "Target quality profile the selected item does not exist.",
-  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
-    "Maintenance unmonitoring candidate identity does not match its title.",
+  "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "Rule validation failed.",
+  "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "Lifecycle sequence step parameters are invalid.",
+  "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
+    "Lifecycle subject ID is required.",
+  "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
+    "Invalid lifecycle subject kind.",
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
+    "The lifecycle subject was not found, or no longer belongs to this title.",
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
+    "Lifecycle unmonitoring candidate identity does not match its title.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
     "The media analysis result is invalid.",
   "error.reason.MEDIA_ARTWORK_WORKER_COUNT_INVALID":
@@ -2415,7 +2511,7 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_DISC_SELECTION_REQUIRES_ISO_IMAGE":
     "Disc selection requires an ISO image.",
   "error.reason.MEDIA_DISC_TITLE_RUNTIME_SECONDS_IMPLAUSIBLE_EPISODE":
-    "Disc title the selected value runtime is implausible for episode the selected value.",
+    "A disc title's runtime is implausible for the episode it is mapped to.",
   "error.reason.MEDIA_EACH_EPISODE_DISTINCT_PLAYBACK_TITLE_OCCUR_ONLY_ONE_MAPPING":
     "Each episode and distinct playback title can occur in only one mapping.",
   "error.reason.MEDIA_EPISODE_MAPPINGS_REQUIRE_SERIES_TITLE":
@@ -2432,6 +2528,8 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_IMAGE_DECODE_FAILED": "Failed to decode image.",
   "error.reason.MEDIA_IMAGE_DIMENSIONS_EMPTY":
     "Image dimensions must be non-zero.",
+  "error.reason.MEDIA_IMAGE_DIMENSIONS_TOO_LARGE":
+    "This image has more pixels than artwork may have.",
   "error.reason.MEDIA_IMAGE_FORMAT_DETECTION_FAILED":
     "Failed to detect image format.",
   "error.reason.MEDIA_IMAGE_FORMAT_UNSUPPORTED": "Unsupported image format.",
@@ -2474,17 +2572,17 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_LOCATION_OPERATION_NOT_FOUND":
     "The location operation could not be found.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_INCOMPLETE_UNSUPPORTED_ANALYSIS":
-    "Mapped disc title the selected value has incomplete or unsupported analysis.",
+    "A mapped disc title has incomplete or unsupported analysis.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_NO_ESTABLISHED_RUNTIME":
-    "Mapped disc title the selected value has no established runtime.",
+    "A mapped disc title has no established runtime.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_NO_LONGER_EXISTS":
-    "Mapped disc title the selected value no longer exists; review the mapping.",
+    "A mapped disc title no longer exists; review the mapping.",
   "error.reason.MEDIA_MAPPED_EPISODE_DOES_NOT_BELONG_TITLE":
     "Mapped episode does not belong to this title.",
   "error.reason.MEDIA_MAP_EACH_COMPLETE_DISC_TITLE_ONE_EPISODE":
     "Map each complete disc title to one episode; combined episodes require separate authored playback titles.",
   "error.reason.MEDIA_MOST_SEARCH_LANGUAGES_ALLOWED":
-    "At most the selected value search languages are allowed.",
+    "At most 16 search languages are allowed.",
   "error.reason.MEDIA_MOVIE_IDENTITY_UNSUPPORTED":
     "Selected movie has no supported identity.",
   "error.reason.MEDIA_NATIVE_DIAGNOSTICS_NOT_COMPILED_INTO_TARGET":
@@ -2567,13 +2665,13 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_REQUEST_QUALITY_PROFILE_ID_REQUIRED":
     "Quality profile id is required.",
   "error.reason.MEDIA_REQUEST_QUALITY_PROFILE_UNKNOWN":
-    "Unknown quality profile the selected value.",
+    "The selected quality profile is unknown.",
   "error.reason.MEDIA_REQUEST_RELEASE_REASON_REQUIRED":
     "A release reason is required.",
   "error.reason.MEDIA_REQUEST_REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY":
     "Requested quality profile is not allowed for this library.",
   "error.reason.MEDIA_REQUEST_REQUEST_MONITOR_TYPE_UNSUPPORTED":
-    "Unsupported request monitor type the selected value.",
+    "The request monitor type is not supported.",
   "error.reason.MEDIA_REQUEST_REQUEST_TITLE_REQUIRED":
     "Request title is required.",
   "error.reason.MEDIA_REQUEST_RESOURCE_NOT_FOUND":
@@ -2590,7 +2688,7 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_SCAN_BATCH_SIZE_INVALID":
     "Batch size must be greater than 0.",
   "error.reason.MEDIA_SEARCH_LANGUAGE_CHOOSE_LANGUAGE_OFFERED_SEARCH_LANGUAGE_PICKER_UNKNOWN":
-    "Unknown search language the selected value; choose a language offered by the search language picker.",
+    "A search language is unknown; choose a language offered by the search language picker.",
   "error.reason.MEDIA_SELECTED_ROOT_CHANGED": "Selected root changed.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
     "The series movie link could not be found.",
@@ -2750,24 +2848,25 @@ const en: LocaleDictionary = {
   "error.reason.NOTIFICATION_MEDIA_SERVER_NOTIFICATION_TARGETS_INVALID":
     "Media server notification targets must be managed in Media Servers.",
   "error.reason.NOTIFICATION_MEDIA_SERVER_PROVIDER_INVALID":
-    "Invalid media server provider the selected item.",
+    "The media server provider is invalid.",
   "error.reason.NOTIFICATION_PLEX_MEDIA_SERVER_BASE_URL_INVALID":
-    "Invalid Plex media server base URL the selected item.",
+    "The Plex media server base URL is invalid.",
   "error.reason.NOTIFICATION_PLUGIN_CHANNEL_TYPE_NOT_FOUND":
     "No notification plugin for channel type was not found.",
   "error.reason.NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_EVENT":
-    "Notification provider the selected item does not support event the selected item.",
+    "This notification provider does not support one of the selected events.",
   "error.reason.NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_TEST_NOTIFICATIONS":
-    "Notification provider the selected item does not support test notifications.",
+    "This notification provider does not support test notifications.",
   "error.reason.NOTIFICATION_PROVIDER_REQUIRES":
-    "Notification provider the selected item requires the selected item.",
-  "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE": "Plugin not installed",
+    "This notification provider is missing a required setting.",
+  "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE":
+    "This notification provider is not available.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_NOT_FOUND":
     "The subscription could not be found.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_TARGET_REQUIRED":
     "Notification subscription target is required.",
   "error.reason.NOTIFICATION_TARGET_ID_REQUIRED_TARGET_KIND":
-    "Notification target id is required for target kind the selected item.",
+    "A notification target id is required for this target kind.",
   "error.reason.NOTIFICATION_TARGET_KIND_INVALID":
     "Invalid notification target kind.",
   "error.reason.NOTIFICATION_TARGET_KIND_REQUIRED_WHEN_TARGET_ID_PROVIDED":
@@ -2791,7 +2890,7 @@ const en: LocaleDictionary = {
   "error.reason.OAUTH_CLIENT_DISPLAY_NAME_REQUIRED":
     "OAuth client display name is required.",
   "error.reason.OAUTH_CLIENT_DISPLAY_NAME_TOO_LONG":
-    "OAuth client display name must not exceed the selected value characters.",
+    "OAuth client display name must not exceed 120 characters.",
   "error.reason.OAUTH_CLIENT_NOT_FOUND": "Oauth client was not found.",
   "error.reason.OAUTH_CLIENT_UNKNOWN": "Unknown OAuth client.",
   "error.reason.OAUTH_CODE_CHALLENGE_INVALID":
@@ -2829,7 +2928,7 @@ const en: LocaleDictionary = {
   "error.reason.OAUTH_USER_NO_LONGER_EXISTS": "OAuth user no longer exists.",
   "error.reason.PLUGIN_ALREADY_INSTALLED": "This plugin is already installed.",
   "error.reason.PLUGIN_ALREADY_VERSION_SELECTED_RELEASE":
-    "Plugin the selected item is already at version the selected value.",
+    "The plugin is already at the selected release's version.",
   "error.reason.PLUGIN_ARCHIVE_EXTRACTOR_CONFLICT":
     "Multiple enabled archive extraction plugins support this format. Disable one in Settings → Plugins.",
   "error.reason.PLUGIN_ARCHIVE_PATH_OUTSIDE_ROOT":
@@ -2837,27 +2936,27 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_ARCHIVE_PATH_UNSAFE":
     "The archive plugin path is not a safe relative path.",
   "error.reason.PLUGIN_ARTIFACT_DIGEST_REQUIRED":
-    "The requested value must include at least one digest.",
+    "The plugin artifact must include at least one digest.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECTS_NOT_ALLOWED":
-    "Plugin artifact redirects are not allowed for the selected value.",
+    "Redirects are not allowed for this plugin artifact.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_DID_NOT_INCLUDE_LOCATION_HEADER":
-    "Plugin artifact redirect for the selected value did not include a Location header.",
+    "A plugin artifact redirect did not include a Location header.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_HEADER":
-    "Plugin artifact redirect for the selected value included an invalid Location header.",
+    "A plugin artifact redirect included an invalid Location header.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_URL":
-    "Plugin artifact redirect for the selected value included an invalid Location URL.",
+    "A plugin artifact redirect included an invalid Location URL.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_LIMIT_EXCEEDED":
-    "Plugin artifact redirect limit exceeded for the selected value.",
+    "The plugin artifact download was redirected too many times.",
   "error.reason.PLUGIN_ARTIFACT_UNTRUSTED":
     "The plugin artifact could not be trusted.",
   "error.reason.PLUGIN_BLOCKED_VERSION_SCRYER_SO_CANNOT_TESTED":
-    "The the selected item plugin is blocked on this version of Scryer, so it cannot be tested. the selected value.",
+    "This plugin is blocked on this version of Scryer, so it cannot be tested.",
   "error.reason.PLUGIN_BROTLI_DECOMPRESSION_NOT_COMPILED_INTO_TARGET":
     "Plugin brotli decompression is not compiled into this target.",
   "error.reason.PLUGIN_BUNDLED_PLUGIN":
-    "Plugin the selected item is a bundled plugin; uninstall any downloaded override before uploading a local build.",
+    "This is a bundled plugin; uninstall any downloaded override before uploading a local build.",
   "error.reason.PLUGIN_CANNOT_REVERT_BUILT_PLUGIN_NO_BUNDLED_DEFINITION_UNAVAILABLE":
-    "Cannot revert built-in plugin the selected item because no bundled definition is available.",
+    "Cannot revert this built-in plugin because no bundled definition is available.",
   "error.reason.PLUGIN_CANNOT_UNINSTALL_BUILT_PLUGINS":
     "Cannot uninstall built-in plugins; disable them instead.",
   "error.reason.PLUGIN_CATALOG_ARTIFACTS_MISSING":
@@ -2871,13 +2970,13 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_CATALOG_REDIRECT_OUT_OF_RANGE":
     "Plugin catalog redirect must include at least one artifact.",
   "error.reason.PLUGIN_CATALOG_REDIRECT_SCHEMA_UNSUPPORTED":
-    "Unsupported plugin catalog redirect schema the selected item.",
+    "The plugin catalog redirect uses an unsupported schema.",
   "error.reason.PLUGIN_CATALOG_SCHEMA_UNSUPPORTED":
-    "Unsupported plugin catalog schema the selected item.",
+    "The plugin catalog uses an unsupported schema.",
   "error.reason.PLUGIN_CATALOG_V3_JSON_INVALID":
     "Invalid plugin catalog v3 JSON.",
   "error.reason.PLUGIN_CATALOG_VERSION_INVALID":
-    "Invalid catalog version the selected item.",
+    "The catalog version is invalid.",
   "error.reason.PLUGIN_CATALOG_VERSION_OUT_OF_RANGE":
     "Plugin catalog version must be greater than zero.",
   "error.reason.PLUGIN_CHANGED_WHILE_RUNTIME_BEING_PREPARED":
@@ -2885,25 +2984,25 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_CLIENT_CONFIG_JSON_INVALID":
     "Invalid client config_json.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_APPROVED_TIER_INVALID":
-    "Community catalog source the selected item approved tier must be verified_community.",
+    "A community catalog source's approved tier must be verified_community.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_MUST_PUBLISH_EXACTLY_ONE_PLUGIN":
-    "Community catalog source the selected item must publish exactly one plugin.",
+    "A community catalog source must publish exactly one plugin.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_PUBLISHED_PLUGIN":
-    "Community catalog source the selected item published plugin the selected item.",
+    "The community catalog source published a plugin other than the one it was approved for.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SIGNER_REPO_DOES_NOT_MATCH_APPROVED_REPO":
-    "Community catalog source the selected item signer repo the selected item does not match approved repo the selected item.",
+    "The community catalog source's signer repository does not match its approved repository.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SOURCE_REPO_DOES_NOT_MATCH_APPROVED_REPO":
-    "Community catalog source the selected item source repo the selected item does not match approved repo the selected item.",
+    "The community catalog source's source repository does not match its approved repository.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SUPPORT_TIER_DOES_NOT_MATCH_APPROVED_TIER":
-    "Community catalog source the selected item support tier does not match approved tier.",
+    "The community catalog source's support tier does not match its approved tier.",
   "error.reason.PLUGIN_COMMUNITY_RULE_PACK_PUBLISH_FORBIDDEN":
-    "Community catalog source the selected item must not publish rule packs.",
+    "A community catalog source must not publish rule packs.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Duplicate community source id the selected item in plugin catalog.",
+    "The plugin catalog lists the same community source id more than once.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_NESTING_FORBIDDEN":
-    "Community catalog source the selected item must not publish nested community sources.",
+    "A community catalog source must not publish nested community sources.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_SUPPORT_TIER_INVALID":
-    "Community source the selected item support tier must be verified_community.",
+    "A community source's support tier must be verified_community.",
   "error.reason.PLUGIN_COMPONENT_DESCRIPTOR_DIFFERS_PERSISTED_METADATA":
     "Component descriptor differs from its persisted metadata.",
   "error.reason.PLUGIN_COMPONENT_DESCRIPTOR_MISMATCH":
@@ -2913,31 +3012,30 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_COMPONENT_UPGRADE_BLOCKED":
     "The plugin upgrade is blocked by installed components.",
   "error.reason.PLUGIN_DECOMPRESSED_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES":
-    "The requested value decompressed payload exceeds maximum size of the selected value bytes.",
+    "The decompressed payload exceeds its maximum size.",
   "error.reason.PLUGIN_DECOMPRESSED_SIZE_LIMIT_EXCEEDS_PLATFORM_S_MAXIMUM_BUFFER_SIZE":
-    "The requested value decompressed size limit the selected value exceeds this platform's maximum buffer size.",
+    "The decompressed size limit exceeds this platform's maximum buffer size.",
   "error.reason.PLUGIN_DESCRIPTOR_ID_MISMATCH":
-    "Downloaded plugin descriptor id the selected item does not match registry id the selected item.",
+    "The downloaded plugin's descriptor id does not match the registry id.",
   "error.reason.PLUGIN_DIGEST_ALGORITHM_REQUIRED":
     "Digest algorithm is missing.",
   "error.reason.PLUGIN_DIGEST_MISMATCH":
-    "The requested value digest mismatch: expected blake3.",
-  "error.reason.PLUGIN_DIGEST_STRING_INVALID":
-    "Invalid digest string the selected item.",
+    "The plugin artifact's blake3 digest does not match.",
+  "error.reason.PLUGIN_DIGEST_STRING_INVALID": "The digest string is invalid.",
   "error.reason.PLUGIN_DIGEST_VALUE_INVALID":
-    "Digest value the selected item must be hexadecimal.",
+    "The digest value must be hexadecimal.",
   "error.reason.PLUGIN_DIGEST_VALUE_REQUIRED": "Digest value is missing.",
   "error.reason.PLUGIN_DOES_NOT_INCLUDE_BLAKE3_DIGEST":
-    "The requested value does not include a blake3 digest.",
+    "The plugin artifact does not include a blake3 digest.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_PLUGIN_TYPE_BUT_REGISTRY_EXPECTS":
-    "Downloaded plugin the selected item has plugin_type the selected item but registry expects the selected item.",
+    "The downloaded plugin's plugin type does not match what the registry expects.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_PROVIDER_TYPE_BUT_REGISTRY_EXPECTS":
-    "Downloaded plugin the selected item has provider_type the selected item but registry expects the selected item.",
+    "The downloaded plugin's provider type does not match what the registry expects.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_SDK_VERSION_BUT_SELECTED_RELEASE":
-    "Downloaded plugin the selected item has sdk_version the selected item but the selected release is the selected item.",
+    "The downloaded plugin's SDK version does not match the selected release.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_VERSION_BUT_SELECTED_RELEASE":
-    "Downloaded plugin the selected item has version the selected item but the selected release is the selected item.",
-  "error.reason.PLUGIN_FIELD_REQUIRED": "The requested value is required.",
+    "The downloaded plugin's version does not match the selected release.",
+  "error.reason.PLUGIN_FIELD_REQUIRED": "A required field is empty.",
   "error.reason.PLUGIN_GITHUB_OWNER_REQUIRED": "GitHub owner is missing.",
   "error.reason.PLUGIN_GITHUB_REPOSITORY_INVALID":
     "GitHub repository must include owner and repo.",
@@ -2946,7 +3044,7 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_GITHUB_REPO_NAME_REQUIRED":
     "GitHub repo name is missing.",
   "error.reason.PLUGIN_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Duplicate plugin id the selected item in plugin catalog.",
+    "The plugin catalog lists the same plugin id more than once.",
   "error.reason.PLUGIN_INDEXER_HOST_FORBIDDEN":
     "The indexer host is not allowed for this instance.",
   "error.reason.PLUGIN_INSTALLED_PACK_VERSION_INVALID":
@@ -2954,25 +3052,25 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_INSTALLED_PLUGIN_SETTINGS_DESCRIPTOR_UNAVAILABLE":
     "Installed plugin settings descriptor is unavailable.",
   "error.reason.PLUGIN_INSTALLED_VERSION_INVALID":
-    "Invalid installed version the selected item.",
+    "The installed version is invalid.",
   "error.reason.PLUGIN_INVALID_PERSISTED_DESCRIPTOR_JSON":
-    "Plugin the selected item has invalid persisted descriptor_json.",
+    "The plugin's stored descriptor is invalid.",
   "error.reason.PLUGIN_LIST_LINKED_ACCOUNT_REQUIRED":
     "List provider reads only a member's own lists and needs that member's linked account.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_CATALOG_NOT_UTF_8":
     "Manual plugin catalog is not UTF-8.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_CATALOG_SOURCE_MISSING_GITHUB_REPO":
-    "Manual plugin catalog source the selected item is missing github repo.",
+    "The manual plugin catalog source is missing its GitHub repository.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_MISSING_SOURCE_REPO":
-    "Manual plugin the selected item is missing source repo.",
+    "The manual plugin is missing its source repository.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPOSITORIES_INVALID":
     "Manual plugin repositories must be hosted on github.com.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_MUST_PUBLISH_EXACTLY_ONE_PLUGIN_ENTRY":
-    "Manual plugin repo the selected item must publish exactly one plugin entry.",
+    "A manual plugin repository must publish exactly one plugin entry.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_NO_SDK_COMPATIBLE_RELEASE":
-    "Manual plugin repo the selected item has no SDK-compatible release.",
+    "The manual plugin repository has no SDK-compatible release.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_PUBLISHED_PLUGIN_SOURCE_REPO":
-    "Manual plugin repo the selected item published plugin the selected item from source repo the selected item.",
+    "The manual plugin repository published a plugin from a different source repository.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_FILE_NAME_REQUIRED":
     "Manual plugin upload file name is required.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_INVALID":
@@ -2982,17 +3080,17 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_REQUIRES_EXPLICIT_RISK_ACKNOWLEDGEMENT":
     "Manual plugin upload requires explicit risk acknowledgement.",
   "error.reason.PLUGIN_MISSING_PERSISTED_DESCRIPTOR_JSON":
-    "Plugin the selected item is missing persisted descriptor_json.",
+    "The plugin is missing its stored descriptor.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_DIGEST_ALGORITHM":
-    "Plugin the selected item is missing persisted wasm digest algorithm.",
+    "The plugin is missing its stored WASM digest algorithm.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_DIGEST_VALUE":
-    "Plugin the selected item is missing persisted wasm digest value.",
+    "The plugin is missing its stored WASM digest value.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_PAYLOAD":
-    "Plugin the selected item is missing persisted WASM payload.",
+    "The plugin is missing its stored WASM payload.",
   "error.reason.PLUGIN_MISSING_USABLE_BLAKE3_DIGEST":
-    "The requested value is missing a usable blake3 digest.",
+    "The plugin artifact is missing a usable blake3 digest.",
   "error.reason.PLUGIN_MUST_USE_SUPPORTED_ALGORITHM_HEX_DIGEST":
-    "The requested value must use a supported <algorithm>:<hex> digest.",
+    "A digest must use a supported <algorithm>:<hex> format.",
   "error.reason.PLUGIN_NETWORK_ENDPOINT_RESOLUTION_FAILED":
     "The indexer's configured endpoints could not be resolved.",
   "error.reason.PLUGIN_NEWZNAB_PROFILE_INVALID":
@@ -3000,41 +3098,41 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND":
     "Plugin  is not available from the plugin catalog was not found.",
   "error.reason.PLUGIN_NO_LONGER_HOST_COMPATIBLE_RELEASE_SCRYER_VERSION":
-    "Plugin the selected item no longer has a host-compatible release for this Scryer version.",
+    "The plugin no longer has a release compatible with this Scryer version.",
   "error.reason.PLUGIN_NO_LONGER_INSTALLED_NOT_FOUND":
     "Plugin is no longer installed was not found.",
   "error.reason.PLUGIN_OFFICIAL_NZBGEEK_PLUGIN_NOT_AVAILABLE_BUILTIN_MIGRATION_NOT_FOUND":
     "Official nzbgeek plugin is not available for builtin migration.",
   "error.reason.PLUGIN_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES":
-    "The requested value payload exceeds maximum size of the selected value bytes.",
+    "The payload exceeds its maximum size.",
   "error.reason.PLUGIN_PAYLOAD_TOO_LARGE_VALIDATE_DECOMPRESSED_SIZE":
-    "The requested value payload is too large to validate decompressed size.",
+    "The payload is too large to validate its decompressed size.",
   "error.reason.PLUGIN_PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE":
-    "Provider type the selected item is reserved for first-party code.",
+    "This provider type is reserved for first-party code.",
   "error.reason.PLUGIN_PROXY_CONFIGURATION_NOT_FOUND":
     "Proxy configuration was not found.",
   "error.reason.PLUGIN_PROXY_DISABLED_DOWNLOAD_CLIENT":
     "Proxy is disabled for this download client.",
   "error.reason.PLUGIN_RELEASE_ARTIFACT_BYTES_OUT_OF_RANGE":
-    "Plugin the selected item release the selected item artifact the selected item bytes must be greater than zero.",
+    "A plugin release artifact's size must be greater than zero.",
   "error.reason.PLUGIN_RELEASE_ARTIFACT_INVALID":
-    "Plugin the selected item release the selected item artifact the selected item must include wasm_digests.",
+    "A plugin release artifact must include wasm_digests.",
   "error.reason.PLUGIN_RELEASE_DUPLICATE_ARTIFACT_VARIANT_ENCODING_ROWS":
-    "Plugin the selected item release the selected item has duplicate artifact variant/encoding rows.",
+    "A plugin release has duplicate artifact variant and encoding rows.",
   "error.reason.PLUGIN_RELEASE_INVALID_MAX_SCRYER_VERSION":
-    "Plugin the selected item release the selected item has invalid max_scryer_version.",
+    "A plugin release has an invalid max_scryer_version.",
   "error.reason.PLUGIN_RELEASE_INVALID_MIN_SCRYER_VERSION":
-    "Plugin the selected item release the selected item has invalid min_scryer_version.",
+    "A plugin release has an invalid min_scryer_version.",
   "error.reason.PLUGIN_RELEASE_MIN_SCRYER_VERSION_GREATER_MAX_SCRYER_VERSION":
-    "Plugin the selected item release the selected item has min_scryer_version greater than max_scryer_version.",
+    "A plugin release has a min_scryer_version greater than its max_scryer_version.",
   "error.reason.PLUGIN_RELEASE_OUT_OF_RANGE":
-    "The selected item release the selected item must include at least one artifact.",
+    "A release must include at least one artifact.",
   "error.reason.PLUGIN_RELEASE_VERSION_INVALID":
-    "Invalid plugin release version the selected item.",
+    "The plugin release version is invalid.",
   "error.reason.PLUGIN_RELEASE_VERSION_PLUGIN_DUPLICATED":
-    "Duplicate release version the selected item for plugin the selected item.",
+    "A plugin lists the same release version more than once.",
   "error.reason.PLUGIN_REQUESTS_HOST_PROCESS_CAPABILITY_WHICH_RESERVED_OFFICIAL_PLUGINS":
-    "Plugin the selected item requests the host-process capability, which is reserved for official plugins.",
+    "The plugin requests the host-process capability, which is reserved for official plugins.",
   "error.reason.PLUGIN_REQUIRED_PLUGIN_SETTING_REQUIRED":
     "Required plugin setting is missing.",
   "error.reason.PLUGIN_RESOURCE_NOT_FOUND":
@@ -3042,44 +3140,44 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_RULE_PACK_CATALOG_CHANGED_DURING_DOWNLOAD":
     "Rule pack catalog changed during download.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_DUPLICATE_RULE_ID":
-    "Rule pack the selected item contains duplicate rule id the selected item.",
+    "The rule pack contains a duplicate rule id.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_NO_RULES":
-    "Rule pack the selected item contains no rules.",
+    "The rule pack contains no rules.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_RULE_REQUIRED_FIELDS_MISSING":
-    "Rule pack the selected item contains a rule with required fields missing.",
+    "The rule pack contains a rule with required fields missing.",
   "error.reason.PLUGIN_RULE_PACK_DOES_NOT_MATCH_CATALOG_ID_VERSION":
-    "Rule pack the selected item does not match the catalog id/version.",
+    "The rule pack does not match the catalog id and version.",
   "error.reason.PLUGIN_RULE_PACK_EMPTY":
-    "Rule pack the selected item has an empty the selected value.",
+    "The rule pack has an empty required field.",
   "error.reason.PLUGIN_RULE_PACK_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Duplicate rule pack id the selected item in plugin catalog.",
+    "The plugin catalog lists the same rule pack id more than once.",
   "error.reason.PLUGIN_RULE_PACK_INVALID_MIN_SCRYER_VERSION":
-    "Rule pack the selected item has invalid min_scryer_version the selected item.",
+    "A rule pack has an invalid min_scryer_version.",
   "error.reason.PLUGIN_RULE_PACK_NOT_FOUND": "Rule pack was not found.",
   "error.reason.PLUGIN_RULE_PACK_NO_COMPATIBLE_ARTIFACT":
-    "Rule pack the selected item has no compatible artifact.",
+    "The rule pack has no compatible artifact.",
   "error.reason.PLUGIN_RULE_PACK_RELEASE_INVALID":
-    "Rule pack the selected item release the selected item must include rule_pack_digests.",
+    "A rule pack release must include rule_pack_digests.",
   "error.reason.PLUGIN_RULE_PACK_RELEASE_VERSION_DUPLICATED":
-    "Duplicate rule pack release version the selected item for the selected item.",
+    "A rule pack lists the same release version more than once.",
   "error.reason.PLUGIN_RULE_PACK_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING":
-    "Rule pack the selected item selected artifact the selected item has unsupported encoding.",
+    "The rule pack's selected artifact has an unsupported encoding.",
   "error.reason.PLUGIN_RULE_PACK_USES_UNSUPPORTED_SCHEMA_VERSION":
-    "Rule pack the selected item uses unsupported schema version the selected value.",
+    "The rule pack uses an unsupported schema version.",
   "error.reason.PLUGIN_SDK_CONSTRAINT_PLUGIN_INVALID":
-    "Invalid sdk_constraint the selected item for plugin the selected item.",
+    "A plugin has an invalid sdk_constraint.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_BYTES_MISMATCH":
-    "Plugin the selected item selected artifact the selected item bytes mismatch: expected the selected value, got the selected value.",
+    "The plugin's selected artifact is not the size the catalog lists.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_TOO_LARGE_VALIDATE_BYTES":
-    "Plugin the selected item selected artifact the selected item is too large to validate bytes.",
+    "The plugin's selected artifact is too large to validate.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING":
-    "Plugin the selected item selected artifact the selected item has unsupported encoding.",
+    "The plugin's selected artifact has an unsupported encoding.",
   "error.reason.PLUGIN_SETTING_UNKNOWN": "Unknown plugin setting.",
   "error.reason.PLUGIN_SETTING_VALUE_INVALID": "Invalid plugin setting value.",
   "error.reason.PLUGIN_SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET":
     "Plugin signature verification is not compiled into this target.",
   "error.reason.PLUGIN_SIGNER_REPO_DOES_NOT_MATCH_SOURCE_REPO":
-    "Plugin the selected item signer repo the selected item does not match source repo the selected item.",
+    "The plugin's signer repository does not match its source repository.",
   "error.reason.PLUGIN_SUBTITLE_CONFIG_NOT_OBJECT":
     "Subtitle provider config_json must be a JSON object.",
   "error.reason.PLUGIN_SUBTITLE_HOST_BINDING_REQUIRED":
@@ -3101,21 +3199,21 @@ const en: LocaleDictionary = {
   "error.reason.PLUGIN_SUBTITLE_SYNC_OUTPUT_TOO_LARGE":
     "The subtitle sync output exceeds the size limit.",
   "error.reason.PLUGIN_TEST_CONNECTION_UNSUPPORTED":
-    "Test connection is not supported for client type the selected item.",
+    "Test connection is not supported for this client type.",
   "error.reason.PLUGIN_TYPE_BUILT_PREPARATION_UNSUPPORTED":
-    "Unsupported plugin_type the selected item for built-in preparation.",
+    "This plugin type is not supported for built-in preparation.",
   "error.reason.PLUGIN_TYPE_BUILT_RESTORE_UNSUPPORTED":
-    "Unsupported plugin_type the selected item for built-in restore.",
+    "This plugin type is not supported for built-in restore.",
   "error.reason.PLUGIN_TYPE_RUNTIME_REMOVAL_UNSUPPORTED":
-    "Unsupported plugin_type the selected item for runtime removal.",
+    "This plugin type is not supported for runtime removal.",
   "error.reason.PLUGIN_TYPE_RUNTIME_UPSERT_UNSUPPORTED":
-    "Unsupported plugin_type the selected item for runtime upsert.",
+    "This plugin type is not supported for runtime install or update.",
   "error.reason.PLUGIN_URL_INVALID":
-    "The requested value URL the selected item must use http or https, got the selected item.",
+    "The URL is invalid; it must use http or https.",
   "error.reason.PLUGIN_USES_UNSUPPORTED_DIGEST_ALGORITHM":
-    "The requested value uses unsupported digest algorithm the selected item.",
+    "The digest uses an unsupported algorithm.",
   "error.reason.PLUGIN_WASM_ARTIFACT_TOO_LARGE":
-    "Plugin the selected item WASM artifact declared size the selected value exceeds maximum size of the selected value bytes.",
+    "The plugin's WASM artifact is larger than the 128 MiB limit.",
   "error.reason.PLUGIN_ZSTD_COMPRESSION_NOT_COMPILED_INTO_TARGET":
     "Plugin zstd compression is not compiled into this target.",
   "error.reason.PLUGIN_ZSTD_DECOMPRESSION_NOT_COMPILED_INTO_TARGET":
@@ -3160,16 +3258,15 @@ const en: LocaleDictionary = {
     "The search results expired. Search again.",
   "error.reason.RELEASE_TOKEN_INVALID":
     "The release selection could not be verified. Search again.",
-  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+  "error.reason.REQUEST_RULE_ENGINE_BUILD_FAILED":
     "Failed to build the request rules engine.",
-  "error.reason.REQUEST_RULE_FIELD_REQUIRED":
-    "The requested value must not be empty.",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "A required field is empty.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
-    "A lease must be at most the selected value days (ten years), or forever.",
-  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+    "A lease must be from 1 to 3650 days (ten years), or forever.",
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_MISMATCH":
     "Library facet does not match requested media facet.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Library was not found.",
-  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+  "error.reason.REQUEST_RULE_DECISION_READ_FORBIDDEN":
     "You may not read this request's decision.",
   "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
     "Media requests must include SMG external identifiers.",
@@ -3179,23 +3276,23 @@ const en: LocaleDictionary = {
     "Media request was not found.",
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
-    "A request may carry at most the selected value tags, the selected value were supplied.",
+  "error.reason.REQUEST_RULE_TAG_LIMIT_EXCEEDED":
+    "A request may carry at most 16 tags.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
-  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE": "Rule failed to compile.",
+  "error.reason.REQUEST_RULE_COMPILE_FAILED": "Rule failed to compile.",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "Rule validation failed.",
   "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND":
     "Sample library was not found.",
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND":
     "Sample requester was not found.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "Request rule set was not found.",
-  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
-    "Tag is the selected value characters, at most the selected value are allowed.",
+  "error.reason.REQUEST_RULE_TAG_TOO_LONG":
+    "A tag may be at most 64 characters long.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
-    "Tag the selected item contains unsupported character the selected item; use letters, digits, '.', '_', '-', or spaces.",
+    "A tag contains an unsupported character; use letters, digits, '.', '_', '-', or spaces.",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "Tag must not be empty.",
   "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
-    "Tag the selected item uses the reserved the selected item prefix.",
+    "A tag may not start with the reserved prefix 'scryer:'.",
   "error.reason.RULE_AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR":
     "Automatic rule pack updates require a stable patch on the installed major/minor.",
   "error.reason.RULE_BUNDLED_RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":
@@ -3206,7 +3303,7 @@ const en: LocaleDictionary = {
   "error.reason.RULE_BUNDLED_TRASH_PACK_UNSUPPORTED_IDENTITY_SCHEMA":
     "Bundled TRaSH pack has an unsupported identity or schema.",
   "error.reason.RULE_CANNOT_ADOPT_DUPLICATE_LEGACY_LOCALE_RULES":
-    "Cannot adopt duplicate legacy locale rules for the selected value.",
+    "Cannot adopt duplicate legacy locale rules for this template.",
   "error.reason.RULE_COPYING_TRACKED_RULE_REQUIRES_DISABLING_SOURCE":
     "Copying a tracked rule requires disabling its source.",
   "error.reason.RULE_COPY_DISABLES_SOURCE_REQUIRES_COPY_SOURCE_RULE_SET":
@@ -3216,7 +3313,7 @@ const en: LocaleDictionary = {
   "error.reason.RULE_EPISODE_CANNOT_SELECTED_WHEN_TESTING_MOVIE_RULE":
     "An episode cannot be selected when testing a movie rule.",
   "error.reason.RULE_EPISODE_DOES_NOT_BELONG_TITLE":
-    "Episode the selected value does not belong to title the selected value.",
+    "The episode does not belong to this title.",
   "error.reason.RULE_EPISODE_NOT_FOUND": "Episode was not found.",
   "error.reason.RULE_EPISODE_REQUIRED_WHEN_TESTING_SERIES_ANIME_RULE":
     "An episode is required when testing a series or anime rule.",
@@ -3232,15 +3329,14 @@ const en: LocaleDictionary = {
   "error.reason.RULE_MANAGED_TRACKED_RULES_INVALID":
     "Managed or tracked rules must be copied before editing.",
   "error.reason.RULE_MEDIA_FILE_DOES_NOT_COVER_EPISODE":
-    "Media file the selected value does not cover episode the selected value.",
+    "The media file does not cover this episode.",
   "error.reason.RULE_MEDIA_FILE_NOT_FOUND":
     "Media file  of title was not found.",
   "error.reason.RULE_ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP":
-    "Only one enabled rule may use exclusive group the selected value.",
+    "Only one enabled rule may use an exclusive group.",
   "error.reason.RULE_PACK_ALREADY_INSTALLED":
-    "Rule pack the selected value is already installed.",
-  "error.reason.RULE_PACK_FACET_INVALID":
-    "Invalid rule pack facet the selected value.",
+    "This rule pack is already installed.",
+  "error.reason.RULE_PACK_FACET_INVALID": "The rule pack facet is invalid.",
   "error.reason.RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":
     "Rule pack installation conflicted with another change.",
   "error.reason.RULE_PACK_PRIORITY_TEMPLATE_ID_DUPLICATED":
@@ -3259,7 +3355,7 @@ const en: LocaleDictionary = {
   "error.reason.RULE_PREVIEW_REQUIRES_EITHER_DRAFT_SAVED_RULE_SET":
     "A preview requires either a draft or a saved rule set.",
   "error.reason.RULE_PUBLISHED_INVALID":
-    "Published at must be an RFC 2822 or RFC 3339 timestamp, got the selected value.",
+    "Published at must be an RFC 2822 or RFC 3339 timestamp.",
   "error.reason.RULE_RELEASE_NAME_TOO_LARGE_SCORING_PREVIEW":
     "Release name is too large for a scoring preview.",
   "error.reason.RULE_RULES_PACK_CANNOT_COPIED":
@@ -3294,12 +3390,11 @@ const en: LocaleDictionary = {
     "Tracked rule pack changed; reload and retry.",
   "error.reason.RULE_TRACKED_RULE_PACK_NOT_FOUND":
     "Tracked rule pack was not found.",
-  "error.reason.RULE_TRACKED_RULE_REQUIRED":
-    "Tracked rule the selected value is missing.",
+  "error.reason.RULE_TRACKED_RULE_REQUIRED": "A tracked rule is missing.",
   "error.reason.RULE_VALIDATION_ERROR": "Rule validation error.",
   "error.reason.RULE_VALIDATION_FAILED": "Rule validation failed.",
   "error.reason.RULE_VERSION_INVALID":
-    "The requested value version is not valid semantic version.",
+    "The version is not a valid semantic version.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE": "Votes cannot be negative.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "The script schedule is invalid.",
   "error.reason.STANDBY_NOT_FOUND": "This saved candidate no longer exists.",
@@ -3333,18 +3428,24 @@ const en: LocaleDictionary = {
     "Authentication session was invalidated.",
   "error.reason.SECURITY_BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD":
     "This backup bundle is encrypted and requires a password.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_ENTRY_TYPE_UNSUPPORTED":
+    "This backup holds something other than files and folders, so it cannot be restored.",
   "error.reason.SECURITY_BACKUP_BUNDLE_INVALID":
     "The backup bundle is invalid.",
   "error.reason.SECURITY_BACKUP_BUNDLE_NOT_FOUND":
     "Backup bundle was not found.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_SCRATCH_SPACE_LOW":
+    "There is not enough free disk space to unpack this backup for restore.",
   "error.reason.SECURITY_BACKUP_BUNDLE_STILL_BEING_CREATED":
     "Backup bundle is still being created.",
   "error.reason.SECURITY_BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG":
-    "Backup bundle table set does not match the current restore catalog: missing [the selected value], unexpected [the selected value]. the selected value.",
+    "The backup's tables do not match what this version of Scryer can restore.",
+  "error.reason.SECURITY_BACKUP_BUNDLE_TOO_MANY_ENTRIES":
+    "This backup holds more entries than a Scryer backup has, so it cannot be restored.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MANIFEST_INCOMPLETE":
-    "Backup checksum manifest is incomplete: missing [the selected value], unexpected [the selected value].",
+    "The backup checksum manifest is incomplete.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MISMATCH":
-    "Backup checksum mismatch for the selected value.",
+    "A backup checksum does not match.",
   "error.reason.SECURITY_BACKUP_CREATION_FAILED":
     "The backup could not be created.",
   "error.reason.SECURITY_BACKUP_DOWNLOAD_SUBJECT_UNKNOWN":
@@ -3367,7 +3468,7 @@ const en: LocaleDictionary = {
     "Backup export requires a non-empty password.",
   "error.reason.SECURITY_BACKUP_FILENAME_INVALID": "Invalid backup filename.",
   "error.reason.SECURITY_BACKUP_FORMAT_VERSION_UNSUPPORTED":
-    "Unsupported backup format version the selected value.",
+    "This backup format version is not supported.",
   "error.reason.SECURITY_BACKUP_MANIFEST_INVALID":
     "Backup manifest is invalid.",
   "error.reason.SECURITY_BACKUP_MANIFEST_MISSING": "Backup manifest missing.",
@@ -3412,13 +3513,13 @@ const en: LocaleDictionary = {
   "error.reason.SECURITY_CANNOT_RESET_OWN_AUTHENTICATION_FACTORS":
     "Cannot reset your own authentication factors.",
   "error.reason.SECURITY_CANNOT_RESOLVE_BACKUP_DOWNLOAD_SIGNING_KEY_ACTOR":
-    "Cannot resolve backup download signing key for actor the selected value.",
+    "Cannot resolve the backup download signing key for this user.",
   "error.reason.SECURITY_CANNOT_RESOLVE_RELEASE_CANDIDATE_SIGNING_KEY_ACTOR":
-    "Cannot resolve release candidate signing key for actor the selected value.",
+    "Cannot resolve the release candidate signing key for this user.",
   "error.reason.SECURITY_CONNECTION_DISABLED":
-    "The requested value connection is disabled.",
+    "This sign-in connection is disabled.",
   "error.reason.SECURITY_CONNECTION_NOT_CONFIGURED":
-    "The requested value connection is not configured for external auth.",
+    "This sign-in connection is not configured for external sign-in.",
   "error.reason.SECURITY_COULD_NOT_ALLOCATE_SCRYER_USERNAME_EXTERNAL_ACCOUNT":
     "Could not allocate a Scryer username for the external account.",
   "error.reason.SECURITY_CREDENTIALS_INVALID": "Invalid credentials.",
@@ -3460,7 +3561,7 @@ const en: LocaleDictionary = {
   "error.reason.SECURITY_ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID":
     "Encrypted backup payload is truncated or invalid.",
   "error.reason.SECURITY_ENCRYPTED_BACKUP_VERSION_UNSUPPORTED":
-    "Unsupported encrypted backup version the selected value.",
+    "This encrypted backup version is not supported.",
   "error.reason.SECURITY_EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD":
     "Externally managed users cannot set a Scryer password.",
   "error.reason.SECURITY_EXTERNAL_ACCOUNT_DISABLED":
@@ -3531,7 +3632,7 @@ const en: LocaleDictionary = {
   "error.reason.SECURITY_NEW_PASSWORD_MUST_DIFFER_TEMPORARY_PASSWORD":
     "New password must differ from the temporary password.",
   "error.reason.SECURITY_NOT_ENABLED":
-    "The requested value is not enabled for the selected value.",
+    "This sign-in provider is not enabled for this use.",
   "error.reason.SECURITY_OAUTH_CLIENT_UNAVAILABLE":
     "OAuth client is unavailable.",
   "error.reason.SECURITY_OAUTH_GRANT_UNAVAILABLE":
@@ -3610,7 +3711,7 @@ const en: LocaleDictionary = {
   "error.reason.SECURITY_PLEX_SERVER_DISCOVERY_REQUIRED_BEFORE_USING_PLEX_AUTH":
     "Plex server discovery is required before using Plex for auth.",
   "error.reason.SECURITY_PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY":
-    "Prepared backup directory contains unsupported entry the selected value.",
+    "The prepared backup directory contains an unsupported entry.",
   "error.reason.SECURITY_RECOVERY_ADMIN_LOGIN_MANAGED_ENVIRONMENT":
     "Recovery-admin login is managed by the environment.",
   "error.reason.SECURITY_RECOVERY_ADMIN_USER_EXTERNALLY_MANAGED_CANNOT_REPAIRED_LOCAL_LOGIN":
@@ -3642,11 +3743,11 @@ const en: LocaleDictionary = {
   "error.reason.SECURITY_RELEASE_CANDIDATE_TOKEN_UNKNOWN_SCOPE":
     "Release candidate token has unknown scope.",
   "error.reason.SECURITY_RELEASE_REPORTS_SEEDERS_BELOW_MINIMUM_INDEXER":
-    "Release reports the selected value seeders, below the minimum of the selected value for this indexer.",
+    "The release reports fewer seeders than the minimum for this indexer.",
   "error.reason.SECURITY_REQUESTED_LOGIN_VERIFICATION_FACTOR_UNAVAILABLE":
     "Requested login verification factor is unavailable.",
   "error.reason.SECURITY_RESERVED_INSTANCE_RECOVERY":
-    "The requested value is reserved for instance recovery.",
+    "The username recovery-admin is reserved for instance recovery.",
   "error.reason.SECURITY_RESTRICTED_AUTHENTICATION_TOKENS_CANNOT_CARRY_ACTOR_CAPABILITIES":
     "Restricted authentication tokens cannot carry actor capabilities.",
   "error.reason.SECURITY_SCRYER_ADMIN_USERNAME_CONFLICTS_EXISTING_USERNAME":
@@ -3673,8 +3774,7 @@ const en: LocaleDictionary = {
   "error.reason.SECURITY_TOTP_ENROLLMENT_CHALLENGE_EXPIRED":
     "TOTP enrollment challenge has expired.",
   "error.reason.SECURITY_USERNAME_REQUIRED": "Username is required.",
-  "error.reason.SECURITY_USER_ALREADY_EXISTS":
-    "User the selected value already exists.",
+  "error.reason.SECURITY_USER_ALREADY_EXISTS": "This user already exists.",
   "error.reason.SECURITY_USER_NOT_FOUND": "User was not found.",
   "error.reason.SECURITY_USE_CHANGE_OWN_PASSWORD_UPDATE_OWN_PASSWORD":
     "Use change_own_password to update your own password.",
@@ -3688,7 +3788,7 @@ const en: LocaleDictionary = {
   "error.reason.SERVICES_COMPLETED_DOWNLOAD_NOT_FOUND":
     "Completed download was not found.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_ASSIGNED_PROXY_WHICH_DISABLED":
-    "Download client the selected value is assigned proxy the selected value, which is disabled.",
+    "The download client is assigned a proxy that is disabled.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_ITEM_ID_REQUIRED":
     "Download client item id is required.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_REFERENCES_PROXY_CONFIGURATION_WHICH_NOT_FOUND":
@@ -3721,23 +3821,23 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_CANNOT_REPLACED_CLEARED_SAME_REQUEST":
     "Automatic backup key cannot be replaced and cleared in the same request.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_OUT_OF_RANGE":
-    "Automatic backup key must be at least the selected value non-whitespace characters.",
+    "Automatic backup key must be at least 8 non-whitespace characters.",
   "error.reason.SETTINGS_BACKUP_PATH_INVALID":
     "Backup path must be a directory.",
   "error.reason.SETTINGS_BACKUP_PATH_NOT_WRITABLE":
     "Backup path is not writable.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_GLOBAL_DEFAULT":
-    "Cannot remove quality profile the selected item because it is the global default.",
+    "Cannot remove this quality profile because it is the global default.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_ALLOWS_REQUESTS":
-    "Cannot remove quality profile the selected item because library the selected item allows it for requests.",
+    "Cannot remove this quality profile because a library allows it for requests.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_REFERENCES":
-    "Cannot remove quality profile the selected item because library the selected item references it.",
+    "Cannot remove this quality profile because a library uses it.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_NOT_CONFIGURED":
-    "Cannot remove quality profile the selected item because it is configured for the selected value.",
+    "Cannot remove this quality profile because it is the configured profile for a media type.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_PENDING_MEDIA_REQUEST_S_REFERENCE":
-    "Cannot remove quality profile the selected item because the selected value pending media request(s) reference it.",
+    "Cannot remove this quality profile because pending media requests use it.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_TITLE_S_REFERENCE":
-    "Cannot remove quality profile the selected item because the selected value title(s) reference it.",
+    "Cannot remove this quality profile because titles use it.",
   "error.reason.SETTINGS_CANNOT_SAVE_RESET_TRUSTED_PROXIES_TOGETHER":
     "Cannot save and reset trusted proxies together.",
   "error.reason.SETTINGS_CATALOG_VIEW_COLUMNS_INVALID":
@@ -3757,7 +3857,7 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_DELAY_PROFILE_ID_REQUIRED":
     "Delay profile id is required.",
   "error.reason.SETTINGS_DELAY_PROFILE_NAMES_UNKNOWN_LIBRARY":
-    "Delay profile the selected item names an unknown library the selected item.",
+    "A delay profile names an unknown library.",
   "error.reason.SETTINGS_DELAY_PROFILE_NOT_FOUND":
     "Delay profile was not found.",
   "error.reason.SETTINGS_DOWNLOAD_CLIENT_ROUTING_ENTRY_REQUIRES_CLIENT_ID":
@@ -3781,7 +3881,7 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_INDEXER_ROUTING_ENTRY_REQUIRES_INDEXER_ID":
     "Indexer routing entry requires indexer_id.",
   "error.reason.SETTINGS_LANGUAGE_OUT_OF_RANGE":
-    "Language must be a language code of at most the selected value letters, digits or hyphens.",
+    "Language must be a language code of at most 16 letters, digits or hyphens.",
   "error.reason.SETTINGS_LIBRARY_ACCESS_DENIED":
     "You do not have access to this library.",
   "error.reason.SETTINGS_LIBRARY_NOT_FOUND": "Library was not found.",
@@ -3802,13 +3902,13 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_MOVIE_RELEASE_MARKET_INVALID":
     "Movie release market must be a two-letter ISO-3166 country code.",
   "error.reason.SETTINGS_MUST_ABSOLUTE_PATH_COMMAND_NAME_WITHOUT_PATH_SEPARATORS":
-    "The requested value must be an absolute path or a command name without path separators.",
+    "The interpreter must be an absolute path or a command name without path separators.",
   "error.reason.SETTINGS_MUST_RRGGBB_HEX_COLOR":
-    "The requested value must be a #RRGGBB hex color.",
+    "The color must be a #RRGGBB hex color.",
   "error.reason.SETTINGS_PASSWORD_MINIMUM_LENGTH_OUT_OF_RANGE":
-    "Password minimum length must be at least the selected value.",
+    "Password minimum length must be at least 8.",
   "error.reason.SETTINGS_PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID":
-    "Invalid permissions.chown_group setting value the selected item: numeric gid is outside range.",
+    "The permissions group is invalid: its numeric group id is out of range.",
   "error.reason.SETTINGS_PERSONA_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE":
     "Persona is required when inherit_global is false.",
   "error.reason.SETTINGS_PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME":
@@ -3819,21 +3919,21 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_PROFILE_ID_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE":
     "Profile_id is required when inherit_global is false.",
   "error.reason.SETTINGS_QUALITY_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE":
-    "Quality profile ids the selected item and the selected item differ only by ASCII case.",
+    "Two quality profile ids differ only by letter case.",
   "error.reason.SETTINGS_QUALITY_PROFILE_ID_AMBIGUOUS_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE":
-    "Quality profile id the selected item is ambiguous because profile ids differ only by ASCII case.",
+    "This quality profile id is ambiguous because profile ids differ only by letter case.",
   "error.reason.SETTINGS_QUALITY_PROFILE_ID_REQUIRED":
     "Quality profile id is required.",
   "error.reason.SETTINGS_QUALITY_PROFILE_NOT_FOUND":
     "Quality profile was not found.",
   "error.reason.SETTINGS_QUALITY_PROFILE_UNKNOWN":
-    "Unknown quality profile the selected item.",
+    "The quality profile is unknown.",
   "error.reason.SETTINGS_RECYCLE_BIN_PATH_UNSAFE":
     "The recycle bin path is unsafe or overlaps managed media.",
   "error.reason.SETTINGS_RECYCLE_BIN_RETENTION_OUT_OF_RANGE":
-    "Recycle bin retention must be between 1 and the selected value days.",
+    "Recycle bin retention must be between 1 and 3650 days.",
   "error.reason.SETTINGS_REQUEST_QUALITY_PROFILE_UNKNOWN":
-    "Unknown request quality profile the selected value.",
+    "A request quality profile is unknown.",
   "error.reason.SETTINGS_RE_CONVERGE_BACKSTOP_CANNOT_NEGATIVE":
     "Re-converge backstop cannot be negative.",
   "error.reason.SETTINGS_ROOT_FOLDER_PATH_REQUIRED":
@@ -3847,7 +3947,7 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_SESSION_DURATION_OUT_OF_RANGE":
     "Session duration must be between 1 and 365 days.",
   "error.reason.SETTINGS_SETTING_VALUE_INVALID":
-    "Invalid the selected value setting value the selected item: expected a 3 or 4 digit octal mask.",
+    "This setting value is invalid. A permissions mask takes a 3 or 4 digit octal number.",
   "error.reason.SETTINGS_SOURCE_REQUIRED": "Source is required.",
   "error.reason.SETTINGS_SUBTITLE_MINIMUM_SCORE_PERCENTAGES_OUT_OF_RANGE":
     "Subtitle minimum score percentages must be between 0 and 100.",
@@ -3860,7 +3960,7 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_TABLE_COLUMN_ORDER_OUT_OF_RANGE":
     "Table column order must be greater than or equal to 0.",
   "error.reason.SETTINGS_TABLE_COLUMN_UNSUPPORTED":
-    "Unsupported the selected value table column the selected value.",
+    "A table column is not supported.",
   "error.reason.SETTINGS_TITLE_IMAGE_CACHE_REFRESH_ALREADY_RUNNING":
     "Title image cache refresh is already running.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_INVALID":
@@ -3868,7 +3968,7 @@ const en: LocaleDictionary = {
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Trusted certificate bundle may only contain X.509 certificate PEM blocks.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
-    "Duplicate UI table column setting for the selected value the selected value the selected value column the selected value.",
+    "A table's column settings list the same column more than once.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
     "You do not have permission to view quality profiles.",
   "error.reason.SETTINGS_VIEW_RECYCLE_BIN_SETTINGS_PERMISSION_DENIED":
@@ -3897,7 +3997,7 @@ const en: LocaleDictionary = {
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_EXCEEDS_NESTING_INPUT_LIMITS":
     "Subtitle artifact exceeds nesting or input limits.",
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT":
-    "Subtitle artifact expands beyond the the selected value byte limit.",
+    "The subtitle artifact expands beyond the 128 MiB limit.",
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_FORMAT_UNSUPPORTED":
     "Unsupported subtitle artifact format.",
   "error.reason.SUBTITLES_SUBTITLE_FORMAT_UNSUPPORTED":
@@ -3927,7 +4027,7 @@ const en: LocaleDictionary = {
   "error.reason.SUBTITLES_TITLE_NOT_FOUND": "Title was not found.",
   "error.reason.TITLE_NOT_FOUND": "The title could not be found.",
   "error.reason.WORKFLOW_ACQUISITION_RECEIPT_REQUIRED":
-    "Maintenance Search requires an accepted receipt for its acquisition job run.",
+    "Lifecycle Search requires an accepted receipt for its acquisition job run.",
   "error.reason.WORKFLOW_CLEANUP_IDENTITY_REQUIRED":
     "Manual cleanup requires title and facet.",
   "error.reason.WORKFLOW_DOWNLOAD_AWAITING_RETRY_RECONCILIATION":
@@ -3967,10 +4067,26 @@ const en: LocaleDictionary = {
   "error.rulePackageRequired": "The rule must declare its assigned package.",
   "error.ruleInputImportUnsupported":
     "Reference rule input directly instead of importing it under another name.",
+  "error.ruleActionValueNotLiteral":
+    "Assign this head a plain literal: a quoted string, a whole number for set_lease_days, or a list of quoted strings for tag and audio language heads.",
+  "error.ruleActionValueInvalid":
+    "This head's value is not valid: a name cannot be empty, tags have to be valid tag labels, a lease is 0 to 3650 days, and monitoring and language values have to be ones Scryer offers.",
+  "error.ruleActionUnknownQualityProfile":
+    "No quality profile has this name, so the rule cannot apply it.",
+  "error.ruleActionUndefinedTag":
+    "This tag is not defined in Settings › Tags, so it is dropped when the rule applies.",
+  "settings.regoSnippet.shapeRequest":
+    "Set the lease an approval writes when a fact holds.",
+  "settings.regoSnippet.tagRequest":
+    "Tag the requested title when a fact holds.",
+  "error.ruleHostHelperRedefined":
+    "days_since is provided by Scryer and cannot be redefined. Give your own helper another name.",
+  "error.ruleUnreferencedRule":
+    "This rule is not an action and nothing else in the source uses it. Check the spelling if it was meant to be an action.",
   "error.ruleMatchRequired":
-    "Define a boolean match rule for this maintenance matcher.",
+    "Define a boolean match rule for this lifecycle matcher.",
   "error.ruleVoteRequired":
-    "Define approve, deny, manual, or tags for this request matcher.",
+    "Define a vote (approve, deny or manual), a value that shapes the approval, or add_tags for this request rule.",
 
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
     "Choose an action or an action sequence, not both.",
@@ -4043,7 +4159,7 @@ const en: LocaleDictionary = {
   "error.reason.INTERFACE_BROWSE_DIRECTORY_UNAVAILABLE":
     "The directory cannot be opened.",
   "error.reason.INTERFACE_RULE_ACTION_INVALID":
-    "The maintenance action definition is invalid.",
+    "The lifecycle action definition is invalid.",
   "error.reason.INTERFACE_REQUEST_RULE_SAMPLE_INVALID":
     "The request rule sample is invalid.",
 
@@ -4194,8 +4310,8 @@ const en: LocaleDictionary = {
     "Choose consistent MFA requirements for this login method.",
   "error.reason.INTERFACE_LOGIN_MFA_REQUIRED":
     "Choose an MFA requirement for Jellyfin login.",
-  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND":
-    "The maintenance rule could not be found.",
+  "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND":
+    "The lifecycle rule could not be found.",
   "error.reason.INTERFACE_METADATA_DATE_INVALID":
     "Enter a valid metadata date.",
   "error.reason.INTERFACE_METADATA_ID_INVALID":
@@ -4212,6 +4328,10 @@ const en: LocaleDictionary = {
     "Enter a quality profile identifier.",
   "error.reason.INTERFACE_QUALITY_PROFILE_NAME_REQUIRED":
     "Enter a quality profile name.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID":
+    "Enter at least 1 for the minimum missing episodes for a pack.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID":
+    "Enter a percentage from 0 to 100 for multi-season packs.",
   "error.reason.INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED":
     "Add at least one quality tier.",
   "error.reason.INTERFACE_QUALITY_PROFILE_VALUE_INVALID":
@@ -4279,7 +4399,7 @@ const en: LocaleDictionary = {
   "error.ruleTargetsPerson":
     "Managing permissions is required to use requester fields in a rule.",
   "error.rulePackUpToDate": "This rule pack is already up to date.",
-  "error.maintenanceArmCountMismatch":
+  "error.lifecycleArmCountMismatch":
     "The candidate count changed. Review and acknowledge the current count again.",
   "error.mfaStepUpRequired":
     "Settings verification expired. Enter an authenticator code to continue.",
@@ -4493,7 +4613,7 @@ const en: LocaleDictionary = {
   "settings.regoHelper.count":
     "Count items in an array, set or object, or characters in a string.",
   "settings.regoHelper.objectGet":
-    "Read an object key, returning the default when absent. Use a named input fact in request and maintenance rules.",
+    "Read an object key, returning the default when absent. Use a named input fact in request and lifecycle rules.",
   "settings.regoHelper.startsWith":
     "Return whether a string begins with a prefix.",
   "settings.regoSnippet.scoreEntry":
@@ -4506,8 +4626,14 @@ const en: LocaleDictionary = {
     "Deny a request when its adult-content fact is true.",
   "settings.regoSnippet.manualRequest":
     "Require manual review when the recent approval count reaches a threshold.",
-  "settings.regoSnippet.matchTag":
-    "Match a maintenance subject by tag. This matcher does not define an action.",
+  "settings.regoHelper.daysSince":
+    "Whole days between an RFC3339 timestamp and the evaluation time. Lifecycle rules only.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Unmonitor a subject that carries a tag.",
+  "settings.regoSnippet.tagAfterDays":
+    "Tag a subject added more than a number of days ago.",
+  "settings.regoSnippet.setProfile":
+    "Move large titles onto a named quality profile.",
 
   "settings.trustedProxiesTitle": "Trusted proxies for rate limiting",
   "settings.trustedProxiesHelp":
@@ -4600,6 +4726,8 @@ const en: LocaleDictionary = {
   "label.filters": "Filters",
   "label.enabled": "Enabled",
   "label.disabled": "Disabled",
+  "label.createEnabled": "Create Enabled",
+  "label.createDisabled": "Create Disabled",
   "unit.seconds": "seconds",
   "label.enable": "Enable",
   "label.disable": "Disable",
@@ -4750,6 +4878,20 @@ const en: LocaleDictionary = {
   "dashboard.recycleBinWindow": "Next 72 hours",
   "dashboard.recycleBinDueNow": "Due now",
   "dashboard.recycleBinDueIn": "In {{hours}}h",
+  "dashboard.lifecycleUpcoming": "Upcoming lifecycle actions",
+  "dashboard.panel.lifecycleUpcomingDescription":
+    "Actions enabled lifecycle rules are about to take, soonest first. Add it more than once to follow different actions.",
+  "dashboard.lifecycleUpcomingEmpty":
+    "No enabled lifecycle rule has an action coming up.",
+  "dashboard.lifecycleUpcomingEmptyFiltered":
+    "No enabled lifecycle rule has one of these actions coming up.",
+  "dashboard.lifecycleUpcomingOff":
+    "Lifecycle rules are switched off for this instance, so no actions are coming up.",
+  "dashboard.lifecycleUpcomingPaused": "Actions paused",
+  "dashboard.lifecycleUpcomingSettingsDescription":
+    "Choose which actions this panel follows and what it is called.",
+  "dashboard.lifecycleUpcomingName": "Panel name",
+  "dashboard.lifecycleUpcomingAllActions": "All actions",
   "dashboard.layout.edit": "Edit dashboard",
   "dashboard.layout.editing": "Editing dashboard",
   "dashboard.layout.editHint":
@@ -4771,6 +4913,8 @@ const en: LocaleDictionary = {
   "dashboard.layout.dragPanel": "Drag {{name}} onto the dashboard",
   "dashboard.layout.movePanel": "Move {{name}}",
   "dashboard.layout.removePanel": "Remove {{name}}",
+  "dashboard.layout.configurePanel": "Configure {{name}}",
+  "dashboard.layout.applyPanelSettings": "Apply",
   "dashboard.layout.empty":
     "No panels are on the dashboard. Open Panels to add some.",
   "dashboard.layout.saved": "Dashboard layout saved.",
@@ -4789,6 +4933,8 @@ const en: LocaleDictionary = {
     "A panel in this layout sits outside the grid.",
   "dashboard.layout.refusal.sizeInvalid":
     "A panel in this layout has no width or height.",
+  "dashboard.layout.refusal.panelSettingsInvalid":
+    "A panel in this layout has settings the server cannot store.",
 
   "discovery.failedToLoad": "Failed to load discovery",
   "discovery.featured": "Featured",
@@ -4856,6 +5002,25 @@ const en: LocaleDictionary = {
   "settings.securitySkipLocalIps": "Skip for local IPs",
   "settings.securitySkipLocalIpsHelp":
     "When enabled, callers from 10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16 can access Scryer without signing in.",
+  "settings.securityMcpEnabled": "Allow the MCP server",
+  "settings.securityMcpEnabledHelp":
+    "Lets coding agents use Scryer's skills over MCP at /mcp with an API key. When off, every MCP request is refused; API keys keep working with the GraphQL API.",
+  "settings.securityMcpEnvOverride":
+    "SCRYER_MCP_ENABLED is set and decides whether the MCP server answers. The saved choice applies after the variable is removed.",
+  "settings.securityLocalTrust": "Local network trust",
+  "settings.securityLocalTrustHelp":
+    "Open admin mode and Skip for local IPs trust a request because of the address it comes from. These settings narrow that trust.",
+  "settings.securityLocalTrustProxyWarning":
+    "Unsafe behind a reverse proxy that does not forward client addresses. Every request then arrives from the proxy's local address and skips login.",
+  "settings.securityAuthlessProxyWarning":
+    "Without login, Scryer admits any caller from a local address. Behind a reverse proxy that does not forward client addresses, every visitor arrives from the proxy's local address and gets full access.",
+  "settings.securityRestrictLocalTrustToProxies":
+    "Trust forwarded addresses only from trusted proxies",
+  "settings.securityRestrictLocalTrustToProxiesHelp":
+    "When on, a listed trusted proxy counts as local only when it forwards a local client address, and forwarding headers from any other caller are not trusted. Local callers that connect directly still count as local. Needs at least one trusted proxy.",
+  "settings.securityLocalTrustAllowedHosts": "Allowed host names",
+  "settings.securityLocalTrustAllowedHostsHelp":
+    "Requests trusted by their address must name an IP address, localhost, the public URL host or one of these host names. This blocks DNS rebinding. One name per line; leave empty to turn the check off.",
   "settings.securityMfaConfigStepUp":
     "Require MFA step-up for configuration changes",
   "settings.securityMfaConfigStepUpHelp":
@@ -5353,6 +5518,12 @@ const en: LocaleDictionary = {
   "jobs.status.completed": "Completed",
   "jobs.status.warning": "Warning",
   "jobs.status.failed": "Failed",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_SCRATCH_IN_USE":
+    "{{workspaces}} download workspace(s) hold {{bytes}} bytes of extracted archives",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_EXTRACTIONS_BLOCKED":
+    "{{blocked}} download(s) failed to extract on every attempt; retry their import to try again",
+  "jobs.healthCheckReason.ARCHIVE_WORKSPACE_UNMARKED_ENTRIES":
+    "{{unmarked}} item(s) in the .scry-ex folders of library roots were not made by Scryer and are left in place",
   "jobs.triggerSource.manual": "Manual",
   "jobs.triggerSource.scheduledStartup": "Scheduled startup",
   "jobs.triggerSource.scheduledInterval": "Scheduled interval",
@@ -5439,6 +5610,14 @@ const en: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Same-tier minimum score delta",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "A release in the same quality tier must beat the current file's score by at least this much.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Minimum missing episodes for a pack",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "A season pack is searched only when at least this many episodes of the season are missing. Default 2. At 1, an automatic search for one missing episode can also take a pack, which can download episodes you already have.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Minimum missing episodes for a multi-season pack (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "A multi-season pack is considered only when more than this percentage of the series' episodes is missing. Default 30. At 0, any missing episode qualifies; at 100, multi-season packs are never taken.",
   "settings.acquisitionConvergence": "Convergence & pacing",
   "settings.acquisitionPollIntervalSeconds": "Poll interval (seconds)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -5747,6 +5926,8 @@ const en: LocaleDictionary = {
     "The media server returned unwatched items when asked for watched ones.",
   "settings.watchSyncReason.unmappedPlayedMovies":
     "Some watched movies could not be matched to a library title.",
+  "settings.watchSyncReason.unplacedFavorites":
+    "Some favorites could not be matched to library media, so that account's favorites are not counted as known.",
   "settings.watchSyncReason.storeFailed":
     "Scryer could not save the watch history it read.",
   "settings.watchSyncReason.sourceUnavailable":
@@ -6882,6 +7063,8 @@ const en: LocaleDictionary = {
     "Import tracking resumed. Normal import checks still apply.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Only a blocked import can be dismissed, and only a dismissed import can be resumed. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "This client item now belongs to a different download. Refresh the queue and try again.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
@@ -6991,7 +7174,7 @@ const en: LocaleDictionary = {
   "system.diagnosticsBundle.download": "Download diagnostics bundle",
   "system.diagnosticsBundle.preparing": "Preparing diagnostics…",
   "system.diagnosticsBundle.helper":
-    "Logs, metrics and a settings summary in one file for the maintainer. Names, addresses, paths and secrets are removed on a best-effort basis; review the bundle before sharing it.",
+    "Logs, metrics and a settings summary in one file for the maintainer. The bundle is sanitized on a best-effort basis and is safe to share in a Discord ticket, but sharing it in GitHub issues or public Discord channels is not recommended.",
   "system.diagnosticsBundle.failed":
     "Could not download the diagnostics bundle.",
   "system.diagnosticsBundle.refusal.authenticationRequired":
@@ -7161,9 +7344,17 @@ const en: LocaleDictionary = {
   "settings.ruleLibraryDescription":
     "Pre-built rules you can add with one click. Select a template to populate the editor.",
   "settings.ruleLibraryAll": "All",
+  "settings.scoringNavRules": "Rules",
+  "settings.scoringNavCommunity": "Community",
+  "settings.communityRulePacks": "Available rule packs",
+  "settings.communityRulePacksAllInstalled":
+    "Every community rule pack is already installed.",
+  "settings.rulePackAuthor": "Author",
+  "settings.rulePackInstall": "Install",
+  "settings.rulePackInstalling": "Installing…",
   "settings.ruleLibraryCommunityEmpty":
     "No community rule packs available. Refresh the plugin registry to check for new packs.",
-  "settings.arrImportAction": "Import Arr custom format",
+  "settings.arrImportAction": "Import from Arr",
   "settings.ruleAiPrompt": "AI prompt",
   "settings.ruleAiPromptTitle": "Create a rule with AI",
   "settings.ruleAiPromptDescription":
@@ -7174,8 +7365,6 @@ const en: LocaleDictionary = {
   "settings.ruleAiPromptCopy": "Copy prompt",
   "settings.ruleAiPromptCopied": "Copied",
   "settings.arrImportTitle": "Import Arr custom formats",
-  "settings.arrImportDescription":
-    "Paste a Sonarr or Radarr custom-format export to create a new Rego rule draft.",
   "settings.arrImportSource": "Source application",
   "settings.arrImportJson": "Custom-format JSON",
   "settings.arrImportJsonPlaceholder":
@@ -7222,12 +7411,120 @@ const en: LocaleDictionary = {
   "settings.arrImportDraftDescription": "Imported from Arr custom-format JSON.",
   "settings.arrImportDiagnostics": "Translation notes",
   "settings.arrImportApply": "Use imported draft",
+  "settings.arrImportDialogDescription":
+    "Import Sonarr or Radarr custom formats as scoring rules.",
+  "settings.arrImportTabConnect": "Connect",
+  "settings.arrImportTabPaste": "Paste JSON",
+  "settings.arrImportBaseUrl": "Base URL",
+  "settings.arrImportApiKey": "API key",
+  "settings.arrImportStart": "Start import",
+  "settings.arrImportStartAnother": "Import again",
+  "settings.arrImportRunning": "Importing custom formats…",
+  "settings.arrImportRunFailed":
+    "The import stopped before it could save any rules.",
+  "settings.arrImportCounts":
+    "{{total}} custom formats: {{saved}} saved, {{review}} to review, {{skipped}} skipped, {{failed}} failed",
+  "settings.arrImportStateSaved": "Saved, disabled",
+  "settings.arrImportStateNeedsReview": "Saved, disabled, needs review",
+  "settings.arrImportStateSavedFailedTranslation": "Saved without translation",
+  "settings.arrImportStateSkipped": "Already exists, skipped",
+  "settings.arrImportStatePending": "Pending",
+  "settings.arrImportStateFailed": "Not imported",
+  "settings.arrImportUnmatchedProfiles":
+    "Quality profiles with no Scryer profile of the same name: {{names}}",
+  "settings.arrImportDuplicateProfiles":
+    "Quality profile names the source repeats with different scores: {{names}}",
+  "settings.arrImportDiagnosticAt": "{{message}} ({{location}})",
+  "settings.maintainerrImportAction": "Migrate from Maintainerr",
+  "settings.maintainerrImportTitle": "Migrate from Maintainerr",
+  "settings.maintainerrImportDescription":
+    "Scryer reads the rule groups of a running Maintainerr and saves each one as a lifecycle rule.",
+  "settings.maintainerrImportBaseUrl": "Maintainerr URL",
+  "settings.maintainerrImportStart": "Start import",
+  "settings.maintainerrImportStartAnother": "Import again",
+  "settings.maintainerrImportRunning": "Importing rule groups…",
+  "settings.maintainerrImportRunningCount":
+    "Importing rule groups… {{done}} of {{total}}",
+  "settings.maintainerrImportRunFailed":
+    "The import stopped before every rule group was saved.",
+  "settings.maintainerrImportCounts":
+    "{{total}} rule group(s): {{saved}} saved, {{untranslated}} saved untranslated, {{skipped}} skipped, {{failed}} not imported",
+  "settings.maintainerrImportStateSaved": "Saved, disabled",
+  "settings.maintainerrImportStateSavedFailedTranslation":
+    "Saved untranslated, disabled",
+  "settings.maintainerrImportStateSkipped": "Already exists, skipped",
+  "settings.maintainerrImportStatePending": "Pending",
+  "settings.maintainerrImportStateFailed": "Not imported",
+  "settings.maintainerrImportSeverityError": "Not translated",
+  "settings.maintainerrImportSeverityWarning": "Check",
+  "settings.maintainerrImportDiagnostic": "{{severity}}: {{message}}",
+  "settings.maintainerrImportDiagnosticAtRule":
+    "{{severity}}: {{message}} (rule {{rule}})",
+  "settings.maintainerrImportCode.groupInvalid":
+    "The group's rules, as Maintainerr combines them, can never match.",
+  "settings.maintainerrImportCode.groupRulesDisabled":
+    "The group does not use rules.",
+  "settings.maintainerrImportCode.groupRulesEmpty": "The group has no rules.",
+  "settings.maintainerrImportCode.groupRulesTooMany":
+    "The group has more rules than one lifecycle rule holds.",
+  "settings.maintainerrImportCode.groupMediaTypeUnsupported":
+    "The group's media type is not one Scryer acts on.",
+  "settings.maintainerrImportCode.ruleInvalid": "A rule is malformed.",
+  "settings.maintainerrImportCode.ruleSecondValueMissing":
+    "A rule compares against another property that is missing.",
+  "settings.maintainerrImportCode.ruleUsernameMissing":
+    "A per-user rule names no user.",
+  "settings.maintainerrImportCode.applicationUnknown":
+    "A rule reads an application Maintainerr does not list, usually one it is not connected to.",
+  "settings.maintainerrImportCode.propertyUnknown":
+    "A rule reads a property Maintainerr does not list.",
+  "settings.maintainerrImportCode.propertyUnmapped":
+    "A rule reads a property Scryer has no matching fact for.",
+  "settings.maintainerrImportCode.propertyCollectionUnsupported":
+    "A rule reads media server collections, playlists or labels.",
+  "settings.maintainerrImportCode.propertyLevelUnsupported":
+    "A rule reads a property Scryer has only for another media type.",
+  "settings.maintainerrImportCode.comparatorUnsupported":
+    "A rule's comparison cannot be expressed exactly in Scryer.",
+  "settings.maintainerrImportCode.comparatorDateEqualityUnsupported":
+    "A rule compares dates for equality, which depends on Maintainerr's time zone.",
+  "settings.maintainerrImportCode.comparatorPartialListWidens":
+    "A rule reads a list Scryer holds only part of, in a way that could match titles Maintainerr would not.",
+  "settings.maintainerrImportCode.comparatorAbsenceWidens":
+    "A rule matches a value being absent, which Scryer can lack where Maintainerr has it.",
+  "settings.maintainerrImportCode.comparatorDateDriftWidens":
+    "A rule compares a date Scryer can record differently from Maintainerr, in a direction that could match titles Maintainerr would not.",
+  "settings.maintainerrImportCode.usernameUnknownWidens":
+    "A rule names a user no Scryer user is called, and it would match every title with no plays from them.",
+  "settings.maintainerrImportCode.scopeAllLibraries":
+    "The group applies to one media-server library in Maintainerr; the imported rule applies to every Scryer library.",
+  "settings.maintainerrImportCode.customValueInvalid":
+    "A rule's value cannot be read the way Maintainerr reads it.",
+  "settings.maintainerrImportCode.actionMissing": "The group has no action.",
+  "settings.maintainerrImportCode.actionUnsupported":
+    "The group's action has no Scryer equivalent for its media type.",
+  "settings.maintainerrImportCode.qualityProfileUnresolved":
+    "The group's quality profile is not one Sonarr or Radarr lists.",
+  "settings.maintainerrImportCode.qualityProfileNotInScryer":
+    "No Scryer quality profile has the name of the group's quality profile.",
+  "settings.maintainerrImportCode.sourceTooLarge":
+    "The translated rule is larger than a lifecycle rule may be.",
+  "settings.maintainerrImportCode.sourceInvalid":
+    "The translated rule did not pass lifecycle rule validation.",
+  "settings.maintainerrImportCode.usernameUnknown":
+    "A rule names a user no Scryer user is called, so it matches nothing for that user.",
+  "settings.maintainerrImportCode.factApproximate":
+    "A rule reads a Scryer fact that differs slightly from Maintainerr's.",
+  "settings.maintainerrImportCode.actionApproximate":
+    "The group's action maps to Scryer actions that differ slightly from Maintainerr's.",
+  "settings.arrImportDiagnosticAtCondition":
+    "{{message}} (condition {{number}})",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":
     "Click to expand the full reference for all fields available to your Rego rules.",
   "settings.refIntro":
-    "Every rule receives an input object with five top-level documents. Your Rego code accesses these via input.release, input.profile, input.context, input.builtin_score, and input.file. input.file is null during pre-download scoring and populated only during post-download import evaluation.",
+    "Every rule receives an input object with five top-level documents. Your Rego code accesses these via input.release, input.profile, input.context, input.builtin_score, and input.file. input.file is null when an indexer result is scored, and is filled whenever the file itself has been analyzed: at the post-download import check, and when a file already in the library is re-scored.",
   "settings.refColField": "Field",
   "settings.refColType": "Type",
   "settings.refColDescription": "Description",
@@ -7238,10 +7535,12 @@ const en: LocaleDictionary = {
   "settings.refReleaseRawTitle":
     "Original unparsed release title from the indexer",
   "settings.refReleaseQuality":
-    "Detected quality tier (e.g. 2160P, 1080P, 720P)",
-  "settings.refReleaseSource": "Media source (e.g. WEB-DL, BLURAY, HDTV)",
+    "Detected quality tier, in lower case (e.g. 2160p, 1080p, 720p)",
+  "settings.refReleaseSource":
+    "Media source as parsed from the name (e.g. WEB-DL, WEBRip, BluRay, HDTV). scryer.normalize_source gives the upper-case form (WEBDL, WEBRIP, BLURAY)",
   "settings.refReleaseVideoCodec": "Video codec (e.g. H.265, H.264, AV1)",
-  "settings.refReleaseAudio": "Primary audio codec (e.g. DDP, AAC, TrueHD)",
+  "settings.refReleaseAudio":
+    "Primary audio codec (e.g. DDP, AAC, TRUEHD, DTSMA)",
   "settings.refReleaseAudioCodecs": "All detected audio codecs as an array",
   "settings.refReleaseGuideFacts":
     "Guide facts detected from the release metadata",
@@ -7250,11 +7549,12 @@ const en: LocaleDictionary = {
   "settings.refReleaseAudioChannels":
     "Audio channel configuration (e.g. 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
-    "ISO 639-3 audio language codes (e.g. eng, jpn). Includes the languages the indexer listing reported, frozen when the release was grabbed; files that were scanned in, adopted, or imported before listing snapshots were kept contribute only what the name and file show",
+    "ISO 639-3 audio language codes (e.g. eng, jpn). Includes the languages the indexer listing reported, frozen when the release was grabbed, and languages Scryer infers: a dual-audio or MULTi marker adds the title's original language (and eng when no language is named), and an unlabeled release adds the original language when the profile requires audio languages. Files that were scanned in, adopted, or imported before listing snapshots were kept contribute only what the name and file show",
   "settings.refReleaseIndexerLanguages":
     "ISO 639-3 audio language codes the indexer listing itself reported, frozen when the release was grabbed. Never inferred from the name or title; empty when the indexer said nothing",
   "settings.refReleaseLangsSub": "ISO 639-3 subtitle language codes",
-  "settings.refReleaseIsDualAudio": "True when multiple audio tracks detected",
+  "settings.refReleaseIsDualAudio":
+    "True when the release name carries a dual-audio marker",
   "settings.refReleaseIsAtmos": "True when Dolby Atmos audio is present",
   "settings.refReleaseIsDV": "True when Dolby Vision metadata is detected",
   "settings.refReleaseHasHdrFallback":
@@ -7435,23 +7735,25 @@ const en: LocaleDictionary = {
   "settings.refCtxTags":
     "User-defined tags on the title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refCtxHasExisting":
-    "True when a file already exists for this title",
+    "True when a file already fills this slot. Only set at the post-download import check; always false when an indexer result is scored",
   "settings.refCtxExistingScore":
-    "Built-in score of the existing file (if any)",
+    "Full score of the file already in the slot, rules included. Only set at the post-download import check; null otherwise",
   "settings.refCtxSearchMode":
-    "Evaluation mode. Current values are auto and post_download",
-  "settings.refCtxRuntimeMin": "Content runtime in minutes",
+    "Where the score is used: canonical (search, grab and library scoring) or post_download (the import check on the downloaded file)",
+  "settings.refCtxRuntimeMin":
+    "Runtime in minutes of what is being scored; summed across episodes for a multi-episode or season release",
   "settings.refCtxIsAnime": "True when the title is categorized as anime",
   "settings.refCtxIsFiller": "True when the episode is marked as filler",
 
   "settings.refSectionBuiltinScore": "— Built-in scoring engine results",
-  "settings.refBuiltinTotal": "Total score from the built-in scoring engine",
+  "settings.refBuiltinTotal":
+    "Total score from the built-in scoring engine. When baseline rules exist, later rules see the baseline subtotal here instead, and a baseline rule itself sees 0",
   "settings.refBuiltinBlocked": "True when built-in rules blocked this release",
   "settings.refBuiltinCodes":
-    "List of scoring codes that were applied (e.g. quality_tier_0)",
+    "List of scoring codes that were applied (e.g. quality_resolution_1080p). When baseline rules exist, their codes are included",
 
   "settings.refSectionFile":
-    "— Actual analyzed file metadata (null pre-download)",
+    "— Analyzed file metadata (null when an indexer result is scored)",
   "settings.refFileVideoCodec": "Verified video codec from media analysis",
   "settings.refFileVideoWidth": "Verified video width in pixels",
   "settings.refFileVideoHeight": "Verified video height in pixels",
@@ -7495,6 +7797,7 @@ const en: LocaleDictionary = {
     "Per-stream verified audio profile or extension label",
   "settings.refAudioStreamChannels": "Per-stream channel count",
   "settings.refAudioStreamLanguage": "Per-stream language code",
+  "settings.refAudioStreamName": "Per-stream audio track title, if available",
   "settings.refAudioStreamBitrateKbps": "Per-stream bitrate in kbps",
 
   "settings.refSectionSubtitleStreams": "— Nested subtitle stream entries",
@@ -7509,7 +7812,7 @@ const en: LocaleDictionary = {
 
   "settings.refSectionBuiltins": "Custom Scryer Functions",
   "settings.refBuiltinsIntro":
-    "These helper functions are available in your Rego rules in addition to all standard OPA builtins.",
+    "These helper functions are available in your Rego rules in addition to the core Rego builtins, regex and time. Other OPA builtin groups, such as encoding, glob, semver, net and http, are not available.",
   "settings.refFnBlockScore":
     "Returns -10000 as a penalty that other scores can offset",
   "settings.refFnSizeGib":
@@ -7527,7 +7830,7 @@ const en: LocaleDictionary = {
   "settings.refSandboxNoIO":
     "No network or filesystem access — rules cannot make HTTP requests, read files, or perform any I/O. Standard OPA builtins like http.send are not available.",
   "settings.refSandboxPkgIsolation":
-    "Package isolation — each rule is automatically namespaced to its own package. Rules cannot read or modify data from other rules.",
+    "Package isolation — each rule is automatically namespaced to its own package and cannot modify another rule. A rule that is not a baseline rule can read another rule's output through data.scryer.rules.user.<id>.",
   "settings.refSandboxReadOnly":
     "Read-only input — rules can only read the input document. They cannot modify application state or persist data between evaluations.",
   "settings.refSandboxOutputRestricted":
@@ -7537,7 +7840,7 @@ const en: LocaleDictionary = {
   "settings.refSandboxValidation":
     "Pre-save validation — rules are compiled and dry-run tested against synthetic input before they can be saved. Invalid rules are rejected.",
   "settings.refSandboxErrorIsolation":
-    "Error isolation — if one rule fails at runtime, all other rules continue to evaluate normally. Failures are logged but never abort scoring.",
+    "Error isolation — if one rule fails at runtime, all other rules continue to evaluate normally. While scoring, a failure is logged and the rule contributes 0. At the post-download import check, a failure in your rule holds the import for review.",
 
   "settings.refSectionOutput": "Rule Output Format",
   "settings.refOutputIntro":
@@ -7777,6 +8080,15 @@ const en: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "No limit",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max queries per minute must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxRequestsPerMonth": "Max requests per month",
+  "form.indexerMaxGrabsPerMonth": "Max grabs per month",
+  "form.indexerMonthlyLimitPlaceholder": "No limit",
+  "form.indexerMonthlyLimitHelp":
+    "Counts traffic observed by this Scryer instance only. A grab is reserved before fetching the release and stays counted if its outcome is uncertain. Limits reset at 00:00 UTC on the first of each month.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Max requests per month must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Max grabs per month must be a whole number of at least 1, or empty for no limit.",
   "form.providerTypePlaceholder": "Provider Type",
   "form.subtitleProviderValidation": "Name and provider type are required.",
   "form.subtitleProviderFacetsRequired":
@@ -8148,6 +8460,18 @@ const en: LocaleDictionary = {
   "settings.chmodPresetEveryoneWrite": "Everyone write",
   "settings.chmodPresetCustom": "Custom",
   "settings.sidecarFilesTitle": "Sidecar Files",
+  "settings.libraryFullHashBackfillTitle": "Background hashing",
+  "settings.libraryFullHashBackfillLabel": "Hash files nightly",
+  "settings.libraryFullHashBackfillDescription":
+    "Reads every file in this library once, overnight, to record its full content hash. Turn this off for libraries on disks you keep spun down; a file's hash is then read only when a move, import or check needs it.",
+  "settings.libraryFullHashBackfillDisableTitle": "Turn off nightly hashing?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Disabling this reduces Scryer's ability to ensure certain file moves are 100% safe.",
+  "settings.libraryFullHashBackfillDisableConfirm": "Turn off",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Nightly hashing turned on for this library.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Nightly hashing turned off for this library.",
   "settings.identityStorageTitle": "Identity & storage",
   "settings.mediaProfilesTitle": "Media profiles",
   "settings.mediaProfilesHelp":
@@ -8344,6 +8668,11 @@ const en: LocaleDictionary = {
   "status.autoSearchAllRejected":
     "No release found for {{name}}: automatic search rejected all {{count}} candidates. {{reasons}}",
   "status.queueFailed": "Queue operation failed.",
+  "status.grabFailed": "The grab failed.",
+  "status.grabResultUnavailable":
+    "The grab finished, but its result is no longer available. Check the download queue.",
+  "status.grabOutcomeUnknown":
+    "The grab could not be followed to its end. Check the download queue.",
   "status.apiError": "Request failed",
   "status.permissionDenied": "You do not have permission for this action.",
 
@@ -8582,6 +8911,7 @@ const en: LocaleDictionary = {
   "wanted.decision.upgradeRejected": "Upgrade rejected",
   "wanted.decision.pendingDelay": "Pending delay",
   "wanted.decision.alreadyActive": "Already active",
+  "wanted.decision.queuedItemBlocksUpgrade": "Waiting for the current download",
   "wanted.decision.acceptInitial": "Accept initial",
   "wanted.decision.acceptUpgrade": "Accept upgrade",
   "wanted.decision.rejectInsufficientDelta": "Insufficient delta",
@@ -9497,665 +9827,967 @@ const en: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "Unsupported",
   "appUpgrade.success": "Upgraded to {{version}}",
   "appUpgrade.failed": "Upgrade failed.",
-  // ── Maintenance rules ──
-  "settings.maintenanceRules": "Maintenance Rules",
+  // ── Lifecycle rules ──
+  "settings.lifecycleRules": "Lifecycle Rules",
   "nav.rules": "Rules",
   "settings.rulesScoring": "Scoring Rules",
-  "settings.maintenanceNavRules": "Rules",
-  "settings.maintenanceNavHistory": "History",
-  "settings.maintenanceRuleAction": "Action",
-  "settings.maintenanceRuleActionHelp":
-    "What this rule would do once maintenance actions are switched on.",
-  "settings.maintenanceRuleActionPlaceholder": "Choose an action",
-  "settings.maintenanceRuleNoActions": "No title-scoped actions are available.",
-  "settings.maintenanceActionSequence": "Action sequence",
-  "settings.maintenanceSequenceTitle": "Action sequence",
-  "settings.maintenanceSequenceHelp":
-    "Run these steps in order after a subject has completed its grace period. An empty sequence records matches without acting on them.",
-  "settings.maintenanceSequenceEmpty":
-    "Dry run only — no action steps are configured.",
-  "settings.maintenanceSequenceObserveOnly": "Dry run only",
-  "settings.maintenanceSequenceSummary": "Sequence summary",
-  "settings.maintenanceSequenceSummaryTarget": "Targets: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "When enabled: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Effects: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "matching title",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "matching title, seasons, and episodes",
-  "settings.maintenanceSequenceTargetSeason": "matching season",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "matching season and episodes",
-  "settings.maintenanceSequenceTargetEpisode": "matching episode",
-  "settings.maintenanceSequencePreviewPlan": "Ordered effects for this preview",
-  "settings.maintenanceSequencePreviewDescendants": "include descendants",
-  "settings.maintenanceSequencePreviewMatchedScope": "matched scope only",
-  "settings.maintenanceSequenceAdd": "Add step",
-  "settings.maintenanceSequencePreset": "Sequence preset",
-  "settings.maintenanceSequencePresetApply": "Replace with preset",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Change profile, then search if it changed",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Unmonitor descendants, then delete files",
-  "settings.maintenanceSequenceTerminal": "Terminal",
-  "settings.maintenanceSequenceDependencies": "Requires: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants":
-    "Include seasons and episodes",
-  "settings.maintenanceSequenceSearchCondition": "Search condition",
-  "settings.maintenanceSequenceSearchUnconditional": "Always request search",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Only after the profile changed",
-  "settings.maintenanceSequenceSearchRequested":
-    "This step requests a search and records accepted only after the request is accepted. Later acquisition and download effects can still be held.",
-  "settings.maintenanceSequenceHistoryWaiting": "waiting for an earlier step",
-  "settings.maintenanceSequenceHistorySearchRequested": "search requested",
-  "settings.maintenanceSequenceHistorySearchAccepted": "accepted",
-  "settings.maintenanceSequenceHistoryJob": "job {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "Completes when accepted",
-  "settings.maintenanceSequenceCompletionCompleted": "Completes when finished",
-  "settings.maintenanceSequenceStepUnavailable":
-    "This saved step is unavailable from the current catalog. Remove it or restore a compatible catalog before saving or previewing.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "The action-step catalog is unavailable. Saved steps remain visible, but saving and unsaved previews are paused until it loads.",
-  "settings.maintenanceSequenceStepUnmonitor": "Unmonitor",
-  "settings.maintenanceSequenceStepDeleteFiles": "Delete files",
-  "settings.maintenanceSequenceStepChangeQualityProfile":
+  "settings.lifecycleNavRules": "Rules",
+  "settings.lifecycleNavTry": "Try a rule",
+  "settings.lifecycleNavHistory": "History",
+  "settings.lifecycleRuleAction": "Actions",
+  "settings.lifecycleActionSequence": "Action sequence",
+  "settings.lifecycleSequenceObserveOnly": "Dry run only",
+  "settings.lifecycleSequenceHistoryWaiting": "waiting for an earlier step",
+  "settings.lifecycleSequenceHistorySearchRequested": "search requested",
+  "settings.lifecycleSequenceHistorySearchAccepted": "accepted",
+  "settings.lifecycleSequenceHistoryJob": "job {{id}}",
+  "settings.lifecycleSequenceStepUnmonitor": "Unmonitor",
+  "settings.lifecycleSequenceStepDeleteFiles": "Delete files",
+  "settings.lifecycleSequenceStepChangeQualityProfile":
     "Change quality profile",
-  "settings.maintenanceSequenceStepSearch": "Search",
-  "settings.maintenanceSequenceStepAddTags": "Add tags",
-  "settings.maintenanceSequenceStepRemoveTags": "Remove tags",
-  "settings.maintenanceSequenceStepDeleteTitleAndFiles":
-    "Delete title and files",
-  "settings.maintenanceRuleGraceDays": "Grace days",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleSequenceStepSearch": "Search",
+  "settings.lifecycleSequenceStepAddTags": "Add tags",
+  "settings.lifecycleSequenceStepRemoveTags": "Remove tags",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles": "Delete title and files",
+  "settings.lifecycleRuleGraceDays": "Grace days",
+  "settings.lifecycleRuleGraceDaysHelp":
     "Days after each subject first matches before its action becomes due.",
-  "settings.maintenanceRuleTargetProfile": "Target quality profile",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "The profile this action would move matching titles to.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "Quality profile ID.",
-  "settings.maintenanceRuleLibraries": "Library scope",
-  "settings.maintenanceRuleLibrariesHelp":
-    "Leave every library unchecked to scope the rule to the whole collection.",
-  "settings.maintenanceRuleLibrariesAll": "All libraries",
-  "settings.maintenanceRuleStorageRoot": "Storage root",
-  "settings.maintenanceRuleStorageRootNone": "No storage root selected",
-  "settings.maintenanceRuleStorageRootHelp":
-    "Select a configured root to read its capacity and limit file deletion to files actually on that root.",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp":
-    "The selected root limits only file deletion. Unmonitoring still applies to the entire matched subject, so files on other roots are retained but no longer monitored.",
-  "settings.maintenanceRuleStorageRootClear": "Clear storage root",
-  "settings.maintenanceStorageRootFileSummary":
-    "Selected root: {{count}} files · {{size}}",
-  "settings.maintenanceRuleCreate": "Create maintenance rule",
-  "settings.maintenanceRuleUpdate": "Update maintenance rule",
-  "settings.maintenanceRuleCopy": "Copy as a new rule",
-  "settings.maintenanceRuleCreateNew": "Create new maintenance rule",
-  "settings.maintenanceRuleSaveDisabledNote":
-    "New rules start Disabled. Review the preview, try a Dry run, then set the rule to Enabled.",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleScheduleHelp":
+    "Each rule runs on its own schedule. A run evaluates the rule, then applies its candidates whose grace period has ended. Changing the schedule keeps the rule's state. Daily, weekly and cron times use the server's local time.",
+  "settings.lifecycleRuleScheduleManualHelp":
+    "This rule never runs on its own. Start it from Runs and history.",
+  "settings.lifecycleRuleLibraries": "Applied Libraries",
+  "settings.lifecycleRuleLibrariesHelp":
+    "Leave empty to apply to all libraries.",
+  "settings.lifecycleRuleLibrariesAll": "All libraries",
+  "settings.lifecycleRuleCreate": "Create lifecycle rule",
+  "settings.lifecycleRuleUpdate": "Update lifecycle rule",
+  "settings.lifecycleRuleCopy": "Copy as a new rule",
+  "settings.lifecycleRuleCreateNew": "Create new lifecycle rule",
+  "settings.lifecycleRuleValidationRequired":
     "Name, matcher source, and an action are required.",
-  "settings.maintenanceRuleConfirmDiscardTitle": "Discard unsaved changes?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "The maintenance rule editor has unsaved changes that will be lost.",
-  "settings.maintenanceRuleDeleting": "Delete the maintenance rule {{name}}?",
-  "settings.noMaintenanceRulesFound": "No maintenance rules yet.",
-  "settings.maintenanceRuleRevision": "Revision",
-  "settings.maintenanceActionDoNothing": "Do nothing",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardTitle": "Discard unsaved changes?",
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "The lifecycle rule editor has unsaved changes that will be lost.",
+  "settings.lifecycleRuleDeleting": "Delete the lifecycle rule {{name}}?",
+  "settings.noLifecycleRulesFound": "No lifecycle rules yet.",
+  "settings.lifecycleActionDoNothing": "Do nothing",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Unmonitor the scope, keep files",
-  "settings.maintenanceActionDeleteTitleAndFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles":
     "Delete the title and its files",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "Unmonitor the title, delete all files",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "Unmonitor the show, delete existing files",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "Unmonitor the scope, delete its files",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "Unmonitor the season, delete its files, then delete the show if it is empty",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "Unmonitor the season, then unmonitor the show if it is empty",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "Change the quality profile and search if it changed",
-  "settings.maintenancePreviewTitle": "Preview",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "Preview",
+  "settings.lifecyclePreviewSubtitle":
     "Run the matcher against titles, seasons, or episodes in its scope. Preview reports what would match and changes nothing.",
-  "settings.maintenancePreviewSource": "Matcher",
-  "settings.maintenancePreviewSourceStored": "Saved rule",
-  "settings.maintenancePreviewSourceDraft": "Editor draft",
-  "settings.maintenancePreviewLibrary": "Library",
-  "settings.maintenancePreviewLibraryPlaceholder": "Select a library",
-  "settings.maintenancePreviewLimit": "Subjects",
-  "settings.maintenancePreviewLimitHelp": "Up to {{max}} subjects per run.",
-  "settings.maintenancePreviewRun": "Run preview",
-  "settings.maintenancePreviewRunning": "Running preview...",
-  "settings.maintenancePreviewEmpty": "Choose a library and run the preview.",
-  "settings.maintenancePreviewNoTitles": "No titles were evaluated.",
-  "settings.maintenancePreviewColOutcome": "Outcome",
-  "settings.maintenancePreviewColReasons": "Reason codes",
-  "settings.maintenancePreviewOutcomeMatch": "MATCH",
-  "settings.maintenancePreviewOutcomeNoMatch": "NO MATCH",
-  "settings.maintenancePreviewOutcomeUnknown": "UNKNOWN",
-  "settings.maintenancePreviewOutcomeError": "ERROR",
-  "settings.maintenancePreviewMeta": "Evaluated {{time}} · matcher {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "Rule",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "Select a saved rule",
-  "settings.maintenanceRuleUpdated": "Maintenance rule updated.",
-  "settings.maintenanceRuleCreated":
-    "Maintenance rule created, and saved disabled.",
-  "settings.maintenanceRuleDeleted": "Maintenance rule {{name}} deleted.",
+  "settings.lifecyclePreviewLibrary": "Library",
+  "settings.lifecyclePreviewLibraryPlaceholder": "Select a library",
+  "settings.lifecyclePreviewLimit": "Subjects",
+  "settings.lifecyclePreviewLimitHelp": "Up to {{max}} subjects per run.",
+  "settings.lifecyclePreviewRun": "Run preview",
+  "settings.lifecyclePreviewRunning": "Running preview...",
+  "settings.lifecyclePreviewNoTitles": "No titles were evaluated.",
+  "settings.lifecyclePreviewColOutcome": "Outcome",
+  "settings.lifecyclePreviewColReasons": "Reason codes",
+  "settings.lifecyclePreviewOutcomeMatch": "MATCH",
+  "settings.lifecyclePreviewOutcomeNoMatch": "NO MATCH",
+  "settings.lifecyclePreviewOutcomeUnknown": "UNKNOWN",
+  "settings.lifecyclePreviewOutcomeError": "ERROR",
+  "settings.lifecyclePreviewMeta": "Evaluated {{time}} · matcher {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "Rule",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "Select a saved rule",
+  "settings.lifecycleRuleUpdated": "Lifecycle rule updated.",
+  "settings.lifecycleRuleCreated":
+    "Lifecycle rule created, and saved disabled.",
+  "settings.lifecycleRuleDeleted": "Lifecycle rule {{name}} deleted.",
 
-  // ── Maintenance rules — instance status ──
+  // ── Lifecycle rules — instance status ──
 
-  // ── Maintenance rules — instance gates ──
+  // ── Lifecycle rules — instance gates ──
 
-  // ── Maintenance rules — mode and arming ──
-  "settings.maintenanceArmingNone": "No effects",
-  "settings.maintenanceArmingReversible": "Library updates",
-  "settings.maintenanceArmingDestructive": "File deletion",
-  "settings.maintenanceRuleState": "State",
-  "settings.maintenanceRuleStateHelp":
+  // ── Lifecycle rules — mode and arming ──
+  "settings.lifecycleRuleState": "State",
+  "settings.lifecycleRuleStateHelp":
     "Disabled rules are never evaluated. Dry run records candidates without acting on them. Enabled rules act on their candidates once each grace period elapses.",
-  "settings.maintenanceRuleStateUpdated": "{{name}} updated.",
-  "settings.maintenanceRuleStateDisabled": "Disabled",
-  "settings.maintenanceRuleStateDisabledHelp": "Never evaluated.",
-  "settings.maintenanceRuleStateDryRun": "Dry run",
-  "settings.maintenanceRuleStateDryRunHelp":
+  "settings.lifecycleRuleStateUpdated": "{{name}} updated.",
+  "settings.lifecycleRuleStateDisabled": "Disabled",
+  "settings.lifecycleRuleStateDisabledHelp": "Never evaluated.",
+  "settings.lifecycleRuleStateDryRun": "Dry run",
+  "settings.lifecycleRuleStateDryRunHelp":
     "Records candidates; takes no action.",
-  "settings.maintenanceRuleStateEnabled": "Enabled",
-  "settings.maintenanceRuleStateEnabledHelp":
+  "settings.lifecycleRuleStateEnabled": "Enabled",
+  "settings.lifecycleRuleStateEnabledHelp":
     "Acts on candidates when their grace period elapses.",
-  "settings.maintenanceRuleEditedSinceEnabled":
+  "settings.lifecycleRuleEditedSinceEnabled":
     "Edited since it was enabled. Review the candidates and enable it again.",
-  "settings.maintenanceRuleSystemOwned": "Built in",
+  "settings.lifecycleRuleSystemOwned": "Built in",
+  "settings.lifecycleRuleView": "View",
+  "settings.lifecycleRuleViewTitle": "View built-in rule",
+  "settings.lifecycleRuleSystemOwnedNote":
+    "This rule ships with Scryer and cannot be edited. Set its state from the rule list.",
   "settings.expiredRequestLeasesHelp":
-    "Deletes a requested title and its files once its request lease has expired and the grace period has passed. Changing the grace period sets the rule to Dry run until you enable it again. Like every maintenance rule, it only runs while Maintenance is on.",
-  "settings.maintenanceSwitchEnabled": "Maintenance",
-  "settings.maintenanceSwitchEnabledHelp":
+    "Deletes a requested title and its files once its request lease has expired and the grace period has passed. Changing the grace period sets the rule to Dry run until you enable it again. Like every lifecycle rule, it only runs while Lifecycle is on.",
+  "settings.lifecycleSwitchEnabled": "Lifecycle",
+  "settings.lifecycleSwitchEnabledHelp":
     "Evaluate rules and show their candidates on this instance.",
-  "settings.maintenanceSwitchActionsPaused": "Pause all actions",
-  "settings.maintenanceSwitchActionsPausedHelp":
+  "settings.lifecycleSwitchActionsPaused": "Pause all actions",
+  "settings.lifecycleSwitchActionsPausedHelp":
     "While paused, Enabled rules keep recording candidates but nothing is unmonitored, changed, or deleted.",
-  "settings.maintenanceSwitchesLocked":
-    "Reading the maintenance switches requires system settings permission. Ask an administrator whether maintenance is on and whether actions are paused.",
-  "settings.maintenanceSwitchesUpdated": "Maintenance settings updated.",
-  "settings.maintenanceUnpauseConfirmTitle": "Resume maintenance actions?",
-  "settings.maintenanceUnpauseConfirmBody":
+  "settings.lifecycleSwitchesLocked":
+    "Reading the lifecycle switches requires system settings permission. Ask an administrator whether lifecycle rules are on and whether actions are paused.",
+  "settings.lifecycleSwitchesUpdated": "Lifecycle settings updated.",
+  "settings.lifecycleUnpauseConfirmTitle": "Resume lifecycle actions?",
+  "settings.lifecycleUnpauseConfirmBody":
     "Enabled rules will act on their candidates as each grace period elapses, including rules that delete files.",
-  "settings.maintenanceUnpauseConfirmAction": "Resume actions",
-  "settings.maintenanceCandidatesEmptyMaintenanceOff":
-    "Maintenance is not switched on for this instance, so no candidates are shown.",
-  "settings.maintenanceCandidatesEmptyAllDisabled":
+  "settings.lifecycleUnpauseConfirmAction": "Resume actions",
+  "settings.lifecycleCandidatesEmptyLifecycleOff":
+    "Lifecycle rules are not switched on for this instance, so no candidates are shown.",
+  "settings.lifecycleCandidatesEmptyAllDisabled":
     "Every rule is Disabled, so nothing is being evaluated. Set a rule to Dry run first.",
-  "settings.maintenanceArmDestructiveIntro":
+  "settings.lifecycleArmDestructiveIntro":
     "{{name}} deletes files. Once enabled it acts on the candidates below as each grace period elapses, unless actions are paused.",
-  "settings.maintenanceArmDestructiveTitle":
-    "Enable a rule that deletes files?",
-  "settings.maintenanceArmDestructiveLoading":
+  "settings.lifecycleArmDestructiveTitle": "Enable a rule that deletes files?",
+  "settings.lifecycleArmDestructiveLoading":
     "Counting the candidates this rule already holds…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "{{count}} candidates could be acted on.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "This rule holds no candidates that could be acted on right now.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "The candidate count changed: this rule now holds {{count}}. Confirm the current count to continue.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "Enable file deletion for {{count}} titles.",
-  "settings.maintenanceArmDestructiveConfirm": "Enable",
+  "settings.lifecycleArmDestructiveConfirm": "Enable",
 
-  // ── Maintenance rules — candidates ──
-  "settings.maintenanceCandidatesTitle": "Leaving soon",
-  "settings.maintenanceCandidatesSubtitle":
+  // ── Lifecycle rules — candidates ──
+  "settings.lifecycleCandidatesTitle": "Leaving soon",
+  "settings.lifecycleCandidatesSubtitle":
     "Titles a rule has matched, soonest due first. Nothing here has been acted on yet.",
-  "settings.maintenanceCandidatesFilterRule": "Rule",
-  "settings.maintenanceCandidatesFilterState": "State",
-  "settings.maintenanceCandidatesFilterLibrary": "Library",
-  "settings.maintenanceCandidatesAllRules": "All rules",
-  "settings.maintenanceCandidatesAllStates": "All states",
-  "settings.maintenanceCandidatesAllLibraries": "All libraries",
-  "settings.maintenanceCandidatesColRule": "Rule",
-  "settings.maintenanceCandidatesColState": "State",
-  "settings.maintenanceCandidatesColFirstMatched": "First matched",
-  "settings.maintenanceCandidatesColDue": "Due",
-  "settings.maintenanceCandidatesHeldSince": "Held since {{time}}",
-  "settings.maintenanceCandidatesEmpty": "No candidates match these filters.",
-  "settings.maintenanceCandidateExclude": "Exclude this title",
-  "settings.maintenanceCandidateStateObserving": "Observing",
-  "settings.maintenanceCandidateStatePendingAction": "Pending action",
-  "settings.maintenanceCandidateStateDue": "Due",
-  "settings.maintenanceCandidateStateExecuting": "Executing",
-  "settings.maintenanceCandidateStateSucceeded": "Succeeded",
-  "settings.maintenanceCandidateStateFailed": "Failed",
-  "settings.maintenanceCandidateStateCanceled": "Canceled",
-  "settings.maintenanceCandidateStateExcluded": "Excluded",
-  "settings.maintenanceCandidateStateBlocked": "Blocked",
-  "settings.maintenanceCountdownDueNow": "Due now",
-  "settings.maintenanceCountdownInMinutes": "in {{count}} min",
-  "settings.maintenanceCountdownInHours": "in {{count}} h",
-  "settings.maintenanceCountdownInDays": "in {{count}} d",
-  "settings.maintenanceCountdownOverdueMinutes": "{{count}} min overdue",
-  "settings.maintenanceCountdownOverdueHours": "{{count}} h overdue",
-  "settings.maintenanceCountdownOverdueDays": "{{count}} d overdue",
+  "settings.lifecycleCandidatesFilterRule": "Rule",
+  "settings.lifecycleCandidatesFilterState": "State",
+  "settings.lifecycleCandidatesFilterLibrary": "Library",
+  "settings.lifecycleCandidatesAllRules": "All rules",
+  "settings.lifecycleCandidatesAllStates": "All states",
+  "settings.lifecycleCandidatesAllLibraries": "All libraries",
+  "settings.lifecycleCandidatesColRule": "Rule",
+  "settings.lifecycleCandidatesColState": "State",
+  "settings.lifecycleCandidatesColFirstMatched": "First matched",
+  "settings.lifecycleCandidatesColDue": "Due",
+  "settings.lifecycleCandidatesHeldSince": "Held since {{time}}",
+  "settings.lifecycleCandidatesEmpty": "No candidates match these filters.",
+  "settings.lifecycleCandidateExclude": "Exclude this title",
+  "settings.lifecycleCandidateStateObserving": "Observing",
+  "settings.lifecycleCandidateStatePendingAction": "Pending action",
+  "settings.lifecycleCandidateStateDue": "Due",
+  "settings.lifecycleCandidateStateExecuting": "Executing",
+  "settings.lifecycleCandidateStateSucceeded": "Succeeded",
+  "settings.lifecycleCandidateStateFailed": "Failed",
+  "settings.lifecycleCandidateStateCanceled": "Canceled",
+  "settings.lifecycleCandidateStateExcluded": "Excluded",
+  "settings.lifecycleCandidateStateBlocked": "Blocked",
+  "settings.lifecycleCountdownDueNow": "Due now",
+  "settings.lifecycleCountdownInMinutes": "in {{count}} min",
+  "settings.lifecycleCountdownInHours": "in {{count}} h",
+  "settings.lifecycleCountdownInDays": "in {{count}} d",
+  "settings.lifecycleCountdownOverdueMinutes": "{{count}} min overdue",
+  "settings.lifecycleCountdownOverdueHours": "{{count}} h overdue",
+  "settings.lifecycleCountdownOverdueDays": "{{count}} d overdue",
 
-  // ── Maintenance rules — runs and history ──
-  "settings.maintenanceRunsTitle": "Runs and history",
-  "settings.maintenanceRunsSubtitle":
-    "Recent evaluation passes and action attempts, newest first.",
-  "settings.maintenanceRunScope": "Scope",
-  "settings.maintenanceRunScopeAll": "Every rule",
-  "settings.maintenanceRunEvaluationNow": "Evaluate now",
-  "settings.maintenanceRunEvaluationRunning": "Evaluating…",
-  "settings.maintenanceRunActionsNow": "Run actions now",
-  "settings.maintenanceRunActionsRunning": "Running actions…",
-  "settings.maintenanceRunStarted": "Run started.",
-  "settings.maintenanceRunNotStarted": "Nothing started: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "Evaluation runs",
-  "settings.maintenanceEvaluationRunsEmpty": "No evaluation runs recorded yet.",
-  "settings.maintenanceActionRunsTitle": "Action runs",
-  "settings.maintenanceActionRunsEmpty": "No action runs recorded yet.",
-  "settings.maintenanceRunColStarted": "Started",
-  "settings.maintenanceRunColStatus": "Status",
-  "settings.maintenanceRunColCounts": "Counts",
-  "settings.maintenanceRunColDuration": "Duration",
-  "settings.maintenanceRunColError": "Error",
-  "settings.maintenanceRunCounts":
+  // ── Lifecycle rules — runs and history ──
+  "settings.lifecycleRunsTitle": "Runs and history",
+  "settings.lifecycleRunScope": "Scope",
+  "settings.lifecycleRunScopeAll": "Every rule",
+  "settings.lifecycleRunEvaluationNow": "Evaluate now",
+  "settings.lifecycleRunEvaluationRunning": "Evaluating…",
+  "settings.lifecycleRunActionsNow": "Run actions now",
+  "settings.lifecycleRunActionsRunning": "Running actions…",
+  "settings.lifecycleRunActionsNeedsRule":
+    "Choose one rule above to act on it now.",
+  "settings.lifecycleRunActionsHeldHelp":
+    "Acting now evaluates the rule first, as each scheduled run does, so it looks at held titles again. A title the evaluation adds that is already due, for example under a rule with no grace period, is acted on in the same run, deletes included.",
+  "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
+    "Choose the rule to act on. Rules act only for themselves, so acting now needs one rule.",
+  "settings.lifecycleRunStarted": "Run started.",
+  "settings.lifecycleRunNotStarted": "Nothing started: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "Evaluation runs",
+  "settings.lifecycleEvaluationRunsEmpty": "No evaluation runs recorded yet.",
+  "settings.lifecycleActionRunsTitle": "Action runs",
+  "settings.lifecycleActionRunsEmpty": "No action runs recorded yet.",
+  "settings.lifecycleRunColStarted": "Started",
+  "settings.lifecycleRunColStatus": "Status",
+  "settings.lifecycleRunColCounts": "Counts",
+  "settings.lifecycleRunColDuration": "Duration",
+  "settings.lifecycleRunColError": "Error",
+  "settings.lifecycleRunCounts":
     "{{evaluated}} evaluated · {{matched}} matched · {{noMatch}} no match · {{unknown}} unknown · {{errors}} errors",
-  "settings.maintenanceRunDuration": "{{seconds}} s",
-  "settings.maintenanceRunRevision": "rev {{revision}}",
-  "settings.maintenanceRunStatusRunning": "Running",
-  "settings.maintenanceRunStatusSucceeded": "Succeeded",
-  "settings.maintenanceRunStatusFailed": "Failed",
-  "settings.maintenanceRunStatusHeld": "Held",
-  "settings.maintenanceRunStatusAlreadySatisfied": "Already satisfied",
-  "settings.maintenanceRunStatusSkipped": "Skipped",
-  "settings.maintenanceActionRunColAttempt": "Attempt",
-  "settings.maintenanceActionRunColHoldReason": "Hold reason",
+  "settings.lifecycleRunDuration": "{{seconds}} s",
+  "settings.lifecycleRunRevision": "rev {{revision}}",
+  "settings.lifecycleRunStatusRunning": "Running",
+  "settings.lifecycleRunStatusSucceeded": "Succeeded",
+  "settings.lifecycleRunStatusFailed": "Failed",
+  "settings.lifecycleRunStatusHeld": "Held",
+  "settings.lifecycleRunStatusAlreadySatisfied": "Already satisfied",
+  "settings.lifecycleRunStatusSkipped": "Skipped",
+  "settings.lifecycleActionRunColAttempt": "Attempt",
+  "settings.lifecycleActionRunColHoldReason": "Hold reason",
 
-  // ── Maintenance rules — exclusions ──
-  "settings.maintenanceExclusionsTitle": "Exclusions",
-  "settings.maintenanceExclusionsSubtitle":
-    "Titles a maintenance rule must never act on. A global exclusion applies to every rule.",
-  "settings.maintenanceExclusionsEmpty": "No exclusions.",
-  "settings.maintenanceExclusionColScope": "Scope",
-  "settings.maintenanceExclusionColReason": "Reason",
-  "settings.maintenanceExclusionColCreated": "Added",
-  "settings.maintenanceExclusionScopeGlobal": "Every rule",
-  "settings.maintenanceExclusionRemove": "Remove exclusion",
-  "settings.maintenanceExclusionRemoved": "Exclusion for {{title}} removed.",
-  "settings.maintenanceExclusionRemoving":
-    "Remove the exclusion for {{title}}?",
-  "settings.maintenanceExcludeTitle": "Exclude from maintenance",
-  "settings.maintenanceExcludeBody":
+  // ── Lifecycle rules — exclusions ──
+  "settings.lifecycleExclusionsTitle": "Exclusions",
+  "settings.lifecycleExclusionsSubtitle":
+    "Titles a lifecycle rule must never act on. A global exclusion applies to every rule.",
+  "settings.lifecycleExclusionsEmpty": "No exclusions.",
+  "settings.lifecycleExclusionColScope": "Scope",
+  "settings.lifecycleExclusionColReason": "Reason",
+  "settings.lifecycleExclusionColCreated": "Added",
+  "settings.lifecycleExclusionScopeGlobal": "Every rule",
+  "settings.lifecycleExclusionRemove": "Remove exclusion",
+  "settings.lifecycleExclusionRemoved": "Exclusion for {{title}} removed.",
+  "settings.lifecycleExclusionRemoving": "Remove the exclusion for {{title}}?",
+  "settings.lifecycleExcludeTitle": "Exclude from lifecycle rules",
+  "settings.lifecycleExcludeBody":
     "{{title}} will be excluded from the next evaluation onward, and its candidate moves to excluded.",
-  "settings.maintenanceExcludeScope": "Scope",
-  "settings.maintenanceExcludeScopeGlobal": "Every rule",
-  "settings.maintenanceExcludeReason": "Reason",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "Scope",
+  "settings.lifecycleExcludeScopeGlobal": "Every rule",
+  "settings.lifecycleExcludeReason": "Reason",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "Why this title is excluded (optional)",
-  "settings.maintenanceExcludeConfirm": "Exclude",
-  "settings.maintenanceExcluded": "{{title}} excluded from maintenance.",
+  "settings.lifecycleExcludeConfirm": "Exclude",
+  "settings.lifecycleExcluded": "{{title}} excluded from lifecycle rules.",
 
-  // ── Maintenance rules — input reference ──
-  "settings.refMaintTitle": "Maintenance input reference",
-  "settings.refMaintSubtitle":
-    "Click to expand every fact a maintenance matcher can read.",
-  "settings.refMaintIntro":
-    "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
-  "settings.refMaintOutputTitle": "Rule output",
-  "settings.refMaintOutputIntro":
-    "A matcher defines up to three names. Anything else in the package is ignored, and a decision that is not exactly this shape is rejected rather than coerced.",
-  "settings.refMaintOutputMatch":
-    "match — boolean. Leaving it undefined means the subject did not match.",
-  "settings.refMaintOutputUnknown":
+  // ── Lifecycle rules — input reference ──
+  "settings.refLifecycleTitle": "Lifecycle input reference",
+  "settings.refLifecycleIntro":
+    "Every lifecycle rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
+  "settings.refLifecycleOutputTitle": "Rule output",
+  "settings.refLifecycleOutputIntro":
+    "A rule says what to do by defining actions, plus the optional unknown and reasons. A subject matches when at least one action holds for it. A decision that is not exactly this shape is rejected rather than coerced.",
+  "settings.refLifecycleOutputUnknown":
     "unknown — boolean. Set it when the rule itself cannot see enough to decide; unknown always beats a match. Facts Scryer could not observe are already handled for you, so this is only for judgements of your own.",
-  "settings.refMaintOutputReasons":
-    "reasons — a set of short machine codes explaining the decision. They are stored on the candidate and shown in preview.",
-  "settings.refMaintOutputNoPackage":
+  "settings.refLifecycleOutputReasons":
+    "reasons — a list or set of up to 32 short machine codes, each at most 120 characters, explaining the decision. They are stored on the candidate and shown in preview.",
+  "settings.refLifecycleOutputNoPackage":
     "Do not write a package or import line. Scryer adds both when it stores the rule and strips them back off for the editor.",
-  "settings.refMaintSectionInput": "— The evaluation envelope",
-  "settings.refMaintInputSchemaVersion":
-    "Version of the maintenance input document this rule is authored against",
-  "settings.refMaintInputEvaluationTime":
+  "settings.refLifecycleSectionInput": "— The evaluation envelope",
+  "settings.refLifecycleInputSchemaVersion":
+    "Version of the lifecycle input document this rule is authored against",
+  "settings.refLifecycleInputEvaluationTime":
     "RFC3339 instant captured once per run, so every subject compares against the same clock. Use it for date maths — time.now_ns() exists, but it would make the same subject decide differently on a retry.",
-  "settings.refMaintSectionSubject":
+  "settings.refLifecycleSectionSubject":
     "— The title, season, or episode under evaluation",
-  "settings.maintenanceFileSummary": "{{count}} files · {{size}}",
-  "settings.maintenanceTestTitle": "Choose a title to test",
-  "settings.maintenanceNoSubjects":
-    "No subjects in this title for the selected scope.",
-  "settings.maintenancePreviewExcluded": "Excluded from actions",
-  "settings.maintenancePreviewEstimatedDue": "If matched now: {{time}}",
-  "settings.maintenancePreviewDue": "Grace deadline: {{time}}",
-  "settings.maintenancePreviewSubject": "Test subject",
-  "settings.maintenancePreviewSample": "Library sample",
-  "settings.maintenanceRuleScope": "Rule scope",
-  "settings.maintenanceRuleTemplate": "Template",
-  "settings.maintenanceRuleTemplatePlaceholder": "Start from a template",
-  "settings.maintenanceScopeSeason": "Season",
-  "settings.maintenanceScopeEpisode": "Episode",
-  "settings.maintenanceFileDeleted": "Deleted",
-  "settings.maintenanceFilePending": "Pending",
-  "settings.maintenanceFileResults": "File results",
-  "settings.maintenanceFileProgress":
+  "settings.lifecycleFileSummary": "{{count}} files · {{size}}",
+  "settings.lifecycleTestTitle": "Choose a title to test",
+  "settings.lifecyclePreviewExcluded": "Excluded from actions",
+  "settings.lifecyclePreviewEstimatedDue": "If matched now: {{time}}",
+  "settings.lifecyclePreviewDue": "Grace deadline: {{time}}",
+  "settings.lifecyclePreviewSubject": "Test subject",
+  "settings.lifecyclePreviewSample": "Library sample",
+  "settings.lifecycleRuleTemplate": "Template",
+  "settings.lifecycleRuleTemplatePlaceholder": "Start from a template",
+  "settings.lifecycleFileDeleted": "Deleted",
+  "settings.lifecycleFilePending": "Pending",
+  "settings.lifecycleFileColPath": "File",
+  "settings.lifecycleFileResults": "File results",
+  "settings.lifecycleFileProgress":
     "{{completed}} deleted · {{remaining}} remaining",
-  "settings.refMaintSubjectId":
+  "settings.refLifecycleSubjectId":
     "Scryer title, collection, or episode ID for the selected scope",
-  "settings.refMaintCollectionId":
+  "settings.refLifecycleCollectionId":
     "Owning season collection ID for season and episode subjects, when known",
-  "settings.refMaintSubjectKind":
+  "settings.refLifecycleSubjectKind":
     "Granularity under evaluation: title, season, or episode",
-  "settings.refMaintSubjectTitleId":
+  "settings.refLifecycleSubjectTitleId":
     "Scryer identifier of the title the subject belongs to",
-  "settings.refMaintSubjectSeasonNumber":
+  "settings.refLifecycleSubjectSeasonNumber":
     "Season number for season and episode subjects, when known",
-  "settings.refMaintSubjectEpisodeId":
+  "settings.refLifecycleSubjectEpisodeId":
     "Episode identifier; present only for episode subjects",
-  "settings.refMaintSubjectFacet":
+  "settings.refLifecycleSubjectFacet":
     "Media facet of the title (movie, series, anime)",
-  "settings.refMaintSubjectName":
+  "settings.refLifecycleSubjectName":
     "Display label of the title, season, or episode",
-  "settings.refMaintSubjectYear": "Release year of the title, when known",
-  "settings.refMaintSectionLibrary": "— The library the subject lives in",
-  "settings.refMaintLibraryId": "Identifier of the library holding the subject",
-  "settings.refMaintLibraryName": "Display name of that library",
-  "settings.refMaintSectionFacts":
+  "settings.refLifecycleSubjectYear": "Release year of the title, when known",
+  "settings.refLifecycleSectionLibrary": "— The library the subject lives in",
+  "settings.refLifecycleLibraryId":
+    "Identifier of the library holding the subject",
+  "settings.refLifecycleLibraryName": "Display name of that library",
+  "settings.refLifecycleSectionSeason": "Season (season heads only)",
+  "settings.refLifecycleSeasonId": "Id of the season being decided.",
+  "settings.refLifecycleSeasonFacts":
+    "The season's own facts, read by season heads such as delete_season_files.",
+  "settings.refLifecycleSeasonObservations":
+    "Observation envelopes for the season's facts.",
+  "settings.refLifecycleSectionEpisode": "Episode (episode heads only)",
+  "settings.refLifecycleEpisodeId": "Id of the episode being decided.",
+  "settings.refLifecycleEpisodeNumber":
+    "Episode number within its season, when known.",
+  "settings.refLifecycleEpisodeFacts":
+    "The episode's own facts, read by episode heads such as delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations":
+    "Observation envelopes for the episode's facts.",
+  "settings.refLifecycleFactsStorageRoots":
+    "One entry for each configured root the subject's files are on, with that root's free space. Unknown when any of those roots cannot be read.",
+  "settings.refLifecycleSectionStorageRoots": "Storage root",
+  "settings.refLifecycleStorageRootId": "Id of the configured root.",
+  "settings.refLifecycleStorageRootPath": "Path of the configured root.",
+  "settings.refLifecycleStorageRootAvailableBytes":
+    "Bytes free on the root's volume.",
+  "settings.refLifecycleStorageRootTotalBytes":
+    "Total bytes on the root's volume.",
+  "settings.refLifecycleStorageRootAvailablePercent":
+    "Free space on the root's volume, as a percentage of its total.",
+  "settings.refLifecycleFactsStorageRootsValue":
+    "The roots the subject's files are on, when known.",
+  "settings.refLifecycleSectionFacts":
     "— The fact snapshot; each fact is a plain value, and the key is missing when the fact is absent or could not be observed",
-  "settings.refMaintFactsMonitored": "Whether the subject is monitored",
-  "settings.refMaintFactsTags":
+  "settings.refLifecycleFactsMonitored": "Whether the subject is monitored",
+  "settings.refLifecycleFactsTags":
     "User-defined tags inherited from the owning title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
-  "settings.refMaintFactsQualityProfileId":
+  "settings.refLifecycleFactsQualityProfileId":
     "Quality profile inherited from the owning title",
-  "settings.refMaintFactsAddedAt": "When the subject was added to the library",
-  "settings.refMaintFactsAddedByUserId":
+  "settings.refLifecycleFactsAddedAt":
+    "When the subject was added to the library",
+  "settings.refLifecycleFactsAddedByUserId":
     "Which user added the subject; absent when a scan or discovery created it",
-  "settings.refMaintFactsAddedByUsername":
+  "settings.refLifecycleFactsAddedByUsername":
     "Name of the user who added the subject",
-  "settings.refMaintFactsRequested":
+  "settings.refLifecycleFactsRequested":
     "Whether a media request created the subject",
-  "settings.refMaintFactsRequestedByUserIds":
+  "settings.refLifecycleFactsRequestedByUserIds":
     "Users who requested the subject: the submitter plus any additional requesters",
-  "settings.refMaintFactsRequestedByUsernames": "Names of those requesters",
-  "settings.refMaintFactsFirstImportedAt":
+  "settings.refLifecycleFactsRequestedByUsernames": "Names of those requesters",
+  "settings.refLifecycleFactsRequestedAt": "When the title was first requested",
+  "settings.refLifecycleFactsFirstImportedAt":
     "When a file was first imported for the subject",
-  "settings.refMaintFactsLastUpgradedAt":
-    "When the subject last received an upgrade",
-  "settings.refMaintFactsHasFile":
+  "settings.refLifecycleFactsLastUpgradedAt":
+    "When the subject last received an upgrade. Not collected yet, so it is always unknown.",
+  "settings.refLifecycleFactsHasFile":
     "Whether the subject has at least one file on disk",
-  "settings.refMaintFactsFileCount": "How many files the subject has on disk",
-  "settings.refMaintFactsTotalFileSizeBytes":
+  "settings.refLifecycleFactsFileCount":
+    "How many files the subject has on disk",
+  "settings.refLifecycleFactsTotalFileSizeBytes":
     "Combined on-disk size of the subject's files",
-  "settings.refMaintFactsFiles":
+  "settings.refLifecycleFactsFiles":
     "The subject's files, with per-file media detail",
-  "settings.refMaintFactsEpisodeCount": "How many episodes the subject covers",
-  "settings.refMaintFactsEpisodeFileCount":
+  "settings.refLifecycleFactsEpisodeCount":
+    "How many episodes the subject covers",
+  "settings.refLifecycleFactsEpisodeFileCount":
     "How many of those episodes have a file",
-  "settings.refMaintFactsMonitoredEpisodeCount":
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
     "How many of those episodes are monitored",
-  "settings.refMaintFactsEpisodePositionByAirDate":
+  "settings.refLifecycleFactsEpisodePositionByAirDate":
     "Episode rank by air date within its show",
-  "settings.refMaintFactsSeasonPositionByAirDate":
+  "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Season rank by newest eligible downloaded episode",
-  "settings.refMaintFactsStorageRootId":
-    "Configured root selected for storage capacity and file deletion",
-  "settings.refMaintFactsStorageAvailableBytes":
-    "Bytes currently available on the selected root",
-  "settings.refMaintFactsStorageTotalBytes":
-    "Total capacity in bytes of the selected root",
-  "settings.refMaintFactsStorageAvailablePercent":
-    "Percentage of the selected root currently available",
-  "settings.refMaintFactsActiveDownloads":
-    "Whether the subject has a download in flight",
-  "settings.refMaintFactsWatchedByUserIds":
-    "Users who watched this episode; for seasons, the same users must have watched every aired episode, including missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. Empty seasons are never completed.",
-  "settings.refMaintFactsLastWatchedAt":
+  "settings.refLifecycleFactsActiveDownloads":
+    "Whether the subject has a download in flight. Not collected yet, so it is always unknown.",
+  "settings.refLifecycleFactsWatchedByUserIds":
+    "Users who watched the subject. For a season or a whole show, only users who watched every aired episode in it, including episodes with missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. A season or show with no aired episodes is never completed.",
+  "settings.refLifecycleFactsLastWatchedAt":
     "When the subject was last played by anyone",
-  "settings.refMaintFactsWatchedByAnyRequester":
+  "settings.refLifecycleFactsWatchedByUsernames":
+    "Names of the users who watched the subject",
+  "settings.refLifecycleFactsWatchedByUsers":
+    "Each user who watched the subject, with their latest play and how many times they played it",
+  "settings.refLifecycleFactsWatchedByAnyRequester":
     "Whether at least one of the subject's requesters has played it",
-  "settings.refMaintFactsWatchedByAllRequesters":
+  "settings.refLifecycleFactsWatchedByAllRequesters":
     "Whether every one of the subject's requesters has played it",
-  "settings.refMaintFactsRequestLeaseState":
+  "settings.refLifecycleFactsRequestLeaseState":
     "Aggregate state of the subject's request leases: none, dormant, active, or expired",
-  "settings.refMaintFactsRequestLeaseExpiresAt":
+  "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "When the last live lease on the subject runs out",
-  "settings.refMaintFactsActiveRetentionClaims":
+  "settings.refLifecycleFactsActiveRetentionClaims":
     "How many request leases still hold the subject",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Whether a list, rather than a person, added the subject to the library",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Whether any enabled list, public or personal, still lists the subject",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Names of the enabled public lists that still list the subject",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Whether every list that ever listed the subject has dropped it",
-  "settings.refMaintFactsListsLeftAt": "When the last list dropped the subject",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLeftAt":
+    "When the last list dropped the subject",
+  "settings.refLifecycleFactsListsLastListName":
     "The public list the subject most recently left",
-  "settings.refMaintFactsListsEnabledIds":
+  "settings.refLifecycleFactsListsEnabledIds":
     "Identifiers of the enabled lists, public or personal, that still list the subject",
-  "settings.refMaintFactsListsPublicCount":
+  "settings.refLifecycleFactsListsPublicCount":
     "How many public lists still list the subject",
-  "settings.refMaintFactsListsPersonalCount":
+  "settings.refLifecycleFactsListsPersonalCount":
     "How many personal lists still list the subject",
-  "settings.refMaintFactsListsFirstSeenAt":
+  "settings.refLifecycleFactsListsFirstSeenAt":
     "When a list that still holds the subject first listed it",
-  "settings.refMaintFactsListsLastSeenAt":
+  "settings.refLifecycleFactsListsLastSeenAt":
     "When a list that still holds the subject last listed it",
-  "settings.refMaintFactsListsDaysOnList":
+  "settings.refLifecycleFactsListsDaysOnList":
     "Whole days since a list that still holds the subject first listed it",
-  "settings.refMaintFactsListsBestRank":
+  "settings.refLifecycleFactsListsBestRank":
     "The best (lowest) rank any list that still holds the subject gives it",
-  "settings.refMaintFactsListsOnLeave":
+  "settings.refLifecycleFactsListsOnLeave":
     "What the enabled lists that hold the subject do when they drop it",
-  "settings.refMaintFactsListsLeftHandled":
+  "settings.refLifecycleFactsListsLeftHandled":
     "Whether every list departure has had its on-leave action applied",
-  "settings.refMaintFactsListsMembershipStates":
+  "settings.refLifecycleFactsListsMembershipStates":
     "States of the subject on the lists that still hold it",
-  "settings.refMaintFactsRequestOrigin":
+  "settings.refLifecycleFactsRequestOrigin":
     "Where the request that created the title came from",
-  "settings.refMaintFactsRequestListName":
+  "settings.refLifecycleFactsRequestListName":
     "The public list that requested the title",
-  "settings.refMaintObsStatus":
+  "settings.refLifecycleObsStatus":
     "known, absent, or unknown. absent means the source answered and there is no value; unknown means Scryer could not find out. Test this before reading value — an unknown fact is never coerced to false, 0, or an empty string.",
-  "settings.refMaintSectionObservations":
+  "settings.refLifecycleSectionObservations":
     "— The same facts as full envelopes, for rules that need to tell absent apart from unknown or to read the reason. Reading a fact here opts that fact out of the automatic hold: you are taking responsibility for the three-valued answer.",
-  "settings.refMaintSectionObsFiles":
+  "settings.refLifecycleSectionObsFiles":
     "— One entry per file in input.observations.files.value",
-  "settings.refMaintObsObservedAt":
+  "settings.refLifecycleObsObservedAt":
     "When the value was observed, if the source recorded a time",
-  "settings.refMaintObsReason":
+  "settings.refLifecycleObsReason":
     "Stable machine code explaining why the fact is unknown, or why an absent fact has no value",
-  "settings.refMaintFactsMonitoredValue": "True when the subject is monitored",
-  "settings.refMaintFactsTagsValue":
+  "settings.refLifecycleFactsMonitoredValue":
+    "True when the subject is monitored",
+  "settings.refLifecycleFactsTagsValue":
     "Lowercase user-defined tag names from the admin tag registry; never reserved scryer: settings entries",
-  "settings.refMaintFactsQualityProfileIdValue":
+  "settings.refLifecycleFactsQualityProfileIdValue":
     "Identifier of the assigned quality profile",
-  "settings.refMaintFactsAddedAtValue":
+  "settings.refLifecycleFactsAddedAtValue":
     "RFC3339 timestamp the subject was added",
-  "settings.refMaintFactsAddedByUserIdValue":
+  "settings.refLifecycleFactsAddedByUserIdValue":
     "Identifier of the user who added the subject; the reason is title_added_by_system when nobody did",
-  "settings.refMaintFactsAddedByUsernameValue":
+  "settings.refLifecycleFactsAddedByUsernameValue":
     "Username of that user; unknown with reason user_not_found when the account is gone",
-  "settings.refMaintFactsRequestedValue":
+  "settings.refLifecycleFactsRequestedValue":
     "True when at least one media request created the subject; a confirmed false otherwise",
-  "settings.refMaintFactsRequestedByUserIdsValue":
+  "settings.refLifecycleFactsRequestedByUserIdsValue":
     "Requester identifiers, deduplicated; an empty list when the subject was not requested",
-  "settings.refMaintFactsRequestedByUsernamesValue":
+  "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Requester usernames; unknown with reason user_not_found when any of those accounts is gone",
-  "settings.refMaintFactsFirstImportedAtValue":
+  "settings.refLifecycleFactsRequestedAtValue":
+    "RFC 3339 time of the oldest request that created the title; absent with reason title_not_requested when no request created it",
+  "settings.refLifecycleFactsFirstImportedAtValue":
     "RFC3339 timestamp of the first import",
-  "settings.refMaintFactsLastUpgradedAtValue":
-    "RFC3339 timestamp of the last upgrade",
-  "settings.refMaintFactsHasFileValue":
+  "settings.refLifecycleFactsLastUpgradedAtValue":
+    "Always unknown with reason not_yet_collected: Scryer does not record upgrades yet, so a rule that reads it is held",
+  "settings.refLifecycleFactsHasFileValue":
     "True when at least one file is on disk",
-  "settings.refMaintFactsFileCountValue": "Number of files on disk",
-  "settings.refMaintFactsTotalFileSizeBytesValue":
+  "settings.refLifecycleFactsFileCountValue": "Number of files on disk",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
     "Combined size of those files in bytes",
-  "settings.refMaintFactsFilesValue":
+  "settings.refLifecycleFactsFilesValue":
     "One entry per file; see input.observations.files.value[] below",
-  "settings.refMaintFactsEpisodeCountValue": "Number of episodes in scope",
-  "settings.refMaintFactsEpisodeFileCountValue":
+  "settings.refLifecycleFactsEpisodeCountValue": "Number of episodes in scope",
+  "settings.refLifecycleFactsEpisodeFileCountValue":
     "Number of those episodes that have a file",
-  "settings.refMaintFactsMonitoredEpisodeCountValue":
+  "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "Number of those episodes that are monitored",
-  "settings.refMaintFactsEpisodePositionByAirDateValue":
+  "settings.refLifecycleFactsEpisodePositionByAirDateValue":
     "Rank 1 is the newest eligible downloaded, aired non-special episode. Equal air dates use season and episode numbers, then stable IDs.",
-  "settings.refMaintFactsSeasonPositionByAirDateValue":
+  "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Rank 1 is the season with the newest eligible downloaded, aired non-special episode. Protected files still occupy a rank.",
-  "settings.refMaintFactsStorageRootIdValue":
-    "Durable configured library-root identifier selected on this revision",
-  "settings.refMaintFactsStorageAvailableBytesValue":
-    "Available capacity in bytes, observed from the selected root itself",
-  "settings.refMaintFactsStorageTotalBytesValue":
-    "Total capacity in bytes, observed from the selected root itself",
-  "settings.refMaintFactsStorageAvailablePercentValue":
-    "Available capacity divided by total capacity, from 0 to 100",
-  "settings.refMaintFactsActiveDownloadsValue":
-    "True when a download for the subject is in flight",
-  "settings.refMaintFactsWatchedByUserIdsValue":
-    "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. Season completion requires the same person to have watched every aired episode, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown for title-scoped shows (show_watch_rollup_unavailable), when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
-  "settings.refMaintFactsLastWatchedAtValue":
+  "settings.refLifecycleFactsActiveDownloadsValue":
+    "Always unknown with reason not_yet_collected: download state is not read yet, so a rule that reads it is held",
+  "settings.refLifecycleFactsWatchedByUserIdsValue":
+    "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. For a season or show, a person counts only after watching every aired episode in it, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
+  "settings.refLifecycleFactsWatchedByUsernamesValue":
+    "Usernames of watched_by_user_ids, in the same order; unknown whenever those ids are, and unknown with reason user_not_found when any of those accounts is gone",
+  "settings.refLifecycleFactsWatchedByUsersValue":
+    "One entry per user in watched_by_user_ids, in the same order, folded over every observed media server; unknown whenever watched_by_usernames is",
+  "settings.refLifecycleFactsLastWatchedAtValue":
     "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing when a play has no recorded time",
-  "settings.refMaintFactsWatchedByAnyRequesterValue":
-    "True when at least one requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
-  "settings.refMaintFactsWatchedByAllRequestersValue":
-    "True when every requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
-  "settings.refMaintFactsRequestLeaseStateValue":
+  "settings.refLifecycleFactsWatchedByAnyRequesterValue":
+    "True when at least one requester played it; known false for a season or show with no aired episodes; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
+  "settings.refLifecycleFactsWatchedByAllRequestersValue":
+    "True when every requester played it; known false for a season or show with no aired episodes; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
+  "settings.refLifecycleFactsRequestLeaseStateValue":
     "none when no request lease was ever written for the subject, dormant when a lease is waiting for the first import, active while a lease is running, and expired once every lease has run out. A lease that was released or converted is withdrawn rather than spent, so it does not make the state expired. Expiry is measured against the evaluation time, so a lease reads as expired the moment its window closes.",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+  "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
     "RFC3339 timestamp of the latest expiry among the live leases; absent with reason no_live_lease when nothing is holding the subject",
-  "settings.refMaintFactsActiveRetentionClaimsValue":
+  "settings.refLifecycleFactsActiveRetentionClaimsValue":
     "Count of leases still holding the subject, dormant ones included",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "True when a list sync created the title; unknown with reason list_store_unreadable when the list store could not be read",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "True while at least one enabled list holds the subject",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Public list names only, sorted; a member's personal list is never named",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "True once every list that listed the subject has dropped it; false while one still holds it or when no list ever did",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339 timestamp; absent with reason not_left_every_list while any list still holds the subject",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Name of that public list; absent with reason no_public_list_left when the subject never left a public list",
-  "settings.refMaintFactsListsEnabledIdsValue":
+  "settings.refLifecycleFactsListsEnabledIdsValue":
     "List identifiers, sorted; never a list name",
-  "settings.refMaintFactsListsPublicCountValue":
+  "settings.refLifecycleFactsListsPublicCountValue":
     "Count of public lists, enabled or paused",
-  "settings.refMaintFactsListsPersonalCountValue":
+  "settings.refLifecycleFactsListsPersonalCountValue":
     "Count of personal lists, enabled or paused",
-  "settings.refMaintFactsListsFirstSeenAtValue":
+  "settings.refLifecycleFactsListsFirstSeenAtValue":
     "RFC3339 timestamp; absent with reason not_on_a_list when no list holds the subject",
-  "settings.refMaintFactsListsLastSeenAtValue":
+  "settings.refLifecycleFactsListsLastSeenAtValue":
     "RFC3339 timestamp; absent with reason not_on_a_list when no list holds the subject",
-  "settings.refMaintFactsListsDaysOnListValue":
+  "settings.refLifecycleFactsListsDaysOnListValue":
     "Whole days to the evaluation time; absent with reason not_on_a_list when no list holds the subject",
-  "settings.refMaintFactsListsBestRankValue":
+  "settings.refLifecycleFactsListsBestRankValue":
     "Rank number; absent with reason no_list_rank when no list that holds the subject ranks it",
-  "settings.refMaintFactsListsOnLeaveValue":
+  "settings.refLifecycleFactsListsOnLeaveValue":
     "Sorted values from keep, log, unmonitor and tag",
-  "settings.refMaintFactsListsLeftHandledValue":
+  "settings.refLifecycleFactsListsLeftHandledValue":
     "True once every departure was handled; absent with reason no_list_left when no list dropped the subject",
-  "settings.refMaintFactsListsMembershipStatesValue":
+  "settings.refLifecycleFactsListsMembershipStatesValue":
     "Sorted states such as in_library, added, requested or held",
-  "settings.refMaintFactsRequestOriginValue":
+  "settings.refLifecycleFactsRequestOriginValue":
     "One of manual, public_list or personal_list; absent with reason title_not_requested when no request created the title",
-  "settings.refMaintFactsRequestListNameValue":
+  "settings.refLifecycleFactsRequestListNameValue":
     "Name of that public list; absent with reason no_public_request_list for manual and personal-list requests, because a personal list is never named",
-  "settings.refMaintSectionFiles": "— One entry per file in input.facts.files",
-  "settings.refMaintFileSizeBytes": "Size of the file in bytes",
-  "settings.refMaintFileQuality":
+  "settings.refLifecycleSectionFiles":
+    "— One entry per file in input.facts.files",
+  "settings.refLifecycleFileSizeBytes": "Size of the file in bytes",
+  "settings.refLifecycleFileQuality":
     "Detected quality of the file (for example 2160P, 1080P)",
-  "settings.refMaintFileVideoCodec":
+  "settings.refLifecycleFileVideoCodec":
     "Video codec of the file (for example H.265, H.264)",
-  "settings.refMaintFileIs3d":
+  "settings.refLifecycleFileIs3d":
     "True when media metadata declares 3D video. False means not detected, including files not yet analyzed.",
-  "settings.refMaintFileVideoWidth": "Video width in pixels",
-  "settings.refMaintFileVideoHeight": "Video height in pixels",
-  "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
-  "settings.refMaintFileSubtitleLanguages":
+  "settings.refLifecycleFileVideoWidth": "Video width in pixels",
+  "settings.refLifecycleFileVideoHeight": "Video height in pixels",
+  "settings.refLifecycleFactsRuntimeMinutes":
+    "Runtime in minutes, as the metadata provider gave it",
+  "settings.refLifecycleFactsOriginalLanguage":
+    "Original language of the title",
+  "settings.refLifecycleFactsSeriesStatus":
+    "Status of a show as the metadata provider gave it, such as continuing or ended",
+  "settings.refLifecycleFactsFirstAired":
+    "Date the show first aired (YYYY-MM-DD)",
+  "settings.refLifecycleFactsNetwork": "Network that airs the show",
+  "settings.refLifecycleFactsStudio": "Studio that made the title",
+  "settings.refLifecycleFactsCountry": "Country of origin",
+  "settings.refLifecycleFactsPopularity":
+    "Popularity score from the metadata provider",
+  "settings.refLifecycleFactsReleaseDate":
+    "Release date of a movie (YYYY-MM-DD)",
+  "settings.refLifecycleFactsDaysSinceAdded":
+    "Whole days since the subject was added",
+  "settings.refLifecycleFactsMaxVideoHeight":
+    "Tallest video stream among the subject's files, in pixels",
+  "settings.refLifecycleFactsSeasonCount":
+    "Number of seasons of the show, specials left out",
+  "settings.refLifecycleFactsAiredEpisodeCount":
+    "Number of regular episodes of the show that have aired",
+  "settings.refLifecycleFactsUnairedEpisodeCount":
+    "Number of regular episodes of the show that have not aired",
+  "settings.refLifecycleFactsMissingEpisodeCount":
+    "Number of aired, monitored episodes of the show without a file",
+  "settings.refLifecycleFactsAiredEpisodeFilePercent":
+    "Aired episodes with a file, as a percentage of aired episodes",
+  "settings.refLifecycleFactsLatestSeasonNumber":
+    "Number of the show's latest season",
+  "settings.refLifecycleFactsLatestAiredEpisodeDate":
+    "Air date of the show's most recently aired episode (YYYY-MM-DD)",
+  "settings.refLifecycleFactsNextEpisodeAirDate":
+    "Air date of the show's next scheduled episode (YYYY-MM-DD)",
+  "settings.refLifecycleFactsGenres":
+    "Genre names from the title's stored metadata",
+  "settings.refLifecycleFactsRating": "The title's stored rating summary",
+  "settings.refLifecycleFactsRatings":
+    "Every external rating behind the rating summary",
+  "settings.refLifecycleFactsPlayCountTotal":
+    "Plays of the subject by every account on every enabled media server, summed; it names nobody",
+  "settings.refLifecycleFactsWatchlistedByUserIds":
+    "Users whose watchlists hold the title",
+  "settings.refLifecycleFactsWatchlistedByUsernames":
+    "Usernames of the users whose watchlists hold the title",
+  "settings.refLifecycleFactsWatchlistedByAnyone":
+    "Whether any user's watchlist holds the title",
+  "settings.refLifecycleFactsWatchlistedByAnyRequester":
+    "Whether a watchlist of one of the title's requesters holds it",
+  "settings.refLifecycleFactsWatchlistAddedAt":
+    "When Scryer first saw the title on any watchlist",
+  "settings.refLifecycleFactsWatchlistOrigins":
+    "Providers whose watchlists hold the title now",
+  "settings.refLifecycleFactsFavoritedByUserIds":
+    "Users who marked the subject a favorite on Jellyfin or Emby",
+  "settings.refLifecycleFactsFavoritedByUsernames":
+    "Usernames of the users who marked the subject a favorite on Jellyfin or Emby",
+  "settings.refLifecycleFactsFavoritedByAnyone":
+    "Whether any user marked the subject a favorite on Jellyfin or Emby",
+  "settings.refLifecycleFactsFavoritedByAnyRequester":
+    "Whether one of the title's requesters marked the subject a favorite on Jellyfin or Emby",
+  "settings.refLifecycleFileAudioCodec":
+    "Audio codec of the file's main audio stream",
+  "settings.refLifecycleFileAudioChannels": "Number of audio channels",
+  "settings.refLifecycleFileAudioBitrateKbps": "Audio bitrate in kbps",
+  "settings.refLifecycleFileVideoBitrateKbps": "Video bitrate in kbps",
+  "settings.refLifecycleFileVideoBitDepth": "Video bit depth",
+  "settings.refLifecycleFileVideoHdrFormat":
+    "HDR format of the video, such as HDR10 or Dolby Vision",
+  "settings.refLifecycleSectionRatings":
+    "— One entry per external rating in input.facts.ratings",
+  "settings.refLifecycleSectionObsRatings":
+    "— One entry per external rating in input.observations.ratings.value",
+  "settings.refLifecycleSectionWatchedByUsers":
+    "— One entry per watcher in input.facts.watched_by_users",
+  "settings.refLifecycleSectionObsWatchedByUsers":
+    "— One entry per watcher in input.observations.watched_by_users.value",
+  "settings.refLifecycleWatcherUserId": "Id of the Scryer user",
+  "settings.refLifecycleWatcherUsername": "Username of the Scryer user",
+  "settings.refLifecycleWatcherLastPlayedAt":
+    "When they last played the subject; null when one of their plays has no time",
+  "settings.refLifecycleWatcherPlayCount":
+    "How many times they played the subject, summed across media servers",
+  "settings.refLifecycleRatingSource": "Source of the rating",
+  "settings.refLifecycleRatingValue":
+    "The rating on the source's own scale, when the source gives one",
+  "settings.refLifecycleRatingNormalized":
+    "The rating on Scryer's common scale, comparable across sources",
+  "settings.refLifecycleRatingVotes":
+    "Number of votes behind the rating, when the source gives one",
+  "settings.refLifecycleFactsRuntimeMinutesValue":
+    "Runtime in minutes; absent when the metadata provider gave no value",
+  "settings.refLifecycleFactsOriginalLanguageValue":
+    "Original language; absent when the metadata provider gave no value",
+  "settings.refLifecycleFactsSeriesStatusValue":
+    "Show status as the provider gave it; absent for a movie, or when the provider gave no value",
+  "settings.refLifecycleFactsFirstAiredValue":
+    "First air date (YYYY-MM-DD), a date rather than a timestamp; absent for a movie, or when the provider gave no value",
+  "settings.refLifecycleFactsNetworkValue":
+    "Network name; absent when the provider gave no value",
+  "settings.refLifecycleFactsStudioValue":
+    "Studio name; absent when the provider gave no value",
+  "settings.refLifecycleFactsCountryValue":
+    "Country of origin; absent when the provider gave no value",
+  "settings.refLifecycleFactsPopularityValue":
+    "Popularity score; absent when the provider gave no value",
+  "settings.refLifecycleFactsReleaseDateValue":
+    "Release date (YYYY-MM-DD): the earliest release date Scryer knows for the movie, of any kind and from any market. Absent for a show, or when the fetched release dates hold none; unknown with reason not_yet_collected while the movie has no date and its release dates have not been fetched",
+  "settings.refLifecycleFactsDaysSinceAddedValue":
+    "Whole days since the subject was added, counted against the evaluation clock",
+  "settings.refLifecycleFactsMaxVideoHeightValue":
+    "Height in pixels of the tallest video stream among the files; absent when no file reports one. Unknown with reason not_yet_collected until every file of the title has a completed scan, including a file whose scan failed or needs review",
+  "settings.refLifecycleFactsSeasonCountValue":
+    "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsAiredEpisodeCountValue":
+    "Regular episodes whose air date is on or before the evaluation day; an episode with no air date counts as not aired. Absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsUnairedEpisodeCountValue":
+    "Regular episodes with no air date or one after the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsMissingEpisodeCountValue":
+    "Regular episodes that have aired, are monitored and have no file; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsAiredEpisodeFilePercentValue":
+    "Percentage of aired episodes that have a file; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsLatestSeasonNumberValue":
+    "Highest regular season number; absent for movies or a show with no seasons, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsLatestAiredEpisodeDateValue":
+    "Air date (YYYY-MM-DD) of the most recently aired regular episode; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsNextEpisodeAirDateValue":
+    "Earliest air date (YYYY-MM-DD) after the evaluation day; absent with reason no_scheduled_episode when none is scheduled, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
+  "settings.refLifecycleFactsGenresValue":
+    "Genre names; unknown with reason metadata_unreadable when the stored metadata could not be read",
+  "settings.refLifecycleFactsRatingValue":
+    "Rating summary; absent when no source rated the title, unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refLifecycleFactsRatingsValue":
+    "One entry per external rating; unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refLifecycleFactsAgeRating":
+    "Minimum age from the title's stored content ratings",
+  "settings.refLifecycleFactsCertifications":
+    "Every certification in the title's stored content ratings; see input.facts.certifications[] below",
+  "settings.refLifecycleFactsCertificationLabel":
+    "US certification label (for example G, PG, PG-13, R)",
+  "settings.refLifecycleFactsCertificationRank":
+    "That label as a number, lowest first, so rules can compare rather than list labels",
+  "settings.refLifecycleFactsAwardCount":
+    "How many awards the title won, from its stored metadata",
+  "settings.refLifecycleFactsAwards":
+    "Every award the title won; see input.facts.awards[] below",
+  "settings.refLifecycleFactsAgeRatingValue":
+    "Minimum age the stored content ratings give, the US rating first; absent with reason no_age_rating when none gives one, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsCertificationsValue":
+    "One entry per certification; absent with reason no_certifications when there are none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsCertificationLabelValue":
+    "The US certification label; absent with reason no_us_certification when there is none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsCertificationRankValue":
+    "That label as a number, lowest first; absent with reason no_us_certification when there is no US label and unrankable_certification when Scryer does not rank it, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsAwardCountValue":
+    "Number of awards won; a known zero when it won none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleFactsAwardsValue":
+    "One entry per award won; a known empty list when it won none, unknown with reason metadata_not_stored until the title's metadata has been stored since Scryer began keeping it, or again after a rematch, and with reason metadata_unreadable when the store could not be read",
+  "settings.refLifecycleSectionCertifications":
+    "— One entry per certification in input.facts.certifications",
+  "settings.refLifecycleSectionObsCertifications":
+    "— One entry per certification in input.observations.certifications.value",
+  "settings.refLifecycleSectionAwards":
+    "— One entry per award won in input.facts.awards",
+  "settings.refLifecycleSectionObsAwards":
+    "— One entry per award won in input.observations.awards.value",
+  "settings.refLifecycleCertCountry": "Country the certification was issued in",
+  "settings.refLifecycleCertValue":
+    "The certification itself (for example PG-13)",
+  "settings.refLifecycleCertSource": "Where the certification came from",
+  "settings.refLifecycleAwardName": "Name of the award",
+  "settings.refLifecycleAwardId":
+    "Wikidata ID of the award (for example Q102427)",
+  "settings.refLifecycleAwardYear": "Year the award was won, when known",
+  "settings.refLifecycleAwardRecipient":
+    "Who won it: the title itself, or the person who won it for the title",
+  "settings.refLifecycleAwardRecipientId": "Wikidata ID of the recipient",
+  "settings.refLifecycleAwardGivenTo":
+    "work when the title won it, person when a person won it for the title",
+  "settings.refLifecycleFactsPlayCountTotalValue":
+    "Plays by every account on every enabled media server, linked to a Scryer user or not, summed. Unknown with reason audience_not_read until every account has been read recently, and with the usual watch-fact reasons whenever watch facts are unknown.",
+  "settings.refLifecycleFactsWatchlistedByUserIdsValue":
+    "IDs of the users whose watchlists hold the title. A watchlist is a user's own enabled, signed-in Plex, Trakt, TMDb or MDBList watchlist, Simkl or MyAnimeList plan-to-watch list, or AniList planning list. Unknown with reason watchlist_not_synced while any watchlist has never synced, last failed, is switched off, is set not to sync or has lost its account, and with reason watchlist_stale while any has not synced recently.",
+  "settings.refLifecycleFactsWatchlistedByUsernamesValue":
+    "Usernames of the users whose watchlists hold the title; unknown with reason user_not_found when one of them no longer exists, and with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refLifecycleFactsWatchlistedByAnyoneValue":
+    "True when any user's watchlist holds the title; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refLifecycleFactsWatchlistedByAnyRequesterValue":
+    "True when a requester's watchlist holds the title; absent with reason title_not_requested when nobody requested it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refLifecycleFactsWatchlistAddedAtValue":
+    "RFC3339 timestamp of when Scryer first saw the title on any watchlist; absent with reason not_on_a_watchlist when no watchlist holds it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refLifecycleFactsWatchlistOriginsValue":
+    "Providers whose watchlists hold the title now; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refLifecycleFactsFavoritedByUserIdsValue":
+    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. A title counts every favorite of it; a series or season favorite counts for every season and episode of the series; an episode favorite counts for that episode, its season and the series. Scryer cannot read Plex favorites: unknown with reason favorites_unsupported when every enabled server is Plex, and with reason favorite_member_unobservable while a linked user can only be seen through Plex. Unknown with reason favorites_member_not_read while a linked user's favorites have no recent complete read, and with reason favorites_unreadable when the stored favorites could not be read. After an upgrade the favorite facts stay unknown until the first sweep has read favorites.",
+  "settings.refLifecycleFactsFavoritedByUsernamesValue":
+    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists, and for the same reasons as favorited_by_user_ids.",
+  "settings.refLifecycleFactsFavoritedByAnyoneValue":
+    "True when a favorite read from Jellyfin or Emby covers the subject, counted as for favorited_by_user_ids, whether or not the account is linked to a Scryer user. False once every account on every enabled Jellyfin and Emby server has had its favorites read in full recently and none covers the subject. Unknown with reason audience_favorites_not_read while some account on such a server has no recent complete read, with reason audience_favorites_unsupported while a Plex server is enabled, since Plex accounts could have favorites Scryer cannot read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
+  "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
+    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account, with reason favorites_member_not_read when a requester's favorites have no recent complete read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
+  "settings.refLifecycleFileAudioLanguages":
+    "Audio languages present in the file",
+  "settings.refLifecycleFileSubtitleLanguages":
     "Subtitle languages present in the file",
-  "settings.refMaintFileAddedAt": "RFC3339 timestamp the file was added",
-  "settings.refMaintFactsSeriesMovies":
+  "settings.refLifecycleFileAddedAt": "RFC3339 timestamp the file was added",
+  "settings.refLifecycleFactsSeriesMovies":
     "Movies linked into this show's timeline, each with its own tags. Present for shows only: the key is missing entirely for a movie subject, and known-empty for a show with no linked movies. add_tags and remove_tags never write these; they act on the subject title.",
-  "settings.refMaintFactsSeriesMoviesValue":
+  "settings.refLifecycleFactsSeriesMoviesValue":
     "One entry per linked movie; see input.observations.series_movies.value[] below",
-  "settings.refMaintSectionSeriesMovies":
+  "settings.refLifecycleSectionSeriesMovies":
     "— One entry per linked movie in input.facts.series_movies",
-  "settings.refMaintSectionObsSeriesMovies":
+  "settings.refLifecycleSectionObsSeriesMovies":
     "— One entry per linked movie in input.observations.series_movies.value",
-  "settings.refMaintSeriesMovieLinkId": "Identifier of the series-movie link",
-  "settings.refMaintSeriesMovieName": "Title of the linked movie",
-  "settings.refMaintSeriesMovieYear":
+  "settings.refLifecycleSeriesMovieLinkId":
+    "Identifier of the series-movie link",
+  "settings.refLifecycleSeriesMovieName": "Title of the linked movie",
+  "settings.refLifecycleSeriesMovieYear":
     "Release year of the linked movie, when known",
-  "settings.refMaintSeriesMovieMonitored":
+  "settings.refLifecycleSeriesMovieMonitored":
     "Whether acquisition is enabled for this linked movie",
-  "settings.refMaintSeriesMovieHasFile":
+  "settings.refLifecycleSeriesMovieHasFile":
     "Whether this linked movie has a file on disk",
-  "settings.refMaintSeriesMovieTags":
+  "settings.refLifecycleSeriesMovieTags":
     "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
-  "settings.refMaintTagActionsTitle": "Tag actions",
-  "settings.refMaintTagActionsNote":
+  "settings.ruleBuilderModeLabel": "Editor",
+  "settings.ruleBuilderModeSimple": "Simple",
+  "settings.ruleBuilderUnavailable":
+    "This rule's source was edited by hand or did not come from the simple builder, so it can only be edited as Rego.",
+  "settings.ruleBuilderEditAsRego": "Edit as Rego",
+  "settings.ruleBuilderEditAsRegoTitle": "Edit this rule as Rego?",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "Once you edit the code, it must stay an Advanced rule and can no longer be opened in Simple, even after you save it.",
+  "settings.ruleBuilderIncomplete":
+    "Some choices are unfinished. Fix the items marked in the builder, then save.",
+  "settings.ruleBuilderConditions": "Conditions",
+  "settings.ruleBuilderJoinAll": "All conditions match",
+  "settings.ruleBuilderJoinAny": "Any condition matches",
+  "settings.ruleBuilderAddCondition": "Add condition",
+  "settings.ruleBuilderActionSubject": "Acts on",
+  "settings.ruleBuilderAction": "Action",
+  "settings.ruleBuilderActionPlaceholder": "Choose an action",
+  "settings.ruleBuilderActionConditions": "Only when",
+  "settings.ruleBuilderActionConditionsHelp":
+    "This action runs only when these match too, on top of the rule's conditions. Other actions are not affected.",
+  "settings.ruleBuilderAddActionCondition":
+    "Add a condition for this action only",
+  "settings.ruleBuilderAddAction": "Add action",
+  "settings.ruleBuilderProblemActionRequired": "Choose an action.",
+  "settings.ruleBuilderFact": "Fact",
+  "settings.ruleBuilderFactPlaceholder": "Choose a fact",
+  "settings.ruleBuilderOperator": "Comparison",
+  "settings.ruleBuilderValue": "Value",
+  "settings.ruleBuilderDays": "Days",
+  "settings.lifecycleBuilderActionsHelp":
+    "Actions run in the order listed. Actions that cannot be combined are disabled once a conflicting one is chosen.",
+  "settings.ruleBuilderOutputConflict": "Cannot be combined with {{outputs}}.",
+  "settings.ruleBuilderQualityProfilePlaceholder": "Choose a quality profile",
+  "settings.ruleBuilderUserPlaceholder": "Choose a user",
+  "settings.ruleBuilderListPlaceholder": "Choose a list",
+  "settings.lifecycleBuilderLibraryPlaceholder": "Choose a library",
+  "settings.lifecycleBuilderRootPlaceholder": "Choose a root folder",
+  "settings.ruleBuilderTagsPlaceholder": "Choose tags",
+  "settings.ruleBuilderNoTags": "No tags have been created yet.",
+  "settings.ruleBuilderOpIsTrue": "is true",
+  "settings.ruleBuilderOpIsFalse": "is false",
+  "settings.ruleBuilderOpEquals": "equals",
+  "settings.ruleBuilderOpNotEquals": "does not equal",
+  "settings.ruleBuilderOpGreaterThan": "is greater than",
+  "settings.ruleBuilderOpGreaterOrEqual": "is at least",
+  "settings.ruleBuilderOpLessThan": "is less than",
+  "settings.ruleBuilderOpLessOrEqual": "is at most",
+  "settings.ruleBuilderOpContains": "contains",
+  "settings.ruleBuilderOpNotContains": "does not contain",
+  "settings.ruleBuilderOpIsEmpty": "is empty",
+  "settings.ruleBuilderOpIsNotEmpty": "is not empty",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "is more than N days ago",
+  "settings.ruleBuilderOpLessThanDaysAgo": "is less than N days ago",
+  "settings.ruleBuilderOpHasValue": "has a value",
+  "settings.ruleBuilderOpHasNoValue": "has no value",
+  "settings.ruleBuilderProblemNoConditions": "Add at least one condition.",
+  "settings.ruleBuilderOpIsOneOf": "is one of",
+  "settings.ruleBuilderOpIsNotOneOf": "is not one of",
+  "settings.ruleBuilderOpContainsAny": "contains any of",
+  "settings.ruleBuilderOpContainsNone": "contains none of",
+  "settings.ruleBuilderValues": "Values",
+  "settings.ruleBuilderValuesPerLine": "One value per line",
+  "settings.ruleBuilderProblemNoOutputs": "Choose at least one outcome.",
+  "settings.ruleBuilderProblemFactRequired": "Choose a fact.",
+  "settings.ruleBuilderProblemFactUnknown":
+    "This fact is not available for this rule.",
+  "settings.ruleBuilderProblemOperatorInvalid":
+    "Choose a comparison for this fact.",
+  "settings.ruleBuilderProblemValueRequired": "Enter a value.",
+  "settings.ruleBuilderProblemValueNotNumber": "Enter a number.",
+  "settings.ruleBuilderProblemValueNotDays":
+    "Enter a whole number of days, up to 100000.",
+  "settings.ruleBuilderProblemValueUnrepresentable":
+    "This value contains characters a rule cannot hold.",
+  "settings.ruleBuilderProblemValueDuplicate":
+    "Each entry can be listed only once.",
+  "settings.ruleBuilderProblemOutputNotInScope":
+    "This option is not available for this rule.",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "This option cannot be combined with another chosen option.",
+  "settings.ruleBuilderProblemOutputRequired": "Choose one of: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotWhole": "Enter a whole number.",
+  "settings.ruleBuilderProblemValueOutOfRange":
+    "This number is outside the allowed range.",
+  "settings.ruleBuilderProblemValueNotOffered":
+    "Choose one of the offered values.",
+  "settings.ruleBuilderProblemValueInvalid":
+    "This value has characters that are not allowed here.",
+  "settings.ruleBuilderProblemValueTooLong": "This value is too long.",
+  "settings.ruleBuilderProblemValueTooMany": "This list has too many entries.",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "This rule names an option this version does not know.",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "This option also needs {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Not offered any more: {{values}}. The rule keeps it until you pick another.",
+  "settings.ruleBuilderSchemaLoading":
+    "Loading the simple editor. The Rego editor works in the meantime.",
+  "settings.ruleBuilderSchemaFailed":
+    "The simple editor could not be loaded. Edit the rule as Rego, or reopen the page to try again.",
+  "settings.scoringBuilderOutputs": "Score",
+  "settings.scoringBuilderOutputsHelp":
+    "Choose one: add points to the release's score, or block the release. The code names the score entry in decision traces.",
+  "settings.scoringBuilderAdjustScore": "Adjust score",
+  "settings.scoringBuilderBlock": "Block release",
+  "settings.scoringBuilderCode": "Code",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "Points",
+  "settings.requestBuilderOutputs": "Decision and changes",
+  "settings.requestBuilderOutputsHelp":
+    "Choose at most one vote: approve, deny or hold for review. A rule can also change what an approval writes, add tags or send a notification, with or without a vote. Reason codes can go with any of these.",
+  "settings.requestBuilderMonitorPlaceholder": "Choose monitoring",
+  "settings.requestBuilderLanguagesPlaceholder": "Choose languages",
+  "settings.requestDeclaredActionsTitle": "What this rule can do",
+  "settings.requestDeclaredActionsNone": "Nothing declared",
+  "settings.requestRuleWarningsTitle": "Warnings",
+  "settings.requestRuleWarningLocation": "Line {{line}}, column {{column}}:",
+  "settings.requestBuilderOriginManual": "Requested by hand",
+  "settings.requestBuilderOriginPublicList": "From a public list",
+  "settings.requestBuilderOriginPersonalList": "From a personal list",
+  "settings.lifecycleDeclaredActionsNone": "No actions",
+  "settings.lifecycleDecidedActionsNone": "No actions",
+  "settings.lifecycleRuleWarningsTitle": "Warnings",
+  "settings.lifecycleRuleWarningLocation": "Line {{line}}, column {{column}}:",
+  "settings.refLifecycleOutputFlagHeads":
+    "Actions without a value are booleans: define them with if, and the action applies when the body holds. For the title: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title. For one season of a series: monitor_season, unmonitor_season, delete_season_files and fetch_season_subtitles. For one episode: monitor_episode, unmonitor_episode, delete_episode_files and fetch_episode_subtitles.",
+  "settings.refLifecycleOutputValueHeads":
+    "Actions with a value assign a literal with :=. set_quality_profile, move_to_library, move_to_root, notify, notify_season and notify_episode take a string; add_tags and remove_tags take a list of strings. An else chain may choose between literals; a computed value is rejected.",
+  "settings.refLifecycleOutputHelpers":
+    "Any other rule name is a helper of your own. It only has an effect when an action, unknown or reasons uses it.",
+  "settings.refLifecycleActionsTitle": "Actions",
+  "settings.refLifecycleActionsOrder":
+    "Scryer applies a subject's actions in this order, whatever order the source lists them in: {{order}}.",
+  "settings.refLifecycleActionsDaysSince":
+    "days_since(timestamp) returns the whole days between an RFC3339 timestamp and the evaluation time, so days_since(input.facts.added_at) > 180 means added more than 180 days ago.",
+  "settings.refLifecycleActionsNotify":
+    "notify sends its message once, after the rule's other actions have actually changed something, or right away when notify is the rule's only action. Nothing is sent when every action was already in place. Previews and dry runs never send it.",
+  "settings.refLifecycleActionsConflicts":
+    "Conflicting actions hold with a reason instead of applying either. That covers one subject, such as monitor with unmonitor or the same tag both added and removed, and also a title against its seasons or episodes and a season against its episodes, such as monitoring a show while deleting one of its seasons' files.",
+  "settings.refLifecycleTagActionsTitle": "Tag actions",
+  "settings.refLifecycleTagActionsNote":
     "add_tags and remove_tags write user tags on the matched title. Every label has to exist in the tag registry an administrator maintains in Settings, and labels are stored lowercase — a rule naming a tag that was deleted afterwards holds with tag_not_defined instead of writing it.",
-  "settings.refMaintTagOscillationNote":
+  "settings.refLifecycleTagOscillationNote":
     "Two rules that write the opposite patch for the same label on the same title hold both candidates with tag_patch_conflict rather than letting whichever ran last win. A rule that adds a label and another that removes it on a later run is not caught that way: it is an authoring mistake that flips the tag back and forth forever, so scope the two so they cannot both match.",
 
-  "settings.maintenanceTemplateGallery": "Starter templates",
-  "settings.maintenanceTemplateGalleryDescription":
-    "Load a written-out matcher into the editor. Nothing is saved until you review it and press create.",
-  "settings.maintenanceTemplateApply": "Use template",
-  "settings.maintenanceTemplateFacetMovie": "Movies",
-  "settings.maintenanceTemplateFacetShow": "Shows",
-  "settings.maintenanceTemplateGraceBadge": "{{count}}-day grace",
-  "settings.maintenanceTemplateNoGraceBadge": "No grace period",
-  "settings.maintenanceTemplateDestructiveBadge": "Deletes files",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Pick a target profile",
-  "settings.maintenanceTemplateDeadWantedTitle": "Dead wanted entries",
-  "settings.maintenanceTemplateDeadWantedDescription":
+  "settings.lifecycleTemplateGallery": "Starter templates",
+  "settings.lifecycleTemplateApply": "Use template",
+  "settings.lifecycleTemplateFacetMovie": "Movies",
+  "settings.lifecycleTemplateFacetShow": "Shows",
+  "settings.lifecycleTemplateGraceBadge": "{{count}}-day grace",
+  "settings.lifecycleTemplateNoGraceBadge": "No grace period",
+  "settings.lifecycleTemplateNeedsProfileBadge": "Name a target profile",
+  "settings.lifecycleTemplateDeadWantedTitle": "Dead wanted entries",
+  "settings.lifecycleTemplateDeadWantedDescription":
     "Titles you still monitor that no file ever arrived for. Facts are plain values, so a title whose monitoring or file state Scryer cannot see holds instead of matching. After a 30-day grace period the scope is unmonitored and anything already on disk is left alone.",
-  "settings.maintenanceTemplateLibraryAgingTitle": "Library aging",
-  "settings.maintenanceTemplateLibraryAgingDescription":
+  "settings.lifecycleTemplateLibraryAgingTitle": "Library aging",
+  "settings.lifecycleTemplateLibraryAgingDescription":
     'Caution: this template deletes the title and its files. Anything holding a file ages out unless it carries the "keep" tag. A 180-day grace period runs first, and the instance gates plus this rule\'s own arming still have to agree before anything is removed.',
-  "settings.maintenanceTemplateAddedLongAgoTitle": "Added over 180 days ago",
-  "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Real date math: the matcher subtracts the title's added_at from the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
-  "settings.maintenanceTemplateOversizedTitle": "Oversized releases",
-  "settings.maintenanceTemplateOversizedDescription":
-    "Titles whose files total more than 40 GB. Moves the title onto a quality profile you choose and searches again only if the profile actually changed — pick that target profile in the editor before saving.",
-  "settings.maintenanceTemplateFourKPurgeTitle": "4K purge",
-  "settings.maintenanceTemplateFourKPurgeDescription":
-    "Any title holding a 2160p file. After a 7-day grace period it moves onto a quality profile you choose and searches again if the profile changed. Pick that target profile in the editor before saving.",
-  "settings.maintenanceTemplateRequestedExpiryTitle": "Requested media expiry",
-  "settings.maintenanceTemplateRequestedExpiryDescription":
+  "settings.lifecycleTemplateAddedLongAgoTitle": "Added over 180 days ago",
+  "settings.lifecycleTemplateAddedLongAgoDescription":
+    "Matches titles added more than 180 days ago. The scope is unmonitored and the files stay. A title with no recorded added date does not match.",
+  "settings.lifecycleTemplateOversizedTitle": "Oversized releases",
+  "settings.lifecycleTemplateOversizedDescription":
+    'Titles whose files total more than 40 GB. Moves the title onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder with one of your profiles before saving.',
+  "settings.lifecycleTemplateFourKPurgeTitle": "4K purge",
+  "settings.lifecycleTemplateFourKPurgeDescription":
+    'Any title holding a 2160p file. After a 7-day grace period it moves onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
+  "settings.lifecycleTemplateRequestedExpiryTitle": "Requested media expiry",
+  "settings.lifecycleTemplateRequestedExpiryDescription":
     'Caution: this template deletes the title and its files. Titles that came in from a request age out after 120 days unless they carry the "keep" tag.',
-  "settings.maintenanceTemplateDepartedRequesterTitle": "Departed requester",
-  "settings.maintenanceTemplateDepartedRequesterDescription":
-    'Caution: this template deletes the title and its files. It matches titles requested by one named user — edit the "departed-user" placeholder in the matcher to the username you mean before saving, or it will match nothing.',
-  "settings.maintenanceTemplateSystemAddedTitle": "System-added cleanup",
-  "settings.maintenanceTemplateSystemAddedDescription":
+  "settings.lifecycleTemplateDepartedRequesterTitle": "Departed requester",
+  "settings.lifecycleTemplateDepartedRequesterDescription":
+    'Caution: this template deletes the title and its files. It matches titles requested by one named user — change the "departed-user" placeholder to the username you mean before saving, or it will match nothing.',
+  "settings.lifecycleTemplateSystemAddedTitle": "System-added cleanup",
+  "settings.lifecycleTemplateSystemAddedDescription":
     "Titles a scan discovered rather than a person adding them, and that hold a file. After 60 days the scope is unmonitored and the files stay where they are.",
-  "settings.maintenanceTemplateWatchedRequestedTitle":
+  "settings.lifecycleTemplateWatchedRequestedTitle":
     "Watched by everyone who asked",
-  "settings.maintenanceTemplateWatchedRequestedDescription":
+  "settings.lifecycleTemplateWatchedRequestedDescription":
     "Caution: this template deletes the title and its files. It matches requested movies that every one of their requesters has now played, after a 30-day grace period. Movies only: Scryer records plays per movie and per episode, never per show, so a series holds instead of matching. It also holds whenever a requester has no linked media-server account, or the last signal sync is over 48 hours old — a partial watch picture is not evidence to delete on.",
-  "settings.maintenanceTemplateExpiredLeasesTitle": "Expired request leases",
-  "settings.maintenanceTemplateExpiredLeasesDescription":
+  "settings.lifecycleTemplateExpiredLeasesTitle": "Expired request leases",
+  "settings.lifecycleTemplateExpiredLeasesDescription":
     "Caution: this template deletes the title and its files. It matches titles whose request leases have all run out, after a 7-day grace period. A lease that has not started yet — the title has not been imported — is left alone, and so is a title that never had a lease.",
-  "settings.maintenanceTemplateNoProfileTitle": "No quality profile",
-  "settings.maintenanceTemplateNoProfileDescription":
-    "Titles with no quality profile assigned. Takes no action at all: this one is for collecting a list to look at before deciding what should happen to it.",
-  "settings.maintenanceTemplateNewestEpisodesTitle":
+  "settings.lifecycleTemplateNoProfileTitle": "No quality profile",
+  "settings.lifecycleTemplateNoProfileDescription":
+    "Titles with no quality profile assigned. Adds the needs-review tag so a person can pick a profile; nothing else changes.",
+  "settings.lifecycleTemplateNewestEpisodesTitle":
     "Keep newest 3 downloaded episodes",
-  "settings.maintenanceTemplateNewestEpisodesDescription":
+  "settings.lifecycleTemplateNewestEpisodesDescription":
     "Caution: this episode-scoped template unmonitors and deletes downloaded episodes ranked older than the newest three by air date. Specials, future episodes, missing files, and unresolved dates receive no rank, so they do not match. Protected episodes still occupy the newest-three slots.",
-  "settings.maintenanceTemplateNewestSeasonsTitle":
+  "settings.lifecycleTemplateNewestSeasonsTitle":
     "Keep newest 2 downloaded seasons",
-  "settings.maintenanceTemplateNewestSeasonsDescription":
+  "settings.lifecycleTemplateNewestSeasonsDescription":
     "Caution: this season-scoped template unmonitors and deletes files from seasons ranked older than the newest two by each season's newest eligible downloaded episode. Specials, future episodes, missing files, and unresolved dates receive no rank; protected seasons still occupy slots.",
-  "settings.maintenanceTemplateLeftEveryListTitle": "Left every list",
-  "settings.maintenanceTemplateLeftEveryListDescription":
+  "settings.lifecycleTemplateLeftEveryListTitle": "Left every list",
+  "settings.lifecycleTemplateLeftEveryListDescription":
     "Titles every list has dropped, public or personal, once each departure has been handled and the last one is more than 30 days old. The scope is unmonitored and the files stay where they are.",
-  "settings.maintenanceTemplateListAddedUnwatchedTitle":
+  "settings.lifecycleTemplateListAddedUnwatchedTitle":
     "Added by a list and never watched",
-  "settings.maintenanceTemplateListAddedUnwatchedDescription":
+  "settings.lifecycleTemplateListAddedUnwatchedDescription":
     "Adds the needs-review tag to titles a list added more than 90 days ago that nobody has played. Holds whenever the watch picture is incomplete. Nothing is deleted.",
 
   // ── Request rules ───────────────────────────────────────────────────
@@ -10166,12 +10798,9 @@ const en: LocaleDictionary = {
   "settings.requestRuleEnabledUpdated": "Updated {{name}}.",
   "settings.requestRuleRequesterFieldsHint":
     "This rule reads requester fields and needs Manage permissions to save.",
-  "settings.requestRuleLibraries": "Libraries",
+  "settings.requestRuleLibraries": "Applied Libraries",
   "settings.requestRuleLibrariesAll": "All libraries",
-  "settings.requestRuleLibrariesHelp":
-    "Leave every box unticked to apply this rule to requests in every library.",
-  "settings.requestRuleRevision": "Revision",
-  "settings.requestRuleDecisionCount": "Decisions",
+  "settings.requestRuleLibrariesHelp": "Leave empty to apply to all libraries.",
   "settings.requestRuleCopy": "Copy rule",
   "settings.requestRuleCreate": "Create rule",
   "settings.requestRuleUpdate": "Update rule",
@@ -10184,26 +10813,13 @@ const en: LocaleDictionary = {
     "Delete the request rule {{name}}? Its recorded decisions are kept.",
   "settings.requestRuleValidationRequired":
     "A request rule needs a name and a matcher.",
-  "settings.requestRuleSaveDisabledNote":
-    "A new rule is saved disabled. Tick Enabled in the table to let it decide requests.",
   "settings.requestRuleConfirmDiscardTitle": "Discard unsaved changes?",
   "settings.requestRuleConfirmDiscardDescription":
     "The matcher in the editor has not been saved. Continuing replaces it.",
-  "settings.requestRuleRequesters": "Name people in this rule",
-  "settings.requestRuleRequestersHelp":
-    "Tick the accounts this rule is about and apply them. The matcher in the editor is rewritten so you can read it before saving.",
-  "settings.requestRuleRequestersApply": "Write these names into the matcher",
-  "settings.requestRuleRequestersUnavailable":
-    "Listing accounts needs permission this page does not carry, so names have to be typed into the matcher by hand.",
-  "settings.requestRuleRequestersNoTarget":
-    "This matcher does not name anybody, so there is nowhere to write the accounts you picked. Add a requesters set or a username comparison first.",
 
   "settings.requestPreviewTitle": "Try this rule against a request",
   "settings.requestPreviewSubtitle":
     "Runs one matcher against a request you describe. Nothing is submitted and nothing is recorded.",
-  "settings.requestPreviewSource": "Matcher",
-  "settings.requestPreviewSourceStored": "A saved rule",
-  "settings.requestPreviewSourceDraft": "The editor draft",
   "settings.requestPreviewRuleSelect": "Rule",
   "settings.requestPreviewRuleSelectPlaceholder": "Choose a rule",
   "settings.requestPreviewUser": "Requester",
@@ -10220,8 +10836,6 @@ const en: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Using {{title}}.",
   "settings.requestPreviewRun": "Run preview",
   "settings.requestPreviewRunning": "Running…",
-  "settings.requestPreviewEmpty":
-    "Describe a request and run the preview to see what this rule would say.",
   "settings.requestPreviewMetadataPartial": "Metadata incomplete",
   "settings.requestPreviewShowInput": "Show the input the matcher saw",
   "settings.requestPreviewHideInput": "Hide the input",
@@ -10231,8 +10845,9 @@ const en: LocaleDictionary = {
     "Define these in Settings › Tags before they can be applied.",
 
   "settings.requestDecisionsTitle": "Recent decisions",
-  "settings.requestDecisionsSubtitle":
-    "What request rules have decided lately.",
+  "settings.requestNavRules": "Rules",
+  "settings.requestNavTry": "Try a request",
+  "settings.requestNavDecisions": "Decisions",
   "settings.requestDecisionsOutcomeFilter": "Outcome",
   "settings.requestDecisionsOutcomeAll": "Any outcome",
   "settings.requestDecisionsColTime": "Evaluated",
@@ -10242,11 +10857,10 @@ const en: LocaleDictionary = {
   "settings.requestDecisionsEmpty": "No decisions recorded yet.",
   "settings.requestDecisionsPolicySaid": "The rules said {{outcome}}.",
   "settings.requestDecisionNoVotes": "No rule voted.",
+  "settings.requestDecisionOtherRules": "Other rules evaluated: {{count}}",
   "settings.requestDecisionHeld": "held",
 
   "settings.requestTemplateGallery": "Starter rules",
-  "settings.requestTemplateGalleryDescription":
-    "Worked examples you can load into the editor. Applying one fills the form in; you still read it, name it, scope it and save it.",
   "settings.requestTemplateGalleryTagNote":
     "A template that emits a tag needs that tag defined in Settings › Tags; undefined ones are dropped when a request is decided.",
   "settings.requestTemplateApply": "Load into the editor",
@@ -10277,21 +10891,32 @@ const en: LocaleDictionary = {
     "Denies a request from a member's personal list when its quality profile goes above 1080p. Public lists and manual requests are left alone.",
 
   "settings.refReqTitle": "Request input reference",
-  "settings.refReqSubtitle":
-    "Every value a request matcher can read, and what each one means.",
   "settings.refReqIntro":
     "A request rule reads one document describing the request, the person who made it, the library it targets, and what Scryer knows about the media. Facts are plain values. A fact Scryer could not observe is simply missing, and a rule that reads a missing fact holds the request for a person instead of guessing — you never write that guard yourself.",
   "settings.refReqOutputTitle": "What a request rule defines",
   "settings.refReqOutputIntro":
-    "At least one of these has to be defined, or the rule can never vote and Scryer refuses to save it.",
+    "A rule has to define a vote, a value that shapes the approval, or add_tags; one that defines none of these is refused when you save it. Valued heads take plain literals with :=.",
   "settings.refReqOutputApprove":
     "approve — the request may be granted without a person seeing it.",
   "settings.refReqOutputDeny":
-    "deny — the request is refused. A denial beats every other vote.",
+    "deny — the request is refused. Across rules, a denial beats every other vote; within one rule, manual outranks deny.",
   "settings.refReqOutputManual":
-    "manual — the request goes to a person, whatever else voted.",
+    "manual — the request goes to a person unless another rule denies it. A rule that errors or is held counts as manual.",
   "settings.refReqOutputTags":
-    'tags contains "…" — labels for the media, applied only on an approval.',
+    'add_tags := ["…"] — tags for the title, applied only on an approval.',
+  "settings.refReqOutputSetQualityProfile":
+    'set_quality_profile := "Profile name" — approve with this quality profile instead of the requested one.',
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — approve with this lease. 0 keeps the title forever; otherwise 1 to 3650 days.",
+  "settings.refReqOutputSetMonitor":
+    'set_monitor := "FUTURE_EPISODES" — approve with this monitoring: MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime.',
+  "settings.refReqOutputSetAudioLanguages":
+    'set_required_audio_languages := ["eng"] and set_preferred_audio_languages := ["jpn", "eng"] — replace the requested audio language lists.',
+  "settings.refReqOutputNotify": 'notify := "…" — send this notification.',
+  "settings.refReqOutputShapingOutcome":
+    "An automatically approved request gets these values. A request held for review shows them to the approver as suggestions, and a denied one lists them in its trace only. When two rules set different values for the same thing, the request is held for review.",
+  "settings.refReqOutputNoSchedule":
+    "Request rules have no schedule: they run on every request and on the requester's pre-flight check.",
   "settings.refReqOutputReasons":
     'reasons contains "…" — stable codes the requester is shown.',
   "settings.refReqOutputNoPackage":
@@ -10304,12 +10929,24 @@ const en: LocaleDictionary = {
   "search.keepForCustom": "A number of days…",
   "search.keepForCustomLabel": "Days to keep",
   "search.keepForHelp":
-    "How long Scryer holds this media for you. When the time is up a maintenance rule may remove it; keeping it forever never expires.",
+    "How long Scryer holds this media for you. When the time is up a lifecycle rule may remove it; keeping it forever never expires.",
 
   "requests.preflightAutoApprove": "This will be approved automatically",
   "requests.preflightManualReview": "This needs approval",
   "requests.preflightDeny": "This would be denied: {{reasons}}",
   "requests.preflightTags": "It will be tagged {{tags}}.",
+  "requests.preflightShaping":
+    "If approved, it will be changed to: {{changes}}.",
+  "requests.shapingTitle": "An approval would be changed to",
+  "requests.shapingSetBy": "set by {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: rules set different values, so a person decides",
+  "requests.shapingSuggested": "Suggested by rule {{rule}}",
+  "requests.shapingLeaseDays": "{{count}} days",
+  "requests.fallbackShapingConflict":
+    "Rules set different values for the same thing, so a person decides.",
+  "requests.fallbackShapingInvalid":
+    "Rules would approve, but a value they set cannot apply to this request, so a person decides.",
   "requests.preflightReason": "Reason: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer could not read everything about this title, so a person will decide.",
@@ -10338,12 +10975,15 @@ const en: LocaleDictionary = {
   "requests.voteManual": "review",
   "requests.voteAbstain": "no opinion",
   "requests.voteNone": "no vote",
+  "requests.voteFailed": "failed to run",
 
   "requests.fallbackRuleManual": "A rule asked for a person to look at this.",
   "requests.fallbackHeld":
     "A rule could not decide, because something it reads was unknown.",
   "requests.fallbackError":
     "A rule failed to run, so the request went to a person.",
+  "requests.fallbackErrorRules":
+    "{{rules}} failed to run, so the request went to a person.",
   "requests.fallbackNoRuleMatched": "No rule matched this request.",
   "requests.fallbackLibraryPermission":
     "Approved by the requester's Auto-Approve Requests permission.",
@@ -10401,7 +11041,7 @@ const en: LocaleDictionary = {
   "settings.refReqRequesterUserId": "Identifier of the requesting account",
   "settings.refReqRequesterUsername": "Username of the requesting account",
   "settings.refReqRequesterAccountKind":
-    "How the account signs in (for example local, or a linked provider)",
+    "How the account was created: local, or external_auto_provisioned for an account made on first sign-in through an identity provider",
   "settings.refReqRequesterAppPermissions":
     "Application-wide permissions the account holds",
   "settings.refReqRequesterLibraryPermissions":
@@ -10409,12 +11049,16 @@ const en: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Media-server and identity providers the account has linked",
   "settings.refReqRequesterCreatedAt":
-    "When the account was created; absent, because Scryer does not record it yet",
+    "When the account was created; absent for an account created before Scryer recorded it",
+  "settings.refReqRequesterLastLoginAt":
+    "When the account last signed in; absent when Scryer has no record of a sign-in",
+  "settings.refReqRequesterAccountAgeDays":
+    "Whole days since the account was created; absent when the creation time is",
   "settings.refReqSectionLibrary": "— The library the request targets",
   "settings.refReqLibraryId": "Identifier of the library",
   "settings.refReqLibraryName": "Name of the library",
   "settings.refReqLibraryFacet":
-    "Kind of media the library holds (MOVIE, SERIES or ANIME)",
+    "Kind of media the library holds (movie, series or anime)",
   "settings.refReqLibraryIsDefault":
     "True when this is the default library for its kind",
   "settings.refReqSectionRequest": "— What was asked for",
@@ -10428,13 +11072,15 @@ const en: LocaleDictionary = {
     "Identifier of the quality profile the requester chose",
   "settings.refReqRequestQualityProfileName": "Name of that profile",
   "settings.refReqRequestMonitorType":
-    "Monitoring the requester asked for (for example ALL_EPISODES)",
+    "Monitoring the requester asked for, in lower case with spaces, dashes and underscores removed (for example allepisodes)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "How many seasons an advanced monitoring selection named",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Season numbers an advanced monitoring selection named, lowest first; null when there is no selection",
   "settings.refReqRequestLeaseForever":
     "True when the requester asked to keep the media forever",
   "settings.refReqRequestLeaseDays":
-    "How many days the requester asked to keep it for; absent when they asked for forever",
+    "How many days the requester asked to keep it for; null when they asked for forever",
   "settings.refReqRequestRequiredAudioLanguages":
     "Audio languages the requester said the title must have. null leaves it to the library; an empty list asks for no requirement",
   "settings.refReqRequestPreferredAudioLanguages":
@@ -10458,6 +11104,10 @@ const en: LocaleDictionary = {
     "The owner's list policy: auto, approval or none; approval when none is stored",
   "settings.refReqRequestListRank":
     "The item's rank on the list; absent when the list does not rank it",
+  "settings.refReqRequestListIsWatchlist":
+    "True when the list is the owner's own watch-later list on a linked account",
+  "settings.refReqRequestListSourceType":
+    "The kind of list at the provider, in lower case (for example watchlist, plantowatch or list)",
   "settings.refReqExternalIdsTmdb":
     "TMDB identifier, when the provider had one",
   "settings.refReqExternalIdsImdb":
@@ -10508,7 +11158,7 @@ const en: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIds":
     "Libraries that already hold this title",
   "settings.refReqFactsPreviousRequestCount":
-    "How many times this requester has asked for this title before",
+    "How many times anyone has asked for this title before",
   "settings.refReqFactsPreviouslyDenied":
     "Whether one of those earlier requests was denied",
   "settings.refReqFactsPreviouslyApproved":
@@ -10527,6 +11177,44 @@ const en: LocaleDictionary = {
     "Days since this requester last asked for anything",
   "settings.refReqFactsLibraryTitleCount":
     "How many titles the target library holds",
+  "settings.refReqFactsSeasonCount":
+    "How many seasons the series has, for series",
+  "settings.refReqFactsEpisodeCount":
+    "How many regular episodes the series has, for series",
+  "settings.refReqFactsAiredEpisodeCount":
+    "How many of those episodes have aired by the evaluation day",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "How many of those episodes have not aired yet",
+  "settings.refReqFactsNextEpisodeAirDate": "When the next episode airs",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Theatrical release date, for movies",
+  "settings.refReqFactsDigitalReleaseDate": "Digital release date, for movies",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Physical (disc) release date, for movies",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Whether the movie is out on digital or disc",
+  "settings.refReqFactsDaysUntilRelease":
+    "Days until the movie's first release",
+  "settings.refReqFactsOtherRequesterCount":
+    "How many other members have asked for this title",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Whether another member's request for this title is waiting",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Whether the title is on the requester's own watchlist",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "How long the title has been on the requester's watchlist",
+  "settings.refReqFactsListExcluded":
+    "Whether a list exclusion covers this title",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "How many titles this requester's requests have added to the target library",
+  "settings.refReqFactsStorageRootId":
+    "The root folder the title would be stored in",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Free space on that root, in bytes",
+  "settings.refReqFactsStorageTotalBytes":
+    "Total size of that root's filesystem, in bytes",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Free space on that root, as a percentage",
   "settings.refReqSectionCertifications":
     "— One entry per certification in input.facts.certifications",
   "settings.refReqCertCountry": "Country the certification was issued in",
@@ -10543,7 +11231,7 @@ const en: LocaleDictionary = {
   "settings.refReqSectionObsCertifications":
     "— One entry per certification in input.observations.certifications.value",
   "settings.refReqFactsAgeRatingValue":
-    "Minimum age implied by the certification; absent with reason no_certification when the metadata carries none",
+    "Minimum age implied by the certification; absent with reason no_age_rating when the metadata gives none",
   "settings.refReqFactsCertificationsValue":
     "One entry per certification; see input.observations.certifications.value[] below",
   "settings.refReqFactsCertificationLabelValue":
@@ -10573,12 +11261,30 @@ const en: LocaleDictionary = {
   "settings.refReqFactsStudioValue": "Name of the studio",
   "settings.refReqFactsContentStatusValue":
     "The provider's content status string",
-  "settings.refReqFactsReleaseDateValue": "RFC3339 release date",
-  "settings.refReqFactsFirstAiredValue": "RFC3339 first air date",
+  "settings.refReqFactsReleaseDateValue":
+    "Release date as the source reports it, RFC3339 or YYYY-MM-DD",
+  "settings.refReqFactsFirstAiredValue":
+    "First air date as the source reports it, RFC3339 or YYYY-MM-DD",
   "settings.refReqFactsReleaseAgeDaysValue":
     "Whole days since release or first airing",
   "settings.refReqFactsAwardCountValue":
     "Number of awards recorded; a confirmed zero when there are none",
+  "settings.refReqFactsAwards":
+    "Every award the title won; see input.facts.awards[] below",
+  "settings.refReqFactsAwardsValue":
+    "One entry per award won; a known empty list when it won none. See input.observations.awards.value[] below",
+  "settings.refReqSectionAwards":
+    "— One entry per award won in input.facts.awards",
+  "settings.refReqSectionObsAwards":
+    "— One entry per award won in input.observations.awards.value",
+  "settings.refReqAwardName": "Name of the award",
+  "settings.refReqAwardId": "Wikidata ID of the award (for example Q102427)",
+  "settings.refReqAwardYear": "Year the award was won, when known",
+  "settings.refReqAwardRecipient":
+    "Who won it: the title itself, or the person who won it for the title",
+  "settings.refReqAwardRecipientId": "Wikidata ID of the recipient",
+  "settings.refReqAwardGivenTo":
+    "work when the title won it, person when a person won it for the title",
   "settings.refReqFactsQualityProfileTiersValue":
     "Tier names in the chosen profile, in profile order",
   "settings.refReqFactsQualityProfileMaxResolutionValue":
@@ -10588,7 +11294,7 @@ const en: LocaleDictionary = {
   "settings.refReqFactsExistsInLibraryIdsValue":
     "Identifiers of libraries already holding the title; an empty list when none do",
   "settings.refReqFactsPreviousRequestCountValue":
-    "Number of earlier requests by this requester for this title",
+    "Number of earlier requests by any requester for this title",
   "settings.refReqFactsPreviouslyDeniedValue":
     "True when one of those earlier requests was denied",
   "settings.refReqFactsPreviouslyApprovedValue":
@@ -10607,6 +11313,46 @@ const en: LocaleDictionary = {
     "Whole days since the requester's previous request; absent with reason no_previous_request when this is their first",
   "settings.refReqFactsLibraryTitleCountValue":
     "Number of titles in the target library",
+  "settings.refReqFactsSeasonCountValue":
+    "Number of seasons; absent with reason not_a_series for a movie, unknown with reason metadata_unavailable when the request carries no series shape",
+  "settings.refReqFactsEpisodeCountValue":
+    "Number of regular episodes; absent and unknown as for season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Episodes aired when the request was made, plus those scheduled on or before the evaluation day",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count minus aired_episode_count, never below zero",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD of the first episode after the evaluation day; absent with reason no_scheduled_episode when none is scheduled",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; absent with reason no_theatrical_release_date when there is none, with reason not_a_movie for a series; unknown with reason not_yet_collected or metadata_unavailable when the dates were not gathered",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; absent with reason no_digital_release_date when there is none; otherwise as theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; absent with reason no_physical_release_date when there is none; otherwise as theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True when a digital or physical date is on or before the evaluation day",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Whole days to the earliest known date; absent with reason already_released once it is out, or no_release_date when no date is known",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Number of distinct other requesters; unknown with reason catalog_unavailable when Scryer could not read its requests",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True when another member's request is still waiting on a decision; unknown as for other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True when a synced watchlist the requester linked holds the title; absent with reason no_watchlist_linked when they linked none; unknown with reason watchlist_not_synced, watchlist_stale or list_store_unreadable when the lists cannot be trusted",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Whole days since it first appeared there; absent with reason not_on_a_watchlist when it is not on one; otherwise as on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True when an exclusion for every list, or for the list behind this request, names the title; unknown with reason list_exclusions_unavailable when they could not be read",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Number of titles in the target library created from this requester's requests; unknown with reason requester_titles_unavailable when they could not be counted",
+  "settings.refReqFactsStorageRootIdValue":
+    "Identifier of the library's default root, or its first root; unknown with reason storage_root_unavailable when the library has none",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Bytes free when Scryer last sampled the root, at most ten minutes before; observed_at says when. Unknown, never zero, with reason storage_not_sampled, storage_sample_stale or storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Total bytes from the same sample; unknown as for storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Available bytes times 100 divided by total bytes, from the same sample; unknown as for storage_available_bytes",
 
   "move.dialogTitle": "Move titles",
   "move.destinationLibrary": "Destination library",
@@ -11252,8 +11998,8 @@ const en: LocaleDictionary = {
     "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
   "settings.titleTagRenameWarning":
     "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "{{count}} maintenance rule sets",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "{{count}} lifecycle rule sets",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} release rule sets",
   "settings.titleTagReferenceManagedTagFilters":
     "{{count}} managed tag filters",
@@ -11288,23 +12034,17 @@ const en: LocaleDictionary = {
   "title.catalogFilters.needsAttentionHint":
     "Holds a file whose scan failed or that needs review, so something has to be looked at before it is usable.",
 
-  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // Series-movie tags and the lifecycle tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,
   // the same way the WP3 block above does.
   "settings.titleTagSeriesMovieCount": "Series movies",
-  "settings.maintenanceActionAddTags": "Add tags",
-  "settings.maintenanceActionRemoveTags": "Remove tags",
-  "settings.maintenanceRuleTags": "Tags",
-  "settings.maintenanceRuleTagsNone": "No tags picked yet",
-  "settings.maintenanceRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "adds {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "removes {{tags}}",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "Tagged for removal",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleActionAddTags": "Add tags",
+  "settings.lifecycleActionRemoveTags": "Remove tags",
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Tagged for removal",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "Flag for review",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "Flag for review",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
@@ -11910,6 +12650,15 @@ const en: LocaleDictionary = {
   "script.schedule.cronUnreadable": "This expression can't be described.",
   "script.schedule.invalid": "Invalid schedule",
   "script.schedule.nextRuns": "Next runs",
+  "script.schedule.describe.everySeconds": "Every {{count}} seconds",
+  "script.schedule.describe.everyMinute": "Every minute",
+  "script.schedule.describe.everyMinutes": "Every {{count}} minutes",
+  "script.schedule.describe.everyHour": "Every hour",
+  "script.schedule.describe.everyHours": "Every {{count}} hours",
+  "script.schedule.describe.everyDay": "Every day",
+  "script.schedule.describe.everyDays": "Every {{count}} days",
+  "script.schedule.describe.daily": "Every day at {{time}}",
+  "script.schedule.describe.weekly": "{{days}} at {{time}}",
   "settings.scriptInterpreters.title": "Script interpreters",
   "settings.scriptInterpreters.description":
     "Programs Scryer uses to run scripts written in each language. Leave a field empty to use the program found on the PATH.",
@@ -11965,27 +12714,143 @@ const en: LocaleDictionary = {
     "Moving the file to its new name failed. The file and its episodes were left as they were.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episode numbering is ambiguous",
-  "settings.maintenanceExecutionReason.playbackHold":
-    "Held: something is playing on a media server.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackHold":
+    "Held: this title is playing on a media server.",
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Held: a media server could not be asked whether something is playing.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Held: the media server shows a play newer than the stored watch history.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Held: the media server's history shows a play by an account the watch history does not count.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Held: the media server could not confirm the watch history before acting.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "This rule deletes but has no titles-per-run limit, so its actions do not run. It still evaluates and previews; set a limit to let it act.",
+  "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
+    "Held: since favorites were last read, an account on the media server marked this item, or the series or a season of the episodes checked, a favorite.",
+  "settings.lifecycleExecutionReason.ruleNotEligible":
+    "Held: before the action ran, the rule was disabled, set to dry run or disarmed, or its safety gate closed.",
+  "settings.lifecycleExecutionReason.noMatchAtExecution":
+    "Not acted on: checked again just before acting, the title no longer matches the rule.",
+  "settings.lifecycleExecutionReason.unknownAtExecution":
+    "Held: checked again just before acting, the rule could not decide. It is checked again on the next run.",
+  "settings.lifecycleExecutionReason.activeAcquisition":
+    "Held: the title has a grab, download or import in progress.",
+  "settings.lifecycleExecutionReason.acquisitionUnknown":
+    "Held: Scryer could not tell whether the title has a grab, download or import in progress.",
+  "settings.lifecycleExecutionReason.storageDeletionInProgress":
+    "Held: a storage-space cleanup is deleting files. The action waits until it finishes.",
+  "settings.lifecycleExecutionReason.actionNotFullySupported":
+    "Held: this action cannot run on this subject, such as a whole-title action on a season or an episode.",
+  "settings.lifecycleExecutionReason.titleMissing":
+    "The title is no longer in the library, so nothing was done.",
+  "settings.lifecycleExecutionReason.locationOperationHold":
+    "Held: the title's files are being moved or renamed. The action runs once that finishes.",
+  "settings.lifecycleExecutionReason.passActionStepBudget":
+    "Held by an earlier run that had used up its action steps. Runs no longer have that limit; the action runs on the next run.",
+  "settings.lifecycleExecutionReason.passHighRiskStepBudget":
+    "Held: deletions failed repeatedly in this run, so the remaining deletions wait for the next run.",
+  "settings.lifecycleExecutionReason.actionSucceeded": "The action completed.",
+  "settings.lifecycleExecutionReason.alreadySatisfied":
+    "Nothing to change: the title was already as the action would leave it.",
+  "settings.lifecycleExecutionReason.retryPending":
+    "The action failed for a reason that may pass. It is tried again.",
+  "settings.lifecycleExecutionReason.actionFailed":
+    "The action failed and is not tried again. The action history has the error.",
+  "settings.lifecycleExecutionReason.leaseReclaimed":
+    "The action stopped before it finished, for example when Scryer restarted. It was released to run again.",
+  "settings.lifecycleExecutionReason.ambiguousEpisodeFileCoverage":
+    "Held: some files cannot be placed on this season's or episode's episodes, so deleting them is not safe.",
+  "settings.lifecycleExecutionReason.qualityProfileUnresolved":
+    "Held: the quality profile this rule sets no longer names exactly one profile. It was renamed or removed, or two profiles share the name.",
+  "settings.lifecycleExecutionReason.actionsNotRunnable":
+    "Held: the actions decided for this subject cannot run together, such as adding and removing the same tag.",
+  "settings.lifecycleExecutionReason.actionsChangedAtExecution":
+    "Held: checked again just before acting, the rule now decides different actions. The next evaluation replaces this candidate.",
+  "settings.lifecycleExecutionReason.actionNotDeclared":
+    "Held: this candidate carries an action the rule's current source no longer declares, so it never runs.",
+  "settings.lifecycleRuleMaxTitlesPerRun": "Titles per run",
+  "settings.lifecycleRuleMaxTitlesPerRunHelp":
+    "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
+  "settings.lifecycleRuleMaxTitlesPerRunNone": "No limit",
+  "settings.lifecycleRuleLoadRefused": "This rule cannot run as it is stored.",
+  "settings.lifecycleSequenceStepMonitor": "Monitor",
+  "settings.lifecycleSequenceStepFetchSubtitles": "Fetch subtitles",
+  "settings.lifecycleSequenceStepMoveToLibrary": "Move to library",
+  "settings.lifecycleSequenceStepMoveToRoot": "Move to root folder",
+  "settings.notificationEvent.lifecycleRuleNotified": "Lifecycle Rule Notified",
+  "settings.lifecycleExecutionReason.tagNotDefined":
+    "Held: a tag this rule writes is no longer defined in Settings › Tags.",
+  "settings.lifecycleExecutionReason.tagPatchConflict":
+    "Held: another rule would add a tag this rule removes, or remove one it adds.",
+  "settings.lifecycleExecutionReason.monitoringConflict":
+    "Held: another rule recently did the opposite to this title's monitoring.",
+  "settings.lifecycleExecutionReason.actionsConflict":
+    "Held: the rule decided actions that cannot run together, so nothing was applied.",
+  "settings.lifecycleExecutionReason.moveLibraryUnresolved":
+    "Held: the library this move names no longer matches exactly one library.",
+  "settings.lifecycleExecutionReason.moveLibraryFacetMismatch":
+    "Held: the library this move names holds another kind of title.",
+  "settings.lifecycleExecutionReason.moveRootNotInLibrary":
+    "Held: the root folder this move names is not a root of the title's library.",
+  "settings.lifecycleExecutionReason.moveRefused":
+    "Held: the move was refused or its plan went stale. The files stay where they are and the move retries.",
+  "settings.lifecycleExecutionCause.staleMovePlan":
+    "The move plan changed before it could start. It is planned again on the next pass.",
+  "settings.lifecycleExecutionCause.blockedItems":
+    "Some files need a decision before they can move.",
+  "settings.lifecycleExecutionCause.insufficientSpace":
+    "The destination does not have room for these files.",
+  "error.ruleActionRequired":
+    "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
+  "error.ruleActionHeadFunction":
+    "An action cannot be written as a function. Write it as a rule instead.",
+  "error.ruleForeignDataReference":
+    "This rule reads data outside its own package. Use input instead.",
+  "error.ruleWithTargetNotAllowed":
+    'This rule cannot replace {{path}} with "with". Its decision must rest on what Scryer observed.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} has a meaning to Scryer and cannot be a function. Write it as a rule instead.",
+  "error.ruleQualityProfileUnknown":
+    "No quality profile has this name, so the rule cannot apply it.",
+  "error.ruleQualityProfileAmbiguous":
+    "More than one quality profile has this name. Rename one so the rule names a single profile.",
+  "error.ruleMonitorUnsupported":
+    "No library this rule applies to accepts this monitor type.",
+  "error.ruleAudioLanguageUnknown": "Scryer does not know this audio language.",
+  "error.lifecycleMaxTitlesPerRunRequiredNamed":
+    "Set titles per run. These actions of the rule need it: {{actions}}.",
+  "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
+    "The rule defines no action, so it could never do anything.",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
+    "The library this move names holds another kind of title than the rule's libraries.",
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
+    "The library this move names does not exist.",
+  "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
+    "The root folder this move names is not a configured library root.",
+  "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
+    "The rule gave this subject neither a decision nor an error.",
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND":
+    "The quality profile this rule sets does not exist.",
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "Titles per run must be at least 1.",
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "Set titles per run: this rule can delete.",
+  "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
+    "Another save changed this rule first. Nothing was saved; reload the rule and try again.",
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
+    "This rule was saved before rules declared their own actions, so it never runs. Replace its source to run it again.",
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "When anyone with an account on a connected media server last played the subject",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True when any account on an enabled media server has played it, whether or not the account is linked to a Scryer user; for seasons and shows, any aired episode counts. Unknown with reason audience_not_read until a sync in the last 48 hours has read every account on every enabled connection, and with the usual watch-fact reasons whenever watch facts are unknown.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "RFC3339 timestamp of the most recent play by any account; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing (episode_play_time_missing for seasons and shows) when a play has no recorded time, or audience_not_read when the accounts have not all been read",
-  "settings.maintenancePreviewFacts": "Facts the rule read",
+  "settings.lifecyclePreviewFacts": "Facts the rule read",
   "uiText.tables": "Tables",
   "uiText.table": "Table",
   "uiText.rows": "Rows",
@@ -12098,12 +12963,9 @@ const en: LocaleDictionary = {
   "uiText.thisAccountHasNoAvailableReauthenticationFactorSignOutAndSignInAgainThenRetryTheAccountSecurityChange":
     "This account has no available reauthentication factor. Sign out and sign in again, then retry the account-security change.",
   "uiText.community": "Community",
-  "uiText.backToPacks": "← Back to packs",
   "uiText.chooseTheRulesToEnableAfterInstallationRulesStayManaged":
     "Choose the rules to enable after installation. Rules stay managed",
   "uiText.managedByThePackAuthor": "Managed by the pack author.",
-  "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled":
-    "Existing custom copies are not adopted or disabled when this pack is installed.",
   "uiText.toNotifyAMediaServerIeJellyfinFirstCreateA":
     "To notify a media server (ie. Jellyfin), first create a",
   "uiText.mediaServerConnection": "media server connection",
@@ -12153,8 +13015,6 @@ const en: LocaleDictionary = {
   "uiText.deny": "Deny",
   "uiText.isReadyToApply": "is ready to apply.",
   "uiText.installedRulePacks": "Installed rule packs",
-  "uiText.packAuthoredNamesDescriptionsAndFacetsStayManagedSomePacksAllowIndividualRulesToBeCopiedForCustomization":
-    "Pack-authored names, descriptions, and facets stay managed. Some packs allow individual rules to be copied for customization.",
   "uiText.pack": "Pack",
   "uiText.lastUpdated": "Last updated",
   "uiText.autoUpdate": "Auto-update",
@@ -12199,10 +13059,6 @@ const en: LocaleDictionary = {
     "Scoring preview only. This does not save this rule, admit a download, or create history.",
   "rules.previewDraftSafety":
     "Scoring preview only. This does not save this draft, admit a download, or create history.",
-  "rules.packChooseCustomizable":
-    "Choose the rules to enable after installation. Rules stay managed and can be copied individually for customization.",
-  "rules.packChooseManaged":
-    "Choose the rules to enable after installation. Rules stay managed.",
   "uiAttr.18_and_over": "18 and over",
   "uiAttr.My_Indexer": "My Indexer",
   "uiAttr.Select_provider": "Select provider",
@@ -12350,7 +13206,7 @@ const en: LocaleDictionary = {
   "rules.template.block-old-releases.title":
     "Penalize releases older than 1 year",
   "rules.template.block-old-releases.description":
-    "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library",
+    "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library. A release whose age is not known is not penalized",
   "rules.template.block-obfuscated-retagged.title":
     "Penalize obfuscated or retagged releases",
   "rules.template.block-obfuscated-retagged.description":
@@ -12448,15 +13304,15 @@ const en: LocaleDictionary = {
   "jobs.builtin.AcquisitionSearch.name": "Acquisition Search",
   "jobs.builtin.AcquisitionSearch.description":
     "Interactive acquisition search over the selected wanted/upgrade scopes.",
+  "jobs.builtin.ReleaseGrab.name": "Release Grab",
+  "jobs.builtin.ReleaseGrab.description":
+    "Hand one operator-chosen release to a download client in the background.",
   "jobs.builtin.ApplicationUpgrade.name": "Application Upgrade",
   "jobs.builtin.ApplicationUpgrade.description":
     "Download, verify, and apply a signed application upgrade.",
-  "jobs.builtin.MaintenanceRuleEvaluation.name": "Maintenance Rule Evaluation",
-  "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action.",
-  "jobs.builtin.LifecycleActionHandling.name": "Maintenance Action Handling",
-  "jobs.builtin.LifecycleActionHandling.description":
-    "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks.",
+  "jobs.builtin.LifecycleRuleEvaluation.name": "Lifecycle Rule Evaluation",
+  "jobs.builtin.LifecycleRuleEvaluation.description":
+    "Start and expire request leases on schedule. Each lifecycle rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
   "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
   "jobs.builtin.MediaServerSignalSync.description":
     "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",
@@ -12466,6 +13322,9 @@ const en: LocaleDictionary = {
   "jobs.builtin.LocationOperation.name": "Location Operation",
   "jobs.builtin.LocationOperation.description":
     "Move title content and catalog placement between roots or libraries.",
+  "jobs.builtin.ExternalRuleImport.name": "External Rule Import",
+  "jobs.builtin.ExternalRuleImport.description":
+    "Import Sonarr or Radarr custom formats, or Maintainerr rule groups, as disabled rules.",
   "jobs.builtin.CustomJob.name": "Custom Job",
   "jobs.builtin.CustomJob.description":
     "Run a user-defined script on its own schedule.",
@@ -12647,6 +13506,106 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
   "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
   "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
+  "ruleOutput.lifecycle.add_tags": "Add tags",
+  "ruleOutput.lifecycle.remove_tags": "Remove tags",
+  "ruleOutput.lifecycle.set_quality_profile": "Change quality profile",
+  "ruleOutput.lifecycle.monitor": "Monitor",
+  "ruleOutput.lifecycle.search": "Search",
+  "ruleOutput.lifecycle.fetch_subtitles": "Fetch subtitles",
+  "ruleOutput.lifecycle.move_to_library": "Move to library",
+  "ruleOutput.lifecycle.move_to_root": "Move to root folder",
+  "ruleOutput.lifecycle.unmonitor": "Unmonitor",
+  "ruleOutput.lifecycle.delete_files": "Delete files",
+  "ruleOutput.lifecycle.delete_title": "Delete title and files",
+  "ruleOutput.lifecycle.notify": "Notify",
+  "ruleOutput.lifecycle.monitor_season": "Monitor season",
+  "ruleOutput.lifecycle.fetch_season_subtitles": "Fetch season subtitles",
+  "ruleOutput.lifecycle.unmonitor_season": "Unmonitor season",
+  "ruleOutput.lifecycle.delete_season_files": "Delete season files",
+  "ruleOutput.lifecycle.notify_season": "Notify about season",
+  "ruleOutput.lifecycle.monitor_episode": "Monitor episode",
+  "ruleOutput.lifecycle.fetch_episode_subtitles": "Fetch episode subtitles",
+  "ruleOutput.lifecycle.unmonitor_episode": "Unmonitor episode",
+  "ruleOutput.lifecycle.delete_episode_files": "Delete episode files",
+  "ruleOutput.lifecycle.notify_episode": "Notify about episode",
+  "ruleSubject.lifecycle.title": "Title",
+  "ruleSubject.lifecycle.season": "Season",
+  "ruleSubject.lifecycle.episode": "Episode",
+  "ruleOutput.lifecycle.notify.placeholder": "Notification text",
+  "ruleOutput.request.approve": "Approve",
+  "ruleOutput.request.deny": "Deny",
+  "ruleOutput.request.manual": "Hold for review",
+  "ruleOutput.request.set_quality_profile": "Quality profile",
+  "ruleOutput.request.set_lease_days": "Lease",
+  "ruleOutput.request.set_lease_days.placeholder": "Days, or 0 to keep forever",
+  "ruleOutput.request.set_monitor": "Monitoring",
+  "ruleOutput.request.set_required_audio_languages": "Required audio languages",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Preferred audio languages",
+  "ruleOutput.request.add_tags": "Add tags",
+  "ruleOutput.request.notify": "Notify",
+  "ruleOutput.request.notify.placeholder": "Notification text",
+  "ruleOutput.request.reasons": "Reason codes",
+  "ruleOutput.request.reasons.placeholder": "One reason code per line",
+  "settings.proxyReachThrough": "Reach through",
+  "settings.proxyReachThroughHelp":
+    "Scryer sends its requests to this solver through the chosen transport proxy or tunnel. Direct reaches the solver from Scryer's own network.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "A challenge solver cannot be reached through another challenge solver.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "A challenge solver cannot be reached through itself.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "The proxy or tunnel to reach the solver through was not found.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "The proxy or tunnel to reach the solver through is disabled.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Only a challenge solver can be reached through another proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "One or more challenge solvers are reached through this proxy. Change them first.",
+  "tours.onboarding.welcome.title": "Welcome to Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer finds, downloads and organizes your movies, series and anime. Here is a quick look around; you can skip it at any time.",
+  "tours.onboarding.search.title": "Search everything",
+  "tours.onboarding.search.body":
+    "Find a title, a setting or an action from anywhere. Press ⌘K or Ctrl+K to open search from the keyboard.",
+  "tours.onboarding.libraries.title": "Your libraries",
+  "tours.onboarding.libraries.body":
+    "Movies, series and anime each have a library: what you have, what is missing and what is on its way.",
+  "tours.onboarding.discover.title": "Discover and request",
+  "tours.onboarding.discover.body":
+    "Browse suggestions drawn from your libraries, request a title, and follow each request in Requests.",
+  "tours.onboarding.lists.title": "Lists",
+  "tours.onboarding.lists.body":
+    "Follow lists from providers such as Trakt or your Plex watchlist. Scryer keeps them in sync and adds or requests their titles for you.",
+  "tours.onboarding.activity.title": "Activity",
+  "tours.onboarding.activity.body":
+    "Downloads and imports as they happen, and anything that needs a decision from you.",
+  "tours.onboarding.indexers.title": "Indexers and download clients",
+  "tours.onboarding.indexers.body":
+    "Scryer needs at least one indexer to find releases and a download client to fetch them. Download clients are just below.",
+  "tours.onboarding.indexers.action": "Add an indexer",
+  "tours.onboarding.qualityProfiles.title": "Quality profiles",
+  "tours.onboarding.qualityProfiles.body":
+    "A quality profile sets which qualities a title may have and when Scryer keeps looking for a better release.",
+  "tours.onboarding.rules.title": "Rules",
+  "tours.onboarding.rules.body":
+    "Rules score releases, so Scryer prefers the ones you want and passes over the ones you don't.",
+  "tours.onboarding.mediaServers.title": "Media servers",
+  "tours.onboarding.mediaServers.body":
+    "Connect Jellyfin, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
+  "tours.onboarding.notifications.title": "Notifications",
+  "tours.onboarding.notifications.body":
+    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Plugins add indexers, download clients and notification services. Install and update them here.",
+  "tours.stepOf": "Step {{current}} of {{total}}",
+  "tours.skip": "Skip tour",
+  "tours.back": "Back",
+  "tours.next": "Next",
+  "tours.done": "Done",
+  "tours.saveFailed":
+    "Your tour progress could not be saved, so this tour may appear again.",
 };
 
 export default en;

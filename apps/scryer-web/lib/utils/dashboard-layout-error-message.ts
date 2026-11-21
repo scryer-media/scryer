@@ -28,6 +28,8 @@ export const DASHBOARD_LAYOUT_REFUSAL_KEYS: Readonly<Record<string, string>> = {
     "dashboard.layout.refusal.outsideGrid",
   SETTINGS_DASHBOARD_ITEM_SIZE_OUT_OF_RANGE:
     "dashboard.layout.refusal.sizeInvalid",
+  SETTINGS_DASHBOARD_PANEL_SETTINGS_INVALID:
+    "dashboard.layout.refusal.panelSettingsInvalid",
 };
 
 /** The translation key for the reason a layout was refused, if known. */

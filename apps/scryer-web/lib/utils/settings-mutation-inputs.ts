@@ -12,6 +12,7 @@ import {
   supportsProxyCredentials,
   supportsProxyPrivateKey,
   supportsProxyPrivateKeyPassphrase,
+  supportsProxyReachThrough,
   supportsProxyRemoteDns,
   supportsProxyWireguardFields,
 } from "../types/proxies.ts";
@@ -192,6 +193,25 @@ function buildProxyTunnelNumberInput<Field extends string>(
 }
 
 /**
+ * A solver's reach-through. Only solvers send it. On a create an empty choice
+ * is an omission; on an update the editor always knows the intended route, so
+ * it sends the id or an explicit null to go back to reaching it directly.
+ */
+function buildProxyReachThroughInput(
+  draft: ProxyDraft,
+  { allowClear }: { allowClear: boolean },
+): { reachThroughProxyConfigId?: string | null } {
+  if (!supportsProxyReachThrough(draft.providerType)) {
+    return {};
+  }
+  const reachThroughProxyConfigId = draft.reachThroughProxyConfigId.trim();
+  if (reachThroughProxyConfigId) {
+    return { reachThroughProxyConfigId };
+  }
+  return allowClear ? { reachThroughProxyConfigId: null } : {};
+}
+
+/**
  * Every payload is built from a normalized draft, so a value pasted as
  * `Key = value` and the same value typed bare reach the API identically. The
  * workflow normalizes again on its side and stays the authority; doing it here
@@ -207,6 +227,7 @@ export function buildCreateProxyInput(rawDraft: ProxyDraft) {
     ...buildProxyCredentialInput(draft, { allowClear: false }),
     ...buildProxyPrivateKeyInput(draft, { allowClear: false }),
     ...buildProxyWireguardInput(draft, { allowClear: false }),
+    ...buildProxyReachThroughInput(draft, { allowClear: false }),
   };
 }
 
@@ -219,6 +240,7 @@ export function buildUpdateProxyInput(id: string, rawDraft: ProxyDraft) {
     ...buildProxyCredentialInput(draft, { allowClear: true }),
     ...buildProxyPrivateKeyInput(draft, { allowClear: true }),
     ...buildProxyWireguardInput(draft, { allowClear: true }),
+    ...buildProxyReachThroughInput(draft, { allowClear: true }),
   };
 }
 

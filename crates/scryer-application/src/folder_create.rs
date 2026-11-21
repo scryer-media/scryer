@@ -66,7 +66,9 @@ pub(crate) fn create_folder_in(parent: &Path, name: &str) -> AppResult<PathBuf> 
 
     let mut retries = 0;
     loop {
-        match std::fs::create_dir(&target) {
+        let created = crate::disk::Disk::process()
+            .create_dir_blocking(&target, crate::disk::Parents::MustExist);
+        match created.map_err(io::Error::from) {
             Ok(()) => return Ok(target),
             Err(error)
                 if error.kind() == io::ErrorKind::Interrupted && retries < INTERRUPTED_RETRIES =>

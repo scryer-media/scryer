@@ -1420,7 +1420,7 @@ jobs:
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
       AWS_LC_SYS_CMAKE_BUILDER: "0"
-      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
+      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'ci-throwaway' || matrix.release_profile }}
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
@@ -1935,7 +1935,7 @@ jobs:
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
       AWS_LC_SYS_CMAKE_BUILDER: "0"
-      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
+      SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'ci-throwaway' || matrix.release_profile }}
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: ${{ github.workspace }}\.sccache

@@ -541,14 +541,30 @@ impl IndexerArtifactTransport {
     ) -> AppResult<ResolvedDownloadArtifact> {
         let provider = proxy.provider_type;
         let name = solver::solver_provider_name(provider);
-        prepare_plugin_http_target(url, "indexer download artifact", policy)
-            .await
-            .map_err(|_| {
-                AppError::DownloadSubmitUnavailable(
-                    "Scryer refused an unsafe download artifact destination.".into(),
-                )
-            })?;
-        let headers = solver::SolvedSessionCache::shared().session_headers(&proxy.id, url);
+        // A solver reached through a proxy or tunnel takes every fetch Scryer
+        // makes for it through that route too: the first attempt with any
+        // cached clearance, and the fetch after a solve. Each hop is then
+        // checked as a transport-proxied hop is, since the name may only
+        // resolve at the far end. Without a route nothing here changes.
+        let route = transport_proxy::solver_reach_through(proxy).map_err(|message| {
+            solver::SolverHealthLedger::shared().record_failure(&proxy.id, &message);
+            AppError::DownloadSubmitUnavailable(message)
+        })?;
+        let egress = match route {
+            Some(route) => ArtifactEgress::TransportProxy(route),
+            None => {
+                prepare_plugin_http_target(url, "indexer download artifact", policy)
+                    .await
+                    .map_err(|_| {
+                        AppError::DownloadSubmitUnavailable(
+                            "Scryer refused an unsafe download artifact destination.".into(),
+                        )
+                    })?;
+                ArtifactEgress::Direct
+            }
+        };
+        let headers = solver::SolvedSessionCache::shared()
+            .session_headers(&solver::solved_session_scope(proxy), url);
         let timeout =
             scryer_outbound_http::effective_proxy_request_timeout(proxy.request_timeout_seconds);
         match self
@@ -562,7 +578,7 @@ impl IndexerArtifactTransport {
                 Some(destination_cooldown_key.clone()),
                 tally,
                 hint.clone(),
-                ArtifactEgress::Direct,
+                egress,
             )
             .await
         {
@@ -573,13 +589,20 @@ impl IndexerArtifactTransport {
             Err(_) => {}
         }
         if !headers.is_empty() {
-            solver::SolvedSessionCache::shared().invalidate(&proxy.id, url);
+            solver::SolvedSessionCache::shared()
+                .invalidate(&solver::solved_session_scope(proxy), url);
         }
-        let solver_http =
-            OutboundHttpClient::new(proxy_reqwest_client(), RateLimitRegistry::indexers());
+        let solver_client = match route {
+            Some(route) => self.proxy_client(route).map_err(|message| {
+                transport_proxy::record_transport_proxy_failure(route, &message);
+                AppError::DownloadSubmitUnavailable(message)
+            })?,
+            None => proxy_reqwest_client(),
+        };
+        let solver_http = OutboundHttpClient::new(solver_client, RateLimitRegistry::indexers());
         let response = tokio::time::timeout(
             timeout,
-            solver_http.send_with_rate_limit_and_dispatch_observer(
+            solver_http.send_with_rate_limit_and_async_dispatch_observer(
                 RequestPolicy::no_retry("indexer_solver", "indexer_artifact_solver")
                     .without_redirects(),
                 || {
@@ -595,12 +618,16 @@ impl IndexerArtifactTransport {
                 },
                 |_| async {},
                 |_| {
-                    // The solver replays this request against the indexer, so
-                    // it is one indexer request regardless of the POST's origin.
-                    tally
-                        .try_note_sent_call(scryer_application::CALL_SOLVER)
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    let tally = &tally;
+                    async move {
+                        // The solver replays this request against the indexer,
+                        // so its send consumes one indexer request slot.
+                        tally
+                            .try_note_sent_call_async(scryer_application::CALL_SOLVER)
+                            .await
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             ),
         )
@@ -612,6 +639,11 @@ impl IndexerArtifactTransport {
             )
         })?
         .map_err(|error| {
+            if matches!(&error, OutboundHttpError::DispatchRejected)
+                && let Some(quota_error) = tally.take_dispatch_error()
+            {
+                return quota_error;
+            }
             if matches!(error, OutboundHttpError::Transport { .. }) {
                 tally.note_result(IndexerRequestResult::NoResponse);
             }
@@ -633,7 +665,11 @@ impl IndexerArtifactTransport {
             tally.note_result(IndexerRequestResult::NoResponse);
             AppError::DownloadSubmitUnavailable(e.message(provider).into())
         })?;
-        solver::SolvedSessionCache::shared().store_solution(&proxy.id, url, &solution);
+        solver::SolvedSessionCache::shared().store_solution(
+            &solver::solved_session_scope(proxy),
+            url,
+            &solution,
+        );
         let solution_status = solution.status.unwrap_or(status.as_u16());
         tally.note_response(&CapturedIndexerHttpResponse {
             status: solution_status,
@@ -675,7 +711,7 @@ impl IndexerArtifactTransport {
                     Some(destination_cooldown_key),
                     tally,
                     hint,
-                    ArtifactEgress::Direct,
+                    egress,
                 )
                 .await;
         }
@@ -785,7 +821,7 @@ impl IndexerArtifactTransport {
             let result = timeout(
                 remaining,
                 self.outbound_http
-                    .send_with_rate_limit_and_dispatch_observer(
+                    .send_with_rate_limit_and_async_dispatch_observer(
                         request_policy,
                         || {
                             builder
@@ -794,23 +830,30 @@ impl IndexerArtifactTransport {
                         },
                         |_| async {},
                         |actual_url| {
-                            let indexer_request = indexer_base_url
-                                .map(|base| artifact_domain_matches(base, actual_url.as_str()))
-                                .unwrap_or(true);
-                            let admitted = if probing_https {
-                                let admitted = tally.try_admit_probe();
-                                if admitted && let Ok(mut dispatch) = probe_dispatch.lock() {
-                                    *dispatch = Some((indexer_request, actual_url.to_string()));
-                                }
+                            let probe_dispatch = &probe_dispatch;
+                            async move {
+                                let indexer_request = indexer_base_url
+                                    .map(|base| artifact_domain_matches(base, actual_url.as_str()))
+                                    .unwrap_or(true);
+                                let admitted = if probing_https {
+                                    let admitted = tally
+                                        .try_admit_probe_async(
+                                            indexer_request.then_some(actual_url.as_str()),
+                                        )
+                                        .await;
+                                    if admitted && let Ok(mut dispatch) = probe_dispatch.lock() {
+                                        *dispatch = Some((indexer_request, actual_url.to_string()));
+                                    }
+                                    admitted
+                                } else if indexer_request {
+                                    tally.try_note_sent_async(actual_url.as_str()).await
+                                } else {
+                                    tally.try_note_auxiliary_sent_call("external_redirect")
+                                };
                                 admitted
-                            } else if indexer_request {
-                                tally.try_note_sent(actual_url.as_str())
-                            } else {
-                                tally.try_note_auxiliary_sent_call("external_redirect")
-                            };
-                            admitted
-                                .then_some(())
-                                .ok_or(OutboundHttpError::DispatchRejected)
+                                    .then_some(())
+                                    .ok_or(OutboundHttpError::DispatchRejected)
+                            }
                         },
                     ),
             )
@@ -1138,6 +1181,11 @@ fn map_artifact_outbound_error_via(
     error: OutboundHttpError,
     egress: ArtifactEgress<'_>,
 ) -> AppError {
+    if matches!(&error, OutboundHttpError::DispatchRejected)
+        && let Some(quota_error) = tally.take_dispatch_error()
+    {
+        return quota_error;
+    }
     if let ArtifactEgress::TransportProxy(proxy) = egress
         && let OutboundHttpError::Transport { source, .. } = &error
         && !source.is_timeout()
@@ -1439,15 +1487,41 @@ pub(crate) fn nzb_header_passwords(
     }
     passwords
 }
+/// Whether the first 4 KiB read as an NZB document.
+///
+/// The check is on bytes, not text: an older NZB declares a single-byte
+/// encoding such as ISO-8859-1, and a multi-byte UTF-8 character may straddle
+/// the 4 KiB cut, so neither may decide. A UTF-8 byte order mark and leading
+/// whitespace, comments and processing instructions before the root are
+/// skipped, as an XML reader does.
 fn looks_nzb(bytes: &[u8]) -> bool {
-    std::str::from_utf8(&bytes[..bytes.len().min(4096)])
-        .ok()
-        .is_some_and(|s| {
-            let s = s.trim_start().to_ascii_lowercase();
-            (s.starts_with("<?xml") && s.contains("<nzb"))
-                || s.starts_with("<nzb")
-                || s.contains("<!doctype nzb")
-        })
+    let head = &bytes[..bytes.len().min(4096)];
+    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    let head = head.trim_ascii_start().to_ascii_lowercase();
+    let contains = |needle: &[u8]| head.windows(needle.len()).any(|window| window == needle);
+    (head.starts_with(b"<?xml") && contains(b"<nzb"))
+        || skip_xml_prolog_misc(&head).starts_with(b"<nzb")
+        || contains(b"<!doctype nzb")
+}
+
+/// Skip whitespace, comments and processing instructions (the XML
+/// declaration among them) at the start of `head`.
+fn skip_xml_prolog_misc(mut head: &[u8]) -> &[u8] {
+    loop {
+        head = head.trim_ascii_start();
+        let (open, close): (&[u8], &[u8]) = if head.starts_with(b"<!--") {
+            (b"<!--", b"-->")
+        } else if head.starts_with(b"<?") {
+            (b"<?", b"?>")
+        } else {
+            return head;
+        };
+        let body = &head[open.len()..];
+        match body.windows(close.len()).position(|window| window == close) {
+            Some(end) => head = &body[end + close.len()..],
+            None => return head,
+        }
+    }
 }
 // BitTorrent fixes the info hash: SHA-1 for v1 metadata, SHA-256 for v2.
 #[allow(clippy::disallowed_methods)]
@@ -2407,6 +2481,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -2457,6 +2533,8 @@ mod tests {
     fn test_proxy(base_url: &str, is_enabled: bool) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2534,6 +2612,9 @@ mod tests {
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())
+        }
+        async fn count_solvers_reaching_through(&self, _: &str, _: bool) -> AppResult<u64> {
+            Ok(0)
         }
     }
 
@@ -2616,6 +2697,191 @@ mod tests {
             panic!("disabled solver must fail");
         };
         assert!(error.to_string().contains("proxy is disabled"));
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
+    }
+
+    /// An HTTP proxy that stands in for the route a solver is reached through.
+    /// It refuses CONNECT, so the HTTPS-first probe falls back; answers a solve
+    /// POST with a clearance cookie; serves the NZB only to a GET that presents
+    /// that cookie; and challenges every other GET. Neither the indexer nor the
+    /// solver name resolves, so only this proxy can answer.
+    struct RoutedSolverFixture {
+        endpoint: String,
+        requests: Arc<Mutex<Vec<(String, bool)>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for RoutedSolverFixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl RoutedSolverFixture {
+        async fn start(target: &'static str) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&requests);
+            let task = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    timeout(Duration::from_secs(30), async {
+                        let mut head = Vec::new();
+                        while !head.ends_with(b"\r\n\r\n") {
+                            assert!(head.len() < 8192);
+                            head.push(stream.read_u8().await.unwrap());
+                        }
+                        let head = String::from_utf8(head).unwrap();
+                        let content_length = head
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let mut body = vec![0u8; content_length];
+                        stream.read_exact(&mut body).await.unwrap();
+                        let first = head.lines().next().unwrap().to_string();
+                        let cleared = head.lines().any(|line| {
+                            line.to_ascii_lowercase().starts_with("cookie:")
+                                && line.contains("cf_clearance=synthetic")
+                        });
+                        recorded.lock().unwrap().push((first.clone(), cleared));
+                        let (status, content_type, body) = if first.starts_with("CONNECT ") {
+                            (502, "text/plain", String::new())
+                        } else if first.starts_with("POST ") {
+                            (
+                                200,
+                                "application/json",
+                                serde_json::json!({
+                                    "status": "ok",
+                                    "solution": {
+                                        "url": target,
+                                        "status": 503,
+                                        "headers": { "content-type": "text/html" },
+                                        "cookies": [{ "name": "cf_clearance", "value": "synthetic" }],
+                                        "userAgent": "Synthetic UA",
+                                        "response": "<html>Just a moment</html>"
+                                    }
+                                })
+                                .to_string(),
+                            )
+                        } else if cleared {
+                            (200, "application/x-nzb", "<nzb></nzb>".to_string())
+                        } else {
+                            (
+                                403,
+                                "text/html",
+                                "<html><title>Just a moment...</title></html>".to_string(),
+                            )
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n{body}",
+                            body.len(),
+                        );
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                        stream.shutdown().await.unwrap();
+                    })
+                    .await
+                    .expect("route request must complete");
+                }
+            });
+            Self {
+                endpoint,
+                requests,
+                task,
+            }
+        }
+
+        fn lines(&self) -> Vec<(String, bool)> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_routed_solver_fetches_solves_and_reuses_clearance_through_its_route() {
+        const TARGET: &str = "http://api.routed-fixture.test/grab?id=fixture";
+        let route_proxy = RoutedSolverFixture::start(TARGET).await;
+        let mut route = test_proxy(&route_proxy.endpoint, true);
+        route.id = "route".into();
+        route.provider_type = scryer_domain::ProxyProviderType::Http;
+        route.protocol = None;
+        let mut solver = test_proxy("http://solver.invalid:8191", true);
+        solver.id = "routed-artifact-solver".into();
+        solver.reach_through_proxy_config_id = Some(route.id.clone());
+        solver.reach_through = Some(Box::new(route));
+        let stats = Arc::new(CountingStats::default());
+        let mut config = test_config("https://api.routed-fixture.test/api", Some("solver"));
+        config.proxy_config_id = Some(solver.id.clone());
+        let mut transport = transport_with_config_and_proxy(Arc::clone(&stats), config, solver);
+        transport.outbound_http = OutboundHttpClient::new(
+            generic_reqwest_client(),
+            RateLimitRegistry::isolated_indexers(),
+        );
+
+        for _ in 0..2 {
+            let resolved = timeout(
+                Duration::from_secs(30),
+                transport.resolve(Some("indexer"), TARGET, None),
+            )
+            .await
+            .expect("artifact request must complete")
+            .expect("the routed solver should resolve the artifact");
+            let ResolvedDownloadArtifact::Nzb { bytes, .. } = resolved else {
+                panic!("expected buffered NZB");
+            };
+            assert_eq!(bytes, b"<nzb></nzb>");
+        }
+
+        let connect = "CONNECT api.routed-fixture.test:443 HTTP/1.1".to_string();
+        let get = format!("GET {TARGET} HTTP/1.1");
+        assert_eq!(
+            route_proxy.lines(),
+            vec![
+                // The first attempt, HTTPS first, both through the route.
+                (connect.clone(), false),
+                (get.clone(), false),
+                // The solve POST dials the solver through the route.
+                (
+                    "POST http://solver.invalid:8191/v1 HTTP/1.1".to_string(),
+                    false
+                ),
+                // The fetch after the solve presents the clearance.
+                (connect.clone(), false),
+                (get.clone(), true),
+                // The next artifact reuses the cached clearance, still routed.
+                (connect, false),
+                (get, true),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_solver_whose_route_is_unresolved_never_fetches_an_artifact() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let mut solver = test_proxy(&server.uri(), true);
+        solver.reach_through_proxy_config_id = Some("route-gone".into());
+        let stats = Arc::new(CountingStats::default());
+        let transport = transport_with_config_and_proxy(
+            Arc::clone(&stats),
+            test_config(&server.uri(), Some("solver")),
+            solver,
+        );
+        let result = transport
+            .resolve(Some("indexer"), &format!("{}/grab", server.uri()), None)
+            .await;
+        match result {
+            Err(AppError::DownloadSubmitUnavailable(_)) => {}
+            Err(other) => panic!("an unresolved route must refuse as unavailable, got {other}"),
+            Ok(_) => panic!("an unresolved route must refuse"),
+        }
         assert!(server.received_requests().await.unwrap().is_empty());
         assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
     }
@@ -2883,6 +3149,8 @@ mod tests {
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
         let proxy = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2972,6 +3240,8 @@ mod tests {
                 OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
             let now = Utc::now();
             let proxy = scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: "solver".into(),
                 name: "fixture solver".into(),
                 provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -3067,6 +3337,8 @@ mod tests {
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
         let proxy = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -3145,6 +3417,8 @@ mod tests {
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
         let proxy = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".into(),
             name: "fixture solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -3275,6 +3549,90 @@ mod tests {
                 matches!(error, AppError::NewznabQuotaExceeded { code: actual, .. } if actual == code)
             );
         }
+    }
+
+    /// A UTF-8 NZB whose 2-byte character starts at byte 4095, so a 4 KiB cut
+    /// splits it.
+    fn nzb_with_character_across_the_probe_cut() -> Vec<u8> {
+        let mut bytes =
+            br#"<?xml version="1.0" encoding="utf-8"?><nzb><head><meta type="name">"#.to_vec();
+        bytes.resize(4095, b'a');
+        bytes.extend_from_slice("\u{e9}</meta></head><file/></nzb>".as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn nzbs_that_are_not_strict_utf8_or_open_with_a_prolog_classify_as_nzb() {
+        let latin1 = b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\"><head><meta type=\"poster\">Andr\xe9</meta></head><file poster=\"Andr\xe9 &lt;a@example.invalid&gt;\" date=\"1\" subject=\"Synthetic.Caf\xe9.mkv yEnc (1/1)\"><groups><group>alt.binaries.test</group></groups><segments><segment bytes=\"1\" number=\"1\">a@example.invalid</segment></segments></file></nzb>".to_vec();
+        let straddling = nzb_with_character_across_the_probe_cut();
+        let mut bom = b"\xef\xbb\xbf".to_vec();
+        bom.extend_from_slice(br#"<?xml version="1.0" encoding="utf-8"?><nzb><file/></nzb>"#);
+        let comment = b"<!-- generated by a synthetic indexer -->\n<nzb><file/></nzb>".to_vec();
+        let whitespace = b" \r\n\t<nzb><file/></nzb>".to_vec();
+        let bom_comment =
+            b"\xef\xbb\xbf\n<!-- a --><?pi x?>  <!-- b -->\n<NZB><file/></NZB>".to_vec();
+
+        // The two fixtures that a strict UTF-8 read of the probe window refuses.
+        assert!(std::str::from_utf8(&latin1[..latin1.len().min(4096)]).is_err());
+        assert!(std::str::from_utf8(&straddling[..4096]).is_err());
+
+        for (label, bytes) in [
+            ("latin-1", latin1),
+            ("straddling character", straddling),
+            ("byte order mark", bom),
+            ("leading comment", comment),
+            ("leading whitespace", whitespace),
+            ("byte order mark and prolog", bom_comment),
+        ] {
+            assert!(super::looks_nzb(&bytes), "{label}");
+            let artifact = classify("fixture", None, None, bytes.clone(), None)
+                .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+            assert!(
+                matches!(&artifact, ResolvedDownloadArtifact::Nzb { bytes: kept, .. } if *kept == bytes),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn html_rss_and_newznab_errors_still_do_not_classify_as_nzb() {
+        for (label, bytes) in [
+            ("html", b"<!DOCTYPE html><html><body>Login required</body></html>".to_vec()),
+            ("html with bom", b"\xef\xbb\xbf<!DOCTYPE html><html></html>".to_vec()),
+            ("html after a comment", b"<!-- nzb --><html><nzb></html>".to_vec()),
+            ("latin-1 html", b"<html><body>Caf\xe9 <nzb></body></html>".to_vec()),
+            (
+                "rss",
+                br#"<?xml version="1.0"?><rss version="2.0"><channel><title>feed</title></channel></rss>"#.to_vec(),
+            ),
+            (
+                "newznab error",
+                br#"<?xml version="1.0"?><error code="100" description="Incorrect user credentials"/>"#.to_vec(),
+            ),
+            ("unterminated comment", b"<!-- <nzb>".to_vec()),
+            ("plain text", b"nzb not found".to_vec()),
+        ] {
+            assert!(!super::looks_nzb(&bytes), "{label}");
+            let error = classify("fixture", None, None, bytes, None)
+                .expect_err(label);
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_TYPE_UNSUPPORTED),
+                "{label}: {error:?}"
+            );
+        }
+        let error = classify(
+            "fixture",
+            None,
+            Some(&serde_json::json!({"content-type": "application/x-nzb"})),
+            b"<html><body>Login required</body></html>".to_vec(),
+            None,
+        )
+        .expect_err("an html page served as an NZB is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::ACQUISITION_RESOLVED_NZB_INVALID)
+        );
     }
 
     #[test]

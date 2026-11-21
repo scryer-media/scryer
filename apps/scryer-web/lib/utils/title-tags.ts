@@ -112,7 +112,7 @@ export function emptyBulkTitleTagsDraft(): BulkTitleTagsDraft {
 /// managed pack's tag filter belongs to the pack, so a rename leaves all four
 /// naming the old label.
 export const TITLE_TAG_REFERENCE_KINDS = [
-  "maintenanceRuleSets",
+  "lifecycleRuleSets",
   "releaseRuleSets",
   "managedTagFilters",
   "requestRuleSets",
@@ -134,7 +134,7 @@ export const EMPTY_TITLE_TAG_REWRITE_COUNTS: TitleTagRewriteCounts = {
   titles: 0,
   seriesMovies: 0,
   delayProfiles: 0,
-  maintenanceRuleSets: 0,
+  lifecycleRuleSets: 0,
   releaseRuleSets: 0,
   managedTagFilters: 0,
   requestRuleSets: 0,
@@ -160,7 +160,7 @@ export function titleTagRenameWarning(
 }
 
 const TITLE_TAG_REFERENCE_LABEL_KEYS: Record<TitleTagReferenceKind, string> = {
-  maintenanceRuleSets: "settings.titleTagReferenceMaintenanceRuleSets",
+  lifecycleRuleSets: "settings.titleTagReferenceLifecycleRuleSets",
   releaseRuleSets: "settings.titleTagReferenceReleaseRuleSets",
   managedTagFilters: "settings.titleTagReferenceManagedTagFilters",
   requestRuleSets: "settings.titleTagReferenceRequestRuleSets",

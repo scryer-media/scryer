@@ -289,6 +289,94 @@ async fn reconcile_interrupted_job_runs_fails_running_rows_and_leaves_terminal_u
 }
 
 #[tokio::test]
+async fn reconcile_keeps_an_interrupted_rule_import_report_and_purges_its_connection() {
+    let (services, _db) = temp_services("workflow_operation_reconcile_rule_import").await;
+    *services
+        .encryption_key_state()
+        .write()
+        .expect("encryption key lock should not be poisoned") =
+        Some(crate::encryption::EncryptionKey::from_bytes([23; 32]));
+    let store = WorkflowOperationStore::new(services.datastore())
+        .with_encryption_key(services.encryption_key_state());
+    let users = user_store(&services);
+    seed_user(&users, "rule-import-actor").await;
+    let now = Utc::now();
+    let report =
+        "{\"phase\":\"SAVING\",\"items\":[{\"key\":\"customformat:1\",\"state\":\"SAVED\"}]}";
+    let mut run = test_job_run_record(
+        "interrupted-rule-import",
+        JobKey::ExternalRuleImport,
+        JobRunStatus::Running,
+        now,
+        now,
+        Some("rule-import-actor"),
+    );
+    run.progress_json = Some(report.to_string());
+    let (run, created) = store
+        .accept_private_job(
+            &run,
+            "rule-import:restart",
+            "{\"apiKey\":\"synthetic-key\"}",
+        )
+        .await
+        .expect("accept rule import");
+    assert!(created);
+    // Another private job's connection is not this purge's to touch.
+    let mut other = test_job_run_record(
+        "interrupted-source-import",
+        JobKey::SourceImport,
+        JobRunStatus::Running,
+        now,
+        now,
+        Some("rule-import-actor"),
+    );
+    other.progress_json = Some("{\"items\":[]}".to_string());
+    let (other, _) = store
+        .accept_private_job(&other, "source-import:restart", "[]")
+        .await
+        .expect("accept source import");
+
+    store
+        .reconcile_interrupted_job_runs(&[])
+        .await
+        .expect("reconcile");
+
+    let reconciled = store
+        .get_job_run(&run.id)
+        .await
+        .expect("load rule import")
+        .expect("rule import present");
+    assert_eq!(reconciled.status, JobRunStatus::Failed);
+    let kept: serde_json::Value =
+        serde_json::from_str(reconciled.progress_json.as_deref().expect("report kept"))
+            .expect("report json");
+    assert_eq!(kept["items"][0]["state"], "SAVED");
+    assert!(
+        store
+            .private_job_input(&run.id, "rule-import-actor")
+            .await
+            .expect("read input")
+            .is_none(),
+        "the connection is purged"
+    );
+    assert!(
+        store
+            .find_private_job("rule-import-actor", "rule-import:restart")
+            .await
+            .expect("receipt lookup")
+            .is_some(),
+        "the receipt still answers a repeated request key"
+    );
+    assert!(
+        store
+            .private_job_input(&other.id, "rule-import-actor")
+            .await
+            .expect("read other input")
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn reconcile_interrupted_job_runs_preserves_a_reboot_required_upgrade_run() {
     let (services, _db) = temp_services("workflow_operation_reconcile_excluded").await;
     let store = workflow_operation_store(&services);

@@ -7,8 +7,8 @@ use scryer_application::{
 };
 use scryer_domain::download_identity::DownloadId;
 
+use super::normalize_download_client_id;
 use super::unique_violation::is_unique_violation;
-use super::{normalize_download_client_id, opt_timestamp_string, timestamp_string};
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 #[derive(Clone)]
@@ -1050,11 +1050,11 @@ fn download_id_from_column(row: &SqlRow, column: &str) -> AppResult<DownloadId> 
 }
 
 fn timestamp_from_row(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    parse_stored_timestamp(&timestamp_string(row, column)?, column)
+    parse_stored_timestamp(&row.timestamp_text(column)?, column)
 }
 
 fn optional_timestamp_from_row(row: &SqlRow, column: &str) -> AppResult<Option<DateTime<Utc>>> {
-    opt_timestamp_string(row, column)?
+    row.opt_timestamp_text(column)?
         .map(|value| parse_stored_timestamp(&value, column))
         .transpose()
 }

@@ -38,9 +38,9 @@ mod configuration;
 mod discovery;
 mod identity;
 mod library;
+mod lifecycle_rules;
 mod lists;
 mod location;
-mod maintenance_rules;
 mod request_rules;
 mod runtime;
 mod scalars;
@@ -50,9 +50,9 @@ pub use configuration::*;
 pub use discovery::*;
 pub use identity::*;
 pub use library::*;
+pub use lifecycle_rules::*;
 pub use lists::*;
 pub use location::*;
-pub use maintenance_rules::*;
 pub use request_rules::*;
 pub use runtime::*;
 pub use scalars::parse_iso_date;
@@ -275,6 +275,79 @@ mod tests {
         ));
         let metadata = field("metadata");
         assert!(metadata.value.is_none());
+    }
+
+    #[test]
+    fn download_client_without_field_definitions_shows_no_stored_string() {
+        let client = |client_type: &str| scryer_domain::DownloadClientConfig {
+            id: "client-1".into(),
+            name: "Synthetic client".into(),
+            client_type: client_type.into(),
+            config_json: json!({
+                "host": "h.invalid",
+                "cookie": "c1",
+                "passkey": "p1",
+                "use_ssl": true,
+            })
+            .to_string(),
+            client_priority: 0,
+            is_enabled: true,
+            status: Default::default(),
+            last_error: None,
+            last_seen_at: None,
+            proxy_config_id: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let value_of = |payload: &crate::types::DownloadClientConfigPayload, key: &str| {
+            payload
+                .config
+                .iter()
+                .find(|value| value.key == key)
+                .unwrap_or_else(|| panic!("{key} should be present"))
+                .value
+                .clone()
+        };
+        let stored_secret = |value: Option<ProviderConfigFieldValue>| {
+            matches!(
+                value,
+                Some(ProviderConfigFieldValue::Secret(SecretConfigValuePayload {
+                    stored: true
+                }))
+            )
+        };
+
+        let orphaned =
+            super::from_download_client_config_with_fields(client("synthetic-orphan"), &[], None);
+        for key in ["host", "cookie", "passkey"] {
+            assert!(stored_secret(value_of(&orphaned, key)), "{key} is redacted");
+        }
+        assert!(matches!(
+            value_of(&orphaned, "use_ssl"),
+            Some(ProviderConfigFieldValue::Bool(BoolConfigValuePayload {
+                value: true
+            }))
+        ));
+        let mut stored_keys = orphaned.stored_secret_keys.clone();
+        stored_keys.sort();
+        assert_eq!(stored_keys, ["cookie", "host", "passkey"]);
+
+        // A loaded plugin's definitions still decide, and built-in clients keep
+        // their key-name rules.
+        let loaded = super::from_download_client_config_with_fields(
+            client("synthetic-orphan"),
+            &[config_field("host", "Host", ConfigFieldType::String)],
+            None,
+        );
+        assert!(matches!(
+            value_of(&loaded, "host"),
+            Some(ProviderConfigFieldValue::String(payload)) if payload.value == "h.invalid"
+        ));
+        let native = super::from_download_client_config_with_fields(client("nzbget"), &[], None);
+        assert!(matches!(
+            value_of(&native, "host"),
+            Some(ProviderConfigFieldValue::String(payload)) if payload.value == "h.invalid"
+        ));
     }
 
     #[test]
@@ -624,6 +697,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -702,6 +777,8 @@ mod tests {
         password: Option<&str>,
     ) -> ProxyConfig {
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "proxy-1".to_string(),
             name: "Gateway".to_string(),
             provider_type,

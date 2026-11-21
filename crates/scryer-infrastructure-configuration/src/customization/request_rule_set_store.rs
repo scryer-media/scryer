@@ -1,12 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, RequestRuleSetRepository};
-use scryer_domain::{RequestRuleEvaluationMode, RequestRuleRevision, RequestRuleSet};
-use sqlx::Row;
+use scryer_domain::{RequestRuleRevision, RequestRuleSet};
 
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
-};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 #[derive(Clone)]
 pub struct RequestRuleSetStore {
@@ -42,8 +39,10 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         &self,
         rule_set: &RequestRuleSet,
         revision: &RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()> {
-        let rule_set_args = rule_set_args(rule_set);
+        let mut rule_set_args = rule_set_args(rule_set);
+        rule_set_args.push(SqlArg::OptText(builder_model_json.map(str::to_string)));
         let revision_args = revision_args(revision);
         let rule_set_id = rule_set.id.clone();
         let library_ids = rule_set.library_ids.clone();
@@ -63,38 +62,60 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         .await
     }
 
-    /// Unlike the maintenance twin there is no disarm riding along: a request
+    /// Unlike the lifecycle twin there is no disarm riding along: a request
     /// rule votes and never executes, so no acknowledgement is attached to the
     /// revision it was granted against.
     async fn add_revision(
         &self,
         revision: &RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
-        let pointer_args = vec![
+        let mut pointer_args = vec![
             SqlArg::I64(revision.revision_number),
             SqlArg::Timestamp(updated_at),
-            SqlArg::Text(revision.rule_set_id.clone()),
         ];
+        // One statement either way: the pointer and the builder document move
+        // together, and a kept document is simply not written.
+        let pointer_sql = match builder_model_json {
+            Some(model) => {
+                pointer_args.push(SqlArg::OptText(model.map(str::to_string)));
+                "UPDATE request_rule_sets
+                    SET current_revision_number = {}, updated_at = {}, builder_model_json = {}
+                  WHERE id = {}"
+            }
+            None => {
+                "UPDATE request_rule_sets
+                    SET current_revision_number = {}, updated_at = {}
+                  WHERE id = {}"
+            }
+        };
+        pointer_args.push(SqlArg::Text(revision.rule_set_id.clone()));
 
         SqlRuntime::run_in_transaction(&self.datastore, "add_request_rule_revision", move |tx| {
             let revision_args = revision_args.clone();
             let pointer_args = pointer_args.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args).await?;
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE request_rule_sets
-                        SET current_revision_number = {}, updated_at = {}
-                      WHERE id = {}",
-                    &pointer_args,
-                )
-                .await?;
+                SqlRuntime::execute(SqlExec::Tx(tx), pointer_sql, &pointer_args).await?;
                 Ok(())
             })
         })
         .await
+    }
+
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT builder_model_json FROM request_rule_sets WHERE id = {}",
+            &[SqlArg::Text(rule_set_id.to_string())],
+        )
+        .await?;
+        match row {
+            Some(row) => row.opt_text("builder_model_json"),
+            None => Ok(None),
+        }
     }
 
     async fn get_revision(
@@ -201,23 +222,19 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         }).await
     }
 
-    async fn update_rule_set_evaluation_mode(
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
-        // Both columns move in one statement: a row that is enabled while its
-        // mode says disabled has no reading the evaluator could act on.
         execute_write(
             &self.datastore,
-            "update_request_rule_set_evaluation_mode",
+            "update_request_rule_set_enabled",
             "UPDATE request_rule_sets
-                SET evaluation_mode = {}, enabled = {}, updated_at = {}
+                SET enabled = {}, updated_at = {}
               WHERE id = {}",
             vec![
-                SqlArg::Text(mode.as_storage_str().to_string()),
                 SqlArg::Bool(enabled),
                 SqlArg::Timestamp(updated_at),
                 SqlArg::Text(id.to_string()),
@@ -238,24 +255,24 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
 }
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
-const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode,
+const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled,
     current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
     FROM request_rule_sets
     LEFT JOIN request_rule_set_libraries scope ON scope.rule_set_id = request_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source,
-    matcher_content_hash, created_by, created_at";
+    source_content_hash, created_by, created_at";
 
 /// Revision keys per statement: two binds each, well under every engine's ceiling.
 const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO request_rule_sets
-        (id, name, description, enabled, evaluation_mode,
-         current_revision_number, created_at, updated_at)
+        (id, name, description, enabled,
+         current_revision_number, created_at, updated_at, builder_model_json)
      VALUES ({}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO request_rule_revisions
-        (id, rule_set_id, revision_number, rego_source, matcher_content_hash,
+        (id, rule_set_id, revision_number, rego_source, source_content_hash,
          created_by, created_at)
      VALUES ({}, {}, {}, {}, {}, {}, {})";
 
@@ -281,7 +298,6 @@ fn rule_set_args(rule_set: &RequestRuleSet) -> Vec<SqlArg> {
         SqlArg::Text(rule_set.name.clone()),
         SqlArg::Text(rule_set.description.clone()),
         SqlArg::Bool(rule_set.enabled),
-        SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
@@ -294,7 +310,7 @@ fn revision_args(revision: &RequestRuleRevision) -> Vec<SqlArg> {
         SqlArg::Text(revision.rule_set_id.clone()),
         SqlArg::I64(revision.revision_number),
         SqlArg::Text(revision.rego_source.clone()),
-        SqlArg::Text(revision.matcher_content_hash.clone()),
+        SqlArg::Text(revision.source_content_hash.clone()),
         SqlArg::OptText(revision.created_by.clone()),
         SqlArg::Timestamp(revision.created_at),
     ]
@@ -306,15 +322,10 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RequestRuleSet> {
         name: row.text("name")?,
         description: row.text("description")?,
         enabled: row.bool("enabled")?,
-        // An unrecognized stored mode is a rule written by a newer build. It
-        // reads back as disabled so this build never acts on semantics it does
-        // not implement.
-        evaluation_mode: RequestRuleEvaluationMode::parse_storage(&row.text("evaluation_mode")?)
-            .unwrap_or_default(),
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         current_revision_number: row.i64("current_revision_number")?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
     })
 }
 
@@ -324,9 +335,9 @@ fn row_to_revision(row: &SqlRow) -> AppResult<RequestRuleRevision> {
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
         rego_source: row.text("rego_source")?,
-        matcher_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("source_content_hash")?,
         created_by: row.opt_text("created_by")?,
-        created_at: timestamp_or_now(row, "created_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
     })
 }
 
@@ -353,36 +364,28 @@ async fn replace_library_scope(
         &[SqlArg::Text(rule_set_id.to_string())],
     )
     .await?;
+    // A library named twice keeps its first place. Positions only order the
+    // scope, so they count the kept libraries without gaps.
     let mut seen = std::collections::HashSet::new();
-    for (position, library_id) in library_ids.iter().enumerate() {
-        if !seen.insert(library_id) {
-            continue;
-        }
-        tx.execute(
-            "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position)
-             VALUES ({}, {}, {})",
-            &[
+    let rows: Vec<Vec<SqlArg>> = library_ids
+        .iter()
+        .filter(|library_id| seen.insert(library_id.as_str()))
+        .enumerate()
+        .map(|(position, library_id)| {
+            vec![
                 SqlArg::Text(rule_set_id.to_string()),
                 SqlArg::Text(library_id.clone()),
                 SqlArg::I64(position as i64),
-            ],
-        )
-        .await?;
-    }
+            ]
+        })
+        .collect();
+    SqlRuntime::execute_batch_insert(
+        tx,
+        "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position)",
+        3,
+        rows,
+        "",
+    )
+    .await?;
     Ok(())
-}
-
-/// The SQLite column defaults to `strftime(...)`, which a row inserted by the
-/// DDL default carries verbatim; parsing it leniently keeps such a row readable
-/// rather than failing the whole listing.
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }

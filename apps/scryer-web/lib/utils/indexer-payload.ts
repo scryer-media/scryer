@@ -21,6 +21,13 @@ export function parseIndexerQueryBudget(
   return { valid: true, value };
 }
 
+/** Monthly local caps use the same positive-integer-or-unlimited contract. */
+export function parseIndexerMonthlyLimit(
+  raw: string,
+): { valid: true; value: number | null } | { valid: false } {
+  return parseIndexerQueryBudget(raw);
+}
+
 /**
  * Reads the request-interval field as typed. Blank means no interval, which
  * the scheduler treats the same as zero seconds, so blank saves as 0 rather
@@ -52,6 +59,22 @@ export function indexerQueryBudgetDraftValue(
     : String(indexer.maxQueriesPerMinute);
 }
 
+export function indexerMonthlyRequestLimitDraftValue(
+  indexer: Pick<IndexerRecord, "maxRequestsPerMonth">,
+): string {
+  return indexer.maxRequestsPerMonth == null
+    ? ""
+    : String(indexer.maxRequestsPerMonth);
+}
+
+export function indexerMonthlyGrabLimitDraftValue(
+  indexer: Pick<IndexerRecord, "maxGrabsPerMonth">,
+): string {
+  return indexer.maxGrabsPerMonth == null
+    ? ""
+    : String(indexer.maxGrabsPerMonth);
+}
+
 /** The editor's text for a saved indexer's request interval; 0 shows blank. */
 export function indexerRateLimitSecondsDraftValue(
   indexer: Pick<IndexerRecord, "rateLimitSeconds">,
@@ -73,6 +96,8 @@ export function buildIndexerSavePayload<TConfig>(
   config: TConfig,
 ) {
   const budget = parseIndexerQueryBudget(draft.maxQueriesPerMinute);
+  const monthlyRequests = parseIndexerMonthlyLimit(draft.maxRequestsPerMonth);
+  const monthlyGrabs = parseIndexerMonthlyLimit(draft.maxGrabsPerMonth);
   const interval = parseIndexerRateLimitSeconds(draft.rateLimitSeconds);
   return {
     name: draft.name.trim(),
@@ -82,6 +107,8 @@ export function buildIndexerSavePayload<TConfig>(
     seedingProfileId: draft.seedingProfileId,
     rateLimitSeconds: interval.valid ? interval.value : null,
     maxQueriesPerMinute: budget.valid ? budget.value : null,
+    maxRequestsPerMonth: monthlyRequests.valid ? monthlyRequests.value : null,
+    maxGrabsPerMonth: monthlyGrabs.valid ? monthlyGrabs.value : null,
     isEnabled: draft.isEnabled,
     enableInteractiveSearch: draft.enableInteractiveSearch,
     enableAutoSearch: draft.enableAutoSearch,

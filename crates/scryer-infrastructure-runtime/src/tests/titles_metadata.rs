@@ -602,6 +602,8 @@ async fn title_writes_generate_and_refresh_catalog_sort_key_sqlite() {
             movie_release_dates: None,
             ratings: None,
             credits: None,
+            content_ratings: None,
+            awards: None,
             extra_external_ids: vec![],
             extra_tags: vec![],
         },
@@ -3440,4 +3442,246 @@ async fn folder_path_owner_candidates_find_only_the_folder_owners_postgres() -> 
     admin_pool.close().await;
     cleanup.map_err(|error| AppError::Repository(format!("failed to drop schema: {error}")))?;
     result
+}
+
+fn sample_content_ratings() -> Vec<scryer_application::ContentRating> {
+    use scryer_application::{ContentCertification, ContentRating};
+    vec![
+        ContentRating {
+            country: "GB".to_string(),
+            certifications: vec![ContentCertification {
+                value: "12A".to_string(),
+                source: "bbfc".to_string(),
+                release_type: Some(3),
+            }],
+            age_rating: Some(12),
+            age_rating_source: Some("bbfc".to_string()),
+        },
+        ContentRating {
+            country: "US".to_string(),
+            certifications: vec![
+                ContentCertification {
+                    value: " ".to_string(),
+                    ..Default::default()
+                },
+                ContentCertification {
+                    value: "PG-13".to_string(),
+                    source: "mpa".to_string(),
+                    release_type: None,
+                },
+            ],
+            age_rating: Some(13),
+            age_rating_source: None,
+        },
+    ]
+}
+
+#[tokio::test]
+async fn hydrated_title_metadata_replaces_title_content_ratings() {
+    let (services, db) = temp_services("scryer_title_content_ratings").await;
+    let catalog = title_store(&services);
+    ensure_default_movie_library(&services.datastore())
+        .await
+        .expect("default movie library");
+
+    let title = make_test_title("title-content-ratings", None);
+    let bare = make_test_title("title-content-ratings-bare", None);
+    TitleRepository::create(&catalog, title.clone())
+        .await
+        .expect("create title");
+    TitleRepository::create(&catalog, bare.clone())
+        .await
+        .expect("create bare title");
+
+    let update = |content_ratings| TitleMetadataUpdate {
+        metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+        content_ratings,
+        ..Default::default()
+    };
+    let load = |ids: Vec<String>| {
+        let catalog = catalog.clone();
+        async move {
+            TitleRepository::list_title_content_ratings(&catalog, &ids)
+                .await
+                .expect("load content ratings")
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>()
+        }
+    };
+
+    let ratings = sample_content_ratings();
+    TitleRepository::update_title_hydrated_metadata(
+        &catalog,
+        &title.id,
+        update(Some(ratings.clone())),
+    )
+    .await
+    .expect("store ratings");
+    let loaded = load(vec![title.id.clone(), bare.id.clone()]).await;
+    assert_eq!(
+        loaded.get(&title.id),
+        Some(&Some(ratings.clone())),
+        "stored in SMG order"
+    );
+    assert_eq!(
+        loaded.get(&bare.id),
+        Some(&None),
+        "a title never hydrated has no stored ratings, not an empty set"
+    );
+    assert_eq!(
+        scryer_application::request_rules::content_ratings_us_certification_label(
+            loaded[&title.id].as_deref().unwrap_or_default()
+        )
+        .as_deref(),
+        Some("PG-13"),
+        "the badge reads the same label the request fact does"
+    );
+
+    TitleRepository::update_title_hydrated_metadata(&catalog, &title.id, update(None))
+        .await
+        .expect("update without ratings");
+    assert_eq!(
+        load(vec![title.id.clone()]).await.get(&title.id),
+        Some(&Some(ratings.clone())),
+        "an update without ratings keeps the stored rows"
+    );
+
+    TitleRepository::update_title_hydrated_metadata(&catalog, &title.id, update(Some(Vec::new())))
+        .await
+        .expect("clear ratings");
+    assert_eq!(
+        load(vec![title.id.clone()])
+            .await
+            .get(&title.id)
+            .cloned()
+            .flatten()
+            .map(|ratings| ratings.len()),
+        Some(0),
+        "a successful empty response stores an empty set"
+    );
+
+    TitleRepository::update_title_hydrated_metadata(
+        &catalog,
+        &title.id,
+        update(Some(ratings.clone())),
+    )
+    .await
+    .expect("store ratings again");
+    TitleRepository::replace_match_state(&catalog, &title.id, Vec::new(), Vec::new())
+        .await
+        .expect("rematch");
+    assert_eq!(
+        load(vec![title.id.clone()]).await.get(&title.id),
+        Some(&None),
+        "a rematch leaves the ratings not stored until the new match is hydrated"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn hydrated_title_metadata_replaces_title_awards() {
+    let (services, db) = temp_services("scryer_title_awards").await;
+    let catalog = title_store(&services);
+    ensure_default_movie_library(&services.datastore())
+        .await
+        .expect("default movie library");
+
+    let title = make_test_title("title-awards", None);
+    let bare = make_test_title("title-awards-bare", None);
+    TitleRepository::create(&catalog, title.clone())
+        .await
+        .expect("create title");
+    TitleRepository::create(&catalog, bare.clone())
+        .await
+        .expect("create bare title");
+
+    let update = |awards| TitleMetadataUpdate {
+        metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+        awards,
+        ..Default::default()
+    };
+    let load = |ids: Vec<String>| {
+        let catalog = catalog.clone();
+        async move {
+            TitleRepository::list_title_awards(&catalog, &ids)
+                .await
+                .expect("load awards")
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>()
+        }
+    };
+
+    let awards = vec![
+        scryer_application::TitleAward {
+            award_qid: "Q1".to_string(),
+            award_label: "Fixture Prize".to_string(),
+            year: Some(2025),
+            recipient_qid: "Q2".to_string(),
+            recipient_label: "Fixture Award Title".to_string(),
+            claim_side: "work".to_string(),
+        },
+        scryer_application::TitleAward {
+            award_qid: "Q3".to_string(),
+            award_label: "Fixture Acting Prize".to_string(),
+            year: None,
+            recipient_qid: "Q4".to_string(),
+            recipient_label: "Fixture Performer".to_string(),
+            claim_side: "person".to_string(),
+        },
+    ];
+    TitleRepository::update_title_hydrated_metadata(
+        &catalog,
+        &title.id,
+        update(Some(awards.clone())),
+    )
+    .await
+    .expect("store awards");
+    let loaded = load(vec![title.id.clone(), bare.id.clone()]).await;
+    assert_eq!(
+        loaded.get(&title.id),
+        Some(&Some(awards.clone())),
+        "stored in SMG order"
+    );
+    assert_eq!(
+        loaded.get(&bare.id),
+        Some(&None),
+        "never hydrated: not stored"
+    );
+
+    TitleRepository::update_title_hydrated_metadata(&catalog, &title.id, update(None))
+        .await
+        .expect("update without awards");
+    assert_eq!(
+        load(vec![title.id.clone()]).await.get(&title.id),
+        Some(&Some(awards.clone())),
+        "an update without awards keeps the stored rows"
+    );
+
+    TitleRepository::update_title_hydrated_metadata(&catalog, &title.id, update(Some(Vec::new())))
+        .await
+        .expect("store no awards");
+    assert_eq!(
+        load(vec![title.id.clone()]).await.get(&title.id),
+        Some(&Some(Vec::new())),
+        "a successful empty response stores a known empty set"
+    );
+
+    TitleRepository::update_title_hydrated_metadata(
+        &catalog,
+        &title.id,
+        update(Some(awards.clone())),
+    )
+    .await
+    .expect("store awards again");
+    TitleRepository::replace_match_state(&catalog, &title.id, Vec::new(), Vec::new())
+        .await
+        .expect("rematch");
+    assert_eq!(
+        load(vec![title.id.clone()]).await.get(&title.id),
+        Some(&None),
+        "a rematch leaves the awards not stored"
+    );
+
+    let _ = std::fs::remove_file(db);
 }

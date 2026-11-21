@@ -165,6 +165,469 @@ async fn verify_import_does_not_terminalize_movie_when_largest_video_has_no_arti
     assert!(!verify_import_inner(&app, &td, 1, Some(&completed)).await);
 }
 
+fn lantern_cove_release_evidence(
+    scope: crate::SubmissionScope,
+) -> crate::import_workflow::ReleaseEvidence {
+    crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Lantern.Cove.The.Movie.2019.1080p.WEB-DL".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope,
+    }
+}
+
+/// A film linked to a series special, with a smaller bonus video beside it.
+fn lantern_cove_series_movie_fixture(
+    film_result: &str,
+    film_episode_id: Option<&str>,
+) -> (
+    tempfile::TempDir,
+    AppUseCase,
+    TrackedDownload,
+    CompletedDownload,
+) {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::File::create(
+        temp_dir
+            .path()
+            .join("Lantern.Cove.The.Movie.2019.1080p.mkv"),
+    )
+    .expect("create film")
+    .set_len(60 * 1024 * 1024)
+    .expect("size film");
+    std::fs::File::create(temp_dir.path().join("Lantern.Cove.Creditless.Opening.mkv"))
+        .expect("create bonus video")
+        .set_len(5 * 1024 * 1024)
+        .expect("size bonus video");
+    let title = build_title("title-1", "Lantern Cove", MediaFacet::Series);
+    let mut film = build_artifact_with_result(
+        "dl-1",
+        film_episode_id,
+        "Lantern.Cove.The.Movie.2019.1080p.mkv",
+        film_result,
+    );
+    film.media_kind = "movie".to_string();
+    let app = build_app(vec![title], vec![], vec![], vec![film]);
+    let td = build_tracked_download(
+        "title-1",
+        "series",
+        "Lantern.Cove.The.Movie.2019.1080p.WEB-DL",
+    );
+    let completed = build_completed_download(
+        "Lantern.Cove.The.Movie.2019.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    (temp_dir, app, td, completed)
+}
+
+/// The series-movie import places only the largest video, so a bonus video
+/// beside the film must not keep the download from verifying.
+#[tokio::test]
+async fn verify_import_terminalizes_series_movie_with_unrecorded_bonus_video() {
+    let (_temp_dir, app, td, completed) = lantern_cove_series_movie_fixture("imported", None);
+    let evidence = lantern_cove_release_evidence(crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: "link-1".to_string(),
+    });
+
+    assert!(
+        super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            1,
+            Some(&completed),
+            Some(&evidence),
+        )
+        .await
+        .expect("verification")
+    );
+    // Without the series-movie scope the bonus video still needs a row.
+    assert!(!verify_import_inner(&app, &td, 1, Some(&completed)).await);
+}
+
+/// An identical film already in the library is recorded as already present
+/// with its linked episode; that settles the download on a later pass too.
+#[tokio::test]
+async fn verify_import_terminalizes_series_movie_already_present_with_bonus_video() {
+    let (_temp_dir, app, td, completed) =
+        lantern_cove_series_movie_fixture("already_present", Some("ep-special-1"));
+    let evidence = lantern_cove_release_evidence(crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: "link-1".to_string(),
+    });
+
+    assert!(
+        super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            0,
+            Some(&completed),
+            Some(&evidence),
+        )
+        .await
+        .expect("verification")
+    );
+    assert!(
+        super::verify_retry_import_with_release_evidence(&app, &td, 0, &completed, &evidence)
+            .await
+            .expect("verification")
+    );
+}
+
+const LANTERN_COVE_EXTRACTED_FILM: &str =
+    ".scryer-ax-0123456789abcdef/out/Lantern.Cove.The.Movie.2019.1080p.mkv";
+
+/// A film imported out of its download's archives, so it is not in the
+/// download folder, with loose extras left there. `film` is the film's row
+/// and `extra_rows` any rows the loose extras have.
+fn lantern_cove_extracted_film_fixture(
+    facet: MediaFacet,
+    film: ImportArtifact,
+    extra_rows: Vec<ImportArtifact>,
+) -> (
+    tempfile::TempDir,
+    AppUseCase,
+    TrackedDownload,
+    CompletedDownload,
+) {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    for (name, len) in [
+        ("Lantern.Cove.Trailer.mkv", 5 * 1024 * 1024),
+        ("Lantern.Cove.Creditless.Opening.mkv", 3 * 1024 * 1024),
+    ] {
+        std::fs::File::create(temp_dir.path().join(name))
+            .expect("create extra")
+            .set_len(len)
+            .expect("size extra");
+    }
+    let facet_name = if facet == MediaFacet::Movie {
+        "movie"
+    } else {
+        "series"
+    };
+    let title = build_title("title-1", "Lantern Cove", facet);
+    let mut artifacts = vec![film];
+    artifacts.extend(extra_rows);
+    let app = build_app(vec![title], vec![], vec![], artifacts);
+    let td = build_tracked_download(
+        "title-1",
+        facet_name,
+        "Lantern.Cove.The.Movie.2019.1080p.WEB-DL",
+    );
+    let completed = build_completed_download(
+        "Lantern.Cove.The.Movie.2019.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some(facet_name),
+    );
+    (temp_dir, app, td, completed)
+}
+
+/// The film's row as the import records it: taken from the extraction
+/// workspace when `workspace_relative_path` is set.
+fn lantern_cove_film_row(result: &str, workspace_relative_path: Option<&str>) -> ImportArtifact {
+    let mut film = build_artifact_with_result(
+        "dl-1",
+        None,
+        "lantern.cove.the.movie.2019.1080p.mkv",
+        result,
+    );
+    film.media_kind = "movie".to_string();
+    film.workspace_relative_path = workspace_relative_path.map(str::to_string);
+    film
+}
+
+async fn verifies_automatic_and_retry(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    completed: &CompletedDownload,
+    evidence: &crate::import_workflow::ReleaseEvidence,
+) -> (bool, bool) {
+    let automatic = super::verify_import_inner_with_release_evidence(
+        app,
+        td,
+        1,
+        Some(completed),
+        Some(evidence),
+    )
+    .await
+    .expect("verification");
+    let retry = super::verify_retry_import_with_release_evidence(app, td, 0, completed, evidence)
+        .await
+        .expect("verification");
+    (automatic, retry)
+}
+
+fn lantern_cove_series_movie_scope() -> crate::import_workflow::ReleaseEvidence {
+    lantern_cove_release_evidence(crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: "link-1".to_string(),
+    })
+}
+
+/// A series movie imported out of its archives settles although the
+/// trailer and opening left loose in the download folder have no rows.
+#[tokio::test]
+async fn verify_import_terminalizes_extracted_series_movie_with_loose_extras() {
+    let (_temp_dir, app, td, completed) = lantern_cove_extracted_film_fixture(
+        MediaFacet::Series,
+        lantern_cove_film_row("imported", Some(LANTERN_COVE_EXTRACTED_FILM)),
+        vec![],
+    );
+
+    assert_eq!(
+        verifies_automatic_and_retry(&app, &td, &completed, &lantern_cove_series_movie_scope())
+            .await,
+        (true, true)
+    );
+}
+
+#[tokio::test]
+async fn verify_import_terminalizes_extracted_movie_with_loose_extras() {
+    let (_temp_dir, app, td, completed) = lantern_cove_extracted_film_fixture(
+        MediaFacet::Movie,
+        lantern_cove_film_row("already_present", Some(LANTERN_COVE_EXTRACTED_FILM)),
+        vec![],
+    );
+    let evidence = lantern_cove_release_evidence(crate::SubmissionScope::Title);
+
+    assert_eq!(
+        verifies_automatic_and_retry(&app, &td, &completed, &evidence).await,
+        (true, true)
+    );
+}
+
+/// Loose extras are excused only by a success taken from the workspace: a
+/// success for a loose file no longer there, a rejected workspace film, or a
+/// rejected loose extra all leave the download unverified.
+#[tokio::test]
+async fn verify_import_keeps_loose_extras_blocking_without_a_workspace_success() {
+    let rejected_trailer = || {
+        let mut row =
+            build_artifact_with_result("dl-1", None, "lantern.cove.trailer.mkv", "rejected");
+        row.media_kind = "movie".to_string();
+        row.relative_path = Some("Lantern.Cove.Trailer.mkv".to_string());
+        row
+    };
+    for facet in [MediaFacet::Series, MediaFacet::Movie] {
+        let evidence = if facet == MediaFacet::Movie {
+            lantern_cove_release_evidence(crate::SubmissionScope::Title)
+        } else {
+            lantern_cove_series_movie_scope()
+        };
+        let mut loose_film = lantern_cove_film_row("imported", None);
+        loose_film.relative_path = Some("Lantern.Cove.The.Movie.2019.1080p.mkv".to_string());
+        for (case, film, extra_rows) in [
+            ("loose success, file gone", loose_film, vec![]),
+            (
+                "rejected workspace film",
+                lantern_cove_film_row("rejected", Some(LANTERN_COVE_EXTRACTED_FILM)),
+                vec![],
+            ),
+            (
+                "rejected loose extra",
+                lantern_cove_film_row("imported", Some(LANTERN_COVE_EXTRACTED_FILM)),
+                vec![rejected_trailer()],
+            ),
+        ] {
+            let (_temp_dir, app, td, completed) =
+                lantern_cove_extracted_film_fixture(facet.clone(), film, extra_rows);
+
+            assert_eq!(
+                verifies_automatic_and_retry(&app, &td, &completed, &evidence).await,
+                (false, false),
+                "{facet:?}: {case}"
+            );
+        }
+    }
+}
+
+fn lantern_cove_series_movie_link(legacy_collection_id: &str) -> scryer_domain::SeriesMovieLink {
+    let now = Utc::now();
+    scryer_domain::SeriesMovieLink {
+        id: "link-1".into(),
+        series_title_id: "title-1".into(),
+        movie: scryer_domain::MovieEntity {
+            id: "movie-lantern-cove".into(),
+            title: "Lantern Cove The Movie".into(),
+            sort_title: None,
+            slug: None,
+            year: Some(2019),
+            overview: None,
+            poster_url: None,
+            background_url: None,
+            language: None,
+            runtime_minutes: None,
+            content_status: None,
+            studio: None,
+            digital_release_date: None,
+            imdb_id: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            mal_id: None,
+            anidb_id: None,
+            ratings: None,
+            credits: None,
+            created_at: now,
+            updated_at: now,
+        },
+        placement: None,
+        narrative_order: None,
+        after_season: None,
+        before_season: None,
+        linked_episode_id: None,
+        association_confidence: None,
+        continuity_status: None,
+        movie_form: Some("movie".into()),
+        confidence: None,
+        signal_summary: None,
+        source: None,
+        monitoring_override: None,
+        metadata_active: true,
+        monitored: true,
+        legacy_collection_id: Some(legacy_collection_id.into()),
+        tags: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// A grab recorded before series-movie links names the film by a legacy
+/// collection id. Only one that resolves to a link gets the largest-video
+/// allowance.
+#[tokio::test]
+async fn verify_import_resolves_a_legacy_collection_scope_to_its_series_movie() {
+    let evidence = lantern_cove_release_evidence(crate::SubmissionScope::Collection {
+        collection_id: "legacy-lantern-cove-movie".to_string(),
+    });
+    let (_temp_dir, app, td, completed) = lantern_cove_extracted_film_fixture(
+        MediaFacet::Series,
+        lantern_cove_film_row("imported", Some(LANTERN_COVE_EXTRACTED_FILM)),
+        vec![],
+    );
+
+    assert_eq!(
+        verifies_automatic_and_retry(&app, &td, &completed, &evidence).await,
+        (false, false),
+        "no link: every loose video needs a row"
+    );
+
+    app.services
+        .catalog
+        .shows
+        .upsert_series_movie_link(lantern_cove_series_movie_link("legacy-lantern-cove-movie"))
+        .await
+        .expect("link");
+
+    assert_eq!(
+        verifies_automatic_and_retry(&app, &td, &completed, &evidence).await,
+        (true, true)
+    );
+}
+
+/// A series movie whose release name names an episode the catalog does not
+/// hold leaves the expected episodes unresolved. One success then covers the
+/// one video the import could place, so loose extras beside it, or the film
+/// itself loose, still settle an automatic pass.
+#[tokio::test]
+async fn verify_import_settles_an_unresolved_series_movie_with_extras_automatically() {
+    let unresolved = |td: &mut TrackedDownload| {
+        td.source_title = Some("Lantern.Cove.S00E05.1080p.WEB-DL".to_string());
+    };
+    let evidence = lantern_cove_series_movie_scope();
+
+    let (_temp_dir, app, mut td, completed) = lantern_cove_extracted_film_fixture(
+        MediaFacet::Series,
+        lantern_cove_film_row("imported", Some(LANTERN_COVE_EXTRACTED_FILM)),
+        vec![],
+    );
+    unresolved(&mut td);
+    assert!(matches!(
+        expected_episode_units(&app, &td).await,
+        ExpectedEpisodeResolution::Unresolved
+    ));
+    assert!(
+        super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            1,
+            Some(&completed),
+            Some(&evidence)
+        )
+        .await
+        .expect("verification")
+    );
+
+    let (_temp_dir, app, mut td, completed) = lantern_cove_series_movie_fixture("imported", None);
+    unresolved(&mut td);
+    assert!(
+        super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            1,
+            Some(&completed),
+            Some(&evidence)
+        )
+        .await
+        .expect("verification")
+    );
+}
+
+/// Episode downloads keep demanding a disposition for every visible video:
+/// the automatic importer skips unparseable files without a row.
+#[tokio::test]
+async fn verify_import_keeps_unrecorded_smaller_video_blocking_for_episode_scope() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::File::create(temp_dir.path().join("Harbor.Lights.S01E01.1080p.mkv"))
+        .expect("create episode")
+        .set_len(60 * 1024 * 1024)
+        .expect("size episode");
+    std::fs::File::create(temp_dir.path().join("Harbor.Lights.S01E02.1080p.mkv"))
+        .expect("create second episode")
+        .set_len(5 * 1024 * 1024)
+        .expect("size second episode");
+    let title = build_title("title-1", "Harbor Lights", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![build_episode("ep-1", "title-1", "season-1", "1", "1", None)];
+    let artifacts = vec![build_artifact(
+        "dl-1",
+        "ep-1",
+        "Harbor.Lights.S01E01.1080p.mkv",
+    )];
+    let app = build_app(vec![title], vec![collection], episodes, artifacts);
+    let td = build_tracked_download("title-1", "series", "Harbor.Lights.S01E01.1080p.WEB-DL");
+    let completed = build_completed_download(
+        "Harbor.Lights.S01E01.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    let evidence = crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Harbor.Lights.S01E01.1080p.WEB-DL".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope: crate::SubmissionScope::Episode {
+            episode_id: "ep-1".to_string(),
+        },
+    };
+
+    assert!(
+        !super::verify_import_inner_with_release_evidence(
+            &app,
+            &td,
+            1,
+            Some(&completed),
+            Some(&evidence),
+        )
+        .await
+        .expect("verification")
+    );
+}
+
 #[tokio::test]
 async fn verify_import_uses_completed_identity_alias_with_normalized_client_fields() {
     let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
@@ -964,6 +1427,56 @@ async fn verify_import_accepts_resolved_pack_when_move_removed_source_but_artifa
     );
 
     assert!(verify_import_inner(&app, &td, 2, Some(&completed)).await);
+}
+
+/// A season pack that holds two of the season's three episodes, both imported
+/// by an earlier pass. The automatic import accepts it (every visible source
+/// unit is imported: a fallback), and the operator's Retry import, and the
+/// restart recovery of an interrupted Retry, accept the very same evidence.
+#[tokio::test]
+async fn retry_accepts_a_pack_the_automatic_import_accepts() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    for name in ["Lantern.Cove.S01E01.mkv", "Lantern.Cove.S01E02.mkv"] {
+        std::fs::File::create(temp_dir.path().join(name))
+            .expect("create video")
+            .set_len(60 * 1024 * 1024)
+            .expect("size video");
+    }
+    let title = build_title("title-1", "Lantern Cove", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![
+        build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+        build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+        build_episode("ep-3", "title-1", "season-1", "1", "3", None),
+    ];
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Lantern.Cove.S01E01.mkv"),
+        build_artifact("dl-1", "ep-2", "Lantern.Cove.S01E02.mkv"),
+    ];
+    let app = build_app(vec![title], vec![collection], episodes, artifacts);
+    let release = "Lantern.Cove.S01.1080p.WEB-DL";
+    let td = build_tracked_download("title-1", "series", release);
+    let completed = build_completed_download(
+        release,
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    let evidence = crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some(release.to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope: crate::SubmissionScope::Collection {
+            collection_id: "season-1".to_string(),
+        },
+    };
+
+    let (automatic, retry) = verifies_automatic_and_retry(&app, &td, &completed, &evidence).await;
+    assert!(automatic, "the automatic import accepts the pack");
+    assert!(retry, "Retry accepts the same evidence");
 }
 
 #[tokio::test]

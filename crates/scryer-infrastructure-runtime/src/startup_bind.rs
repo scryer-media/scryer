@@ -45,7 +45,13 @@ async fn read(config: &DatastoreConfig) -> Result<Option<String>, String> {
     let scope = scryer_application::SETTINGS_SCOPE_SYSTEM;
     let raw: Option<String> = match config.engine {
         DatastoreEngine::Sqlite => {
-            if !datastore_file_path(&config.database_url).exists() {
+            let database = datastore_file_path(&config.database_url);
+            if scryer_application::disk::Disk::process()
+                .follow(database)
+                .await
+                .exists()
+                != Some(true)
+            {
                 return Ok(None);
             }
             let options = config
@@ -117,6 +123,8 @@ async fn read(config: &DatastoreConfig) -> Result<Option<String>, String> {
 }
 
 #[cfg(test)]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::MigrationMode;

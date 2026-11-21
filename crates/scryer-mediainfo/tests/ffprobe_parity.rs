@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -174,40 +177,16 @@ fn ffprobe_primary_stream<'a>(json: &'a Value, codec_type: &str) -> Option<&'a V
     if codec_type != "audio" {
         return candidates.into_iter().next();
     }
-    candidates
-        .into_iter()
-        .enumerate()
-        .filter(|(_, stream)| stream["disposition"]["comment"] != 1)
-        .max_by_key(|(ordinal, stream)| {
-            (
-                reference_audio_rank(stream),
-                stream["channels"].as_u64().unwrap_or(0),
-                std::cmp::Reverse(*ordinal),
-            )
-        })
-        .map(|(_, stream)| stream)
-}
-
-fn reference_audio_rank(stream: &Value) -> i32 {
-    match (
-        stream["codec_name"].as_str().unwrap_or_default(),
-        stream["profile"].as_str().unwrap_or_default(),
-    ) {
-        ("truehd", profile) if profile.contains("Atmos") => 100,
-        ("dts", profile) if profile.contains("DTS:X") => 95,
-        ("truehd", _) => 90,
-        ("dts", "DTS-HD MA") => 85,
-        ("flac", _) => 80,
-        ("eac3", profile) if profile.contains("Atmos") => 75,
-        ("eac3", _) => 70,
-        ("dts", "DTS-HD HRA") => 65,
-        ("dts", _) => 60,
-        ("ac3", _) => 50,
-        ("aac" | "opus", _) => 40,
-        ("mp3" | "vorbis", _) => 30,
-        (codec, _) if codec.starts_with("pcm_") => 20,
-        _ => 10,
-    }
+    // The product's own rule: the default stream that is not commentary, or
+    // the first that is not. Codec and channel count never pick the stream.
+    scryer_media_types::primary_audio_stream_index(candidates.iter().map(|stream| {
+        (
+            stream["disposition"]["default"] == 1,
+            stream["disposition"]["comment"] == 1,
+            stream["tags"]["title"].as_str(),
+        )
+    }))
+    .map(|index| candidates[index])
 }
 
 fn belongs_to_selected_program(json: &Value, stream: &Value) -> bool {
@@ -907,6 +886,96 @@ fn sparse_mkv_reference_defaults_require_exact_authored_evidence() {
             "{path}"
         );
     }
+}
+
+#[test]
+fn mkv_dolby_vision_mapping_never_adds_reads() {
+    // Same bytes, only the BlockAddIDType differs: 'dvvC' versus an unregistered value.
+    let dolby_vision = sparse_mkv::pq_dolby_vision_bytes(u32::from_be_bytes(*b"dvvC").into());
+    let plain = sparse_mkv::pq_dolby_vision_bytes(u32::from_be_bytes(*b"xxxx").into());
+    assert_eq!(dolby_vision.len(), plain.len());
+    assert!(dolby_vision.len() > 256 * 1024);
+
+    let analyze = |bytes: &[u8], profile| {
+        scryer_mediainfo::analyze_source(
+            &mut std::io::Cursor::new(bytes.to_vec()),
+            "mkv",
+            scryer_mediainfo::AnalyzeOptions { profile },
+        )
+        .unwrap()
+    };
+    for profile in [
+        scryer_mediainfo::AnalysisProfile::ContentProbe,
+        scryer_mediainfo::AnalysisProfile::Fast,
+        scryer_mediainfo::AnalysisProfile::DefaultRich,
+        scryer_mediainfo::AnalysisProfile::FfprobeParity,
+    ] {
+        let with_dv = analyze(&dolby_vision, profile);
+        let without_dv = analyze(&plain, profile);
+        assert_eq!(
+            with_dv.video_hdr_format.as_deref(),
+            Some("Dolby Vision"),
+            "{profile:?}"
+        );
+        assert_eq!(with_dv.dovi_profile, Some(8), "{profile:?}");
+        assert_eq!(
+            without_dv.video_hdr_format.as_deref(),
+            Some("HDR10"),
+            "{profile:?}"
+        );
+        let (dv_read, plain_read) = (
+            with_dv.details.report.bytes_read,
+            without_dv.details.report.bytes_read,
+        );
+        assert!(plain_read > 0, "{profile:?}");
+        if profile == scryer_mediainfo::AnalysisProfile::FfprobeParity {
+            // The PQ frame-payload HDR10+ probe runs only without a Dolby Vision record.
+            assert!(
+                dv_read + 256 * 1024 <= plain_read,
+                "{profile:?}: {dv_read} vs {plain_read}"
+            );
+        } else {
+            assert_eq!(dv_read, plain_read, "{profile:?}");
+        }
+    }
+}
+
+#[test]
+fn mkv_dolby_vision_record_follows_its_track_past_cover_art() {
+    let analysis = scryer_mediainfo::analyze_source(
+        &mut std::io::Cursor::new(sparse_mkv::cover_art_then_dolby_vision_bytes()),
+        "mkv",
+        scryer_mediainfo::AnalyzeOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(analysis.video_codec.as_deref(), Some("hevc"));
+    assert_eq!(analysis.video_hdr_format.as_deref(), Some("Dolby Vision"));
+    assert_eq!(analysis.dovi_profile, Some(7));
+    assert_eq!(analysis.dovi_bl_compat_id, Some(6));
+    let dolby_vision: Vec<_> = analysis
+        .details
+        .streams
+        .iter()
+        .map(|stream| {
+            (
+                stream.codec.as_deref(),
+                stream.metadata.hdr.dolby_vision,
+                stream
+                    .metadata
+                    .hdr
+                    .dovi
+                    .as_ref()
+                    .and_then(|dovi| dovi.profile),
+            )
+        })
+        .collect();
+    assert_eq!(
+        dolby_vision,
+        [
+            (Some("mjpeg"), None, None),
+            (Some("hevc"), Some(true), Some(7))
+        ]
+    );
 }
 
 #[test]

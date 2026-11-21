@@ -12,6 +12,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { TitleReleaseBlocklistEntry } from "@/lib/types/titles";
 import { cn } from "@/lib/utils";
+import { blocklistReasonText } from "@/lib/utils/blocklist-reason";
 import { formatUiDate } from "@/lib/utils/date-format";
 
 /**
@@ -133,7 +134,7 @@ export function TitleBlockedReleasesSection({
                   </div>
                   {entry.errorMessage ? (
                     <p className="mt-2 line-clamp-3 rounded-[8px] bg-[var(--scry-danger-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--scry-danger-text)]">
-                      {entry.errorMessage}
+                      {blocklistReasonText(entry.errorMessage, t)}
                     </p>
                   ) : null}
                 </div>

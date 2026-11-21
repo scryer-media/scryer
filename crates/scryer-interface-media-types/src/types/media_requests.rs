@@ -188,8 +188,9 @@ pub struct MediaRequestPayload {
     /// was never evaluated. A requester reading their own request gets it with
     /// `votes` emptied.
     pub decision: Option<RequestRuleDecision>,
-    /// Tags the policy emitted for this request. Stamped on the title only when
-    /// the request is approved.
+    /// Tags the policy emitted for this request, narrowed to the labels the
+    /// tag registry defines. Stamped on the title only when the request is
+    /// approved. The rules add none to a request they deny.
     pub policy_tags: Vec<String>,
     /// The metadata the request was decided against, as captured at submit
     /// time.
@@ -233,6 +234,25 @@ pub enum ProviderCatalogFamilyValue {
 pub struct SubmitMediaRequestPayload {
     /// ID of the submitted or deduplicated media request.
     pub request_id: ID,
+}
+
+/// The subject a requester picked, staged before the request dialog previews it.
+#[derive(InputObject, Clone)]
+pub struct StageMediaRequestMetadataInput {
+    /// Library the request would target.
+    pub library_id: ID,
+    /// Requested media facet.
+    pub facet: MediaFacetValue,
+    /// External provider identifiers of the subject, as a submit would send them.
+    pub external_ids: Vec<ExternalIdInput>,
+}
+
+/// What staging a request subject's metadata established.
+#[derive(SimpleObject, Clone)]
+pub struct StageMediaRequestMetadataPayload {
+    /// True when the metadata could not be fully established, so a preview
+    /// or a submit of this subject reads some facts as unknown.
+    pub metadata_partial: bool,
 }
 
 #[derive(InputObject, Clone)]

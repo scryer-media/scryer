@@ -336,9 +336,13 @@ impl AppUseCase {
             return Ok(ItemResult::simple(id.to_owned(), ItemStatus::MissingMedia));
         };
         if mf.title_id != title.id
-            || !tokio::fs::try_exists(stored_path_to_path_buf(&mf.file_path))
+            || !crate::disk::Disk::process()
+                .follow(stored_path_to_path_buf(&mf.file_path))
                 .await
-                .map_err(|error| AppError::Repository(error.to_string()))?
+                .exists()
+                .ok_or_else(|| {
+                    AppError::Repository("could not read the media file's path".to_string())
+                })?
         {
             return Ok(ItemResult::simple(id.to_owned(), ItemStatus::MissingMedia));
         }

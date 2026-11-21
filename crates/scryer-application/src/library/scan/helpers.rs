@@ -66,7 +66,10 @@ where
 
 pub(crate) fn require_directory_library_path(library_path: &str) -> AppResult<&Path> {
     let root = Path::new(library_path);
-    if !root.is_dir() {
+    if !crate::disk::Disk::process()
+        .follow_blocking(root)
+        .is(crate::disk::EntryKind::Directory)
+    {
         return Err(AppError::validation_refused(
             crate::error_reasons::library::PATH_NOT_DIRECTORY,
             format!("library path is not a directory: {library_path}"),

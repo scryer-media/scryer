@@ -57,5 +57,6 @@ test("the client knows exactly the server's watch-sync reasons", () => {
     "WATCH_SYNC_SOURCE_UNAVAILABLE",
     "WATCH_SYNC_STORE_FAILED",
     "WATCH_SYNC_UNMAPPED_PLAYED_MOVIES",
+    "WATCH_SYNC_UNPLACED_FAVORITES",
   ]);
 });

@@ -1,8 +1,9 @@
 //! Reads the configured log file and its newest rotated archives, read only.
 
-use std::fs::File;
+use crate::disk::{Disk, Open};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Raw bytes read from the log files at most, newest content first. The
 /// archive cap trims further; this bound keeps sanitizing time reasonable.
@@ -11,11 +12,14 @@ const LOG_FILE_READ_CAP_BYTES: u64 = 24 * 1024 * 1024;
 const ROTATED_ARCHIVES_READ: usize = 2;
 /// Marker the log writer puts between the active file name and a rotation's
 /// timestamp.
-const ROTATION_MARKER: &str = ".scryer-rotate-";
+pub const LOG_ROTATION_MARKER: &str = ".scry-ro-";
+/// What releases before [`LOG_ROTATION_MARKER`] wrote; still read, published
+/// and retained.
+pub const LEGACY_LOG_ROTATION_MARKER: &str = ".scryer-rotate-";
 
 /// What reading the log files produced.
 #[derive(Debug, Default)]
-pub(crate) struct LogFileRead {
+pub struct LogFileRead {
     /// Lines, oldest first, across the archives and the active file.
     pub lines: Vec<String>,
     /// Sources read, as code-defined labels (`active`, `rotated-1`, ...).
@@ -29,11 +33,11 @@ pub(crate) struct LogFileRead {
 }
 
 impl LogFileRead {
-    pub(crate) fn absent() -> Self {
+    pub fn absent() -> Self {
         Self::default()
     }
 
-    pub(crate) fn failed(reason: &str) -> Self {
+    pub fn failed(reason: &str) -> Self {
         Self {
             configured: true,
             failures: vec![("log_file".to_string(), reason.to_string())],
@@ -44,7 +48,13 @@ impl LogFileRead {
 
 /// Reads the active file and up to [`ROTATED_ARCHIVES_READ`] rotated gzip
 /// archives beside it, newest content first, until the read cap.
-pub(crate) fn read_log_files(active: &Path) -> LogFileRead {
+pub fn read_log_files(active: &Path) -> LogFileRead {
+    read_log_files_unless_cancelled(active, &AtomicBool::new(false))
+}
+
+/// [`read_log_files`], checking `cancelled` before each file and stopping
+/// with what was read so far once it is raised.
+pub fn read_log_files_unless_cancelled(active: &Path, cancelled: &AtomicBool) -> LogFileRead {
     let mut read = LogFileRead {
         configured: true,
         ..LogFileRead::default()
@@ -52,6 +62,9 @@ pub(crate) fn read_log_files(active: &Path) -> LogFileRead {
     let mut budget = LOG_FILE_READ_CAP_BYTES;
     // Newest first: the active file, then archives newest to oldest.
     let mut chunks: Vec<Vec<String>> = Vec::new();
+    if cancelled.load(Ordering::Acquire) {
+        return read;
+    }
     match read_tail(active, budget) {
         Ok((lines, used, capped)) => {
             budget = budget.saturating_sub(used);
@@ -63,6 +76,9 @@ pub(crate) fn read_log_files(active: &Path) -> LogFileRead {
     }
     for (index, archive) in rotated_archives(active).into_iter().enumerate() {
         let label = format!("rotated-{}", index + 1);
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
         if budget == 0 {
             read.read_capped = true;
             break;
@@ -92,9 +108,15 @@ fn io_reason(error: &std::io::Error) -> String {
     }
 }
 
+fn open_log(path: &Path) -> Result<std::fs::File, String> {
+    Disk::process()
+        .open_blocking(path, Open::read())
+        .map_err(|error| io_reason(&error.into()))
+}
+
 /// The last `budget` bytes of a plain file, cut to whole lines.
 fn read_tail(path: &Path, budget: u64) -> Result<(Vec<String>, u64, bool), String> {
-    let mut file = File::open(path).map_err(|error| io_reason(&error))?;
+    let mut file = open_log(path)?;
     let length = file.metadata().map_err(|error| io_reason(&error))?.len();
     let capped = length > budget;
     if capped {
@@ -116,7 +138,7 @@ fn read_tail(path: &Path, budget: u64) -> Result<(Vec<String>, u64, bool), Strin
 
 /// A gzip archive's lines, keeping the newest `budget` bytes.
 fn read_gzip(path: &Path, budget: u64) -> Result<(Vec<String>, u64, bool), String> {
-    let file = File::open(path).map_err(|error| io_reason(&error))?;
+    let file = open_log(path)?;
     let decoder = flate2::read::GzDecoder::new(file);
     let mut lines = std::collections::VecDeque::new();
     let mut used = 0_u64;
@@ -163,21 +185,29 @@ fn rotated_archives(active: &Path) -> Vec<std::path::PathBuf> {
     let (Some(directory), Some(file_name)) = (active.parent(), active.file_name()) else {
         return Vec::new();
     };
-    let prefix = format!("{}{ROTATION_MARKER}", file_name.to_string_lossy());
-    let Ok(entries) = std::fs::read_dir(directory) else {
+    let file_name = file_name.to_string_lossy();
+    let prefixes = [LOG_ROTATION_MARKER, LEGACY_LOG_ROTATION_MARKER]
+        .map(|marker| format!("{file_name}{marker}"));
+    let Ok(entries) = Disk::process().list_blocking(directory) else {
         return Vec::new();
     };
+    // Ordered by the timestamp and sequence after the marker, so archives
+    // under either spelling interleave by age.
     let mut archives = entries
-        .filter_map(Result::ok)
+        .into_iter()
         .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            (name.starts_with(&prefix) && name.ends_with(".gz")).then(|| entry.path())
+            let name = entry.path.file_name()?.to_string_lossy().into_owned();
+            let rotation = prefixes
+                .iter()
+                .find_map(|prefix| name.strip_prefix(prefix.as_str()))?
+                .to_owned();
+            name.ends_with(".gz").then_some((rotation, entry.path))
         })
         .collect::<Vec<_>>();
     archives.sort();
     archives.reverse();
     archives.truncate(ROTATED_ARCHIVES_READ);
-    archives
+    archives.into_iter().map(|(_, path)| path).collect()
 }
 
 #[cfg(test)]
@@ -190,14 +220,33 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let active = dir.path().join("scryer.log");
         std::fs::write(&active, "active-1\nactive-2\n").expect("write active");
-        for (stamp, line) in [
-            ("20260101T000000Z-00000000000000000001", "oldest"),
-            ("20260102T000000Z-00000000000000000002", "middle"),
-            ("20260103T000000Z-00000000000000000003", "newest"),
+        // Written before and after the marker was shortened, plus a name that
+        // only resembles one and must be ignored.
+        for (marker, stamp, line) in [
+            (
+                LEGACY_LOG_ROTATION_MARKER,
+                "20260101T000000Z-00000000000000000001",
+                "oldest",
+            ),
+            (
+                LEGACY_LOG_ROTATION_MARKER,
+                "20260102T000000Z-00000000000000000002",
+                "middle",
+            ),
+            (
+                LOG_ROTATION_MARKER,
+                "20260103T000000Z-00000000000000000003",
+                "newest",
+            ),
+            (
+                ".scry-r-",
+                "20260104T000000Z-00000000000000000004",
+                "lookalike",
+            ),
         ] {
             let path = dir
                 .path()
-                .join(format!("scryer.log{ROTATION_MARKER}{stamp}.sealed.gz"));
+                .join(format!("scryer.log{marker}{stamp}.sealed.gz"));
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
             writeln!(encoder, "{line}").expect("encode");

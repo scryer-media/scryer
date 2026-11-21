@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -8,6 +9,8 @@ use scryer_domain::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+
+use crate::disk::{Disk, EntryKind, Removal, Remove};
 
 use futures_util::stream::{StreamExt, TryStreamExt};
 
@@ -1397,10 +1400,11 @@ impl AppUseCase {
                 if !directory_is_empty(&current).await {
                     break;
                 }
-                if let Err(error) = tokio::fs::remove_dir(&current).await {
+                let removal = Disk::process().remove(&current, Remove::EmptyDir).await;
+                if !matches!(removal, Ok(Removal::Removed)) {
                     warn!(
                         directory = %current.display(),
-                        error = %error,
+                        error = ?removal,
                         "could not remove the folder a rename emptied"
                     );
                     break;
@@ -1983,26 +1987,33 @@ impl AppUseCase {
         let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) else {
             return path.to_path_buf();
         };
-        let Ok(mut entries) = tokio::fs::read_dir(parent).await else {
-            return path.to_path_buf();
-        };
-        let mut case_insensitive_match = None;
-        loop {
-            let Ok(Some(entry)) = entries.next_entry().await else {
-                break;
+        // The exact name ends the scan; an entry the listing failed on ends
+        // it with what was found so far.
+        let (wanted, name) = (path_to_stored_string(path), file_name.to_os_string());
+        let disk = Disk::process();
+        let found = disk.visit(parent, None, move |found, entry| {
+            let Ok(entry) = entry else {
+                return ControlFlow::Break(());
             };
-            if entry.file_name() == file_name {
-                return entry.path();
+            let exact = entry.name() == name;
+            if exact
+                || crate::stored_paths::paths_match_ignoring_case(
+                    &path_to_stored_string(entry.path()),
+                    &wanted,
+                )
+            {
+                *found = Some(entry.into_path());
             }
-            let entry_path = entry.path();
-            if crate::stored_paths::paths_match_ignoring_case(
-                &path_to_stored_string(&entry_path),
-                &path_to_stored_string(path),
-            ) {
-                case_insensitive_match = Some(entry_path);
+            if exact {
+                return ControlFlow::Break(());
             }
-        }
-        case_insensitive_match.unwrap_or_else(|| path.to_path_buf())
+            ControlFlow::Continue(())
+        });
+        found
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| path.to_path_buf())
     }
 
     async fn library_id_for_rename_item(&self, item: &RenameApplyItemResult) -> Option<String> {
@@ -4545,10 +4556,7 @@ fn path_is_inside_any_library_root(path: &Path, roots: &[LibraryRootFolder]) -> 
 }
 
 async fn directory_is_empty(path: &Path) -> bool {
-    match tokio::fs::read_dir(path).await {
-        Ok(mut entries) => matches!(entries.next_entry().await, Ok(None)),
-        Err(_) => false,
-    }
+    matches!(Disk::process().has_entries(path).await, Ok(false))
 }
 
 /// Whether `path` is one of the renamed titles' own folders, or sits inside one
@@ -4764,21 +4772,20 @@ fn path_file_stem(path: &Path) -> Option<String> {
 /// read. Planning is otherwise database-only, but external subtitles have no
 /// catalog rows at all, so the source directory is the only place they exist.
 async fn rename_companion_directory_entries(directory: &Path) -> Vec<String> {
-    let Ok(mut entries) = tokio::fs::read_dir(directory).await else {
-        return Vec::new();
-    };
-    let mut names = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if entry
-            .file_type()
-            .await
-            .map(|file_type| file_type.is_file())
-            .unwrap_or(false)
-            && let Some(name) = entry.file_name().to_str()
+    // Names read before an entry the listing failed on are kept.
+    let disk = Disk::process();
+    let names = disk.visit(directory, Vec::new(), |names, entry| {
+        let Ok(entry) = entry else {
+            return ControlFlow::Break(());
+        };
+        if entry.kind().is_ok_and(|kind| kind == EntryKind::File)
+            && let Some(name) = entry.name().to_str()
         {
             names.push(name.to_string());
         }
-    }
+        ControlFlow::Continue(())
+    });
+    let mut names = names.await.unwrap_or_default();
     names.sort();
     names
 }

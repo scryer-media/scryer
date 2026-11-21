@@ -1,5 +1,7 @@
 // async-graphql schema expansion exceeded the default macro recursion depth.
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 // Scryer never uses the system allocator: glibc's does not plateau on a large
 // library (§15 of the load-test report: ~3 GB and still climbing after 30
@@ -72,6 +74,7 @@ mod initial_auth;
 mod list_account_origin;
 mod log_buffer;
 mod log_delivery;
+mod mcp;
 mod metadata_gateway_url;
 mod metrics_setup;
 mod middleware;
@@ -110,6 +113,7 @@ use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use scryer_application::disk::{Disk, IfPresent, Open, Parents, reason};
 use scryer_application::{
     AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY, AppUseCase, ArchiveExtractorPluginProvider,
     AutoBackupRunOutcome, DownloadClientCategorySnapshotStore, DownloadClientPluginProvider,
@@ -124,7 +128,7 @@ use scryer_application::{
     start_background_media_server_playback_reconciliation_loop, start_background_subtitle_poller,
     start_background_title_hydration_loop, start_background_title_image_loop,
     start_download_queue_poller_with_options, start_navigation_badge_facts_refresh,
-    start_notification_dispatcher,
+    start_notification_dispatcher, start_storage_capacity_sampler,
     tracked_downloads::{
         BridgedClientTypesHandle, TrackedDownloadHandle, TrackedDownloadSnapshotIngestHandle,
     },
@@ -591,7 +595,11 @@ enum VersionLifecycle {
 fn log_smg_version_incompatibility(
     incompat: &scryer_infrastructure_metadata::metadata::enrollment::VersionIncompatible,
 ) {
-    let env = if std::path::Path::new("/.dockerenv").exists() {
+    let env = if Disk::process()
+        .follow_blocking(Path::new("/.dockerenv"))
+        .exists()
+        == Some(true)
+    {
         "docker"
     } else {
         "binary"
@@ -861,7 +869,9 @@ async fn run_application() {
 
         let env_filter = enable_context_spans(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                // rmcp logs every request at info; an operator's own filter
+                // still decides when one is set.
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rmcp=warn")),
         );
 
         match log_format {
@@ -946,7 +956,9 @@ async fn run_application() {
     );
 
     let secrets_path = data_dir.join("instance-secrets.env");
-    if secrets_path.exists() && dotenvy::from_path_override(&secrets_path).is_err() {
+    if Disk::process().follow(&secrets_path).await.exists() == Some(true)
+        && dotenvy::from_path_override(&secrets_path).is_err()
+    {
         tracing::error!("cannot load managed instance secrets");
         std::process::exit(1);
     }
@@ -971,7 +983,7 @@ async fn run_application() {
         && let Some(path) = datastore_config.database_url.strip_prefix("sqlite://")
         && let Some(parent) = std::path::Path::new(path).parent()
     {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = Disk::process().create_dir(parent, Parents::Create).await;
     }
     let jwt_issuer = std::env::var("SCRYER_JWT_ISSUER").unwrap_or_else(|_| "scryer".to_string());
     let development_mode = resolve_development_mode_from_env().unwrap_or_else(|error| {
@@ -1725,7 +1737,8 @@ async fn bootstrap_application(
     // Prefer an explicit managed JWT signing secret so restored bundles can
     // preserve instance identity across environments. Fall back to the SMG
     // registration secret or a persistent local secret for fresh installs.
-    let jwt_signing_salt = match normalize_env_option("SCRYER_JWT_SIGNING_SECRET") {
+    let explicit_jwt_signing_secret = normalize_env_option("SCRYER_JWT_SIGNING_SECRET");
+    let jwt_signing_salt = match explicit_jwt_signing_secret.clone() {
         Some(secret) => secret,
         None => match &smg_registration_secret {
             Some(secret) => secret.clone(),
@@ -1733,10 +1746,22 @@ async fn bootstrap_application(
                 tracing::warn!(
                     "no SMG registration secret available; using persistent local JWT salt"
                 );
-                load_or_create_persistent_jwt_signing_salt(&data_dir)?
+                load_or_create_persistent_jwt_signing_salt(&data_dir).await?
             }
         },
     };
+    // Sessions sign with an explicit secret when one is set, and otherwise
+    // with a salt derived from this instance's encryption master key, which
+    // the encryption bootstrap above has already resolved or refused to start
+    // without. The salt above keeps keying stored credential hashes.
+    let session_master_key = bootstrap_settings_store
+        .current_encryption_key_base64()
+        .await?
+        .ok_or("encryption master key is unavailable after bootstrap")?;
+    let session_signing_salt = scryer_application::JwtAuthConfig::select_session_signing_salt(
+        explicit_jwt_signing_secret.as_deref(),
+        &session_master_key,
+    )?;
 
     let metadata_gateway = Arc::new(datastore.metadata_gateway_client(
         metadata_gateway_url.as_str().to_string(),
@@ -1908,6 +1933,7 @@ async fn bootstrap_application(
         scryer_application::JwtAuthConfig {
             issuer: jwt_issuer,
             jwt_signing_salt,
+            session_signing_salt,
         },
         facet_registry,
         webauthn,
@@ -2132,9 +2158,9 @@ async fn bootstrap_application(
         tracing::warn!(error = %error, "failed to reconcile interrupted script runs on startup");
     }
 
-    // Durable maintenance search intents resume with their original job ids.
+    // Durable lifecycle search intents resume with their original job ids.
     // Keep those reservations out of generic interrupted-job reconciliation.
-    match app_use_case.resume_interrupted_maintenance_searches().await {
+    match app_use_case.resume_interrupted_lifecycle_searches().await {
         Ok(recovered) if location_reservations_readable => {
             upgrade_reconcile_exclusions.extend(recovered);
             // Other abandoned jobs cannot be resumed; close them before pollers start.
@@ -2146,19 +2172,23 @@ async fn bootstrap_application(
             }
         }
         // Either the location reservations could not be read, or the
-        // maintenance-search reservation failed. Keep recovery evidence: an
+        // lifecycle-search reservation failed. Keep recovery evidence: an
         // optional recovery pass must not prevent the rest of the application
         // from starting, and reconciling against a partial exclusion list
         // would fail runs that are about to be resumed.
         Ok(_) => {}
         Err(error) => {
-            tracing::warn!(error = %error, "could not reserve maintenance searches; preserved interrupted jobs for the next restart");
+            tracing::warn!(error = %error, "could not reserve lifecycle searches; preserved interrupted jobs for the next restart");
         }
     }
 
     if let Err(e) = app_use_case.reconcile_default_library_roots().await {
         tracing::warn!(error = %e, "failed to reconcile default library roots on startup");
     }
+    // The disk owner learns the roots it caches and bounds; root writes
+    // install them again.
+    app_use_case.install_disk_volumes().await;
+    app_use_case.install_disk_hash_store();
 
     // After root reconciliation, so it reads the roots the library really has.
     application_migrator
@@ -2227,6 +2257,7 @@ async fn bootstrap_application(
     }
     let bootstrap_admin = startup_auth::read_bootstrap_admin()?;
     let auth_mode = resolve_auth_mode_from_env(bootstrap_admin.active())?;
+    scryer_application::mcp_enabled_env_override()?;
     if bootstrap_admin.active() {
         app_use_case
             .configure_bootstrap_admin(
@@ -2459,6 +2490,10 @@ async fn bootstrap_application(
         app_use_case.clone(),
         restore_workers.shutdown_workers.child_token(),
     ));
+    restore_workers.spawn_worker(start_storage_capacity_sampler(
+        app_use_case.clone(),
+        restore_workers.shutdown_workers.child_token(),
+    ));
     restore_workers.spawn_worker(start_background_custom_job_scheduler(
         app_use_case.clone(),
         restore_workers.shutdown_workers.child_token(),
@@ -2471,6 +2506,18 @@ async fn bootstrap_application(
         app_use_case.clone(),
         restore_workers.shutdown_workers.child_token(),
     ));
+    restore_workers.spawn_worker({
+        // One pass over the library roots' archive workspaces; housekeeping
+        // repeats it daily.
+        let app = app_use_case.clone();
+        let shutdown = restore_workers.shutdown_workers.child_token();
+        async move {
+            tokio::select! {
+                () = scryer_application::sweep_archive_workspaces_at_startup(&app) => {}
+                () = shutdown.cancelled() => {}
+            }
+        }
+    });
     app_use_case.wake_title_image_loops();
 
     if let Err(error) = app_use_case
@@ -2480,6 +2527,10 @@ async fn bootstrap_application(
         .await
     {
         tracing::error!(%error, "failed to load trusted proxy configuration");
+        std::process::exit(1);
+    }
+    if let Err(error) = app_use_case.initialize_local_trust_policy().await {
+        tracing::error!(%error, "failed to load local trust configuration");
         std::process::exit(1);
     }
     let rate_limiter = ScryerRateLimiter::from_env(app_use_case.trusted_proxy_runtime());
@@ -2530,12 +2581,14 @@ async fn bootstrap_application(
         auth_runtime: auth_runtime.clone(),
         policy: authless_access_policy,
         allowlist: authless_access_allowlist.clone(),
+        local_trust: middleware::LocalTrustContext::from_app(&app_use_case),
     };
     let authless_web_client_proof_route_state = AuthlessWebClientProofRouteState {
         auth_runtime: auth_runtime.clone(),
         policy: authless_access_policy,
         proof: authless_web_client_proof.clone(),
         allowlist: authless_access_allowlist,
+        local_trust: middleware::LocalTrustContext::from_app(&app_use_case),
     };
 
     let cors_for_layer = cors.clone();
@@ -2608,6 +2661,13 @@ async fn bootstrap_application(
                 .layer(DefaultBodyLimit::max(middleware::GRAPHQL_MAX_MESSAGE_BYTES)),
         )
         .route(
+            mcp::MCP_PATH,
+            post(mcp::mcp_handler).with_state(mcp::McpState::new(
+                auth_state.clone(),
+                diagnostics_route_state.host.clone(),
+            )),
+        )
+        .route(
             "/images/media/{token}/{variant}",
             get(image_proxy_handler).with_state(image_proxy_runtime),
         )
@@ -2672,7 +2732,7 @@ async fn bootstrap_application(
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {
-            if Path::new(dist_dir).exists() {
+            if Disk::process().follow(dist_dir).await.exists() == Some(true) {
                 tracing::info!(path = %dist_dir.display(), "serving web UI from filesystem path");
             } else {
                 tracing::warn!(
@@ -3151,14 +3211,16 @@ fn load_startup_environment() -> Result<(), String> {
         PathBuf::from(".env"),
         profile.join(".env"),
     ];
-    if !candidates.iter().any(|path| path.exists()) {
+    let disk = Disk::process();
+    let exists = |path: &Path| disk.follow_blocking(path).exists() == Some(true);
+    if !candidates.iter().any(|path| exists(path)) {
         for parent in std::env::current_dir()
             .map_err(|_| "cannot resolve working directory")?
             .ancestors()
             .skip(1)
         {
             let candidate = parent.join(".env");
-            if candidate.exists() {
+            if exists(&candidate) {
                 candidates.push(candidate);
                 break;
             }
@@ -3200,7 +3262,11 @@ fn maybe_open_browser(url: &str) {
         return;
     }
     // Skip in containers (Docker sets /.dockerenv).
-    if Path::new("/.dockerenv").exists() {
+    if Disk::process()
+        .follow_blocking(Path::new("/.dockerenv"))
+        .exists()
+        == Some(true)
+    {
         return;
     }
     if let Err(err) = open::that(url) {
@@ -3326,21 +3392,18 @@ fn build_webauthn_runtime(
     }
 }
 
-fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Result<String> {
+async fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Result<String> {
     use aws_lc_rs::rand::{SecureRandom, SystemRandom};
-    use std::io::Write;
+    use tokio::io::AsyncWriteExt;
 
-    std::fs::create_dir_all(data_dir)?;
+    let disk = Disk::process();
+    disk.create_dir(data_dir, Parents::Create).await?;
     let path = data_dir.join("jwt-signing-secret");
-    match std::fs::read_to_string(&path) {
-        Ok(existing) => {
-            let existing = existing.trim();
-            if !existing.is_empty() {
-                return Ok(existing.to_string());
-            }
+    if let Some(existing) = disk.read_to_string(&path).await.if_present()? {
+        let existing = existing.trim();
+        if !existing.is_empty() {
+            return Ok(existing.to_string());
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
     }
 
     let rng = SystemRandom::new();
@@ -3349,18 +3412,15 @@ fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Resul
         .map_err(|_| std::io::Error::other("failed to generate JWT signing secret"))?;
     let secret = format!("scryer-jwt-v1-{}", hex_bytes(&bytes));
 
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
+    match disk.open(&path, Open::create_new()).await {
         Ok(mut file) => {
-            file.write_all(secret.as_bytes())?;
-            file.write_all(b"\n")?;
+            file.write_all(secret.as_bytes()).await?;
+            file.write_all(b"\n").await?;
+            file.flush().await?;
             Ok(secret)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let existing = std::fs::read_to_string(&path)?;
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            let existing = disk.read_to_string(&path).await?;
             let existing = existing.trim();
             if existing.is_empty() {
                 Err(std::io::Error::other("JWT signing secret file is empty"))
@@ -3368,7 +3428,7 @@ fn load_or_create_persistent_jwt_signing_salt(data_dir: &Path) -> std::io::Resul
                 Ok(existing.to_string())
             }
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 

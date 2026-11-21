@@ -1,5 +1,4 @@
-//! Read models for the request-rule GraphQL surface (spec 0003 FR-016, FR-020,
-//! FR-044).
+//! Read models for the request-rule GraphQL surface.
 //!
 //! Nothing in this module decides anything. Every method is a read plus the
 //! authorization that read requires, and it exists because the repositories the
@@ -9,7 +8,7 @@
 //! Two properties are enforced here rather than remembered at each call site:
 //!
 //! 1. **A requester never sees the vote table.** The same redaction the
-//!    pre-flight applies (FR-020) applies to a stored decision read back by the
+//!    pre-flight applies also applies to a stored decision read back by the
 //!    person it was about: outcome, fallback reason, reasons, and tags, never
 //!    the per-rule votes. [`RequestRuleDecisionView::redacted`] carries that
 //!    judgement to the projection so the projection cannot forget to ask.
@@ -39,7 +38,7 @@ pub struct RequestRuleDecisionView {
     pub record: RequestRuleDecisionRecord,
     /// True when the caller reached the trace as the *requester* rather than as
     /// a manager of the request's library. The projection then drops the votes,
-    /// mirroring the pre-flight's redaction (FR-020).
+    /// mirroring the pre-flight's redaction.
     pub redacted: bool,
 }
 
@@ -99,8 +98,9 @@ impl AppUseCase {
 
     /// How many decisions each of `rule_set_ids` took part in.
     ///
-    /// One count per rule set rather than a batched query: the authoring list is
-    /// tens of rows, and the port's count is a single indexed scan per rule.
+    /// Counted from the rule set links written with each decision: one grouped
+    /// statement per bind-safe chunk of ids, served by the rule set index. A
+    /// rule set with no decision maps to zero.
     pub async fn request_rule_decision_counts(
         &self,
         actor: &User,
@@ -108,17 +108,19 @@ impl AppUseCase {
     ) -> AppResult<HashMap<String, u64>> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        let mut counts = HashMap::with_capacity(rule_set_ids.len());
-        for rule_set_id in rule_set_ids {
-            let count = self
-                .services
-                .customization
-                .request_rule_decisions
-                .count_for_rule_set(rule_set_id)
-                .await?;
-            counts.insert(rule_set_id.clone(), count);
-        }
-        Ok(counts)
+        let counts = self
+            .services
+            .customization
+            .request_rule_decisions
+            .count_for_rule_sets(rule_set_ids)
+            .await?;
+        Ok(rule_set_ids
+            .iter()
+            .map(|rule_set_id| {
+                let count = counts.get(rule_set_id.trim()).copied().unwrap_or(0);
+                (rule_set_id.clone(), count)
+            })
+            .collect())
     }
 
     /// The latest decision recorded for one request.
@@ -161,7 +163,7 @@ impl AppUseCase {
                 .any(|requester| requester.user_id == actor.id)
         {
             return Err(AppError::unauthorized_reason(
-                crate::error_reasons::request_rules::MAY_NOT_READ_REQUEST_S_DECISION,
+                crate::error_reasons::request_rules::DECISION_READ_FORBIDDEN,
                 "You may not read this request's decision".to_string(),
             ));
         }

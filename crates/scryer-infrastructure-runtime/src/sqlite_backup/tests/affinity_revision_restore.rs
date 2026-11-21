@@ -70,7 +70,7 @@ async fn restore_replaces_the_affinity_revision() {
             source_engine: "sqlite".into(),
             secrets: scryer_application::BackupExportSecrets {
                 encryption_master_key: "fixture-master-key".into(),
-                jwt_signing_secret: "fixture-jwt-key".into(),
+                jwt_signing_secret: Some("fixture-jwt-key".into()),
                 smg_registration_secret: None,
                 smg_gateway_url: None,
             },

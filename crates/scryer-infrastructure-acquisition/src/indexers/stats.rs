@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -8,6 +10,7 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveDate, Utc};
 use scryer_application::{IndexerDispatchGate, IndexerQueryStats, IndexerStatsTracker};
 
+use crate::indexers::db::{IndexerMonthlyLimitRow, MonthlyUsageKind, monthly_usage_window_start};
 use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
 
 const INDEXER_REQUEST_ACCOUNTING_V2_STARTED_AT_KEY: &str =
@@ -123,6 +126,166 @@ impl PendingQuotaUpdate {
     }
 }
 
+/// The monthly limits configured on one indexer. `None` means no limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MonthlyLimitValues {
+    requests: Option<i64>,
+    grabs: Option<i64>,
+}
+
+impl MonthlyLimitValues {
+    fn for_kind(self, kind: MonthlyUsageKind) -> Option<i64> {
+        match kind {
+            MonthlyUsageKind::Request => self.requests,
+            MonthlyUsageKind::Grab => self.grabs,
+        }
+    }
+
+    fn is_unlimited(self) -> bool {
+        self.requests.is_none() && self.grabs.is_none()
+    }
+}
+
+#[derive(Default)]
+struct MonthlyLimitState {
+    /// Whether `limits` reflects the stored indexer configuration. Until it
+    /// does, admission cannot tell a limited indexer from an unlimited one.
+    loaded: bool,
+    /// Advanced by every configuration change, so a load that raced one is
+    /// discarded instead of overwriting the newer value.
+    generation: u64,
+    /// Indexers with at least one monthly limit. Absent means unlimited.
+    limits: HashMap<String, MonthlyLimitValues>,
+    /// The month and limit an admission was last refused for. While both
+    /// still hold, further attempts are refused without another statement.
+    refused: HashMap<(String, MonthlyUsageKind), (NaiveDate, i64)>,
+}
+
+/// What admission knows about one indexer's monthly limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MonthlyLimitLookup {
+    /// The stored configuration has not been read yet.
+    NotLoaded,
+    Unlimited,
+    Limited(i64),
+}
+
+/// In-memory copy of every indexer's monthly limits, shared between the
+/// indexer configuration store, which keeps it current on create, update and
+/// delete, and the stats tracker, which consults it on every admission.
+///
+/// It exists so an indexer without a monthly limit costs no database work per
+/// request: the tracker reads the limit here and only issues a statement for
+/// an indexer that has one.
+#[derive(Clone, Default)]
+pub struct IndexerMonthlyLimits {
+    state: Arc<Mutex<MonthlyLimitState>>,
+}
+
+impl IndexerMonthlyLimits {
+    fn state(&self) -> std::sync::MutexGuard<'_, MonthlyLimitState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Record the limits now stored for `indexer_id`.
+    pub fn set(&self, indexer_id: &str, requests: Option<i64>, grabs: Option<i64>) {
+        let values = MonthlyLimitValues { requests, grabs };
+        let mut state = self.state();
+        state.generation = state.generation.wrapping_add(1);
+        if values.is_unlimited() {
+            state.limits.remove(indexer_id);
+        } else {
+            state.limits.insert(indexer_id.to_string(), values);
+        }
+        for kind in [MonthlyUsageKind::Request, MonthlyUsageKind::Grab] {
+            let key = (indexer_id.to_string(), kind);
+            let still_refused = matches!(
+                (state.refused.get(&key), values.for_kind(kind)),
+                (Some((_, refused_limit)), Some(limit)) if *refused_limit == limit
+            );
+            if !still_refused {
+                state.refused.remove(&key);
+            }
+        }
+    }
+
+    /// Drop everything known about a deleted indexer.
+    pub fn forget(&self, indexer_id: &str) {
+        let mut state = self.state();
+        state.generation = state.generation.wrapping_add(1);
+        state.limits.remove(indexer_id);
+        for kind in [MonthlyUsageKind::Request, MonthlyUsageKind::Grab] {
+            state.refused.remove(&(indexer_id.to_string(), kind));
+        }
+    }
+
+    fn lookup(&self, indexer_id: &str, kind: MonthlyUsageKind) -> MonthlyLimitLookup {
+        let state = self.state();
+        if !state.loaded {
+            return MonthlyLimitLookup::NotLoaded;
+        }
+        match state
+            .limits
+            .get(indexer_id)
+            .and_then(|values| values.for_kind(kind))
+        {
+            Some(limit) => MonthlyLimitLookup::Limited(limit),
+            None => MonthlyLimitLookup::Unlimited,
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        self.state().generation
+    }
+
+    /// Install limits read from the datastore, unless the configuration
+    /// changed after `generation` was taken. Returns whether they were kept.
+    fn install(&self, generation: u64, rows: Vec<IndexerMonthlyLimitRow>) -> bool {
+        let mut state = self.state();
+        if state.generation != generation {
+            return false;
+        }
+        state.limits = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.indexer_id,
+                    MonthlyLimitValues {
+                        requests: row.max_requests_per_month,
+                        grabs: row.max_grabs_per_month,
+                    },
+                )
+            })
+            .collect();
+        state.loaded = true;
+        true
+    }
+
+    fn is_refused(
+        &self,
+        indexer_id: &str,
+        kind: MonthlyUsageKind,
+        month: NaiveDate,
+        limit: i64,
+    ) -> bool {
+        self.state().refused.get(&(indexer_id.to_string(), kind)) == Some(&(month, limit))
+    }
+
+    fn remember_refusal(
+        &self,
+        indexer_id: &str,
+        kind: MonthlyUsageKind,
+        month: NaiveDate,
+        limit: i64,
+    ) {
+        self.state()
+            .refused
+            .insert((indexer_id.to_string(), kind), (month, limit));
+    }
+}
+
 /// Thread-safe indexer stats tracker with in-memory 24-hour rolling window
 /// and optional SQLite persistence for API quota enforcement.
 #[derive(Clone)]
@@ -136,6 +299,7 @@ pub struct InMemoryIndexerStatsTracker {
     quota_flush_scheduled: Arc<AtomicBool>,
     quota_runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     observation_started_at: Arc<Mutex<Option<String>>>,
+    monthly_limits: IndexerMonthlyLimits,
 }
 
 impl Default for InMemoryIndexerStatsTracker {
@@ -155,7 +319,15 @@ impl InMemoryIndexerStatsTracker {
             quota_flush_scheduled: Arc::new(AtomicBool::new(false)),
             quota_runtime: Arc::new(Mutex::new(tokio::runtime::Handle::try_current().ok())),
             observation_started_at: Arc::new(Mutex::new(None)),
+            monthly_limits: IndexerMonthlyLimits::default(),
         }
+    }
+
+    /// Share the monthly limits the indexer configuration store maintains, so
+    /// a limit set, changed or cleared there takes effect on the next request.
+    pub fn with_monthly_limits(mut self, monthly_limits: IndexerMonthlyLimits) -> Self {
+        self.monthly_limits = monthly_limits;
+        self
     }
 
     /// Seed the in-memory counters from the persisted quota rows.
@@ -170,6 +342,12 @@ impl InMemoryIndexerStatsTracker {
         let Some(datastore) = &self.datastore else {
             return;
         };
+        if let Err(error) = self.load_monthly_limits(datastore).await {
+            tracing::warn!(
+                error = %error,
+                "failed to load monthly indexer limits; the first indexer request retries"
+            );
+        }
         let quotas = match crate::queries::indexer::load_indexer_quotas(datastore).await {
             Ok(quotas) => quotas,
             Err(error) => {
@@ -437,12 +615,203 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
         self.record_api_request_sent_on(indexer_id, indexer_name, dispatched_at.date_naive());
     }
 
+    fn admit_monthly_request<'a>(
+        &'a self,
+        indexer_id: &'a str,
+        at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = scryer_application::AppResult<()>> + Send + 'a>> {
+        Box::pin(self.admit_monthly_usage(indexer_id, at, MonthlyUsageKind::Request))
+    }
+
+    fn admit_monthly_request_blocking(
+        &self,
+        indexer_id: &str,
+        at: DateTime<Utc>,
+    ) -> scryer_application::AppResult<()> {
+        let kind = MonthlyUsageKind::Request;
+        if self.datastore.is_none() {
+            return Ok(());
+        }
+        // Decided from memory, so neither needs a runtime to wait on.
+        match self.monthly_limits.lookup(indexer_id, kind) {
+            MonthlyLimitLookup::Unlimited => return Ok(()),
+            MonthlyLimitLookup::Limited(limit)
+                if self.is_refused_from_memory(indexer_id, kind, at, limit) =>
+            {
+                return Err(monthly_limit_reached(kind));
+            }
+            MonthlyLimitLookup::Limited(_) | MonthlyLimitLookup::NotLoaded => {}
+        }
+        if tokio::runtime::Handle::try_current().is_ok() {
+            // Blocking here would panic the runtime worker. Refuse instead:
+            // async callers must use `admit_monthly_request`.
+            tracing::error!(
+                indexer_id,
+                "blocking monthly indexer admission was called on an async runtime thread"
+            );
+            return Err(monthly_accounting_unavailable(kind));
+        }
+        let runtime = self
+            .quota_runtime_handle()
+            .ok_or_else(|| monthly_accounting_unavailable(kind))?;
+        runtime.block_on(self.admit_monthly_usage(indexer_id, at, kind))
+    }
+
+    /// Admit one grab against the indexer's monthly grab limit.
+    ///
+    /// A grab is followed by a fetch of the release from the indexer, which
+    /// passes request admission. While the indexer's request limit is
+    /// remembered as reached for this month and the current limit, that fetch
+    /// is already known to be refused, so the grab is refused here with the
+    /// request reason before anything is counted: from memory, with no
+    /// statement, and without spending a grab.
+    ///
+    /// This also refuses a grab that would not have contacted the indexer,
+    /// such as a magnet link. That is accepted: an indexer at its request
+    /// limit is treated as out of use for the rest of the month.
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        indexer_id: &'a str,
+        at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = scryer_application::AppResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.datastore.is_some()
+                && let MonthlyLimitLookup::Limited(request_limit) = self
+                    .monthly_limits
+                    .lookup(indexer_id, MonthlyUsageKind::Request)
+                && self.is_refused_from_memory(
+                    indexer_id,
+                    MonthlyUsageKind::Request,
+                    at,
+                    request_limit,
+                )
+            {
+                return Err(monthly_limit_reached(MonthlyUsageKind::Request));
+            }
+            self.admit_monthly_usage(indexer_id, at, MonthlyUsageKind::Grab)
+                .await
+        })
+    }
+
+    fn monthly_grab_refusal_remembered(&self, indexer_id: &str, at: DateTime<Utc>) -> bool {
+        if self.datastore.is_none() {
+            return false;
+        }
+        [MonthlyUsageKind::Grab, MonthlyUsageKind::Request]
+            .into_iter()
+            .any(|kind| match self.monthly_limits.lookup(indexer_id, kind) {
+                MonthlyLimitLookup::Limited(limit) => {
+                    self.is_refused_from_memory(indexer_id, kind, at, limit)
+                }
+                MonthlyLimitLookup::Unlimited | MonthlyLimitLookup::NotLoaded => false,
+            })
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats> {
         self.collect_stats()
     }
 }
 
 impl InMemoryIndexerStatsTracker {
+    /// Read the stored monthly limits into memory. A configuration change
+    /// that lands while the read is in flight wins, and the read is repeated.
+    async fn load_monthly_limits(
+        &self,
+        datastore: &StoreDatastore,
+    ) -> scryer_application::AppResult<()> {
+        const ATTEMPTS: usize = 3;
+        for _ in 0..ATTEMPTS {
+            let generation = self.monthly_limits.generation();
+            let rows = crate::queries::indexer::load_indexer_monthly_limits(datastore).await?;
+            if self.monthly_limits.install(generation, rows) {
+                return Ok(());
+            }
+        }
+        Err(scryer_application::AppError::Repository(
+            "monthly indexer limits kept changing while they were loaded".into(),
+        ))
+    }
+
+    fn is_refused_from_memory(
+        &self,
+        indexer_id: &str,
+        kind: MonthlyUsageKind,
+        at: DateTime<Utc>,
+        limit: i64,
+    ) -> bool {
+        limit <= 0
+            || self.monthly_limits.is_refused(
+                indexer_id,
+                kind,
+                monthly_usage_window_start(at),
+                limit,
+            )
+    }
+
+    /// Admit one request or grab against the indexer's monthly limit.
+    ///
+    /// An indexer without that limit is admitted from memory: no read, no
+    /// write, and its usage is not counted. A limited indexer costs one
+    /// statement per admission until the limit is reached; after that, further
+    /// attempts in the same month under the same limit are refused from memory.
+    async fn admit_monthly_usage(
+        &self,
+        indexer_id: &str,
+        at: DateTime<Utc>,
+        kind: MonthlyUsageKind,
+    ) -> scryer_application::AppResult<()> {
+        let Some(datastore) = self.datastore.as_ref() else {
+            return Ok(());
+        };
+        let mut lookup = self.monthly_limits.lookup(indexer_id, kind);
+        if lookup == MonthlyLimitLookup::NotLoaded {
+            // Only reached when the boot-time load failed or was skipped. A
+            // limit that cannot be read cannot be enforced, so refuse.
+            if let Err(error) = self.load_monthly_limits(datastore).await {
+                tracing::warn!(
+                    indexer_id,
+                    error = %error,
+                    "failed to load monthly indexer limits"
+                );
+                return Err(monthly_accounting_unavailable(kind));
+            }
+            lookup = self.monthly_limits.lookup(indexer_id, kind);
+        }
+        let limit = match lookup {
+            MonthlyLimitLookup::Unlimited => return Ok(()),
+            MonthlyLimitLookup::Limited(limit) => limit,
+            MonthlyLimitLookup::NotLoaded => return Err(monthly_accounting_unavailable(kind)),
+        };
+        if self.is_refused_from_memory(indexer_id, kind, at, limit) {
+            return Err(monthly_limit_reached(kind));
+        }
+        match crate::queries::indexer::admit_monthly_indexer_usage(
+            datastore, indexer_id, at, kind, limit,
+        )
+        .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                self.monthly_limits.remember_refusal(
+                    indexer_id,
+                    kind,
+                    monthly_usage_window_start(at),
+                    limit,
+                );
+                Err(monthly_limit_reached(kind))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    indexer_id,
+                    ?kind,
+                    error = %error,
+                    "failed to durably admit monthly indexer usage"
+                );
+                Err(monthly_accounting_unavailable(kind))
+            }
+        }
+    }
+
     fn record_api_request_sent_on(&self, indexer_id: &str, indexer_name: &str, today: NaiveDate) {
         if !scryer_application::indexer_error_history_is_persistable(indexer_id) {
             return;
@@ -505,6 +874,35 @@ impl InMemoryIndexerStatsTracker {
             })
             .collect()
     }
+}
+
+fn monthly_limit_reached(kind: MonthlyUsageKind) -> scryer_application::AppError {
+    use scryer_application::error_reasons::indexer_monthly_quota as reason;
+    match kind {
+        MonthlyUsageKind::Request => scryer_application::AppError::validation_refused(
+            reason::REQUEST_LIMIT_REACHED,
+            "This indexer's locally configured monthly request limit has been reached.",
+        ),
+        MonthlyUsageKind::Grab => scryer_application::AppError::validation_refused(
+            reason::GRAB_LIMIT_REACHED,
+            "This indexer's locally configured monthly grab limit has been reached.",
+        ),
+    }
+}
+
+fn monthly_accounting_unavailable(kind: MonthlyUsageKind) -> scryer_application::AppError {
+    scryer_application::AppError::temporary_unavailable_reason(
+        scryer_application::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE,
+        match kind {
+            MonthlyUsageKind::Request => {
+                "Monthly indexer request usage could not be durably checked; request was refused."
+            }
+            MonthlyUsageKind::Grab => {
+                "Monthly indexer grab usage could not be durably checked; grab was refused."
+            }
+        },
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -653,6 +1051,360 @@ mod tests {
         assert_eq!(newer.grab_current, Some(2));
         assert_eq!(newer.grab_max, Some(50));
         assert_eq!(newer.query_delta, 2);
+    }
+
+    /// A database with the monthly quota schema and two indexers: `idx-open`
+    /// has no monthly limit, `idx-capped` allows two requests a month.
+    async fn monthly_quota_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        for statement in [
+            "CREATE TABLE indexers (
+                id TEXT PRIMARY KEY NOT NULL,
+                max_requests_per_month INTEGER,
+                max_grabs_per_month INTEGER
+            )",
+            "CREATE TABLE indexer_monthly_usage (
+                indexer_id TEXT PRIMARY KEY NOT NULL,
+                month_start TEXT NOT NULL,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                grab_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            "INSERT INTO indexers (id, max_requests_per_month) VALUES
+                ('idx-open', NULL), ('idx-capped', 2)",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("monthly quota fixture should be created");
+        }
+        pool
+    }
+
+    fn monthly_tracker(pool: &SqlitePool) -> InMemoryIndexerStatsTracker {
+        tracker_with_gate(pool, Arc::new(tokio::sync::Mutex::new(())))
+    }
+
+    fn utc(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("fixture time should parse")
+            .with_timezone(&Utc)
+    }
+
+    fn refusal(result: scryer_application::AppResult<()>) -> Option<&'static str> {
+        result.err().and_then(|error| error.reason())
+    }
+
+    async fn monthly_usage_rows(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM indexer_monthly_usage")
+            .fetch_one(pool)
+            .await
+            .expect("usage rows should be countable")
+    }
+
+    #[tokio::test]
+    async fn an_indexer_without_a_monthly_limit_costs_no_database_work() {
+        let pool = monthly_quota_pool().await;
+        let tracker = monthly_tracker(&pool);
+        let at = utc("2026-03-10T12:00:00Z");
+        tracker
+            .load_monthly_limits(tracker.datastore.as_ref().expect("datastore"))
+            .await
+            .expect("limits should load");
+
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-open", at).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-open", at).await),
+            None
+        );
+        // `idx-capped` limits requests only, so its grabs are unlimited too.
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", at).await),
+            None
+        );
+        assert_eq!(
+            monthly_usage_rows(&pool).await,
+            0,
+            "usage is counted only against a configured limit"
+        );
+
+        // With the database gone, any read or write would fail the admission.
+        pool.close().await;
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-open", at).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-open", at).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_request_blocking("idx-open", at)),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reached_monthly_limit_is_refused_from_memory_until_the_month_or_limit_changes() {
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = monthly_quota_pool().await;
+        // Not hydrated: the first admission loads the limits itself.
+        let tracker = monthly_tracker(&pool);
+        let march = utc("2026-03-10T12:00:00Z");
+
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", march).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", march).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", march).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+
+        // Park the usage table: a further statement could only fail, which
+        // would surface as the accounting-unavailable reason instead.
+        sqlx::query("ALTER TABLE indexer_monthly_usage RENAME TO parked_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be parked");
+        for _ in 0..3 {
+            assert_eq!(
+                refusal(tracker.admit_monthly_request("idx-capped", march).await),
+                Some(reason::REQUEST_LIMIT_REACHED)
+            );
+        }
+        assert_eq!(
+            refusal(tracker.admit_monthly_request_blocking("idx-capped", march)),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+        sqlx::query("ALTER TABLE parked_usage RENAME TO indexer_monthly_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be restored");
+
+        // A new UTC month is asked of the database again and admitted.
+        let april = utc("2026-04-01T00:00:00Z");
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", april).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", april).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", april).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+
+        // So is a changed limit.
+        tracker.monthly_limits.set("idx-capped", Some(3), None);
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", april).await),
+            None
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", april).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+        let counted: i64 = sqlx::query_scalar(
+            "SELECT request_count FROM indexer_monthly_usage WHERE indexer_id = 'idx-capped'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("usage should be readable");
+        assert_eq!(counted, 3, "refused attempts are not counted");
+    }
+
+    #[tokio::test]
+    async fn a_reached_request_limit_refuses_a_grab_before_it_is_counted() {
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = monthly_quota_pool().await;
+        sqlx::query("UPDATE indexers SET max_grabs_per_month = 5 WHERE id = 'idx-capped'")
+            .execute(&pool)
+            .await
+            .expect("grab limit should be set");
+        let tracker = monthly_tracker(&pool);
+        let march = utc("2026-03-10T12:00:00Z");
+        let grab_count = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT grab_count FROM indexer_monthly_usage WHERE indexer_id = 'idx-capped'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("usage should be readable")
+        };
+
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            None,
+            "a grab is admitted while requests remain"
+        );
+        for expected in [None, None, Some(reason::REQUEST_LIMIT_REACHED)] {
+            assert_eq!(
+                refusal(tracker.admit_monthly_request("idx-capped", march).await),
+                expected
+            );
+        }
+        assert_eq!(grab_count().await, 1);
+
+        // Park the usage table: a statement could only fail, which would
+        // surface as the accounting-unavailable reason instead.
+        sqlx::query("ALTER TABLE indexer_monthly_usage RENAME TO parked_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be parked");
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            Some(reason::REQUEST_LIMIT_REACHED),
+            "the fetch is already known to be refused, so the grab is too"
+        );
+        sqlx::query("ALTER TABLE parked_usage RENAME TO indexer_monthly_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be restored");
+        assert_eq!(grab_count().await, 1, "the refused grab spent no slot");
+
+        // A new UTC month admits the grab again.
+        assert_eq!(
+            refusal(
+                tracker
+                    .admit_monthly_grab("idx-capped", utc("2026-04-01T00:00:00Z"))
+                    .await
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remembered_refusal_answers_whether_a_grab_would_be_refused() {
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = monthly_quota_pool().await;
+        sqlx::query("UPDATE indexers SET max_grabs_per_month = 1 WHERE id = 'idx-capped'")
+            .execute(&pool)
+            .await
+            .expect("grab limit should be set");
+        let tracker = monthly_tracker(&pool);
+        let march = utc("2026-03-10T12:00:00Z");
+        let april = utc("2026-04-01T00:00:00Z");
+        let usage = || async {
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT request_count, grab_count FROM indexer_monthly_usage
+                 WHERE indexer_id = 'idx-capped'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("usage should be readable")
+        };
+
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", march),
+            "nothing is remembered before admission has refused"
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            None
+        );
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", march),
+            "an admitted grab is not a refusal"
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            Some(reason::GRAB_LIMIT_REACHED)
+        );
+
+        assert!(tracker.monthly_grab_refusal_remembered("idx-capped", march));
+        assert!(!tracker.monthly_grab_refusal_remembered("idx-open", march));
+        assert_eq!(usage().await, (0, 1), "asking counts nothing");
+
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", april),
+            "a new UTC month is not remembered as refused"
+        );
+        tracker.monthly_limits.set("idx-capped", Some(2), Some(5));
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", march),
+            "a raised limit is not remembered as refused"
+        );
+
+        // A reached request limit refuses a grab too.
+        for expected in [None, None, Some(reason::REQUEST_LIMIT_REACHED)] {
+            assert_eq!(
+                refusal(tracker.admit_monthly_request("idx-capped", march).await),
+                expected
+            );
+        }
+        assert!(tracker.monthly_grab_refusal_remembered("idx-capped", march));
+        assert_eq!(usage().await, (2, 1));
+    }
+
+    #[tokio::test]
+    async fn a_monthly_limit_that_cannot_be_checked_refuses_the_request() {
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = monthly_quota_pool().await;
+        let tracker = monthly_tracker(&pool);
+        let at = utc("2026-03-10T12:00:00Z");
+        tracker
+            .load_monthly_limits(tracker.datastore.as_ref().expect("datastore"))
+            .await
+            .expect("limits should load");
+
+        // Waiting on the database from a runtime thread is refused, not run.
+        assert_eq!(
+            refusal(tracker.admit_monthly_request_blocking("idx-capped", at)),
+            Some(reason::ACCOUNTING_UNAVAILABLE)
+        );
+
+        sqlx::query("ALTER TABLE indexer_monthly_usage RENAME TO parked_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be parked");
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", at).await),
+            Some(reason::ACCOUNTING_UNAVAILABLE)
+        );
+
+        // The failure is not remembered as a reached limit.
+        sqlx::query("ALTER TABLE parked_usage RENAME TO indexer_monthly_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be restored");
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", at).await),
+            None
+        );
+
+        // Limits that were never readable refuse rather than admit.
+        let unreadable = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        let tracker = monthly_tracker(&unreadable);
+        assert_eq!(
+            refusal(tracker.admit_monthly_request("idx-capped", at).await),
+            Some(reason::ACCOUNTING_UNAVAILABLE)
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", at).await),
+            Some(reason::ACCOUNTING_UNAVAILABLE)
+        );
     }
 
     async fn create_quota_table(pool: &SqlitePool) {

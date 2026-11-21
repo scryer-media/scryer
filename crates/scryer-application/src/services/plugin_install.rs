@@ -223,9 +223,11 @@ impl PluginInstallOrchestrator {
                 return;
             };
             let current = handle.tx.borrow().clone();
-            let _ = handle
+            // Stored even when nobody is subscribed yet, so a subscriber that
+            // arrives later reads the latest state, not the first one.
+            handle
                 .tx
-                .send(current.with_state(next_state, message, error));
+                .send_replace(current.with_state(next_state, message, error));
             if matches!(
                 next_state,
                 PluginInstallState::Succeeded | PluginInstallState::Failed
@@ -266,5 +268,49 @@ impl PluginInstallOrchestrator {
                 state.snapshots_by_actor_plugin.remove(&snapshot_key);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_subscriber_that_arrives_after_a_transition_reads_the_latest_state() {
+        let orchestrator = PluginInstallOrchestrator::default();
+        orchestrator
+            .begin(
+                "user-a",
+                "example-plugin",
+                PluginInstallOperationKind::Install,
+            )
+            .await
+            .expect("the install is accepted");
+
+        // Nobody is subscribed while the install moves on and ends.
+        orchestrator
+            .transition(
+                "user-a",
+                "example-plugin",
+                PluginInstallState::Installing,
+                None,
+                None,
+            )
+            .await;
+        orchestrator
+            .transition(
+                "user-a",
+                "example-plugin",
+                PluginInstallState::Succeeded,
+                None,
+                None,
+            )
+            .await;
+
+        let receiver = orchestrator
+            .subscribe("user-a", "example-plugin")
+            .await
+            .expect("the finished snapshot is still held");
+        assert_eq!(receiver.borrow().state, PluginInstallState::Succeeded);
     }
 }

@@ -1142,19 +1142,28 @@ impl AppUseCase {
         )
         .await?;
 
-        let mut filtered = Vec::with_capacity(results.len());
-        for result in results {
-            let is_blocklisted = self
-                .services
+        // One read of this file's blocklist, not one per result. A failed read
+        // hides nothing, as a failed per-result check did.
+        let blocklist = if results.is_empty() {
+            Vec::new()
+        } else {
+            self.services
                 .workflow
                 .subtitle_downloads
-                .is_blocklisted(media_file_id, &result.provider, &result.provider_file_id)
+                .list_blocklist_for_media_file(media_file_id)
                 .await
-                .unwrap_or(false);
-            if !is_blocklisted {
-                filtered.push(result);
-            }
-        }
+                .unwrap_or_default()
+        };
+        let blocklisted: std::collections::HashSet<(&str, &str)> = blocklist
+            .iter()
+            .map(|entry| (entry.provider.as_str(), entry.provider_file_id.as_str()))
+            .collect();
+        let filtered: Vec<_> = results
+            .into_iter()
+            .filter(|result| {
+                !blocklisted.contains(&(result.provider.as_str(), result.provider_file_id.as_str()))
+            })
+            .collect();
 
         Ok(SubtitleSearchOutcome {
             status: SubtitleSearchStatus::Ready,
@@ -1543,7 +1552,7 @@ async fn reference_subtitle_path_for_sync(
         .filter_map(|record| {
             let path = stored_path_to_path_buf(&record.file_path);
             if same_filesystem_path(&path, subtitle_path)
-                || !path.exists()
+                || crate::disk::Disk::process().follow_blocking(&path).exists() != Some(true)
                 || !is_supported_reference_subtitle_path(&path)
             {
                 return None;
@@ -1584,7 +1593,11 @@ fn same_filesystem_path(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
     }
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+    let disk = crate::disk::Disk::process();
+    match (
+        disk.canonicalize_blocking(left),
+        disk.canonicalize_blocking(right),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -2413,9 +2426,13 @@ async fn search_automatic_subtitles_for_file(
         .await?;
     }
     if actor.is_some()
-        && !tokio::fs::try_exists(stored_path_to_path_buf(&mf.file_path))
+        && !crate::disk::Disk::process()
+            .follow(stored_path_to_path_buf(&mf.file_path))
             .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
+            .exists()
+            .ok_or_else(|| {
+                AppError::Repository("could not read the media file's path".to_string())
+            })?
     {
         return Err(AppError::not_found_reason(
             crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,

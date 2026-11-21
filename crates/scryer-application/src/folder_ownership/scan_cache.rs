@@ -974,6 +974,7 @@ impl PathEvidence {
     }
 
     /// A containing directory's stamp, probed once per claim.
+    #[allow(clippy::disallowed_methods)] // disk-guard: change-time stamps the owner's readings do not carry
     fn parent_stamp(
         &mut self,
         parent: &Path,
@@ -991,6 +992,7 @@ impl PathEvidence {
     /// What `path` is to a link walk: from the evidence when its containing
     /// directory is unchanged, or else from one probe of `path`. `None` when
     /// `path` was not probed.
+    #[allow(clippy::disallowed_methods)] // disk-guard: uncached link probe bound to a change-time stamp
     fn verify(
         &mut self,
         path: &Path,

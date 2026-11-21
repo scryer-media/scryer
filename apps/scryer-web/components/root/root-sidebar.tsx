@@ -1,3 +1,4 @@
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -53,7 +54,6 @@ import {
   Rss,
   Server,
   Settings2,
-  Wrench,
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
@@ -69,9 +69,13 @@ import { Link, useLocation } from "react-router";
 import { INDEXER_SETTINGS_TAB_ITEMS } from "@/components/views/settings/indexer-settings-tabs";
 import {
   buildIndexerSettingsPath,
+  buildRulesPath,
   indexerSettingsTabFromPath,
   INDEXER_SETTINGS_TABS,
+  RULES_SECTIONS,
+  rulesSectionFromPath,
 } from "@/lib/utils/routing";
+import type { RulesSection } from "@/components/root/types";
 import { PalettePicker } from "@/components/views/settings/palette-picker";
 import { QuickHighlightColorPicker } from "@/components/views/settings/quick-highlight-color-picker";
 import {
@@ -83,10 +87,7 @@ import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
 import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
-import {
-  useExperimentalFeaturesEnabled,
-  useInstanceFeatures,
-} from "@/lib/context/instance-features-context";
+import { useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { useUiSettings } from "@/lib/context/ui-settings-context";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
@@ -126,6 +127,16 @@ type TopNavGroup = {
   items: TopNavGroupItem[];
 };
 
+/// The kinds of rule listed under the sidebar's Rules entry.
+const RULES_SECTION_ITEMS: Record<
+  RulesSection,
+  { labelKey: string; icon: LucideIcon }
+> = {
+  scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
+  lifecycle: { labelKey: "settings.lifecycleRules", icon: LifecycleRulesIcon },
+  request: { labelKey: "settings.requestRules", icon: Inbox },
+};
+
 type TopNavGroupItemDefinition =
   | { kind: "view"; id: ViewId }
   | { kind: "apiExplorer"; icon: LucideIcon }
@@ -149,7 +160,7 @@ function isSettingsNavEntryActive(
   if (entryId === "rules") {
     return (
       settingsSection === "rules" ||
-      settingsSection === "maintenanceRules" ||
+      settingsSection === "lifecycleRules" ||
       settingsSection === "requestRules"
     );
   }
@@ -224,8 +235,8 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "lists" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
-      // Scoring, maintenance and request rules share this entry; the Rules
-      // page's own gutter picks the kind, so the sidebar names the subject once.
+      // Scoring, lifecycle and request rules share this entry; while one is
+      // open, the three kinds are listed under it.
       {
         kind: "settings",
         id: "rules",
@@ -335,6 +346,8 @@ type RootSidebarProps = {
   activitySection: ActivitySection;
   wantedSection: WantedSection;
   user: AuthUser;
+  /** The member's own lists are not allowed, so Lists offers them nothing. */
+  personalListsRefused?: boolean;
   pendingImportCounts: PendingImportCounts | null;
   pendingMediaRequestCounts: PendingImportCounts | null;
   manualImportRequiredCount: number;
@@ -443,16 +456,16 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
-    id: "maintenanceRules",
-    label: (t) => t("settings.maintenanceRules"),
-    icon: Wrench,
-    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
-  },
-  {
     id: "requestRules",
     label: (t) => t("settings.requestRules"),
     icon: Inbox,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
+    id: "lifecycleRules",
+    label: (t) => t("settings.lifecycleRules"),
+    icon: LifecycleRulesIcon,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {
     id: "plugins",
@@ -495,6 +508,7 @@ const SETTINGS_NAV_GROUPS: Array<{
     itemIds: [
       "profile",
       "general",
+      "acquisition",
       "qualityProfiles",
       "delayProfiles",
       "titleTags",
@@ -725,6 +739,7 @@ function RootSidebarContent({
   activitySection,
   wantedSection,
   user,
+  personalListsRefused = false,
   pendingImportCounts,
   pendingMediaRequestCounts,
   manualImportRequiredCount,
@@ -737,7 +752,6 @@ function RootSidebarContent({
   onNavigate,
 }: RootSidebarProps) {
   const t = useTranslate();
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { apiExplorerEnabled } = useInstanceFeatures();
   const { isMobile, setOpenMobile } = useSidebar();
   const { resolvedTheme } = useTheme();
@@ -827,18 +841,13 @@ function RootSidebarContent({
     () =>
       settingsEntries.filter(
         (entry) =>
-          // Maintenance and request rules are still being finished, so their
-          // shortcuts are offered only when the instance has opted in. The
-          // permission each already required still applies on top.
-          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
-            experimentalFeaturesEnabled) &&
-          (!entry.requiredAnyAppPermission ||
-            hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
-            entry.requiredAnyLibraryPermission?.some((permission) =>
-              hasAnyLibraryPermission(user, permission),
-            )),
+          !entry.requiredAnyAppPermission ||
+          hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
+          entry.requiredAnyLibraryPermission?.some((permission) =>
+            hasAnyLibraryPermission(user, permission),
+          ),
       ),
-    [experimentalFeaturesEnabled, user],
+    [user],
   );
   const groupedSettingsEntries = React.useMemo(() => {
     const entriesById = new Map(
@@ -871,6 +880,7 @@ function RootSidebarContent({
                 hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) ||
                 canManageTitle,
               canManageLists || canManageSystemSettings,
+              personalListsRefused,
             )) &&
           (item.id !== "wanted" || canViewLibraryInternals) &&
           (item.id !== "dashboard" ||
@@ -886,6 +896,7 @@ function RootSidebarContent({
       canManageTitle,
       canResolveImports,
       canViewCatalog,
+      personalListsRefused,
       topNav,
       user,
     ],
@@ -1068,6 +1079,7 @@ function RootSidebarContent({
 
   const { pathname } = useLocation();
   const activeIndexerSettingsTab = indexerSettingsTabFromPath(pathname);
+  const activeRulesSection = rulesSectionFromPath(pathname);
   const handleNavigate = React.useCallback(
     (
       event: React.MouseEvent,
@@ -1204,7 +1216,7 @@ function RootSidebarContent({
     <SidebarTrigger
       id="root-sidebar-mobile-trigger"
       aria-label={t("nav.mobileTrigger")}
-      className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-muted2)] shadow-none transition hover:border-[var(--scry-bhover2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:ring-primary/25 min-[1280px]:hidden"
+      className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-muted2)] shadow-none transition hover:border-[var(--scry-bhover2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:ring-primary/25 min-[1024px]:hidden"
     />
   );
   const canInjectMobileNavigation =
@@ -1221,7 +1233,7 @@ function RootSidebarContent({
         collapsible={isMobile ? "offcanvas" : "none"}
         mobileTitle={t("nav.mobileTitle")}
         mobileDescription={t("nav.mobileDescription")}
-        className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[4px_0_16px_rgba(2,6,23,0.04)] dark:shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[1280px]:sticky min-[1280px]:top-[var(--root-shell-top-offset,0px)] min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:self-start"
+        className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[4px_0_16px_rgba(2,6,23,0.04)] dark:shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[1024px]:sticky min-[1024px]:top-[var(--root-shell-top-offset,0px)] min-[1024px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:self-start"
       >
         <SidebarHeader className="px-4 py-0">
           <div className="flex w-full items-center justify-center">
@@ -1363,6 +1375,51 @@ function RootSidebarContent({
                                           >
                                             <tabItem.icon className="h-3.5 w-3.5 shrink-0" />
                                             <span>{t(tabItem.labelKey)}</span>
+                                          </Link>
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    );
+                                  })}
+                                </SidebarMenuSub>
+                              </SidebarGroupContent>
+                            ) : null}
+                            {item.id === "rules" &&
+                            view === "settings" &&
+                            isSettingsNavEntryActive(
+                              "rules",
+                              settingsSection,
+                            ) ? (
+                              <SidebarGroupContent>
+                                <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
+                                  {RULES_SECTIONS.filter(
+                                    (section) =>
+                                      section !== "lifecycle" ||
+                                      canManageSystemSettings,
+                                  ).map((section) => {
+                                    const rulesItem =
+                                      RULES_SECTION_ITEMS[section];
+                                    return (
+                                      <SidebarMenuSubItem key={section}>
+                                        <SidebarMenuSubButton
+                                          asChild
+                                          isActive={
+                                            activeRulesSection === section
+                                          }
+                                          className={SUB_NAV_BUTTON_CLASS}
+                                        >
+                                          <Link
+                                            id={selectorId(
+                                              "root-sidebar-rules",
+                                              section,
+                                            )}
+                                            to={buildRulesPath(section)}
+                                            onClick={() => {
+                                              if (isMobile)
+                                                setOpenMobile(false);
+                                            }}
+                                          >
+                                            <rulesItem.icon className="h-3.5 w-3.5 shrink-0" />
+                                            <span>{t(rulesItem.labelKey)}</span>
                                           </Link>
                                         </SidebarMenuSubButton>
                                       </SidebarMenuSubItem>
@@ -2004,11 +2061,11 @@ function RootSidebarContent({
       </Sidebar>
       <SidebarInset
         data-slot="root-content-panel"
-        className="relative min-w-0 min-[1280px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1280px]:overflow-hidden"
+        className="relative min-w-0 min-[1024px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[1024px]:overflow-hidden"
       >
         {headerWithMobileNavigation}
         {canInjectMobileNavigation ? null : (
-          <div className="mx-3 mb-3 mt-3 flex items-center gap-3 rounded-xl border border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] px-3 py-2 shadow-[0_12px_28px_rgba(2,6,23,0.16)] min-[1280px]:hidden">
+          <div className="mx-3 mb-3 mt-3 flex items-center gap-3 rounded-xl border border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] px-3 py-2 shadow-[0_12px_28px_rgba(2,6,23,0.16)] min-[1024px]:hidden">
             {mobileNavigationTrigger}
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-foreground">
@@ -2034,7 +2091,7 @@ export const RootSidebar = React.memo(function RootSidebar(
 ) {
   return (
     <SidebarProvider
-      className="min-[1280px]:h-full"
+      className="min-[1024px]:h-full"
       style={
         {
           "--sidebar-width": "224px",

@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 const FORBIDDEN_ARCHIVE_CORE_DEPENDENCIES: &[&str] = &["sevenz-rust2", "unrar-rs", "zip"];
 const FORBIDDEN_BUILTIN_ARCHIVE_PLUGIN_NAMES: &[&str] =
     &["archive-extraction", "archive_extraction"];

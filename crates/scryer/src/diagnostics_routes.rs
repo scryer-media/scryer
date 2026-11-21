@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scryer_application::application_upgrade::InstallationAssessment;
 use scryer_application::diagnostics::{DiagnosticsHostInputs, DiagnosticsMetrics};
+use scryer_application::disk::{Disk, PathReading};
 use scryer_application::{AppError, JwtSessionScope};
 use scryer_domain::AppPermission;
 use serde_json::{Map, Value, json};
@@ -41,6 +42,7 @@ const ENV_VALUE_ALLOWLIST: &[&str] = &[
     "SCRYER_LOG_FORMAT",
     "SCRYER_METRICS",
     "SCRYER_AUTH_ENABLED",
+    "SCRYER_MCP_ENABLED",
     "SCRYER_PACKAGE",
 ];
 
@@ -190,14 +192,19 @@ fn content_disposition(file_name: &str) -> String {
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
 }
 
+/// The process environment, UTF-8 variables only.
+pub(crate) fn process_variables() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
 fn host_inputs(
     host: &DiagnosticsHost,
     auth: &scryer_interface::context::AuthRuntimeStateSnapshot,
 ) -> DiagnosticsHostInputs {
     let generated_at = Utc::now();
-    let variables = std::env::vars_os()
-        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-        .collect::<Vec<_>>();
+    let variables = process_variables();
     let mut facts = HostFacts::default();
     facts.collect(host, auth, &variables, generated_at);
 
@@ -217,12 +224,99 @@ fn host_inputs(
     }
 }
 
+/// One section of the environment facts only the binary knows. Each is
+/// produced on its own, so a caller that wants one pays only for that one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostSection {
+    Build,
+    Installation,
+    Container,
+    Launcher,
+    Os,
+    Process,
+    DatastoreFiles,
+    Network,
+    Auth,
+    Metrics,
+    Logging,
+    TimeAndLocale,
+    ScryerVariables,
+}
+
+impl HostSection {
+    /// Every section, in the bundle's order.
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::Build,
+        Self::Installation,
+        Self::Container,
+        Self::Launcher,
+        Self::Os,
+        Self::Process,
+        Self::DatastoreFiles,
+        Self::Network,
+        Self::Auth,
+        Self::Metrics,
+        Self::Logging,
+        Self::TimeAndLocale,
+        Self::ScryerVariables,
+    ];
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Installation => "installation",
+            Self::Container => "container",
+            Self::Launcher => "launcher",
+            Self::Os => "os",
+            Self::Process => "process",
+            Self::DatastoreFiles => "datastore_files",
+            Self::Network => "network",
+            Self::Auth => "auth",
+            Self::Metrics => "metrics",
+            Self::Logging => "logging",
+            Self::TimeAndLocale => "time_and_locale",
+            Self::ScryerVariables => "scryer_variables",
+        }
+    }
+}
+
+/// The values and paths only the binary knows that the sanitizer replaces,
+/// exactly as the bundle registers them. Reads no file; call it off the
+/// async runtime, since it asks the system for the host name and paths.
+pub(crate) fn host_identifying(host: &DiagnosticsHost) -> (Vec<String>, Vec<(String, String)>) {
+    let mut facts = HostFacts::default();
+    facts.register_identifying(host, &process_variables());
+    (facts.sensitive_values, facts.sensitive_paths)
+}
+
+/// The named host sections with their omissions, each produced on its own.
+/// `container` and `datastore_files` read files; call it off the async
+/// runtime.
+pub(crate) fn host_sections(
+    host: &DiagnosticsHost,
+    auth: &scryer_interface::context::AuthRuntimeStateSnapshot,
+    sections: &[HostSection],
+) -> HostFacts {
+    let variables = process_variables();
+    let generated_at = Utc::now();
+    let mut facts = HostFacts::default();
+    for section in sections {
+        facts.section(*section, host, auth, &variables, generated_at);
+    }
+    facts
+}
+
+/// The whole in-memory log buffer, oldest first.
+pub(crate) fn buffered_log_lines(host: &DiagnosticsHost) -> Vec<String> {
+    host.log_ring_buffer.snapshot(BUFFERED_LOG_LINES)
+}
+
 #[derive(Default)]
-struct HostFacts {
-    environment: Map<String, Value>,
-    omissions: Vec<(String, String)>,
-    sensitive_values: Vec<String>,
-    sensitive_paths: Vec<(String, String)>,
+pub(crate) struct HostFacts {
+    pub(crate) environment: Map<String, Value>,
+    pub(crate) omissions: Vec<(String, String)>,
+    pub(crate) sensitive_values: Vec<String>,
+    pub(crate) sensitive_paths: Vec<(String, String)>,
 }
 
 impl HostFacts {
@@ -244,52 +338,143 @@ impl HostFacts {
         variables: &[(String, String)],
         generated_at: DateTime<Utc>,
     ) {
-        let variable = |name: &str| env_value(variables, name);
-
-        self.environment.insert(
-            "build".to_string(),
-            json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-                "build_lane": env!("SCRYER_COMPILED_BUILD_LANE"),
-                "target_os": std::env::consts::OS,
-                "target_arch": std::env::consts::ARCH,
-                "target_family": std::env::consts::FAMILY,
-            }),
-        );
-        self.omit("build.commit", "not_embedded_in_build");
-        self.omit("wasmtime_version", "not_exposed_by_build");
-
-        let assessment = &host.installation;
-        self.environment.insert(
-            "installation".to_string(),
-            json!({
-                "kind": snake_case(&format!("{:?}", assessment.kind)),
-                "upgrade_owner": snake_case(&format!("{:?}", assessment.owner)),
-                "self_upgrade_eligible": assessment.eligible,
-                "self_upgrade_reason": snake_case(&format!("{:?}", assessment.reason)),
-                "tray_supervised": assessment.tray_supervised,
-                "package": variable("SCRYER_PACKAGE").map(safe_token),
-                "self_upgrade_disabled_by_environment": variable("SCRYER_DISABLE_SELF_UPGRADE").is_some(),
-            }),
-        );
-
-        self.container(variables);
-        let systemd_unit = systemd_unit(variables, std::process::id());
-        if systemd_unit.is_none() {
-            self.omit("launcher.systemd_unit", "systemd_exec_pid_not_set");
+        for section in HostSection::ALL {
+            self.section(*section, host, auth, variables, generated_at);
         }
-        self.environment.insert(
-            "launcher".to_string(),
-            json!({
-                "systemd_unit": systemd_unit,
-                "launchd_job": cfg!(target_os = "macos") && launchd_job(variables, parent_process_id()),
-                "windows_tray_supervised": assessment.tray_supervised,
-            }),
-        );
+        self.register_identifying(host, variables);
+    }
 
-        self.operating_system();
+    /// Adds one section and its omissions. Only `container` and
+    /// `datastore_files` touch the filesystem; call this off the async
+    /// runtime for those two.
+    pub(crate) fn section(
+        &mut self,
+        section: HostSection,
+        host: &DiagnosticsHost,
+        auth: &scryer_interface::context::AuthRuntimeStateSnapshot,
+        variables: &[(String, String)],
+        generated_at: DateTime<Utc>,
+    ) {
+        let variable = |name: &str| env_value(variables, name);
+        let assessment = &host.installation;
+        match section {
+            HostSection::Build => {
+                self.environment.insert(
+                    "build".to_string(),
+                    json!({
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+                        "build_lane": env!("SCRYER_COMPILED_BUILD_LANE"),
+                        "target_os": std::env::consts::OS,
+                        "target_arch": std::env::consts::ARCH,
+                        "target_family": std::env::consts::FAMILY,
+                    }),
+                );
+                self.omit("build.commit", "not_embedded_in_build");
+                self.omit("wasmtime_version", "not_exposed_by_build");
+            }
+            HostSection::Installation => {
+                self.environment.insert(
+                    "installation".to_string(),
+                    json!({
+                        "kind": snake_case(&format!("{:?}", assessment.kind)),
+                        "upgrade_owner": snake_case(&format!("{:?}", assessment.owner)),
+                        "self_upgrade_eligible": assessment.eligible,
+                        "self_upgrade_reason": snake_case(&format!("{:?}", assessment.reason)),
+                        "tray_supervised": assessment.tray_supervised,
+                        "package": variable("SCRYER_PACKAGE").map(safe_token),
+                        "self_upgrade_disabled_by_environment": variable("SCRYER_DISABLE_SELF_UPGRADE").is_some(),
+                    }),
+                );
+            }
+            HostSection::Container => self.container(variables),
+            HostSection::Launcher => {
+                let systemd_unit = systemd_unit(variables, std::process::id());
+                if systemd_unit.is_none() {
+                    self.omit("launcher.systemd_unit", "systemd_exec_pid_not_set");
+                }
+                self.environment.insert(
+                    "launcher".to_string(),
+                    json!({
+                        "systemd_unit": systemd_unit,
+                        "launchd_job": cfg!(target_os = "macos") && launchd_job(variables, parent_process_id()),
+                        "windows_tray_supervised": assessment.tray_supervised,
+                    }),
+                );
+            }
+            HostSection::Os => self.operating_system(),
+            HostSection::Process => self.process(host, generated_at),
+            HostSection::DatastoreFiles => self.datastore_files(host),
+            HostSection::Network => self.network(host, variables),
+            HostSection::Auth => {
+                self.environment.insert(
+                    "auth".to_string(),
+                    json!({
+                        "mode": if auth.effective_form_login_enabled { "authenticated" } else { "authless" },
+                        "form_login_enabled": auth.form_login_enabled,
+                        "authless_local_access": auth.skip_login_for_local_ips,
+                        "passkey_enabled": auth.passkey_enabled,
+                        "webauthn_configured": auth.webauthn_configured,
+                        "environment_override_active": auth.env_override_active,
+                    }),
+                );
+            }
+            HostSection::Metrics => {
+                self.environment.insert(
+                    "metrics".to_string(),
+                    json!({
+                        "enabled": host.metrics.is_some(),
+                        "renderable": host.metrics.is_some(),
+                    }),
+                );
+            }
+            HostSection::Logging => {
+                self.environment.insert(
+                    "logging".to_string(),
+                    json!({
+                        "file_logging_enabled": host.process.log_file.is_some(),
+                        "log_filter": variable("RUST_LOG").map(safe_log_filter),
+                    }),
+                );
+            }
+            HostSection::TimeAndLocale => {
+                let offset = chrono::Local::now().offset().local_minus_utc();
+                let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+                    .iter()
+                    .find_map(|name| variable(name))
+                    .map(safe_token);
+                self.environment.insert(
+                    "time_and_locale".to_string(),
+                    json!({
+                        "utc_offset_seconds": offset,
+                        "locale": locale,
+                    }),
+                );
+            }
+            HostSection::ScryerVariables => self.report_scryer_variables(variables),
+        }
+    }
 
+    /// Every value and path the sanitizer must replace that only the binary
+    /// knows, in the bundle's order, so pseudonyms match between the bundle
+    /// and any other reader. Reads nothing from the filesystem.
+    pub(crate) fn register_identifying(
+        &mut self,
+        host: &DiagnosticsHost,
+        variables: &[(String, String)],
+    ) {
+        if let Some(parent) = host.sqlite_path.as_deref().and_then(Path::parent) {
+            self.path("database-dir", parent);
+        }
+        let listening = host.listening.ip();
+        if !listening.is_loopback() && !listening.is_unspecified() {
+            self.sensitive_values.push(listening.to_string());
+        }
+        self.register_scryer_variables(variables);
+        self.identifying_values(host, variables);
+    }
+
+    fn process(&mut self, host: &DiagnosticsHost, generated_at: DateTime<Utc>) {
         let uptime = (generated_at - host.process.started_at)
             .num_seconds()
             .max(0);
@@ -314,15 +499,18 @@ impl HostFacts {
         }
         self.environment
             .insert("process".to_string(), Value::Object(process));
+    }
 
+    fn datastore_files(&mut self, host: &DiagnosticsHost) {
         match &host.sqlite_path {
             Some(path) => {
                 let size = |suffix: &str| {
                     let mut name = path.as_os_str().to_owned();
                     name.push(suffix);
-                    std::fs::metadata(PathBuf::from(name))
-                        .ok()
-                        .map(|metadata| metadata.len())
+                    match Disk::process().follow_blocking(&PathBuf::from(name)) {
+                        PathReading::Known { len, .. } => len,
+                        _ => None,
+                    }
                 };
                 self.environment.insert(
                     "datastore_files".to_string(),
@@ -332,13 +520,13 @@ impl HostFacts {
                         "shared_memory_bytes": size("-shm"),
                     }),
                 );
-                if let Some(parent) = path.parent() {
-                    self.path("database-dir", parent);
-                }
             }
             None => self.omit("datastore_files", "not_sqlite"),
         }
+    }
 
+    fn network(&mut self, host: &DiagnosticsHost, variables: &[(String, String)]) {
+        let variable = |name: &str| env_value(variables, name);
         let listening = host.listening;
         let tls_enabled = ["SCRYER_TLS_CERT", "SCRYER_TLS_KEY"]
             .iter()
@@ -354,60 +542,16 @@ impl HostFacts {
                 "cors_origins_configured": variable("SCRYER_CORS_ALLOWED_ORIGINS").is_some(),
             }),
         );
-        if !listening.ip().is_loopback() && !listening.ip().is_unspecified() {
-            self.sensitive_values.push(listening.ip().to_string());
-        }
-
-        self.environment.insert(
-            "auth".to_string(),
-            json!({
-                "mode": if auth.effective_form_login_enabled { "authenticated" } else { "authless" },
-                "form_login_enabled": auth.form_login_enabled,
-                "authless_local_access": auth.skip_login_for_local_ips,
-                "passkey_enabled": auth.passkey_enabled,
-                "webauthn_configured": auth.webauthn_configured,
-                "environment_override_active": auth.env_override_active,
-            }),
-        );
-
-        self.environment.insert(
-            "metrics".to_string(),
-            json!({
-                "enabled": host.metrics.is_some(),
-                "renderable": host.metrics.is_some(),
-            }),
-        );
-        self.environment.insert(
-            "logging".to_string(),
-            json!({
-                "file_logging_enabled": host.process.log_file.is_some(),
-                "log_filter": variable("RUST_LOG").map(safe_log_filter),
-            }),
-        );
-
-        let offset = chrono::Local::now().offset().local_minus_utc();
-        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
-            .iter()
-            .find_map(|name| variable(name))
-            .map(safe_token);
-        self.environment.insert(
-            "time_and_locale".to_string(),
-            json!({
-                "utc_offset_seconds": offset,
-                "locale": locale,
-            }),
-        );
-
-        self.scryer_variables(variables);
-        self.identifying_values(host, variables);
     }
 
     fn container(&mut self, variables: &[(String, String)]) {
         let variable = |name: &str| env_value(variables, name);
+        let exists =
+            |path: &str| Disk::process().follow_blocking(Path::new(path)).exists() == Some(true);
         let mut hints = Vec::new();
         if cfg!(target_os = "linux") {
             for source in ["/proc/1/cgroup", "/proc/self/cgroup"] {
-                if let Ok(text) = std::fs::read_to_string(source) {
+                if let Ok(text) = Disk::process().read_to_string_blocking(Path::new(source)) {
                     for token in ["docker", "kubepods", "containerd", "libpod", "lxc"] {
                         if text.contains(token) && !hints.contains(&token) {
                             hints.push(token);
@@ -426,8 +570,8 @@ impl HostFacts {
         self.environment.insert(
             "container".to_string(),
             json!({
-                "docker_env_file": Path::new("/.dockerenv").exists(),
-                "podman_env_file": Path::new("/run/.containerenv").exists(),
+                "docker_env_file": exists("/.dockerenv"),
+                "podman_env_file": exists("/run/.containerenv"),
                 "container_variable": container_variable,
                 "kubernetes": variable("KUBERNETES_SERVICE_HOST").is_some(),
                 "cgroup_hints": hints,
@@ -469,20 +613,38 @@ impl HostFacts {
     }
 
     /// Every `SCRYER_*` variable by name; values only for the allowlist.
+    #[cfg(test)]
     fn scryer_variables(&mut self, variables: &[(String, String)]) {
+        self.report_scryer_variables(variables);
+        self.register_scryer_variables(variables);
+    }
+
+    fn set_scryer_variables(variables: &[(String, String)]) -> Vec<&(String, String)> {
         let mut names = variables
             .iter()
             .filter(|(name, value)| name.starts_with("SCRYER_") && !value.trim().is_empty())
             .collect::<Vec<_>>();
         names.sort_by(|left, right| left.0.cmp(&right.0));
+        names
+    }
+
+    fn report_scryer_variables(&mut self, variables: &[(String, String)]) {
         let mut reported = Map::new();
-        for (name, value) in names {
+        for (name, value) in Self::set_scryer_variables(variables) {
             let shown = if ENV_VALUE_ALLOWLIST.contains(&name.as_str()) {
                 safe_token(value)
             } else {
                 "<set>".to_string()
             };
             reported.insert(name.clone(), json!(shown));
+        }
+        self.environment
+            .insert("scryer_variables".to_string(), Value::Object(reported));
+    }
+
+    /// The values of the variables reported only by name.
+    fn register_scryer_variables(&mut self, variables: &[(String, String)]) {
+        for (name, value) in Self::set_scryer_variables(variables) {
             if !ENV_VALUE_ALLOWLIST.contains(&name.as_str()) {
                 for part in value.split([',', ';']) {
                     let part = part.trim();
@@ -498,8 +660,6 @@ impl HostFacts {
                 }
             }
         }
-        self.environment
-            .insert("scryer_variables".to_string(), Value::Object(reported));
     }
 
     /// Values that identify this host and that nothing else harvests.
@@ -747,8 +907,10 @@ fn address_kind(address: IpAddr) -> &'static str {
 
 #[cfg(target_os = "linux")]
 fn os_release() -> Option<(String, String)> {
-    let text = std::fs::read_to_string("/etc/os-release")
-        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+    let disk = Disk::process();
+    let text = disk
+        .read_to_string_blocking(Path::new("/etc/os-release"))
+        .or_else(|_| disk.read_to_string_blocking(Path::new("/usr/lib/os-release")))
         .ok()?;
     let field = |key: &str| {
         text.lines()
@@ -807,7 +969,9 @@ fn host_name() -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn total_memory_bytes() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let text = Disk::process()
+        .read_to_string_blocking(Path::new("/proc/meminfo"))
+        .ok()?;
     let kib = text
         .lines()
         .find_map(|line| line.strip_prefix("MemTotal:"))?

@@ -457,6 +457,115 @@ async fn graphql_unlinked_grab_refuses_a_release_outside_the_search() {
     );
 }
 
+/// A grab started as a background job answers at once with its job run, and
+/// the job's outcome is the very error the direct mutation raises.
+#[tokio::test]
+async fn graphql_background_grab_reports_what_the_direct_grab_raises() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let mut events = ctx
+        .app
+        .subscribe_domain_event_sequences(&admin)
+        .await
+        .expect("subscribe to domain events");
+
+    let start = gql(
+        &ctx,
+        r#"mutation($input: SearchReleasesInput!) {
+            startInteractiveReleaseSearch(input: $input) { id state }
+        }"#,
+        json!({ "input": { "query": "paperman" } }),
+    )
+    .await;
+    assert_no_errors(&start);
+    let search_id = start["data"]["startInteractiveReleaseSearch"]["id"]
+        .as_str()
+        .expect("search id")
+        .to_string();
+    let grab_input = json!({
+        "searchId": search_id,
+        "downloadUrl": "https://example.invalid/not-in-this-search.nzb",
+        "downloadClientId": "dc-unknown",
+    });
+
+    let direct = gql(
+        &ctx,
+        r#"mutation($input: QueueUnlinkedReleaseInput!) {
+            queueUnlinkedRelease(input: $input) { downloadId }
+        }"#,
+        json!({ "input": grab_input }),
+    )
+    .await;
+    let direct_error = &direct["errors"][0];
+    assert!(direct_error["message"].is_string(), "{direct}");
+
+    let started = gql(
+        &ctx,
+        r#"mutation($input: StartGrabInput!) {
+            startGrab(input: $input) { jobRun { id jobKey triggerSource } }
+        }"#,
+        json!({ "input": { "unlinked": grab_input } }),
+    )
+    .await;
+    assert_no_errors(&started);
+    let job_run = &started["data"]["startGrab"]["jobRun"];
+    assert_eq!(job_run["jobKey"], "RELEASE_GRAB");
+    let run_id = job_run["id"].as_str().expect("run id").to_string();
+
+    let finished = tokio::time::timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
+        loop {
+            let run = ctx
+                .app
+                .list_job_runs(&admin, scryer_application::JobKey::ReleaseGrab, 10)
+                .await
+                .expect("list grab runs")
+                .into_iter()
+                .find(|run| run.id == run_id);
+            if let Some(run) = run
+                && run.status.is_terminal()
+            {
+                return run;
+            }
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    panic!("domain events closed before the grab finished")
+                }
+            }
+        }
+    })
+    .await
+    .expect("the grab job should finish");
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Failed);
+    let summary: Value =
+        serde_json::from_str(finished.summary_json.as_deref().expect("summary")).unwrap();
+    assert_eq!(summary["kind"], "unlinked");
+    assert_eq!(summary["outcome"], "FAILED");
+
+    let result = gql(
+        &ctx,
+        "query($id: ID!) { grabJobResult(id: $id) { unlinked { downloadId } } }",
+        json!({ "id": run_id }),
+    )
+    .await;
+    let job_error = &result["errors"][0];
+    assert_eq!(job_error["message"], direct_error["message"], "{result}");
+    assert_eq!(
+        job_error["extensions"], direct_error["extensions"],
+        "{result}"
+    );
+
+    // A run this instance holds no outcome for answers null, not an error.
+    let unknown = gql(
+        &ctx,
+        "query($id: ID!) { grabJobResult(id: $id) { unlinked { downloadId } } }",
+        json!({ "id": "no-such-run" }),
+    )
+    .await;
+    assert_no_errors(&unknown);
+    assert!(unknown["data"]["grabJobResult"].is_null());
+}
+
 #[tokio::test]
 async fn graphql_one_shot_search_releases_requires_a_title() {
     let ctx = TestContext::new().await;

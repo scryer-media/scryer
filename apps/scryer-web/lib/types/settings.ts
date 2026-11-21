@@ -159,6 +159,21 @@ export type UiSettings = {
    * shows the default layout.
    */
   dashboardLayouts: UiDashboardLayout[];
+  /** Guided tours already finished or skipped; a tour with no entry has not been shown. */
+  tours: UiTourProgress[];
+};
+
+/** How a guided tour was left. Either way it is not offered again. */
+export type UiTourOutcome = "COMPLETED" | "SKIPPED";
+
+export type UiTourProgress = {
+  tourId: string;
+  outcome: UiTourOutcome;
+};
+
+export type RecordMyUiToursInput = {
+  tourIds: string[];
+  outcome: UiTourOutcome;
 };
 
 /** Dashboard grid breakpoints, keyed on the viewport width as the old media queries were. */
@@ -171,6 +186,8 @@ export type UiDashboardLayoutItem = {
   y: number;
   w: number;
   h: number;
+  /** The panel's own settings, a JSON object, or null when it has none. */
+  settings?: Record<string, unknown> | null;
 };
 
 export type UiDashboardLayout = {
@@ -200,6 +217,7 @@ export type SetMyUiSettingsInput = Omit<
   | "tableColumns"
   | "catalogViews"
   | "dashboardLayouts"
+  | "tours"
   | "discoveryGridHideOwned"
   | "discoveryGridHideRequested"
 > & {
@@ -233,10 +251,17 @@ export type SecuritySettings = {
   passwordMinLength: number;
   skipLoginForLocalIps: boolean;
   apiKeysRestrictToSystemSettingsUsers: boolean;
+  mcpEnabled: boolean;
+  /** The value SCRYER_MCP_ENABLED forces; null when unset. */
+  mcpEnabledEnvOverride: boolean | null;
   mfaRequireConfigStepUp: boolean;
   mfaRequirePasswordLogin: boolean;
   mfaRequireJellyfinLogin: boolean;
   mfaRequireEmbyLogin: boolean;
+  /** Host names a request trusted only by its network address may use; empty turns the check off. */
+  localTrustAllowedHosts: string[];
+  /** Local trust follows the trusted proxy list instead of any local peer. */
+  restrictLocalTrustToTrustedProxies: boolean;
   effectiveFormLoginEnabled: boolean;
   envOverrideActive: boolean;
   envOverrideDescription: string | null;

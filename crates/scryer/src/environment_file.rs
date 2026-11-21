@@ -3,6 +3,8 @@
 use std::io::Read;
 use std::path::Path;
 
+use scryer_application::disk::{Disk, IfPresent, Open};
+
 pub(crate) fn read(path: &Path) -> Result<Vec<(String, String)>, String> {
     read_with_context(path, &std::collections::BTreeMap::new())
 }
@@ -11,14 +13,17 @@ pub(crate) fn read_with_context(
     path: &Path,
     context: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<(String, String)>, String> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    let file = match Disk::process()
+        .open_blocking(path, Open::read())
+        .if_present()
+    {
+        Ok(Some(file)) => file,
+        Ok(None) => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
                 "cannot read environment file {}: {}",
                 path.display(),
-                error.kind()
+                std::io::Error::from(error).kind()
             ));
         }
     };

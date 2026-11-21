@@ -12,3 +12,8 @@ public/
 **/__fixtures__/
 package-lock.json
 **/*.md
+
+# Generated builder schemas must match the Rust copies byte for byte.
+/lib/contracts/lifecycle-builder-schema.json
+/lib/contracts/request-builder-schema.json
+/lib/contracts/scoring-builder-schema.json

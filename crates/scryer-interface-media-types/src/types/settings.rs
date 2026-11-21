@@ -4,7 +4,7 @@ use super::{
     RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
     VerificationDepthValue,
 };
-use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, Json, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 #[derive(SimpleObject, Clone)]
@@ -238,6 +238,10 @@ pub struct SecuritySettingsPayload {
     pub skip_login_for_local_ips: bool,
     /// Whether API keys are restricted to users with system-settings permission.
     pub api_keys_restrict_to_system_settings_users: bool,
+    /// The saved MCP switch.
+    pub mcp_enabled: bool,
+    /// The value SCRYER_MCP_ENABLED forces over the saved switch; null when unset.
+    pub mcp_enabled_env_override: Option<bool>,
     /// Whether configuration changes require MFA step-up.
     pub mfa_require_config_step_up: bool,
     /// Whether password login is required alongside MFA.
@@ -258,6 +262,11 @@ pub struct SecuritySettingsPayload {
     pub env_override_active: bool,
     /// Description of the active override, or null when none is active.
     pub env_override_description: Option<String>,
+    /// Host names a request served without a login must use, beside IP
+    /// addresses, localhost and the public URL host. Empty when the check is off.
+    pub local_trust_allowed_hosts: Vec<String>,
+    /// Whether forwarding headers count for local trust only from a listed trusted proxy.
+    pub restrict_local_trust_to_trusted_proxies: bool,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -547,6 +556,38 @@ pub struct UiSettingsPayload {
     pub catalog_views: Vec<UiCatalogViewSettingPayload>,
     /// Saved dashboard layouts, one per breakpoint that has one; a breakpoint without an entry uses the default layout.
     pub dashboard_layouts: Vec<UiDashboardLayout>,
+    /// Guided tours (onboarding and release highlights) the caller has finished or skipped; a tour without an entry has not been shown.
+    pub tours: Vec<UiTourProgressPayload>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// How the caller left a guided tour. Either way the tour is not offered again.
+pub enum UiTourOutcomeValue {
+    /// The caller reached the last step.
+    Completed,
+    /// The caller dismissed the tour before the end.
+    Skipped,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A guided tour the caller has finished or skipped.
+pub struct UiTourProgressPayload {
+    /// Tour identifier from the web's tour registry, e.g. `onboarding`.
+    pub tour_id: String,
+    /// How the caller left the tour.
+    pub outcome: UiTourOutcomeValue,
+    /// When the outcome was recorded.
+    pub recorded_at: DateTime<Utc>,
+}
+
+#[derive(InputObject, Clone)]
+/// Guided tours to record for the caller, all with one outcome.
+pub struct RecordMyUiToursInput {
+    /// Tour identifiers: 1 to 32 ids of 1 to 64 lowercase letters, digits, dots or hyphens. Repeated ids count once.
+    pub tour_ids: Vec<String>,
+    /// How the caller left these tours.
+    pub outcome: UiTourOutcomeValue,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -576,6 +617,9 @@ pub struct UiDashboardLayoutItem {
     pub w: i32,
     /// Height in grid rows.
     pub h: i32,
+    /// The panel's own settings as saved by the web client, a JSON object, or
+    /// null when the panel has none.
+    pub settings: Option<Json<serde_json::Value>>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -693,6 +737,10 @@ pub struct UiDashboardLayoutItemInput {
     pub w: i32,
     /// Height in grid rows, at least 1.
     pub h: i32,
+    /// The panel's own settings: a JSON object of at most 2048 bytes when
+    /// serialized, stored as given. Omitted or null saves the panel without
+    /// settings.
+    pub settings: Option<Json<serde_json::Value>>,
 }
 
 #[derive(InputObject, Clone)]
@@ -817,8 +865,8 @@ pub struct TitleTagRewriteCountsPayload {
     pub series_movies: i32,
     /// Delay profiles whose tag list was rewritten.
     pub delay_profiles: i32,
-    /// Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
-    pub maintenance_rule_sets: i32,
+    /// Lifecycle rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+    pub lifecycle_rule_sets: i32,
     /// Release rule sets whose rule source names the old label; rule sources are never rewritten, so these rules stop matching.
     pub release_rule_sets: i32,
     /// Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.
@@ -928,6 +976,16 @@ pub struct QualityProfileCriteriaPayload {
     /// Score a same-tier candidate must beat the current file by to count as
     /// an upgrade. Profiles that never set it report the default, 120.
     pub min_upgrade_score_delta: i32,
+    /// Wanted episodes that must be missing before an automatic search takes
+    /// a pack. At 1, a search for one missing episode may take a pack.
+    /// Profiles that never set it report the default, 2. Changing it does
+    /// not re-open searches already covered.
+    pub min_missing_episodes_for_pack: i32,
+    /// A multi-season pack is taken only when more than this percentage of
+    /// its monitored, aired episodes is missing. Profiles that never set it
+    /// report the default, 30. Changing it does not re-open searches already
+    /// covered.
+    pub min_missing_percent_for_series_pack: i32,
     /// The steps releases are compared on, in order, before the score
     /// decides. Profiles that never set it report `QUALITY_TIER, REVISION,
     /// PREFERRED_LANGUAGE, OPTIONAL_LANGUAGES`; an empty list ranks on score
@@ -1511,6 +1569,8 @@ pub struct UpdateSecuritySettingsInput {
     pub skip_login_for_local_ips: bool,
     /// Whether API keys are restricted to users with system-settings permission.
     pub api_keys_restrict_to_system_settings_users: Option<bool>,
+    /// Whether the built-in MCP endpoint answers. Needs system-settings permission; omission preserves the saved setting.
+    pub mcp_enabled: Option<bool>,
     /// Whether sensitive configuration changes require MFA step-up.
     pub mfa_require_config_step_up: bool,
     /// Whether password login requires MFA.
@@ -1525,6 +1585,13 @@ pub struct UpdateSecuritySettingsInput {
     /// Deprecated alias for `mfaRequireEmbyLogin`. Omission preserves the saved setting.
     #[graphql(deprecation = "Use mfaRequireEmbyLogin.")]
     pub totp_require_emby_login: Option<bool>,
+    /// Host names a request served without a login must use, beside IP
+    /// addresses, localhost and the public URL host. An empty list turns the
+    /// check off. Needs system-settings permission; omission preserves the saved list.
+    pub local_trust_allowed_hosts: Option<Vec<String>>,
+    /// Whether forwarding headers count for local trust only from a listed
+    /// trusted proxy. Needs system-settings permission; omission preserves the saved setting.
+    pub restrict_local_trust_to_trusted_proxies: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]
@@ -1731,6 +1798,16 @@ pub struct QualityProfileCriteriaInput {
     /// value, and sending the default (120) stores the profile as using the
     /// default.
     pub min_upgrade_score_delta: Option<i32>,
+    /// Optional count of wanted episodes that must be missing before an
+    /// automatic search takes a pack; at least 1. Omitting it keeps the stored
+    /// value, and sending the default (2) stores the profile as using the
+    /// default.
+    pub min_missing_episodes_for_pack: Option<i32>,
+    /// Optional percentage, 0 to 100, of a multi-season pack's monitored,
+    /// aired episodes that must be exceeded by the missing ones. Omitting it
+    /// keeps the stored value, and sending the default (30) stores the profile
+    /// as using the default.
+    pub min_missing_percent_for_series_pack: Option<i32>,
     /// Optional decision order; each step at most once. Omitting it keeps the
     /// stored order, and an empty list ranks on score alone. When sent,
     /// whether it lists `REVISION` sets `ignoreProperRepack`.

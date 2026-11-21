@@ -117,6 +117,17 @@ pub(crate) struct DownloadFailureContext {
     /// download client reported; a failure Scryer's own import gate raised
     /// names itself here instead.
     pub blocklist_reason: Option<String>,
+    /// The typed kind of failure, from [`crate::error_reasons::download_failure`],
+    /// when Scryer classified it. `None` is a failure the client reported.
+    pub failure_code: Option<&'static str>,
+}
+impl DownloadFailureContext {
+    /// A release whose payload is itself bad is bad on every indexer that
+    /// carries it, so its block names no indexer. Every other failure stays
+    /// with the indexer that served it.
+    fn blocks_every_indexer(&self) -> bool {
+        self.failure_code == Some(crate::error_reasons::download_failure::UNWANTED_EXECUTABLES)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureHandlingOutcome {
@@ -712,6 +723,26 @@ impl DownloadClientSnapshot {
         !self.history_listing_failed && !self.failed_by_download_id.is_empty()
     }
 
+    /// Every client item id a submission can carry for [`Self::failed_item`]
+    /// to answer for it. `failed_item` looks a submission up by its own item
+    /// id and by `client:item`, so the item id is either a whole key of the
+    /// failed map or what follows one of a key's colons. An item id may hold
+    /// colons itself, so every such suffix is listed; the extra ones match no
+    /// submission or one `failed_item` then turns down.
+    fn failed_item_id_candidates(&self) -> Vec<String> {
+        if self.history_listing_failed {
+            return Vec::new();
+        }
+        let mut candidates = std::collections::BTreeSet::new();
+        for key in self.failed_by_download_id.keys() {
+            candidates.insert(key.clone());
+            for (colon, _) in key.match_indices(':') {
+                candidates.insert(key[colon + 1..].to_string());
+            }
+        }
+        candidates.into_iter().collect()
+    }
+
     /// If a download with this job ID failed in history with a blocklist-worthy
     /// reason, returns the failure snapshot.
     pub(crate) fn failed_item(
@@ -868,15 +899,51 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
         debug!("check_grabbed_for_failures: no failed download client items");
         return;
     }
+    // A grabbed scope can only match a failed item through a submission of
+    // its own title that the snapshot reports as failed. Those submissions
+    // are read by item id, and only their titles' grabbed scopes are checked.
+    let submissions = match app
+        .services
+        .workflow
+        .download_submissions
+        .list_for_client_item_ids(&dl_snapshot.failed_item_id_candidates())
+        .await
+    {
+        Ok(submissions) => submissions,
+        Err(err) => {
+            warn!(error = %err, "failed to list submissions of failed download client items");
+            return;
+        }
+    };
+    let mut submissions_by_title: HashMap<String, Vec<DownloadSubmission>> = HashMap::new();
+    let mut title_ids = Vec::new();
+    for submission in submissions {
+        if dl_snapshot
+            .failed_item(
+                submission.download_client_id.as_deref(),
+                &submission.download_client_item_id,
+            )
+            .is_none()
+        {
+            continue;
+        }
+        if !submissions_by_title.contains_key(&submission.title_id) {
+            title_ids.push(submission.title_id.clone());
+        }
+        submissions_by_title
+            .entry(submission.title_id.clone())
+            .or_default()
+            .push(submission);
+    }
+    if title_ids.is_empty() {
+        debug!("check_grabbed_for_failures: no failed download client item has a submission");
+        return;
+    }
     let grabbed_items = match app
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-            statuses: vec!["grabbed".into()],
-            limit: 200,
-            ..AcquisitionScopeStatesQuery::default()
-        })
+        .list_grabbed_acquisition_scopes_for_titles(&title_ids)
         .await
     {
         Ok(items) => items,
@@ -885,19 +952,17 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
             return;
         }
     };
-
     if grabbed_items.is_empty() {
         debug!("check_grabbed_for_failures: no grabbed wanted items");
         return;
     }
-
     debug!(
         count = grabbed_items.len(),
+        title_count = title_ids.len(),
         "check_grabbed_for_failures: checking grabbed wanted items against download client"
     );
-
-    let mut submissions_by_title = HashMap::new();
-    let mut episodes_by_title = HashMap::new();
+    let episodes_by_title =
+        load_collection_episodes_for_grabbed(app, &grabbed_items, &submissions_by_title).await;
     let mut processed_failed_submissions = HashSet::new();
 
     for item in &grabbed_items {
@@ -912,71 +977,20 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
         // Look up the download submission to find the download client job ID.
         // Match by job ID (works across all clients) instead of title name
         // (which gets sanitized differently by each client).
-        let submissions = if let Some(cached) = submissions_by_title.get(&item.title_id) {
-            cached
-        } else {
-            let fetched = match app
-                .services
-                .workflow
-                .download_submissions
-                .list_for_title(&item.title_id)
-                .await
-            {
-                Ok(submissions) => submissions,
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        title_id = item.title_id.as_str(),
-                        "failed to list submissions for grabbed wanted item title"
-                    );
-                    Vec::new()
-                }
-            };
-
-            trace!(
-                title_id = item.title_id.as_str(),
-                release = release_title.as_str(),
-                submission_count = fetched.len(),
-                submission_ids = ?fetched.iter().map(|s| s.download_client_item_id.as_str()).collect::<Vec<_>>(),
-                "check_grabbed_for_failures: looking up submissions for grabbed title"
-            );
-
-            submissions_by_title.insert(item.title_id.clone(), fetched);
-            submissions_by_title
-                .get(&item.title_id)
-                .expect("title submissions cache entry should exist")
-        };
+        let submissions = submissions_by_title
+            .get(&item.title_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
 
         let episode_collection_id = if item.episode_id.is_some()
             && submissions
                 .iter()
                 .any(|submission| matches!(&submission.scope, SubmissionScope::Collection { .. }))
         {
-            let episodes = if let Some(cached) = episodes_by_title.get(&item.title_id) {
-                cached
-            } else {
-                let fetched = match app
-                    .services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(&item.title_id)
-                    .await
-                {
-                    Ok(episodes) => episodes,
-                    Err(err) => {
-                        warn!(
-                            error = %err,
-                            title_id = item.title_id.as_str(),
-                            "failed to list episodes while matching failed download submissions"
-                        );
-                        Vec::new()
-                    }
-                };
-                episodes_by_title.insert(item.title_id.clone(), fetched);
-                episodes_by_title
-                    .get(&item.title_id)
-                    .expect("title episodes cache entry should exist")
-            };
+            let episodes = episodes_by_title
+                .get(&item.title_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             item.episode_id.as_ref().and_then(|episode_id| {
                 episodes
                     .iter()
@@ -1036,6 +1050,7 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
             let outcome = process_download_failure(
                 app,
                 DownloadFailureContext {
+                    failure_code: None,
                     wanted_item: Some(item.clone()),
                     title_id: Some(item.title_id.clone()),
                     client_id: failed_item.client_id.clone(),
@@ -1054,6 +1069,60 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
             }
         }
     }
+}
+/// The episodes of the titles whose grabbed episode scopes face a failed
+/// collection submission, read in one call. A failed read leaves those titles
+/// with no episodes to match, as a failed read of one title did.
+async fn load_collection_episodes_for_grabbed(
+    app: &AppUseCase,
+    grabbed_items: &[AcquisitionScopeState],
+    submissions_by_title: &HashMap<String, Vec<DownloadSubmission>>,
+) -> HashMap<String, Vec<scryer_domain::Episode>> {
+    let mut seen = HashSet::new();
+    let mut episode_titles = Vec::new();
+    for item in grabbed_items {
+        if item.episode_id.is_none() || !seen.insert(item.title_id.as_str()) {
+            continue;
+        }
+        let faces_collection = submissions_by_title
+            .get(&item.title_id)
+            .is_some_and(|submissions| {
+                submissions.iter().any(|submission| {
+                    matches!(&submission.scope, SubmissionScope::Collection { .. })
+                })
+            });
+        if faces_collection {
+            episode_titles.push(item.title_id.clone());
+        }
+    }
+    let mut episodes_by_title: HashMap<String, Vec<scryer_domain::Episode>> = HashMap::new();
+    if episode_titles.is_empty() {
+        return episodes_by_title;
+    }
+    match app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_titles(&episode_titles)
+        .await
+    {
+        Ok(episodes) => {
+            for episode in episodes {
+                episodes_by_title
+                    .entry(episode.title_id.clone())
+                    .or_default()
+                    .push(episode);
+            }
+        }
+        Err(err) => {
+            warn!(
+                error = %err,
+                title_count = episode_titles.len(),
+                "failed to list episodes while matching failed download submissions"
+            );
+        }
+    }
+    episodes_by_title
 }
 async fn find_failed_submission_for_download(
     app: &AppUseCase,
@@ -1123,7 +1192,7 @@ async fn resolve_failed_pack_episode_wanted_items(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await?;
 
     let failed_release = normalize_release_name(submission.source_title.as_deref());
@@ -1234,10 +1303,14 @@ async fn handle_download_failure_for_download(
     let normalized_source_hint = resolved_failed_release_hint(failed_submission.as_ref());
     // Both halves of the blocklist key come off the submission: source_provider_id
     // has carried the indexer id since 0150, info_hash since 0192.
-    let blocklist_indexer_id = failed_submission
-        .as_ref()
-        .and_then(|submission| submission.source_provider_id.clone())
-        .unwrap_or_default();
+    let blocklist_indexer_id = if context.blocks_every_indexer() {
+        String::new()
+    } else {
+        failed_submission
+            .as_ref()
+            .and_then(|submission| submission.source_provider_id.clone())
+            .unwrap_or_default()
+    };
     let blocklist_info_hash = failed_submission
         .as_ref()
         .and_then(|submission| submission.info_hash.clone());
@@ -1540,7 +1613,7 @@ async fn resolve_failure_wanted_item(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(&[title_id.to_string()])
+        .list_acquisition_scope_states_for_title_ids_without_decisions(&[title_id.to_string()])
         .await
         .ok()?
         .into_iter()
@@ -1964,7 +2037,7 @@ async fn unconfirmed_grab_wanted_items(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await
     {
         Ok(items) => items,
@@ -2302,12 +2375,35 @@ pub(crate) async fn try_saved_candidates_with_trigger(
     // Standby candidates are re-checked against the per-title blocklist (the
     // single, removable exclusion source), never the failed-attempt history.
     let db_blocklist = app
-        .load_title_release_blocklist_signatures(&item.title_id)
+        .load_title_release_blocklist_signatures(
+            &item.title_id,
+            standby_releases
+                .iter()
+                .map(|standby| (standby.release_title.as_str(), standby.info_hash.as_deref())),
+        )
         .await;
     let mut stale_indexer_ids = HashSet::new();
     let mut covered_scopes: Vec<SubmissionScope> = Vec::new();
+    // Indexers whose monthly limit refused a grab during this walk. Their
+    // other saved results stay `Standby`, unclaimed and untried.
+    let mut limit_refused_indexers: HashSet<String> = HashSet::new();
 
     for standby in standby_releases {
+        if standby
+            .indexer_id
+            .as_deref()
+            .is_some_and(|id| limit_refused_indexers.contains(id))
+        {
+            continue;
+        }
+        // Already known to be at its limit: the saved result stays `Standby`
+        // with no claim, no attempt and no restore.
+        if let Some(indexer_id) = standby.indexer_id.as_ref()
+            && app.indexer_monthly_grab_refused_now(Some(indexer_id))
+        {
+            limit_refused_indexers.insert(indexer_id.clone());
+            continue;
+        }
         let standby_scope = standby_scopes
             .get(&standby.id)
             .cloned()
@@ -2548,8 +2644,9 @@ pub(crate) async fn try_saved_candidates_with_trigger(
                 reason,
                 message,
             }) => {
-                // Only a strict upgrade is fetched beside a queued release. This
-                // one is not, but it stays walkable: if the queued release fails,
+                // Nothing is fetched beside a release the client is still
+                // working, and only a strict upgrade beside one it is not. This
+                // one is neither, but it stays walkable: if the queued release fails,
                 // it is the next saved result for the scope. Every later row
                 // within this scope is skipped unjudged: a strict upgrade saved
                 // below this row waits until the queued release leaves the
@@ -2564,6 +2661,20 @@ pub(crate) async fn try_saved_candidates_with_trigger(
                     .update_pending_release_status(&standby.id, PendingReleaseStatus::Standby, None)
                     .await;
                 covered_scopes.push(standby_scope);
+            }
+            Ok(super::pending::PendingGrabOutcome::IndexerLimitRefused) => {
+                // The saved result is as good as it was; only its indexer is
+                // at a monthly limit. Hand the claim back and try a saved
+                // result from another indexer.
+                let _ = app
+                    .services
+                    .workflow
+                    .pending_releases
+                    .update_pending_release_status(&standby.id, PendingReleaseStatus::Standby, None)
+                    .await;
+                if let Some(indexer_id) = standby.indexer_id.as_ref() {
+                    limit_refused_indexers.insert(indexer_id.clone());
+                }
             }
             Ok(super::pending::PendingGrabOutcome::Parked) => {
                 return StandbyRecoveryOutcome::Parked {
@@ -2614,6 +2725,7 @@ fn log_saved_result_queue_covered(
         standby_release = standby.release_title.as_str(),
         queued_release,
         reason = ?reason,
+        reason_code = reason.reason_code(),
         detail = message,
         "saved search result not grabbed: a queued release already covers this scope"
     );
@@ -3138,6 +3250,102 @@ mod client_snapshot_tests {
         assert!(snap.failed_item(Some("client-1"), "nzo_1").is_some());
         assert!(snap.reports_failed_items());
         assert!(!snapshot(false, false).reports_failed_items());
+    }
+
+    fn snapshot_with_failed(items: &[(&str, &str)]) -> DownloadClientSnapshot {
+        let mut snap = snapshot(false, false);
+        for (client_id, item_id) in items {
+            snap.failed_by_download_id.insert(
+                download_client_item_identity(Some(client_id), item_id),
+                FailedDownloadSnapshot {
+                    reason: "MISSING ARTICLES".to_string(),
+                    download_client_item_id: (*item_id).to_string(),
+                    client_id: (*client_id).to_string(),
+                    client_name: None,
+                },
+            );
+        }
+        snap
+    }
+
+    /// Every submission `failed_item` answers for carries an item id the
+    /// candidate list names, so reading submissions by those ids loses none.
+    fn assert_candidates_cover_every_match(
+        snap: &DownloadClientSnapshot,
+        submissions: &[(Option<&str>, &str, bool)],
+    ) {
+        let candidates = snap.failed_item_id_candidates();
+        for (client_id, item_id, fails) in submissions {
+            assert_eq!(
+                snap.failed_item(*client_id, item_id).is_some(),
+                *fails,
+                "{client_id:?} {item_id}"
+            );
+            if *fails {
+                assert!(
+                    candidates.iter().any(|candidate| candidate == item_id),
+                    "{client_id:?} {item_id} is missing from {candidates:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn failed_item_id_candidates_cover_an_item_id_that_holds_a_colon() {
+        let snap = snapshot_with_failed(&[("client-1", "group:nzo_7"), ("a:b", "c")]);
+        assert_candidates_cover_every_match(
+            &snap,
+            &[
+                (Some("client-1"), "group:nzo_7", true),
+                // A submission that names no client is found by its own id
+                // when that id is the whole key.
+                (None, "client-1:group:nzo_7", true),
+                // `a` + `b:c` builds the key `a:b` + `c` built.
+                (Some("a"), "b:c", true),
+                (Some("a:b"), "c", true),
+                (Some("client-2"), "group:nzo_7", false),
+                (None, "nzo_7", false),
+            ],
+        );
+        assert_eq!(
+            snap.failed_item_id_candidates(),
+            vec![
+                "a:b:c".to_string(),
+                "b:c".to_string(),
+                "c".to_string(),
+                "client-1:group:nzo_7".to_string(),
+                "group:nzo_7".to_string(),
+                "nzo_7".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_item_id_candidates_cover_a_failed_item_without_a_client_id() {
+        // A history item with a blank client id is keyed by its bare item id.
+        let snap = snapshot_with_failed(&[("", "bare_job"), ("  ", "padded_job")]);
+        assert_candidates_cover_every_match(
+            &snap,
+            &[
+                (None, "bare_job", true),
+                (Some(""), "bare_job", true),
+                // The bare key answers for a submission under any client.
+                (Some("client-1"), "bare_job", true),
+                (Some("client-1"), "padded_job", true),
+                (None, "other_job", false),
+            ],
+        );
+        assert_eq!(
+            snap.failed_item_id_candidates(),
+            vec!["bare_job".to_string(), "padded_job".to_string()]
+        );
+    }
+
+    #[test]
+    fn failed_item_id_candidates_are_empty_when_history_could_not_be_read() {
+        let mut snap = snapshot_with_failed(&[("client-1", "nzo_1")]);
+        snap.history_listing_failed = true;
+        assert!(snap.failed_item_id_candidates().is_empty());
     }
 
     /// **D18 liveness.** Which tracked states make a submission a queued

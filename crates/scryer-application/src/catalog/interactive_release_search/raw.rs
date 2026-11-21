@@ -761,6 +761,7 @@ impl RawSearchGeneration {
                                 | IndexerSearchOutcome::BackedOff { .. }
                                 | IndexerSearchOutcome::Unsupported
                                 | IndexerSearchOutcome::ClientUnavailable { .. }
+                                | IndexerSearchOutcome::LocalLimit { .. }
                                 | IndexerSearchOutcome::Errored
                         )
                     );
@@ -981,6 +982,7 @@ impl RawSearchGeneration {
             let limited = !state.sources.is_empty() && state.sources.iter().all(|source| matches!(source.outcome,
                 Some(IndexerSearchOutcome::Deferred { .. } | IndexerSearchOutcome::Skipped { .. }
                     | IndexerSearchOutcome::BackedOff { .. }
+                    | IndexerSearchOutcome::LocalLimit { .. }
                     | IndexerSearchOutcome::Partial { reason: Some(crate::IndexerSearchIncompleteReason::RateLimited
                         | crate::IndexerSearchIncompleteReason::QueryBudgetExhausted), .. })));
             return Err(AppError::temporary_unavailable_reason(

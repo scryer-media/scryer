@@ -490,3 +490,35 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod credential_salt_tests {
+    use super::*;
+
+    // Stored with the derivation in use before sessions got their own salt:
+    // HMAC-SHA256 keyed by the credential salt the test fixture carries.
+    const LOOKUP_ID: &str = "AQEBAQEBAQEBAQEBAQEBAQ";
+    const SECRET: &str = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
+    const STORED_API_KEY_HASH: &str = "QP8-5Tg7MGTmUselmmpPLylUqrvINDsF6L69crc73_g";
+    const STORED_OAUTH_TOKEN_HASH: &str =
+        "07b7cf041ba6d12d98a65c0cc7e5ec6fe1f7798ce1aa738ab22aa7d782dbd47d";
+
+    #[test]
+    fn credentials_hashed_before_the_session_salt_split_still_verify() {
+        let (app, _) = crate::lib_tests::bootstrap();
+        assert_ne!(app.auth.jwt_signing_salt, app.auth.session_signing_salt);
+
+        assert_eq!(app.api_key_hash(LOOKUP_ID, SECRET), STORED_API_KEY_HASH);
+        assert!(verify_key_material(
+            &app.auth.jwt_signing_salt,
+            "api-key",
+            LOOKUP_ID,
+            SECRET,
+            STORED_API_KEY_HASH,
+        ));
+        assert_eq!(
+            app.oauth_token_hash("access", "token-value"),
+            STORED_OAUTH_TOKEN_HASH
+        );
+    }
+}

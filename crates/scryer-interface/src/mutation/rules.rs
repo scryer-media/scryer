@@ -1,6 +1,6 @@
 use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::types::*;
-use async_graphql::{Context, ID, Json, Object, Result as GqlResult};
+use async_graphql::{Context, ID, Json, MaybeUndefined, Object, Result as GqlResult};
 use scryer_domain::{AppPermission, RulePackInstallation, RuleSet, User};
 use std::collections::HashMap;
 
@@ -99,6 +99,18 @@ async fn tracked_rule_pack_payload(
     ))
 }
 
+/// The builder-model change an input field asks for: omitted keeps the stored
+/// document, null clears it, and a value replaces it.
+pub(crate) fn builder_model_change(
+    field: MaybeUndefined<Json<serde_json::Value>>,
+) -> scryer_application::BuilderModelChange {
+    scryer_application::BuilderModelChange::from_input(match field {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(Json(value)) => Some(Some(value)),
+    })
+}
+
 fn parse_facets(input: Option<Vec<String>>) -> Vec<scryer_domain::MediaFacet> {
     input
         .unwrap_or_default()
@@ -130,7 +142,7 @@ impl RulesMutations {
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
         let rule_set = app
-            .create_rule_set(
+            .create_rule_set_with_builder_model(
                 &actor,
                 input.name,
                 input.description.unwrap_or_default(),
@@ -138,6 +150,7 @@ impl RulesMutations {
                 parse_facets(input.applied_facets),
                 input.priority.unwrap_or(0),
                 input.enabled,
+                builder_model_change(input.builder_model),
             )
             .await
             .map_err(to_gql_error)?;
@@ -159,7 +172,7 @@ impl RulesMutations {
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
         let rule_set = app
-            .update_rule_set(
+            .update_rule_set_with_builder_model(
                 &actor,
                 String::from(input.id),
                 input.name,
@@ -168,6 +181,7 @@ impl RulesMutations {
                 input.applied_facets.map(|f| parse_facets(Some(f))),
                 input.priority,
                 input.managed_tag_filter,
+                builder_model_change(input.builder_model),
             )
             .await
             .map_err(to_gql_error)?;

@@ -3,16 +3,20 @@ import {
   INDEXER_SEARCH_EXTRA_RESULT_FIELDS,
   JOB_RUN_FIELDS,
   LOCATION_OPERATION_FIELDS,
-  MAINTENANCE_EXCLUSION_FIELDS,
-  MAINTENANCE_RULE_SET_DETAIL_FIELDS,
-  MAINTENANCE_RULE_SET_FIELDS,
+  LIFECYCLE_EXCLUSION_FIELDS,
+  LIFECYCLE_DECIDED_ACTIONS_FIELDS,
+  LIFECYCLE_DECLARED_ACTIONS_FIELDS,
+  LIFECYCLE_RULE_SET_DETAIL_FIELDS,
+  LIFECYCLE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
   POST_PROCESSING_SCRIPT_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
+  REQUEST_DECLARED_ACTIONS_FIELDS,
   REQUEST_RULE_DECISION_FIELDS,
   REQUEST_RULE_SET_DETAIL_FIELDS,
   REQUEST_RULE_SET_FIELDS,
+  REQUEST_SHAPING_FIELDS,
   SCRIPT_INTERPRETER_SETTINGS_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
@@ -417,6 +421,8 @@ export const createIndexerMutation = `mutation CreateIndexer($input: CreateIndex
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     isEnabled
     isManaged
@@ -447,6 +453,8 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     isEnabled
     isManaged
@@ -481,6 +489,7 @@ const PROXY_CONFIG_FIELDS = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled
@@ -641,6 +650,14 @@ export const addTitleAndQueueMutation = `mutation AddTitleAndQueue($input: AddTi
       sourceTitle
       sourceKind
     }
+  }
+}`;
+
+/// Fired once when the request dialog opens: the server reads the subject's
+/// metadata and keeps it, and every preview and the submit read that record.
+export const stageMyRequestMetadataMutation = `mutation StageMyRequestMetadata($input: StageMediaRequestMetadataInput!) {
+  stageMyRequestMetadata(input: $input) {
+    metadataPartial
   }
 }`;
 
@@ -982,6 +999,10 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -991,6 +1012,7 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
         y
         w
         h
+        settings
       }
     }
   }
@@ -1025,6 +1047,10 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1034,6 +1060,7 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
         y
         w
         h
+        settings
       }
     }
   }
@@ -1067,6 +1094,10 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1076,6 +1107,7 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
         y
         w
         h
+        settings
       }
     }`;
 
@@ -1088,6 +1120,12 @@ export const setMyDashboardLayoutMutation = `mutation SetMyDashboardLayout($inpu
 /** Drops the saved dashboard layout for one breakpoint, or every one when null. */
 export const resetMyDashboardLayoutMutation = `mutation ResetMyDashboardLayout($breakpoint: UiDashboardBreakpoint) {
   resetMyDashboardLayout(breakpoint: $breakpoint) {${UI_SETTINGS_PAYLOAD_FIELDS}
+  }
+}`;
+
+/** Records guided tours the caller finished or skipped, so they are not offered again. */
+export const recordMyUiToursMutation = `mutation RecordMyUiTours($input: RecordMyUiToursInput!) {
+  recordMyUiTours(input: $input) {${UI_SETTINGS_PAYLOAD_FIELDS}
   }
 }`;
 
@@ -1151,10 +1189,14 @@ export const updateSecuritySettingsMutation = `mutation UpdateSecuritySettings($
     sessionDurationDays
     skipLoginForLocalIps
     apiKeysRestrictToSystemSettingsUsers
+    mcpEnabled
+    mcpEnabledEnvOverride
     mfaRequireConfigStepUp
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin
     mfaRequireEmbyLogin
+    localTrustAllowedHosts
+    restrictLocalTrustToTrustedProxies
     effectiveFormLoginEnabled
     envOverrideActive
     envOverrideDescription
@@ -1330,7 +1372,7 @@ const TITLE_TAG_REWRITE_COUNT_FIELDS = `
       titles
       seriesMovies
       delayProfiles
-      maintenanceRuleSets
+      lifecycleRuleSets
       releaseRuleSets
       managedTagFilters
       requestRuleSets`;
@@ -1407,6 +1449,8 @@ const qualityProfileCriteriaFields = `
       minScoreToGrab
       cutoffScore
       minUpgradeScoreDelta
+      minMissingEpisodesForPack
+      minMissingPercentForSeriesPack
       decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
@@ -1537,135 +1581,6 @@ export const updateMediaSettingsMutation = `mutation UpdateMediaSettings($input:
 
 export const updateServiceSettingsMutation = `mutation UpdateServiceSettings($input: UpdateServiceSettingsInput!) {
   updateServiceSettings(input: $input) {${serviceSettingsFieldSelection}
-  }
-}`;
-
-export const queueIndexerSearchAssignmentMutation = `mutation QueueIndexerSearchAssignment($input: QueueDownloadInput!, $routing: IndexerGrabSelectionInput!, $replacement: Boolean!) {
-  queueIndexerSearchAssignment(input: $input, routing: $routing, replacement: $replacement) {
-    status
-    jobId
-    titleId
-    titleName
-    sourceTitle
-    sourceKind
-    conflict {
-      titleId
-      titleName
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      sourceKind
-      state
-      replaceable
-      scope {
-        __typename
-        ... on EpisodeScopePayload {
-          episodeId
-        }
-        ... on EpisodeSetScopePayload {
-          episodeIds
-        }
-        ... on SeriesMovieScopePayload {
-          seriesMovieLinkId
-        }
-        ... on CollectionScopePayload {
-          collectionId
-        }
-        ... on TitleScopePayload {
-          wholeTitle
-        }
-        ... on OrphanScopePayload {
-          orphaned
-        }
-      }
-    }
-  }
-}`;
-
-export const queueExistingMutation = `mutation QueueExisting($input: QueueDownloadInput!) {
-  queueExistingTitleDownload(input: $input) {
-    status
-    jobId
-    titleId
-    titleName
-    sourceTitle
-    sourceKind
-    conflict {
-      titleId
-      titleName
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      sourceKind
-      state
-      replaceable
-      scope {
-        __typename
-        ... on EpisodeScopePayload {
-          episodeId
-        }
-        ... on EpisodeSetScopePayload {
-          episodeIds
-        }
-        ... on SeriesMovieScopePayload {
-          seriesMovieLinkId
-        }
-        ... on CollectionScopePayload {
-          collectionId
-        }
-        ... on TitleScopePayload {
-          wholeTitle
-        }
-        ... on OrphanScopePayload {
-          orphaned
-        }
-      }
-    }
-  }
-}`;
-
-export const queueReplacementMutation = `mutation QueueReplacement($input: QueueDownloadInput!) {
-  queueReplacementRelease(input: $input) {
-    status
-    jobId
-    titleId
-    titleName
-    sourceTitle
-    sourceKind
-    conflict {
-      titleId
-      titleName
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      sourceKind
-      state
-      replaceable
-      scope {
-        __typename
-        ... on EpisodeScopePayload {
-          episodeId
-        }
-        ... on EpisodeSetScopePayload {
-          episodeIds
-        }
-        ... on SeriesMovieScopePayload {
-          seriesMovieLinkId
-        }
-        ... on CollectionScopePayload {
-          collectionId
-        }
-        ... on TitleScopePayload {
-          wholeTitle
-        }
-        ... on OrphanScopePayload {
-          orphaned
-        }
-      }
-    }
   }
 }`;
 
@@ -2181,13 +2096,14 @@ export const issueInteractiveReleaseCandidateTokenMutation = `mutation IssueInte
   }
 }`;
 
-// Spec 0002 D8: grabs a search row with no catalog title behind it. The client's
-// own routing category applies, so there is no category input here.
-export const queueUnlinkedReleaseMutation = `mutation QueueUnlinkedRelease($input: QueueUnlinkedReleaseInput!) {
-  queueUnlinkedRelease(input: $input) {
-    downloadId
-    clientName
-    sourceTitle
+// Starts a grab in the background. The request returns as soon as the job is
+// recorded; `grabJobResultQuery` reads the outcome once the job has finished.
+export const startGrabMutation = `mutation StartGrab($input: StartGrabInput!) {
+  startGrab(input: $input) {
+    jobRun {
+      id jobKey displayName category section status triggerSource
+      startedAt completedAt summaryJson summaryText errorText progressJson
+    }
   }
 }`;
 
@@ -2216,43 +2132,6 @@ export const triggerRssSyncMutation = `mutation TriggerRssSync {
 
 // ── Pending Releases ─────────────────────────────────────────────────────
 
-export const forceGrabPendingReleaseMutation = `mutation ForceGrabPendingRelease($id: ID!) {
-  forceGrabPendingRelease(id: $id) {
-    id
-    grabbed
-  }
-}`;
-
-export const queueStandbyReleaseMutation = `mutation QueueStandbyRelease($id: ID!, $choice: StandbyQueueChoiceValue!, $confirmed: [StandbyConflictIdentityInput!]!) {
-  queueStandbyRelease(id: $id, choice: $choice, confirmed: $confirmed) {
-    grabbed
-    conflicts {
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      titleName
-      state
-    }
-    cancelled {
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      titleName
-      state
-    }
-    cancelFailed {
-      downloadClientId
-      downloadClientType
-      downloadClientItemId
-      sourceTitle
-      titleName
-      state
-    }
-  }
-}`;
-
 export const dismissPendingReleaseMutation = `mutation DismissPendingRelease($id: ID!) {
   dismissPendingRelease(id: $id) {
     id
@@ -2260,6 +2139,14 @@ export const dismissPendingReleaseMutation = `mutation DismissPendingRelease($id
 }`;
 
 // ── Plugins ──────────────────────────────────────────────────────────────
+
+export const dismissPluginRestoreWarningsMutation = `mutation DismissPluginRestoreWarnings {
+  dismissPluginRestoreWarnings {
+    outageMessage
+    blockedActions
+    restoreWarnings
+  }
+}`;
 
 export const refreshPluginCatalogMutation = `mutation RefreshPluginCatalog {
   refreshPluginCatalog {
@@ -2855,44 +2742,47 @@ export const uninstallTrackedRulePackMutation = `mutation UninstallTrackedRulePa
   }
 }`;
 
-// ── Maintenance Rules ─────────────────────────────────────────────────
+// ── Lifecycle Rules ─────────────────────────────────────────────────
 //
-// Maintenance rule sets are saved disabled. Preview runs a matcher read-only:
+// Lifecycle rule sets are saved disabled. Preview runs a matcher read-only:
 // it reports what a rule would select, and changes nothing.
 
-export const createMaintenanceRuleSetMutation = `mutation CreateMaintenanceRuleSet($input: CreateMaintenanceRuleSetInput!) {
-  createMaintenanceRuleSet(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+export const createLifecycleRuleSetMutation = `mutation CreateLifecycleRuleSet($input: CreateLifecycleRuleSetInput!) {
+  createLifecycleRuleSet(input: $input) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
-export const updateMaintenanceRuleMatcherMutation = `mutation UpdateMaintenanceRuleMatcher($input: UpdateMaintenanceRuleMatcherInput!) {
-  updateMaintenanceRuleMatcher(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+export const updateLifecycleRuleSourceMutation = `mutation UpdateLifecycleRuleSource($input: UpdateLifecycleRuleSourceInput!) {
+  updateLifecycleRuleSource(input: $input) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
-export const updateMaintenanceRuleMetadataMutation = `mutation UpdateMaintenanceRuleMetadata($input: UpdateMaintenanceRuleMetadataInput!) {
-  updateMaintenanceRuleMetadata(input: $input) {${MAINTENANCE_RULE_SET_FIELDS}
+export const updateLifecycleRuleMetadataMutation = `mutation UpdateLifecycleRuleMetadata($input: UpdateLifecycleRuleMetadataInput!) {
+  updateLifecycleRuleMetadata(input: $input) {${LIFECYCLE_RULE_SET_FIELDS}
   }
 }`;
 
-export const deleteMaintenanceRuleSetMutation = `mutation DeleteMaintenanceRuleSet($id: ID!) {
-  deleteMaintenanceRuleSet(id: $id) {
+export const deleteLifecycleRuleSetMutation = `mutation DeleteLifecycleRuleSet($id: ID!) {
+  deleteLifecycleRuleSet(id: $id) {
     id
   }
 }`;
 
-export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule($input: ValidateMaintenanceRuleInput!) {
-  validateMaintenanceRule(input: $input) {
+export const validateLifecycleRuleMutation = `mutation ValidateLifecycleRule($input: ValidateLifecycleRuleInput!) {
+  validateLifecycleRule(input: $input) {
     valid
     diagnostics { code message line column path }
+    warnings { code message line column path }
     errors
+    declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
+    }
   }
 }`;
 
-export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($input: PreviewMaintenanceRuleInput!) {
-  previewMaintenanceRule(input: $input) {
+export const previewLifecycleRuleMutation = `mutation PreviewLifecycleRule($input: PreviewLifecycleRuleInput!) {
+  previewLifecycleRule(input: $input) {
     ruleSetId
-    matcherContentHash
+    sourceContentHash
     evaluatedAt
     titles {
       excluded
@@ -2910,6 +2800,9 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       outcome
       reasonCodes
       error
+      errorCode
+      actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
+      }
       facts
     }
   }
@@ -2920,40 +2813,40 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
 /// rejects the call with the real count in the message and the dialog re-asks
 /// against that number. The caller refetches the list afterwards, so the
 /// selection stays at what it needs to correlate the response.
-export const setMaintenanceRuleStateMutation = `mutation SetMaintenanceRuleState($ruleSetId: ID!, $state: MaintenanceRuleState!, $confirmation: MaintenanceRuleArmingConfirmationInput) {
-  setMaintenanceRuleState(ruleSetId: $ruleSetId, state: $state, confirmation: $confirmation) {
+export const setLifecycleRuleStateMutation = `mutation SetLifecycleRuleState($ruleSetId: ID!, $state: LifecycleRuleState!, $confirmation: LifecycleRuleArmingConfirmationInput) {
+  setLifecycleRuleState(ruleSetId: $ruleSetId, state: $state, confirmation: $confirmation) {
     id
     state
   }
 }`;
 
-export const setMaintenanceInstanceGatesMutation = `mutation SetMaintenanceInstanceGates($input: SetMaintenanceInstanceGatesInput!) {
-  setMaintenanceInstanceGates(input: $input) {
+export const setLifecycleInstanceGatesMutation = `mutation SetLifecycleInstanceGates($input: SetLifecycleInstanceGatesInput!) {
+  setLifecycleInstanceGates(input: $input) {
     enabled
     actionsPaused
   }
 }`;
 
-export const excludeMaintenanceSubjectMutation = `mutation ExcludeMaintenanceSubject($input: ExcludeMaintenanceSubjectInput!) {
-  excludeMaintenanceSubject(input: $input) {${MAINTENANCE_EXCLUSION_FIELDS}
+export const excludeLifecycleSubjectMutation = `mutation ExcludeLifecycleSubject($input: ExcludeLifecycleSubjectInput!) {
+  excludeLifecycleSubject(input: $input) {${LIFECYCLE_EXCLUSION_FIELDS}
   }
 }`;
 
-export const removeMaintenanceExclusionMutation = `mutation RemoveMaintenanceExclusion($id: ID!) {
-  removeMaintenanceExclusion(id: $id) {
+export const removeLifecycleExclusionMutation = `mutation RemoveLifecycleExclusion($id: ID!) {
+  removeLifecycleExclusion(id: $id) {
     id
   }
 }`;
 
-export const runMaintenanceEvaluationNowMutation = `mutation RunMaintenanceEvaluationNow($ruleSetId: ID) {
-  runMaintenanceEvaluationNow(ruleSetId: $ruleSetId) {
+export const runLifecycleEvaluationNowMutation = `mutation RunLifecycleEvaluationNow($ruleSetId: ID) {
+  runLifecycleEvaluationNow(ruleSetId: $ruleSetId) {
     started
     message
   }
 }`;
 
-export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow {
-  runMaintenanceActionHandlerNow {
+export const runLifecycleActionHandlerNowMutation = `mutation RunLifecycleActionHandlerNow($ruleSetId: ID!) {
+  runLifecycleActionHandlerNow(ruleSetId: $ruleSetId) {
     started
     message
   }
@@ -2968,8 +2861,8 @@ export const createRequestRuleSetMutation = `mutation CreateRequestRuleSet($inpu
   }
 }`;
 
-export const updateRequestRuleMatcherMutation = `mutation UpdateRequestRuleMatcher($input: UpdateRequestRuleMatcherInput!) {
-  updateRequestRuleMatcher(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+export const updateRequestRuleSourceMutation = `mutation UpdateRequestRuleSource($input: UpdateRequestRuleSourceInput!) {
+  updateRequestRuleSource(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
@@ -2993,7 +2886,10 @@ export const validateRequestRuleMutation = `mutation ValidateRequestRule($input:
   validateRequestRule(input: $input) {
     valid
     diagnostics { code message line column path }
+    warnings { code message line column path }
     errors
+    declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
+    }
   }
 }`;
 
@@ -3004,11 +2900,13 @@ export const validateRequestRuleMutation = `mutation ValidateRequestRule($input:
 export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: PreviewRequestRuleInput!) {
   previewRequestRule(input: $input) {
     ruleSetId
-    matcherContentHash
+    sourceContentHash
     metadataPartial
     undefinedTags
     inputDocument
     decision {${REQUEST_RULE_DECISION_FIELDS}
+      shaping {${REQUEST_SHAPING_FIELDS}
+      }
     }
   }
 }`;
@@ -3157,6 +3055,14 @@ export const retryExternalImportSourcesMutation = `mutation RetryExternalImportS
 }`;
 export const skipExternalImportSourceMutation = `mutation SkipExternalImportSource($runId: ID!, $key: String!) {
   skipExternalImportSource(runId: $runId, key: $key) { ${sourceImportJobFields} }
+}`;
+
+// Starts a background import of external rules; progress arrives through the
+// job-run stream and the final report through externalRuleImportStatusQuery.
+export const startExternalRuleImportMutation = `mutation StartExternalRuleImport($requestKey: String!, $input: ExternalRuleImportInput!) {
+  startExternalRuleImport(requestKey: $requestKey, input: $input) {
+${JOB_RUN_FIELDS}
+  }
 }`;
 
 export const finalizeExternalImportMutation = `mutation FinalizeExternalImport($input: FinalizeExternalImportInput!) {
@@ -3657,5 +3563,12 @@ export const createFolderMutation = `mutation CreateFolder($parentPath: String!,
     name
     path
     isDirectory
+  }
+}`;
+
+export const setLibraryFullHashBackfillMutation = `mutation SetLibraryFullHashBackfill($input: SetLibraryFullHashBackfillInput!) {
+  setLibraryFullHashBackfill(input: $input) {
+    id
+    fullHashBackfillEnabled
   }
 }`;

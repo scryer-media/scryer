@@ -1,0 +1,10 @@
+# Quality profile ids and names to pick one per library. Read-only. Variables: none.
+query QualityProfileChoices {
+  qualityProfileSettings {
+    globalProfileId
+    profiles {
+      id
+      name
+    }
+  }
+}

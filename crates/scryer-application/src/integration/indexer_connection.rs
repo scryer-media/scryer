@@ -448,6 +448,8 @@ impl AppUseCase {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
@@ -555,6 +557,8 @@ impl AppUseCase {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
@@ -949,24 +953,29 @@ async fn observed_preflight_test_flight_url(
     )
     .with_indexer_origin(url.as_str());
     let response = outbound_http
-        .send_with_dispatch_observer(
+        .send_with_async_dispatch_observer(
             scryer_outbound_http::RequestPolicy::no_retry("indexer_preflight", "head_origin"),
             || outbound_http.client().head(&origin),
             |url| {
-                if tally.try_note_sent(url.as_str()) {
-                    Ok(())
-                } else {
-                    Err(scryer_outbound_http::OutboundHttpError::DispatchRejected)
+                let tally = &tally;
+                async move {
+                    if tally.try_note_sent_async(url.as_str()).await {
+                        Ok(())
+                    } else {
+                        Err(scryer_outbound_http::OutboundHttpError::DispatchRejected)
+                    }
                 }
             },
         )
         .await
         .map_err(|error| {
             tally.note_result(crate::IndexerRequestResult::NoResponse);
-            AppError::validation_refused(
-                crate::error_reasons::integration::INDEXER_CONNECTION_UNREACHABLE,
-                format_preflight_transport_error(url, &origin, &error.to_string()),
-            )
+            tally.take_dispatch_error().unwrap_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::INDEXER_CONNECTION_UNREACHABLE,
+                    format_preflight_transport_error(url, &origin, &error.to_string()),
+                )
+            })
         })?;
     tally.note_response(&crate::CapturedIndexerHttpResponse {
         status: response.status().as_u16(),
@@ -2248,6 +2257,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             Arc::new(FacetRegistry::new()),
         )
@@ -2286,6 +2296,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".to_string(),
                 jwt_signing_salt: "test-salt".to_string(),
+                session_signing_salt: "test-session-salt".to_string(),
             },
             Arc::new(FacetRegistry::new()),
         )
@@ -2297,6 +2308,8 @@ mod tests {
     fn solver_proxy_config(id: &str) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: id.to_string(),
             name: "Solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2372,6 +2385,14 @@ mod tests {
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())
+        }
+
+        async fn count_solvers_reaching_through(
+            &self,
+            _id: &str,
+            _enabled_only: bool,
+        ) -> AppResult<u64> {
+            Ok(0)
         }
     }
 
@@ -2499,6 +2520,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
@@ -2585,6 +2608,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -2629,6 +2654,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
@@ -2676,6 +2703,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -2709,6 +2738,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -2760,6 +2791,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: None,
                     enable_interactive_search: None,
                     enable_auto_search: None,
@@ -2806,6 +2839,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -2858,6 +2893,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: None,
                     enable_interactive_search: None,
                     enable_auto_search: None,
@@ -2892,6 +2929,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -2943,6 +2982,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: None,
                 enable_interactive_search: None,
                 enable_auto_search: None,
@@ -2978,6 +3019,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3020,6 +3063,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".into(),
                 jwt_signing_salt: "test-salt".into(),
+                session_signing_salt: "test-session-salt".into(),
             },
             Arc::new(FacetRegistry::new()),
         );
@@ -3049,6 +3093,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3099,6 +3145,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".into(),
                 jwt_signing_salt: "test-salt".into(),
+                session_signing_salt: "test-session-salt".into(),
             },
             Arc::new(FacetRegistry::new()),
         );
@@ -3134,6 +3181,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3207,6 +3256,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".into(),
                 jwt_signing_salt: "test-salt".into(),
+                session_signing_salt: "test-session-salt".into(),
             },
             Arc::new(FacetRegistry::new()),
         );
@@ -3255,6 +3305,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3319,6 +3371,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".into(),
                 jwt_signing_salt: "test-salt".into(),
+                session_signing_salt: "test-session-salt".into(),
             },
             Arc::new(FacetRegistry::new()),
         );
@@ -3392,6 +3445,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".into(),
                 jwt_signing_salt: "test-salt".into(),
+                session_signing_salt: "test-session-salt".into(),
             },
             Arc::new(FacetRegistry::new()),
         )
@@ -3424,6 +3478,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -3489,6 +3545,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3548,6 +3606,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3647,6 +3707,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -3937,6 +3999,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -4000,6 +4064,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -4076,6 +4142,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -4117,6 +4185,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: false,
             enable_interactive_search: false,
@@ -4156,6 +4226,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: Some(true),
                     enable_interactive_search: None,
                     enable_auto_search: None,
@@ -4734,6 +4806,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -4781,6 +4855,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -4819,6 +4895,8 @@ mod tests {
                     rate_limit_seconds: None,
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
@@ -4866,6 +4944,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -4897,6 +4977,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: true,
@@ -4960,6 +5042,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -4993,6 +5077,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: false,
                 enable_interactive_search: false,
@@ -5153,6 +5239,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -5217,6 +5305,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -5250,6 +5340,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: false,
                 enable_interactive_search: false,
@@ -5311,6 +5403,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -5342,6 +5436,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -5405,6 +5501,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -5521,6 +5619,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: false,
@@ -5600,6 +5700,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -5628,6 +5730,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: false,
             enable_interactive_search: false,
@@ -5667,6 +5771,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -5878,6 +5984,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: false,
@@ -5908,6 +6016,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -5997,6 +6107,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until,
             is_enabled,
             enable_interactive_search: true,
@@ -6267,6 +6379,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -6333,6 +6447,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: false,
@@ -6364,6 +6480,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: true,
@@ -6592,6 +6710,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "test".into(),
                 jwt_signing_salt: "test-salt".into(),
+                session_signing_salt: "test-session-salt".into(),
             },
             Arc::new(FacetRegistry::new()),
         )
@@ -6624,6 +6743,8 @@ mod tests {
                 rate_limit_seconds: Some(10),
                 rate_limit_burst: Some(5),
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 ..Default::default()
             },
             IndexerConfigUpdate {
@@ -6805,6 +6926,8 @@ mod tests {
                         rate_limit_seconds: None,
                         rate_limit_burst: None,
                         max_queries_per_minute: None,
+                        max_requests_per_month: None,
+                        max_grabs_per_month: None,
                         is_enabled: enabled,
                         enable_interactive_search: true,
                         enable_auto_search: true,
@@ -7098,6 +7221,8 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 max_queries_per_minute: None,
+                max_requests_per_month: None,
+                max_grabs_per_month: None,
                 is_enabled: false,
                 enable_interactive_search: true,
                 enable_auto_search: true,
@@ -7367,6 +7492,39 @@ mod tests {
             let cookie = fields.iter().find(|field| field.key == "cookie").unwrap();
             assert_eq!(cookie.field_type, scryer_domain::ConfigFieldType::Password);
             assert!(!cookie.required);
+        }
+
+        #[tokio::test]
+        async fn a_stored_indexer_without_field_definitions_redacts_every_stored_string() {
+            let (app, _, _) = dynamic_app(&[], RecordingIndexerClient::new(false));
+            let mut stored = app
+                .create_indexer_config(
+                    &test_admin(),
+                    new_config(r#"{"definition":"alpha","username":"reader"}"#),
+                )
+                .await
+                .unwrap();
+
+            // With the plugin loaded its own definitions govern, as before.
+            let loaded = app.indexer_config_fields_for_config(&stored).await;
+            let username = loaded.iter().find(|field| field.key == "username").unwrap();
+            assert_eq!(username.field_type, scryer_domain::ConfigFieldType::String);
+
+            // A type no loaded plugin offers has no definitions to consult.
+            stored.provider_type = "synthetic-orphan".into();
+            stored.config_json = Some(
+                r#"{"definition":"alpha","passkey":"p1","username":"reader","limit":5}"#.into(),
+            );
+            let fields = app.indexer_config_fields_for_config(&stored).await;
+            let mut keys = fields
+                .iter()
+                .map(|field| field.key.as_str())
+                .collect::<Vec<_>>();
+            keys.sort();
+            assert_eq!(keys, ["definition", "passkey", "username"]);
+            assert!(fields.iter().all(|field| {
+                field.field_type == scryer_domain::ConfigFieldType::Password && !field.required
+            }));
         }
     }
 }

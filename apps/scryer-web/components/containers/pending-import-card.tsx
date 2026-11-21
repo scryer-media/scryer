@@ -18,7 +18,10 @@ import type {
   PendingImportBindingPreview,
   PendingImportItem,
 } from "@/lib/types";
-import { isResolvableConflict } from "@/lib/pending-import-conflicts";
+import {
+  canFixConflictMatch,
+  isResolvableConflict,
+} from "@/lib/pending-import-conflicts";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 type MetadataSearchResult = {
@@ -141,6 +144,10 @@ export const PendingImportCard = React.memo(function PendingImportCard({
     isInvalidOwnership;
   const canSearchOrBind =
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
+  // A movie bound to a title that already owns another folder can be matched
+  // again to the right title; the search replaces that binding.
+  const canFixMatch = canFixConflictMatch(item);
+  const showsTitleSearch = canFixMatch || (canSearchOrBind && !item.titleId);
   // The scan found the title but could not tell which episode the file's
   // absolute number means, so the operator picks it.
   const canAssignEpisode =
@@ -206,6 +213,19 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                   {t("pendingImports.conflict.keepOne")}
                 </Button>
               </>
+            ) : null}
+            {canFixMatch ? (
+              <Button
+                type="button"
+                size="sm"
+                id={`pending-import-fix-match-${item.id}`}
+                variant={isActive ? "secondary" : "outline"}
+                onClick={() => onOpenSearch(item)}
+                disabled={isBusy || conflictBusy}
+              >
+                <Search className="mr-2 h-4 w-4" />
+                {t("title.fixMatchAction")}
+              </Button>
             ) : null}
             {canAssignEpisode ? (
               <Button
@@ -299,9 +319,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                   )}
           </p>
         ) : null}
-        {isActive && canSearchOrBind ? (
+        {isActive && (canSearchOrBind || canFixMatch) ? (
           <div className="space-y-3 rounded-lg border border-border/80 bg-background/60 p-3">
-            {item.titleId ? (
+            {!showsTitleSearch ? (
               <>
                 {bindingLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">

@@ -464,6 +464,8 @@ fn indexer_config(provider_type: &str) -> IndexerConfig {
         rate_limit_seconds: None,
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         is_enabled: true,
         enable_interactive_search: true,
@@ -488,6 +490,8 @@ fn indexer_config(provider_type: &str) -> IndexerConfig {
 fn proxy_config() -> scryer_domain::ProxyConfig {
     let at = Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap();
     scryer_domain::ProxyConfig {
+        reach_through_proxy_config_id: None,
+        reach_through: None,
         id: "proxy-1".to_string(),
         name: "Synthetic Proxy".to_string(),
         provider_type: scryer_domain::ProxyProviderType::Http,

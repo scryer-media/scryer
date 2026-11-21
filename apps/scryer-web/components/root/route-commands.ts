@@ -1,3 +1,4 @@
+import { LifecycleRulesIcon } from "@/components/common/lifecycle-rules-icon";
 import type { LucideIcon } from "lucide-react";
 import {
   ActivitySquare,
@@ -24,7 +25,6 @@ import {
   Trash2,
   User,
   Users,
-  Wrench,
 } from "lucide-react";
 import type {
   ActivitySection,
@@ -66,13 +66,9 @@ export type RouteCommand = {
 type BuildRouteCommandsArgs = {
   t: Translate;
   user: AuthUser;
+  /** The member's own lists are not allowed, so Lists offers them nothing. */
+  personalListsRefused?: boolean;
   activityImportCount?: number;
-  /**
-   * Whether surfaces that are still being finished are offered on this
-   * instance. Defaults to off so a caller that has not read the switch yet
-   * never surfaces a command for a page the sidebar is hiding.
-   */
-  experimentalFeaturesEnabled?: boolean;
   /**
    * Navigates to a canonical path. Panes that `onNavigate` has no section
    * argument for (the Lists page's exclusions) go through this; without it
@@ -116,8 +112,8 @@ function buildNavigate(
 export function buildRouteCommands({
   t,
   user,
+  personalListsRefused = false,
   activityImportCount = 0,
-  experimentalFeaturesEnabled = false,
   onNavigatePath,
   onNavigate,
 }: BuildRouteCommandsArgs): RouteCommand[] {
@@ -409,6 +405,7 @@ export function buildRouteCommands({
         hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) ||
         hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles),
       canManageLists || canManageSystemSettings,
+      personalListsRefused,
     )
       ? [
           {
@@ -583,6 +580,22 @@ export function buildRouteCommands({
             onSelect: buildNavigate(onNavigate, "settings", "general"),
           } satisfies RouteCommand,
           {
+            id: "settings-acquisition",
+            label: `${settingsGroupLabel} / ${t("settings.acquisition")}`,
+            description: t("settings.acquisition"),
+            groupLabel: settingsGroupLabel,
+            keywords: [
+              "settings",
+              "acquisition",
+              "rss",
+              "backfill",
+              "search",
+              "pacing",
+            ],
+            icon: Settings,
+            onSelect: buildNavigate(onNavigate, "settings", "acquisition"),
+          } satisfies RouteCommand,
+          {
             id: "settings-backups",
             label: `${systemGroupLabel} / ${t("settings.backups")}`,
             description: t("settings.backups"),
@@ -674,33 +687,31 @@ export function buildRouteCommands({
             icon: SlidersHorizontal,
             onSelect: buildNavigate(onNavigate, "settings", "rules"),
           } satisfies RouteCommand,
-          // Maintenance rules are still being finished, so the palette offers the
-          // page only when the instance has opted in. Its catalog-settings
-          // permission still gates the whole group above.
-          ...(experimentalFeaturesEnabled
-            ? [
-                {
-                  id: "settings-maintenance-rules",
-                  label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.maintenanceRules")}`,
-                  description: t("settings.maintenanceRules"),
-                  groupLabel: automationGroupLabel,
-                  keywords: [
-                    "settings",
-                    "maintenance",
-                    "rules",
-                    "rego",
-                    "cleanup",
-                    "prune",
-                  ],
-                  icon: Wrench,
-                  onSelect: buildNavigate(
-                    onNavigate,
-                    "settings",
-                    "maintenanceRules",
-                  ),
-                } satisfies RouteCommand,
-              ]
-            : []),
+        ]
+      : []),
+    ...(canManageSystemSettings
+      ? [
+          {
+            id: "settings-lifecycle-rules",
+            label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.lifecycleRules")}`,
+            description: t("settings.lifecycleRules"),
+            groupLabel: automationGroupLabel,
+            keywords: [
+              "settings",
+              "lifecycle",
+              "maintenance",
+              "rules",
+              "rego",
+              "cleanup",
+              "prune",
+            ],
+            icon: LifecycleRulesIcon,
+            onSelect: buildNavigate(onNavigate, "settings", "lifecycleRules"),
+          } satisfies RouteCommand,
+        ]
+      : []),
+    ...(canManageCatalogSettings
+      ? [
           {
             id: "settings-post-processing",
             label: `${automationGroupLabel} / ${t("settings.postProcessing")}`,

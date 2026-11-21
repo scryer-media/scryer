@@ -11579,13 +11579,285 @@ async fn ownership_conflict_pending_import_cannot_be_bound_or_adopted() {
         .expect_err("ownership conflict must not be bound");
 
     for error in [resolve_error, preview_error, bind_error] {
-        assert!(
-            error
-                .to_string()
-                .contains("folder ownership conflicts cannot be bound or adopted")
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::FOLDER_OWNERSHIP_CONFLICT)
         );
     }
     assert_eq!(unmatched_items.items().await, vec![conflict]);
+}
+
+struct FixMatchFixture {
+    _tempdir: tempfile::TempDir,
+    app: AppUseCase,
+    user: User,
+    unmatched_items: Arc<TrackingLibraryScanUnmatchedItemRepo>,
+    folder: std::path::PathBuf,
+    file: std::path::PathBuf,
+    wrong_title: Title,
+    wrong_folder: String,
+    conflict: LibraryScanUnmatchedItem,
+}
+
+/// A movie folder the scan bound to a same-name title that already owns its
+/// own folder: the shape "Fix Match" repairs.
+async fn fix_match_fixture() -> FixMatchFixture {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let folder = tempdir.path().join("Quiet Meridian (2023)");
+    tokio::fs::create_dir(&folder).await.unwrap();
+    let file = folder.join("Quiet.Meridian.2023.1080p.mkv");
+    tokio::fs::write(&file, b"movie").await.unwrap();
+    let wrong_folder = tempdir
+        .path()
+        .join("Quiet Meridian (1960)")
+        .to_string_lossy()
+        .to_string();
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+        Arc::new(MockMetadataGateway {
+            movies: HashMap::from([(900_777, make_movie_metadata(900_777, "Quiet Meridian"))]),
+        }),
+    );
+    app.reconcile_default_library_roots().await.unwrap();
+    let wrong_title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Quiet Meridian".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "900111".to_string())],
+                root_folder_id: None,
+                year: Some(1960),
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .unwrap()
+        .title;
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&wrong_title.id, &wrong_folder)
+        .await
+        .unwrap();
+    let wrong_title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&wrong_title.id)
+        .await
+        .unwrap()
+        .expect("wrong title");
+    let mut conflict = build_test_unmatched_item(
+        "movie-fix-match-1",
+        MediaFacet::Movie,
+        tempdir.path().to_string_lossy().as_ref(),
+        file.to_string_lossy().as_ref(),
+        "Quiet Meridian",
+        "Quiet Meridian",
+        Some(2023),
+    );
+    conflict.title_id = Some(wrong_title.id.clone());
+    conflict.reason_code =
+        crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER.to_string();
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&conflict)
+        .await
+        .unwrap();
+    FixMatchFixture {
+        _tempdir: tempdir,
+        app,
+        user,
+        unmatched_items,
+        folder,
+        file,
+        wrong_title,
+        wrong_folder,
+        conflict,
+    }
+}
+
+async fn assert_wrong_title_untouched(fixture: &FixMatchFixture) {
+    let reread = fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&fixture.wrong_title.id)
+        .await
+        .unwrap()
+        .expect("the previously bound title still exists");
+    assert_eq!(
+        reread.folder_path.as_deref(),
+        Some(fixture.wrong_folder.as_str())
+    );
+    assert_eq!(reread.external_ids, fixture.wrong_title.external_ids);
+    assert!(
+        fixture
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&fixture.wrong_title.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn fix_match_rebinds_an_ownership_conflict_to_an_existing_title() {
+    let fixture = fix_match_fixture().await;
+    let chosen = fixture
+        .app
+        .create_title_without_hydration(
+            &fixture.user,
+            NewTitle {
+                name: "Quiet Meridian".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "900777".to_string())],
+                root_folder_id: None,
+                year: Some(2023),
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .unwrap()
+        .title;
+
+    let result = fixture
+        .app
+        .resolve_pending_import(
+            &fixture.user,
+            &fixture.conflict.id,
+            pending_import_title_request(
+                MediaFacet::Movie,
+                "Quiet Meridian",
+                Some("900777"),
+                Some(2023),
+            ),
+            true,
+        )
+        .await
+        .expect("fix match binds the chosen title");
+
+    assert_eq!(result.title.id, chosen.id);
+    assert!(!result.created);
+    assert_eq!(
+        result.title.folder_path.as_deref(),
+        Some(fixture.folder.to_string_lossy().as_ref())
+    );
+    assert!(
+        fixture
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&chosen.id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|media| media.file_path == fixture.file.to_string_lossy())
+    );
+    assert!(fixture.unmatched_items.items().await.is_empty());
+    assert_wrong_title_untouched(&fixture).await;
+}
+
+#[tokio::test]
+async fn fix_match_creates_the_chosen_title_and_clears_the_conflict() {
+    let fixture = fix_match_fixture().await;
+
+    let result = fixture
+        .app
+        .resolve_pending_import(
+            &fixture.user,
+            &fixture.conflict.id,
+            pending_import_title_request(
+                MediaFacet::Movie,
+                "Quiet Meridian",
+                Some("900777"),
+                Some(2023),
+            ),
+            false,
+        )
+        .await
+        .expect("fix match creates the chosen title");
+
+    assert!(result.created);
+    assert_ne!(result.title.id, fixture.wrong_title.id);
+    assert!(fixture.unmatched_items.items().await.is_empty());
+    assert_wrong_title_untouched(&fixture).await;
+}
+
+#[tokio::test]
+async fn fix_match_refuses_a_title_that_owns_another_folder() {
+    let fixture = fix_match_fixture().await;
+    let chosen = fixture
+        .app
+        .create_title_without_hydration(
+            &fixture.user,
+            NewTitle {
+                name: "Quiet Meridian".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "900777".to_string())],
+                root_folder_id: None,
+                year: Some(2023),
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .unwrap()
+        .title;
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .set_folder_path(&chosen.id, "/elsewhere/Quiet Meridian")
+        .await
+        .unwrap();
+
+    for (request_tvdb, attach) in [("900777", true), ("900111", true)] {
+        let error = fixture
+            .app
+            .resolve_pending_import(
+                &fixture.user,
+                &fixture.conflict.id,
+                pending_import_title_request(
+                    MediaFacet::Movie,
+                    "Quiet Meridian",
+                    Some(request_tvdb),
+                    None,
+                ),
+                attach,
+            )
+            .await
+            .expect_err("a title owning another folder is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::folder_ownership::TITLE_ALREADY_OWNS_ANOTHER_FOLDER),
+            "tvdb {request_tvdb}"
+        );
+        assert_eq!(
+            fixture.unmatched_items.items().await,
+            vec![fixture.conflict.clone()]
+        );
+    }
+    assert_wrong_title_untouched(&fixture).await;
 }
 
 // ── #224: a scan assigns and heals the root it actually walked ────────────
@@ -13899,4 +14171,170 @@ async fn cleared_unmatched_rows_of_a_dropped_walk_are_still_removed() {
     })
     .await
     .expect("dropped walk's cleared rows should be removed");
+}
+
+/// Probe store that keeps the last signature per title and counts writes.
+#[derive(Default)]
+struct RecordingProbeRepo {
+    rows: Mutex<HashMap<String, LibraryProbeSignature>>,
+    writes: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl LibraryProbeRepository for RecordingProbeRepo {
+    async fn get_probe_signature(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<LibraryProbeSignature>> {
+        Ok(self.rows.lock().await.get(title_id).cloned())
+    }
+
+    async fn upsert_probe_signature(&self, probe: &LibraryProbeSignature) -> AppResult<()> {
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.rows
+            .lock()
+            .await
+            .insert(probe.title_id.clone(), probe.clone());
+        Ok(())
+    }
+
+    async fn delete_probe_signatures_for_title_ids(&self, _: &[String]) -> AppResult<u32> {
+        Ok(0)
+    }
+}
+
+/// A refresh of a folder whose signature has not changed writes no probe row
+/// and never walks the folder; a changed folder still records its signature.
+#[tokio::test]
+async fn an_unchanged_refresh_probe_writes_nothing() {
+    use crate::library::discovery::{
+        BackgroundRefreshProbeOutcome, run_background_refresh_probe_with_delta,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("Lantern Cove (2031).mkv"), b"synthetic").expect("seed file");
+    let probes = Arc::new(RecordingProbeRepo::default());
+    let (app, _actor) = bootstrap();
+    let app =
+        app.with_test_overrides(|services| services.with_library_probe_signatures(probes.clone()));
+
+    let first = run_background_refresh_probe_with_delta(&app, "title-lantern", dir.path(), async {
+        Ok((
+            (),
+            HashSet::from(["a".to_string()]),
+            HashSet::<String>::new(),
+        ))
+    })
+    .await
+    .expect("first probe");
+    assert!(matches!(first, BackgroundRefreshProbeOutcome::Changed(())));
+    assert_eq!(probes.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let recorded = probes
+        .rows
+        .lock()
+        .await
+        .get("title-lantern")
+        .map(|probe| (probe.probe_signature_value.clone(), probe.last_probed_at));
+
+    let walked = std::sync::atomic::AtomicBool::new(false);
+    let second =
+        run_background_refresh_probe_with_delta(&app, "title-lantern", dir.path(), async {
+            walked.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(((), HashSet::<String>::new(), HashSet::<String>::new()))
+        })
+        .await
+        .expect("second probe");
+    assert!(matches!(second, BackgroundRefreshProbeOutcome::Unchanged));
+    assert!(!walked.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        probes.writes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "an unchanged folder must not rewrite its probe row"
+    );
+    assert_eq!(
+        probes
+            .rows
+            .lock()
+            .await
+            .get("title-lantern")
+            .map(|probe| (probe.probe_signature_value.clone(), probe.last_probed_at)),
+        recorded
+    );
+}
+
+/// A background refresh that finds the same refused title boundary as the
+/// last one leaves its row as it was: same scan session, same `updated_at`.
+#[tokio::test]
+async fn a_repeat_refresh_leaves_an_unchanged_refused_boundary_row_alone() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let mixed_parent = tempdir.path().join("L").join("Lantern Cove (2031)");
+    let mixed_child = mixed_parent.join("Harbor Lights (2032)");
+    std::fs::create_dir_all(&mixed_child).expect("create mixed layout");
+    std::fs::write(mixed_parent.join("Lantern Cove (2031).mkv"), b"parent")
+        .expect("write parent movie file");
+    std::fs::write(mixed_child.join("Harbor Lights (2032).mkv"), b"child")
+        .expect("write nested movie file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    app.services
+        .config
+        .settings
+        .upsert_setting_json(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::FOLDER_TEMPLATE_KEY,
+            Some(MediaFacet::Movie.as_str().to_string()),
+            serde_json::to_string("{title_first_character}/{title_with_article} ({year})")
+                .expect("serialize template"),
+            "test",
+            None,
+        )
+        .await
+        .expect("set the nested movie folder template");
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile legacy movie root");
+
+    let refused_row = || async {
+        let items = unmatched_items.items().await;
+        let rows: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                item.item_path == mixed_parent.to_string_lossy()
+                    && item.reason_code
+                        == crate::library_scan_unmatched::LIBRARY_SCAN_INVALID_TITLE_BOUNDARY
+            })
+            .collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        rows.into_iter().next().unwrap()
+    };
+
+    app.background_library_refresh_with_tracking(&user, MediaFacet::Movie, "refresh-one")
+        .await
+        .expect("first refresh");
+    let first = refused_row().await;
+    assert_eq!(first.scan_session_id, "refresh-one");
+    assert_eq!(first.status, PendingImportStatus::Ignored);
+
+    app.background_library_refresh_with_tracking(&user, MediaFacet::Movie, "refresh-two")
+        .await
+        .expect("second refresh");
+    let second = refused_row().await;
+    assert_eq!(
+        second, first,
+        "an unchanged refused boundary must not be rewritten"
+    );
 }

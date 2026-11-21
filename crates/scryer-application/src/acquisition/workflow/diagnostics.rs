@@ -20,15 +20,13 @@ impl AppUseCase {
             .acquisition_scope_states
             .list_release_decisions_for_title(title_id, 25, 0)
             .await?;
-        let wanted_items = self
+        // Counted in the store, so a title with any number of scopes reads
+        // one row per status.
+        let wanted_tallies = self
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                title_id: Some(title_id.to_string()),
-                limit: 500,
-                ..AcquisitionScopeStatesQuery::default()
-            })
+            .tally_acquisition_scope_states_for_title(title_id)
             .await?;
         let pending_releases = self
             .services
@@ -44,10 +42,10 @@ impl AppUseCase {
                 .or_insert(0) += 1;
         }
         let mut wanted_status_counts = HashMap::<String, i64>::new();
-        for item in &wanted_items {
+        for tally in &wanted_tallies {
             *wanted_status_counts
-                .entry(item.status.as_str().to_string())
-                .or_insert(0) += 1;
+                .entry(tally.status.as_str().to_string())
+                .or_insert(0) += tally.count;
         }
         let mut pending_release_counts = HashMap::<String, i64>::new();
         for release in &pending_releases {
@@ -56,12 +54,11 @@ impl AppUseCase {
                 .or_insert(0) += 1;
         }
 
-        let mismatch_recovery_eligible_count = wanted_items
+        let mismatch_recovery_eligible_count = wanted_tallies
             .iter()
-            .filter(|item| {
-                item.status == AcquisitionScopeStatus::Wanted && item.mismatch_recovery_eligible
-            })
-            .count() as i64;
+            .filter(|tally| tally.status == AcquisitionScopeStatus::Wanted)
+            .map(|tally| tally.mismatch_recovery_eligible)
+            .sum::<i64>();
 
         let mut decision_counts = decision_counts
             .into_iter()
@@ -86,9 +83,9 @@ impl AppUseCase {
             .collect::<Vec<_>>();
         pending_release_counts.sort_by(|left, right| left.status.cmp(&right.status));
 
-        let latest_wanted_search_at = wanted_items
+        let latest_wanted_search_at = wanted_tallies
             .iter()
-            .filter_map(|item| item.last_search_at.clone())
+            .filter_map(|tally| tally.latest_search_at.clone())
             .max();
 
         Ok(TitleAcquisitionDiagnostics {

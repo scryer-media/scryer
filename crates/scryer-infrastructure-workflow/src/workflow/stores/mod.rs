@@ -1,4 +1,5 @@
 pub mod acquisition_store;
+pub mod archive_extraction_store;
 mod core;
 pub mod domain_event_store;
 pub mod download_client_status_store;
@@ -15,6 +16,7 @@ pub mod workflow_operation_store;
 mod writer_transaction_recorder;
 
 pub use acquisition_store::AcquisitionStore;
+pub use archive_extraction_store::ArchiveExtractionStore;
 pub use domain_event_store::DomainEventStore;
 pub use download_client_status_store::DownloadClientStatusStore;
 pub use download_queue_command_store::DownloadQueueCommandStore;

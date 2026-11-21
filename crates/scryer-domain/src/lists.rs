@@ -88,7 +88,7 @@ impl ListMode {
 /// What happens to a title the list added when the item leaves the list.
 ///
 /// There is deliberately no removal variant. Removing titles a list no longer
-/// wants is a maintenance rule with its own approval boundary; Lists only
+/// wants is a lifecycle rule with its own approval boundary; Lists only
 /// records the departure and exposes it as facts.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]

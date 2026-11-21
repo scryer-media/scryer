@@ -29,20 +29,17 @@ rustls-native-certs = "0.8"
 url = "2"
 uuid = { workspace = true }
 zstd = { version = "0.14", default-features = false }
-tempfile = "3"
-libc = "0.2"
 blake3 = "1"
 # RFC 123 WP1: native wasmtime archive host (crypto ABI + command protocol).
-wasmparser = "0.262"
+wasmparser = "0.261"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 
-[build-dependencies]
-wat = "1"
-
 [dev-dependencies]
-# Tests keep readable inline WAT and explicitly translate it to bytes.
+# Tests keep readable inline WAT and explicitly translate it to bytes, and
+# check the committed capability probes against their WAT sources.
 wat = "1"
+tempfile = "3"
 # The in-process SSH server double, so tunnel tests prove egress really
 # travelled through a tunnel rather than merely failing to go direct.
 scryer-tunnel = { workspace = true, features = ["test-support"] }

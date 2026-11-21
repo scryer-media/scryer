@@ -80,6 +80,10 @@ impl InMemoryLocationOperationStore {
             .cloned()
     }
 
+    pub(crate) fn operation_count(&self) -> usize {
+        self.state.lock().expect("lock").operations.len()
+    }
+
     pub(crate) fn checkpoint(&self, operation_id: &str, title_id: &str) -> Option<TitleCheckpoint> {
         self.state
             .lock()

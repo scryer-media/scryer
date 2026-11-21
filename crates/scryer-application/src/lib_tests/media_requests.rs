@@ -1923,7 +1923,7 @@ async fn approval_waits_for_destructive_title_ownership() {
         .runtime
         .jobs
         .interactive_operation_guards
-        .try_acquire(&format!("maintenance-title:{}", first.title_id))
+        .try_acquire(&format!("lifecycle-title:{}", first.title_id))
         .await
         .unwrap();
     let error = harness
@@ -1938,7 +1938,7 @@ async fn approval_waits_for_destructive_title_ownership() {
             None,
         )
         .await
-        .expect_err("maintenance owns the title");
+        .expect_err("lifecycle owns the title");
     assert!(error.to_string().contains("title is being modified"));
     assert_eq!(
         harness
@@ -2658,7 +2658,7 @@ fn media_request_snapshot_round_trips_a_series() {
     widen_series_for_snapshot(&mut series);
     let captured_at = chrono::Utc::now();
 
-    let snapshot = crate::MediaRequestMetadataSnapshot::from_series(&series, captured_at);
+    let snapshot = crate::MediaRequestMetadataSnapshot::from_series(&series, &[], captured_at);
 
     assert!(!snapshot.partial);
     assert_eq!(snapshot.source.as_deref(), Some("smg_series"));
@@ -2677,6 +2677,59 @@ fn media_request_snapshot_round_trips_a_series() {
 
     let reparsed = crate::MediaRequestMetadataSnapshot::parse(&snapshot.to_json());
     assert_eq!(reparsed, snapshot);
+}
+
+fn snapshot_episode(
+    season_number: i32,
+    episode_number: i32,
+    aired: &str,
+) -> crate::EpisodeMetadata {
+    crate::EpisodeMetadata {
+        tvdb_id: i64::from(season_number * 100 + episode_number),
+        tmdb_id: None,
+        episode_number,
+        name: format!("Episode {season_number}x{episode_number}"),
+        aired: aired.to_string(),
+        runtime_minutes: 24,
+        is_filler: false,
+        is_recap: false,
+        overview: String::new(),
+        absolute_number: String::new(),
+        contiguous_absolute_number: None,
+        season_number,
+        image_url: String::new(),
+    }
+}
+
+/// The shape comes from the hydration's episode list, not from the series copy
+/// it hands back for the snapshot, which carries no episodes.
+#[test]
+fn media_request_snapshot_series_shape_counts_the_hydrated_episodes() {
+    let mut series = make_series_metadata(92_003, "Shaped Series");
+    series.episodes = vec![
+        snapshot_episode(0, 1, "2020-01-01"),
+        snapshot_episode(1, 1, "2020-01-01"),
+        snapshot_episode(1, 2, "2020-01-08"),
+        snapshot_episode(2, 1, "2099-01-01"),
+        snapshot_episode(2, 2, ""),
+    ];
+    let hydrated = crate::catalog::facets::handler::series_to_hydration_result(series, "eng");
+    let raw = hydrated
+        .raw_series
+        .as_ref()
+        .expect("series hydration keeps raw metadata");
+    let captured_at = chrono::Utc::now();
+
+    let snapshot =
+        crate::MediaRequestMetadataSnapshot::from_series(raw, &hydrated.episodes, captured_at);
+
+    let shape = snapshot
+        .series_shape
+        .expect("a series snapshot has a shape");
+    assert_eq!(shape.season_count, 2, "specials are not a season");
+    assert_eq!(shape.episode_count, 4, "regular episodes only");
+    assert_eq!(shape.aired_at_capture, 2);
+    assert_eq!(shape.upcoming_air_dates, vec!["2099-01-01".to_string()]);
 }
 
 #[test]
@@ -2826,16 +2879,24 @@ async fn submit_media_request_records_a_partial_snapshot_when_enrichment_fails()
     );
 }
 
-#[tokio::test]
-async fn a_preview_and_the_submit_that_follows_it_read_smg_once() {
+/// A movie request app whose gateway counts every read that reaches SMG.
+fn staging_app(
+    tvdb_id: i64,
+    fail_detail: bool,
+) -> (
+    MediaRequestTestHarness,
+    AppUseCase,
+    Arc<std::sync::atomic::AtomicUsize>,
+    SubmitMediaRequestInput,
+) {
     let harness = bootstrap_media_request_app();
-    let tvdb_id = 92_040;
-    let mut movie = make_movie_metadata(tvdb_id, "Cached Movie");
+    let mut movie = make_movie_metadata(tvdb_id, "Staged Movie");
     widen_movie_for_snapshot(&mut movie);
     let detail_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let app = harness.app.with_test_overrides(|builder| {
         builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
             movies: HashMap::from([(tvdb_id, movie)]),
+            fail_detail,
             detail_calls: detail_calls.clone(),
             ..Default::default()
         }))
@@ -2843,54 +2904,521 @@ async fn a_preview_and_the_submit_that_follows_it_read_smg_once() {
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut input = media_request_input(library_id, tvdb_id);
     input.external_ids = vec![external_id("TVDB", tvdb_id)];
+    (harness, app, detail_calls, input)
+}
+
+fn smg_reads(detail_calls: &std::sync::atomic::AtomicUsize) -> usize {
+    detail_calls.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn staged_record_count(harness: &MediaRequestTestHarness) -> usize {
+    harness
+        .media_requests
+        .staged_metadata
+        .lock()
+        .expect("staged metadata lock")
+        .len()
+}
+
+#[tokio::test]
+async fn a_preview_of_an_unstaged_subject_reads_no_smg_and_writes_nothing() {
+    let (harness, app, detail_calls, input) = staging_app(92_040, false);
+
+    for _ in 0..3 {
+        let preflight = app
+            .preview_my_request_decision(&harness.user, input.clone())
+            .await
+            .expect("a preview of an unstaged subject still answers");
+        assert!(
+            preflight.metadata_partial,
+            "nothing was staged, so the metadata reads as unavailable"
+        );
+    }
+
+    assert_eq!(smg_reads(&detail_calls), 0, "a preview never reaches SMG");
+    assert_eq!(staged_record_count(&harness), 0, "a preview never writes");
+    assert!(
+        harness.media_requests.requests.lock().await.is_empty(),
+        "a preview creates no request"
+    );
+}
+
+#[tokio::test]
+async fn staging_then_previews_and_the_submit_read_smg_once() {
+    let (harness, app, detail_calls, input) = staging_app(92_041, false);
+
+    let staged = app
+        .stage_my_request_metadata(
+            &harness.user,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids.clone(),
+        )
+        .await
+        .expect("staging should succeed");
+    assert!(!staged.metadata_partial);
+    assert_eq!(smg_reads(&detail_calls), 1, "staging is the one SMG read");
+    assert_eq!(staged_record_count(&harness), 1);
+
+    // The request dialog previews on every edit.
+    for _ in 0..3 {
+        let preflight = app
+            .preview_my_request_decision(&harness.user, input.clone())
+            .await
+            .expect("preview should succeed");
+        assert!(
+            !preflight.metadata_partial,
+            "the preview reads the staged record"
+        );
+    }
+    // Opening the dialog again on the same subject stages again.
+    app.stage_my_request_metadata(
+        &harness.user,
+        &input.library_id,
+        MediaFacet::Movie,
+        input.external_ids.clone(),
+    )
+    .await
+    .expect("staging again should succeed");
+
     let normalized = normalize_media_request_external_ids(input.external_ids.clone())
         .expect("request external ids should normalize");
-
-    // Two pre-flight evaluations, as the request dialog would issue while the requester edits.
-    let first = app
-        .enrich_request_draft(&MediaFacet::Movie, normalized.clone())
-        .await;
-    let second = app
-        .enrich_request_draft(&MediaFacet::Movie, normalized)
-        .await;
-    assert_eq!(
-        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the second pre-flight is served from the enrichment cache"
-    );
-    assert_eq!(first.snapshot, second.snapshot);
+    let staged_enrichment = app
+        .staged_request_metadata(&MediaFacet::Movie, &normalized)
+        .await
+        .expect("the subject is staged");
 
     app.submit_media_request(&harness.user, input)
         .await
         .expect("request submission should succeed");
 
     assert_eq!(
-        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
+        smg_reads(&detail_calls),
         1,
-        "the submit reuses the enrichment the preview already paid for (FR-021)"
+        "previews, a second staging and the submit all reuse the one read"
     );
     let requests = harness.media_requests.requests.lock().await;
     let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
     assert_eq!(
-        snapshot, first.snapshot,
+        snapshot, staged_enrichment.snapshot,
         "what the requester was shown is what the request was stored with"
+    );
+    assert!(!snapshot.partial);
+}
+
+#[tokio::test]
+async fn a_submit_of_an_unstaged_subject_reads_smg_once_and_stages_it() {
+    let (harness, app, detail_calls, input) = staging_app(92_042, false);
+
+    app.submit_media_request(&harness.user, input.clone())
+        .await
+        .expect("request submission should succeed");
+
+    assert_eq!(smg_reads(&detail_calls), 1);
+    assert_eq!(
+        staged_record_count(&harness),
+        1,
+        "the submit staged what it read"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(!snapshot.partial, "the request carries the full snapshot");
+    drop(requests);
+
+    let preflight = app
+        .preview_my_request_decision(&harness.user, input)
+        .await
+        .expect("preview should succeed");
+    assert!(!preflight.metadata_partial);
+    assert_eq!(
+        smg_reads(&detail_calls),
+        1,
+        "a later preview of the same subject reads the staged record"
     );
 }
 
+#[tokio::test]
+async fn a_failed_staging_keeps_the_preview_and_the_submit_agreeing() {
+    let (harness, app, detail_calls, input) = staging_app(92_043, true);
+
+    let staged = app
+        .stage_my_request_metadata(
+            &harness.user,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids.clone(),
+        )
+        .await
+        .expect("an SMG outage does not fail the staging step");
+    assert!(staged.metadata_partial);
+    let reads_after_staging = smg_reads(&detail_calls);
+    assert!(reads_after_staging >= 1, "staging asked SMG");
+    assert_eq!(staged_record_count(&harness), 1, "the outage is staged too");
+
+    let preflight = app
+        .preview_my_request_decision(&harness.user, input.clone())
+        .await
+        .expect("preview should succeed");
+    assert!(preflight.metadata_partial);
+
+    app.submit_media_request(&harness.user, input.clone())
+        .await
+        .expect("a metadata outage must never fail a submission");
+    assert_eq!(
+        smg_reads(&detail_calls),
+        reads_after_staging,
+        "the submit reads the staged outage instead of asking SMG again"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(snapshot.partial);
+    assert_eq!(snapshot.source.as_deref(), Some("enrichment_failed"));
+    drop(requests);
+
+    // The requester opening the dialog again is the retry.
+    app.stage_my_request_metadata(
+        &harness.user,
+        &input.library_id,
+        MediaFacet::Movie,
+        input.external_ids,
+    )
+    .await
+    .expect("staging again should succeed");
+    assert!(
+        smg_reads(&detail_calls) > reads_after_staging,
+        "staging again asks SMG again when the record established nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_staged_record_is_not_reused() {
+    let (harness, app, detail_calls, input) = staging_app(92_044, false);
+    let normalized = normalize_media_request_external_ids(input.external_ids.clone())
+        .expect("request external ids should normalize");
+    let key = crate::media_requests::media_request_staging_key(&MediaFacet::Movie, &normalized);
+
+    app.stage_request_metadata(&MediaFacet::Movie, normalized.clone(), false)
+        .await;
+    assert_eq!(smg_reads(&detail_calls), 1);
+    // Age the record to just past its freshness window.
+    {
+        let mut staged = harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock");
+        let record = staged.get_mut(&key).expect("the record is staged");
+        record.staged_at = Utc::now()
+            - crate::media_requests::STAGED_REQUEST_METADATA_FRESH_FOR
+            - chrono::Duration::minutes(1);
+    }
+
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_none(),
+        "a stale record does not answer a preview"
+    );
+    assert_eq!(
+        smg_reads(&detail_calls),
+        1,
+        "and the preview read asks nobody"
+    );
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("request submission should succeed");
+    assert_eq!(
+        smg_reads(&detail_calls),
+        2,
+        "the submit refreshes the stale record with one read"
+    );
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_some(),
+        "and the refreshed record answers again"
+    );
+}
+
+#[tokio::test]
+async fn a_staged_outage_stops_answering_within_minutes() {
+    let (harness, app, detail_calls, input) = staging_app(92_047, true);
+    let normalized = normalize_media_request_external_ids(input.external_ids.clone())
+        .expect("request external ids should normalize");
+    let key = crate::media_requests::media_request_staging_key(&MediaFacet::Movie, &normalized);
+
+    let staged = app
+        .stage_request_metadata(&MediaFacet::Movie, normalized.clone(), false)
+        .await;
+    assert!(staged.snapshot.partial);
+    let reads_after_staging = smg_reads(&detail_calls);
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_some(),
+        "the outage answers while it is recent, so a preview and its submit agree"
+    );
+
+    // Age the outage past its short window, well inside the 24 hours a
+    // record that established something answers for.
+    {
+        let mut records = harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock");
+        let record = records.get_mut(&key).expect("the outage is staged");
+        record.staged_at = Utc::now()
+            - crate::media_requests::STAGED_REQUEST_METADATA_UNAVAILABLE_FRESH_FOR
+            - chrono::Duration::minutes(1);
+    }
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_none(),
+        "an old outage no longer answers"
+    );
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("a metadata outage must never fail a submission");
+    assert!(
+        smg_reads(&detail_calls) > reads_after_staging,
+        "a later submit asks SMG again instead of reusing the old outage"
+    );
+}
+
+/// A request app over three movies and three series, one of the series known
+/// to SMG only by a TMDB id until it is resolved.
+fn batch_staging_app(
+    fail_detail: bool,
+) -> (
+    MediaRequestTestHarness,
+    AppUseCase,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::Mutex<Vec<(String, bool)>>>,
+) {
+    let harness = bootstrap_media_request_app();
+    let mut movies = HashMap::new();
+    for tvdb_id in [93_001, 93_002, 93_003] {
+        let mut movie = make_movie_metadata(tvdb_id, &format!("Batch Movie {tvdb_id}"));
+        widen_movie_for_snapshot(&mut movie);
+        movies.insert(tvdb_id, movie);
+    }
+    let mut series = HashMap::new();
+    for tvdb_id in [94_001, 94_002, 94_003] {
+        let mut item = make_series_metadata(tvdb_id, &format!("Batch Series {tvdb_id}"));
+        item.smg_id = Some(tvdb_id + 1_000_000);
+        item.tmdb_id = Some(tvdb_id + 2_000_000);
+        series.insert(tvdb_id, item);
+    }
+    let detail_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let resolve_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            movies,
+            series,
+            fail_detail,
+            detail_calls: detail_calls.clone(),
+            resolve_calls: resolve_calls.clone(),
+        }))
+    });
+    (harness, app, detail_calls, resolve_calls)
+}
+
+/// Movies and series a list would request together: known ones, one of each
+/// that SMG does not have, a series named only by a TMDB id, and a subject
+/// that names nothing SMG can look up.
+fn batch_staging_subjects() -> Vec<(MediaFacet, Vec<ExternalId>)> {
+    vec![
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_001)]),
+        (MediaFacet::Series, vec![external_id("tvdb", 94_001)]),
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_002)]),
+        (MediaFacet::Anime, vec![external_id("tvdb", 94_002)]),
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_999)]),
+        (MediaFacet::Series, vec![external_id("tvdb", 94_999)]),
+        (MediaFacet::Series, vec![external_id("tmdb", 2_094_003)]),
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_003)]),
+        (MediaFacet::Series, vec![external_id("mal", 7)]),
+        // Named twice: staged once.
+        (MediaFacet::Movie, vec![external_id("tvdb", 93_001)]),
+    ]
+}
+
+/// A staged payload without the instants it was captured at, which differ
+/// between two runs of the same read.
+fn staged_payload_without_instants(payload_json: &str) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("captured_at");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_str(payload_json).expect("a staged payload is JSON");
+    strip(&mut value);
+    value
+}
+
+#[tokio::test]
+async fn a_staging_batch_reads_smg_once_per_kind_and_stages_what_single_staging_would() {
+    let (batch_harness, batch_app, batch_reads, batch_resolves) = batch_staging_app(false);
+    batch_app
+        .stage_request_metadata_batch(batch_staging_subjects())
+        .await;
+    assert_eq!(
+        smg_reads(&batch_reads),
+        2,
+        "one movie read and one series read for the whole batch"
+    );
+    assert_eq!(
+        batch_resolves.lock().expect("resolve calls lock").len(),
+        1,
+        "the one series named only by a provider id is resolved in one call"
+    );
+
+    // The same subjects staged one at a time, as each submit used to.
+    let (single_harness, single_app, single_reads, _) = batch_staging_app(false);
+    for (facet, external_ids) in batch_staging_subjects() {
+        single_app
+            .stage_request_metadata(&facet, external_ids, false)
+            .await;
+    }
+    assert!(smg_reads(&single_reads) > smg_reads(&batch_reads));
+
+    let payloads = |harness: &MediaRequestTestHarness| {
+        harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .iter()
+            .map(|(key, record)| {
+                (
+                    key.clone(),
+                    staged_payload_without_instants(&record.payload_json),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let batch_payloads = payloads(&batch_harness);
+    let mut single_payloads = payloads(&single_harness);
+    // The batch leaves a subject that names nothing to its submit, which
+    // settles it without SMG; single staging stores that answer.
+    let unidentifiable = crate::media_requests::media_request_staging_key(
+        &MediaFacet::Series,
+        &[external_id("mal", 7)],
+    );
+    assert!(single_payloads.remove(&unidentifiable).is_some());
+    assert_eq!(batch_payloads.len(), 8);
+    assert_eq!(batch_payloads, single_payloads);
+
+    // Every staged subject now answers without SMG, as a submit would read it.
+    let reads_after_batch = smg_reads(&batch_reads);
+    for (facet, external_ids) in batch_staging_subjects() {
+        batch_app
+            .stage_request_metadata(&facet, external_ids, false)
+            .await;
+    }
+    batch_app
+        .stage_request_metadata_batch(batch_staging_subjects())
+        .await;
+    assert_eq!(smg_reads(&batch_reads), reads_after_batch);
+}
+
+#[tokio::test]
+async fn a_staging_batch_that_cannot_reach_smg_stages_nothing() {
+    let (harness, app, reads, _) = batch_staging_app(true);
+    app.stage_request_metadata_batch(batch_staging_subjects())
+        .await;
+    assert_eq!(smg_reads(&reads), 2);
+    assert_eq!(
+        staged_record_count(&harness),
+        0,
+        "an outage of the batched read is not recorded against every subject; each submit asks for its own"
+    );
+}
+
+#[tokio::test]
+async fn staging_requires_request_permission_before_smg_is_asked() {
+    let (harness, app, detail_calls, input) = staging_app(92_045, false);
+    let stranger = library_permission_user("stranger", &input.library_id, &[]);
+
+    let error = app
+        .stage_my_request_metadata(
+            &stranger,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids,
+        )
+        .await
+        .expect_err("a caller without request permission is refused");
+    assert!(
+        matches!(error, AppError::UnauthorizedReason { .. }),
+        "{error:?}"
+    );
+    assert_eq!(smg_reads(&detail_calls), 0);
+    assert_eq!(staged_record_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn housekeeping_removes_only_staged_records_past_retention() {
+    let (harness, app, _detail_calls, _input) = staging_app(92_046, false);
+    let now = Utc::now();
+    {
+        let mut staged = harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock");
+        for (key, age) in [
+            ("movie|tvdb=1", chrono::Duration::days(8)),
+            ("movie|tvdb=2", chrono::Duration::days(30)),
+            ("movie|tvdb=3", chrono::Duration::days(6)),
+            ("movie|tvdb=4", chrono::Duration::hours(1)),
+        ] {
+            staged.insert(
+                key.to_string(),
+                crate::StagedMediaRequestMetadata {
+                    staging_key: key.to_string(),
+                    payload_json: "{}".to_string(),
+                    staged_at: now - age,
+                },
+            );
+        }
+    }
+
+    assert_eq!(app.purge_stale_staged_request_metadata(now).await, 2);
+
+    let staged = harness
+        .media_requests
+        .staged_metadata
+        .lock()
+        .expect("staged metadata lock");
+    let mut kept: Vec<&str> = staged.keys().map(String::as_str).collect();
+    kept.sort_unstable();
+    assert_eq!(kept, vec!["movie|tvdb=3", "movie|tvdb=4"]);
+}
+
 #[test]
-fn enrichment_cache_key_ignores_external_id_order_and_case() {
-    let a = crate::media_requests::media_request_enrichment_cache_key(
+fn staging_key_ignores_external_id_order_and_case() {
+    let a = crate::media_requests::media_request_staging_key(
         &MediaFacet::Movie,
         &[external_id("TVDB", 42), external_id("imdb", "tt0000042")],
     );
-    let b = crate::media_requests::media_request_enrichment_cache_key(
+    let b = crate::media_requests::media_request_staging_key(
         &MediaFacet::Movie,
         &[external_id("imdb", "tt0000042"), external_id("tvdb", 42)],
     );
     assert_eq!(a, b);
     assert_ne!(
         a,
-        crate::media_requests::media_request_enrichment_cache_key(
+        crate::media_requests::media_request_staging_key(
             &MediaFacet::Series,
             &[external_id("tvdb", 42), external_id("imdb", "tt0000042")],
         ),

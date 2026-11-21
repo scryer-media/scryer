@@ -1,9 +1,12 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 pub mod media;
 
 pub use media::*;
 
 pub(crate) mod queries {
-    pub(crate) use crate::media::search::{title_search, wanted};
+    pub(crate) use crate::media::search::title_search;
     pub(crate) use crate::media::titles::db as title;
     pub(crate) use scryer_infrastructure_sql::{common, runtime as sql_runtime};
 }

@@ -306,6 +306,66 @@ async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     assert_eq!(items[0].target_tier, "720P");
 }
 
+/// A profile with no cutoff tier upgrades to its top tier: a file below it
+/// is cutoff unmet with the top tier as its target, and a file at it is not.
+/// The profile here ranks 720P above 1080P, so 720P is the top.
+#[tokio::test]
+async fn list_cutoff_unmet_titles_targets_the_top_tier_without_a_cutoff() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            r#""no-cutoff""#,
+        )
+        .await;
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    let mut profile = cutoff_projection_test_profile("no-cutoff", "720P");
+    profile.criteria.cutoff_tier = None;
+    profile.criteria.quality_tiers = vec!["720P".to_string(), "1080P".to_string()];
+    quality_profiles.set_profiles(vec![profile]).await;
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (app, user, _) =
+        bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+
+    let mut title_ids = Vec::new();
+    for (name, quality) in [("Below Top", "1080p"), ("At Top", "720p")] {
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: name.into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/library/{name}.mkv"),
+                size_bytes: 1_000,
+                quality_label: Some(quality.to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        title_ids.push(title.id);
+    }
+
+    let items = app
+        .list_cutoff_unmet_titles(&user, Some(MediaFacet::Movie), None)
+        .await
+        .expect("cutoff unmet query should succeed");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title_id, title_ids[0]);
+    assert_eq!(items[0].current_tier, "1080P");
+    assert_eq!(items[0].target_tier, "720P");
+}
+
 /// A profile whose order has no quality tier step ignores its cutoff tier, so
 /// a file below that tier is not reported, or swept, as quality-cutoff unmet.
 #[tokio::test]
@@ -1574,6 +1634,48 @@ async fn interactive_search_blocklist_is_per_title_and_removal_reallows_the_rele
 }
 
 #[tokio::test]
+async fn interactive_search_excludes_a_block_older_than_a_thousand_newer_ones() {
+    let release_title = "Lantern.Cove.2024.1080p.WEB-DL-GRP";
+    let (app, user, blocklist) = bootstrap_interactive_search_with_blocklist(release_title).await;
+    let title = add_movie_title_for_search(&app, &user, "Lantern Cove").await;
+
+    blocklist
+        .block(&blocklist_entry_for(
+            &title.id,
+            release_title,
+            "grab failed",
+        ))
+        .await
+        .expect("seed the old block");
+    for index in 0..1_100 {
+        blocklist
+            .block(&blocklist_entry_for(
+                &title.id,
+                &format!("Lantern.Cove.Other.{index}.2024.1080p"),
+                "grab failed",
+            ))
+            .await
+            .expect("seed a newer block");
+    }
+    assert!(
+        !blocklist
+            .list_for_title(&title.id, 1_000)
+            .await
+            .expect("list newest blocks")
+            .iter()
+            .any(|entry| entry.release_name == release_title),
+        "the fixture leaves the old block outside the newest thousand"
+    );
+
+    assert!(
+        interactive_search_titles(&app, &user, &title.id)
+            .await
+            .is_empty(),
+        "a blocked release stays blocked however many newer blocks follow it"
+    );
+}
+
+#[tokio::test]
 async fn interactive_search_ignores_failed_attempt_history_without_a_blocklist_entry() {
     // The failed-attempt log is history/audit only: a Failed attempt with no
     // blocklist entry (e.g. one whose entry the operator removed) must not gate.
@@ -1712,6 +1814,14 @@ impl BlocklistRepository for FailingBlocklistRepo {
     async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
         Err(AppError::Repository("blocklist unavailable".to_string()))
     }
+    async fn list_matching_for_title(
+        &self,
+        _: &str,
+        _: &[String],
+        _: &[String],
+    ) -> AppResult<Vec<crate::BlocklistMatch>> {
+        Err(AppError::Repository("blocklist unavailable".to_string()))
+    }
     async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         Err(AppError::Repository("blocklist unavailable".to_string()))
     }
@@ -1780,14 +1890,30 @@ async fn title_release_blocklist_signatures_are_per_title_and_normalized() {
         .await
         .expect("seed other-title entry");
 
-    let signatures = app.load_title_release_blocklist_signatures(&title.id).await;
+    let signatures = app
+        .load_title_release_blocklist_signatures(
+            &title.id,
+            [
+                ("Mixed.Case.Release.2024.1080p", None),
+                ("Other.Title.Release.2024.1080p", None),
+            ],
+        )
+        .await;
     assert_eq!(
         signatures.release_names,
         HashSet::from([(String::new(), "mixed.case.release.2024.1080p".to_string())])
     );
     assert!(signatures.info_hashes.is_empty());
 
-    let other_signatures = app.load_title_release_blocklist_signatures(&other.id).await;
+    let other_signatures = app
+        .load_title_release_blocklist_signatures(
+            &other.id,
+            [
+                ("Mixed.Case.Release.2024.1080p", None),
+                ("Other.Title.Release.2024.1080p", None),
+            ],
+        )
+        .await;
     assert_eq!(
         other_signatures.release_names,
         HashSet::from([(String::new(), "other.title.release.2024.1080p".to_string())])
@@ -2292,6 +2418,7 @@ async fn a_queued_releases_announced_size_affects_fit_without_creating_score_upg
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
             missing_history: false,
+            blocks_submission: false,
             history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),
@@ -2411,6 +2538,7 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
             missing_history: false,
+            blocks_submission: false,
             history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),

@@ -8,16 +8,23 @@ import {
   ChevronDown,
   Copy,
   Edit,
-  FileInput,
   Library,
   Plus,
   Power,
   Trash2,
 } from "lucide-react";
-import { useClient } from "urql";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { FacetSelect, FacetTags } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
+import {
+  GutterPanel,
+  GutterPanelButton,
+} from "@/components/common/gutter-panel";
+import {
+  RULE_REFERENCE_BODY_CLASS,
+  RuleSidePanelHeader,
+  useRuleSidePanels,
+} from "@/components/views/settings/rule-side-panels";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
@@ -25,10 +32,18 @@ import {
   RULE_TEMPLATE_CATEGORIES,
   type RuleTemplate,
 } from "@/lib/constants/rule-templates";
+import { CommunityRulePacksSection } from "@/components/views/settings/community-rule-packs-section";
+import { ScoringRulesTabs } from "@/components/views/settings/scoring-rules-tabs";
+import { RuleTablePager } from "@/components/views/settings/rule-table-pager";
+import { SortableHead } from "@/components/views/lists/sortable-head";
 import {
-  rulePackRegistryQuery,
-  rulePackTemplatesQuery,
-} from "@/lib/graphql/queries";
+  nextRuleTableSort,
+  ruleTablePage,
+  sortScoringRules,
+  type RuleTableSort,
+  type ScoringRuleSortKey,
+} from "@/lib/utils/rule-table";
+import type { ScoringRulesSection } from "@/components/root/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +70,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useExternalRuleImport } from "@/lib/hooks/use-external-rule-import";
 import type { ArrCustomFormatDraft } from "@/components/views/settings/arr-custom-format-import-dialog";
 import type {
   RuleSetRecord,
@@ -63,8 +79,18 @@ import type {
 } from "@/lib/types/rule-sets";
 import ruleInputContract from "@/lib/contracts/rule-input-contract.json";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
+import {
+  isUserOwnedRuleSet,
+  SCORING_STARTER_SOURCE,
+} from "@/lib/utils/rule-sets";
+import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
+import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
+import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
+import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import { trashLocalePacks } from "@/lib/utils/trash-packs";
+import { productLogoUrl } from "@/components/setup/import/import-instance-pill";
 
 type SettingsRulesSectionProps = {
   canManageTrackedPacks: boolean;
@@ -73,6 +99,20 @@ type SettingsRulesSectionProps = {
   editingRuleSetId: string | null;
   ruleSetDraft: RuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RuleSetDraft>>;
+  /// Which source editor the form shows. Simple is only offered while the
+  /// draft is still the builder's.
+  builderMode: RuleEditorMode;
+  setBuilderMode: (mode: "simple" | "view") => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  setBuilderModel: (model: RuleBuilderModel) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  editAsRego: () => void;
+  builderOptions: RuleBuilderOptions;
+  /// Null until the served outputs are read, and after a failed read.
+  builderSchema: RuleBuilderSchema | null;
+  builderStatus: RuleBuilderSchemaStatus;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -93,6 +133,8 @@ type SettingsRulesSectionProps = {
     appliedFacets?: string[];
   }) => void;
   importCustomFormats: (draft: ArrCustomFormatDraft) => void;
+  /** Reloads the rule list, after a connected import saved rules. */
+  refreshRuleSets: () => Promise<void> | void;
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
@@ -101,11 +143,16 @@ type SettingsRulesSectionProps = {
     onOpenChange: (open: boolean) => void;
   }) => React.ReactNode;
   trackedRulePacks?: React.ReactNode;
+  /** Packs already installed, which the Community pane leaves out of the
+   * packs on offer. */
+  installedRulePackIds: readonly string[];
   installTrackedRulePack: (
     packId: string,
     templateIds: string[],
   ) => Promise<void> | void;
   installingRulePackId: string | null;
+  /** Which pane of the Scoring Rules page is open. */
+  section?: ScoringRulesSection;
 };
 
 const ArrCustomFormatImportDialog = React.lazy(
@@ -198,189 +245,182 @@ score_entry["japanese_audio_bonus"] := 300 if {
 
 const ignoreRulesReferenceCodeChange = (_value: string) => undefined;
 
+const SCORING_LIBRARY_PANEL_ID = "settings-rules-library-panel";
+const SCORING_REFERENCE_PANEL_ID = "settings-rules-reference-panel";
+type ScoringSidePanel = "library" | "reference";
+
 function RulesContextReference() {
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <BookOpen className="h-4 w-4" />
-          {t("settings.refTitle")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </CardTitle>
+    <div>
+      <RuleSidePanelHeader
+        icon={<BookOpen className="h-4 w-4" />}
+        title={t("settings.refTitle")}
+      />
+      <div className={RULE_REFERENCE_BODY_CLASS}>
         <p className="text-xs text-muted-foreground">
           {t("settings.refSubtitle")}
         </p>
-      </CardHeader>
-      {open ? (
-        <CardContent className="space-y-6 text-sm">
-          <p className="text-muted-foreground">{t("settings.refIntro")}</p>
+        <p className="text-muted-foreground">{t("settings.refIntro")}</p>
 
-          <div>
-            <h4 className="mb-2 font-semibold">
-              {t("settings.refSectionSandbox")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refSandboxIntro")}
-            </p>
-            <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refSandboxNoIO")}</li>
-              <li>{t("settings.refSandboxPkgIsolation")}</li>
-              <li>{t("settings.refSandboxReadOnly")}</li>
-              <li>{t("settings.refSandboxOutputRestricted")}</li>
-              <li>{t("settings.refSandboxIntegerOnly")}</li>
-              <li>{t("settings.refSandboxValidation")}</li>
-              <li>{t("settings.refSandboxErrorIsolation")}</li>
-            </ul>
+        <div>
+          <h4 className="mb-2 font-semibold">
+            {t("settings.refSectionSandbox")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refSandboxIntro")}
+          </p>
+          <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+            <li>{t("settings.refSandboxNoIO")}</li>
+            <li>{t("settings.refSandboxPkgIsolation")}</li>
+            <li>{t("settings.refSandboxReadOnly")}</li>
+            <li>{t("settings.refSandboxOutputRestricted")}</li>
+            <li>{t("settings.refSandboxIntegerOnly")}</li>
+            <li>{t("settings.refSandboxValidation")}</li>
+            <li>{t("settings.refSandboxErrorIsolation")}</li>
+          </ul>
+        </div>
+
+        {REF_SECTIONS.map((section) => (
+          <RefFieldTable key={section.path} section={section} />
+        ))}
+
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refSectionBuiltins")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refBuiltinsIntro")}
+          </p>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[280px]">
+                    {t("settings.refColFunction")}
+                  </TableHead>
+                  <TableHead className="w-[100px]">
+                    {t("settings.refColReturns")}
+                  </TableHead>
+                  <TableHead>{t("settings.refColDescription")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.block_score()
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      number
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnBlockScore")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.size_gib(bytes)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      float
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnSizeGib")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.lang_matches(code, pattern)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      bool
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnLangMatches")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.normalize_source(raw)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      string
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnNormalizeSource")}
+                  </TableCell>
+                </TableRow>
+                <TableRow data-ui="settings-table-row">
+                  <TableCell>
+                    <code data-code-font className="text-xs">
+                      scryer.normalize_codec(raw)
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code
+                      data-code-font
+                      className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                    >
+                      string
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {t("settings.refFnNormalizeCodec")}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
+        </div>
 
-          {REF_SECTIONS.map((section) => (
-            <RefFieldTable key={section.path} section={section} />
-          ))}
-
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refSectionBuiltins")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refBuiltinsIntro")}
-            </p>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[280px]">
-                      {t("settings.refColFunction")}
-                    </TableHead>
-                    <TableHead className="w-[100px]">
-                      {t("settings.refColReturns")}
-                    </TableHead>
-                    <TableHead>{t("settings.refColDescription")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.block_score()
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        number
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnBlockScore")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.size_gib(bytes)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        float
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnSizeGib")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.lang_matches(code, pattern)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        bool
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnLangMatches")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.normalize_source(raw)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        string
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnNormalizeSource")}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow data-ui="settings-table-row">
-                    <TableCell>
-                      <code data-code-font className="text-xs">
-                        scryer.normalize_codec(raw)
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code
-                        data-code-font
-                        className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
-                      >
-                        string
-                      </code>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t("settings.refFnNormalizeCodec")}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-
-          <div>
-            <h4 className="mb-1 font-semibold">
-              {t("settings.refSectionOutput")}
-            </h4>
-            <p className="mb-2 text-muted-foreground">
-              {t("settings.refOutputIntro")}
-            </p>
-            <LazyRegoEditor
-              ruleFamily="release"
-              id="settings-rules-output-format-example"
-              value={RULE_OUTPUT_EXAMPLE}
-              onChange={ignoreRulesReferenceCodeChange}
-              readOnly
-              minLines={25}
-              maxLines={25}
-            />
-          </div>
-        </CardContent>
-      ) : null}
-    </Card>
+        <div>
+          <h4 className="mb-1 font-semibold">
+            {t("settings.refSectionOutput")}
+          </h4>
+          <p className="mb-2 text-muted-foreground">
+            {t("settings.refOutputIntro")}
+          </p>
+          <LazyRegoEditor
+            ruleFamily="release"
+            id="settings-rules-output-format-example"
+            value={RULE_OUTPUT_EXAMPLE}
+            onChange={ignoreRulesReferenceCodeChange}
+            readOnly
+            minLines={25}
+            maxLines={25}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -529,93 +569,13 @@ function TrashLocalePacksCard({
   );
 }
 
-type CommunityPack = {
-  id: string;
-  name: string;
-  description: string;
-  author: string;
-  version: string;
-  customizable?: boolean | null;
-};
-type CommunityTemplate = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  appliedFacets: string[];
-};
-
 function RuleLibrary({
   onApply,
-  defaultOpen,
-  onInstallCommunityPack,
-  installingRulePackId,
-  canManage,
 }: {
   onApply: (template: RuleTemplate) => void;
-  defaultOpen?: boolean;
-  onInstallCommunityPack: (
-    packId: string,
-    templateIds: string[],
-  ) => Promise<void> | void;
-  installingRulePackId: string | null;
-  canManage: boolean;
 }) {
   const t = useTranslate();
-  const client = useClient();
-  const [open, setOpen] = React.useState(defaultOpen ?? false);
-  const [tab, setTab] = React.useState<"builtin" | "community">("builtin");
   const [categoryFilter, setCategoryFilter] = React.useState<string>("All");
-
-  // Community state
-  const [communityPacks, setCommunityPacks] = React.useState<CommunityPack[]>(
-    [],
-  );
-  const [communityPacksLoaded, setCommunityPacksLoaded] = React.useState(false);
-  const [selectedPack, setSelectedPack] = React.useState<CommunityPack | null>(
-    null,
-  );
-  const [packTemplates, setPackTemplates] = React.useState<CommunityTemplate[]>(
-    [],
-  );
-  const [packLoading, setPackLoading] = React.useState(false);
-  const [selectedTemplateIds, setSelectedTemplateIds] = React.useState<
-    string[]
-  >([]);
-
-  React.useEffect(() => {
-    if (tab === "community" && !communityPacksLoaded) {
-      client
-        .query(rulePackRegistryQuery, {})
-        .toPromise()
-        .then(({ data }) => {
-          setCommunityPacks(data?.rulePackRegistry ?? []);
-          setCommunityPacksLoaded(true);
-        })
-        .catch(() => {
-          setCommunityPacksLoaded(true);
-        });
-    }
-  }, [tab, communityPacksLoaded, client]);
-
-  const loadPack = React.useCallback(
-    async (pack: CommunityPack) => {
-      setSelectedPack(pack);
-      setSelectedTemplateIds([]);
-      setPackLoading(true);
-      try {
-        const { data } = await client
-          .query(rulePackTemplatesQuery, { packId: pack.id })
-          .toPromise();
-        setPackTemplates(data?.rulePackTemplates ?? []);
-      } catch {
-        setPackTemplates([]);
-      } finally {
-        setPackLoading(false);
-      }
-    },
-    [client],
-  );
 
   const filtered =
     categoryFilter === "All"
@@ -623,249 +583,47 @@ function RuleLibrary({
       : RULE_TEMPLATES.filter((tpl) => tpl.category === categoryFilter);
 
   return (
-    <Card>
-      <CardHeader
-        className="cursor-pointer select-none"
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Library className="h-4 w-4" />
-          {t("settings.ruleLibrary")}
-          <ChevronDown
-            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
+    <div>
+      <RuleSidePanelHeader
+        icon={<Library className="h-4 w-4" />}
+        title={t("settings.ruleLibrary")}
+      />
+      <div id="settings-rules-library" className="@container p-3">
+        <p className="mb-3 text-xs text-muted-foreground">
           {t("settings.ruleLibraryDescription")}
         </p>
-      </CardHeader>
-      {open ? (
-        <CardContent>
-          {/* Tab selector */}
-          <div className="mb-3 flex gap-2 border-b border-border pb-2">
-            <button
-              id="settings-rules-library-tab-builtin"
-              type="button"
-              className={cn(
-                "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
-                tab === "builtin"
-                  ? "text-primary border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setTab("builtin")}
-            >
-              {t("settings.pluginBuiltin")}
-            </button>
-            <button
-              id="settings-rules-library-tab-community"
-              type="button"
-              className={cn(
-                "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
-                tab === "community"
-                  ? "text-primary border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setTab("community")}
-            >
-              {t("uiText.community")}
-            </button>
-          </div>
-
-          {tab === "builtin" ? (
-            <>
-              <div className="mb-3 flex flex-wrap gap-1">
-                {[
-                  t("settings.ruleLibraryAll"),
-                  ...RULE_TEMPLATE_CATEGORIES,
-                ].map((cat) => {
-                  const isAll = cat === t("settings.ruleLibraryAll");
-                  const active = isAll
-                    ? categoryFilter === "All"
-                    : categoryFilter === cat;
-                  return (
-                    <button
-                      id={selectorId(
-                        "settings-rules-library-category",
-                        isAll ? "all" : cat,
-                      )}
-                      key={t(`rules.category.${cat}`)}
-                      type="button"
-                      className={cn(
-                        "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                        active
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground hover:bg-muted/80",
-                      )}
-                      onClick={() => setCategoryFilter(isAll ? "All" : cat)}
-                    >
-                      {t(`rules.category.${cat}`)}
-                    </button>
-                  );
-                })}
-              </div>
-              <TemplateGrid
-                templates={filtered}
-                onApply={(tpl) => {
-                  onApply(tpl);
-                  setOpen(false);
-                }}
-              />
-            </>
-          ) : /* Community tab */
-          selectedPack ? (
-            <div>
-              <button
-                id="settings-rules-library-back-to-packs"
-                type="button"
-                className="mb-3 text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setSelectedPack(null);
-                  setPackTemplates([]);
-                }}
-              >
-                {t("uiText.backToPacks")}
-              </button>
-              <p className="mb-1 text-sm font-medium">{selectedPack.name}</p>
-              <p className="mb-3 text-xs text-muted-foreground">
-                {selectedPack.description}
-              </p>
-              {packLoading ? (
-                <p className="text-sm text-muted-foreground">
-                  {t("label.loading")}
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-xs text-muted-foreground">
-                    {t(
-                      selectedPack.customizable !== false
-                        ? "rules.packChooseCustomizable"
-                        : "rules.packChooseManaged",
-                    )}
-                  </p>
-                  {selectedPack.customizable === false ? (
-                    <p className="text-xs text-muted-foreground">
-                      {t("uiText.managedByThePackAuthor")}
-                    </p>
-                  ) : null}
-                  <p className="text-xs text-muted-foreground">
-                    {t(
-                      "uiText.existingCustomCopiesAreNotAdoptedOrDisabledWhenThisPackIsInstalled",
-                    )}
-                  </p>
-                  <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
-                    {packTemplates.map((template) => {
-                      const checked = selectedTemplateIds.includes(template.id);
-                      const checkboxId = selectorId(
-                        "settings-rules-library-template-install",
-                        template.id,
-                      );
-                      return (
-                        <label
-                          key={template.id}
-                          className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3"
-                        >
-                          <Checkbox
-                            id={checkboxId}
-                            checked={checked}
-                            disabled={!canManage}
-                            onCheckedChange={(value) =>
-                              setSelectedTemplateIds((current) =>
-                                value === true
-                                  ? [...current, template.id]
-                                  : current.filter((id) => id !== template.id),
-                              )
-                            }
-                          />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium">
-                              {template.title}
-                            </span>
-                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">
-                              {template.description}
-                            </span>
-                            <span className="mt-2 flex flex-wrap gap-1">
-                              <Badge tone="neutral" className="text-[10px]">
-                                {template.category}
-                              </Badge>
-                              {template.appliedFacets.map((facet) => (
-                                <Badge
-                                  key={facet}
-                                  tone="info"
-                                  className="text-[10px]"
-                                >
-                                  {facet}
-                                </Badge>
-                              ))}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {canManage ? (
-                    <Button
-                      id={selectorId(
-                        "settings-rules-library-pack-install",
-                        selectedPack.id,
-                      )}
-                      type="button"
-                      disabled={installingRulePackId === selectedPack.id}
-                      onClick={() =>
-                        void onInstallCommunityPack(
-                          selectedPack.id,
-                          selectedTemplateIds,
-                        )
-                      }
-                    >
-                      {installingRulePackId === selectedPack.id
-                        ? "Installing…"
-                        : "Install pack"}
-                    </Button>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
-              {communityPacks.length === 0 && communityPacksLoaded ? (
-                <p className="col-span-full text-sm text-muted-foreground">
-                  {t("settings.ruleLibraryCommunityEmpty")}
-                </p>
-              ) : null}
-              {communityPacks.map((pack) => (
+        <div className="mb-3 flex flex-wrap gap-1">
+          {[t("settings.ruleLibraryAll"), ...RULE_TEMPLATE_CATEGORIES].map(
+            (cat) => {
+              const isAll = cat === t("settings.ruleLibraryAll");
+              const active = isAll
+                ? categoryFilter === "All"
+                : categoryFilter === cat;
+              return (
                 <button
-                  id={selectorId("settings-rules-library-pack", pack.id)}
-                  key={pack.id}
+                  id={selectorId(
+                    "settings-rules-library-category",
+                    isAll ? "all" : cat,
+                  )}
+                  key={t(`rules.category.${cat}`)}
                   type="button"
-                  className="group rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
-                  onClick={() => void loadPack(pack)}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/80",
+                  )}
+                  onClick={() => setCategoryFilter(isAll ? "All" : cat)}
                 >
-                  <p className="text-sm font-medium text-foreground group-hover:text-primary">
-                    {pack.name}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-                    {pack.description}
-                  </p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Badge tone="info" className="text-[10px]">
-                      {pack.author}
-                    </Badge>
-                    {pack.customizable === false ? (
-                      <Badge tone="neutral" className="text-[10px]">
-                        {t("settings.managedIndexerBadge")}
-                      </Badge>
-                    ) : null}
-                    <span className="text-[10px] text-muted-foreground">
-                      v{pack.version}
-                    </span>
-                  </div>
+                  {t(`rules.category.${cat}`)}
                 </button>
-              ))}
-            </div>
+              );
+            },
           )}
-        </CardContent>
-      ) : null}
-    </Card>
+        </div>
+        <TemplateGrid templates={filtered} onApply={onApply} />
+      </div>
+    </div>
   );
 }
 
@@ -918,6 +676,14 @@ export function SettingsRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  builderMode,
+  setBuilderMode,
+  editRegoSource,
+  setBuilderModel,
+  editAsRego,
+  builderOptions,
+  builderSchema,
+  builderStatus,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -931,27 +697,101 @@ export function SettingsRulesSection({
   validationResult,
   applyTemplate,
   importCustomFormats,
+  refreshRuleSets,
   translationDiagnostics,
   focusEditor,
   onEditorFocused,
   testScoring,
   trackedRulePacks,
+  installedRulePackIds,
   installTrackedRulePack,
   installingRulePackId,
+  section = "rules",
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
+  const {
+    rootRef: sidePanelRootRef,
+    columnRef: sidePanelColumnRef,
+    buttonProps: sidePanelButtonProps,
+    panelProps: sidePanelProps,
+    close: closeSidePanel,
+  } = useRuleSidePanels<ScoringSidePanel>();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
+  // Held here rather than in the lazy dialog, so a connected import keeps its
+  // run and refreshes the rule list even after the dialog closes.
+  const arrConnectImport = useExternalRuleImport({
+    onTerminal: () => void refreshRuleSets(),
+  });
   const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
+  // The rule list arrives whole; sorting and paging stay in the page.
+  const [ruleSort, setRuleSort] = React.useState<
+    RuleTableSort<ScoringRuleSortKey>
+  >({ key: "name", descending: false });
+  const [rulePageIndex, setRulePageIndex] = React.useState(0);
+  const userRules = React.useMemo(
+    () => sortScoringRules(ruleSetRecords.filter(isUserOwnedRuleSet), ruleSort),
+    [ruleSetRecords, ruleSort],
+  );
+  const rulePage = ruleTablePage(userRules, rulePageIndex);
   const validationDiagnostics = React.useMemo(
     () => regoDiagnostics(ruleSetDraft.regoSource, validationResult, t),
     [ruleSetDraft.regoSource, validationResult, t],
   );
+  const validationStatus = (
+    <EditorValidationStatus
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+    />
+  );
 
   return (
-    <div id="settings-rules-section" className="space-y-4 text-sm">
-      <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
-        <div className="min-w-0 flex-1">
-          <div className="mx-auto w-full max-w-[1280px] space-y-4">
+    <div
+      ref={sidePanelRootRef}
+      id="settings-rules-section"
+      className="space-y-4 text-sm"
+    >
+      <div
+        ref={sidePanelColumnRef}
+        className="mx-auto w-full max-w-[1280px] space-y-4"
+      >
+        {/* The library and reference only help write rules, so their buttons
+          sit on the tab strip only while the rule list is open. */}
+        <ScoringRulesTabs
+          activeSection={section}
+          actions={
+            section === "rules" ? (
+              <>
+                <GutterPanelButton
+                  panelId={SCORING_LIBRARY_PANEL_ID}
+                  label={t("settings.ruleLibrary")}
+                  icon={<Library className="h-4 w-4" />}
+                  {...sidePanelButtonProps("library")}
+                />
+                <GutterPanelButton
+                  panelId={SCORING_REFERENCE_PANEL_ID}
+                  label={t("settings.refTitle")}
+                  icon={<BookOpen className="h-4 w-4" />}
+                  {...sidePanelButtonProps("reference")}
+                />
+              </>
+            ) : null
+          }
+        />
+        {section === "community" ? (
+          <>
+            {trackedRulePacks}
+            <CommunityRulePacksSection
+              installedPackIds={installedRulePackIds}
+              canManage={canManageTrackedPacks}
+              installingPackId={installingRulePackId}
+              onInstall={installTrackedRulePack}
+            />
+          </>
+        ) : (
+          <>
             <div className="overflow-hidden rounded border border-border bg-card">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <CardTitle className="text-base text-foreground">
@@ -963,7 +803,7 @@ export function SettingsRulesSection({
                     ruleKind="scoring"
                     inputContract={ruleInputContract}
                     outputContract={
-                      'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'
+                      'One or more score_entry["stable_id"] := 100 if { ... }'
                     }
                   />
                   <TextActionButton
@@ -972,7 +812,20 @@ export function SettingsRulesSection({
                     size="default"
                     onClick={() => setIsArrImportOpen(true)}
                     disabled={mutatingRuleSetId !== null}
-                    leadingIcon={<FileInput className="h-4 w-4" />}
+                    leadingIcon={
+                      <span aria-hidden className="flex items-center gap-1">
+                        <img
+                          src={productLogoUrl("SONARR") ?? undefined}
+                          alt=""
+                          className="h-4 w-4"
+                        />
+                        <img
+                          src={productLogoUrl("RADARR") ?? undefined}
+                          alt=""
+                          className="h-4 w-4"
+                        />
+                      </span>
+                    }
                     label={t("settings.arrImportAction")}
                   />
                 </div>
@@ -981,19 +834,44 @@ export function SettingsRulesSection({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t("label.name")}</TableHead>
-                      <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
-                      <TableHead className="text-center">
-                        {t("label.enabled")}
-                      </TableHead>
+                      {(
+                        [
+                          ["name", t("label.name"), undefined],
+                          [
+                            "description",
+                            t("settings.ruleDescription"),
+                            undefined,
+                          ],
+                          [
+                            "appliedFacets",
+                            t("settings.ruleAppliedFacets"),
+                            undefined,
+                          ],
+                          ["enabled", t("label.enabled"), "text-center"],
+                        ] as const
+                      ).map(([key, label, className]) => (
+                        <SortableHead
+                          key={key}
+                          id={selectorId("settings-rules-sort", key)}
+                          label={label}
+                          className={className}
+                          active={ruleSort.key === key}
+                          descending={ruleSort.descending}
+                          onSort={() => {
+                            setRuleSort((current) =>
+                              nextRuleTableSort(current, key),
+                            );
+                            setRulePageIndex(0);
+                          }}
+                        />
+                      ))}
                       <TableHead className="text-right">
                         {t("label.actions")}
                       </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
+                    {rulePage.rows.map((record) => (
                       <TableRow
                         data-ui="settings-table-row"
                         key={record.id}
@@ -1088,7 +966,7 @@ export function SettingsRulesSection({
                         </TableCell>
                       </TableRow>
                     ))}
-                    {ruleSetRecords.length === 0 ? (
+                    {userRules.length === 0 ? (
                       <TableRow>
                         <TableCell
                           colSpan={5}
@@ -1101,6 +979,11 @@ export function SettingsRulesSection({
                   </TableBody>
                 </Table>
               </div>
+              <RuleTablePager
+                idPrefix="settings-rules"
+                page={rulePage}
+                onPageChange={setRulePageIndex}
+              />
             </div>
 
             {isEditorOpen ? (
@@ -1192,9 +1075,6 @@ export function SettingsRulesSection({
                       </div>
 
                       <div>
-                        <Label className="mb-2 block">
-                          {t("settings.ruleRegoSource")}
-                        </Label>
                         {translationDiagnostics.length ? (
                           <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
                             <p className="font-medium">
@@ -1209,33 +1089,36 @@ export function SettingsRulesSection({
                             </ul>
                           </div>
                         ) : null}
-                        <LazyRegoEditor
-                          ruleFamily="release"
-                          id="settings-rule-rego-source"
-                          autoFocus={focusEditor}
-                          onAutoFocus={onEditorFocused}
-                          value={ruleSetDraft.regoSource}
-                          onChange={(value) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              regoSource: value,
-                            }))
-                          }
-                          diagnostics={validationDiagnostics}
-                          feedback={
-                            <EditorValidationStatus
-                              checking={validating}
-                              result={validationResult}
-                              formatError={(error) =>
-                                formatRegoValidationError(
-                                  error,
-                                  ruleSetDraft.regoSource,
-                                )
-                              }
+                        <RuleEditorSurface
+                          idPrefix="settings-rule"
+                          schema={builderSchema}
+                          builderStatus={builderStatus}
+                          variant={null}
+                          mode={builderMode}
+                          onModeChange={setBuilderMode}
+                          available
+                          onEditAsRego={editAsRego}
+                          model={ruleSetDraft.builderModel}
+                          onModelChange={setBuilderModel}
+                          options={builderOptions}
+                          generatedSource={ruleSetDraft.regoSource}
+                          feedback={validationStatus}
+                          starterSource={SCORING_STARTER_SOURCE}
+                          editor={(readOnly, source) => (
+                            <LazyRegoEditor
+                              ruleFamily="release"
+                              id="settings-rule-rego-source"
+                              autoFocus={focusEditor}
+                              onAutoFocus={onEditorFocused}
+                              value={source}
+                              readOnly={readOnly}
+                              onChange={editRegoSource}
+                              diagnostics={validationDiagnostics}
+                              feedback={validationStatus}
+                              minLines={10}
+                              maxLines={35}
                             />
-                          }
-                          minLines={10}
-                          maxLines={35}
+                          )}
                         />
                       </div>
 
@@ -1329,20 +1212,28 @@ export function SettingsRulesSection({
               mutatingRuleSetId={mutatingRuleSetId}
               toggleRuleSetEnabled={toggleRuleSetEnabled}
             />
-            {trackedRulePacks}
-          </div>
-        </div>
-        <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
-          <RuleLibrary
-            defaultOpen={ruleSetRecords.length === 0}
-            onApply={applyTemplate}
-            onInstallCommunityPack={installTrackedRulePack}
-            installingRulePackId={installingRulePackId}
-            canManage={canManageTrackedPacks}
-          />
-          <RulesContextReference />
-        </div>
+          </>
+        )}
       </div>
+      <GutterPanel
+        id={SCORING_LIBRARY_PANEL_ID}
+        label={t("settings.ruleLibrary")}
+        {...sidePanelProps("library")}
+      >
+        <RuleLibrary
+          onApply={(template) => {
+            applyTemplate(template);
+            closeSidePanel();
+          }}
+        />
+      </GutterPanel>
+      <GutterPanel
+        id={SCORING_REFERENCE_PANEL_ID}
+        label={t("settings.refTitle")}
+        {...sidePanelProps("reference")}
+      >
+        <RulesContextReference />
+      </GutterPanel>
       {isArrImportOpen ? (
         <React.Suspense fallback={null}>
           <ArrCustomFormatImportDialog
@@ -1352,6 +1243,7 @@ export function SettingsRulesSection({
               importCustomFormats(draft);
               setIsArrImportOpen(false);
             }}
+            connectImport={arrConnectImport}
           />
         </React.Suspense>
       ) : null}

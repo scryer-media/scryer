@@ -70,6 +70,7 @@ open = "5"
 governor = { workspace = true }
 webauthn-rs = { workspace = true }
 url = "2"
+rmcp = { workspace = true }
 
 # Scryer does not use the system allocator anywhere. glibc's never plateaus on
 # this workload (it ratchets to ~3 GB on the 111k-item load-test library and is

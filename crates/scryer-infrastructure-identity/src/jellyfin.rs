@@ -10,6 +10,8 @@ use scryer_domain::ExternalId;
 use serde_json::Value;
 use url::Url;
 
+use crate::catalog_paging::{CatalogPager, CatalogScanLimits, read_catalog_json};
+
 const SCRYER_PRODUCT: &str = "Scryer";
 const SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CATALOG_PAGE_SIZE: usize = 500;
@@ -107,10 +109,12 @@ pub(super) async fn scan_catalog(
     base_url: &str,
     api_key: &str,
     recent_only: bool,
+    limits: CatalogScanLimits,
 ) -> AppResult<Vec<MediaServerCatalogItem>> {
     let base_url = self::base_url(base_url)?;
     let mut start = 0usize;
     let mut catalog = Vec::new();
+    let mut pager = CatalogPager::new("Jellyfin", limits);
     loop {
         let mut url = catalog_url(&base_url, "Items")?;
         url.query_pairs_mut()
@@ -139,7 +143,7 @@ pub(super) async fn scan_catalog(
                 response.status()
             )));
         }
-        let page = response.json::<Value>().await.map_err(|error| {
+        let page = read_catalog_json(response, limits).await.map_err(|error| {
             AppError::Repository(format!("invalid Jellyfin catalog response: {error}"))
         })?;
         let items = page
@@ -148,6 +152,7 @@ pub(super) async fn scan_catalog(
             .cloned()
             .unwrap_or_default();
         let page_len = items.len();
+        pager.record_page(items.iter().map(item_id))?;
         catalog.extend(items.iter().filter_map(catalog_item));
         start += page_len;
         let total = page
@@ -155,9 +160,15 @@ pub(super) async fn scan_catalog(
             .and_then(Value::as_u64)
             .unwrap_or(0) as usize;
         if recent_only || page_len < CATALOG_PAGE_SIZE || (total > 0 && start >= total) {
-            return hydrate_parent_series(client, &base_url, api_key, catalog).await;
+            return hydrate_parent_series(client, &base_url, api_key, catalog, limits).await;
         }
+        pager.ensure_another_page_allowed()?;
     }
+}
+
+/// A catalog row's `Id`, as the pager tells pages apart by it.
+fn item_id(item: &Value) -> Option<String> {
+    item.get("Id").and_then(Value::as_str).map(str::to_string)
 }
 
 async fn hydrate_parent_series(
@@ -165,6 +176,7 @@ async fn hydrate_parent_series(
     base_url: &Url,
     api_key: &str,
     mut catalog: Vec<MediaServerCatalogItem>,
+    limits: CatalogScanLimits,
 ) -> AppResult<Vec<MediaServerCatalogItem>> {
     let mut known_series_ids = catalog
         .iter()
@@ -206,7 +218,7 @@ async fn hydrate_parent_series(
                 response.status()
             )));
         }
-        let page = response.json::<Value>().await.map_err(|error| {
+        let page = read_catalog_json(response, limits).await.map_err(|error| {
             AppError::Repository(format!("invalid Jellyfin parent-series response: {error}"))
         })?;
         // A series that no longer exists yields an empty page rather than a 404.
@@ -414,9 +426,15 @@ mod tests {
             .mount(&server)
             .await;
 
-        let catalog = scan_catalog(&test_client(), &server.uri(), "api-key", false)
-            .await
-            .expect("scan Jellyfin catalog");
+        let catalog = scan_catalog(
+            &test_client(),
+            &server.uri(),
+            "api-key",
+            false,
+            CatalogScanLimits::STANDARD,
+        )
+        .await
+        .expect("scan Jellyfin catalog");
 
         assert_eq!(catalog.len(), 3);
         assert_eq!(catalog[0].kind, MediaServerCatalogItemKind::Movie);
@@ -431,6 +449,113 @@ mod tests {
         assert_eq!(catalog[1].episode_number_end, Some(4));
         assert_eq!(catalog[2].kind, MediaServerCatalogItemKind::Series);
         assert_eq!(catalog[2].provider_item_id, "series-1");
+    }
+
+    /// A full page of synthetic movies whose ids start at `first`.
+    fn full_page(first: usize) -> Value {
+        let items = (first..first + CATALOG_PAGE_SIZE)
+            .map(|index| json!({"Type": "Movie", "Id": format!("movie-{index}")}))
+            .collect::<Vec<_>>();
+        json!({ "Items": items })
+    }
+
+    struct EndlessPages;
+
+    impl wiremock::Respond for EndlessPages {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let start = request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "StartIndex")
+                .and_then(|(_, value)| value.parse::<usize>().ok())
+                .expect("start requested");
+            ResponseTemplate::new(200).set_body_json(full_page(start))
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_scan_that_ignores_the_start_fails_instead_of_looping() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Items"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(full_page(0)))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let error = scan_catalog(
+            &test_client(),
+            &server.uri(),
+            "api-key",
+            false,
+            CatalogScanLimits::STANDARD,
+        )
+        .await
+        .expect_err("a repeated page is not a complete catalog");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn catalog_scan_that_never_signals_its_end_fails_at_the_page_ceiling() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Items"))
+            .respond_with(EndlessPages)
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let error = scan_catalog(
+            &test_client(),
+            &server.uri(),
+            "api-key",
+            false,
+            CatalogScanLimits {
+                page_ceiling: 3,
+                ..CatalogScanLimits::STANDARD
+            },
+        )
+        .await
+        .expect_err("a listing with no end is not a complete catalog");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn catalog_answer_past_the_byte_limit_fails_the_scan() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Items"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{"Type": "Movie", "Id": "movie-1", "Name": "x".repeat(4096)}],
+                "TotalRecordCount": 1
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let catalog = scan_catalog(
+            &test_client(),
+            &server.uri(),
+            "api-key",
+            false,
+            CatalogScanLimits::STANDARD,
+        )
+        .await
+        .expect("the answer fits the standard limit");
+        assert_eq!(catalog.len(), 1);
+        let error = scan_catalog(
+            &test_client(),
+            &server.uri(),
+            "api-key",
+            false,
+            CatalogScanLimits {
+                response_max_bytes: 1024,
+                ..CatalogScanLimits::STANDARD
+            },
+        )
+        .await
+        .expect_err("an answer past the limit fails the scan");
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
     }
 
     #[tokio::test]

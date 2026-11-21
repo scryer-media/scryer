@@ -512,6 +512,9 @@ pub(super) struct MockMediaRequestRepo {
     pub(super) fail_approvals: AtomicBool,
     pub(super) requests: Arc<Mutex<Vec<MediaRequest>>>,
     pub(super) domain_events: Option<Arc<MockDomainEventRepo>>,
+    /// The staged request metadata, by staging key.
+    pub(super) staged_metadata:
+        Arc<std::sync::Mutex<HashMap<String, crate::StagedMediaRequestMetadata>>>,
 }
 
 impl MockMediaRequestRepo {
@@ -520,6 +523,7 @@ impl MockMediaRequestRepo {
             titles: None,
             requests: Arc::new(Mutex::new(Vec::new())),
             domain_events: Some(domain_events),
+            staged_metadata: Arc::default(),
             fail_policy_tag_rewrites: AtomicBool::new(false),
             fail_approvals: AtomicBool::new(false),
         }
@@ -887,7 +891,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
     async fn requester_user_ids_by_title_ids(
         &self,
         title_ids: &[String],
-    ) -> AppResult<HashMap<String, Vec<String>>> {
+    ) -> AppResult<HashMap<String, crate::TitleRequesters>> {
         let wanted: HashSet<&String> = title_ids.iter().collect();
         let mut requests: Vec<MediaRequest> = self
             .requests
@@ -908,13 +912,19 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 .then_with(|| left.id.cmp(&right.id))
         });
 
-        let mut by_title: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_title: HashMap<String, crate::TitleRequesters> = HashMap::new();
         for request in requests {
             let title_id = request
                 .created_title_id
                 .clone()
                 .expect("filtered to requests with a created title");
-            let entry = by_title.entry(title_id).or_default();
+            let entry = &mut by_title
+                .entry(title_id)
+                .or_insert_with(|| crate::TitleRequesters {
+                    user_ids: Vec::new(),
+                    first_requested_at: request.created_at,
+                })
+                .user_ids;
             let mut requesters = request.requesters.clone();
             requesters.sort_by(|left, right| {
                 left.requested_at
@@ -1006,6 +1016,44 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 .then_with(|| right.id.cmp(&left.id))
         });
         Ok(history)
+    }
+
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<crate::StagedMediaRequestMetadata>> {
+        Ok(self
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .get(staging_key)
+            .cloned())
+    }
+
+    async fn stage_metadata(&self, record: &crate::StagedMediaRequestMetadata) -> AppResult<()> {
+        self.staged_metadata
+            .lock()
+            .expect("staged metadata lock")
+            .insert(record.staging_key.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: chrono::DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize> {
+        let mut staged = self.staged_metadata.lock().expect("staged metadata lock");
+        let stale: Vec<String> = staged
+            .values()
+            .filter(|record| record.staged_at < cutoff)
+            .take(limit)
+            .map(|record| record.staging_key.clone())
+            .collect();
+        for key in &stale {
+            staged.remove(key);
+        }
+        Ok(stale.len())
     }
 
     async fn latest_request_at_for_user(

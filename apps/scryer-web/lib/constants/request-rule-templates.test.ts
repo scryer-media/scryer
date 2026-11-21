@@ -4,10 +4,6 @@ import test from "node:test";
 import requestInputContract from "../contracts/request-input-contract.json" with { type: "json" };
 import en from "../i18n/locales/en.ts";
 import ru from "../i18n/locales/ru.ts";
-import {
-  applyRequestersToSource,
-  requestRuleNamesRequesters,
-} from "../utils/request-rule-sets.ts";
 import { REQUEST_RULE_TEMPLATES } from "./request-rule-templates.ts";
 
 /// The seven worked examples, byte-for-byte as `REQUEST_RULE_EXAMPLES` pins them
@@ -17,19 +13,19 @@ import { REQUEST_RULE_TEMPLATES } from "./request-rule-templates.ts";
 /// and a template that diverges from them is a template that will not save.
 const PINNED_SOURCES: Record<string, string> = {
   "named-requesters-family-rated":
-    'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains "family" if {\n\tinput.facts.certification_rank <= 1\n}\n',
+    'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := ["family"] if {\n\tinput.facts.certification_rank <= 1\n}\n',
   "short-lease-approval":
     'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "bob"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n',
   "low-resolution-approval":
     'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "alice"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n',
   "deny-adult-content":
-    'package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains "adult_content" if {\n\tinput.facts.is_adult\n}\n',
+    'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.is_adult == true\n}\n\ndeny if rule_applies\n\nreasons contains "adult_content" if rule_applies\n',
   "monthly-approval-quota":
-    "package rules\nimport rego.v1\n\nmanual if {\n\tinput.facts.approved_last_30d >= 5\n}\n",
+    "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.approved_last_30d >= 5\n}\n\nmanual if rule_applies\n",
   "hold-approval-policy-list-requests":
-    'package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n',
+    'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n\nmanual if rule_applies\n',
   "deny-personal-list-above-1080p":
-    'package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n',
+    'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n\ndeny if rule_applies\n',
 };
 
 test("the gallery ships the seven worked examples exactly once, in order", () => {
@@ -99,11 +95,6 @@ test("person-targeted templates are the ones that read the requester", () => {
       template.regoSource.includes("input.requester."),
       `${template.id} disagrees with its matcher about naming people`,
     );
-    assert.equal(
-      template.namesRequesters === true,
-      requestRuleNamesRequesters(template.regoSource),
-      `${template.id} disagrees about whether the user picker can write to it`,
-    );
   }
 
   assert.deepEqual(
@@ -118,41 +109,9 @@ test("person-targeted templates are the ones that read the requester", () => {
   );
 });
 
-test("the user picker rewrites both ways a template names people", () => {
-  const set = REQUEST_RULE_TEMPLATES.find(
-    (template) => template.id === "named-requesters-family-rated",
-  )!;
-  assert.equal(
-    applyRequestersToSource(set.regoSource, ["dana"]),
-    set.regoSource.replace('{"alice", "bob", "carol"}', '{"dana"}'),
-  );
-
-  const literal = REQUEST_RULE_TEMPLATES.find(
-    (template) => template.id === "short-lease-approval",
-  )!;
-  assert.equal(
-    applyRequestersToSource(literal.regoSource, ["dana"]),
-    literal.regoSource.replace('== "bob"', '== "dana"'),
-  );
-  /// One name stays an equality; several become a set membership, which is the
-  /// only honest way to say "any of these" with an equality operator.
-  assert.equal(
-    applyRequestersToSource(literal.regoSource, ["dana", "erin"]),
-    literal.regoSource.replace('== "bob"', 'in {"dana", "erin"}'),
-  );
-
-  /// A matcher that names nobody has nowhere to write, and says so rather than
-  /// leaving the placeholder in place.
-  const contentOnly = REQUEST_RULE_TEMPLATES.find(
-    (template) => template.id === "deny-adult-content",
-  )!;
-  assert.equal(applyRequestersToSource(contentOnly.regoSource, ["dana"]), null);
-});
-
 test("every template key resolves in the default locale and in Russian", () => {
   const keys = [
     "settings.requestTemplateGallery",
-    "settings.requestTemplateGalleryDescription",
     "settings.requestTemplateApply",
     "settings.requestTemplatePersonTargetedBadge",
     ...REQUEST_RULE_TEMPLATES.flatMap((template) => [

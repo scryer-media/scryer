@@ -33,6 +33,9 @@
 //! by hand, no scheduler luck — and then hold the component hosts to the
 //! construction that cannot exhibit it.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::any::Any;
 use std::future::Future;
 use std::panic::{self, AssertUnwindSafe};

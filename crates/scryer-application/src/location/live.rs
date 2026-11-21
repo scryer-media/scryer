@@ -28,6 +28,62 @@ pub struct TransferTitle {
     #[serde(default)]
     pub recording: usize,
     pub detail: Option<String>,
+    /// The stable reason and facts of the error that failed the title, beside
+    /// the sentence in `detail`: written and cleared wherever `detail` is.
+    /// Rows written before this field existed, and every row whose detail is
+    /// not a coded failure, have none and leave no key in the stored summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<TitleRefusal>,
+}
+
+/// One value a title's refusal carries, in the shape the GraphQL error
+/// extension gives it: a single text, or a list of them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TitleRefusalFact {
+    Text(String),
+    List(Vec<String>),
+}
+
+/// The stable reason code of the error that failed a title and the typed facts
+/// it carried, kept so a client can explain the failure without reading the
+/// sentence. Facts are keyed exactly as the GraphQL error extensions are.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitleRefusal {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub facts: BTreeMap<String, TitleRefusalFact>,
+}
+
+impl TitleRefusal {
+    /// The refusal an error names, or `None` when it names no reason. Facts
+    /// never travel without the reason they belong to.
+    pub fn from_error(error: &crate::AppError) -> Option<Self> {
+        let reason = error.reason()?;
+        let facts = error
+            .refusal_facts()
+            .iter()
+            .map(|fact| {
+                let value = match &fact.value {
+                    crate::RefusalFactValue::Text(value) => TitleRefusalFact::Text(value.clone()),
+                    crate::RefusalFactValue::List(values) => TitleRefusalFact::List(values.clone()),
+                };
+                (fact.key.to_owned(), value)
+            })
+            .collect();
+        Some(Self {
+            reason: reason.to_owned(),
+            facts,
+        })
+    }
+}
+
+/// What a title's row says about how it ended: the sentence and, when the
+/// failure named one, its refusal.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TransferTitleOutcome {
+    pub detail: Option<String>,
+    pub refusal: Option<TitleRefusal>,
 }
 
 impl TransferTitle {
@@ -666,6 +722,20 @@ impl crate::AppUseCase {
         operation_id: &str,
         title_id: &str,
     ) -> crate::AppResult<Option<String>> {
+        Ok(self
+            .location_transfer_title_outcome(actor, operation_id, title_id)
+            .await?
+            .and_then(|outcome| outcome.detail))
+    }
+
+    /// The sentence and refusal on one title's row, or `None` when the
+    /// operation or the row does not exist.
+    pub async fn location_transfer_title_outcome(
+        &self,
+        actor: &scryer_domain::User,
+        operation_id: &str,
+        title_id: &str,
+    ) -> crate::AppResult<Option<TransferTitleOutcome>> {
         let store = &self.services.library.location_operations;
         let Some(operation) = store.get_location_operation(operation_id).await? else {
             return Ok(None);
@@ -675,7 +745,10 @@ impl crate::AppUseCase {
         Ok(store
             .transfer_title(operation_id, title_id)
             .await?
-            .and_then(|row| row.detail))
+            .map(|row| TransferTitleOutcome {
+                detail: row.detail,
+                refusal: row.refusal,
+            }))
     }
 
     pub(crate) async fn seed_transfer_titles(
@@ -715,6 +788,7 @@ impl crate::AppUseCase {
                 verifying: 0,
                 recording: 0,
                 detail: None,
+                refusal: None,
             });
         }
         let unplanned: Vec<_> = selection
@@ -754,6 +828,7 @@ impl crate::AppUseCase {
                 verifying: 0,
                 recording: 0,
                 detail: None,
+                refusal: None,
             });
         }
         store.seed_transfer_titles(operation_id, &summaries).await
@@ -1202,6 +1277,7 @@ mod tests {
             verifying: 0,
             recording: 0,
             detail: Some("first file failed".into()),
+            refusal: None,
         };
         hub.overlay("op", &mut row);
         assert_eq!(row.rank(), 3);
@@ -1259,6 +1335,7 @@ mod tests {
             verifying: 0,
             recording: 0,
             detail: None,
+            refusal: None,
         };
         let mut mixed = make(TitleCheckpointState::Moving);
         mixed.copying = 2;
@@ -1272,6 +1349,70 @@ mod tests {
             TitleCheckpointState::Completed,
         ];
         assert_eq!(states.map(|state| make(state).rank()), [0, 1, 2, 3, 4]);
+    }
+
+    /// The stored summary of a row with no refusal keeps exactly the keys it
+    /// had before refusals were stored, and such a summary reads back as a
+    /// row with none.
+    #[test]
+    fn a_row_without_a_refusal_keeps_its_stored_summary_shape() {
+        let legacy = r#"{"title_id":"title-a","name":"Synthetic Title","sequence":0,"state":"failed","files_total":1,"files_done":0,"bytes_total":10,"copy_bytes":0,"verification_bytes":0,"current_file":null,"copying":0,"verifying":0,"recording":0,"detail":"a file could not be copied"}"#;
+        let row: TransferTitle = serde_json::from_str(legacy).expect("legacy summary");
+        assert_eq!(row.refusal, None);
+        assert_eq!(row.detail.as_deref(), Some("a file could not be copied"));
+        assert_eq!(
+            serde_json::to_value(&row).expect("serialize"),
+            serde_json::from_str::<serde_json::Value>(legacy).expect("legacy value"),
+        );
+    }
+
+    #[test]
+    fn a_refusal_keeps_its_reason_and_facts_through_the_stored_summary() {
+        let error = crate::AppError::validation_refused_with_facts(
+            crate::error_reasons::location::UNPROVEN_LINK_NOT_REMOVED,
+            "the link could not be proven",
+            vec![
+                crate::RefusalFact::new(
+                    crate::error_reasons::location::LEFT_BEHIND_PATH_FACT,
+                    "/synthetic/library/Synthetic Title/file.mkv",
+                ),
+                crate::RefusalFact::list("syntheticList", vec!["a".into(), "b".into()]),
+            ],
+        );
+        let refusal = TitleRefusal::from_error(&error).expect("coded error");
+        assert_eq!(refusal.reason, "LOCATION_UNPROVEN_LINK_NOT_REMOVED");
+        let encoded = serde_json::to_value(&refusal).expect("serialize");
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "reason": "LOCATION_UNPROVEN_LINK_NOT_REMOVED",
+                "facts": {
+                    "leftBehindPath": "/synthetic/library/Synthetic Title/file.mkv",
+                    "syntheticList": ["a", "b"],
+                },
+            })
+        );
+        let decoded: TitleRefusal = serde_json::from_value(encoded).expect("deserialize");
+        assert_eq!(decoded, refusal);
+    }
+
+    #[test]
+    fn an_error_without_a_reason_has_no_refusal() {
+        assert_eq!(
+            TitleRefusal::from_error(&crate::AppError::Repository("disk said no".into())),
+            None
+        );
+        let coded = TitleRefusal::from_error(&crate::AppError::RepositoryFailed {
+            message: "could not read".into(),
+            reason: crate::disk::reason::DISK_PERMISSION_DENIED,
+        })
+        .expect("coded");
+        assert_eq!(coded.reason, "DISK_PERMISSION_DENIED");
+        assert!(coded.facts.is_empty());
+        assert_eq!(
+            serde_json::to_value(&coded).expect("serialize"),
+            serde_json::json!({ "reason": "DISK_PERMISSION_DENIED" })
+        );
     }
 
     #[test]

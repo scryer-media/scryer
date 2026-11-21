@@ -3,11 +3,15 @@ import test from "node:test";
 
 import ruleInputContract from "../contracts/rule-input-contract.json" with { type: "json" };
 import type { RuleSetRecord } from "../types/rule-sets.ts";
+import { SCORING_CONTRACT_SCHEMA } from "./rule-builder-contract-fixture.ts";
 import {
   copyRuleSetDraft,
   createRuleSetInput,
   isUserOwnedRuleSet,
+  scoringRuleBuilder,
 } from "./rule-sets.ts";
+
+const scoring = scoringRuleBuilder(SCORING_CONTRACT_SCHEMA);
 
 const managedRule: RuleSetRecord = {
   id: "managed-1",
@@ -25,7 +29,7 @@ const managedRule: RuleSetRecord = {
 };
 
 test("copying a managed rule creates a user-owned draft without managed metadata", () => {
-  const draft = copyRuleSetDraft(managedRule);
+  const draft = copyRuleSetDraft(managedRule, scoring);
 
   assert.deepEqual(draft, {
     name: "Copy of Built-in quality guard",
@@ -34,6 +38,7 @@ test("copying a managed rule creates a user-owned draft without managed metadata
     enabled: false,
     priority: managedRule.priority,
     appliedFacets: ["movies", "series"],
+    builderModel: null,
   });
   assert.equal(Object.hasOwn(draft, "id"), false);
   assert.equal(Object.hasOwn(draft, "managedKey"), false);
@@ -41,7 +46,10 @@ test("copying a managed rule creates a user-owned draft without managed metadata
 });
 
 test("create input round-trips enabled and omits managed metadata", () => {
-  const input = createRuleSetInput(copyRuleSetDraft(managedRule));
+  const input = createRuleSetInput(
+    copyRuleSetDraft(managedRule, scoring),
+    scoring,
+  );
 
   assert.equal(input.enabled, false);
   assert.deepEqual(input.appliedFacets, ["movies", "series"]);
@@ -57,13 +65,13 @@ test("community copies format only the draft and preserve source until explicitl
       'score_entry["bonus"] := 200 if { input.release.is_remux; true }',
   };
   const original = structuredClone(record);
-  const draft = copyRuleSetDraft(record);
+  const draft = copyRuleSetDraft(record, scoring);
   assert.equal(
     draft.regoSource,
     'score_entry["bonus"] := 200 if {\n  input.release.is_remux\n  true\n}',
   );
   assert.deepEqual(record, original);
-  assert.equal(createRuleSetInput(draft).regoSource, draft.regoSource);
+  assert.equal(createRuleSetInput(draft, scoring).regoSource, draft.regoSource);
 });
 
 test("managed rules remain guarded from user-owned edit and delete actions", () => {

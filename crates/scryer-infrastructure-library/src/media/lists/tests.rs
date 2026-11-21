@@ -1007,6 +1007,70 @@ async fn exclusions_match_by_id_kind_and_scope() {
 }
 
 #[tokio::test]
+async fn exclusions_created_together_are_stored_whole_or_not_at_all() {
+    let store = test_store(None).await;
+    for id in ["sub-1", "sub-2"] {
+        ListSubscriptionRepository::create(&store, subscription(id, ListScope::Public, OWNER))
+            .await
+            .expect("create subscription");
+    }
+    let scoped = |id: &str, subscription_id: &str, tmdb: &str| {
+        let mut exclusion = exclusion(
+            id,
+            ListExclusionScope::List {
+                subscription_id: subscription_id.into(),
+            },
+            &[("tmdb", tmdb), ("imdb", "tt300")],
+        );
+        exclusion.created_by_user_id = None;
+        exclusion
+    };
+
+    // One names a list that does not exist, so none of the batch is kept.
+    let refused = ListExclusionRepository::create_many(
+        &store,
+        vec![
+            scoped("first", "sub-1", "300"),
+            scoped("orphan", "sub-gone", "300"),
+        ],
+    )
+    .await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        ListExclusionRepository::list(&store)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    ListExclusionRepository::create_many(
+        &store,
+        vec![
+            scoped("first", "sub-1", "300"),
+            scoped("second", "sub-2", "300"),
+        ],
+    )
+    .await
+    .expect("create both");
+    let ids = vec![ExternalId::new("tmdb", "300")];
+    for (subscription_id, expected) in [("sub-1", "first"), ("sub-2", "second")] {
+        let found = store
+            .find_matching(MediaFacet::Movie, &ids, Some(subscription_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            found.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec![expected]
+        );
+        assert_eq!(found[0].external_ids.len(), 2);
+        assert_eq!(found[0].created_by_user_id, None);
+    }
+    ListExclusionRepository::create_many(&store, Vec::new())
+        .await
+        .expect("an empty batch writes nothing");
+}
+
+#[tokio::test]
 async fn a_sync_outcome_keeps_a_sync_requested_after_the_sync_read_the_list() {
     let store = test_store(None).await;
     let mut created = subscription("sub-1", ListScope::Public, OWNER);

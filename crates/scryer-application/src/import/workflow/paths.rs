@@ -579,21 +579,23 @@ pub(crate) fn discover_video_files(
             .collect()
     }
 
-    let metadata = std::fs::metadata(dir).map_err(|error| AppError::ImportSourceInspection {
+    match import_source_kind(dir).map_err(|message| AppError::ImportSourceInspection {
         path: dir.display().to_string(),
-        message: error.to_string(),
-    })?;
-    if metadata.is_file() {
-        tracing::info!(
-            path = %dir.display(),
-            "download path is a video file, not a directory"
-        );
-        return Ok(single_file(dir, filter_samples));
-    }
-    if !metadata.is_dir() {
-        return Err(AppError::UnsupportedImportSource {
-            path: dir.display().to_string(),
-        });
+        message,
+    })? {
+        EntryKind::File => {
+            tracing::info!(
+                path = %dir.display(),
+                "download path is a video file, not a directory"
+            );
+            return Ok(single_file(dir, filter_samples));
+        }
+        EntryKind::Directory => {}
+        _ => {
+            return Err(AppError::UnsupportedImportSource {
+                path: dir.display().to_string(),
+            });
+        }
     }
 
     let walked = match crate::filesystem_walk::FilesystemWalker::new()
@@ -601,9 +603,9 @@ pub(crate) fn discover_video_files(
         .walk(dir)
     {
         Ok(walked) => walked,
-        Err(walk_error) => match std::fs::metadata(dir) {
-            Ok(metadata) if metadata.is_file() => return Ok(single_file(dir, filter_samples)),
-            Ok(metadata) if metadata.is_dir() => {
+        Err(walk_error) => match import_source_kind(dir) {
+            Ok(EntryKind::File) => return Ok(single_file(dir, filter_samples)),
+            Ok(EntryKind::Directory) => {
                 return Err(AppError::ImportSourceInspection {
                     path: dir.display().to_string(),
                     message: walk_error.to_string(),
@@ -631,6 +633,29 @@ pub(crate) fn discover_video_files(
         .collect())
 }
 
+/// What an import source resolves to through any links, or why that is not
+/// known.
+fn import_source_kind(path: &Path) -> Result<EntryKind, String> {
+    match Disk::process().follow_blocking(path) {
+        PathReading::Known { kind, .. } => Ok(kind),
+        PathReading::Missing { .. } => {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound).to_string())
+        }
+        reading => Err(reading
+            .unknown_reason()
+            .unwrap_or(reason::DISK_PATH_UNREACHABLE)
+            .to_string()),
+    }
+}
+
+/// The size `path` resolves to, or zero when it cannot be read.
+fn followed_len_or_zero(path: &Path) -> u64 {
+    match Disk::process().follow_blocking(path) {
+        PathReading::Known { len, .. } => len.unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// [`discover_video_files`] for callers that read only the paths.
 pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
     Ok(discover_video_files(dir, filter_samples)?
@@ -642,17 +667,17 @@ pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Ve
 /// Every regular file of a completed download source, which may be a single
 /// file. Read only to classify a download that produced no video.
 pub(crate) fn find_download_files(dir: &Path) -> AppResult<Vec<PathBuf>> {
-    let metadata = std::fs::metadata(dir).map_err(|error| AppError::ImportSourceInspection {
+    match import_source_kind(dir).map_err(|message| AppError::ImportSourceInspection {
         path: dir.display().to_string(),
-        message: error.to_string(),
-    })?;
-    if metadata.is_file() {
-        return Ok(vec![dir.to_path_buf()]);
-    }
-    if !metadata.is_dir() {
-        return Err(AppError::UnsupportedImportSource {
-            path: dir.display().to_string(),
-        });
+        message,
+    })? {
+        EntryKind::File => return Ok(vec![dir.to_path_buf()]),
+        EntryKind::Directory => {}
+        _ => {
+            return Err(AppError::UnsupportedImportSource {
+                path: dir.display().to_string(),
+            });
+        }
     }
     crate::filesystem_walk::FilesystemWalker::new()
         .skip_unreadable_subdirectories()
@@ -699,8 +724,8 @@ pub(crate) fn unwanted_executable_in_download(
         let replaced = crate::archive_extractor::replaced_archive_sources(extracted_dir)?;
         files.extend(find_download_files(dest_dir)?.into_iter().filter(|path| {
             !path.starts_with(extracted_dir)
-                && path
-                    .canonicalize()
+                && Disk::process()
+                    .canonicalize_blocking(path)
                     .is_ok_and(|path| !replaced.contains(&path))
         }));
         Ok::<_, AppError>(files)
@@ -747,13 +772,7 @@ pub(crate) fn completed_download_release_claims(completed: &CompletedDownload) -
     if video_files.is_empty() {
         video_files = find_video_files(dest_dir, false).unwrap_or_default();
     }
-    video_files.sort_by_cached_key(|file| {
-        std::cmp::Reverse(
-            std::fs::metadata(file)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0),
-        )
-    });
+    video_files.sort_by_cached_key(|file| std::cmp::Reverse(followed_len_or_zero(file)));
     let mut claims = Vec::new();
     for stem in video_files.iter().filter_map(|file| {
         file.file_stem()
@@ -772,7 +791,7 @@ pub(crate) fn completed_download_release_claims(completed: &CompletedDownload) -
 pub(crate) fn pick_largest_file(files: &[PathBuf]) -> AppResult<PathBuf> {
     files
         .iter()
-        .max_by_key(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0))
+        .max_by_key(|f| followed_len_or_zero(f))
         .cloned()
         .ok_or_else(|| AppError::Repository("no files to pick from".to_string()))
 }
@@ -886,8 +905,15 @@ fn probe_video_content(
 /// a video container; `None` for a file with an extension, one too small to
 /// probe, or content that is not video.
 fn content_qualify_opaque_video(path: &Path) -> Option<ContentQualifiedVideo> {
-    let metadata = std::fs::metadata(path).ok()?;
-    if !metadata.is_file() || !opaque_video_probe_applies(path, metadata.len()) {
+    let PathReading::Known {
+        kind: EntryKind::File,
+        len: Some(len),
+        ..
+    } = Disk::process().follow_blocking(path)
+    else {
+        return None;
+    };
+    if !opaque_video_probe_applies(path, len) {
         return None;
     }
     match probe_video_content(path, false) {
@@ -1130,8 +1156,8 @@ async fn posted_names_from_grab(
     }
     let mut on_disk = Vec::with_capacity(cut_files.len());
     for (path, name) in cut_files {
-        if let Ok(metadata) = tokio::fs::metadata(path).await {
-            on_disk.push((name.clone(), metadata.len()));
+        if let Some(len) = Disk::process().follow(*path).await.size() {
+            on_disk.push((name.clone(), len));
         }
     }
     match_cut_file_names(&grabbed, &on_disk)
@@ -1362,11 +1388,7 @@ impl SrrdbFilenameRecovery {
 fn pick_largest_import_video_file(files: &[ImportVideoFile]) -> AppResult<ImportVideoFile> {
     files
         .iter()
-        .max_by_key(|file| {
-            std::fs::metadata(file.path())
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
-        })
+        .max_by_key(|file| Disk::process().follow_blocking(file.path()).size().unwrap_or(0))
         .cloned()
         .ok_or_else(|| AppError::Repository("no files to pick from".to_string()))
 }

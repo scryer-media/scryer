@@ -1,0 +1,2127 @@
+//! The action executor's gate matrix, arming contract, safety rechecks, and
+//! postconditions.
+//!
+//! Every test that makes an action execute also asserts the evidence trail:
+//! the action-run row, the candidate's terminal state, and its reason. The
+//! deletion journey itself lives in the integration suite, where the real
+//! delete path and stores exist; here the mock harness proves the decisions
+//! around execution.
+
+use super::*;
+
+use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
+use crate::lib_tests::lifecycle_rules::{InMemoryLifecycleRuleRepo, LifecycleRuleReadFault};
+use crate::lifecycle_rules::{LifecycleRuleDraft, LifecycleSourceDraft, execution_reason};
+use crate::location::ownership_guard::OwnedEntity;
+use crate::location::test_support::InMemoryLocationOperationStore;
+use crate::ports::{
+    ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
+    PlaybackProbeStatus, PlayingMedia, ProviderPlayedItem,
+};
+use scryer_domain::{
+    LifecycleCandidateState, LifecycleRuleState, MediaServerProvider, MediaServerSignalKind,
+};
+
+/// A playback probe whose answer the test chooses, and may change.
+struct FixedPlaybackProbe {
+    status: Arc<std::sync::Mutex<PlaybackProbeStatus>>,
+}
+
+#[async_trait]
+impl MediaServerPlaybackProbe for FixedPlaybackProbe {
+    async fn active_playback(&self) -> AppResult<PlaybackActivitySnapshot> {
+        Ok(PlaybackActivitySnapshot {
+            connections: vec![ConnectionPlaybackActivity {
+                connection_id: "conn-1".to_string(),
+                provider: MediaServerProvider::Jellyfin,
+                path_mappings: Vec::new(),
+                status: self.status.lock().expect("playback status").clone(),
+            }],
+            observed_at: Utc::now(),
+        })
+    }
+}
+
+pub(super) struct ExecutionFixture {
+    pub(super) app: AppUseCase,
+    pub(super) user: User,
+    pub(super) rules: Arc<InMemoryLifecycleRuleRepo>,
+    pub(super) evaluation: Arc<InMemoryLifecycleEvaluationRepo>,
+    #[allow(dead_code)] // sibling acceptance modules selectively need this seam
+    pub(super) media_files: Arc<MockMediaFileRepo>,
+    /// What the playback probe reports, when the fixture wired one.
+    playback: Arc<std::sync::Mutex<PlaybackProbeStatus>>,
+}
+
+pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
+    let (app, user) = bootstrap();
+    let rules = Arc::new(InMemoryLifecycleRuleRepo::default());
+    let evaluation = Arc::new(InMemoryLifecycleEvaluationRepo::default());
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let job_runs = Arc::new(RecordingJobRunRepo::with_lifecycle_action_job_receipts(
+        evaluation.action_job_receipts.clone(),
+    ));
+    let playback_status = Arc::new(std::sync::Mutex::new(PlaybackProbeStatus::Idle));
+    let app = app.with_test_overrides(|services| {
+        let services = services
+            .with_lifecycle_rule_set_store(rules.clone())
+            .with_lifecycle_evaluation_store(evaluation.clone())
+            .with_media_files(media_files.clone())
+            .with_job_runs(job_runs.clone());
+        match playback {
+            Some(status) => {
+                *playback_status.lock().expect("playback status") = status;
+                services.with_media_server_playback_probe(Arc::new(FixedPlaybackProbe {
+                    status: playback_status.clone(),
+                }))
+            }
+            None => services,
+        }
+    });
+    ExecutionFixture {
+        app,
+        user,
+        rules,
+        evaluation,
+        media_files,
+        playback: playback_status,
+    }
+}
+
+const MONITORED_SOURCE: &str = "match if {\n\
+     \tinput.facts.monitored\n\
+     }\n";
+
+const ALWAYS_SOURCE: &str = "match := true\n";
+
+pub(super) fn unmonitor_draft(rego_source: &str) -> LifecycleRuleDraft {
+    LifecycleRuleDraft {
+        max_titles_per_run: Some(100),
+        name: "Unmonitor stale".to_string(),
+        description: String::new(),
+        rego_source: crate::lib_tests::heads_source(
+            rego_source,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
+        ),
+        grace_days: 0,
+        library_ids: Vec::new(),
+    }
+}
+
+fn delete_draft() -> LifecycleRuleDraft {
+    LifecycleRuleDraft {
+        max_titles_per_run: Some(100),
+        name: "Retire".to_string(),
+        description: String::new(),
+        rego_source: crate::lib_tests::heads_source(
+            ALWAYS_SOURCE,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
+        ),
+        grace_days: 0,
+        library_ids: Vec::new(),
+    }
+}
+
+pub(super) async fn seed_title(
+    app: &AppUseCase,
+    user: &User,
+    name: &str,
+    monitored: bool,
+) -> Title {
+    app.add_title(
+        user,
+        NewTitle {
+            name: name.to_string(),
+            facet: MediaFacet::Movie,
+            monitored,
+            tags: vec![],
+            external_ids: vec![],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create title")
+}
+
+impl ExecutionFixture {
+    /// A session on the wired probe now plays `title`, through a file Scryer
+    /// knows belongs to it.
+    async fn watching(&self, title: &Title) {
+        let path = format!("/media/playing/{}.mkv", title.id);
+        self.media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.clone(),
+                size_bytes: 1_000,
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        *self.playback.lock().expect("playback status") =
+            PlaybackProbeStatus::Playing(vec![PlayingMedia::Video(ProviderPlayedItem {
+                provider_item_id: format!("jf-{}", title.id),
+                kind: MediaServerSignalKind::Movie,
+                name: Some(title.name.clone()),
+                file_paths: vec![path],
+                ..ProviderPlayedItem::default()
+            })]);
+    }
+
+    async fn observed_rule(&self, draft: LifecycleRuleDraft) -> String {
+        let created = self
+            .app
+            .create_lifecycle_rule_set(&self.user, draft)
+            .await
+            .expect("create rule set");
+        super::lifecycle_rules::set_rule_state(
+            &self.app,
+            &self.user,
+            &created.rule_set.id,
+            LifecycleRuleState::DryRun,
+            None,
+        )
+        .await;
+        created.rule_set.id
+    }
+
+    async fn open_gates(&self, reversible: bool, destructive: bool) {
+        super::lifecycle_rules::open_lifecycle_gates(&self.app, reversible, destructive).await;
+    }
+
+    async fn arm(&self, rule_set_id: &str, state: LifecycleRuleState, ack: Option<i64>) {
+        super::lifecycle_rules::arm_rule(&self.app, &self.user, rule_set_id, state, ack).await;
+    }
+
+    async fn set_state(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        state: LifecycleRuleState,
+        ack: Option<i64>,
+        confirmation: Option<scryer_domain::LifecycleRuleArmingConfirmation>,
+    ) -> AppResult<crate::lifecycle_rules::LifecycleRuleSetDetail> {
+        self.app
+            .set_lifecycle_rule_state(actor, rule_set_id, state, confirmation, ack)
+            .await
+    }
+
+    async fn evaluate(&self) {
+        self.app
+            .run_lifecycle_rule_evaluation_job()
+            .await
+            .expect("evaluation pass");
+    }
+
+    async fn handle(&self) -> crate::lifecycle_rules::LifecycleActionHandlingReport {
+        self.app
+            .run_every_rule_action_pass_for_tests()
+            .await
+            .expect("handler pass")
+    }
+
+    async fn only_candidate(&self) -> scryer_domain::LifecycleCandidate {
+        let candidates = self.evaluation.all_candidates().await;
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        candidates[0].clone()
+    }
+}
+
+// ── Arming survives nothing it did not authorize (Fix 1) ────────────────────
+
+#[tokio::test]
+async fn replacing_the_source_disarms_the_rule() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    // The operator armed *this* matcher after acknowledging what it would
+    // delete. Swapping the matcher out needs only catalog-settings authority,
+    // so if the arming survived, a different rule would run destructively under
+    // an acknowledgement nobody gave for it.
+    let replaced = fixture
+        .app
+        .update_lifecycle_rule_source(
+            &fixture.user,
+            &rule_id,
+            LifecycleSourceDraft {
+                rego_source: crate::lib_tests::heads_source(
+                    ALWAYS_SOURCE,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
+                ),
+                grace_days: 0,
+                max_titles_per_run: None,
+            },
+        )
+        .await
+        .expect("replace the matcher");
+    assert_eq!(
+        replaced.rule_set.state,
+        LifecycleRuleState::DryRun,
+        "the returned detail must report the disarm the store just wrote"
+    );
+
+    let stored = fixture
+        .app
+        .get_lifecycle_rule_set(&fixture.user, &rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(
+        stored.rule_set.state,
+        LifecycleRuleState::DryRun,
+        "the disarm must be persisted, not just reported"
+    );
+
+    // And it is a real refusal, not just a field: the next pass finds no
+    // eligible rule at all.
+    fixture.evaluate().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(
+        fixture.evaluation.all_action_runs().await.is_empty(),
+        "a disarmed rule must not reach an action run"
+    );
+
+    // Re-arming against the new matcher is what puts it back in play.
+    let pending = fixture
+        .app
+        .count_active_lifecycle_candidates(&rule_id)
+        .await
+        .expect("count candidates");
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(pending))
+        .await;
+    let rearmed = fixture.handle().await;
+    assert_eq!(rearmed.rules_eligible, 1, "{rearmed:?}");
+}
+
+#[tokio::test]
+async fn renaming_a_rule_leaves_its_arming_alone() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    // A rename moves neither the matcher nor the action, so the operator's
+    // acknowledgement still describes exactly the same blast radius.
+    fixture
+        .app
+        .update_lifecycle_rule_metadata(
+            &fixture.user,
+            &rule_id,
+            "Retire, renamed".to_string(),
+            "Same matcher".to_string(),
+            Vec::new(),
+        )
+        .await
+        .expect("rename");
+
+    let stored = fixture
+        .app
+        .get_lifecycle_rule_set(&fixture.user, &rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(stored.rule_set.name, "Retire, renamed");
+    assert_eq!(
+        stored.rule_set.state,
+        LifecycleRuleState::Enabled,
+        "a rename must not disarm a rule"
+    );
+    assert!(
+        stored.rule_set.destructive_confirmed(),
+        "a rename keeps the deletion confirmation"
+    );
+    assert_eq!(
+        stored.rule_set.current_revision_number, 1,
+        "a rename appends no revision, which is why it does not disarm"
+    );
+}
+
+// ── Stranded leases are recoverable (Fix 3) ─────────────────────────────────
+
+#[tokio::test]
+async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Interrupted", true).await;
+    fixture.evaluate().await;
+
+    // The worker that took the lease died before it ran a step: the candidate
+    // is `executing` with nobody driving it.
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(
+        report.candidates_considered, 1,
+        "a stranded lease must be selectable again: {report:?}"
+    );
+    assert_eq!(report.executed, 1, "{report:?}");
+
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored, "the reclaimed attempt must do the work");
+
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].attempt, 1, "the reclaim runs the step once");
+    assert!(steps[0].state.is_completion_success(), "{steps:?}");
+    assert_eq!(
+        fixture.only_candidate().await.state,
+        LifecycleCandidateState::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Vanished", true).await;
+    fixture.evaluate().await;
+
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
+        .await;
+    // The subject was deleted while the lease was stranded. Reclaiming does not
+    // resume a decision made hours ago: the ordinary safety chain re-runs first,
+    // and a missing subject cancels there.
+    fixture
+        .app
+        .delete_title(&fixture.user, &title.id, false, None)
+        .await
+        .expect("delete the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Canceled);
+    assert_eq!(candidate.state_reason, execution_reason::TITLE_MISSING);
+}
+
+// ── Concurrent writers cannot clobber each other (Fix 4) ────────────────────
+
+#[tokio::test]
+async fn the_evaluator_leaves_a_candidate_under_an_execution_lease_alone() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Leased", true).await;
+    fixture.evaluate().await;
+
+    let candidate = fixture.only_candidate().await;
+    let leased_at = Utc::now();
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, leased_at)
+        .await;
+
+    // The subject stops matching while the executor holds the lease. The
+    // evaluator runs on its own schedule and would ordinarily cancel here —
+    // straight over a row the executor is about to write a result to.
+    fixture
+        .app
+        .set_title_monitored(&fixture.user, &title.id, false)
+        .await
+        .expect("manual unmonitor");
+    let report = fixture
+        .app
+        .run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("evaluation pass");
+
+    assert_eq!(
+        report.candidates_canceled, 0,
+        "an executing candidate is the executor's to decide: {report:?}"
+    );
+    assert_eq!(
+        report.candidates_held, 0,
+        "not held either — the pass skips the subject whole"
+    );
+
+    let after = fixture.only_candidate().await;
+    assert_eq!(after.state, LifecycleCandidateState::Executing);
+    assert_eq!(after.updated_at, leased_at, "the lease was not touched");
+}
+
+#[tokio::test]
+async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Contested", true).await;
+    fixture.evaluate().await;
+
+    // Another pass declares this lease stale and takes the candidate in the
+    // window between the action finishing and its result being recorded.
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .steal_lease_when_the_next_run_finishes(&candidate.id)
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.lease_lost, 1, "{report:?}");
+    assert_eq!(
+        report.executed, 0,
+        "a worker that lost its lease must not claim the outcome"
+    );
+
+    let after = fixture.only_candidate().await;
+    assert_eq!(
+        after.state,
+        LifecycleCandidateState::Due,
+        "the new owner's state stands; the losing worker wrote nothing over it"
+    );
+    assert_ne!(after.state_reason, execution_reason::ACTION_SUCCEEDED);
+
+    // The action itself did happen, and its step row still says so: that is
+    // honest evidence of what this worker did, whoever owns the candidate now.
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored);
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert!(steps[0].state.is_completion_success(), "{steps:?}");
+}
+
+// ── A transient rule read holds; only a deleted rule cancels (Fix 5) ────────
+
+#[tokio::test]
+async fn a_rule_that_is_actually_gone_cancels_its_candidate() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Orphaned", true).await;
+    fixture.evaluate().await;
+
+    fixture
+        .rules
+        .fail_rule_set_reads(LifecycleRuleReadFault::Missing)
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Canceled);
+    assert_eq!(candidate.state_reason, execution_reason::RULE_NOT_ELIGIBLE);
+}
+
+#[tokio::test]
+async fn an_unreadable_rule_store_holds_the_candidate_instead_of_cancelling_it() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Unreadable", true).await;
+    fixture.evaluate().await;
+
+    // A store that cannot answer says nothing about whether the rule exists.
+    // Cancelling here would retire a live candidate on the strength of a network
+    // blip — the one failure on this path that used to do exactly that, while
+    // every sibling check held.
+    fixture
+        .rules
+        .fail_rule_set_reads(LifecycleRuleReadFault::Unreachable)
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.canceled, 0);
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
+    assert_eq!(candidate.state_reason, execution_reason::RULE_NOT_ELIGIBLE);
+}
+
+#[tokio::test]
+async fn both_effect_gates_off_executes_nothing() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(false, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Watched Movie", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert!(!report.gates_enabled);
+    assert_eq!(report.candidates_considered, 0);
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+}
+
+#[tokio::test]
+async fn reversible_unmonitor_executes_and_records_the_evidence() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Watched Movie", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert!(report.gates_enabled);
+    assert_eq!(report.rules_eligible, 1);
+    assert_eq!(report.executed, 1, "{report:?}");
+
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored, "the action must unmonitor the title");
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].state, LifecycleCandidateState::Succeeded);
+    assert_eq!(
+        candidates[0].state_reason,
+        execution_reason::ACTION_SUCCEEDED
+    );
+
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].status,
+        scryer_domain::LifecycleActionRunStatus::Succeeded
+    );
+    assert_eq!(runs[0].attempt, 1);
+    assert!(runs[0].finished_at.is_some());
+}
+
+#[tokio::test]
+async fn action_result_write_failures_still_consume_the_rule_execution_budget() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(LifecycleRuleDraft {
+            max_titles_per_run: Some(10),
+            ..unmonitor_draft(MONITORED_SOURCE)
+        })
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let mut titles = Vec::new();
+    for index in 0..12 {
+        titles.push(
+            seed_title(
+                &fixture.app,
+                &fixture.user,
+                &format!("Budget {index}"),
+                true,
+            )
+            .await,
+        );
+    }
+    fixture.evaluate().await;
+    fixture
+        .evaluation
+        .fail_action_completion
+        .store(true, Ordering::SeqCst);
+    let report = fixture.handle().await;
+    assert_eq!(report.failed, 10, "{report:?}");
+    assert_eq!(
+        report.candidates_considered, 10,
+        "errors must count toward the rule's ten-title maximum"
+    );
+    let mut changed = 0;
+    for title in titles {
+        if !fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+        {
+            changed += 1;
+        }
+    }
+    assert_eq!(
+        changed, 10,
+        "failure to persist a result must not permit extra side effects"
+    );
+}
+
+#[tokio::test]
+async fn an_already_met_postcondition_reports_already_satisfied() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Already Done", false).await;
+    fixture.evaluate().await;
+
+    let candidate = fixture.only_candidate().await;
+    fixture.handle().await;
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates[0].state, LifecycleCandidateState::Succeeded);
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(
+        steps[0].state,
+        scryer_domain::LifecycleActionStepState::AlreadySatisfied,
+        "an unmonitor of an unmonitored title changes nothing and says so"
+    );
+}
+
+#[tokio::test]
+async fn destructive_result_write_failures_trip_the_high_risk_breaker() {
+    let fixture = execution_app_with_operations(Arc::new(InMemoryLocationOperationStore::new()));
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    for index in 0..5 {
+        seed_title(
+            &fixture.app,
+            &fixture.user,
+            &format!("Breaker {index}"),
+            true,
+        )
+        .await;
+    }
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(5))
+        .await;
+    fixture
+        .evaluation
+        .fail_action_completion
+        .store(true, Ordering::SeqCst);
+    let report = fixture.handle().await;
+    assert_eq!(report.failed, 3, "{report:?}");
+    assert_eq!(
+        report.candidates_considered, 3,
+        "result write failures must trip the destructive breaker"
+    );
+    assert_eq!(fixture.evaluation.all_action_runs().await.len(), 3);
+}
+
+// ── A rule acts on at most the titles its operator chose per run ────────────
+
+#[tokio::test]
+async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
+    let fixture = execution_app(None);
+    let error = fixture
+        .app
+        .create_lifecycle_rule_set(
+            &fixture.user,
+            LifecycleRuleDraft {
+                max_titles_per_run: None,
+                ..delete_draft()
+            },
+        )
+        .await
+        .expect_err("a deleting rule needs a maximum");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let facts = error.refusal_facts();
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(
+        facts[0].key,
+        crate::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT
+    );
+    assert!(
+        matches!(&facts[0].value, crate::RefusalFactValue::List(heads) if !heads.is_empty()),
+        "{facts:?}"
+    );
+
+    let zero = fixture
+        .app
+        .create_lifecycle_rule_set(
+            &fixture.user,
+            LifecycleRuleDraft {
+                max_titles_per_run: Some(0),
+                ..unmonitor_draft(ALWAYS_SOURCE)
+            },
+        )
+        .await
+        .expect_err("a maximum of zero acts on nothing");
+    assert_eq!(
+        zero.validation_reason(),
+        Some(crate::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_INVALID)
+    );
+    assert!(
+        fixture
+            .rules
+            .list_rule_sets()
+            .await
+            .expect("list rules")
+            .is_empty()
+    );
+
+    // A rule that cannot delete needs none; null is no limit.
+    fixture
+        .app
+        .create_lifecycle_rule_set(
+            &fixture.user,
+            LifecycleRuleDraft {
+                max_titles_per_run: None,
+                ..unmonitor_draft(ALWAYS_SOURCE)
+            },
+        )
+        .await
+        .expect("a reversible rule saves without a maximum");
+}
+
+#[tokio::test]
+async fn a_source_save_adds_a_delete_head_and_its_maximum_together() {
+    let fixture = execution_app(None);
+    let created = fixture
+        .app
+        .create_lifecycle_rule_set(
+            &fixture.user,
+            LifecycleRuleDraft {
+                max_titles_per_run: None,
+                ..unmonitor_draft(ALWAYS_SOURCE)
+            },
+        )
+        .await
+        .expect("a reversible rule saves without a maximum");
+    let rule_id = created.rule_set.id.clone();
+    let deleting_source = crate::lib_tests::heads_source(
+        ALWAYS_SOURCE,
+        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
+    );
+    let save = |max_titles_per_run| crate::lifecycle_rules::LifecycleSourceDraft {
+        rego_source: deleting_source.clone(),
+        grace_days: 0,
+        max_titles_per_run,
+    };
+
+    let refused = fixture
+        .app
+        .update_lifecycle_rule_source(&fixture.user, &rule_id, save(None))
+        .await
+        .expect_err("a delete head without a maximum is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let unchanged = fixture
+        .rules
+        .get_rule_set(&rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(unchanged.current_revision_number, 1);
+    assert_eq!(unchanged.max_titles_per_run, None);
+
+    let saved = fixture
+        .app
+        .update_lifecycle_rule_source(&fixture.user, &rule_id, save(Some(Some(7))))
+        .await
+        .expect("a delete head saved with its maximum");
+    assert_eq!(saved.rule_set.max_titles_per_run, Some(7));
+    assert!(saved.declared_actions.destructive);
+    let stored = fixture
+        .rules
+        .get_rule_set(&rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(stored.current_revision_number, 2);
+    assert_eq!(stored.max_titles_per_run, Some(7));
+}
+
+#[tokio::test]
+async fn a_destructive_rule_cannot_lose_its_maximum_or_arm_without_one() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+
+    let cleared = fixture
+        .app
+        .update_lifecycle_rule_metadata_with_schedule(
+            &fixture.user,
+            &rule_id,
+            "Retire".to_string(),
+            String::new(),
+            Vec::new(),
+            None,
+            Some(None),
+        )
+        .await
+        .expect_err("clearing a deleting rule's maximum is refused");
+    assert_eq!(
+        cleared.validation_reason(),
+        Some(crate::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+
+    let raised = fixture
+        .app
+        .update_lifecycle_rule_metadata_with_schedule(
+            &fixture.user,
+            &rule_id,
+            "Retire".to_string(),
+            String::new(),
+            Vec::new(),
+            None,
+            Some(Some(100_000)),
+        )
+        .await
+        .expect("any maximum of at least one is accepted");
+    assert_eq!(raised.max_titles_per_run, Some(100_000));
+
+    // A row that reached the store without one (written by hand, say)
+    // cannot be armed to delete, and a pass never acts on it.
+    fixture
+        .rules
+        .set_rule_set_max_titles_per_run(&rule_id, None, Utc::now())
+        .await
+        .expect("strip the maximum");
+    seed_title(&fixture.app, &fixture.user, "Synthetic keeper", true).await;
+    fixture.evaluate().await;
+    let refused = fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            LifecycleRuleState::Enabled,
+            Some(1),
+            None,
+        )
+        .await
+        .expect_err("arming a deleting rule without a maximum is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::lifecycle::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_subject_that_stopped_matching_cancels_instead_of_acting() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Changed Mind", true).await;
+    fixture.evaluate().await;
+
+    // The operator unmonitors by hand between evaluation and handling; the
+    // fresh re-evaluation must see it and cancel rather than "act" on a
+    // decision that is no longer true.
+    fixture
+        .app
+        .set_title_monitored(&fixture.user, &title.id, false)
+        .await
+        .expect("manual unmonitor");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    assert_eq!(report.already_satisfied, 0);
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates[0].state, LifecycleCandidateState::Canceled);
+    assert_eq!(
+        candidates[0].state_reason,
+        execution_reason::NO_MATCH_AT_EXECUTION
+    );
+}
+
+/// Scope is part of what an operator acknowledged when they armed the rule, so
+/// the handler re-reads it with everything else it re-reads. Without this check
+/// a rule narrowed after its candidates were opened still acts on the subjects
+/// its scope no longer covers, and the narrowing is invisible to the executor.
+#[tokio::test]
+async fn a_candidate_outside_the_fresh_rule_scope_cancels_instead_of_acting() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Out Of Scope", true).await;
+    fixture.evaluate().await;
+
+    // Narrowed at the store, with the arming deliberately left in place: going
+    // through the service would disarm the rule, and this test would then prove
+    // nothing about the executor's own scope check.
+    fixture
+        .rules
+        .re_scope_without_disarming(&rule_id, vec!["library-elsewhere".to_string()])
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.executed, 0, "{report:?}");
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Canceled);
+    assert_eq!(
+        candidate.state_reason,
+        crate::lifecycle_rules::candidate_reason::OUT_OF_SCOPE
+    );
+}
+
+/// An empty scope means instance-wide, which covers every library, so the same
+/// check must not turn a rule with no scope into a rule that reaches nothing.
+#[tokio::test]
+async fn an_empty_rule_scope_still_reaches_every_library() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "In Scope", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(report.canceled, 0, "{report:?}");
+}
+
+#[tokio::test]
+async fn a_destructive_rule_needs_both_the_gate_and_destructive_arming() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    // Reversible gate on, destructive off: the high-risk rule is not eligible.
+    fixture.open_gates(true, false).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+
+    // Both gates open, but a stored row that is enabled without a deletion
+    // confirmation (not writable through the state control) still cannot
+    // delete.
+    fixture.open_gates(true, true).await;
+    fixture
+        .rules
+        .store_state_directly(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+}
+
+/// A deletion confirmation is for one revision. An enabled row whose stored
+/// confirmation names an older revision of the source deletes nothing.
+#[tokio::test]
+async fn a_confirmation_for_an_older_revision_never_deletes() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    // A second revision of the same deleting source.
+    fixture
+        .app
+        .update_lifecycle_rule_source(
+            &fixture.user,
+            &rule_id,
+            LifecycleSourceDraft {
+                rego_source: delete_draft().rego_source,
+                grace_days: 0,
+                max_titles_per_run: None,
+            },
+        )
+        .await
+        .expect("save a second revision");
+    fixture.evaluate().await;
+    // The row claims Enabled under the first revision's confirmation.
+    fixture
+        .rules
+        .store_state_directly(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+    let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+    assert_eq!(rule.current_revision_number, 2);
+    assert!(!rule.destructive_confirmed());
+
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(
+        fixture.evaluation.all_action_runs().await.is_empty(),
+        "a confirmation for another revision must not reach an action run"
+    );
+}
+
+/// The pass selects an enabled, confirmed deleting rule, and the rule changes
+/// before its step acts. The re-read just before acting holds the candidate
+/// and deletes nothing.
+#[tokio::test]
+async fn a_rule_that_changes_after_the_pass_selects_it_deletes_nothing() {
+    for (changed_state, changed_confirmation) in [
+        // Still enabled, but the confirmation is not for the revision in force.
+        (LifecycleRuleState::Enabled, Some(2)),
+        (LifecycleRuleState::Enabled, None),
+        // Confirmed for the revision in force, but no longer enabled.
+        (LifecycleRuleState::DryRun, Some(1)),
+    ] {
+        let fixture =
+            execution_app_with_operations(Arc::new(InMemoryLocationOperationStore::new()));
+        let rule_id = fixture.observed_rule(delete_draft()).await;
+        fixture.open_gates(true, true).await;
+        let title = seed_title(&fixture.app, &fixture.user, "Synthetic Retiree", true).await;
+        fixture.evaluate().await;
+        fixture
+            .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+            .await;
+        let stored = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+        assert!(stored.destructive_confirmed(), "{stored:?}");
+
+        fixture
+            .rules
+            .answer_single_reads_with(Some((changed_state, changed_confirmation)))
+            .await;
+        let report = fixture.handle().await;
+        let case = (changed_state, changed_confirmation);
+        assert_eq!(report.rules_eligible, 1, "{case:?}: {report:?}");
+        assert_eq!(report.held, 1, "{case:?}: {report:?}");
+        assert_eq!(report.executed, 0, "{case:?}: {report:?}");
+        assert!(
+            fixture
+                .app
+                .get_title(&fixture.user, &title.id)
+                .await
+                .expect("read title")
+                .is_some(),
+            "{case:?}: a rule that changed before acting must not delete"
+        );
+        let candidate = fixture.only_candidate().await;
+        assert_eq!(
+            candidate.state,
+            LifecycleCandidateState::Blocked,
+            "{case:?}"
+        );
+        assert_eq!(
+            candidate.state_reason,
+            execution_reason::RULE_NOT_ELIGIBLE,
+            "{case:?}"
+        );
+
+        // The same candidate passes the re-read once it agrees again, so the
+        // hold above came from the changed rule alone. The delete itself is
+        // proven in the integration suite.
+        fixture.rules.answer_single_reads_with(None).await;
+        fixture.evaluate().await;
+        let report = fixture.handle().await;
+        assert_eq!(report.held, 0, "{case:?}: {report:?}");
+        let candidate = fixture.only_candidate().await;
+        assert_ne!(
+            candidate.state_reason,
+            execution_reason::RULE_NOT_ELIGIBLE,
+            "{case:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn enabling_derives_arming_and_destructive_demands_the_current_count() {
+    let fixture = execution_app(None);
+    let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
+
+    // A medium-risk rule arms library updates only, with no confirmation.
+    let enabled = fixture
+        .set_state(
+            &fixture.user,
+            &unmonitor_rule,
+            LifecycleRuleState::Enabled,
+            None,
+            None,
+        )
+        .await
+        .expect("enabling a reversible rule needs no confirmation");
+    assert_eq!(enabled.rule_set.state, LifecycleRuleState::Enabled);
+    assert_eq!(enabled.rule_set.destructive_confirmed_revision, None);
+
+    let delete_rule = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, false).await;
+    seed_title(&fixture.app, &fixture.user, "A", true).await;
+    seed_title(&fixture.app, &fixture.user, "B", true).await;
+    fixture.evaluate().await;
+
+    // The acknowledgement must equal the current non-terminal count, and the
+    // refusal names that count so a client can re-present it.
+    let mismatch = fixture
+        .set_state(
+            &fixture.user,
+            &delete_rule,
+            LifecycleRuleState::Enabled,
+            Some(1),
+            super::lifecycle_rules::arming_confirmation(&fixture.app, &delete_rule).await,
+        )
+        .await
+        .expect_err("a stale acknowledged count must be refused");
+    assert!(
+        mismatch
+            .to_string()
+            .contains("acknowledging the current candidate count (2)"),
+        "{mismatch}"
+    );
+
+    let armed = fixture
+        .set_state(
+            &fixture.user,
+            &delete_rule,
+            LifecycleRuleState::Enabled,
+            Some(2),
+            super::lifecycle_rules::arming_confirmation(&fixture.app, &delete_rule).await,
+        )
+        .await
+        .expect("correct acknowledgement arms");
+    assert_eq!(armed.rule_set.state, LifecycleRuleState::Enabled);
+    assert_eq!(
+        armed.rule_set.destructive_confirmed_revision,
+        Some(armed.rule_set.current_revision_number),
+        "the confirmation is stored with the state, for the revision reviewed"
+    );
+
+    // Falling back to dry run never needs an acknowledgement.
+    fixture
+        .arm(&delete_rule, LifecycleRuleState::DryRun, None)
+        .await;
+}
+
+/// Enabling a rule that deletes without the configuration confirmation is
+/// refused with its reason code, whatever count comes with it, and the
+/// stored row keeps no state or confirmation from the attempt.
+#[tokio::test]
+async fn enabling_a_deleting_rule_without_a_confirmation_is_refused() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    for ack in [None, Some(0)] {
+        let refused = fixture
+            .set_state(
+                &fixture.user,
+                &rule_id,
+                LifecycleRuleState::Enabled,
+                ack,
+                None,
+            )
+            .await
+            .expect_err("deletion is never enabled without a confirmation");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::lifecycle::ARM_CONFIRMATION_STALE),
+            "{refused:?}"
+        );
+    }
+    let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+    assert_eq!(rule.state, LifecycleRuleState::DryRun);
+    assert_eq!(rule.destructive_confirmed_revision, None);
+    assert_eq!(fixture.handle().await.rules_eligible, 0);
+}
+
+#[tokio::test]
+async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same_count() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let reviewed = super::lifecycle_rules::arming_confirmation(&fixture.app, &rule_id).await;
+    fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            LifecycleRuleState::Enabled,
+            Some(0),
+            None,
+        )
+        .await
+        .expect_err("deletion must not be armed without configuration confirmation");
+
+    let draft = delete_draft();
+    fixture
+        .app
+        .update_lifecycle_rule_source(
+            &fixture.user,
+            &rule_id,
+            LifecycleSourceDraft {
+                rego_source: draft.rego_source,
+                grace_days: 0,
+                max_titles_per_run: None,
+            },
+        )
+        .await
+        .unwrap();
+    fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            LifecycleRuleState::Enabled,
+            Some(0),
+            reviewed,
+        )
+        .await
+        .expect_err("the old dialog must not arm the replacement revision");
+    assert_eq!(fixture.handle().await.rules_eligible, 0);
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(0))
+        .await;
+    // Disabling remains available without any confirmation.
+    fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            LifecycleRuleState::Disabled,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn destructive_arming_rejects_a_stale_scope_even_with_the_same_revision_and_count() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let reviewed = super::lifecycle_rules::arming_confirmation(&fixture.app, &rule_id).await;
+    let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+    fixture
+        .app
+        .update_lifecycle_rule_metadata(
+            &fixture.user,
+            &rule_id,
+            rule.name,
+            rule.description,
+            vec!["library-a".into()],
+        )
+        .await
+        .unwrap();
+    fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            LifecycleRuleState::Enabled,
+            Some(0),
+            reviewed,
+        )
+        .await
+        .expect_err("same revision and count do not confirm a different library scope");
+    assert_eq!(fixture.handle().await.rules_eligible, 0);
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(0))
+        .await;
+}
+
+#[tokio::test]
+async fn arming_any_rule_requires_system_settings_authority() {
+    let fixture = execution_app(None);
+    let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
+    let delete_rule = fixture.observed_rule(delete_draft()).await;
+    let mut outsider = User::new_admin("outsider");
+    outsider.authorization = scryer_domain::UserAuthorization {
+        app: AppPermissionMask::from_permissions([
+            scryer_domain::AppPermission::ManageCatalogSettings,
+        ]),
+        loaded: true,
+        ..Default::default()
+    };
+    let mut settings_manager = User::new_admin("settings-manager");
+    settings_manager.authorization = scryer_domain::UserAuthorization {
+        app: AppPermissionMask::from_permissions([
+            scryer_domain::AppPermission::ManageSystemSettings,
+        ]),
+        loaded: true,
+        ..Default::default()
+    };
+
+    // Catalog authority enables neither a reversible rule nor one that deletes.
+    let reversible = fixture
+        .set_state(
+            &outsider,
+            &unmonitor_rule,
+            LifecycleRuleState::Enabled,
+            None,
+            None,
+        )
+        .await
+        .expect_err("reversible arming must demand system-settings authority");
+    let destructive = fixture
+        .set_state(
+            &outsider,
+            &delete_rule,
+            LifecycleRuleState::Enabled,
+            Some(0),
+            super::lifecycle_rules::arming_confirmation(&fixture.app, &delete_rule).await,
+        )
+        .await
+        .expect_err("destructive arming must demand system-settings authority");
+    for refused in [reversible, destructive] {
+        assert!(
+            matches!(
+                &refused,
+                AppError::UnauthorizedReason { reason, .. }
+                    if *reason == crate::error_reasons::authorization::ACTION_PERMISSION_DENIED
+            ),
+            "{refused:?}"
+        );
+    }
+
+    // System-settings authority alone arms both.
+    fixture
+        .set_state(
+            &settings_manager,
+            &unmonitor_rule,
+            LifecycleRuleState::Enabled,
+            None,
+            None,
+        )
+        .await
+        .expect("reversible arming under system-settings authority");
+    fixture
+        .set_state(
+            &settings_manager,
+            &delete_rule,
+            LifecycleRuleState::Enabled,
+            Some(0),
+            super::lifecycle_rules::arming_confirmation(&fixture.app, &delete_rule).await,
+        )
+        .await
+        .expect("destructive arming under system-settings authority");
+}
+
+#[tokio::test]
+async fn playback_of_a_title_holds_its_due_action() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Being Watched", true).await;
+    fixture.watching(&title).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(stored.monitored, "a held action must not mutate the title");
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates[0].state, LifecycleCandidateState::Blocked);
+    assert_eq!(candidates[0].state_reason, execution_reason::PLAYBACK_HOLD);
+
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].status,
+        scryer_domain::LifecycleActionRunStatus::Held
+    );
+    assert_eq!(
+        runs[0].hold_reason.as_deref(),
+        Some(execution_reason::PLAYBACK_HOLD)
+    );
+}
+
+/// A session that cannot be matched to any Scryer title, such as a stream
+/// with no item id, ids or file.
+fn unattributable_session() -> PlaybackProbeStatus {
+    PlaybackProbeStatus::Playing(vec![PlayingMedia::Other {
+        provider_item_id: None,
+        name: None,
+        file_paths: Vec::new(),
+    }])
+}
+
+#[tokio::test]
+async fn a_session_on_one_title_leaves_another_titles_action_free() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let watched = seed_title(&fixture.app, &fixture.user, "Alder Quay", true).await;
+    let idle = seed_title(&fixture.app, &fixture.user, "Birch Hollow", true).await;
+    fixture.watching(&watched).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 1, "{report:?}");
+    let monitored = |title: &Title| {
+        let app = &fixture.app;
+        let user = &fixture.user;
+        let id = title.id.clone();
+        async move {
+            app.get_title(user, &id)
+                .await
+                .expect("read title")
+                .expect("title exists")
+                .monitored
+        }
+    };
+    assert!(monitored(&watched).await, "the playing title is held");
+    assert!(!monitored(&idle).await, "the other title is acted on");
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    let held = candidates
+        .iter()
+        .find(|candidate| candidate.title_id == watched.id)
+        .expect("watched candidate");
+    assert_eq!(held.state, LifecycleCandidateState::Blocked);
+    assert_eq!(held.state_reason, execution_reason::PLAYBACK_HOLD);
+}
+
+#[tokio::test]
+async fn an_unattributed_session_lets_reversible_work_proceed() {
+    let fixture = execution_app(Some(unattributable_session()));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Cedar Reach", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(report.unmatched_playback_sessions, 1, "{report:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored);
+}
+
+#[tokio::test]
+async fn an_unmatched_session_holds_no_destructive_work() {
+    let fixture = execution_app(Some(unattributable_session()));
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Dunmore Fell", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.unmatched_playback_sessions, 1, "{report:?}");
+    let candidate = fixture.only_candidate().await;
+    assert!(
+        ![
+            execution_reason::PLAYBACK_HOLD,
+            execution_reason::PLAYBACK_UNKNOWN
+        ]
+        .contains(&candidate.state_reason.as_str()),
+        "an unmatched session must not hold the delete: {candidate:?}"
+    );
+}
+
+/// A pass that finds a candidate still held by the same safety check writes
+/// nothing for it: no state change, no new history entry. A hold for another
+/// reason is still written.
+#[tokio::test]
+async fn a_second_pass_under_the_same_safety_hold_writes_nothing() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Lantern Cove", true).await;
+    fixture.watching(&title).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    let before = fixture.evaluation.all_candidates().await;
+    assert_eq!(before[0].state_reason, execution_reason::PLAYBACK_HOLD);
+    let runs_before = fixture.evaluation.all_action_runs().await;
+
+    fixture.evaluation.begin_next_evaluation().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "examined again: {report:?}");
+    assert_eq!(report.executed, 0);
+    let after = fixture.evaluation.all_candidates().await;
+    assert_eq!(after[0].state, LifecycleCandidateState::Blocked);
+    assert_eq!(after[0].state_reason, execution_reason::PLAYBACK_HOLD);
+    assert_eq!(
+        after[0].updated_at, before[0].updated_at,
+        "already held for it: nothing is written"
+    );
+    assert_eq!(
+        fixture.evaluation.all_action_runs().await.len(),
+        runs_before.len(),
+        "no new history entry"
+    );
+}
+
+#[tokio::test]
+async fn an_unreachable_media_server_holds_destructive_work() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Unreachable(
+        "status 401".to_string(),
+    )));
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Unknown Playback", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some(),
+        "a held delete must not remove the title"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
+    assert_eq!(candidate.state_reason, execution_reason::PLAYBACK_UNKNOWN);
+}
+
+#[tokio::test]
+async fn an_unreachable_media_server_lets_reversible_work_proceed() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Unreachable(
+        "status 401".to_string(),
+    )));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Unknown Playback", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.executed, 1, "{report:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored);
+}
+
+#[tokio::test]
+async fn a_dry_run_rule_never_acts() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Dry Run", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+    let rule = fixture.rules.get_rule_set(&rule_id).await.unwrap().unwrap();
+    assert_eq!(rule.state, LifecycleRuleState::DryRun);
+    assert_eq!(rule.destructive_confirmed_revision, None);
+}
+
+#[tokio::test]
+async fn a_candidate_inside_its_grace_window_is_not_touched() {
+    let fixture = execution_app(None);
+    let mut draft = unmonitor_draft(MONITORED_SOURCE);
+    draft.grace_days = 30;
+    let rule_id = fixture.observed_rule(draft).await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Still Grace", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.candidates_considered, 0, "{report:?}");
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates[0].state, LifecycleCandidateState::Observing);
+}
+
+#[tokio::test]
+async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
+    let fixture = execution_app(None);
+    let mut draft = unmonitor_draft(MONITORED_SOURCE);
+    draft.rego_source = "add_tags := [\"graced\"] if {\n\tinput.facts.monitored\n}\n\n\
+                         unmonitor if {\n\tinput.facts.monitored\n}\n"
+        .to_string();
+    draft.grace_days = 30;
+    fixture
+        .app
+        .create_title_tag_definition(&fixture.user, "graced", None)
+        .await
+        .expect("define title tag");
+    let rule_id = fixture.observed_rule(draft).await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Graced Title", true).await;
+    let untouched =
+        |title: &Title| title.monitored && !title.tags.iter().any(|tag| tag == "graced");
+    let read_title = || async {
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("read title")
+            .expect("title exists")
+    };
+
+    // Every path short of a due candidate: evaluation, preview, the handler,
+    // and evaluation again. None of them applies an action.
+    fixture.evaluate().await;
+    fixture
+        .app
+        .preview_lifecycle_rule(
+            &fixture.user,
+            crate::lifecycle_rules::LifecyclePreviewRequest {
+                source: crate::lifecycle_rules::LifecyclePreviewSource::Stored {
+                    rule_set_id: rule_id.clone(),
+                },
+                selection: crate::lifecycle_rules::LifecyclePreviewSelection::Titles(vec![
+                    title.id.clone(),
+                ]),
+            },
+        )
+        .await
+        .expect("preview the rule");
+    let report = fixture.handle().await;
+    assert_eq!(report.candidates_considered, 0, "{report:?}");
+    fixture.evaluate().await;
+    assert_eq!(fixture.handle().await.candidates_considered, 0);
+    assert!(untouched(&read_title().await));
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Observing);
+    assert!(candidate.due_at > Utc::now() + chrono::Duration::days(29));
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+    assert!(
+        fixture
+            .evaluation
+            .action_steps_with_id("unmonitor")
+            .await
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .evaluation
+            .action_steps_with_id("add_tags")
+            .await
+            .is_empty()
+    );
+
+    // Once the grace ends, the same candidate carries the actions.
+    fixture.evaluation.end_every_grace().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    let after = read_title().await;
+    assert!(!after.monitored);
+    assert!(after.tags.iter().any(|tag| tag == "graced"));
+}
+
+#[tokio::test]
+async fn an_undecidable_subject_blocks_at_execution() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Undecidable", true).await;
+    fixture.evaluate().await;
+
+    // Rewrite the revision in place (test-only) so the same revision now
+    // returns unknown: the executor's fresh re-evaluation must hold, exactly
+    // as it would when a fact source degrades between passes.
+    let detail = fixture
+        .app
+        .get_lifecycle_rule_set(&fixture.user, &rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    let mut revision = detail.revision;
+    revision.rego_source = scryer_rules::lifecycle::rewrite_package_declaration(
+        "match := true\n\nunknown := true\n",
+        &rule_id,
+    );
+    fixture.rules.replace_revision_in_place(revision).await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates[0].state, LifecycleCandidateState::Blocked);
+    assert_eq!(
+        candidates[0].state_reason,
+        execution_reason::UNKNOWN_AT_EXECUTION
+    );
+}
+
+#[tokio::test]
+async fn a_held_candidate_waits_for_the_next_evaluation_then_is_examined_again() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Later", true).await;
+    fixture.watching(&title).await;
+    fixture.evaluate().await;
+    // The evaluation began before anything the passes below write.
+    fixture
+        .evaluation
+        .age_evaluation_runs(chrono::Duration::seconds(1))
+        .await;
+
+    // Playback is going on: a hold meant to clear by itself.
+    let first = fixture.handle().await;
+    assert_eq!(first.held, 1);
+    let held = fixture.evaluation.all_candidates().await;
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].state, LifecycleCandidateState::Blocked);
+
+    // Until the rule evaluates again, every pass leaves the hold alone: it
+    // is not examined, nothing is read for it and nothing is written.
+    for _ in 0..2 {
+        let idle = fixture.handle().await;
+        assert_eq!(idle.candidates_considered, 0, "{idle:?}");
+        assert_eq!(idle.held, 0, "{idle:?}");
+        assert_eq!(fixture.evaluation.all_candidates().await, held);
+    }
+
+    // The next evaluation releases it, and the pass after examines it again.
+    fixture.evaluate().await;
+    let after = fixture.handle().await;
+    assert_eq!(after.candidates_considered, 1, "{after:?}");
+    assert_eq!(after.held, 1);
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(stored.monitored);
+}
+
+// ── A title an operation owns is out of reach (FR-084) ──────────────────────
+
+fn execution_app_with_operations(
+    operations: Arc<InMemoryLocationOperationStore>,
+) -> ExecutionFixture {
+    let (app, user) = bootstrap();
+    let rules = Arc::new(InMemoryLifecycleRuleRepo::default());
+    let evaluation = Arc::new(InMemoryLifecycleEvaluationRepo::default());
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_lifecycle_rule_set_store(rules.clone())
+            .with_lifecycle_evaluation_store(evaluation.clone())
+            .with_media_files(media_files.clone())
+            .with_location_operation_repository(operations)
+    });
+    ExecutionFixture {
+        app,
+        user,
+        rules,
+        evaluation,
+        media_files,
+        playback: Arc::new(std::sync::Mutex::new(PlaybackProbeStatus::Idle)),
+    }
+}
+
+#[tokio::test]
+async fn a_destructive_action_holds_while_a_location_operation_owns_the_title() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+    operations
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
+        .await
+        .expect("claim the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some(),
+        "a held delete must not remove the title"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
+    assert_eq!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].hold_reason.as_deref(),
+        Some(execution_reason::LOCATION_OPERATION_HOLD)
+    );
+
+    // The operation releasing its claim is what lifts the hold: the next pass
+    // no longer holds for this reason.
+    operations
+        .release_location_operation_ownership("operation-1")
+        .await
+        .expect("release the claim");
+    fixture.evaluate().await;
+    let second = fixture.handle().await;
+    assert_eq!(second.held, 0, "{second:?}");
+    let candidate = fixture.only_candidate().await;
+    assert_ne!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+}
+
+#[tokio::test]
+async fn a_reversible_action_also_holds_while_a_location_operation_owns_the_title() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    operations
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
+        .await
+        .expect("claim the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(
+        stored.monitored,
+        "a held unmonitor must leave the title monitored"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
+    assert_eq!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+
+    // Waiting on the operation charges no attempt, however often it repeats.
+    fixture.handle().await;
+    fixture.handle().await;
+    assert!(
+        fixture
+            .evaluation
+            .all_step_attempts()
+            .await
+            .iter()
+            .all(|attempt| attempt.state == scryer_domain::LifecycleActionStepState::Held),
+        "a location hold must never be recorded as a dispatch"
+    );
+
+    operations
+        .release_location_operation_ownership("operation-1")
+        .await
+        .expect("release the claim");
+    fixture.evaluate().await;
+    let after = fixture.handle().await;
+    assert_eq!(after.held, 0, "{after:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored, "the released title is unmonitored");
+}
+
+#[tokio::test]
+async fn the_policy_delete_itself_refuses_a_title_a_location_operation_owns() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    operations
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
+        .await
+        .expect("claim the title");
+
+    let authorization = crate::PolicyDeleteAuthorization {
+        rule_set_id: "rule-1".to_string(),
+        candidate_id: "candidate-1".to_string(),
+        revision_number: 1,
+    };
+    let error = fixture
+        .app
+        .delete_title_by_policy(&fixture.user, &title.id, "unused", &authorization)
+        .await
+        .expect_err("an owned title must be refused before any fingerprint check");
+    // The refusal is the busy signal the scheduler retries on, not a
+    // validation failure of the request itself.
+    assert!(
+        matches!(&error, AppError::LocationOperationBusy(message) if message.contains("location operation owns")),
+        "{error:?}"
+    );
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some()
+    );
+}

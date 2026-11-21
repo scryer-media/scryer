@@ -1230,11 +1230,11 @@ async fn release_attempt_queries_exclude_pending_attempts_from_failed_signatures
 
 #[tokio::test]
 async fn atomic_global_settings_patch_rolls_back_an_earlier_gate_on_later_failure() {
-    let (services, db) = temp_services("atomic_maintenance_gates").await;
+    let (services, db) = temp_services("atomic_lifecycle_gates").await;
     let settings = SettingsStore::new(services.datastore(), services.encryption_key_state());
     let keys = [
-        "maintenance.evaluation_enabled",
-        "maintenance.destructive_effects_enabled",
+        "lifecycle.evaluation_enabled",
+        "lifecycle.destructive_effects_enabled",
     ];
     settings
         .batch_ensure_setting_definitions(
@@ -1258,7 +1258,7 @@ async fn atomic_global_settings_patch_rolls_back_an_earlier_gate_on_later_failur
             .await
             .unwrap();
     }
-    sqlx::query("CREATE TRIGGER fail_second_gate BEFORE UPDATE ON settings_values WHEN NEW.setting_definition_id IN (SELECT id FROM settings_definitions WHERE key_name = 'maintenance.destructive_effects_enabled') BEGIN SELECT RAISE(ABORT, 'injected gate failure'); END")
+    sqlx::query("CREATE TRIGGER fail_second_gate BEFORE UPDATE ON settings_values WHEN NEW.setting_definition_id IN (SELECT id FROM settings_definitions WHERE key_name = 'lifecycle.destructive_effects_enabled') BEGIN SELECT RAISE(ABORT, 'injected gate failure'); END")
         .execute(services.pool()).await.unwrap();
     let patch = keys
         .iter()

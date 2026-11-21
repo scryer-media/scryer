@@ -16,6 +16,7 @@ import {
   PendingImportConflictProgress,
 } from "@/components/dialogs/pending-import-conflict-dialog";
 import {
+  canFixConflictMatch,
   type ConflictPolicy,
   type ConflictTask,
 } from "@/lib/pending-import-conflicts";
@@ -886,7 +887,7 @@ export const PendingImportsContainer = React.memo(
         setSelectedEpisodeIds([]);
         setExpandedBindingSeasonKeys([]);
 
-        if (item.titleId) {
+        if (item.titleId && !canFixConflictMatch(item)) {
           setSearchQuery("");
           setBindingLoading(true);
           void client
