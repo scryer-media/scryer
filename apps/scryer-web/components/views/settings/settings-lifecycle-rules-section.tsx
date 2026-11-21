@@ -36,6 +36,7 @@ import {
   integerInputProps,
   sanitizeDigits,
 } from "@/components/ui/input";
+import { LibrarySingleSelect } from "@/components/common/library-single-select";
 import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
@@ -532,26 +533,26 @@ function LifecyclePreviewPanel({
               }))}
             />
           </div>
-          <SingleSelectField
+          <LibrarySingleSelect
             id="settings-lifecycle-preview-library"
             label={t("settings.lifecyclePreviewLibrary")}
             placeholder={t("settings.lifecyclePreviewLibraryPlaceholder")}
             value={previewLibraryId}
             onValueChange={setPreviewLibraryId}
-            options={libraries.map((library) => ({
-              value: library.id,
-              label: library.name,
-            }))}
+            libraries={libraries}
           />
-          <label>
-            <Label className="mb-2 block">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              htmlFor="settings-lifecycle-preview-limit"
+              className="flex min-h-5 items-center text-sm font-medium text-[var(--scry-ink2)]"
+            >
               <HelpLabel
                 label={t("settings.lifecyclePreviewLimit")}
                 help={t("settings.lifecyclePreviewLimitHelp", {
                   max: LIFECYCLE_PREVIEW_LIMIT_MAX,
                 })}
               />
-            </Label>
+            </label>
             <Input
               id="settings-lifecycle-preview-limit"
               {...integerInputProps}
@@ -560,7 +561,7 @@ function LifecyclePreviewPanel({
                 setPreviewLimit(Number(sanitizeDigits(event.target.value)) || 0)
               }
             />
-          </label>
+          </div>
         </div>
 
         <LifecycleSubjectPicker

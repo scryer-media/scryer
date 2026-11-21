@@ -41,6 +41,7 @@ import {
   integerInputProps,
   sanitizeDigits,
 } from "@/components/ui/input";
+import { LibrarySingleSelect } from "@/components/common/library-single-select";
 import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
@@ -537,7 +538,7 @@ function RequestPreviewPanel({
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
-          <SingleSelectField
+          <LibrarySingleSelect
             id="settings-request-preview-library"
             label={t("settings.requestPreviewLibrary")}
             placeholder={t("settings.requestPreviewLibraryPlaceholder")}
@@ -545,10 +546,7 @@ function RequestPreviewPanel({
             onValueChange={(value) =>
               setPreviewSample((prev) => ({ ...prev, libraryId: value }))
             }
-            options={libraries.map((library) => ({
-              value: library.id,
-              label: library.name,
-            }))}
+            libraries={libraries}
           />
           <SingleSelectField
             id="settings-request-preview-profile"
@@ -594,10 +592,13 @@ function RequestPreviewPanel({
             ]}
           />
           {previewSample.leaseForever ? null : (
-            <label>
-              <Label className="mb-2 block">
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <label
+                htmlFor="settings-request-preview-lease-days"
+                className="block text-sm font-medium text-[var(--scry-ink2)]"
+              >
                 {t("settings.requestPreviewLeaseDays")}
-              </Label>
+              </label>
               <Input
                 id="settings-request-preview-lease-days"
                 {...integerInputProps}
@@ -611,7 +612,7 @@ function RequestPreviewPanel({
                   }))
                 }
               />
-            </label>
+            </div>
           )}
         </div>
 
