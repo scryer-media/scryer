@@ -152,6 +152,41 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         Ok(row.i64("decision_count")?.max(0) as u64)
     }
 
+    /// One `GROUP BY` per chunk of ids, served by the rule set index.
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>> {
+        let ids: Vec<String> = rule_set_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut counts = std::collections::HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(RULE_SET_COUNT_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT rule_set_id, COUNT(*) AS decision_count
+                   FROM request_rule_decision_rule_sets
+                  WHERE rule_set_id IN ({placeholders})
+                  GROUP BY rule_set_id"
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                counts.insert(
+                    row.text("rule_set_id")?,
+                    row.i64("decision_count")?.max(0) as u64,
+                );
+            }
+        }
+        Ok(counts)
+    }
+
     /// The select reads the partial index `idx_request_rule_decisions_preflight`,
     /// whose predicate it repeats literally, so a pass with nothing left to
     /// remove reads an empty index and writes nothing.
@@ -206,6 +241,10 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         Ok(removed as usize)
     }
 }
+
+/// Rule set ids bound per decision count statement, far under both dialects'
+/// bind limits.
+const RULE_SET_COUNT_CHUNK: usize = 500;
 
 /// The traces older builds wrote for pre-flight previews. Spelled exactly as
 /// the partial index's predicate, so both dialects can serve it from that

@@ -4445,10 +4445,15 @@ impl AcquisitionQueries {
             .iter()
             .map(|detail| detail.rule_set.id.clone())
             .collect();
-        let counts = app
-            .request_rule_decision_counts(&actor, &ids)
-            .await
-            .map_err(to_gql_error)?;
+        // The counts are read only when the selection asks for them: one
+        // grouped read for every listed rule.
+        let counts = if ctx.look_ahead().field("decisionCount").exists() {
+            app.request_rule_decision_counts(&actor, &ids)
+                .await
+                .map_err(to_gql_error)?
+        } else {
+            std::collections::HashMap::new()
+        };
         // The scan parses each source, so it runs only when the selection asks
         // for it; the revisions are already in hand from the one batched read.
         let with_declared_actions = ctx.look_ahead().field("declaredActions").exists();
@@ -4489,11 +4494,15 @@ impl AcquisitionQueries {
         else {
             return Ok(None);
         };
-        let counts = app
-            .request_rule_decision_counts(&actor, std::slice::from_ref(&detail.rule_set.id))
-            .await
-            .map_err(to_gql_error)?;
-        let count = counts.get(&detail.rule_set.id).copied().unwrap_or_default();
+        let count = if look_ahead.field("ruleSet").field("decisionCount").exists() {
+            let counts = app
+                .request_rule_decision_counts(&actor, std::slice::from_ref(&detail.rule_set.id))
+                .await
+                .map_err(to_gql_error)?;
+            counts.get(&detail.rule_set.id).copied().unwrap_or_default()
+        } else {
+            0
+        };
         Ok(Some(crate::mappers::from_request_rule_set_detail(
             detail,
             count,

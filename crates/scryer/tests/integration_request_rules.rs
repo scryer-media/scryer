@@ -1060,6 +1060,30 @@ async fn an_enforced_approval_leases_the_title_and_explains_itself() {
     assert_eq!(managed["effectiveOutcome"], "AUTO_APPROVE");
     assert_eq!(managed["votes"][0]["vote"], "APPROVE");
     assert_eq!(managed["votes"][0]["ruleSetName"], "Policy under test");
+
+    // The count is read when the selection asks for it, in the list and in
+    // the detail alike.
+    let listed = gql(
+        &ctx,
+        "query { requestRuleSets { id decisionCount } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let rule_sets = listed["data"]["requestRuleSets"].as_array().expect("rules");
+    assert_eq!(rule_sets.len(), 1, "{listed}");
+    assert_eq!(rule_sets[0]["decisionCount"], 1, "{listed}");
+    let detail = gql(
+        &ctx,
+        "query($id: ID!) { requestRuleSet(id: $id) { ruleSet { decisionCount } } }",
+        json!({ "id": rule_sets[0]["id"] }),
+    )
+    .await;
+    assert_no_errors(&detail);
+    assert_eq!(
+        detail["data"]["requestRuleSet"]["ruleSet"]["decisionCount"],
+        1
+    );
 }
 
 #[tokio::test]

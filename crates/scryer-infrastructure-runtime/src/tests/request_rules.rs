@@ -464,6 +464,12 @@ async fn assert_decision_round_trip(store: &dyn RequestRuleDecisionRepository) -
     assert_eq!(store.count_for_rule_set("rule-a").await?, 3);
     assert_eq!(store.count_for_rule_set("rule-zzz").await?, 0);
     assert_eq!(store.count_for_rule_set("  ").await?, 0);
+    assert_eq!(
+        store
+            .count_for_rule_sets(&["rule-a", "rule-zzz", "  ", "rule-a"].map(str::to_string))
+            .await?,
+        std::collections::HashMap::from([("rule-a".to_string(), 3)])
+    );
     Ok(())
 }
 
@@ -779,6 +785,21 @@ async fn the_linked_rule_set_count_finds_what_the_votes_scan_found() {
         1,
         "a rule set past the first link statement is linked"
     );
+
+    // The grouped read answers what the per-rule count answers, across more
+    // ids than one statement binds.
+    let mut many = checked.clone();
+    many.extend((0..800).map(|index| format!("rule-absent-{index}")));
+    many.push(rule_set_ids[3].clone());
+    let grouped = decisions.count_for_rule_sets(&many).await.unwrap();
+    for rule_set_id in &many {
+        assert_eq!(
+            grouped.get(rule_set_id).copied().unwrap_or(0),
+            decisions.count_for_rule_set(rule_set_id).await.unwrap(),
+            "{rule_set_id}"
+        );
+    }
+    assert!(grouped.values().all(|count| *count > 0));
     let _ = std::fs::remove_file(db);
 }
 

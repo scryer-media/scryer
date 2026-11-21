@@ -1427,6 +1427,74 @@ async fn preflight_writes_no_decision_trace() {
 }
 
 #[tokio::test]
+async fn rule_decision_counts_are_one_batched_read_with_zero_for_unused_rules() {
+    let harness = bootstrap_media_request_app();
+    let trace = |id: &str, votes: &str| scryer_domain::RequestRuleDecisionRecord {
+        id: id.to_string(),
+        request_id: format!("request-{id}"),
+        evaluated_at: chrono::Utc::now(),
+        effective_outcome: RequestDecisionOutcome::AutoApprove,
+        policy_outcome: RequestDecisionOutcome::AutoApprove,
+        fallback_reason: None,
+        votes_json: votes.to_string(),
+        tags: Vec::new(),
+        shaping_json: None,
+        input_hash: String::new(),
+        input_schema_version: 1,
+        created_at: chrono::Utc::now(),
+    };
+    for (id, votes) in [
+        ("d1", r#"[{"rule_set_id":"rule-a"}]"#),
+        (
+            "d2",
+            r#"[{"rule_set_id":"rule-a"},{"rule_set_id":"rule-b"}]"#,
+        ),
+        ("d3", r#"[{"rule_set_id":"rule-a"}]"#),
+    ] {
+        harness.request_rule_decisions.seed(trace(id, votes)).await;
+    }
+    let ids = ["rule-a", "rule-b", "rule-unused"].map(str::to_string);
+
+    let counts = harness
+        .app
+        .request_rule_decision_counts(&harness.manager, &ids)
+        .await
+        .expect("counts");
+
+    assert_eq!(
+        counts,
+        std::collections::HashMap::from([
+            ("rule-a".to_string(), 3),
+            ("rule-b".to_string(), 1),
+            ("rule-unused".to_string(), 0),
+        ])
+    );
+    assert_eq!(
+        harness
+            .request_rule_decisions
+            .count_batches
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+
+    // The permission check still comes first.
+    let mut viewer = test_admin_user();
+    viewer.id = "viewer".to_string();
+    viewer.authorization = scryer_domain::UserAuthorization {
+        app: scryer_domain::AppPermissionMask::NONE,
+        loaded: true,
+        ..Default::default()
+    };
+    assert!(
+        harness
+            .app
+            .request_rule_decision_counts(&viewer, &ids)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn housekeeping_purges_only_preflight_traces() {
     let harness = bootstrap_media_request_app();
     let trace = |id: String, request_id: String| scryer_domain::RequestRuleDecisionRecord {

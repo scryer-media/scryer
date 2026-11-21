@@ -12402,6 +12402,14 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
     /// whose votes name the rule set's id.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
 
+    /// [`Self::count_for_rule_set`] for each of `rule_set_ids` at once, in one
+    /// grouped statement per bind-safe chunk. A rule set with no decision is
+    /// absent from the map; blank ids are skipped.
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>>;
+
     /// Remove up to `limit` traces that older builds wrote for pre-flight
     /// previews (request ids starting with
     /// [`crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX`]), with their rule
