@@ -938,3 +938,265 @@ async fn a_malformed_title_override_reads_as_inheriting_and_keeps_the_pass_going
         BTreeSet::from([wanted.id.clone()])
     );
 }
+
+/// A rule that scores by the library a title sits in, so a library name read
+/// for the wrong title, or not read at all, moves the bar.
+fn library_named_rule_engine() -> scryer_rules::UserRulesEngine {
+    let policy = scryer_rules::UserPolicy {
+        id: "library_named".to_string(),
+        name: "Library named".to_string(),
+        rego_source: scryer_rules::rewrite_package_declaration(
+            "score_entry[\"second_library\"] := 400 if {\n    input.context.library_name == \"Second Shelf\"\n}\nscore_entry[\"any_library\"] := 25 if {\n    input.context.library_name != null\n}\n",
+            "library_named",
+        ),
+        origin: scryer_rules::PolicyOrigin::User,
+        applied_facets: vec![],
+    };
+    scryer_rules::UserRulesEngine::build(&[policy]).expect("library rule compiles")
+}
+
+#[tokio::test]
+async fn a_page_of_titles_reads_each_library_once_and_scores_as_one_title_at_a_time() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    fixture
+        .app
+        .swap_user_rules_engine(library_named_rule_engine());
+    let mut second_library = mock_default_library(MediaFacet::Movie);
+    second_library.id = "library-movie-second".to_string();
+    second_library.slug = "movies-second".to_string();
+    second_library.name = "Second Shelf".to_string();
+    second_library.is_default = false;
+    fixture
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(second_library);
+
+    let mut scopes = Vec::new();
+    for index in 0..5 {
+        let name = format!("Shelf Reel {index}");
+        let release = format!("Shelf.Reel.{index}.2024.1080p.WEB-DL.H.264-GRP");
+        let title = fixture.add_movie(&name, &release, 6_000_000_000).await;
+        if index >= 3 {
+            fixture
+                .edit_title(&title.id, |title| {
+                    title.library_id = "library-movie-second".to_string();
+                })
+                .await;
+        }
+        scopes.push(movie_scope(&title));
+    }
+
+    // One title per call is what every title paid before: its own library read.
+    let mut one_at_a_time = Vec::new();
+    for scope in &scopes {
+        one_at_a_time.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    let reads = || fixture.libraries.get_by_id_reads.load(Ordering::SeqCst);
+    let before = reads();
+    let page = fixture.app.landed_bars_for_scopes(&scopes).await;
+    assert_eq!(page, one_at_a_time);
+    assert_eq!(reads() - before, 2, "two libraries on the page, two reads");
+    let (Some(first), Some(second)) = (page[0], page[3]) else {
+        panic!("every scope is occupied: {page:?}");
+    };
+    assert_eq!(second - first, 400, "the library name reached the rules");
+
+    // A failed read is never remembered: every title asks again, and scores
+    // as a title whose library could not be read always has.
+    fixture
+        .libraries
+        .get_by_id_fails
+        .store(true, Ordering::SeqCst);
+    let before = reads();
+    let unreadable = fixture.app.landed_bars_for_scopes(&scopes).await;
+    assert_eq!(reads() - before, scopes.len());
+    let mut unreadable_one_at_a_time = Vec::new();
+    for scope in &scopes {
+        unreadable_one_at_a_time.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    assert_eq!(unreadable, unreadable_one_at_a_time);
+    assert_eq!(
+        unreadable[0],
+        Some(first - 25),
+        "no library name, no library rule"
+    );
+}
+
+#[tokio::test]
+async fn a_mixed_page_scores_every_scope_as_it_scores_alone() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    fixture.app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
+    let mut scopes = Vec::new();
+    for (series, name) in ["Lantern Row", "Copper Vale", "Mist Annex"]
+        .iter()
+        .enumerate()
+    {
+        let title = fixture
+            .app
+            .add_title(
+                &fixture.user,
+                NewTitle {
+                    name: (*name).into(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+        let mut collections = Vec::new();
+        let mut episode_ids = Vec::new();
+        for season in 1..=2 {
+            let collection = fixture
+                .app
+                .create_collection(
+                    &fixture.user,
+                    title.id.clone(),
+                    "season".into(),
+                    season.to_string(),
+                    Some(format!("Season {season}")),
+                    None,
+                    Some("1".into()),
+                    Some("3".into()),
+                )
+                .await
+                .expect("create collection");
+            for number in 1..=3 {
+                let episode = fixture
+                    .app
+                    .create_episode(
+                        &fixture.user,
+                        title.id.clone(),
+                        Some(collection.id.clone()),
+                        "standard".into(),
+                        Some(number.to_string()),
+                        Some(season.to_string()),
+                        None,
+                        Some(format!("Episode {number}")),
+                        Some((Utc::now() - chrono::Duration::days(60)).to_rfc3339()),
+                        Some(1_200 + 60 * number as i64 + 300 * series as i64),
+                        false,
+                        false,
+                    )
+                    .await
+                    .expect("create episode");
+                episode_ids.push((season, episode.id));
+            }
+            collections.push(collection.id);
+        }
+        let dotted = name.replace(' ', ".");
+        // Season one: a single-episode file and a two-episode file. Season two
+        // holds one file, so its other members are empty.
+        let layout: [(&[usize], &str, i64); 3] = [
+            (&[0], "S01E01.1080p.WEB-DL.H.264-GRP", 1_300_000_000),
+            (
+                &[1, 2],
+                "S01E02E03.720p.HDTV.x264-GRP",
+                1_900_000_000 + series as i64,
+            ),
+            (&[3], "S02E01.2160p.WEB-DL.H.265-GRP", 5_000_000_000),
+        ];
+        for (members, suffix, size) in layout {
+            let file_id = fixture
+                .media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/library/{name}/{dotted}.{suffix}.mkv"),
+                    size_bytes: size,
+                    quality_label: Some(
+                        if suffix.contains("720p") {
+                            "720P"
+                        } else {
+                            "1080P"
+                        }
+                        .into(),
+                    ),
+                    scene_name: Some(format!("{dotted}.{suffix}")),
+                    ..Default::default()
+                })
+                .await
+                .expect("insert media file");
+            for member in members {
+                let episode_id = &episode_ids[*member].1;
+                fixture
+                    .media_files
+                    .link_file_to_episode(&file_id, episode_id)
+                    .await
+                    .expect("link episode");
+                fixture
+                    .media_files
+                    .set_media_file_roles_for_episode(&title.id, episode_id, &file_id, &[])
+                    .await
+                    .expect("make the file the episode's primary");
+            }
+        }
+        for (_, episode_id) in &episode_ids {
+            scopes.push(LandedBarScope {
+                title_id: title.id.clone(),
+                episode_id: Some(episode_id.clone()),
+                collection_id: None,
+                series_movie_link_id: None,
+            });
+        }
+        for collection_id in collections {
+            scopes.push(LandedBarScope {
+                title_id: title.id.clone(),
+                episode_id: None,
+                collection_id: Some(collection_id),
+                series_movie_link_id: None,
+            });
+        }
+        scopes.push(movie_scope(&title));
+    }
+    let movie = fixture
+        .add_movie(
+            "Harbor Lamp",
+            "Harbor.Lamp.2024.1080p.BluRay.x264-GRP",
+            9_000_000_000,
+        )
+        .await;
+    scopes.push(movie_scope(&movie));
+    // Interleave the titles so no title's scopes sit together on the page.
+    let mut page = Vec::new();
+    let per_series = scopes.len() / 3;
+    for offset in 0..per_series {
+        for series in 0..3 {
+            page.push(scopes[series * per_series + offset].clone());
+        }
+    }
+    page.extend(scopes[3 * per_series..].iter().cloned());
+
+    let mut alone = Vec::new();
+    for scope in &page {
+        alone.extend(
+            fixture
+                .app
+                .landed_bars_for_scopes(std::slice::from_ref(scope))
+                .await,
+        );
+    }
+    let together = fixture.app.landed_bars_for_scopes(&page).await;
+    assert_eq!(together, alone);
+    let occupied = together.iter().filter(|bar| bar.is_some()).count();
+    // Per series: four occupied episodes (E01, E02, E03, S02E01) and two
+    // occupied seasons; plus the movie.
+    assert_eq!(occupied, 3 * 6 + 1, "{together:?}");
+}

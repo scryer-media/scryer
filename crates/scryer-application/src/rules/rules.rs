@@ -1015,7 +1015,16 @@ impl AppUseCase {
             .available()
             .map(|provider| provider.scoring_policies())
             .unwrap_or_default();
-        Self::build_user_rules_engine(rule_sets, plugin_policies)
+        // Compiling every pack is CPU work; keep it off the async workers, as
+        // validation and preview do. A build that never finished is an error,
+        // never an empty engine.
+        let span = tracing::Span::current();
+        tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
+            Self::build_user_rules_engine(rule_sets, plugin_policies)
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("rules engine build failed: {error}")))?
     }
 
     /// Build an engine from an already captured policy snapshot. This is pure
@@ -1236,6 +1245,97 @@ pub(crate) mod tests {
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    fn engine_rebuild_rule(id: &str, score: i32, exclusive_group: Option<&str>) -> RuleSet {
+        let now = Utc::now();
+        RuleSet {
+            id: id.into(),
+            name: id.into(),
+            description: "Fixture rule".into(),
+            rego_source: scryer_rules::rewrite_package_declaration(
+                &format!("package example\nimport rego.v1\nscore_entry[\"{id}\"] := {score}"),
+                id,
+            ),
+            enabled: true,
+            priority: score,
+            evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
+            exclusive_group: exclusive_group.map(str::to_string),
+            disabled_reason_code: None,
+            disabled_reason: None,
+            applied_facets: vec![MediaFacet::Movie],
+            created_at: now,
+            updated_at: now,
+            is_managed: false,
+            managed_key: None,
+            managed_tag_filter: None,
+        }
+    }
+
+    // A single-threaded runtime: a build compiled on the runtime thread and
+    // one compiled on a blocking thread must install the same engine.
+    #[tokio::test(flavor = "current_thread")]
+    async fn engine_rebuild_installs_the_engine_the_synchronous_build_produces() {
+        let rules = vec![
+            engine_rebuild_rule("rebuild_low", 150, None),
+            engine_rebuild_rule("rebuild_high", 700, None),
+        ];
+        let app = build_test_app(vec![], rules.clone());
+        let expected =
+            AppUseCase::build_user_rules_engine(rules, Vec::new()).expect("fixture rules build");
+
+        app.rebuild_user_rules_engine()
+            .await
+            .expect("rebuild succeeds");
+
+        let guard = app.services.customization.user_rules.read().unwrap();
+        assert_eq!(guard.rule_identity(), expected.rule_identity());
+        let input = multi_audio_rule_input("profile", false, false);
+        let live = guard.evaluator().evaluate(&input, "movie").unwrap();
+        let reference = expected.evaluator().evaluate(&input, "movie").unwrap();
+        assert_eq!(
+            format!("{:?}", live.entries),
+            format!("{:?}", reference.entries)
+        );
+        assert_eq!(live.entries.len(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn engine_rebuild_refusal_survives_the_blocking_build_and_keeps_the_old_engine() {
+        let app = build_test_app(vec![], vec![engine_rebuild_rule("kept", 100, None)]);
+        app.rebuild_user_rules_engine()
+            .await
+            .expect("first rebuild succeeds");
+        let before = app
+            .services
+            .customization
+            .user_rules
+            .read()
+            .unwrap()
+            .rule_identity();
+
+        let Err(error) = app
+            .prepare_user_rules_engine(vec![
+                engine_rebuild_rule("left", 100, Some("group")),
+                engine_rebuild_rule("right", 200, Some("group")),
+            ])
+            .await
+        else {
+            panic!("two enabled rules in one exclusive group cannot build");
+        };
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::rules::ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP)
+        );
+        assert_eq!(
+            app.services
+                .customization
+                .user_rules
+                .read()
+                .unwrap()
+                .rule_identity(),
+            before
+        );
+    }
 
     #[derive(Default)]
     struct TestQualityProfileRepo {
