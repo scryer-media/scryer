@@ -2745,9 +2745,6 @@ const fr: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Aperçu",
   "settings.lifecyclePreviewSubtitle":
     "Exécutez le filtre sur des titres réels. L'aperçu est en lecture seule : il indique ce qui correspondrait et ne modifie rien.",
-  "settings.lifecyclePreviewSource": "Filtre",
-  "settings.lifecyclePreviewSourceStored": "Règle enregistrée",
-  "settings.lifecyclePreviewSourceDraft": "Brouillon de l'éditeur",
   "settings.lifecyclePreviewLibrary": "Bibliothèque",
   "settings.lifecyclePreviewLibraryPlaceholder":
     "Sélectionner une bibliothèque",
@@ -3393,9 +3390,6 @@ const fr: LocaleDictionary = {
   "settings.requestPreviewTitle": "Essayer cette règle sur une demande",
   "settings.requestPreviewSubtitle":
     "Exécute un filtre sur une demande que vous décrivez. Rien n'est envoyé et rien n'est consigné.",
-  "settings.requestPreviewSource": "Filtre",
-  "settings.requestPreviewSourceStored": "Une règle enregistrée",
-  "settings.requestPreviewSourceDraft": "Le brouillon de l'éditeur",
   "settings.requestPreviewRuleSelect": "Règle",
   "settings.requestPreviewRuleSelectPlaceholder": "Choisir une règle",
   "settings.requestPreviewUser": "Demandeur",

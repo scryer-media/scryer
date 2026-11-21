@@ -9884,9 +9884,6 @@ const en: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Preview",
   "settings.lifecyclePreviewSubtitle":
     "Run the matcher against titles, seasons, or episodes in its scope. Preview reports what would match and changes nothing.",
-  "settings.lifecyclePreviewSource": "Matcher",
-  "settings.lifecyclePreviewSourceStored": "Saved rule",
-  "settings.lifecyclePreviewSourceDraft": "Editor draft",
   "settings.lifecyclePreviewLibrary": "Library",
   "settings.lifecyclePreviewLibraryPlaceholder": "Select a library",
   "settings.lifecyclePreviewLimit": "Subjects",
@@ -10818,9 +10815,6 @@ const en: LocaleDictionary = {
   "settings.requestPreviewTitle": "Try this rule against a request",
   "settings.requestPreviewSubtitle":
     "Runs one matcher against a request you describe. Nothing is submitted and nothing is recorded.",
-  "settings.requestPreviewSource": "Matcher",
-  "settings.requestPreviewSourceStored": "A saved rule",
-  "settings.requestPreviewSourceDraft": "The editor draft",
   "settings.requestPreviewRuleSelect": "Rule",
   "settings.requestPreviewRuleSelectPlaceholder": "Choose a rule",
   "settings.requestPreviewUser": "Requester",

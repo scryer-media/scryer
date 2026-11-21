@@ -2383,9 +2383,6 @@ const zh_CN: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "预览",
   "settings.lifecyclePreviewSubtitle":
     "针对真实标题运行匹配器。预览为只读：仅报告哪些内容会匹配，不做任何更改。",
-  "settings.lifecyclePreviewSource": "匹配器",
-  "settings.lifecyclePreviewSourceStored": "已保存的规则",
-  "settings.lifecyclePreviewSourceDraft": "编辑器草稿",
   "settings.lifecyclePreviewLibrary": "媒体库",
   "settings.lifecyclePreviewLibraryPlaceholder": "选择媒体库",
   "settings.lifecyclePreviewLimit": "标题数",
@@ -2968,9 +2965,6 @@ const zh_CN: LocaleDictionary = {
   "settings.requestPreviewTitle": "用一个请求试运行此规则",
   "settings.requestPreviewSubtitle":
     "针对您描述的请求运行一个匹配器。不会提交任何内容，也不会留下记录。",
-  "settings.requestPreviewSource": "匹配器",
-  "settings.requestPreviewSourceStored": "已保存的规则",
-  "settings.requestPreviewSourceDraft": "编辑器草稿",
   "settings.requestPreviewRuleSelect": "规则",
   "settings.requestPreviewRuleSelectPlaceholder": "选择规则",
   "settings.requestPreviewUser": "请求者",

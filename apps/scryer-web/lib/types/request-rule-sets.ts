@@ -257,7 +257,3 @@ export type RequestRulePreviewSample = {
   leaseForever: boolean;
   leaseDays: number;
 };
-
-/// Where a preview run gets its matcher from: the stored revision of a saved
-/// rule set, or the unsaved editor draft.
-export type RequestRulePreviewSource = "stored" | "draft";

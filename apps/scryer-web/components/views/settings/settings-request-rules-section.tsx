@@ -41,6 +41,7 @@ import {
   integerInputProps,
   sanitizeDigits,
 } from "@/components/ui/input";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
@@ -66,7 +67,6 @@ import type {
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
-  RequestRulePreviewSource,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
   RequestRuleUserOption,
@@ -174,8 +174,6 @@ type SettingsRequestRulesSectionProps = {
   /// Saving a rule that reads requester fields needs Manage permissions; the
   /// editor warns before save rather than after the API refuses.
   canManagePermissions: boolean;
-  previewSource: RequestRulePreviewSource;
-  setPreviewSource: (source: RequestRulePreviewSource) => void;
   previewRuleSetId: string;
   setPreviewRuleSetId: (id: string) => void;
   previewSample: RequestRulePreviewSample;
@@ -420,14 +418,10 @@ function DecisionVotes({ decision }: { decision: RequestRuleDecisionRecord }) {
 /// document the matcher actually saw, which is the only honest answer to "why
 /// did this not match".
 function RequestPreviewPanel({
-  isEditorOpen,
-  draftName,
   ruleSetRecords,
   libraries,
   qualityProfiles,
   users,
-  previewSource,
-  setPreviewSource,
   previewRuleSetId,
   setPreviewRuleSetId,
   previewSample,
@@ -437,15 +431,12 @@ function RequestPreviewPanel({
   previewing,
   previewResult,
   previewError,
-}: { draftName: string } & Pick<
+}: Pick<
   SettingsRequestRulesSectionProps,
-  | "isEditorOpen"
   | "ruleSetRecords"
   | "libraries"
   | "qualityProfiles"
   | "users"
-  | "previewSource"
-  | "setPreviewSource"
   | "previewRuleSetId"
   | "setPreviewRuleSetId"
   | "previewSample"
@@ -493,13 +484,12 @@ function RequestPreviewPanel({
     };
   }, [facet, searchPreviewTitles, titleQuery]);
 
-  const canPreviewDraft = isEditorOpen;
   const canRun =
     !previewing &&
     Boolean(previewSample.userId) &&
     Boolean(previewSample.libraryId) &&
     previewSample.externalIds.length > 0 &&
-    (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
+    Boolean(previewRuleSetId);
 
   const decision = previewResult?.decision ?? null;
 
@@ -510,30 +500,18 @@ function RequestPreviewPanel({
       help={t("settings.requestPreviewSubtitle")}
     >
       <div className={FORM_SHELL}>
-        <div className="grid gap-3 md:grid-cols-3">
-          <SingleSelectField
-            id="settings-request-preview-source"
-            label={t("settings.requestPreviewSource")}
-            value={previewSource}
-            onValueChange={(value) =>
-              setPreviewSource(value as RequestRulePreviewSource)
-            }
-            options={[
-              {
-                value: "stored",
-                label: t("settings.requestPreviewSourceStored"),
-              },
-              {
-                value: "draft",
-                label: t("settings.requestPreviewSourceDraft"),
-                disabled: !canPreviewDraft,
-              },
-            ]}
-          />
-          {previewSource === "stored" ? (
-            <SingleSelectField
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              htmlFor="settings-request-preview-rule"
+              className="block text-sm font-medium text-[var(--scry-ink2)]"
+            >
+              {t("settings.requestPreviewRuleSelect")}
+            </label>
+            <FilterableSelect
               id="settings-request-preview-rule"
-              label={t("settings.requestPreviewRuleSelect")}
+              optionIdPrefix="settings-request-preview-rule"
+              filterByValue={false}
               placeholder={t("settings.requestPreviewRuleSelectPlaceholder")}
               value={previewRuleSetId}
               onValueChange={setPreviewRuleSetId}
@@ -542,19 +520,7 @@ function RequestPreviewPanel({
                 label: record.name,
               }))}
             />
-          ) : (
-            <div className="min-w-0 space-y-1.5">
-              <Label className="block">
-                {t("settings.requestPreviewRuleSelect")}
-              </Label>
-              <p
-                id="settings-request-preview-draft-name"
-                className="truncate text-xs text-muted-foreground"
-              >
-                {draftName || t("settings.requestPreviewSourceDraft")}
-              </p>
-            </div>
-          )}
+          </div>
           <SingleSelectField
             id="settings-request-preview-user"
             label={t("settings.requestPreviewUser")}
@@ -1091,8 +1057,6 @@ export function SettingsRequestRulesSection({
           {pageHead}
           {section === "try" ? (
             <RequestPreviewPanel
-              isEditorOpen={isEditorOpen}
-              draftName={ruleSetDraft.name}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               qualityProfiles={qualityProfiles}

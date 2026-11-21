@@ -4723,9 +4723,6 @@ const ru: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Предпросмотр",
   "settings.lifecyclePreviewSubtitle":
     "Запустите правило на реальных тайтлах. Предпросмотр только читает: он сообщает, что совпало бы, и ничего не меняет.",
-  "settings.lifecyclePreviewSource": "Правило",
-  "settings.lifecyclePreviewSourceStored": "Сохранённое правило",
-  "settings.lifecyclePreviewSourceDraft": "Черновик редактора",
   "settings.lifecyclePreviewLibrary": "Библиотека",
   "settings.lifecyclePreviewLibraryPlaceholder": "Выберите библиотеку",
   "settings.lifecyclePreviewLimit": "Тайтлы",
@@ -5494,9 +5491,6 @@ const ru: LocaleDictionary = {
   "settings.requestPreviewTitle": "Проверить правило на запросе",
   "settings.requestPreviewSubtitle":
     "Выполняет один сопоставитель на запросе, который вы опишете. Ничего не отправляется и не записывается.",
-  "settings.requestPreviewSource": "Сопоставитель",
-  "settings.requestPreviewSourceStored": "Сохранённое правило",
-  "settings.requestPreviewSourceDraft": "Черновик в редакторе",
   "settings.requestPreviewRuleSelect": "Правило",
   "settings.requestPreviewRuleSelectPlaceholder": "Выберите правило",
   "settings.requestPreviewUser": "Запросивший",

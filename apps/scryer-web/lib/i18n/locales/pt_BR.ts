@@ -2659,9 +2659,6 @@ const pt_BR: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Prévia",
   "settings.lifecyclePreviewSubtitle":
     "Execute o comparador em títulos reais. A prévia apenas lê: informa o que corresponderia e não altera nada.",
-  "settings.lifecyclePreviewSource": "Comparador",
-  "settings.lifecyclePreviewSourceStored": "Regra salva",
-  "settings.lifecyclePreviewSourceDraft": "Rascunho do editor",
   "settings.lifecyclePreviewLibrary": "Biblioteca",
   "settings.lifecyclePreviewLibraryPlaceholder": "Selecione uma biblioteca",
   "settings.lifecyclePreviewLimit": "Títulos",
@@ -3301,9 +3298,6 @@ const pt_BR: LocaleDictionary = {
   "settings.requestPreviewTitle": "Testar esta regra em uma solicitação",
   "settings.requestPreviewSubtitle":
     "Executa um comparador em uma solicitação que você descreve. Nada é enviado e nada é registrado.",
-  "settings.requestPreviewSource": "Comparador",
-  "settings.requestPreviewSourceStored": "Uma regra salva",
-  "settings.requestPreviewSourceDraft": "O rascunho do editor",
   "settings.requestPreviewRuleSelect": "Regra",
   "settings.requestPreviewRuleSelectPlaceholder": "Escolha uma regra",
   "settings.requestPreviewUser": "Solicitante",

@@ -64,7 +64,6 @@ import type {
   LifecycleInstanceGates,
   LifecyclePreviewResult,
   LifecycleTestSubject,
-  LifecyclePreviewSource,
   LifecycleRuleSetDetail,
   LifecycleRuleSetDraft,
   LifecycleRuleSetRecord,
@@ -171,8 +170,6 @@ export function SettingsLifecycleRulesContainer({
       isEditorOpen,
     );
 
-  const [previewSource, setPreviewSource] =
-    useState<LifecyclePreviewSource>("stored");
   const [previewRuleSetId, setPreviewRuleSetId] = useState("");
   const [previewLibraryId, setPreviewLibraryId] = useState("");
   const [previewLimit, setPreviewLimit] = useState(
@@ -842,8 +839,7 @@ export function SettingsLifecycleRulesContainer({
         const { data, error } = await client
           .mutation(previewLifecycleRuleMutation, {
             input: lifecyclePreviewInput({
-              ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
-              draft: previewSource === "draft" ? ruleSetDraft : undefined,
+              ruleSetId: previewRuleSetId,
               titleIds: subject ? [subject.titleId] : undefined,
               // A whole-title pick evaluates every level of the rule; a
               // season or episode picked from the results narrows to it.
@@ -869,15 +865,7 @@ export function SettingsLifecycleRulesContainer({
         if (request === previewRequest.current) setPreviewing(false);
       }
     },
-    [
-      client,
-      previewLibraryId,
-      previewLimit,
-      previewRuleSetId,
-      previewSource,
-      ruleSetDraft,
-      t,
-    ],
+    [client, previewLibraryId, previewLimit, previewRuleSetId, t],
   );
 
   // Results and sample targets belong to the matcher and library that produced
@@ -1151,8 +1139,6 @@ export function SettingsLifecycleRulesContainer({
         deleteRuleSet={deleteRuleSet}
         validating={validating}
         validationResult={validationResult}
-        previewSource={previewSource}
-        setPreviewSource={setPreviewSource}
         previewRuleSetId={previewRuleSetId}
         setPreviewRuleSetId={setPreviewRuleSetId}
         previewLibraryId={previewLibraryId}

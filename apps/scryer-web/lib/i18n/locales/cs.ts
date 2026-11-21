@@ -4960,9 +4960,6 @@ const cs: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Náhled",
   "settings.lifecyclePreviewSubtitle":
     "Spustí porovnávání vůči titulům, řadám nebo epizodám v jeho rozsahu. Náhled ukazuje, co by odpovídalo, a nic nemění.",
-  "settings.lifecyclePreviewSource": "Porovnávání",
-  "settings.lifecyclePreviewSourceStored": "Uložené pravidlo",
-  "settings.lifecyclePreviewSourceDraft": "Koncept z editoru",
   "settings.lifecyclePreviewLibrary": "Knihovna",
   "settings.lifecyclePreviewLibraryPlaceholder": "Vyberte knihovnu",
   "settings.lifecyclePreviewLimit": "Subjekty",
@@ -5806,9 +5803,6 @@ const cs: LocaleDictionary = {
   "settings.requestPreviewTitle": "Vyzkoušet toto pravidlo na žádosti",
   "settings.requestPreviewSubtitle":
     "Spustí jednu podmínku na žádosti, kterou popíšete. Nic se neodešle ani nezaznamená.",
-  "settings.requestPreviewSource": "Podmínka",
-  "settings.requestPreviewSourceStored": "Uložené pravidlo",
-  "settings.requestPreviewSourceDraft": "Koncept z editoru",
   "settings.requestPreviewRuleSelect": "Pravidlo",
   "settings.requestPreviewRuleSelectPlaceholder": "Vyberte pravidlo",
   "settings.requestPreviewUser": "Žadatel",

@@ -2641,9 +2641,6 @@ const de: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Vorschau",
   "settings.lifecyclePreviewSubtitle":
     "Führen Sie den Matcher gegen echte Titel aus. Die Vorschau liest nur: Sie meldet, was übereinstimmen würde, und ändert nichts.",
-  "settings.lifecyclePreviewSource": "Matcher",
-  "settings.lifecyclePreviewSourceStored": "Gespeicherte Regel",
-  "settings.lifecyclePreviewSourceDraft": "Editor-Entwurf",
   "settings.lifecyclePreviewLibrary": "Bibliothek",
   "settings.lifecyclePreviewLibraryPlaceholder": "Bibliothek auswählen",
   "settings.lifecyclePreviewLimit": "Titel",
@@ -3286,9 +3283,6 @@ const de: LocaleDictionary = {
   "settings.requestPreviewTitle": "Diese Regel an einer Anfrage ausprobieren",
   "settings.requestPreviewSubtitle":
     "Führt einen Matcher an einer von Ihnen beschriebenen Anfrage aus. Es wird nichts abgeschickt und nichts festgehalten.",
-  "settings.requestPreviewSource": "Matcher",
-  "settings.requestPreviewSourceStored": "Eine gespeicherte Regel",
-  "settings.requestPreviewSourceDraft": "Der Entwurf im Editor",
   "settings.requestPreviewRuleSelect": "Regel",
   "settings.requestPreviewRuleSelectPlaceholder": "Regel wählen",
   "settings.requestPreviewUser": "Anfragende Person",

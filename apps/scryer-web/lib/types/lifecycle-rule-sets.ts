@@ -210,10 +210,6 @@ export type LifecyclePreviewResult = {
   titles: LifecyclePreviewTitle[];
 };
 
-/// Where a preview run gets its matcher from: the stored revision of a saved
-/// rule set, or the unsaved editor draft.
-export type LifecyclePreviewSource = "stored" | "draft";
-
 /// Lifecycle state of one candidate. The states past `OBSERVING` are written by
 /// the action handler; a dry run rule only ever produces the first three.
 export type LifecycleCandidateState =

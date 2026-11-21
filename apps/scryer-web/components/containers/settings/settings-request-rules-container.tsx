@@ -28,7 +28,6 @@ import type {
   RequestRuleDecisionRecord,
   RequestRulePreviewResult,
   RequestRulePreviewSample,
-  RequestRulePreviewSource,
   RequestRuleSetDetail,
   RequestRuleSetDraft,
   RequestRuleSetRecord,
@@ -164,8 +163,6 @@ export function SettingsRequestRulesContainer({
       isEditorOpen,
     );
 
-  const [previewSource, setPreviewSource] =
-    useState<RequestRulePreviewSource>("stored");
   const [previewRuleSetId, setPreviewRuleSetId] = useState("");
   const [previewSample, setPreviewSample] =
     useState<RequestRulePreviewSample>(initialPreviewSample);
@@ -722,12 +719,7 @@ export function SettingsRequestRulesContainer({
       const { data, error } = await client
         .mutation(previewRequestRuleMutation, {
           input: {
-            /// Exactly one of the two: sending a stored rule set *and* a draft
-            /// source together is refused, because it does not say which one
-            /// the author meant to preview.
-            ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
-            regoSource:
-              previewSource === "draft" ? ruleSetDraft.regoSource : null,
+            ruleSetId: previewRuleSetId,
             sample: {
               userId: previewSample.userId,
               libraryId: previewSample.libraryId,
@@ -752,14 +744,7 @@ export function SettingsRequestRulesContainer({
     } finally {
       setPreviewing(false);
     }
-  }, [
-    client,
-    previewRuleSetId,
-    previewSample,
-    previewSource,
-    ruleSetDraft.regoSource,
-    t,
-  ]);
+  }, [client, previewRuleSetId, previewSample, t]);
 
   return (
     <>
@@ -795,8 +780,6 @@ export function SettingsRequestRulesContainer({
           void setRuleEnabled(record, enabled)
         }
         canManagePermissions={canManagePermissions}
-        previewSource={previewSource}
-        setPreviewSource={setPreviewSource}
         previewRuleSetId={previewRuleSetId}
         setPreviewRuleSetId={setPreviewRuleSetId}
         previewSample={previewSample}

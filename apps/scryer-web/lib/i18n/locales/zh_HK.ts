@@ -4259,9 +4259,6 @@ const zh_HK: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "預覽",
   "settings.lifecyclePreviewSubtitle":
     "針對真實標題運行匹配器。預覽為只讀：僅報告哪些內容會匹配，不做任何更改。",
-  "settings.lifecyclePreviewSource": "匹配器",
-  "settings.lifecyclePreviewSourceStored": "已儲存的規則",
-  "settings.lifecyclePreviewSourceDraft": "編輯器草稿",
   "settings.lifecyclePreviewLibrary": "媒體庫",
   "settings.lifecyclePreviewLibraryPlaceholder": "選擇媒體庫",
   "settings.lifecyclePreviewLimit": "標題數",
@@ -5021,9 +5018,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestPreviewTitle": "用一個請求試運行此規則",
   "settings.requestPreviewSubtitle":
     "針對您描述的請求運行一個匹配器。不會提交任何內容，也不會留下記錄。",
-  "settings.requestPreviewSource": "匹配器",
-  "settings.requestPreviewSourceStored": "已儲存的規則",
-  "settings.requestPreviewSourceDraft": "編輯器草稿",
   "settings.requestPreviewRuleSelect": "規則",
   "settings.requestPreviewRuleSelectPlaceholder": "選擇規則",
   "settings.requestPreviewUser": "請求者",

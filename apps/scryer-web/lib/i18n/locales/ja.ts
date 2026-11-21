@@ -2585,9 +2585,6 @@ const ja: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "プレビュー",
   "settings.lifecyclePreviewSubtitle":
     "実際のタイトルに対してマッチャーを実行します。プレビューは読み取り専用で、一致する対象を報告するだけで何も変更しません。",
-  "settings.lifecyclePreviewSource": "マッチャー",
-  "settings.lifecyclePreviewSourceStored": "保存済みルール",
-  "settings.lifecyclePreviewSourceDraft": "エディターの下書き",
   "settings.lifecyclePreviewLibrary": "ライブラリ",
   "settings.lifecyclePreviewLibraryPlaceholder": "ライブラリを選択",
   "settings.lifecyclePreviewLimit": "タイトル数",
@@ -3218,9 +3215,6 @@ const ja: LocaleDictionary = {
   "settings.requestPreviewTitle": "このルールをリクエストで試す",
   "settings.requestPreviewSubtitle":
     "あなたが記述したリクエストに対してマッチャーを 1 つ実行します。送信も記録もされません。",
-  "settings.requestPreviewSource": "マッチャー",
-  "settings.requestPreviewSourceStored": "保存済みのルール",
-  "settings.requestPreviewSourceDraft": "エディタの下書き",
   "settings.requestPreviewRuleSelect": "ルール",
   "settings.requestPreviewRuleSelectPlaceholder": "ルールを選択",
   "settings.requestPreviewUser": "リクエストした人",

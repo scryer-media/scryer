@@ -2672,9 +2672,6 @@ const it: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "Anteprima",
   "settings.lifecyclePreviewSubtitle":
     "Esegui il matcher su titoli reali. L'anteprima è in sola lettura: riporta ciò che corrisponderebbe e non modifica nulla.",
-  "settings.lifecyclePreviewSource": "Matcher",
-  "settings.lifecyclePreviewSourceStored": "Regola salvata",
-  "settings.lifecyclePreviewSourceDraft": "Bozza dell'editor",
   "settings.lifecyclePreviewLibrary": "Libreria",
   "settings.lifecyclePreviewLibraryPlaceholder": "Seleziona una libreria",
   "settings.lifecyclePreviewLimit": "Titoli",
@@ -3316,9 +3313,6 @@ const it: LocaleDictionary = {
   "settings.requestPreviewTitle": "Prova questa regola su una richiesta",
   "settings.requestPreviewSubtitle":
     "Esegue un matcher su una richiesta che descrivi tu. Non viene inviato né registrato nulla.",
-  "settings.requestPreviewSource": "Matcher",
-  "settings.requestPreviewSourceStored": "Una regola salvata",
-  "settings.requestPreviewSourceDraft": "La bozza nell'editor",
   "settings.requestPreviewRuleSelect": "Regola",
   "settings.requestPreviewRuleSelectPlaceholder": "Scegli una regola",
   "settings.requestPreviewUser": "Richiedente",

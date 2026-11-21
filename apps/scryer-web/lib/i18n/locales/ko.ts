@@ -2528,9 +2528,6 @@ const ko: LocaleDictionary = {
   "settings.lifecyclePreviewTitle": "미리 보기",
   "settings.lifecyclePreviewSubtitle":
     "실제 타이틀에 매처를 실행합니다. 미리 보기는 읽기 전용이며, 무엇이 일치할지 보고할 뿐 아무것도 변경하지 않습니다.",
-  "settings.lifecyclePreviewSource": "매처",
-  "settings.lifecyclePreviewSourceStored": "저장된 규칙",
-  "settings.lifecyclePreviewSourceDraft": "편집기 초안",
   "settings.lifecyclePreviewLibrary": "라이브러리",
   "settings.lifecyclePreviewLibraryPlaceholder": "라이브러리 선택",
   "settings.lifecyclePreviewLimit": "타이틀 수",
@@ -3155,9 +3152,6 @@ const ko: LocaleDictionary = {
   "settings.requestPreviewTitle": "이 규칙을 요청으로 시험하기",
   "settings.requestPreviewSubtitle":
     "직접 설명한 요청에 매처 하나를 실행합니다. 제출되지도 기록되지도 않습니다.",
-  "settings.requestPreviewSource": "매처",
-  "settings.requestPreviewSourceStored": "저장된 규칙",
-  "settings.requestPreviewSourceDraft": "편집기 초안",
   "settings.requestPreviewRuleSelect": "규칙",
   "settings.requestPreviewRuleSelectPlaceholder": "규칙 선택",
   "settings.requestPreviewUser": "요청자",

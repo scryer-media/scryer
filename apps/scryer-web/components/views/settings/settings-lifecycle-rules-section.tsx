@@ -36,6 +36,7 @@ import {
   integerInputProps,
   sanitizeDigits,
 } from "@/components/ui/input";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
@@ -71,7 +72,6 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   LifecyclePreviewResult,
-  LifecyclePreviewSource,
   LifecyclePreviewTitle,
   LifecycleTestSubject,
   LifecycleRuleSetDraft,
@@ -160,8 +160,6 @@ type SettingsLifecycleRulesSectionProps = {
   deleteRuleSet: (record: LifecycleRuleSetRecord) => Promise<void> | void;
   validating: boolean;
   validationResult: LifecycleValidationResult | null;
-  previewSource: LifecyclePreviewSource;
-  setPreviewSource: (source: LifecyclePreviewSource) => void;
   previewRuleSetId: string;
   setPreviewRuleSetId: (id: string) => void;
   previewLibraryId: string;
@@ -464,12 +462,8 @@ function PreviewOutcomeCell({ title }: { title: LifecyclePreviewTitle }) {
 }
 
 function LifecyclePreviewPanel({
-  isEditorOpen,
-  draftName,
   ruleSetRecords,
   libraries,
-  previewSource,
-  setPreviewSource,
   previewRuleSetId,
   setPreviewRuleSetId,
   previewLibraryId,
@@ -480,15 +474,10 @@ function LifecyclePreviewPanel({
   previewing,
   previewResult,
   previewError,
-}: {
-  draftName: string;
-} & Pick<
+}: Pick<
   SettingsLifecycleRulesSectionProps,
-  | "isEditorOpen"
   | "ruleSetRecords"
   | "libraries"
-  | "previewSource"
-  | "setPreviewSource"
   | "previewRuleSetId"
   | "setPreviewRuleSetId"
   | "previewLibraryId"
@@ -509,12 +498,11 @@ function LifecyclePreviewPanel({
   React.useEffect(() => {
     setSelectedSubject(undefined);
     setManualTarget(false);
-  }, [previewSource, previewRuleSetId, previewLibraryId, draftName]);
-  const canPreviewDraft = isEditorOpen;
+  }, [previewRuleSetId, previewLibraryId]);
   const canRun =
     !previewing &&
     Boolean(previewLibraryId || selectedSubject) &&
-    (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
+    Boolean(previewRuleSetId);
 
   return (
     <PaneSection
@@ -523,30 +511,18 @@ function LifecyclePreviewPanel({
       help={t("settings.lifecyclePreviewSubtitle")}
     >
       <div className={FORM_SHELL}>
-        <div className="grid gap-3 md:grid-cols-4">
-          <SingleSelectField
-            id="settings-lifecycle-preview-source"
-            label={t("settings.lifecyclePreviewSource")}
-            value={previewSource}
-            onValueChange={(value) =>
-              setPreviewSource(value as LifecyclePreviewSource)
-            }
-            options={[
-              {
-                value: "stored",
-                label: t("settings.lifecyclePreviewSourceStored"),
-              },
-              {
-                value: "draft",
-                label: t("settings.lifecyclePreviewSourceDraft"),
-                disabled: !canPreviewDraft,
-              },
-            ]}
-          />
-          {previewSource === "stored" ? (
-            <SingleSelectField
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              htmlFor="settings-lifecycle-preview-rule"
+              className="block text-sm font-medium text-[var(--scry-ink2)]"
+            >
+              {t("settings.lifecyclePreviewRuleSelect")}
+            </label>
+            <FilterableSelect
               id="settings-lifecycle-preview-rule"
-              label={t("settings.lifecyclePreviewRuleSelect")}
+              optionIdPrefix="settings-lifecycle-preview-rule"
+              filterByValue={false}
               placeholder={t("settings.lifecyclePreviewRuleSelectPlaceholder")}
               value={previewRuleSetId}
               onValueChange={setPreviewRuleSetId}
@@ -555,19 +531,7 @@ function LifecyclePreviewPanel({
                 label: record.name,
               }))}
             />
-          ) : (
-            <div className="min-w-0 space-y-1.5">
-              <Label className="block">
-                {t("settings.lifecyclePreviewRuleSelect")}
-              </Label>
-              <p
-                id="settings-lifecycle-preview-draft-name"
-                className="truncate text-xs text-muted-foreground"
-              >
-                {draftName || t("settings.lifecyclePreviewSourceDraft")}
-              </p>
-            </div>
-          )}
+          </div>
           <SingleSelectField
             id="settings-lifecycle-preview-library"
             label={t("settings.lifecyclePreviewLibrary")}
@@ -600,7 +564,7 @@ function LifecyclePreviewPanel({
         </div>
 
         <LifecycleSubjectPicker
-          key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${draftName}`}
+          key={`${previewRuleSetId}:${previewLibraryId}`}
           onChange={(subject) => {
             setSelectedSubject(subject);
             setManualTarget(Boolean(subject));
@@ -916,8 +880,6 @@ export function SettingsLifecycleRulesSection({
           {pageHead}
           {section === "try" ? (
             <LifecyclePreviewPanel
-              isEditorOpen={isEditorOpen}
-              draftName={ruleSetDraft.name}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               {...previewProps}
