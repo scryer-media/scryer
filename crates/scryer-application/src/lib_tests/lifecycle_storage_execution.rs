@@ -542,7 +542,7 @@ async fn narrow_subject_resolvers_match_the_full_resolver() {
         assert_eq!(monitoring(&monitored), monitoring(&full), "{kind} {id}");
 
         let (subject, title_subject) = app
-            .lifecycle_resolve_subject_with_title(kind, id, &title, &files)
+            .lifecycle_resolve_subject_with_title(kind, id, &title, &files, true)
             .await
             .expect("shared subject");
         assert_eq!(whole(&subject), whole(&full), "{kind} {id}");
@@ -563,7 +563,7 @@ async fn narrow_subject_resolvers_match_the_full_resolver() {
     }
     // A subject the title no longer holds is not found the same way.
     let gone = app
-        .lifecycle_resolve_subject_with_title("episode", "no-such-episode", &title, &files)
+        .lifecycle_resolve_subject_with_title("episode", "no-such-episode", &title, &files, true)
         .await
         .expect_err("unknown episode");
     let gone_full = app
@@ -805,7 +805,10 @@ async fn a_page_of_inventories_read_together_matches_loading_each_title() {
 
     // Preview's form: no pass memo.
     let batched = app
-        .lifecycle_load_title_episode_inventories(&titles, None)
+        .lifecycle_load_title_episode_inventories(
+            &titles,
+            crate::lifecycle_rules::subjects::FilePresence::Probe(None),
+        )
         .await;
     let mut shows = Vec::new();
     for title in &titles {
@@ -834,7 +837,10 @@ async fn a_page_of_inventories_read_together_matches_loading_each_title() {
     // would make, and the same inventories.
     let mut batched_presence = LifecyclePassFilePresence::default();
     let with_memo = app
-        .lifecycle_load_title_episode_inventories(&titles, Some(&mut batched_presence))
+        .lifecycle_load_title_episode_inventories(
+            &titles,
+            crate::lifecycle_rules::subjects::FilePresence::Probe(Some(&mut batched_presence)),
+        )
         .await;
     let mut per_title_presence = LifecyclePassFilePresence::default();
     for title in titles

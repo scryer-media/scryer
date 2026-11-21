@@ -819,6 +819,17 @@ impl AppUseCase {
             revision_number: candidate.revision_number,
         };
         let actor = User::system_execution_actor();
+        // These rechecks keep only the decision, never the input, so a rule
+        // that reads no presence fact is rechecked without probing the
+        // title's files: its decision cannot depend on them.
+        let recheck_presence = if super::subjects::rule_may_read_file_presence(
+            &detail.revision.rego_source,
+            &detail.rule_set.id,
+        ) {
+            super::action_execution::RecheckFilePresence::Probe
+        } else {
+            super::action_execution::RecheckFilePresence::SkipUnread
+        };
         let mut failed = false;
         for index in 0..checkpoint.files.len() {
             if checkpoint.files[index].completed {
@@ -852,6 +863,7 @@ impl AppUseCase {
                         libraries,
                         tag_conflicts,
                         storage_roots,
+                        recheck_presence,
                     )
                     .await
                 {

@@ -1615,6 +1615,7 @@ impl AppUseCase {
         libraries: &HashMap<String, LifecycleLibraryRef>,
         tag_conflicts: &Option<HashSet<String>>,
         storage_roots: &super::storage::LifecycleStorageRootsOnce,
+        presence: RecheckFilePresence,
     ) -> SafetyDecision {
         // (1) Re-read the rule and the gates: both can move between selection
         // and execution, and a lowered gate must stop a leased worker before
@@ -1893,6 +1894,7 @@ impl AppUseCase {
                 &candidate.subject_id,
                 &title,
                 files,
+                presence == RecheckFilePresence::Probe,
             )
             .await
         {
@@ -2253,6 +2255,20 @@ impl AppUseCase {
 
         SafetyDecision::Proceed(Box::new(title), Box::new(input))
     }
+}
+
+/// Whether [`AppUseCase::lifecycle_execution_safety_checks`] probes the
+/// subject's files on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecheckFilePresence {
+    /// Probe them. Every recheck whose input is kept, and every recheck for
+    /// a rule that may read a presence fact.
+    Probe,
+    /// Leave presence unread: only for a recheck whose input is discarded,
+    /// for a rule that reads no presence fact
+    /// ([`super::subjects::rule_may_read_file_presence`]). Presence facts are
+    /// then unknown, which no fact the rule reads depends on.
+    SkipUnread,
 }
 
 /// Which of a sequence's own effects [`AppUseCase::restore_sequence_own_effects`]

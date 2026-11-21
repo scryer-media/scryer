@@ -22,6 +22,10 @@ pub(crate) struct LifecycleTitleEpisodeInventory {
     scoped_files: Vec<EpisodeScopedMediaFile>,
     file_availability: HashMap<String, EpisodeFileAvailability>,
     episode_coverage: HashMap<String, EpisodeFileCoverage>,
+    /// False when the load did not probe its files: every answer that rests
+    /// on presence (downloaded counts, retention ranks) is then unresolved
+    /// rather than read as "not on disk".
+    presence_probed: bool,
     retention_ranks: Mutex<Option<(DateTime<Utc>, Arc<LifecycleRetentionRanks>)>>,
 }
 
@@ -61,6 +65,11 @@ pub(crate) struct LifecycleRetentionRanks {
 }
 
 impl LifecycleTitleEpisodeInventory {
+    /// Whether this inventory's load probed its files' presence.
+    pub(crate) fn presence_probed(&self) -> bool {
+        self.presence_probed
+    }
+
     /// The title's seasons and episodes as this inventory read them.
     pub(crate) fn collections_and_episodes(&self) -> (&[Collection], &[Episode]) {
         (&self.collections, &self.episodes)
@@ -71,7 +80,10 @@ impl LifecycleTitleEpisodeInventory {
         let mut unresolved = false;
         for episode in episodes {
             let coverage = self.episode_coverage.get(&episode.id);
-            unresolved |= coverage.is_some_and(|coverage| coverage.has_unreadable_file);
+            // An episode with a file whose presence was not probed cannot be
+            // counted either way.
+            unresolved |= coverage
+                .is_some_and(|coverage| coverage.has_unreadable_file || !self.presence_probed);
             count += i64::from(coverage.is_some_and(EpisodeFileCoverage::downloaded));
         }
         (count, unresolved)
@@ -245,6 +257,10 @@ impl LifecycleTitleEpisodeInventory {
         episode_id: &str,
         completed_episode_ids: Option<&BTreeSet<String>>,
     ) -> bool {
+        // Ranks rest on presence; an unprobed inventory ranks nothing.
+        if !self.presence_probed {
+            return false;
+        }
         let restored = completed_episode_ids.is_some_and(|ids| ids.contains(episode_id));
         match self.episode_coverage.get(episode_id) {
             Some(coverage) => {
@@ -416,12 +432,12 @@ impl AppUseCase {
     /// did: when a batched read fails nothing is returned, and when one
     /// title's inventory cannot be built, it and every later title are left
     /// out, so no file is probed that the per-title path would not reach.
-    /// `presence` is the pass memo; `None` probes each file the way the
-    /// per-title loader does without one.
+    /// `presence` probes each file, through the pass memo when one is given,
+    /// or skips probing for a pass whose rule reads no presence fact.
     pub(crate) async fn lifecycle_load_title_episode_inventories(
         &self,
         titles: &[Title],
-        mut presence: Option<&mut LifecyclePassFilePresence>,
+        mut presence: FilePresence<'_>,
     ) -> HashMap<String, Arc<LifecycleTitleEpisodeInventory>> {
         let shows: Vec<&Title> = titles
             .iter()
@@ -495,10 +511,7 @@ impl AppUseCase {
                     per_title_read_role(file, &read_of);
                 }
             }
-            let presence = match presence.as_deref_mut() {
-                Some(memo) => FilePresence::Probe(Some(memo)),
-                None => FilePresence::Probe(None),
-            };
+            let presence = presence.reborrow();
             match self
                 .build_title_episode_inventory(
                     title,
@@ -518,9 +531,12 @@ impl AppUseCase {
         inventories
     }
 
-    /// [`FilePresence::Skip`] only for a candidate listing, through
-    /// [`LifecycleListingInventories`], which never hands the inventory on.
-    async fn load_title_episode_inventory(
+    /// [`FilePresence::Skip`] only where nothing read from the inventory
+    /// depends on presence: a candidate listing, through
+    /// [`LifecycleListingInventories`], which never hands the inventory on, a
+    /// manifest or monitoring read, or a load for a rule that cannot read a
+    /// presence fact ([`rule_may_read_file_presence`]).
+    pub(crate) async fn load_title_episode_inventory(
         &self,
         title: &Title,
         presence: FilePresence<'_>,
@@ -632,6 +648,7 @@ impl AppUseCase {
             scoped_files,
             file_availability: file_availabilities,
             episode_coverage,
+            presence_probed: !matches!(presence, FilePresence::Skip),
             retention_ranks: Mutex::default(),
         }))
     }
@@ -817,6 +834,7 @@ impl AppUseCase {
         subject_id: &str,
         title: &Title,
         files: &[TitleMediaFile],
+        probe_presence: bool,
     ) -> AppResult<(LifecycleSubject, Option<AppResult<LifecycleSubject>>)> {
         let scope = subject_coordinates_kind(kind, subject_id)?;
         if title.facet == scryer_domain::MediaFacet::Movie {
@@ -827,7 +845,12 @@ impl AppUseCase {
             let title_subject = (scope != Scope::Title).then(|| Err(subject_no_longer_belongs()));
             return Ok((subject, title_subject));
         }
-        let inventory = self.lifecycle_load_title_episode_inventory(title).await?;
+        let presence = if probe_presence {
+            FilePresence::Probe(None)
+        } else {
+            FilePresence::Skip
+        };
+        let inventory = self.load_title_episode_inventory(title, presence).await?;
         let subject = self
             .lifecycle_subjects_from_episode_inventory(scope, title, files, &inventory)?
             .into_iter()
@@ -1046,11 +1069,53 @@ fn episode_reads(episodes: &[Episode]) -> HashMap<&str, usize> {
 }
 
 /// Whether an inventory load probes its files' presence on disk.
-enum FilePresence<'a> {
-    /// A candidate listing: no listing field depends on presence.
+pub(crate) enum FilePresence<'a> {
+    /// A candidate listing, a manifest or monitoring read, or a load for
+    /// rules none of which can read a presence fact
+    /// ([`rule_may_read_file_presence`]): nothing read from the inventory
+    /// depends on presence, and what would is left unresolved.
     Skip,
     /// Probe each file, answering from the pass memo when one is given.
     Probe(Option<&'a mut LifecyclePassFilePresence>),
+}
+
+impl FilePresence<'_> {
+    /// The same choice for one more load, sharing the memo.
+    pub(crate) fn reborrow(&mut self) -> FilePresence<'_> {
+        match self {
+            FilePresence::Skip => FilePresence::Skip,
+            FilePresence::Probe(None) => FilePresence::Probe(None),
+            FilePresence::Probe(Some(memo)) => FilePresence::Probe(Some(&mut **memo)),
+        }
+    }
+}
+
+/// Facts whose value rests on which of a subject's files are on disk: the
+/// downloaded-episode count and the air-date retention positions. Every
+/// other fact and subject field is read without probing a file.
+const FILE_PRESENCE_FACTS: [&str; 3] = [
+    "episode_file_count",
+    "episode_position_by_air_date",
+    "season_position_by_air_date",
+];
+
+/// Whether a rule can read a fact that rests on file presence, so a load for
+/// it has to probe its files. Conservative: a source whose facts cannot be
+/// listed, or that names a presence fact or the observation envelopes
+/// anywhere in its text, counts as reading one.
+pub(crate) fn rule_may_read_file_presence(rego_source: &str, rule_set_id: &str) -> bool {
+    if rego_source.contains("observations")
+        || rego_source.contains("position_by_air_date")
+        || FILE_PRESENCE_FACTS
+            .iter()
+            .any(|fact| rego_source.contains(fact))
+    {
+        return true;
+    }
+    match scryer_rules::validation::lifecycle_referenced_facts(rego_source, rule_set_id) {
+        Ok(facts) => FILE_PRESENCE_FACTS.iter().any(|fact| facts.contains(*fact)),
+        Err(_) => true,
+    }
 }
 
 /// File presence probed during one evaluation pass, by catalog path. Every
@@ -1427,6 +1492,7 @@ mod tests {
             scoped_files: vec![],
             file_availability: HashMap::new(),
             episode_coverage,
+            presence_probed: true,
             retention_ranks: Mutex::default(),
         };
 
@@ -1471,6 +1537,27 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(inventory.downloaded_episode_count(&versioned), (1, false));
+
+        // The same rows read without probing answer nothing that rests on
+        // presence: the count is unresolved and no episode is ranked.
+        let unprobed = LifecycleTitleEpisodeInventory {
+            title_id: inventory.title_id.clone(),
+            collections: inventory.collections.clone(),
+            episodes: inventory.episodes.clone(),
+            scoped_files: vec![],
+            file_availability: HashMap::new(),
+            episode_coverage: inventory.episode_coverage.clone(),
+            presence_probed: false,
+            retention_ranks: Mutex::default(),
+        };
+        assert!(unprobed.downloaded_episode_count(&versioned).1);
+        let unprobed_ranks = unprobed.retention_ranks_at(
+            DateTime::parse_from_rfc3339("2024-02-01T00:00:00Z")
+                .expect("fixed timestamp parses")
+                .with_timezone(&Utc),
+        );
+        assert!(unprobed_ranks.episode_positions.is_empty());
+        assert!(unprobed_ranks.season_positions.is_empty());
     }
 
     #[test]
@@ -1529,6 +1616,7 @@ mod tests {
                     coverage(true, false, false, false),
                 ),
             ]),
+            presence_probed: true,
             retention_ranks: Mutex::default(),
         };
         assert_eq!(
@@ -1562,6 +1650,7 @@ mod tests {
                     coverage(true, false, false, false),
                 ),
             ]),
+            presence_probed: true,
             retention_ranks: Mutex::default(),
         };
         let live = inventory.retention_ranks_at(at);

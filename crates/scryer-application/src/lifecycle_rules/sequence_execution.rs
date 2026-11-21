@@ -286,6 +286,7 @@ impl AppUseCase {
                 libraries,
                 tag_conflicts,
                 storage_roots,
+                super::action_execution::RecheckFilePresence::Probe,
             )
             .await
         {
@@ -939,6 +940,7 @@ impl AppUseCase {
                     libraries,
                     tag_conflicts,
                     storage_roots,
+                    super::action_execution::RecheckFilePresence::Probe,
                 )
                 .await;
             let (title, input) = match decision {
@@ -1078,6 +1080,7 @@ impl AppUseCase {
                                     libraries,
                                     tag_conflicts,
                                     storage_roots,
+                                    super::action_execution::RecheckFilePresence::Probe,
                                 )
                                 .await
                             {

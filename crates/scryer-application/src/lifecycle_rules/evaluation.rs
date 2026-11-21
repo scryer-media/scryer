@@ -49,7 +49,8 @@ use crate::lifecycle_rules::storage::{
     LifecycleStorageCapacityMemo, LifecycleStorageRead, LifecycleStorageRoots,
 };
 use crate::lifecycle_rules::subjects::{
-    LifecycleListingInventories, LifecyclePassFilePresence, LifecycleTitleEpisodeInventory,
+    FilePresence, LifecycleListingInventories, LifecyclePassFilePresence,
+    LifecycleTitleEpisodeInventory, rule_may_read_file_presence,
 };
 use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
 use crate::ports::LifecycleCandidateQuery;
@@ -1205,6 +1206,15 @@ impl AppUseCase {
             &detail.revision.rego_source,
             &rule_set.id,
         );
+        // A rule that reads no presence fact is evaluated from inventories
+        // that never probe a file; one that may read one gets probed ones.
+        let probes_presence =
+            rule_may_read_file_presence(&detail.revision.rego_source, &rule_set.id);
+        // A cached inventory serves this rule unless the rule needs presence
+        // and that inventory was read without it.
+        let serves = |inventory: &Arc<LifecycleTitleEpisodeInventory>| {
+            !probes_presence || inventory.presence_probed()
+        };
 
         let mut counts = RuleCounts::default();
         // The levels the rule acts at, read off the heads it defines. A rule
@@ -1274,13 +1284,17 @@ impl AppUseCase {
             // show the batch could not build loads on its own below, as before.
             let uncached: Vec<Title> = chunk
                 .iter()
-                .filter(|title| !batch_cache.inventories.contains_key(&title.id))
+                .filter(|title| !batch_cache.inventories.get(&title.id).is_some_and(serves))
                 .cloned()
                 .collect();
             let mut chunk_inventories = self
                 .lifecycle_load_title_episode_inventories(
                     &uncached,
-                    Some(&mut batch_cache.file_presence),
+                    if probes_presence {
+                        FilePresence::Probe(Some(&mut batch_cache.file_presence))
+                    } else {
+                        FilePresence::Skip
+                    },
                 )
                 .await;
             // Every title of the chunk has its subjects built first, so the
@@ -1322,21 +1336,32 @@ impl AppUseCase {
                             .await?;
                     }
                 } else {
-                    let inventory = if let Some(inventory) = batch_cache.inventories.get(&title.id)
+                    let inventory = if let Some(inventory) = batch_cache
+                        .inventories
+                        .get(&title.id)
+                        .filter(|inventory| serves(inventory))
                     {
                         inventory.clone()
                     } else {
                         let inventory = match chunk_inventories.remove(&title.id) {
                             Some(inventory) => inventory,
-                            None => {
+                            None if probes_presence => {
                                 self.lifecycle_load_title_episode_inventory_for_pass(
                                     title,
                                     &mut batch_cache.file_presence,
                                 )
                                 .await?
                             }
+                            None => {
+                                self.load_title_episode_inventory(title, FilePresence::Skip)
+                                    .await?
+                            }
                         };
-                        if batch_cache.inventories.len() < LIFECYCLE_EVALUATION_TITLE_CHUNK {
+                        // A probed inventory replaces an unprobed one in
+                        // place: it serves every later rule.
+                        if batch_cache.inventories.contains_key(&title.id)
+                            || batch_cache.inventories.len() < LIFECYCLE_EVALUATION_TITLE_CHUNK
+                        {
                             batch_cache
                                 .inventories
                                 .insert(title.id.clone(), inventory.clone());

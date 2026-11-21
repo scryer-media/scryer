@@ -480,13 +480,120 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
     );
 }
 
+/// Presence probes made while evaluating and while executing one season
+/// delete, for a season matcher with `extra` added to its body.
+struct SeasonDeleteProbes {
+    evaluation: usize,
+    execution: usize,
+}
+
 /// A season delete removes exactly the season's files and keeps the other
 /// season's, while the per-file rechecks probe the share only for the
 /// matcher's own re-evaluation: the manifest and monitoring rechecks read the
 /// catalog alone, and a season and its title share one inventory read.
 #[tokio::test]
 async fn season_sequence_delete_keeps_sibling_files_and_probes_once_per_recheck() {
-    let fixture = title_fixture("Probe count scope", MediaFacet::Series).await;
+    let probes = season_delete_probes(
+        "Probe count presence",
+        "  input.season.facts.episode_file_count >= 0\n",
+    )
+    .await;
+    // The pass memo probes each of the title's five files once.
+    assert_eq!(probes.evaluation, 5, "presence probes during evaluation");
+    // Four step rechecks of the five-file title (20), the journal's
+    // retention read (5), and one inventory per file recheck as the season
+    // empties (5 + 4 + 3). The manifest and monitoring rechecks and a second
+    // inventory per recheck took this to 123.
+    assert_eq!(
+        probes.execution, 37,
+        "presence probes during the action pass"
+    );
+}
+
+/// The same delete for a matcher that reads no presence fact: it deletes
+/// and keeps the same files, evaluation probes nothing, and the per-file
+/// rechecks, whose input is discarded, probe nothing either.
+#[tokio::test]
+async fn season_delete_for_a_rule_without_presence_facts_skips_the_unread_probes() {
+    let probes = season_delete_probes("Probe count no presence", "").await;
+    assert_eq!(probes.evaluation, 0, "presence probes during evaluation");
+    // Four step rechecks (20) and the journal's retention read (5) keep
+    // their inputs and still probe; the three per-file rechecks (12) do not.
+    assert_eq!(
+        probes.execution, 25,
+        "presence probes during the action pass"
+    );
+}
+
+/// One pass evaluating a rule that reads no presence fact before one that
+/// does: the second does not take the first's unprobed inventory, so its
+/// downloaded-episode count stays known and its match stands.
+#[tokio::test]
+async fn a_presence_rule_after_an_unprobing_rule_reads_probed_files() {
+    let fixture = title_fixture("Probe cache order", MediaFacet::Series).await;
+    for number in 1..=2 {
+        let (_, episode) =
+            season_and_episode(&fixture, 1, number, &format!("2020-01-0{number}")).await;
+        add_episode_file(
+            &fixture,
+            &episode,
+            &format!("Order/Season 01/S01E0{number}.mkv"),
+        )
+        .await;
+    }
+    let draft = |name: &str, matcher: &str| {
+        let mut draft = sequence_draft(vec![LifecycleActionStep {
+            id: "unmonitor".to_string(),
+            kind: LifecycleActionStepKind::Unmonitor,
+            parameters: LifecycleActionStepParameters::Unmonitor {
+                include_descendants: false,
+            },
+        }]);
+        draft.name = name.to_string();
+        draft.rego_source = crate::lib_tests::heads_source_at(
+            format!("package order\nimport rego.v1\n\nmatch if {{\n{matcher}}}\n"),
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
+            scryer_domain::LifecycleRuleSubjectKind::Title,
+        );
+        draft
+    };
+    // The plain rule is created first and named first, so a pass evaluates
+    // it before the presence rule whichever order the store lists them in.
+    let (plain_rule, _) = arm_and_evaluate_all(
+        &fixture.execution,
+        draft("A reads no presence", "  input.facts.monitored == true\n"),
+    )
+    .await;
+    let probes_before = crate::lifecycle_rules::subjects::presence_probes::under(&fixture.root);
+    let (presence_rule, _) = arm_and_evaluate_all(
+        &fixture.execution,
+        draft(
+            "B reads presence",
+            "  input.facts.episode_file_count == 2\n",
+        ),
+    )
+    .await;
+    let probes =
+        crate::lifecycle_rules::subjects::presence_probes::under(&fixture.root) - probes_before;
+
+    let candidates = fixture.execution.evaluation.all_candidates().await;
+    for rule in [&plain_rule, &presence_rule] {
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(|candidate| &candidate.rule_set_id == rule
+                    && candidate.subject_id == fixture.title.id)
+                .count(),
+            1,
+            "{candidates:?}"
+        );
+    }
+    // Only the presence rule's reload probes, once per file.
+    assert_eq!(probes, 2, "presence probes during the second pass");
+}
+
+async fn season_delete_probes(name: &str, extra: &str) -> SeasonDeleteProbes {
+    let fixture = title_fixture(name, MediaFacet::Series).await;
     let app = &fixture.execution.app;
     let user = &fixture.execution.user;
     let season = app
@@ -536,7 +643,7 @@ async fn season_sequence_delete_keeps_sibling_files_and_probes_once_per_recheck(
     let mut draft = sequence_draft(deletion_steps());
     draft.rego_source = crate::lib_tests::heads_source_at(
         format!(
-            "package selected_season\nimport rego.v1\n\nmatch if {{\n  input.season.id == {:?}\n}}\n",
+            "package selected_season\nimport rego.v1\n\nmatch if {{\n  input.season.id == {:?}\n{extra}}}\n",
             season.id
         ),
         &[
@@ -545,7 +652,10 @@ async fn season_sequence_delete_keeps_sibling_files_and_probes_once_per_recheck(
         ],
         scryer_domain::LifecycleRuleSubjectKind::Season,
     );
+    let evaluation_before = crate::lifecycle_rules::subjects::presence_probes::under(&fixture.root);
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    let evaluation =
+        crate::lifecycle_rules::subjects::presence_probes::under(&fixture.root) - evaluation_before;
     assert_eq!(candidate.subject_id, season.id);
     super::lifecycle_rules::arm_rule(
         app,
@@ -589,11 +699,10 @@ async fn season_sequence_delete_keeps_sibling_files_and_probes_once_per_recheck(
                 .is_some()
         );
     }
-    // Four step rechecks of the five-file title (20), the journal's
-    // retention read (5), and one inventory per file recheck as the season
-    // empties (5 + 4 + 3). The manifest and monitoring rechecks and a second
-    // inventory per recheck took this to 123.
-    assert_eq!(probes, 37, "presence probes during the action pass");
+    SeasonDeleteProbes {
+        evaluation,
+        execution: probes,
+    }
 }
 
 #[tokio::test]
