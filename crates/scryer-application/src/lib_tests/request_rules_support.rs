@@ -188,6 +188,8 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
 pub(super) struct InMemoryRequestRuleDecisionRepo {
     decisions: Mutex<Vec<RequestRuleDecisionRecord>>,
     pub(super) fail_writes: std::sync::atomic::AtomicBool,
+    /// How many batched count reads ran.
+    pub(super) count_batches: std::sync::atomic::AtomicUsize,
 }
 
 impl InMemoryRequestRuleDecisionRepo {
@@ -263,6 +265,55 @@ impl crate::ports::RequestRuleDecisionRepository for InMemoryRequestRuleDecision
             .iter()
             .filter(|decision| decision.votes_json.contains(rule_set_id))
             .count() as u64)
+    }
+
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>> {
+        self.count_batches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let decisions = self.decisions.lock().await;
+        let mut counts = std::collections::HashMap::new();
+        for rule_set_id in rule_set_ids {
+            let rule_set_id = rule_set_id.trim();
+            if rule_set_id.is_empty() {
+                continue;
+            }
+            let count = decisions
+                .iter()
+                .filter(|decision| decision.votes_json.contains(rule_set_id))
+                .count() as u64;
+            if count > 0 {
+                counts.insert(rule_set_id.to_string(), count);
+            }
+        }
+        Ok(counts)
+    }
+
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize> {
+        let mut decisions = self.decisions.lock().await;
+        let mut removed = 0usize;
+        decisions.retain(|decision| {
+            let preflight = decision
+                .request_id
+                .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX);
+            if preflight && removed < limit {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        Ok(removed)
+    }
+}
+
+impl InMemoryRequestRuleDecisionRepo {
+    /// Store a trace as an older build would have, bypassing the evaluation.
+    #[allow(dead_code)]
+    pub(super) async fn seed(&self, decision: RequestRuleDecisionRecord) {
+        self.decisions.lock().await.push(decision);
     }
 }
 

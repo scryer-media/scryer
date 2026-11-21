@@ -738,6 +738,17 @@ impl RequestRulesEvaluator {
     pub fn evaluate(&mut self, input: &RequestInput) -> Result<RequestEvalResult, RulesError> {
         self.evaluate_policies(input, &())
     }
+
+    /// [`Self::evaluate`] over only the rules `in_scope` accepts by rule set
+    /// id. A rule left out is not run and yields neither a record nor an
+    /// error; every rule accepted is evaluated exactly as `evaluate` would.
+    pub fn evaluate_in_scope(
+        &mut self,
+        input: &RequestInput,
+        in_scope: impl Fn(&str) -> bool,
+    ) -> Result<RequestEvalResult, RulesError> {
+        self.evaluate_policies_where(input, &(), "in_scope", |rule| in_scope(&rule.id))
+    }
 }
 
 // ── Output validation ───────────────────────────────────────────────────────
@@ -1027,6 +1038,51 @@ mod tests {
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert_eq!(result.records.len(), 1, "expected exactly one record");
         &result.records[0].decision
+    }
+
+    #[test]
+    fn evaluating_in_scope_runs_only_the_accepted_rules_and_decides_as_a_full_pass() {
+        let policies = [
+            policy(
+                "scoped_a",
+                "approve if {\n  input.facts.certification_rank <= 2\n}\n",
+            ),
+            policy(
+                "scoped_b",
+                "deny if {\n  input.facts.certification_rank <= 2\n}\n",
+            ),
+            policy(
+                "scoped_c",
+                "manual if {\n  input.facts.certification_rank <= 2\n}\n",
+            ),
+        ];
+        let engine = RequestRulesEngine::build(&policies).expect("policies should compile");
+        let input = synthetic_request_input();
+        let full = engine.evaluator().evaluate(&input).expect("full pass");
+        assert_eq!(full.records.len(), 3);
+        let mut evaluator = engine.evaluator();
+        for round in 0..2 {
+            let scoped = evaluator
+                .evaluate_in_scope(&input, |id| id != "scoped_b")
+                .expect("scoped pass");
+            let expected: Vec<String> = full
+                .records
+                .iter()
+                .filter(|record| record.rule_set_id != "scoped_b")
+                .map(|record| format!("{record:?}"))
+                .collect();
+            let actual: Vec<String> = scoped
+                .records
+                .iter()
+                .map(|record| format!("{record:?}"))
+                .collect();
+            assert_eq!(actual, expected, "round {round}");
+            assert!(scoped.errors.is_empty());
+        }
+        let none = evaluator
+            .evaluate_in_scope(&input, |_| false)
+            .expect("empty pass");
+        assert!(none.records.is_empty() && none.errors.is_empty());
     }
 
     // ── vote precedence ──

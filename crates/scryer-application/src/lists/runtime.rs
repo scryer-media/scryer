@@ -107,8 +107,14 @@ impl<'a> AppListActions<'a> {
         Self { app }
     }
 
+    /// The subscription's owner, read fresh on every call, with the owner's
+    /// authorization attached so the permission checks of one action share a
+    /// single read instead of each loading it again. A disabled owner is
+    /// returned without it: callers stop at the disabled check, and one that
+    /// does not loads it on demand as before.
     async fn list_owner(&self, subscription: &ListSubscription) -> AppResult<User> {
-        self.app
+        let owner = self
+            .app
             .services
             .identity
             .users
@@ -119,7 +125,11 @@ impl<'a> AppListActions<'a> {
                     crate::error_reasons::lists::OWNER_NOT_FOUND,
                     "list owner".to_string(),
                 )
-            })
+            })?;
+        if !owner.authorization.login_status.is_enabled() || owner.authorization.loaded {
+            return Ok(owner);
+        }
+        self.app.attach_user_authorization(owner).await
     }
 }
 

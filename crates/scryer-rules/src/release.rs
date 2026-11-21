@@ -697,8 +697,8 @@ impl UserRulesEvaluator {
             let mut phased_input = input.clone();
             phased_input.builtin_score.total = 0;
             let mut baseline =
-                self.evaluate_policies_where(&phased_input, facet, "baseline", |extra| {
-                    extra.baseline
+                self.evaluate_policies_where(&phased_input, facet, "baseline", |rule| {
+                    rule.extra.baseline
                 })?;
             let subtotal = baseline
                 .records
@@ -716,8 +716,8 @@ impl UserRulesEvaluator {
                     .map(|entry| entry.code.clone()),
             );
             let additional =
-                self.evaluate_policies_where(&phased_input, facet, "additional", |extra| {
-                    !extra.baseline
+                self.evaluate_policies_where(&phased_input, facet, "additional", |rule| {
+                    !rule.extra.baseline
                 })?;
             baseline.records.extend(additional.records);
             baseline.errors.extend(additional.errors);

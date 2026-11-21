@@ -8,6 +8,9 @@ pub(super) struct MockLibraryRepo {
     pub(super) get_by_id_reads: AtomicUsize,
     /// While set, `get_by_id` fails as an unreadable store would.
     pub(super) get_by_id_fails: std::sync::atomic::AtomicBool,
+    /// How many times each user's app permissions were read: one per
+    /// authorization load.
+    pub(super) app_permission_reads: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
 impl MockLibraryRepo {
@@ -18,6 +21,7 @@ impl MockLibraryRepo {
             grants: Arc::new(Mutex::new(HashMap::new())),
             get_by_id_reads: AtomicUsize::new(0),
             get_by_id_fails: std::sync::atomic::AtomicBool::new(false),
+            app_permission_reads: Arc::default(),
         }
     }
 
@@ -242,6 +246,12 @@ impl LibraryRepository for MockLibraryRepo {
     }
 
     async fn app_permission_mask_for_user(&self, user_id: &str) -> AppResult<AppPermissionMask> {
+        *self
+            .app_permission_reads
+            .lock()
+            .unwrap()
+            .entry(user_id.to_string())
+            .or_default() += 1;
         Ok(self
             .app_permissions
             .lock()

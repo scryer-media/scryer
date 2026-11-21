@@ -45,7 +45,11 @@ async fn rule_set_payload(
     actor: &scryer_domain::User,
     rule_set: &scryer_domain::RequestRuleSet,
 ) -> GqlResult<RequestRuleSet> {
-    let count = decision_count(app, actor, &rule_set.id).await?;
+    let count = if ctx.look_ahead().field("decisionCount").exists() {
+        decision_count(app, actor, &rule_set.id).await?
+    } else {
+        0
+    };
     let declared_actions = if ctx.look_ahead().field("declaredActions").exists() {
         app.request_rule_declared_actions(actor, rule_set)
             .await
@@ -126,7 +130,16 @@ impl RequestRuleMutations {
             .update_request_rule_source(&actor, &rule_set_id, &input.rego_source, builder_model)
             .await
             .map_err(to_gql_error)?;
-        let count = decision_count(&app, &actor, &rule_set_id).await?;
+        let count = if ctx
+            .look_ahead()
+            .field("ruleSet")
+            .field("decisionCount")
+            .exists()
+        {
+            decision_count(&app, &actor, &rule_set_id).await?
+        } else {
+            0
+        };
 
         Ok(crate::mappers::from_request_rule_set_detail(
             detail,
@@ -363,8 +376,9 @@ impl RequestRuleMutations {
 
 /// How many decisions one rule took part in.
 ///
-/// Read after every mutation that returns a rule set so the payload a client
-/// stores is the same shape the list query hands it.
+/// Read after a mutation that returns a rule set, when the selection asks for
+/// the count, so the payload a client stores is the same shape the list query
+/// hands it.
 async fn decision_count(
     app: &scryer_application::AppUseCase,
     actor: &scryer_domain::User,

@@ -653,7 +653,7 @@ impl AppUseCase {
                 evaluated_at,
                 None,
                 // The preview shows the whole input document.
-                true,
+                crate::request_rules::facts::RequestFactReads::ALL,
             )
             .await?;
         let input = build_request_input(context);

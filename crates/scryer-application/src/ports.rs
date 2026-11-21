@@ -3753,6 +3753,23 @@ pub struct MediaRequestQualityProfileReferenceCounts {
     pub pending_requested: u64,
 }
 
+/// One requester's own submissions, aggregated in the store for the
+/// requester-history facts. Each figure is what the matching
+/// [`MediaRequestRepository::count_for_requester`] or
+/// [`MediaRequestRepository::latest_request_at_for_user`] call answers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaRequestRequesterSummary {
+    pub pending_count: u64,
+    /// Approved, created at or after `since`.
+    pub approved_since_count: u64,
+    /// Rejected, created at or after `since`.
+    pub rejected_since_count: u64,
+    /// Approved, at any time.
+    pub approved_count: u64,
+    /// When they last submitted anything; `None` when they never have.
+    pub latest_request_at: Option<DateTime<Utc>>,
+}
+
 /// What has been asked for one identity before, aggregated in the store so
 /// the request facts never decode a request row to count it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -4040,6 +4057,55 @@ pub trait MediaRequestRepository: Send + Sync {
         Err(AppError::Repository(
             "this request store cannot count the titles a requester's requests created".into(),
         ))
+    }
+
+    /// The requester-history figures for `user_id`, with the request being
+    /// edited excluded. A store answers it in one aggregate statement; this
+    /// default composes the separate reads.
+    async fn requester_history_summary(
+        &self,
+        user_id: &str,
+        since: DateTime<Utc>,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestRequesterSummary> {
+        use scryer_domain::MediaRequestStatus;
+        Ok(MediaRequestRequesterSummary {
+            pending_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Pending),
+                    None,
+                    excluding_request_id,
+                )
+                .await?,
+            approved_since_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Approved),
+                    Some(since),
+                    excluding_request_id,
+                )
+                .await?,
+            rejected_since_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Rejected),
+                    Some(since),
+                    excluding_request_id,
+                )
+                .await?,
+            approved_count: self
+                .count_for_requester(
+                    user_id,
+                    Some(MediaRequestStatus::Approved),
+                    None,
+                    excluding_request_id,
+                )
+                .await?,
+            latest_request_at: self
+                .latest_request_at_for_user(user_id, excluding_request_id)
+                .await?,
+        })
     }
 
     /// When `user_id` last submitted anything, for `days_since_last_request`.
@@ -12401,6 +12467,22 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
     /// How many recorded decisions a rule set participated in: the decisions
     /// whose votes name the rule set's id.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
+
+    /// [`Self::count_for_rule_set`] for each of `rule_set_ids` at once, in one
+    /// grouped statement per bind-safe chunk. A rule set with no decision is
+    /// absent from the map; blank ids are skipped.
+    async fn count_for_rule_sets(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>>;
+
+    /// Remove up to `limit` traces that older builds wrote for pre-flight
+    /// previews (request ids starting with
+    /// [`crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX`]), with their rule
+    /// set links, in one transaction. Returns how many traces went. A call
+    /// that finds none writes nothing. Traces of submitted requests are never
+    /// touched.
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize>;
 }
 
 /// Title leases and keep claims (spec 0003 FR-041…FR-044).

@@ -464,6 +464,12 @@ async fn assert_decision_round_trip(store: &dyn RequestRuleDecisionRepository) -
     assert_eq!(store.count_for_rule_set("rule-a").await?, 3);
     assert_eq!(store.count_for_rule_set("rule-zzz").await?, 0);
     assert_eq!(store.count_for_rule_set("  ").await?, 0);
+    assert_eq!(
+        store
+            .count_for_rule_sets(&["rule-a", "rule-zzz", "  ", "rule-a"].map(str::to_string))
+            .await?,
+        std::collections::HashMap::from([("rule-a".to_string(), 3)])
+    );
     Ok(())
 }
 
@@ -779,6 +785,110 @@ async fn the_linked_rule_set_count_finds_what_the_votes_scan_found() {
         1,
         "a rule set past the first link statement is linked"
     );
+
+    // The grouped read answers what the per-rule count answers, across more
+    // ids than one statement binds.
+    let mut many = checked.clone();
+    many.extend((0..800).map(|index| format!("rule-absent-{index}")));
+    many.push(rule_set_ids[3].clone());
+    let grouped = decisions.count_for_rule_sets(&many).await.unwrap();
+    for rule_set_id in &many {
+        assert_eq!(
+            grouped.get(rule_set_id).copied().unwrap_or(0),
+            decisions.count_for_rule_set(rule_set_id).await.unwrap(),
+            "{rule_set_id}"
+        );
+    }
+    assert!(grouped.values().all(|count| *count > 0));
+    let _ = std::fs::remove_file(db);
+}
+
+/// Seeds pre-flight traces as older builds wrote them beside real ones, then
+/// removes the pre-flight ones in batches: only they and their links go, and
+/// a pass with nothing left removes nothing.
+async fn assert_preflight_traces_purge(store: &dyn RequestRuleDecisionRepository) -> AppResult<()> {
+    let traced = |id: &str, request_id: &str| {
+        let mut record = decision(id, request_id, RequestDecisionOutcome::AutoApprove);
+        record.votes_json = r#"[{"rule_set_id":"rule-purge","vote":"approve"}]"#.to_string();
+        record
+    };
+    for index in 0..5 {
+        store
+            .record(&traced(
+                &format!("decision-preflight-{index}"),
+                &format!(
+                    "{}{index:04}",
+                    scryer_application::PREFLIGHT_REQUEST_ID_PREFIX
+                ),
+            ))
+            .await?;
+    }
+    for index in 0..3 {
+        store
+            .record(&traced(
+                &format!("decision-real-{index}"),
+                &format!("request-real-{index}"),
+            ))
+            .await?;
+    }
+    // A real request id that merely contains the word is not a pre-flight.
+    store
+        .record(&traced(
+            "decision-real-lookalike",
+            "request-preflight:lookalike",
+        ))
+        .await?;
+    assert_eq!(store.count_for_rule_set("rule-purge").await?, 9);
+
+    assert_eq!(store.delete_preflight_traces(2).await?, 2);
+    assert_eq!(store.count_for_rule_set("rule-purge").await?, 7);
+    assert_eq!(store.delete_preflight_traces(10).await?, 3);
+    assert_eq!(store.delete_preflight_traces(10).await?, 0);
+    assert_eq!(store.count_for_rule_set("rule-purge").await?, 4);
+
+    let mut kept: Vec<String> = store
+        .list_recent(1000, None)
+        .await?
+        .into_iter()
+        .map(|row| row.id)
+        .filter(|id| id.starts_with("decision-real") || id.starts_with("decision-preflight"))
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        vec![
+            "decision-real-0",
+            "decision-real-1",
+            "decision-real-2",
+            "decision-real-lookalike",
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn preflight_traces_purge_leaves_real_traces() {
+    let (services, db) = temp_services("scryer_request_rule_preflight_purge").await;
+    let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
+    assert_preflight_traces_purge(&decisions)
+        .await
+        .expect("pre-flight traces purge");
+
+    // The batch select is served by the partial index, so a pass with nothing
+    // left reads an empty index rather than the whole trace table.
+    let detail: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN SELECT id FROM request_rule_decisions
+          WHERE request_id LIKE 'preflight:%' LIMIT 500",
+    )
+    .fetch_all(services.pool())
+    .await
+    .unwrap();
+    assert!(
+        detail
+            .iter()
+            .any(|(_, _, _, step)| step.contains("idx_request_rule_decisions_preflight")),
+        "{detail:?}"
+    );
     let _ = std::fs::remove_file(db);
 }
 
@@ -831,7 +941,8 @@ async fn request_rule_stores_round_trip_postgres() -> AppResult<()> {
             super::lifecycle_rule_sets::seed_rule_libraries(&services.datastore()).await;
             assert_rule_set_round_trip(&rules).await?;
             assert_decision_round_trip(&decisions).await?;
-            assert_decisions_outlive_their_rule_set(&rules, &decisions).await
+            assert_decisions_outlive_their_rule_set(&rules, &decisions).await?;
+            assert_preflight_traces_purge(&decisions).await
         }
         .await;
         services.pool().close().await;
