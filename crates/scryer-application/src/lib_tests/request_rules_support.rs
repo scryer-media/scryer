@@ -333,9 +333,21 @@ impl crate::ports::RequestRuleDecisionRepository for InMemoryRequestRuleDecision
         });
         let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut doomed = std::collections::HashSet::new();
+        let mut unlinked = 0usize;
         for decision in newest_first {
             let rule_sets = voted(decision);
-            let mut kept_by_any = rule_sets.is_empty();
+            // Pre-flight traces have their own purge.
+            let mut kept_by_any = false;
+            if rule_sets.is_empty() {
+                if decision
+                    .request_id
+                    .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX)
+                {
+                    continue;
+                }
+                unlinked += 1;
+                kept_by_any = unlinked <= keep;
+            }
             for rule_set in rule_sets {
                 let rank = seen.entry(rule_set).or_default();
                 *rank += 1;

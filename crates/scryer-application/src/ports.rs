@@ -12563,7 +12563,8 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
     /// Remove up to `limit` traces that are older than the newest `keep`
     /// traces of every rule set that voted in them, with their rule set
     /// links. A trace two rule sets voted in stays while either still counts
-    /// it among its newest `keep`. A trace no rule set voted in is never
+    /// it among its newest `keep`. Traces no rule set voted in are a group of
+    /// their own: the newest `keep` of them stay. A pre-flight trace is never
     /// touched, and neither is anything when `keep` is zero. Returns how many
     /// traces went. A call that finds none writes nothing.
     async fn delete_traces_beyond_latest_per_rule_set(

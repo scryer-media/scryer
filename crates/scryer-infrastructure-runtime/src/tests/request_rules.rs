@@ -903,8 +903,18 @@ async fn assert_superseded_traces_prune(
         .await?;
     store.record(&traced("keep-b0", 1, &["keep-b"])).await?;
     store.record(&traced("keep-b1", 2, &["keep-b"])).await?;
-    // No rule set voted: a fallback decision. Older than everything.
-    store.record(&traced("keep-unlinked", -100, &[])).await?;
+    // No rule set voted: fallback decisions, a group of their own. All are
+    // older than everything a rule set voted in.
+    for index in 0..5 {
+        store
+            .record(&traced(&format!("keep-u{index}"), -100 + index, &[]))
+            .await?;
+    }
+    // A pre-flight trace has its own purge: it neither goes here nor takes
+    // one of the kept places, though it is the oldest of all.
+    let mut preflight = traced("keep-preflight", -200, &[]);
+    preflight.request_id = "preflight:keep".to_string();
+    store.record(&preflight).await?;
 
     assert_eq!(
         store
@@ -925,7 +935,7 @@ async fn assert_superseded_traces_prune(
         store
             .delete_traces_beyond_latest_per_rule_set(3, 100)
             .await?,
-        1
+        3
     );
     assert_eq!(
         store
@@ -950,8 +960,11 @@ async fn assert_superseded_traces_prune(
             "keep-a5",
             "keep-b0",
             "keep-b1",
+            "keep-preflight",
             "keep-shared",
-            "keep-unlinked",
+            "keep-u2",
+            "keep-u3",
+            "keep-u4",
         ]
     );
     // The removed traces took their links with them; the shared trace keeps
