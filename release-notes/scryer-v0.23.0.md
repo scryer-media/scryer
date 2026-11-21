@@ -123,7 +123,7 @@ These changes are relative to v0.22.5 and cover `scryer-v0.22.5..5d43fcb75`.
 - Profiles that agree on a format's score give a literal score. Profiles that disagree score by Scryer quality profile name when every name matches. Otherwise the rule is saved for review, scoring 0, with the score table commented out.
 - Lifecycle rules import Maintainerr rule groups from its URL, one disabled lifecycle rule per group. Properties, sections and AND/OR follow Maintainerr's meaning, and actions map onto lifecycle actions.
 - A Maintainerr comparison that Scryer's facts could make match more titles than Maintainerr would fails its group instead of translating loosely. A group tied to one library warns that it now applies to every library.
-- A group or format with no faithful translation is saved as a failed placeholder or not at all, and the report lists each finding.
+- When Scryer cannot translate a group or format faithfully, it records the failure in the import report and may save a disabled rule for review.
 - Imports run as background jobs. The report survives closing the dialog and switching tabs, and a run can be retried when its report fails to load.
 - A rule whose name already exists is skipped. The connection details are stored encrypted for the run and removed after the fetch. Password managers are asked not to fill the API key field.
 - Sonarr and Radarr imports need Manage catalog settings; Maintainerr imports need Manage system settings.
