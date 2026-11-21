@@ -1641,63 +1641,26 @@ impl AppUseCase {
         evaluation_time: DateTime<Utc>,
         excluding_request_id: Option<&str>,
     ) -> RequestRequesterHistoryContext {
-        use scryer_domain::MediaRequestStatus;
-
         let thirty_days_ago = evaluation_time - chrono::Duration::days(30);
-        let requests = &self.services.catalog.media_requests;
         let mut context = RequestRequesterHistoryContext {
             readable: true,
             ..RequestRequesterHistoryContext::default()
         };
 
-        let counters = async {
-            Ok::<_, crate::AppError>((
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Pending),
-                        None,
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Approved),
-                        Some(thirty_days_ago),
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Rejected),
-                        Some(thirty_days_ago),
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Approved),
-                        None,
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .latest_request_at_for_user(&actor.id, excluding_request_id)
-                    .await?,
-            ))
-        }
-        .await;
+        let counters = self
+            .services
+            .catalog
+            .media_requests
+            .requester_history_summary(&actor.id, thirty_days_ago, excluding_request_id)
+            .await;
 
         match counters {
-            Ok((pending, approved_30d, denied_30d, total_approved, last_request_at)) => {
-                context.pending_request_count = pending as i64;
-                context.approved_last_30d = approved_30d as i64;
-                context.denied_last_30d = denied_30d as i64;
-                context.total_approved = total_approved as i64;
-                context.last_request_at = last_request_at;
+            Ok(summary) => {
+                context.pending_request_count = summary.pending_count as i64;
+                context.approved_last_30d = summary.approved_since_count as i64;
+                context.denied_last_30d = summary.rejected_since_count as i64;
+                context.total_approved = summary.approved_count as i64;
+                context.last_request_at = summary.latest_request_at;
             }
             Err(error) => {
                 tracing::warn!(
