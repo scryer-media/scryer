@@ -63,6 +63,7 @@ impl MediaServerPlaybackProbe for IdlePlayback {
             connections: vec![ConnectionPlaybackActivity {
                 connection_id: CONNECTION_ID.to_string(),
                 provider: MediaServerProvider::Jellyfin,
+                path_mappings: Vec::new(),
                 status: PlaybackProbeStatus::Idle,
             }],
             observed_at: Utc::now(),

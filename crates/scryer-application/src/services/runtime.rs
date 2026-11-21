@@ -2530,6 +2530,8 @@ pub struct AppRuntimeIntegrationState {
     pub(crate) managed_caps_unanswered:
         Arc<crate::integration::indexer_caps_cache::UnansweredCapsRequests>,
     pub(crate) navigation_badge_facts: NavigationBadgeFactsCache,
+    /// The lifecycle executor's playback picture, kept for one pass.
+    pub(crate) lifecycle_playback: crate::lifecycle_rules::LifecyclePlaybackCache,
 }
 
 /// The unfiltered facts behind the navigation badges.
@@ -2815,6 +2817,7 @@ impl AppRuntimeState {
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
                 managed_caps_unanswered: Arc::default(),
                 navigation_badge_facts: NavigationBadgeFactsCache::default(),
+                lifecycle_playback: Default::default(),
             },
         }
     }

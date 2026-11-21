@@ -818,7 +818,7 @@ impl AppUseCase {
 
     /// One batched `title_external_ids` join covering every id every item
     /// carries.
-    async fn signal_title_index(
+    pub(crate) async fn signal_title_index(
         &self,
         items: &[ProviderPlayedItem],
     ) -> AppResult<TitleExternalIdIndex> {

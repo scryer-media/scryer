@@ -58,7 +58,11 @@ pub use evaluation::{
     LifecycleEvaluationReport, LifecycleEvaluationTrigger, LifecycleExclusionView, LifecycleGates,
     LifecycleGatesUpdate, candidate_reason,
 };
-pub use safety::{LifecycleActivityCheck, LifecyclePlaybackHold, fold_playback_hold};
+pub(crate) use safety::LifecyclePlaybackCache;
+pub use safety::{
+    LifecycleActivityCheck, LifecyclePlaybackHold, LifecyclePlaybackPicture, PlayingSession,
+    SessionAttribution, fold_playback_picture,
+};
 pub use service::{
     EXPIRED_REQUEST_LEASES_REGO, LIFECYCLE_MAX_GRACE_DAYS, LIFECYCLE_PREVIEW_DEFAULT_TITLES,
     LIFECYCLE_PREVIEW_MAX_TITLES, LifecyclePreviewRequest, LifecyclePreviewResult,
