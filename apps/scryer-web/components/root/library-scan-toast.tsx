@@ -27,6 +27,7 @@ import type {
   LibraryScanProgress,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 type FacetConfig = {
@@ -810,6 +811,7 @@ export function LibraryScanToast({
       <div className="mt-[14px] flex items-center gap-[9px]">
         {unmatched > 0 ? (
           <button
+            id={selectorId("library-scan-review-unmatched", session.sessionId)}
             type="button"
             onClick={onReviewUnmatched}
             className="flex h-9 flex-1 items-center justify-center gap-[7px] rounded-[9px] text-[12.5px] font-semibold transition hover:brightness-110"
