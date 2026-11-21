@@ -3682,6 +3682,9 @@ impl crate::ports::RequestRuleDecisionRepository for NullRequestRuleDecisionRepo
     async fn count_for_rule_set(&self, _rule_set_id: &str) -> AppResult<u64> {
         Ok(0)
     }
+    async fn delete_preflight_traces(&self, _limit: usize) -> AppResult<usize> {
+        Ok(0)
+    }
 }
 
 /// No claim store means no lease can be created, so writes refuse. Reads answer

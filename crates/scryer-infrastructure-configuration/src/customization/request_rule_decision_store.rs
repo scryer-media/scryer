@@ -7,9 +7,11 @@ use crate::storage::sql::json::{canonical_json_text, json_text_or};
 
 /// Append-only traces of request evaluations (spec 0003 FR-016).
 ///
-/// There is no update and no delete: a decision explains what the instance did
-/// at one instant, and rewriting it would make the explanation a fiction. Rule
-/// deletion does not cascade here either — the trace outlives the rule.
+/// There is no update, and the only delete removes the pre-flight traces older
+/// builds wrote, which explain no request: a decision explains what the
+/// instance did at one instant, and rewriting it would make the explanation a
+/// fiction. Rule deletion does not cascade here either — the trace outlives
+/// the rule.
 #[derive(Clone)]
 pub struct RequestRuleDecisionStore {
     datastore: StoreDatastore,
@@ -149,7 +151,70 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         };
         Ok(row.i64("decision_count")?.max(0) as u64)
     }
+
+    /// The select reads the partial index `idx_request_rule_decisions_preflight`,
+    /// whose predicate it repeats literally, so a pass with nothing left to
+    /// remove reads an empty index and writes nothing.
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize> {
+        let limit = limit.min(PREFLIGHT_TRACE_DELETE_CHUNK);
+        if limit == 0 {
+            return Ok(0);
+        }
+        let ids: Vec<String> = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT id FROM request_rule_decisions
+                  WHERE {PREFLIGHT_TRACE_PREDICATE}
+                  LIMIT {{}}"
+            ),
+            &[SqlArg::I64(limit as i64)],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("id"))
+        .collect::<AppResult<_>>()?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = std::iter::repeat_n("{}", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let delete_links = format!(
+            "DELETE FROM request_rule_decision_rule_sets WHERE decision_id IN ({placeholders})"
+        );
+        // The predicate is repeated so this statement can only ever remove a
+        // pre-flight trace, whatever the id list holds.
+        let delete_decisions = format!(
+            "DELETE FROM request_rule_decisions
+              WHERE id IN ({placeholders}) AND {PREFLIGHT_TRACE_PREDICATE}"
+        );
+        let args: Vec<SqlArg> = ids.into_iter().map(SqlArg::Text).collect();
+        let removed = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_preflight_request_rule_decisions",
+            move |tx| {
+                let args = args.clone();
+                let delete_links = delete_links.clone();
+                let delete_decisions = delete_decisions.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), &delete_links, &args).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), &delete_decisions, &args).await
+                })
+            },
+        )
+        .await?;
+        Ok(removed as usize)
+    }
 }
+
+/// The traces older builds wrote for pre-flight previews. Spelled exactly as
+/// the partial index's predicate, so both dialects can serve it from that
+/// index; the literal must match
+/// `scryer_application::PREFLIGHT_REQUEST_ID_PREFIX`.
+const PREFLIGHT_TRACE_PREDICATE: &str = "request_id LIKE 'preflight:%'";
+
+/// Pre-flight traces removed per transaction at most; one bind each.
+const PREFLIGHT_TRACE_DELETE_CHUNK: usize = 500;
 
 /// Request ids bound per latest-decision statement.
 const LATEST_DECISION_REQUEST_CHUNK: usize = 10_000;
@@ -259,4 +324,20 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
         input_schema_version: row.i64("input_schema_version")?,
         created_at: row.timestamp_or_now("created_at")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PREFLIGHT_TRACE_PREDICATE;
+
+    #[test]
+    fn the_preflight_predicate_names_the_application_prefix() {
+        assert_eq!(
+            PREFLIGHT_TRACE_PREDICATE,
+            format!(
+                "request_id LIKE '{}%'",
+                scryer_application::PREFLIGHT_REQUEST_ID_PREFIX
+            )
+        );
+    }
 }

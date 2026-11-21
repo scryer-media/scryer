@@ -264,6 +264,31 @@ impl crate::ports::RequestRuleDecisionRepository for InMemoryRequestRuleDecision
             .filter(|decision| decision.votes_json.contains(rule_set_id))
             .count() as u64)
     }
+
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize> {
+        let mut decisions = self.decisions.lock().await;
+        let mut removed = 0usize;
+        decisions.retain(|decision| {
+            let preflight = decision
+                .request_id
+                .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX);
+            if preflight && removed < limit {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        Ok(removed)
+    }
+}
+
+impl InMemoryRequestRuleDecisionRepo {
+    /// Store a trace as an older build would have, bypassing the evaluation.
+    #[allow(dead_code)]
+    pub(super) async fn seed(&self, decision: RequestRuleDecisionRecord) {
+        self.decisions.lock().await.push(decision);
+    }
 }
 
 #[derive(Default)]

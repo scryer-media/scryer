@@ -4432,6 +4432,23 @@ file = "postgres/migrations/0364_lifecycle_cause_codes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 365
+description = "request rule preflight trace index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0365_request_rule_preflight_trace_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0365_request_rule_preflight_trace_index.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

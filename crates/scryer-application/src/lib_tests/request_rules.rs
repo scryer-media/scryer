@@ -1316,15 +1316,112 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     assert_eq!(requests[0].policy_tags, preflight.tags);
     drop(requests);
 
-    // The pre-flight trace is inspectable but cannot be mistaken for a decision
-    // about a submitted request.
+    // Only the submit keeps a trace; the pre-flight persisted nothing.
     let traces = harness.request_rule_decisions.recorded().await;
-    assert_eq!(traces.len(), 2);
-    assert!(traces.iter().any(|trace| {
-        trace
-            .request_id
-            .starts_with(crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX)
-    }));
+    assert_eq!(traces.len(), 1);
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+    assert_eq!(traces[0].request_id, request_id);
+}
+
+#[tokio::test]
+async fn preflight_writes_no_decision_trace() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    enable(&harness, &detail.rule_set.id).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9054);
+    for lease in [Some(7), Some(14), None] {
+        input.requested_lease_days = lease;
+        let preflight = harness
+            .app
+            .preview_my_request_decision(&harness.user, input.clone())
+            .await
+            .expect("pre-flight should answer");
+        assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
+        assert!(preflight.rules_consulted);
+    }
+    assert!(
+        harness.request_rule_decisions.recorded().await.is_empty(),
+        "a preview keeps no trace and writes no rule set link"
+    );
+    assert_eq!(
+        harness
+            .app
+            .request_rule_decision_counts(
+                &harness.manager,
+                std::slice::from_ref(&detail.rule_set.id)
+            )
+            .await
+            .expect("counts")
+            .get(&detail.rule_set.id)
+            .copied()
+            .unwrap_or(0),
+        0
+    );
+}
+
+#[tokio::test]
+async fn housekeeping_purges_only_preflight_traces() {
+    let harness = bootstrap_media_request_app();
+    let trace = |id: String, request_id: String| scryer_domain::RequestRuleDecisionRecord {
+        id,
+        request_id,
+        evaluated_at: chrono::Utc::now(),
+        effective_outcome: RequestDecisionOutcome::AutoApprove,
+        policy_outcome: RequestDecisionOutcome::AutoApprove,
+        fallback_reason: None,
+        votes_json: "[]".to_string(),
+        tags: Vec::new(),
+        shaping_json: None,
+        input_hash: String::new(),
+        input_schema_version: 1,
+        created_at: chrono::Utc::now(),
+    };
+    // More than two batches, so the pass loops and stops on a short batch.
+    for index in 0..1_203 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("decision-preflight-{index}"),
+                format!(
+                    "{}{index}",
+                    crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX
+                ),
+            ))
+            .await;
+    }
+    for index in 0..4 {
+        harness
+            .request_rule_decisions
+            .seed(trace(
+                format!("decision-real-{index}"),
+                format!("request-real-{index}"),
+            ))
+            .await;
+    }
+
+    assert_eq!(
+        harness.app.purge_preflight_request_rule_traces().await,
+        1_203
+    );
+    assert_eq!(harness.app.purge_preflight_request_rule_traces().await, 0);
+    let kept: Vec<String> = harness
+        .request_rule_decisions
+        .recorded()
+        .await
+        .into_iter()
+        .map(|trace| trace.id)
+        .collect();
+    assert_eq!(
+        kept,
+        vec![
+            "decision-real-0",
+            "decision-real-1",
+            "decision-real-2",
+            "decision-real-3",
+        ]
+    );
 }
 
 #[tokio::test]

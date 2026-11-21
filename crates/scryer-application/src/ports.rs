@@ -12401,6 +12401,14 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
     /// How many recorded decisions a rule set participated in: the decisions
     /// whose votes name the rule set's id.
     async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
+
+    /// Remove up to `limit` traces that older builds wrote for pre-flight
+    /// previews (request ids starting with
+    /// [`crate::request_rules::PREFLIGHT_REQUEST_ID_PREFIX`]), with their rule
+    /// set links, in one transaction. Returns how many traces went. A call
+    /// that finds none writes nothing. Traces of submitted requests are never
+    /// touched.
+    async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize>;
 }
 
 /// Title leases and keep claims (spec 0003 FR-041…FR-044).

@@ -32,19 +32,18 @@ use crate::request_rules::facts::{RequestDraft, build_request_input};
 use crate::{AppResult, AppUseCase};
 use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
 
-/// Prefix on the `request_id` of a trace produced by a pre-flight preview.
+/// Prefix on the `request_id` of a trace that an older build wrote for a
+/// pre-flight preview.
 ///
-/// Pre-flight evaluates a draft that has no request row and may never get one,
-/// so its trace cannot carry a real request id — but it must still be
-/// inspectable. The prefix keeps it in the same append-only
-/// table without any reader mistaking it for a decision about a submitted
-/// request.
+/// Pre-flight no longer writes a trace. Rows carrying this prefix are left over
+/// from builds that did, and housekeeping removes them.
 pub const PREFLIGHT_REQUEST_ID_PREFIX: &str = "preflight:";
 
 /// Which call is asking.
 #[derive(Clone, Debug)]
 pub enum RequestEvaluationPurpose {
-    /// A preview: nothing is persisted except the trace.
+    /// A preview: nothing is persisted, not even a trace. The dialog runs it
+    /// on every debounced change, and no request row exists to explain.
     Preflight,
     /// The request has just been submitted.
     Submit { request_id: String },
@@ -53,10 +52,12 @@ pub enum RequestEvaluationPurpose {
 }
 
 impl RequestEvaluationPurpose {
-    fn trace_request_id(&self) -> String {
+    /// The request the trace explains, or `None` when this evaluation keeps
+    /// no trace.
+    fn trace_request_id(&self) -> Option<&str> {
         match self {
-            Self::Preflight => format!("{PREFLIGHT_REQUEST_ID_PREFIX}{}", Id::new().0),
-            Self::Submit { request_id } | Self::Resubmit { request_id } => request_id.clone(),
+            Self::Preflight => None,
+            Self::Submit { request_id } | Self::Resubmit { request_id } => Some(request_id),
         }
     }
 }
@@ -301,10 +302,16 @@ impl AppUseCase {
             }
         };
         let input = build_request_input(context);
-        let input_hash = blake3_identity_hex(
-            HashDomain::RequestRuleInput,
-            serde_json::to_string(&input).unwrap_or_default(),
-        );
+        // The hash exists for the trace alone, so an evaluation that keeps no
+        // trace does not serialize the input to compute it.
+        let input_hash = if purpose.trace_request_id().is_some() {
+            blake3_identity_hex(
+                HashDomain::RequestRuleInput,
+                serde_json::to_string(&input).unwrap_or_default(),
+            )
+        } else {
+            String::new()
+        };
 
         let mut evaluator = cache.engine.evaluator();
         let outcome = match evaluator.evaluate(&input) {
@@ -546,8 +553,7 @@ impl AppUseCase {
         // Pre-flight runs on every debounced change in the request dialog, so
         // its copy of the same news is a debug line; a submit or an edit
         // happens once and deserves the operator's attention. Pre-flight has no
-        // request id, and its trace id is minted later at the write, so its line
-        // carries no id rather than one nothing can be joined on.
+        // request id and keeps no trace, so its line carries no id.
         match purpose {
             RequestEvaluationPurpose::Preflight => tracing::debug!(
                 dropped = ?undefined,
@@ -573,7 +579,8 @@ impl AppUseCase {
     ///
     /// A store that refuses the write must not fail a submission that has
     /// already happened; the warning is the operator's signal that traces are
-    /// being lost. Returns the id of the record when it landed.
+    /// being lost. Returns the id of the record when it landed. A pre-flight
+    /// writes nothing and returns `None`.
     async fn record_request_decision(
         &self,
         purpose: &RequestEvaluationPurpose,
@@ -582,10 +589,11 @@ impl AppUseCase {
         errors: &[ScopedError],
         input_hash: &str,
     ) -> Option<String> {
+        let request_id = purpose.trace_request_id()?;
         let now = Utc::now();
         let record = RequestRuleDecisionRecord {
             id: Id::new().0,
-            request_id: purpose.trace_request_id(),
+            request_id: request_id.to_string(),
             evaluated_at: now,
             effective_outcome: evaluation.effective_outcome,
             policy_outcome: evaluation.policy_outcome,

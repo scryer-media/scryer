@@ -25,6 +25,11 @@ const DISCOVERY_DIAGNOSTIC_RETENTION_DAYS: i64 = 30;
 const TITLE_IMAGE_BLOB_GC_BATCH_SIZE: u32 = 100;
 const TITLE_IMAGE_BLOB_GC_MAX_BATCHES: usize = 10;
 const RECYCLE_BIN_BATCH_MAX_ITEMS: usize = 250;
+/// Pre-flight traces left by older builds, removed per transaction.
+const PREFLIGHT_TRACE_PURGE_BATCH_SIZE: usize = 500;
+/// Batches per housekeeping pass, so one pass holds the writer for a bounded
+/// stretch; whatever is left goes on the next pass.
+const PREFLIGHT_TRACE_PURGE_MAX_BATCHES: usize = 100;
 
 /// How long a deleted title's recycle-cleanup record is kept: the history
 /// retention period, or forever when history is kept forever.
@@ -1204,6 +1209,8 @@ impl AppUseCase {
             )
             .await?;
 
+        let preflight_traces_purged = self.purge_preflight_request_rule_traces().await;
+
         let (
             stale_history_events,
             stale_domain_events,
@@ -1426,6 +1433,7 @@ impl AppUseCase {
             stale_download_queue_deletes,
             stale_rule_set_history,
             stale_list_sync_runs,
+            preflight_traces_purged,
             stale_history_records,
             staged_nzb_artifacts_pruned,
             recycled_purged,
@@ -1435,6 +1443,33 @@ impl AppUseCase {
         );
 
         Ok(report)
+    }
+
+    /// Remove the request rule traces older builds wrote for every pre-flight
+    /// preview. They explain no request, so they are junk rather than
+    /// history and go whatever the history retention says. Each batch is its
+    /// own transaction; a batch that finds none ends the pass without a write.
+    pub(crate) async fn purge_preflight_request_rule_traces(&self) -> usize {
+        let store = &self.services.customization.request_rule_decisions;
+        let mut purged = 0usize;
+        for _ in 0..PREFLIGHT_TRACE_PURGE_MAX_BATCHES {
+            match store
+                .delete_preflight_traces(PREFLIGHT_TRACE_PURGE_BATCH_SIZE)
+                .await
+            {
+                Ok(removed) => {
+                    purged = purged.saturating_add(removed);
+                    if removed < PREFLIGHT_TRACE_PURGE_BATCH_SIZE {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, "failed to remove pre-flight request rule traces");
+                    break;
+                }
+            }
+        }
+        purged
     }
 
     /// List all items across all recycle bins, sorted newest first.
