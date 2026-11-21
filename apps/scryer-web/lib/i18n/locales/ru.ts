@@ -12805,6 +12805,7 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRuleTemplatePlaceholder": "Начать с шаблона",
   "settings.lifecycleFileDeleted": "Удалён",
   "settings.lifecycleFilePending": "Ожидает",
+  "settings.lifecycleFileColPath": "Файл",
   "settings.lifecycleFileResults": "Результаты обработки файлов",
   "settings.lifecycleFileProgress":
     "Удалено: {{completed}} · осталось: {{remaining}}",
