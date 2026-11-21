@@ -3860,8 +3860,6 @@ const it: LocaleDictionary = {
     "In attesa: questo titolo è in riproduzione su un server multimediale.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "In attesa: non è stato possibile chiedere a un server multimediale se è in corso una riproduzione.",
-  "settings.lifecycleExecutionReason.playbackUnattributed":
-    "In attesa: un server multimediale sta riproducendo qualcosa che Scryer non è riuscito ad associare a un titolo, quindi nulla viene eliminato finché la riproduzione non termina.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "In attesa: il server multimediale mostra una riproduzione più recente della cronologia salvata.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

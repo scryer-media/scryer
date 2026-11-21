@@ -1599,6 +1599,7 @@ async fn an_unattributed_session_lets_reversible_work_proceed() {
     let report = fixture.handle().await;
     assert_eq!(report.held, 0, "{report:?}");
     assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(report.unmatched_playback_sessions, 1, "{report:?}");
     let stored = fixture
         .app
         .get_title(&fixture.user, &title.id)
@@ -1609,33 +1610,27 @@ async fn an_unattributed_session_lets_reversible_work_proceed() {
 }
 
 #[tokio::test]
-async fn an_unattributed_session_holds_destructive_work() {
+async fn an_unmatched_session_holds_no_destructive_work() {
     let fixture = execution_app(Some(unattributable_session()));
     let rule_id = fixture.observed_rule(delete_draft()).await;
     fixture.open_gates(true, true).await;
-    let title = seed_title(&fixture.app, &fixture.user, "Dunmore Fell", true).await;
+    seed_title(&fixture.app, &fixture.user, "Dunmore Fell", true).await;
     fixture.evaluate().await;
     fixture
         .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
         .await;
 
     let report = fixture.handle().await;
-    assert_eq!(report.held, 1, "{report:?}");
-    assert_eq!(report.executed, 0);
-    assert!(
-        fixture
-            .app
-            .get_title(&fixture.user, &title.id)
-            .await
-            .expect("read title")
-            .is_some(),
-        "a held delete must not remove the title"
-    );
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.unmatched_playback_sessions, 1, "{report:?}");
     let candidate = fixture.only_candidate().await;
-    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
-    assert_eq!(
-        candidate.state_reason,
-        execution_reason::PLAYBACK_UNATTRIBUTED
+    assert!(
+        ![
+            execution_reason::PLAYBACK_HOLD,
+            execution_reason::PLAYBACK_UNKNOWN
+        ]
+        .contains(&candidate.state_reason.as_str()),
+        "an unmatched session must not hold the delete: {candidate:?}"
     );
 }
 
@@ -1681,7 +1676,36 @@ async fn a_second_pass_under_the_same_safety_hold_writes_nothing() {
 }
 
 #[tokio::test]
-async fn an_unreachable_media_server_fails_closed() {
+async fn an_unreachable_media_server_holds_destructive_work() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Unreachable(
+        "status 401".to_string(),
+    )));
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Unknown Playback", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some(),
+        "a held delete must not remove the title"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
+    assert_eq!(candidate.state_reason, execution_reason::PLAYBACK_UNKNOWN);
+}
+
+#[tokio::test]
+async fn an_unreachable_media_server_lets_reversible_work_proceed() {
     let fixture = execution_app(Some(PlaybackProbeStatus::Unreachable(
         "status 401".to_string(),
     )));
@@ -1692,17 +1716,19 @@ async fn an_unreachable_media_server_fails_closed() {
     fixture
         .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
-    seed_title(&fixture.app, &fixture.user, "Unknown Playback", true).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Unknown Playback", true).await;
     fixture.evaluate().await;
 
     let report = fixture.handle().await;
-    assert_eq!(report.held, 1, "{report:?}");
-    let candidates = fixture.evaluation.all_candidates().await;
-    assert_eq!(candidates[0].state, LifecycleCandidateState::Blocked);
-    assert_eq!(
-        candidates[0].state_reason,
-        execution_reason::PLAYBACK_UNKNOWN
-    );
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.executed, 1, "{report:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored);
 }
 
 #[tokio::test]

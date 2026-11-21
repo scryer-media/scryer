@@ -58,7 +58,6 @@ test("the client translates exactly the server's execution reasons", () => {
     "pass_action_step_budget",
     "pass_high_risk_step_budget",
     "playback_hold",
-    "playback_unattributed",
     "playback_unknown",
     "quality_profile_unresolved",
     "retry_pending",

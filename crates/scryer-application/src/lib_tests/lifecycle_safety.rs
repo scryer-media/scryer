@@ -176,7 +176,9 @@ async fn a_session_on_a_known_file_holds_only_that_title() {
     });
 
     for destructive in [true, false] {
-        let hold = app.lifecycle_playback_hold_for_title("title-a", destructive).await;
+        let hold = app
+            .lifecycle_playback_hold_for_title("title-a", destructive)
+            .await;
         assert!(
             matches!(hold, LifecyclePlaybackHold::Hold { .. }),
             "{hold:?}"
@@ -190,7 +192,7 @@ async fn a_session_on_a_known_file_holds_only_that_title() {
 }
 
 #[tokio::test]
-async fn a_session_no_title_can_be_matched_to_holds_only_destructive_work() {
+async fn a_session_no_title_can_be_matched_to_holds_nothing() {
     let (app, _user) = bootstrap();
     let app = app.with_test_overrides(|services| {
         services.with_media_server_playback_probe(Arc::new(StubPlaybackProbe::reporting(vec![(
@@ -199,19 +201,24 @@ async fn a_session_no_title_can_be_matched_to_holds_only_destructive_work() {
         )])))
     });
 
-    let hold = app.lifecycle_playback_hold_for_title("title-a", true).await;
-    assert!(
-        matches!(hold, LifecyclePlaybackHold::Unattributed { .. }),
-        "{hold:?}"
-    );
+    for destructive in [true, false] {
+        assert_eq!(
+            app.lifecycle_playback_hold_for_title("title-a", destructive)
+                .await,
+            LifecyclePlaybackHold::Clear
+        );
+    }
     assert_eq!(
-        app.lifecycle_playback_hold_for_title("title-a", false).await,
-        LifecyclePlaybackHold::Clear
+        app.lifecycle_playback_picture()
+            .await
+            .unmatched_sessions()
+            .len(),
+        1
     );
 }
 
 #[tokio::test]
-async fn an_unreachable_connection_makes_the_hold_unknown() {
+async fn an_unreachable_connection_holds_only_destructive_work() {
     let (app, _user) = bootstrap();
     let app = app.with_test_overrides(|services| {
         services.with_media_server_playback_probe(Arc::new(StubPlaybackProbe::reporting(vec![
@@ -223,14 +230,17 @@ async fn an_unreachable_connection_makes_the_hold_unknown() {
         ])))
     });
 
-    for destructive in [true, false] {
-        let hold = app.lifecycle_playback_hold_for_title("title-a", destructive).await;
-        assert!(
-            matches!(hold, LifecyclePlaybackHold::Unknown { .. }),
-            "{hold:?}"
-        );
-        assert!(hold.holds());
-    }
+    let hold = app.lifecycle_playback_hold_for_title("title-a", true).await;
+    assert!(
+        matches!(hold, LifecyclePlaybackHold::Unknown { .. }),
+        "{hold:?}"
+    );
+    assert!(hold.holds());
+    assert_eq!(
+        app.lifecycle_playback_hold_for_title("title-a", false)
+            .await,
+        LifecyclePlaybackHold::Clear
+    );
 }
 
 #[tokio::test]
@@ -240,7 +250,7 @@ async fn a_broken_probe_is_unknown_rather_than_an_error() {
         services.with_media_server_playback_probe(Arc::new(StubPlaybackProbe::failing()))
     });
 
-    let hold = app.lifecycle_playback_hold_for_title("title-a", false).await;
+    let hold = app.lifecycle_playback_hold_for_title("title-a", true).await;
     assert!(
         matches!(hold, LifecyclePlaybackHold::Unknown { .. }),
         "{hold:?}"

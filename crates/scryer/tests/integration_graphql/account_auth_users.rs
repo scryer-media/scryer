@@ -2613,7 +2613,10 @@ async fn a_password_sign_in_records_the_last_sign_in_time() {
     let restamped = last_sign_in(&ctx, &user.id)
         .await
         .expect("the second sign-in keeps a time");
-    assert!(restamped >= stamped, "{restamped} went backwards from {stamped}");
+    assert!(
+        restamped >= stamped,
+        "{restamped} went backwards from {stamped}"
+    );
 }
 
 #[tokio::test]
@@ -2638,7 +2641,10 @@ async fn a_failed_sign_in_records_no_sign_in_time() {
         None,
     )
     .await;
-    assert!(!body["errors"].is_null(), "wrong password must fail: {body}");
+    assert!(
+        !body["errors"].is_null(),
+        "wrong password must fail: {body}"
+    );
     assert_eq!(last_sign_in(&ctx, &user.id).await, None);
 }
 

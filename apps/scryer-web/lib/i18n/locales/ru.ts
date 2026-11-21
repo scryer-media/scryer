@@ -6974,8 +6974,6 @@ const ru: LocaleDictionary = {
     "Отложено: этот тайтл воспроизводится на медиасервере.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
-  "settings.lifecycleExecutionReason.playbackUnattributed":
-    "Отложено: медиасервер воспроизводит то, что Scryer не смог сопоставить ни с одним тайтлом, поэтому ничего не удаляется, пока воспроизведение не закончится.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Отложено: медиасервер показывает просмотр новее сохранённой истории просмотров.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

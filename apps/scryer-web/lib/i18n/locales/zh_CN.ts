@@ -3477,8 +3477,6 @@ const zh_CN: LocaleDictionary = {
     "已暂缓：此作品正在媒体服务器上播放。",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "已暂缓：无法向媒体服务器确认是否正在播放。",
-  "settings.lifecycleExecutionReason.playbackUnattributed":
-    "已暂缓：媒体服务器正在播放 Scryer 无法对应到任何作品的内容，播放结束前不会删除任何内容。",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "已暂缓：媒体服务器显示有比已存观看记录更新的播放。",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

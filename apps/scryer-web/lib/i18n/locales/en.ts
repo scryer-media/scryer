@@ -12699,8 +12699,6 @@ const en: LocaleDictionary = {
     "Held: this title is playing on a media server.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Held: a media server could not be asked whether something is playing.",
-  "settings.lifecycleExecutionReason.playbackUnattributed":
-    "Held: a media server is playing something Scryer could not match to a title, so nothing is deleted until it stops.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Held: the media server shows a play newer than the stored watch history.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

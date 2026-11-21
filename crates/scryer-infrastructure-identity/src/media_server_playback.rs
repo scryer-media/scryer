@@ -289,7 +289,9 @@ fn jellyfin_playing_media(item: &Value) -> PlayingMedia {
 
 /// A session's item carries no play state: the normalizers read user data a
 /// session item does not have, and nothing downstream may read it as a play.
-fn blank_play_state(mut item: scryer_application::ProviderPlayedItem) -> scryer_application::ProviderPlayedItem {
+fn blank_play_state(
+    mut item: scryer_application::ProviderPlayedItem,
+) -> scryer_application::ProviderPlayedItem {
     item.played = false;
     item.play_count = 0;
     item.last_played_at = None;
@@ -1004,7 +1006,10 @@ mod tests {
         assert_eq!(item.provider_item_id, "ep-1");
         assert_eq!(item.kind, scryer_domain::MediaServerSignalKind::Episode);
         assert_eq!(item.series_provider_item_id.as_deref(), Some("series-1"));
-        assert_eq!((item.season_number, item.episode_number), (Some(1), Some(2)));
+        assert_eq!(
+            (item.season_number, item.episode_number),
+            (Some(1), Some(2))
+        );
         assert_eq!(item.file_paths, vec!["/tv/Show/S01E02.mkv".to_string()]);
         assert!(!item.played && item.play_count == 0 && item.last_played_at.is_none());
     }
@@ -1020,7 +1025,10 @@ mod tests {
         let [PlayingMedia::Video(item)] = sessions.as_slice() else {
             panic!("expected a video session, got {sessions:?}");
         };
-        assert_eq!(item.external_ids.get("tmdb").map(String::as_str), Some("13595"));
+        assert_eq!(
+            item.external_ids.get("tmdb").map(String::as_str),
+            Some("13595")
+        );
     }
 
     #[test]
@@ -1045,7 +1053,10 @@ mod tests {
         );
         assert!(matches!(
             &sessions[2],
-            PlayingMedia::Other { provider_item_id: None, .. }
+            PlayingMedia::Other {
+                provider_item_id: None,
+                ..
+            }
         ));
     }
 
@@ -1074,8 +1085,14 @@ mod tests {
         };
         assert_eq!(item.provider_item_id, "101");
         assert_eq!(item.series_provider_item_id.as_deref(), Some("100"));
-        assert_eq!((item.season_number, item.episode_number), (Some(3), Some(4)));
-        assert_eq!(item.file_paths, vec!["/data/tv/Show/S03E04.mkv".to_string()]);
+        assert_eq!(
+            (item.season_number, item.episode_number),
+            (Some(3), Some(4))
+        );
+        assert_eq!(
+            item.file_paths,
+            vec!["/data/tv/Show/S03E04.mkv".to_string()]
+        );
     }
 
     #[test]
@@ -1091,7 +1108,10 @@ mod tests {
         assert!(matches!(sessions[0], PlayingMedia::Video(_)));
         assert!(matches!(
             sessions[1],
-            PlayingMedia::Other { provider_item_id: None, .. }
+            PlayingMedia::Other {
+                provider_item_id: None,
+                ..
+            }
         ));
     }
 

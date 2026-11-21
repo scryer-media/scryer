@@ -396,7 +396,12 @@ impl AppUseCase {
                     status,
                     LifecycleActionRunStatus::Held | LifecycleActionRunStatus::Failed
                 )
-                .then(|| steps.iter().rev().find_map(|step| step.run.cause_code.clone()))
+                .then(|| {
+                    steps
+                        .iter()
+                        .rev()
+                        .find_map(|step| step.run.cause_code.clone())
+                })
                 .flatten()
             });
         run.status = status;

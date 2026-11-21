@@ -13,9 +13,9 @@
 //!
 //! Every ambiguity defers. A candidate is re-evaluated against fresh facts
 //! immediately before its action: a subject that no longer matches cancels
-//! instead of acting, and one that cannot be decided holds. Live playback
-//! anywhere, an unreachable media server, and active or unattributable
-//! acquisition work all hold. A hold writes an action-run row saying why and
+//! instead of acting, and one that cannot be decided holds. Live playback of
+//! the title, an unreachable media server (for destructive work), and active
+//! or unattributable acquisition work all hold. A hold writes an action-run row saying why and
 //! leaves the candidate [`LifecycleCandidateState::Blocked`], re-checked on
 //! the next pass. Nothing in this module deletes a file outside
 //! [`AppUseCase::delete_title_by_policy`], whose fingerprint check is the same
@@ -231,13 +231,11 @@ pub mod execution_reason {
     pub const NO_MATCH_AT_EXECUTION: &str = "no_match_at_execution";
     /// Fresh re-evaluation could not decide, or errored.
     pub const UNKNOWN_AT_EXECUTION: &str = "unknown_at_execution";
-    /// A playback session is active on a configured media server.
+    /// A playback session on a configured media server is playing this title.
     pub const PLAYBACK_HOLD: &str = "playback_hold";
-    /// A configured media server could not be asked about playback.
+    /// A configured media server could not be asked about playback. Holds
+    /// destructive work only.
     pub const PLAYBACK_UNKNOWN: &str = "playback_unknown";
-    /// A session is playing something that could not be matched to any
-    /// Scryer title, so it may be this one. Holds destructive work only.
-    pub const PLAYBACK_UNATTRIBUTED: &str = "playback_unattributed";
     /// A rule that reads a watch fact matched, and reading the subject's
     /// items back from the media server found a play newer than the stored
     /// facts, by an account the watch facts count.
@@ -346,7 +344,6 @@ pub mod execution_reason {
         UNKNOWN_AT_EXECUTION,
         PLAYBACK_HOLD,
         PLAYBACK_UNKNOWN,
-        PLAYBACK_UNATTRIBUTED,
         WATCH_RECHECK_NEWER_PLAY,
         WATCH_RECHECK_UNCREDITED_PLAY,
         WATCH_RECHECK_UNAVAILABLE,
@@ -402,7 +399,7 @@ pub mod execution_reason {
                     "{reason} has a stray underscore"
                 );
             }
-            assert_eq!(ALL.len(), 37);
+            assert_eq!(ALL.len(), 36);
         }
     }
 }
@@ -424,6 +421,9 @@ pub struct LifecycleActionHandlingReport {
     /// Rules that reached their own most-titles-per-run this pass. Their
     /// remaining due candidates were left for the next fire, untouched.
     pub rules_stopped_at_maximum: usize,
+    /// Live playback sessions this pass could not match to any title. They
+    /// held nothing; each is logged by name.
+    pub unmatched_playback_sessions: usize,
 }
 
 /// One action run with its title's display name resolved for rendering.
@@ -1432,6 +1432,12 @@ impl AppUseCase {
             }
         }
 
+        report.unmatched_playback_sessions = self
+            .runtime
+            .integrations
+            .lifecycle_playback
+            .kept_unmatched_sessions()
+            .await;
         Ok(report)
     }
 
@@ -2223,9 +2229,9 @@ impl AppUseCase {
             }
         }
 
-        // (4) A session playing this title holds every action kind, and so
-        // does a server that could not be asked. A session no title could be
-        // matched to holds destructive work only.
+        // (4) A session playing this title holds every action kind on it. A
+        // server that could not be asked holds destructive work only, and a
+        // session no title could be matched to holds nothing.
         let playback = self
             .lifecycle_playback_hold_for_title(&title.id, high_risk)
             .await;

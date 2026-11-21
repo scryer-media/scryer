@@ -2479,8 +2479,14 @@ impl SettingsMutations {
         let form_login_enabled = auth_runtime_from_ctx(ctx)
             .snapshot()
             .effective_form_login_enabled;
-        let (user, verified_until, persist_session, auth_session_version, _password_change_required) =
-            app.login_verification_passkey_complete(
+        let (
+            user,
+            verified_until,
+            persist_session,
+            auth_session_version,
+            _password_change_required,
+        ) = app
+            .login_verification_passkey_complete(
                 input.login_challenge_id.as_ref(),
                 input.webauthn_challenge_id.as_ref(),
                 &serde_json::to_string(&input.response_json.0).unwrap_or_default(),
@@ -2510,10 +2516,16 @@ impl SettingsMutations {
         input: LoginVerificationTotpCompleteInput,
     ) -> GqlResult<LoginPayload> {
         let app = app_from_ctx(ctx)?;
-        let (user, verified_until, persist_session, auth_session_version, _password_change_required) =
-            app.complete_login_verification_totp(input.login_challenge_id.as_ref(), &input.code)
-                .await
-                .map_err(to_gql_error)?;
+        let (
+            user,
+            verified_until,
+            persist_session,
+            auth_session_version,
+            _password_change_required,
+        ) = app
+            .complete_login_verification_totp(input.login_challenge_id.as_ref(), &input.code)
+            .await
+            .map_err(to_gql_error)?;
         login_payload_from_user(
             &app,
             user,

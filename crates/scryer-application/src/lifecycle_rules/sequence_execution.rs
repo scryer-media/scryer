@@ -47,7 +47,9 @@ enum SequenceOutcome {
     },
     /// A step failed and will retry; `cause` is the failure's code, if any.
     RetryingFailed(Option<&'static str>),
-    Failed { step_id: String },
+    Failed {
+        step_id: String,
+    },
     Canceled(&'static str),
     Excluded,
     LeaseLost,

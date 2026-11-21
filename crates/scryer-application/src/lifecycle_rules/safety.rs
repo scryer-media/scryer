@@ -28,19 +28,18 @@
 //! kind. For a series, any of its episodes playing holds every subject of the
 //! series: the title, each season and each episode. Other titles proceed.
 //!
-//! # Fail closed
+//! # What holds and what does not
 //!
-//! * A session that cannot be placed on any title holds **destructive** work
-//!   for every subject; reversible work proceeds. A session is let go only
-//!   when it is shown not to be Scryer media at all: it plays audio, which
-//!   Scryer never manages, or its ids reach no Scryer title and none of its
-//!   files lies in a Scryer library (the watch-signal sync's own "foreign"
-//!   test). A lookup that fails shows nothing to be foreign.
-//! * An enabled connection that cannot be queried is *unknown*, not idle.
-//!   Unknown holds every action, because what it plays cannot be seen at all.
-//!   The one case that is genuinely clear rather than unknown is having no
-//!   enabled connections: nothing can be playing on servers Scryer does not
-//!   know about.
+//! * A session that cannot be placed on any title holds **nothing**. Holding
+//!   every title's work because one stream could not be matched would let any
+//!   unmatched item stop the whole library. The session is logged by name and
+//!   counted as unmatched in the pass report, so the gap in the mapping can be
+//!   found and fixed.
+//! * An enabled connection that cannot be queried is *unknown*, not idle. What
+//!   it plays cannot be seen at all, so it holds **destructive** work on every
+//!   title until it answers again; reversible work proceeds. The one case that
+//!   is genuinely clear rather than unknown is having no enabled connections:
+//!   nothing can be playing on servers Scryer does not know about.
 //!
 //! # One snapshot per pass
 //!
@@ -97,11 +96,8 @@ pub enum LifecyclePlaybackHold {
     Clear,
     /// These sessions are playing the title. Holds every action kind.
     Hold { sessions: Vec<PlayingSession> },
-    /// These sessions play something that could not be placed on any title,
-    /// so it may be this one. Holds destructive work only.
-    Unattributed { sessions: Vec<PlayingSession> },
     /// At least one enabled connection could not be asked, so playback of the
-    /// title could not be ruled out. Holds every action kind.
+    /// title could not be ruled out. Holds destructive work only.
     Unknown { reason: String },
 }
 
@@ -118,7 +114,6 @@ impl LifecyclePlaybackHold {
         match self {
             Self::Clear => None,
             Self::Hold { .. } => Some(execution_reason::PLAYBACK_HOLD),
-            Self::Unattributed { .. } => Some(execution_reason::PLAYBACK_UNATTRIBUTED),
             Self::Unknown { .. } => Some(execution_reason::PLAYBACK_UNKNOWN),
         }
     }
@@ -135,10 +130,6 @@ impl LifecyclePlaybackHold {
         match self {
             Self::Clear => "no playback holds this title".to_string(),
             Self::Hold { sessions } => format!("playing now: {}", list(sessions)),
-            Self::Unattributed { sessions } => format!(
-                "playing something no title could be matched to: {}",
-                list(sessions)
-            ),
             Self::Unknown { reason } => reason.clone(),
         }
     }
@@ -152,7 +143,8 @@ pub enum SessionAttribution {
     Titles(BTreeSet<String>),
     /// The session is shown not to be playing Scryer media.
     NotScryerMedia,
-    /// The session could not be placed on any title.
+    /// The session could not be placed on any title. It holds nothing; the
+    /// pass logs it and counts it as unmatched.
     Unattributed,
 }
 
@@ -180,31 +172,31 @@ impl LifecyclePlaybackPicture {
         self.playing.is_empty() && self.unattributed.is_empty() && !self.unreachable.is_empty()
     }
 
+    /// Sessions playing something no title could be matched to. They hold
+    /// nothing; the pass reports them.
+    pub fn unmatched_sessions(&self) -> &[PlayingSession] {
+        &self.unattributed
+    }
+
     /// The hold for an action on `title_id`. `destructive` is whether the
-    /// action can delete, which is the only kind an unattributed session
+    /// action can delete, which is the only kind an unreachable connection
     /// holds.
     ///
-    /// Precedence, highest first: a session playing this title; a connection
-    /// that could not be asked; a session no title could be matched to, for
-    /// destructive work; clear.
+    /// Precedence, highest first: a session playing this title; for
+    /// destructive work, a connection that could not be asked; clear.
     pub fn hold_for_title(&self, title_id: &str, destructive: bool) -> LifecyclePlaybackHold {
         if let Some(sessions) = self.playing.get(title_id) {
             return LifecyclePlaybackHold::Hold {
                 sessions: sessions.clone(),
             };
         }
-        if !self.unreachable.is_empty() {
+        if destructive && !self.unreachable.is_empty() {
             return LifecyclePlaybackHold::Unknown {
                 reason: format!(
                     "playback could not be ruled out on {}: {}",
                     self.unreachable.len(),
                     self.unreachable.join("; ")
                 ),
-            };
-        }
-        if destructive && !self.unattributed.is_empty() {
-            return LifecyclePlaybackHold::Unattributed {
-                sessions: self.unattributed.clone(),
             };
         }
         LifecyclePlaybackHold::Clear
@@ -301,7 +293,9 @@ pub(crate) fn attribute_playback_sessions(
                 ScryerLibraryPaths::new(evidence.library_roots.clone(), &connection.path_mappings);
             sessions
                 .iter()
-                .map(|media| attribute_session(&connection.connection_id, media, evidence, &library))
+                .map(|media| {
+                    attribute_session(&connection.connection_id, media, evidence, &library)
+                })
                 .collect()
         })
         .collect()
@@ -327,7 +321,11 @@ fn attribute_session(
             provider_item_id,
             file_paths,
             ..
-        } => ([provider_item_id.as_deref(), None], file_paths.as_slice(), None),
+        } => (
+            [provider_item_id.as_deref(), None],
+            file_paths.as_slice(),
+            None,
+        ),
     };
 
     let mut titles = BTreeSet::new();
@@ -365,7 +363,9 @@ fn attribute_session(
         return SessionAttribution::Titles(titles);
     }
     match video {
-        Some(item) if !evidence.incomplete && is_foreign_item(item, &evidence.external_ids, library) => {
+        Some(item)
+            if !evidence.incomplete && is_foreign_item(item, &evidence.external_ids, library) =>
+        {
             SessionAttribution::NotScryerMedia
         }
         _ => SessionAttribution::Unattributed,
@@ -402,6 +402,16 @@ impl LifecyclePlaybackCache {
     /// Forget the kept picture, so the next ask probes again.
     pub(crate) async fn clear(&self) {
         *self.picture.lock().await = None;
+    }
+
+    /// How many sessions the kept picture could not match to a title, without
+    /// probing. Zero when no picture is kept.
+    pub(crate) async fn kept_unmatched_sessions(&self) -> usize {
+        self.picture
+            .lock()
+            .await
+            .as_ref()
+            .map_or(0, |(_, picture)| picture.unattributed.len())
     }
 }
 
@@ -508,7 +518,23 @@ impl AppUseCase {
             }
         };
         let evidence = self.lifecycle_playback_evidence(&snapshot).await;
-        fold_playback_picture(&snapshot, &attribute_playback_sessions(&snapshot, &evidence))
+        let picture = fold_playback_picture(
+            &snapshot,
+            &attribute_playback_sessions(&snapshot, &evidence),
+        );
+        if !picture.unattributed.is_empty() {
+            tracing::info!(
+                unmatched = picture.unattributed.len(),
+                sessions = %picture
+                    .unattributed
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                "lifecycle playback: sessions matched no title and hold nothing"
+            );
+        }
+        picture
     }
 
     /// Every read the attribution needs, each one batched over the whole
@@ -542,7 +568,10 @@ impl AppUseCase {
                         provider_item_id,
                         file_paths,
                         ..
-                    } => (provider_item_id.as_deref().into_iter().collect(), file_paths),
+                    } => (
+                        provider_item_id.as_deref().into_iter().collect(),
+                        file_paths,
+                    ),
                 };
                 for id in ids.into_iter().map(str::trim).filter(|id| !id.is_empty()) {
                     provider_items.push((connection.connection_id.clone(), id.to_string()));
@@ -587,7 +616,13 @@ impl AppUseCase {
             .into_iter()
             .collect::<Vec<_>>();
         if !episode_ids.is_empty() {
-            match self.services.catalog.shows.get_episodes_by_ids(&episode_ids).await {
+            match self
+                .services
+                .catalog
+                .shows
+                .get_episodes_by_ids(&episode_ids)
+                .await
+            {
                 Ok(episodes) => {
                     evidence.episode_titles = episodes
                         .into_iter()
@@ -613,7 +648,9 @@ impl AppUseCase {
                 Ok(files) => {
                     for (path, file) in files {
                         for key in scryer_paths.get(&path).into_iter().flatten() {
-                            evidence.file_titles.insert(key.clone(), file.title_id.clone());
+                            evidence
+                                .file_titles
+                                .insert(key.clone(), file.title_id.clone());
                         }
                     }
                 }
@@ -826,7 +863,10 @@ mod tests {
     }
 
     /// Attribute and fold in one step, as the use case does.
-    fn picture(snapshot: &PlaybackActivitySnapshot, evidence: &PlaybackEvidence) -> LifecyclePlaybackPicture {
+    fn picture(
+        snapshot: &PlaybackActivitySnapshot,
+        evidence: &PlaybackEvidence,
+    ) -> LifecyclePlaybackPicture {
         fold_playback_picture(snapshot, &attribute_playback_sessions(snapshot, evidence))
     }
 
@@ -863,7 +903,10 @@ mod tests {
     fn no_configured_connections_is_clear() {
         // Nothing can be playing on servers Scryer does not know about.
         let folded = fold_playback_picture(&snapshot(Vec::new()), &[]);
-        assert_eq!(folded.hold_for_title("title-a", true), LifecyclePlaybackHold::Clear);
+        assert_eq!(
+            folded.hold_for_title("title-a", true),
+            LifecyclePlaybackHold::Clear
+        );
     }
 
     #[test]
@@ -905,44 +948,59 @@ mod tests {
             folded.hold_for_title("title-a", true).reason_code(),
             Some(super::super::action_execution::execution_reason::PLAYBACK_HOLD)
         );
-        assert!(folded.hold_for_title("title-a", true).describe().contains("Alpha"));
+        assert!(
+            folded
+                .hold_for_title("title-a", true)
+                .describe()
+                .contains("Alpha")
+        );
     }
 
     #[test]
-    fn an_unattributed_session_holds_destructive_work_everywhere_but_not_reversible_work() {
+    fn an_unmatched_session_holds_nothing_and_is_reported() {
         let snapshot = snapshot(vec![playing("plex", vec![movie("px-1", "Mystery")])]);
         let folded = fold_playback_picture(&snapshot, &[vec![SessionAttribution::Unattributed]]);
 
         for title in ["title-a", "title-b"] {
-            let hold = folded.hold_for_title(title, true);
-            assert!(matches!(hold, LifecyclePlaybackHold::Unattributed { .. }), "{hold:?}");
-            assert_eq!(
-                hold.reason_code(),
-                Some(super::super::action_execution::execution_reason::PLAYBACK_UNATTRIBUTED)
-            );
-            assert_eq!(folded.hold_for_title(title, false), LifecyclePlaybackHold::Clear);
+            for destructive in [true, false] {
+                assert_eq!(
+                    folded.hold_for_title(title, destructive),
+                    LifecyclePlaybackHold::Clear
+                );
+            }
         }
+        assert_eq!(
+            folded.unmatched_sessions(),
+            [PlayingSession {
+                connection_id: "plex".to_string(),
+                name: Some("Mystery".to_string()),
+            }]
+        );
     }
 
     #[test]
-    fn a_session_without_an_attribution_entry_is_unattributed() {
+    fn a_session_without_an_attribution_entry_is_unmatched() {
         let snapshot = snapshot(vec![playing("plex", vec![movie("px-1", "Mystery")])]);
         let folded = fold_playback_picture(&snapshot, &[]);
-        assert!(matches!(
+        assert_eq!(
             folded.hold_for_title("title-a", true),
-            LifecyclePlaybackHold::Unattributed { .. }
-        ));
+            LifecyclePlaybackHold::Clear
+        );
+        assert_eq!(folded.unmatched_sessions().len(), 1);
     }
 
     #[test]
     fn a_session_shown_not_to_be_scryer_media_holds_nothing() {
         let snapshot = snapshot(vec![playing("plex", vec![PlayingMedia::Audio])]);
         let folded = fold_playback_picture(&snapshot, &[vec![SessionAttribution::NotScryerMedia]]);
-        assert_eq!(folded.hold_for_title("title-a", true), LifecyclePlaybackHold::Clear);
+        assert_eq!(
+            folded.hold_for_title("title-a", true),
+            LifecyclePlaybackHold::Clear
+        );
     }
 
     #[test]
-    fn an_unreachable_connection_is_unknown_for_every_kind_of_work() {
+    fn an_unreachable_connection_holds_destructive_work_only() {
         let folded = fold_playback_picture(
             &snapshot(vec![
                 connection("plex", PlaybackProbeStatus::Idle),
@@ -953,15 +1011,16 @@ mod tests {
             ]),
             &[],
         );
-        for destructive in [true, false] {
-            let LifecyclePlaybackHold::Unknown { reason } =
-                folded.hold_for_title("title-a", destructive)
-            else {
-                panic!("expected unknown");
-            };
-            assert!(reason.contains("jellyfin"), "{reason}");
-            assert!(reason.contains("status 401"), "{reason}");
-        }
+        let LifecyclePlaybackHold::Unknown { reason } = folded.hold_for_title("title-a", true)
+        else {
+            panic!("expected unknown");
+        };
+        assert!(reason.contains("jellyfin"), "{reason}");
+        assert!(reason.contains("status 401"), "{reason}");
+        assert_eq!(
+            folded.hold_for_title("title-a", false),
+            LifecyclePlaybackHold::Clear
+        );
     }
 
     #[test]
@@ -970,7 +1029,10 @@ mod tests {
         // different server was down.
         let snapshot = snapshot(vec![
             playing("plex", vec![movie("px-a", "Alpha")]),
-            connection("jellyfin", PlaybackProbeStatus::Unreachable("timeout".to_string())),
+            connection(
+                "jellyfin",
+                PlaybackProbeStatus::Unreachable("timeout".to_string()),
+            ),
         ]);
         let folded = fold_playback_picture(&snapshot, &[vec![titles(&["title-a"])], Vec::new()]);
         assert!(matches!(
@@ -978,16 +1040,20 @@ mod tests {
             LifecyclePlaybackHold::Hold { .. }
         ));
         assert!(matches!(
-            folded.hold_for_title("title-b", false),
+            folded.hold_for_title("title-b", true),
             LifecyclePlaybackHold::Unknown { .. }
         ));
+        assert_eq!(
+            folded.hold_for_title("title-b", false),
+            LifecyclePlaybackHold::Clear
+        );
     }
 
     #[test]
     fn a_failed_probe_is_unknown_and_never_kept() {
         let folded = LifecyclePlaybackPicture::unknown("playback probe unavailable");
         assert!(matches!(
-            folded.hold_for_title("title-a", false),
+            folded.hold_for_title("title-a", true),
             LifecyclePlaybackHold::Unknown { .. }
         ));
         assert!(folded.probe_failed());
@@ -998,7 +1064,10 @@ mod tests {
     #[test]
     fn a_playing_episode_holds_its_whole_series_through_the_series_mapping() {
         // The episode itself is not mapped; its series item is.
-        let snapshot = snapshot(vec![playing("jellyfin", vec![episode("jf-ep", Some("jf-series"))])]);
+        let snapshot = snapshot(vec![playing(
+            "jellyfin",
+            vec![episode("jf-ep", Some("jf-series"))],
+        )]);
         let evidence = PlaybackEvidence {
             mapped: mapped(&[(
                 "jellyfin",
@@ -1044,7 +1113,12 @@ mod tests {
     fn a_mapping_on_another_connection_does_not_place_the_session() {
         let snapshot = snapshot(vec![playing("plex", vec![movie("item-1", "Alpha")])]);
         let evidence = PlaybackEvidence {
-            mapped: mapped(&[("jellyfin", "item-1", MediaServerPlaybackEntityKind::Title, "title-a")]),
+            mapped: mapped(&[(
+                "jellyfin",
+                "item-1",
+                MediaServerPlaybackEntityKind::Title,
+                "title-a",
+            )]),
             ..PlaybackEvidence::default()
         };
         assert_eq!(
@@ -1060,7 +1134,8 @@ mod tests {
             kind: MediaServerSignalKind::Movie,
             ..ProviderPlayedItem::default()
         };
-        item.external_ids.insert("tmdb".to_string(), "603".to_string());
+        item.external_ids
+            .insert("tmdb".to_string(), "603".to_string());
         let snapshot = snapshot(vec![playing("plex", vec![PlayingMedia::Video(item)])]);
         let mut evidence = PlaybackEvidence::default();
         evidence.external_ids.insert(
@@ -1106,7 +1181,9 @@ mod tests {
             file_paths: vec!["/elsewhere/home-video.mkv".to_string()],
             ..ProviderPlayedItem::default()
         };
-        foreign.external_ids.insert("tmdb".to_string(), "999".to_string());
+        foreign
+            .external_ids
+            .insert("tmdb".to_string(), "999".to_string());
         let snapshot = snapshot(vec![playing(
             "plex",
             vec![PlayingMedia::Audio, PlayingMedia::Video(foreign)],
@@ -1117,7 +1194,10 @@ mod tests {
         };
         assert_eq!(
             attribute_playback_sessions(&snapshot, &complete),
-            vec![vec![SessionAttribution::NotScryerMedia, SessionAttribution::NotScryerMedia]]
+            vec![vec![
+                SessionAttribution::NotScryerMedia,
+                SessionAttribution::NotScryerMedia
+            ]]
         );
 
         // A read that failed shows nothing to be foreign.
@@ -1127,7 +1207,10 @@ mod tests {
         };
         assert_eq!(
             attribute_playback_sessions(&snapshot, &incomplete),
-            vec![vec![SessionAttribution::NotScryerMedia, SessionAttribution::Unattributed]]
+            vec![vec![
+                SessionAttribution::NotScryerMedia,
+                SessionAttribution::Unattributed
+            ]]
         );
     }
 
@@ -1150,7 +1233,10 @@ mod tests {
         };
         assert_eq!(
             attribute_playback_sessions(&snapshot, &evidence),
-            vec![vec![SessionAttribution::Unattributed, SessionAttribution::Unattributed]]
+            vec![vec![
+                SessionAttribution::Unattributed,
+                SessionAttribution::Unattributed
+            ]]
         );
     }
 

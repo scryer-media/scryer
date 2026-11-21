@@ -3831,8 +3831,6 @@ const de: LocaleDictionary = {
     "Angehalten: Dieser Titel wird gerade auf einem Medienserver abgespielt.",
   "settings.lifecycleExecutionReason.playbackUnknown":
     "Angehalten: Ein Medienserver konnte nicht gefragt werden, ob gerade etwas abgespielt wird.",
-  "settings.lifecycleExecutionReason.playbackUnattributed":
-    "Angehalten: Ein Medienserver spielt etwas ab, das Scryer keinem Titel zuordnen konnte. Bis die Wiedergabe endet, wird nichts gelöscht.",
   "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Angehalten: Der Medienserver zeigt eine Wiedergabe, die neuer ist als der gespeicherte Wiedergabeverlauf.",
   "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":

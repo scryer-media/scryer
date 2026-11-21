@@ -214,11 +214,26 @@ async fn provider_items_read_back_to_their_mapped_entities_on_their_own_connecti
     // Index 1 is mapped on connections a and b; index 7 on none. A provider
     // id asked on the wrong connection finds nothing.
     let request = vec![
-        ("connection-a".to_string(), "connection-a-item-1".to_string()),
-        ("connection-b".to_string(), "connection-b-item-1".to_string()),
-        ("connection-a".to_string(), "connection-b-item-1".to_string()),
-        ("connection-a".to_string(), "connection-a-item-7".to_string()),
-        ("connection-a".to_string(), "connection-a-item-1".to_string()),
+        (
+            "connection-a".to_string(),
+            "connection-a-item-1".to_string(),
+        ),
+        (
+            "connection-b".to_string(),
+            "connection-b-item-1".to_string(),
+        ),
+        (
+            "connection-a".to_string(),
+            "connection-b-item-1".to_string(),
+        ),
+        (
+            "connection-a".to_string(),
+            "connection-a-item-7".to_string(),
+        ),
+        (
+            "connection-a".to_string(),
+            "connection-a-item-1".to_string(),
+        ),
     ];
     let mut found = store
         .list_playback_items_for_provider_items(&request)
