@@ -263,16 +263,17 @@ impl FilesystemWalker {
         let mut entries = Vec::new();
         let mut failure = None;
         disk.visit_blocking(dir, |entry| {
-            let kind = entry
-                .map_err(|error| ("failed to read entry in", dir.to_path_buf(), error))
-                .and_then(|entry| match entry.kind() {
+            let kind = match entry {
+                Ok(entry) => match entry.kind() {
                     Ok(kind) => Ok((entry.into_path(), kind)),
                     Err(error) => Err((
                         "failed to inspect filesystem entry",
                         entry.into_path(),
                         error,
                     )),
-                });
+                },
+                Err(error) => Err(("failed to read entry in", dir.to_path_buf(), error)),
+            };
             match kind {
                 Ok(entry) => {
                     entries.push(entry);

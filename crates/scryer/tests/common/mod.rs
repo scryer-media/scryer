@@ -1002,6 +1002,8 @@ impl TestContext {
         .await
     }
 
+    // disk-guard: this harness owns the temporary directories it creates.
+    #[expect(clippy::disallowed_methods, reason = "Creates isolated test fixtures")]
     async fn new_with_database(
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
         indexer_provider: Option<Arc<dyn IndexerPluginProvider>>,
@@ -1800,6 +1802,8 @@ fn json_i64(value: &Value) -> Option<i64> {
 }
 
 /// Load a fixture file relative to the workspace `tests/fixtures/` directory.
+// disk-guard: this harness reads checked-in fixtures directly.
+#[expect(clippy::disallowed_methods, reason = "Reads checked-in test fixtures")]
 pub fn load_fixture(path: &str) -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let fixture_path = std::path::Path::new(manifest_dir)

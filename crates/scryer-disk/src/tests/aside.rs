@@ -327,8 +327,8 @@ fn a_destination_link_to_the_source_puts_the_source_back() {
     let answer =
         disk.remove_source_beside_blocking(&p(SOURCE), &source_mark(), &dest, &mark(link(9)));
     assert!(matches!(answer, AsideRemoval::SameEntry), "{answer:?}");
-    assert_eq!(backend.paths_of("lstat"), [dest.clone()]);
-    assert_eq!(backend.paths_of("stat"), [dest.clone()]);
+    assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&dest));
+    assert_eq!(backend.paths_of("stat"), std::slice::from_ref(&dest));
     assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE), aside()]);
     assert_eq!(backend.calls_of("remove_file"), 0);
 
@@ -457,7 +457,7 @@ fn a_claimed_set_aside_that_left_a_name_puts_back_only_the_sources_own_file() {
         );
         assert!(matches!(answer, AsideRemoval::NotSetAside(_)), "{answer:?}");
         assert_eq!(backend.paths_of("rename_claimed"), [p(SOURCE)]);
-        assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+        assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&aside));
     }
 
     let (disk, backend) = claimed();
@@ -511,7 +511,7 @@ fn a_claimed_set_aside_that_left_a_name_puts_back_only_the_sources_own_file() {
         &mark(named(8, 1)),
     );
     assert!(matches!(answer, AsideRemoval::NotSetAside(_)), "{answer:?}");
-    assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+    assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&aside));
     assert_eq!(backend.paths_of("rename_claimed"), [p(SOURCE)]);
 }
 
@@ -639,8 +639,11 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
     backend.stat_is(aside.to_str().unwrap(), Ok(named(7, 1)));
     let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
     assert!(matches!(answer, PutBackAside::PutBack), "{answer:?}");
-    assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
-    assert_eq!(backend.paths_of("rename_no_replace"), [aside.clone()]);
+    assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&aside));
+    assert_eq!(
+        backend.paths_of("rename_no_replace"),
+        std::slice::from_ref(&aside)
+    );
     assert_eq!(backend.calls_of("remove_file"), 0);
 
     let folder = RawStat {
@@ -654,7 +657,7 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
         }
         let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
         assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}");
-        assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
+        assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&aside));
         assert_eq!(backend.calls_of("rename_no_replace"), 0);
         assert_eq!(backend.calls_of("remove_file"), 0);
     }
@@ -667,8 +670,11 @@ fn a_set_aside_source_left_by_an_interruption_is_put_back() {
         }
         let answer = disk.put_back_set_aside_source_blocking(&p(SOURCE));
         assert!(matches!(answer, PutBackAside::Nothing), "{answer:?}");
-        assert_eq!(backend.paths_of("lstat"), [aside.clone()]);
-        assert_eq!(backend.paths_of("remove_file"), [aside.clone()]);
+        assert_eq!(backend.paths_of("lstat"), std::slice::from_ref(&aside));
+        assert_eq!(
+            backend.paths_of("remove_file"),
+            std::slice::from_ref(&aside)
+        );
         assert_eq!(backend.calls_of("rename_no_replace"), 0);
     }
 

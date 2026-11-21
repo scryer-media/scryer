@@ -1387,7 +1387,7 @@ fn favourite_rows_with(
     unread: &[&str],
     audience_gate: Option<&'static str>,
 ) -> FavoriteLoad {
-    FavoriteLoad::Loaded(FavoriteRows {
+    FavoriteLoad::Loaded(Box::new(FavoriteRows {
         by_title: if rows.is_empty() {
             HashMap::new()
         } else {
@@ -1407,7 +1407,7 @@ fn favourite_rows_with(
         favorite_unread_user_ids: unread.iter().map(|id| (*id).to_string()).collect(),
         member_gate: None,
         audience_gate,
-    })
+    }))
 }
 
 fn with_favourites(favorites: FavoriteLoad) -> LifecycleListFacts {

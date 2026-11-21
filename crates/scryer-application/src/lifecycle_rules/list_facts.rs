@@ -102,21 +102,16 @@ pub(crate) struct LifecycleListFacts {
 }
 
 /// One per-title metadata set of a batch, such as its content ratings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum StoredSetLoad<T> {
     /// No rule being evaluated reads a fact of this set.
+    #[default]
     NotLoaded,
     /// The store could not be read for this pass.
     Unreadable,
     /// Keyed by title id. `None`, or no entry, means the set is not stored
     /// for that title, which is not the same as an empty set.
     Loaded(HashMap<String, Option<Vec<T>>>),
-}
-
-impl<T> Default for StoredSetLoad<T> {
-    fn default() -> Self {
-        Self::NotLoaded
-    }
 }
 
 impl<T> StoredSetLoad<T> {
@@ -145,7 +140,7 @@ pub(crate) enum FavoriteLoad {
     /// Every enabled media server is Plex, both the watch gate and the
     /// audience gate are closed, or the store could not be read.
     Unknown(&'static str),
-    Loaded(FavoriteRows),
+    Loaded(Box<FavoriteRows>),
 }
 
 /// The batch's favourites, and who they could have come from.
@@ -570,7 +565,7 @@ impl AppUseCase {
                         }
                     }
                 }
-                FavoriteLoad::Loaded(FavoriteRows {
+                FavoriteLoad::Loaded(Box::new(FavoriteRows {
                     by_title,
                     linked_user_ids: watch.linked_user_ids.clone(),
                     favorite_user_ids: watch.favorite_user_ids.clone(),
@@ -578,7 +573,7 @@ impl AppUseCase {
                     favorite_unread_user_ids: watch.favorite_unread_user_ids.clone(),
                     member_gate: watch.unavailable_reason(),
                     audience_gate: audience_favorite_gate(watch),
-                })
+                }))
             }
             Err(error) => {
                 tracing::warn!(

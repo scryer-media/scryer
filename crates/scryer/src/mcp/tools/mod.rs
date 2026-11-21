@@ -261,7 +261,7 @@ pub(crate) fn charge_call(
 ) -> Option<CallToolResult> {
     charge_api_key_call(&context.auth, &context.caller, (entry.class)(arguments))
         .err()
-        .map(tool_result)
+        .map(|response| tool_result(*response))
 }
 
 /// The diagnostics tools' admission, the same as the bundle route's: a full

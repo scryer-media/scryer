@@ -4,11 +4,10 @@ use super::{
 };
 use crate::diagnostics_routes::{HostSection, host_identifying, host_sections};
 use crate::mcp::server::json_result;
-use rmcp::model::CallToolResult;
-use scryer_application::AppError;
 use scryer_application::diagnostics::{
     DiagnosticsHarvest, DiagnosticsSection, EnvironmentSection, Omission, SummarySection,
 };
+use scryer_application::{AppError, AppResult};
 use serde_json::{Map, Value, json};
 
 /// The Prometheus exposition, filtered to named families.
@@ -124,7 +123,7 @@ fn run(context: ToolContext, arguments: Arguments) -> ToolFuture {
 
         let harvest = match harvest(&context).await {
             Ok(harvest) => harvest,
-            Err(refused) => return Ok(refused),
+            Err(error) => return Ok(diagnostics_error(error)),
         };
 
         let mut result = Map::new();
@@ -192,20 +191,19 @@ fn run(context: ToolContext, arguments: Arguments) -> ToolFuture {
 }
 
 /// One harvest for this call, with the same inputs as the bundle's.
-async fn harvest(context: &ToolContext) -> Result<DiagnosticsHarvest, CallToolResult> {
+async fn harvest(context: &ToolContext) -> AppResult<DiagnosticsHarvest> {
     let host = context.diagnostics.clone();
     let Ok((values, paths)) = tokio::task::spawn_blocking(move || host_identifying(&host)).await
     else {
-        return Err(diagnostics_error(AppError::Repository(
+        return Err(AppError::Repository(
             "diagnostics identifying values task failed".into(),
-        )));
+        ));
     };
     context
         .auth
         .app
         .diagnostics_harvest(context.caller.user(), &values, &paths)
         .await
-        .map_err(diagnostics_error)
 }
 
 fn insert_value(result: &mut Map<String, Value>, value: Value) {

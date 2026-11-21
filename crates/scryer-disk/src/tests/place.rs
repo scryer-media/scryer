@@ -24,8 +24,9 @@ fn scripted() -> (Disk, Arc<Scripted>, Arc<ManualClock>) {
     (disk, backend, clock)
 }
 
-fn place(disk: &Disk, policy: Placement) -> Result<Placed, PlaceRefusal> {
+fn place(disk: &Disk, policy: Placement) -> Result<Placed, Box<PlaceRefusal>> {
     disk.place_blocking(&p(SOURCE), &p(DEST), policy)
+        .map_err(Box::new)
 }
 
 fn refusal(disk: &Disk, policy: Placement) -> Refused {

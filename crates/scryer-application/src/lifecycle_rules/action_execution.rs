@@ -1650,6 +1650,10 @@ impl AppUseCase {
     /// matters: eligibility first so a disarmed rule never even re-evaluates,
     /// the matcher before the environment so "stopped matching" reads as a
     /// cancel rather than a hold, and the environment holds last.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The leased candidate is checked against independently loaded rule and batch evidence"
+    )]
     pub(super) async fn lifecycle_execution_safety_checks(
         &self,
         detail: &LifecycleRuleSetDetail,
@@ -2052,7 +2056,7 @@ impl AppUseCase {
             self.populate_lifecycle_storage_roots(
                 &mut input.facts,
                 files,
-                &storage_roots,
+                storage_roots,
                 &mut capacities,
                 super::storage::LifecycleStorageRead::RefreshUncached,
             )
@@ -2116,7 +2120,7 @@ impl AppUseCase {
                 .restore_sequence_own_effects(
                     candidate,
                     &title,
-                    &sequence,
+                    sequence,
                     &completed_steps,
                     deletion_checkpoint.as_ref(),
                     &mut input,
@@ -2368,6 +2372,10 @@ impl AppUseCase {
     ///
     /// `completed_steps` is the candidate's step rows for its current match
     /// generation and revision. An `Err` is the hold reason.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Replay takes explicit candidate, checkpoint, and monitoring evidence"
+    )]
     pub(super) async fn restore_sequence_own_effects(
         &self,
         candidate: &LifecycleCandidate,
@@ -2505,7 +2513,7 @@ impl AppUseCase {
                     // library it was in before the move, while it is
                     // still where the move sent it.
                     let landed = provenance.as_ref().is_some_and(|value| {
-                        super::sequence_execution::sequence_move_landed(value, &title)
+                        super::sequence_execution::sequence_move_landed(value, title)
                     });
                     if landed
                         && let Some(before) = before.as_ref()

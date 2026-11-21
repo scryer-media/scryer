@@ -75,6 +75,10 @@ pub struct ClaimedNewRuleSet {
 
 /// What [`AppUseCase::create_rule_sets_batch_claiming_names`] did with one draft.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The public batch outcome carries the existing owned RuleSet payload"
+)]
 pub enum ClaimedRuleSetOutcome {
     Created(RuleSet),
     /// Nothing was written: a rule set, or an earlier draft of the batch,

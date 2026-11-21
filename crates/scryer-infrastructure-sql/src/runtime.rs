@@ -1401,7 +1401,8 @@ mod tests {
             .expect("insert bytes");
         }
 
-        let rows: Vec<(i64, Option<Vec<u8>>, Option<Vec<u8>>, String, String)> = sqlx::query_as(
+        type ByteProbeRow = (i64, Option<Vec<u8>>, Option<Vec<u8>>, String, String);
+        let rows: Vec<ByteProbeRow> = sqlx::query_as(
             "SELECT n, owned, shared, typeof(owned), typeof(shared) FROM bytes_probe ORDER BY n",
         )
         .fetch_all(&pool)

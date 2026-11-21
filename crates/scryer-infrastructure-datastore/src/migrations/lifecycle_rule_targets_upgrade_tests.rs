@@ -333,7 +333,15 @@ fn removed() -> Vec<(&'static str, i64)> {
 }
 
 /// Every seeded rule, its revisions' roots, and whether the upgrade keeps it.
-const RULES: &[(&str, &str, &[Option<&str>], bool, bool)] = &[
+type RuleFixture = (
+    &'static str,
+    &'static str,
+    &'static [Option<&'static str>],
+    bool,
+    bool,
+);
+
+const RULES: &[RuleFixture] = &[
     (TITLE_RULE, "title", &[None, None], false, false),
     (SEASON_RULE, "season", &[None], false, false),
     (EPISODE_RULE, "episode", &[None], false, false),

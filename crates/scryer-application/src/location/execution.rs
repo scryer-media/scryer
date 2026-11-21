@@ -491,7 +491,7 @@ impl TitleFileMover for RootMoveFileMover {
             super::resolution::compare_existing(
                 source,
                 destination,
-                &request.progress,
+                request.progress,
                 request.file.source_content.as_ref(),
                 request.depth,
             )
@@ -502,7 +502,7 @@ impl TitleFileMover for RootMoveFileMover {
                 source,
                 destination,
                 crate::disk::placement::verified_copy(request.depth, DestinationClaim::ClaimHere),
-                &request.progress,
+                request.progress,
             )
             .await?
         };

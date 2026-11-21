@@ -4048,17 +4048,19 @@ fn attempt_report_from_value(analysis: &JsonValue) -> Option<scryer_media_types:
         .and_then(|report| scryer_media_types::ProbeReport::deserialize(report).ok())
 }
 
+type StoredAnalysis = Option<Option<Vec<u8>>>;
+
 /// Decodes the media file rows of one read. A statement that returns a file
 /// on several rows, one per episode, decodes its stored analysis once.
 #[derive(Default)]
 struct MediaFileRowDecoder {
-    analyses: HashMap<String, (Option<Option<Vec<u8>>>, std::sync::Arc<AnalysisParts>)>,
+    analyses: HashMap<String, (StoredAnalysis, std::sync::Arc<AnalysisParts>)>,
 }
 
 impl MediaFileRowDecoder {
     fn analysis(&mut self, row: &SqlRow) -> std::sync::Arc<AnalysisParts> {
         let stored = row.opt_bytes("analysis").ok();
-        let decode = |stored: &Option<Option<Vec<u8>>>| {
+        let decode = |stored: &StoredAnalysis| {
             std::sync::Arc::new(AnalysisParts::from_stored(
                 stored.as_ref().map(|stored| stored.as_deref()),
             ))
@@ -9857,7 +9859,13 @@ mod tests {
 
         // (analysis bytes, attempt status, attempt json, linked episodes)
         let compressed = |json: &str| Some(encode_media_analysis(json).unwrap());
-        let cases: Vec<(Option<Vec<u8>>, Option<&str>, Option<&str>, Vec<&str>)> = vec![
+        type AnalysisCase<'a> = (
+            Option<Vec<u8>>,
+            Option<&'a str>,
+            Option<&'a str>,
+            Vec<&'a str>,
+        );
+        let cases: Vec<AnalysisCase<'_>> = vec![
             (
                 compressed(&full_json),
                 Some("succeeded"),

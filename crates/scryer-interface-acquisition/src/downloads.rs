@@ -769,34 +769,6 @@ impl DownloadMutations {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn queued_manual_import_payload_uses_the_source_identity_not_the_selection_id() {
-        let payload = queued_manual_import_action_payload(scryer_application::QueuedManualImport {
-            import_id: "import-1".to_string(),
-            source_identity: scryer_application::ClientJobLocator::new(
-                Some("client-1"),
-                "weaver",
-                "10766",
-            ),
-        });
-
-        assert_eq!(payload.download_client_item_id, "10766");
-        assert_eq!(
-            payload.client_id.as_ref().map(|id| id.as_str()),
-            Some("client-1")
-        );
-        assert_eq!(payload.client_type.as_deref(), Some("weaver"));
-        assert_eq!(
-            payload.import_id.as_ref().map(|id| id.as_str()),
-            Some("import-1")
-        );
-    }
-}
-
 /// Queue a signed candidate with an operator-selected client and category.
 pub(crate) async fn queue_indexer_search_assignment(
     app: &AppUseCase,
@@ -1000,4 +972,32 @@ pub(crate) async fn queue_replacement_release(
             conflict: Some(queue_download_conflict_payload(conflict)),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_manual_import_payload_uses_the_source_identity_not_the_selection_id() {
+        let payload = queued_manual_import_action_payload(scryer_application::QueuedManualImport {
+            import_id: "import-1".to_string(),
+            source_identity: scryer_application::ClientJobLocator::new(
+                Some("client-1"),
+                "weaver",
+                "10766",
+            ),
+        });
+
+        assert_eq!(payload.download_client_item_id, "10766");
+        assert_eq!(
+            payload.client_id.as_ref().map(|id| id.as_str()),
+            Some("client-1")
+        );
+        assert_eq!(payload.client_type.as_deref(), Some("weaver"));
+        assert_eq!(
+            payload.import_id.as_ref().map(|id| id.as_str()),
+            Some("import-1")
+        );
+    }
 }

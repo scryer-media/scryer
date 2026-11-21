@@ -43,9 +43,10 @@ fn prove(
     fallback: Fallback,
     seen: &RawStat,
     proof: LinkProof,
-) -> Result<Placed, PlaceRefusal> {
+) -> Result<Placed, Box<PlaceRefusal>> {
     let seen = Mark::of_stat(seen);
     disk.place_proven_blocking(&p(SOURCE), &p(DEST), linking(fallback), &seen, proof)
+        .map_err(Box::new)
 }
 
 #[test]

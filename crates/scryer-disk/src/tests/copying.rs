@@ -485,7 +485,9 @@ fn staged_copy<'a>(staged: &'a Path, seen: &'a Mark) -> StagedCopy<'a> {
 }
 
 /// A watch that keeps every report it is given.
-fn recording() -> (Watch, Arc<Mutex<Vec<(Phase, u64)>>>) {
+type RecordedProgress = Arc<Mutex<Vec<(Phase, u64)>>>;
+
+fn recording() -> (Watch, RecordedProgress) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = seen.clone();
     let watch = Watch {

@@ -382,6 +382,10 @@ pub enum HashDomain {
     IndexerClientRelease,
     /// Per-instance phase offset for the metadata gateway compatibility poll.
     GatewayCompatibilityPollPhase,
+    /// Lookup key for a pending MCP confirmation token.
+    McpConfirmationToken,
+    /// Operation and variables covered by an MCP confirmation.
+    McpConfirmationBinding,
 }
 
 impl HashDomain {
@@ -411,6 +415,8 @@ impl HashDomain {
             Self::RawSearchScope => "scryer.raw-search.scope.v1",
             Self::IndexerClientRelease => "scryer.indexer-client.release.v1",
             Self::GatewayCompatibilityPollPhase => "scryer.metadata-gateway.poll-phase.v1",
+            Self::McpConfirmationToken => "scryer.mcp.confirmation-token.v1",
+            Self::McpConfirmationBinding => "scryer.mcp.confirmation-binding.v1",
         }
     }
 }
@@ -447,11 +453,22 @@ impl HashDomain {
 /// nobody outside Scryer computes or verifies it — it belongs here. If you think
 /// you need SHA-256 for something first-party, the answer is that you do not.
 pub fn blake3_identity_hex(domain: HashDomain, input: impl AsRef<str>) -> String {
+    blake3_identity_hash(domain, input.as_ref())
+        .to_hex()
+        .to_string()
+}
+
+/// The domain-separated identity digest as fixed-size bytes.
+pub fn blake3_identity_bytes(domain: HashDomain, input: impl AsRef<str>) -> [u8; 32] {
+    *blake3_identity_hash(domain, input.as_ref()).as_bytes()
+}
+
+fn blake3_identity_hash(domain: HashDomain, input: &str) -> blake3::Hash {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain.as_str().as_bytes());
     hasher.update(&[0u8]);
-    hasher.update(input.as_ref().as_bytes());
-    hasher.finalize().to_hex().to_string()
+    hasher.update(input.as_bytes());
+    hasher.finalize()
 }
 
 /// Fingerprint of one indexer listing page: its results' identities, in the

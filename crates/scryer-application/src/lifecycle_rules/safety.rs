@@ -392,10 +392,12 @@ impl LifecycleActivityCheck {
     }
 }
 
+type CachedPlaybackPicture = (tokio::time::Instant, Arc<LifecyclePlaybackPicture>);
+
 /// The pass's playback picture, shared by every candidate that asks.
 #[derive(Clone, Default)]
 pub(crate) struct LifecyclePlaybackCache {
-    picture: Arc<tokio::sync::Mutex<Option<(tokio::time::Instant, Arc<LifecyclePlaybackPicture>)>>>,
+    picture: Arc<tokio::sync::Mutex<Option<CachedPlaybackPicture>>>,
 }
 
 impl LifecyclePlaybackCache {

@@ -2589,12 +2589,14 @@ enum SourceCleanup {
     Done,
     /// The source goes beside a destination that was already there and was
     /// adopted, once the filesystem shows the two are separate entries.
-    BesideAdopted {
-        source: PathBuf,
-        source_mark: Mark,
-        dest: PathBuf,
-        adopted: Mark,
-    },
+    BesideAdopted(Box<AdoptedSourceCleanup>),
+}
+
+struct AdoptedSourceCleanup {
+    source: PathBuf,
+    source_mark: Mark,
+    dest: PathBuf,
+    adopted: Mark,
 }
 
 impl SourceCleanup {
@@ -2604,21 +2606,24 @@ impl SourceCleanup {
     fn finish_blocking(self) -> AppResult<()> {
         match self {
             Self::Done => Ok(()),
-            Self::BesideAdopted {
-                source,
-                source_mark,
-                dest,
-                adopted,
-            } => aside_removal_result(
-                &source,
-                &dest,
-                Disk::process().remove_source_beside_blocking(
-                    &source,
-                    &source_mark,
-                    &dest,
-                    &adopted,
-                ),
-            ),
+            Self::BesideAdopted(cleanup) => {
+                let AdoptedSourceCleanup {
+                    source,
+                    source_mark,
+                    dest,
+                    adopted,
+                } = cleanup.as_ref();
+                aside_removal_result(
+                    source,
+                    dest,
+                    Disk::process().remove_source_beside_blocking(
+                        source,
+                        source_mark,
+                        dest,
+                        adopted,
+                    ),
+                )
+            }
         }
     }
 
@@ -2628,12 +2633,13 @@ impl SourceCleanup {
     async fn finish(self) -> AppResult<()> {
         match self {
             Self::Done => Ok(()),
-            Self::BesideAdopted {
-                source,
-                source_mark,
-                dest,
-                adopted,
-            } => {
+            Self::BesideAdopted(cleanup) => {
+                let AdoptedSourceCleanup {
+                    source,
+                    source_mark,
+                    dest,
+                    adopted,
+                } = *cleanup;
                 let removal = tokio::spawn({
                     let (source, dest) = (source.clone(), dest.clone());
                     async move {
@@ -2805,12 +2811,13 @@ fn beside_adopted_destination(
             source.display()
         )));
     }
-    Ok(SourceCleanup::BesideAdopted {
+    let cleanup = AdoptedSourceCleanup {
         source: source.to_path_buf(),
         source_mark,
         dest: dest.to_path_buf(),
         adopted,
-    })
+    };
+    Ok(SourceCleanup::BesideAdopted(Box::new(cleanup)))
 }
 
 /// What a removal beside an adopted destination answered, as the import
@@ -2832,7 +2839,7 @@ fn aside_removal_result(source: &Path, dest: &Path, answer: AsideRemoval) -> App
         AsideRemoval::DestinationUnread(reading) => Err(import_destination_alias_unknown(
             source,
             dest,
-            &reading.describe_absence().to_string(),
+            reading.describe_absence(),
         )),
         AsideRemoval::CannotTell => Err(import_destination_alias_unknown(
             source,
@@ -8859,9 +8866,9 @@ mod tests {
 
             let error = match fast {
                 true => fast_lane_error(&source, &dest, options),
-                false => import_in_one_process(&source, &dest, options)
-                    .err()
-                    .expect("the source changed"),
+                false => {
+                    import_in_one_process(&source, &dest, options).expect_err("the source changed")
+                }
             };
             let said = error.to_string();
             assert!(
@@ -8899,7 +8906,7 @@ mod tests {
                 true => Err(fast_lane_error(&source, &dest, options)),
                 false => import_in_one_process(&source, &dest, options),
             };
-            let error = outcome.err().expect("the name is occupied");
+            let error = outcome.expect_err("the name is occupied");
             assert_eq!(
                 error.reason(),
                 Some(scryer_application::error_reasons::import::DESTINATION_OCCUPIED),

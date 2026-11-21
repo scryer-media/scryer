@@ -106,12 +106,11 @@ fn run(context: ToolContext, mut arguments: Arguments, expected: OperationKind) 
                 facts,
             ));
         }
-        if confirm::needs_confirmation(operation) {
-            if let Some(refused) =
+        if confirm::needs_confirmation(operation)
+            && let Some(refused) =
                 confirm_or_refuse(&context, operation, variables.as_ref(), confirm_token)
-            {
-                return Ok(refused);
-            }
+        {
+            return Ok(refused);
         }
         let mut request =
             async_graphql::Request::new(operation.text).operation_name(operation.name.as_str());

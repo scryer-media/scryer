@@ -425,8 +425,7 @@ pub fn search_log_lines(
     }
     let mut chars = 0;
     for (position, (source, lines, start)) in sources.iter().enumerate() {
-        let mut passed = *start;
-        for line in lines.iter().rev().skip(*start) {
+        for (passed, line) in lines.iter().rev().enumerate().skip(*start) {
             if cancelled.load(Ordering::Acquire) {
                 result.cancelled = true;
                 return result;
@@ -451,7 +450,6 @@ pub fn search_log_lines(
                 }
                 chars += size;
             }
-            passed += 1;
             result.scanned += 1;
             if let Some(projected) = hit {
                 result.lines.push(LogHit {

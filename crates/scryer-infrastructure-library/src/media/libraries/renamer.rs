@@ -270,7 +270,7 @@ async fn move_file(
     source: &str,
     target: &str,
     read: Option<&ReadBefore>,
-) -> Result<(), PlaceRefusal> {
+) -> Result<(), Box<PlaceRefusal>> {
     let (source, target) = (
         stored_path_to_path_buf(source),
         stored_path_to_path_buf(target),
@@ -282,6 +282,7 @@ async fn move_file(
         None => disk.place(source, target, policy).await,
     }
     .map(|_| ())
+    .map_err(Box::new)
 }
 
 fn rename_paths_equivalent(source: &str, target: &str) -> bool {

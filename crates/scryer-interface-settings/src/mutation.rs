@@ -2940,8 +2940,7 @@ mod tests {
     fn out_of_range_pack_thresholds_are_refused_with_their_reasons() {
         let reason = |criteria: serde_json::Value| {
             let error = quality_profile_from_input(pack_threshold_input(criteria), None)
-                .err()
-                .expect("refused");
+                .expect_err("refused");
             error
                 .extensions
                 .as_ref()

@@ -729,34 +729,6 @@ pub fn from_script_interpreter_config(
     }
 }
 
-#[cfg(test)]
-mod scoring_history_tests {
-    use super::history_scoring;
-
-    #[test]
-    fn history_scoring_preserves_recorded_evidence_and_legacy_absence() {
-        assert!(history_scoring(None).is_none());
-        assert!(history_scoring(Some(r#"{"type":"release_grabbed","data":{}}"#)).is_none());
-        let json = serde_json::json!({"type":"release_grabbed","data":{"release_facts":{"scoring":{
-            "candidate_score":0,"previous_score":-5,"delta":5,"decision_code":"manual_override",
-            "comparisons":[],"entries":[{"code":"synthetic_rule","delta":-3,"kind":"score_contribution","source":"Test rule"}]
-        }}}}).to_string();
-        let score = history_scoring(Some(&json)).unwrap();
-        assert_eq!(score.candidate_score, 0);
-        assert_eq!(score.previous_score, Some(-5));
-        assert_eq!(score.decision_code, "manual_override");
-        assert_eq!(score.entries[0].delta, -3);
-        assert_eq!(score.entries[0].source.as_deref(), Some("Test rule"));
-        let upgrade = history_scoring(Some(
-            r#"{"type":"file_upgraded","data":{"old_score":-7,"new_score":0}}"#,
-        ))
-        .unwrap();
-        assert_eq!(upgrade.candidate_score, 0);
-        assert_eq!(upgrade.previous_score, Some(-7));
-        assert_eq!(upgrade.decision_code, "upgrade");
-    }
-}
-
 pub fn to_rule_import_source(
     source: ExternalRuleImportSource,
 ) -> scryer_application::rule_import::RuleImportSource {
@@ -847,5 +819,33 @@ pub fn from_rule_import_status(
             .into_iter()
             .map(from_rule_import_fact)
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod scoring_history_tests {
+    use super::history_scoring;
+
+    #[test]
+    fn history_scoring_preserves_recorded_evidence_and_legacy_absence() {
+        assert!(history_scoring(None).is_none());
+        assert!(history_scoring(Some(r#"{"type":"release_grabbed","data":{}}"#)).is_none());
+        let json = serde_json::json!({"type":"release_grabbed","data":{"release_facts":{"scoring":{
+            "candidate_score":0,"previous_score":-5,"delta":5,"decision_code":"manual_override",
+            "comparisons":[],"entries":[{"code":"synthetic_rule","delta":-3,"kind":"score_contribution","source":"Test rule"}]
+        }}}}).to_string();
+        let score = history_scoring(Some(&json)).unwrap();
+        assert_eq!(score.candidate_score, 0);
+        assert_eq!(score.previous_score, Some(-5));
+        assert_eq!(score.decision_code, "manual_override");
+        assert_eq!(score.entries[0].delta, -3);
+        assert_eq!(score.entries[0].source.as_deref(), Some("Test rule"));
+        let upgrade = history_scoring(Some(
+            r#"{"type":"file_upgraded","data":{"old_score":-7,"new_score":0}}"#,
+        ))
+        .unwrap();
+        assert_eq!(upgrade.candidate_score, 0);
+        assert_eq!(upgrade.previous_score, Some(-7));
+        assert_eq!(upgrade.decision_code, "upgrade");
     }
 }

@@ -803,44 +803,6 @@ fn carried_high_risk_attempts(
         .fold(candidate.action_attempts.max(0), i64::max)
 }
 
-#[cfg(test)]
-mod decision_change_tests {
-    use super::decision_deletes_more;
-    use scryer_rules::lifecycle_actions::LifecycleActions;
-
-    fn actions(delete_files: bool, delete_title: bool, search: bool) -> LifecycleActions {
-        LifecycleActions {
-            delete_files,
-            delete_title,
-            search,
-            ..LifecycleActions::default()
-        }
-    }
-
-    #[test]
-    fn each_delete_head_is_compared_on_its_own() {
-        let files = actions(true, false, false);
-        let title = actions(false, true, false);
-        let both = actions(true, true, false);
-        let none = actions(false, false, true);
-
-        assert!(decision_deletes_more(Some(&files), &title));
-        assert!(decision_deletes_more(Some(&title), &files));
-        assert!(decision_deletes_more(Some(&files), &both));
-        assert!(decision_deletes_more(Some(&none), &files));
-        assert!(decision_deletes_more(None, &title));
-
-        assert!(!decision_deletes_more(Some(&both), &files));
-        assert!(!decision_deletes_more(Some(&both), &title));
-        assert!(!decision_deletes_more(
-            Some(&files),
-            &actions(true, false, true)
-        ));
-        assert!(!decision_deletes_more(Some(&files), &none));
-        assert!(!decision_deletes_more(None, &none));
-    }
-}
-
 // ── Manual trigger ──────────────────────────────────────────────────────────
 
 impl AppUseCase {
@@ -2940,5 +2902,43 @@ impl AppUseCase {
             .into_iter()
             .map(|user| (user.id, user.username))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod decision_change_tests {
+    use super::decision_deletes_more;
+    use scryer_rules::lifecycle_actions::LifecycleActions;
+
+    fn actions(delete_files: bool, delete_title: bool, search: bool) -> LifecycleActions {
+        LifecycleActions {
+            delete_files,
+            delete_title,
+            search,
+            ..LifecycleActions::default()
+        }
+    }
+
+    #[test]
+    fn each_delete_head_is_compared_on_its_own() {
+        let files = actions(true, false, false);
+        let title = actions(false, true, false);
+        let both = actions(true, true, false);
+        let none = actions(false, false, true);
+
+        assert!(decision_deletes_more(Some(&files), &title));
+        assert!(decision_deletes_more(Some(&title), &files));
+        assert!(decision_deletes_more(Some(&files), &both));
+        assert!(decision_deletes_more(Some(&none), &files));
+        assert!(decision_deletes_more(None, &title));
+
+        assert!(!decision_deletes_more(Some(&both), &files));
+        assert!(!decision_deletes_more(Some(&both), &title));
+        assert!(!decision_deletes_more(
+            Some(&files),
+            &actions(true, false, true)
+        ));
+        assert!(!decision_deletes_more(Some(&files), &none));
+        assert!(!decision_deletes_more(None, &none));
     }
 }
