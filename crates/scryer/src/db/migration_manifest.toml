@@ -4382,36 +4382,19 @@ engine = "postgres"
 scope = "all"
 
 [[migration]]
-version = 362
-description = "dashboard panel settings"
-checksum_algo = "blake3"
-
-[[migration.steps]]
-kind = "sql"
-file = "migrations/0362_dashboard_panel_settings.sql"
-engine = "sqlite"
-scope = "all"
-
-[[migration.steps]]
-kind = "sql"
-file = "postgres/migrations/0362_dashboard_panel_settings.sql"
-engine = "postgres"
-scope = "all"
-
-[[migration]]
 version = 363
-description = "lifecycle candidates state due index"
+description = "dashboard panel settings and lifecycle candidates state due index"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0363_lifecycle_candidates_state_due_index.sql"
+file = "migrations/0363_dashboard_panel_settings_and_lifecycle_due_index.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0363_lifecycle_candidates_state_due_index.sql"
+file = "postgres/migrations/0363_dashboard_panel_settings_and_lifecycle_due_index.sql"
 engine = "postgres"
 scope = "all"
 

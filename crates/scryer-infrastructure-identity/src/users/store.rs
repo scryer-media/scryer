@@ -2101,12 +2101,10 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create dashboard layout tables");
-        sqlx::raw_sql(include_str!(
-            "../../../scryer/src/db/migrations/0362_dashboard_panel_settings.sql"
-        ))
-        .execute(&pool)
-        .await
-        .expect("add dashboard panel settings");
+        sqlx::query("ALTER TABLE user_ui_dashboard_layout_items ADD COLUMN settings_json TEXT")
+            .execute(&pool)
+            .await
+            .expect("add dashboard panel settings");
         sqlx::query(
             "CREATE TABLE user_ui_tours (
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
