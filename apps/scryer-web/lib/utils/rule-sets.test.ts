@@ -46,7 +46,10 @@ test("copying a managed rule creates a user-owned draft without managed metadata
 });
 
 test("create input round-trips enabled and omits managed metadata", () => {
-  const input = createRuleSetInput(copyRuleSetDraft(managedRule, scoring), scoring);
+  const input = createRuleSetInput(
+    copyRuleSetDraft(managedRule, scoring),
+    scoring,
+  );
 
   assert.equal(input.enabled, false);
   assert.deepEqual(input.appliedFacets, ["movies", "series"]);

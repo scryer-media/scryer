@@ -1918,12 +1918,16 @@ const ko: LocaleDictionary = {
   "settings.sidecarFilesTitle": "사이드카 파일",
   "settings.libraryFullHashBackfillTitle": "백그라운드 해시",
   "settings.libraryFullHashBackfillLabel": "매일 밤 파일 해시",
-  "settings.libraryFullHashBackfillDescription": "이 라이브러리의 모든 파일을 밤에 한 번 읽어 전체 콘텐츠 해시를 기록합니다. 스핀다운 상태로 두는 디스크의 라이브러리에서는 끄세요. 그러면 파일의 해시는 이동, 가져오기 또는 검사에 필요할 때만 읽습니다.",
+  "settings.libraryFullHashBackfillDescription":
+    "이 라이브러리의 모든 파일을 밤에 한 번 읽어 전체 콘텐츠 해시를 기록합니다. 스핀다운 상태로 두는 디스크의 라이브러리에서는 끄세요. 그러면 파일의 해시는 이동, 가져오기 또는 검사에 필요할 때만 읽습니다.",
   "settings.libraryFullHashBackfillDisableTitle": "야간 해시를 끄시겠습니까?",
-  "settings.libraryFullHashBackfillDisableWarning": "이 기능을 끄면 특정 파일 이동이 100% 안전한지 Scryer가 보장하기 어려워집니다.",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "이 기능을 끄면 특정 파일 이동이 100% 안전한지 Scryer가 보장하기 어려워집니다.",
   "settings.libraryFullHashBackfillDisableConfirm": "끄기",
-  "settings.libraryFullHashBackfillEnabledStatus": "이 라이브러리의 야간 해시를 켰습니다.",
-  "settings.libraryFullHashBackfillDisabledStatus": "이 라이브러리의 야간 해시를 껐습니다.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "이 라이브러리의 야간 해시를 켰습니다.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "이 라이브러리의 야간 해시를 껐습니다.",
   "settings.nfoWriteOnImportLabel": "가져오기 시 NFO 작성",
   "settings.nfoWriteOnImportDescription":
     "가져온 미디어와 함께 Kodi/Jellyfin/Emby 호환 .nfo 메타데이터 파일을 작성합니다. 기존 .nfo 파일은 절대 덮어쓰지 않습니다",
@@ -2502,8 +2506,7 @@ const ko: LocaleDictionary = {
     "저장하지 않은 변경 사항을 버릴까요?",
   "settings.lifecycleRuleConfirmDiscardDescription":
     "수명 주기 규칙 편집기에 저장되지 않은 변경 사항이 있으며 사라집니다.",
-  "settings.lifecycleRuleDeleting":
-    "수명 주기 규칙 {{name}}을(를) 삭제할까요?",
+  "settings.lifecycleRuleDeleting": "수명 주기 규칙 {{name}}을(를) 삭제할까요?",
   "settings.noLifecycleRulesFound": "아직 수명 주기 규칙이 없습니다.",
   "settings.lifecycleRuleRevision": "리비전",
   "settings.lifecycleActionDoNothing": "아무 작업도 하지 않음",
@@ -2531,8 +2534,7 @@ const ko: LocaleDictionary = {
   "settings.lifecyclePreviewLibrary": "라이브러리",
   "settings.lifecyclePreviewLibraryPlaceholder": "라이브러리 선택",
   "settings.lifecyclePreviewLimit": "타이틀 수",
-  "settings.lifecyclePreviewLimitHelp":
-    "실행당 최대 {{max}}개의 타이틀입니다.",
+  "settings.lifecyclePreviewLimitHelp": "실행당 최대 {{max}}개의 타이틀입니다.",
   "settings.lifecyclePreviewRun": "미리 보기 실행",
   "settings.lifecyclePreviewRunning": "미리 보기 실행 중...",
   "settings.lifecyclePreviewNoTitles": "평가된 타이틀이 없습니다.",
@@ -2610,8 +2612,7 @@ const ko: LocaleDictionary = {
   "settings.lifecycleRunNotStarted":
     "아무것도 시작되지 않았습니다: {{message}}",
   "settings.lifecycleEvaluationRunsTitle": "평가 실행",
-  "settings.lifecycleEvaluationRunsEmpty":
-    "아직 기록된 평가 실행이 없습니다.",
+  "settings.lifecycleEvaluationRunsEmpty": "아직 기록된 평가 실행이 없습니다.",
   "settings.lifecycleActionRunsTitle": "작업 실행",
   "settings.lifecycleActionRunsEmpty": "아직 기록된 작업 실행이 없습니다.",
   "settings.lifecycleRunColStarted": "시작",
@@ -2653,7 +2654,8 @@ const ko: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "이 타이틀을 제외하는 이유 (선택)",
   "settings.lifecycleExcludeConfirm": "제외",
-  "settings.lifecycleExcluded": "{{title}}을(를) 수명 주기 규칙에서 제외했습니다.",
+  "settings.lifecycleExcluded":
+    "{{title}}을(를) 수명 주기 규칙에서 제외했습니다.",
   "move.dialogTitle": "타이틀 이동",
   "move.destinationLibrary": "대상 라이브러리",
   "move.destinationRoot": "대상 루트",

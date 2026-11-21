@@ -149,6 +149,26 @@ impl<F: PolicyFamily> PolicyEngine<F> {
         limits: RuntimeLimits,
         observer: Option<Arc<dyn PolicyObserver>>,
     ) -> Result<Self, RulesError> {
+        Self::build_engine(policies, limits, observer, true)
+    }
+
+    /// [`Self::build_with_limits`] without preparing the template, as every
+    /// build did before: each evaluator then prepares its own clone on its
+    /// first rule. Exists so a test can compare the two.
+    #[cfg(test)]
+    pub(crate) fn build_unprepared_for_test(
+        policies: &[F::Policy],
+        limits: RuntimeLimits,
+    ) -> Result<Self, RulesError> {
+        Self::build_engine(policies, limits, None, false)
+    }
+
+    fn build_engine(
+        policies: &[F::Policy],
+        limits: RuntimeLimits,
+        observer: Option<Arc<dyn PolicyObserver>>,
+        prepare: bool,
+    ) -> Result<Self, RulesError> {
         let mut engine = runtime::configured_engine(&limits);
         let mut rules = Vec::with_capacity(policies.len());
         let mut reads_clock = false;
@@ -207,6 +227,9 @@ impl<F: PolicyFamily> PolicyEngine<F> {
             timer.finish("ok");
         }
 
+        if prepare {
+            prepare_template(&mut engine);
+        }
         Ok(Self {
             observer,
             template: Arc::new(engine),
@@ -220,9 +243,11 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     /// Build an empty engine (no policies loaded).
     pub fn empty() -> Self {
         let limits = F::limits();
+        let mut engine = runtime::configured_engine(&limits);
+        prepare_template(&mut engine);
         Self {
             observer: None,
-            template: Arc::new(runtime::configured_engine(&limits)),
+            template: Arc::new(engine),
             rules: Vec::new(),
             limits,
             reads_clock: false,
@@ -291,6 +316,23 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     }
 }
 
+/// Run regorus's one-time analysis of the loaded modules on the template, so
+/// every evaluator cloned from it starts prepared instead of repeating the
+/// analysis on its first rule.
+///
+/// regorus has no public call that only prepares, so this evaluates the
+/// constant query `true`, which reads no input, data or rule. Every rule
+/// evaluation resets the interpreter's per-evaluation state before it runs,
+/// and nothing an evaluator does afterwards (`set_input`, `eval_rule`) clears
+/// the prepared flag; only adding policies or data would, and no evaluator
+/// does. A failure leaves the template unprepared, so each evaluation reports
+/// it per rule exactly as before.
+fn prepare_template(engine: &mut Engine) {
+    if let Err(error) = engine.eval_bool_query("true".to_string(), false) {
+        tracing::debug!(%error, "policy template could not be prepared at build");
+    }
+}
+
 /// Evaluates every loaded policy against one input document at a time.
 pub struct PolicyEvaluator<F: PolicyFamily> {
     pub(crate) observer: Option<Arc<dyn PolicyObserver>>,
@@ -337,7 +379,33 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input: &F::Input,
         ctx: &F::EvalContext,
         phase: &'static str,
-        selected: impl Fn(&F::RuleExtra) -> bool,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
+    ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
+        self.evaluate_document_where(
+            |limits| {
+                if F::BOUND_INPUT {
+                    runtime::bounded_input_document(input, limits)
+                } else {
+                    Ok(serde_json::to_value(input)?)
+                }
+            },
+            ctx,
+            phase,
+            selected,
+        )
+    }
+
+    /// [`Self::evaluate_policies_where`] over an input document the caller
+    /// builds, so a caller that evaluates one input in several phases can
+    /// serialize it once and patch the document between them. `document` is
+    /// not called when no rule is loaded, and the family's input bound is the
+    /// caller's to apply.
+    pub(crate) fn evaluate_document_where(
+        &mut self,
+        document: impl FnOnce(&RuntimeLimits) -> Result<serde_json::Value, RulesError>,
+        ctx: &F::EvalContext,
+        phase: &'static str,
+        selected: impl Fn(&RuleHandle<F::RuleExtra>) -> bool,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
 
@@ -347,11 +415,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
 
         let input_timer =
             PolicyTimer::new(&self.observer, F::NAME, "input_prepare", phase, "", "none");
-        let document = if F::BOUND_INPUT {
-            runtime::bounded_input_document(input, &self.limits)?
-        } else {
-            serde_json::to_value(input)?
-        };
+        let document = document(&self.limits)?;
         let unobservable = if F::TRACKS_REFERENCED_FACTS {
             unobservable_facts_in(&document, F::NESTED_FACT_SECTIONS)
         } else {
@@ -361,7 +425,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input_timer.finish("ok");
 
         for (index, rule) in self.rules.iter().enumerate() {
-            if !selected(&rule.extra) {
+            if !selected(rule) {
                 continue;
             }
             let temperature = if self.observed_rules.get(index).copied().unwrap_or(false) {

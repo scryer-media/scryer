@@ -118,14 +118,19 @@ async fn request_rule_timeout_holds_an_armed_request_and_records_the_error() {
         limits,
     )
     .unwrap();
-    harness
-        .app
-        .services
-        .customization
-        .request_rules_engine
-        .write()
-        .unwrap()
-        .engine = engine;
+    {
+        let mut guard = harness
+            .app
+            .services
+            .customization
+            .request_rules_engine
+            .write()
+            .unwrap();
+        *guard = std::sync::Arc::new(crate::request_rules::RequestRulesEngineCache {
+            engine,
+            ..crate::request_rules::RequestRulesEngineCache::clone(&guard)
+        });
+    }
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     submit(&harness, &library_id, 9047, None).await;
     assert_eq!(

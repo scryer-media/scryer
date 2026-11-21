@@ -2024,13 +2024,19 @@ const es: LocaleDictionary = {
     "Incluir películas clasificadas como de relleno en la cola de descargas",
   "settings.sidecarFilesTitle": "Archivos sidecar",
   "settings.libraryFullHashBackfillTitle": "Hash en segundo plano",
-  "settings.libraryFullHashBackfillLabel": "Calcular hash de los archivos cada noche",
-  "settings.libraryFullHashBackfillDescription": "Lee cada archivo de esta biblioteca una vez, durante la noche, para guardar su hash de contenido completo. Desactívalo en bibliotecas cuyos discos mantienes detenidos; el hash de un archivo solo se leerá cuando un movimiento, una importación o una comprobación lo necesite.",
-  "settings.libraryFullHashBackfillDisableTitle": "¿Desactivar el hash nocturno?",
-  "settings.libraryFullHashBackfillDisableWarning": "Desactivar esto reduce la capacidad de Scryer de garantizar que ciertos movimientos de archivos sean 100 % seguros.",
+  "settings.libraryFullHashBackfillLabel":
+    "Calcular hash de los archivos cada noche",
+  "settings.libraryFullHashBackfillDescription":
+    "Lee cada archivo de esta biblioteca una vez, durante la noche, para guardar su hash de contenido completo. Desactívalo en bibliotecas cuyos discos mantienes detenidos; el hash de un archivo solo se leerá cuando un movimiento, una importación o una comprobación lo necesite.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "¿Desactivar el hash nocturno?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Desactivar esto reduce la capacidad de Scryer de garantizar que ciertos movimientos de archivos sean 100 % seguros.",
   "settings.libraryFullHashBackfillDisableConfirm": "Desactivar",
-  "settings.libraryFullHashBackfillEnabledStatus": "Hash nocturno activado para esta biblioteca.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Hash nocturno desactivado para esta biblioteca.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Hash nocturno activado para esta biblioteca.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Hash nocturno desactivado para esta biblioteca.",
   "settings.nfoWriteOnImportLabel": "Escribir NFO al importar",
   "settings.nfoWriteOnImportDescription":
     "Escribir archivos de metadatos .nfo compatibles con Kodi/Jellyfin/Emby junto al medio importado; nunca se sobrescribe un archivo .nfo existente",
@@ -2682,8 +2688,7 @@ const es: LocaleDictionary = {
   "settings.lifecyclePreviewLibrary": "Biblioteca",
   "settings.lifecyclePreviewLibraryPlaceholder": "Selecciona una biblioteca",
   "settings.lifecyclePreviewLimit": "Títulos",
-  "settings.lifecyclePreviewLimitHelp":
-    "Hasta {{max}} títulos por ejecución.",
+  "settings.lifecyclePreviewLimitHelp": "Hasta {{max}} títulos por ejecución.",
   "settings.lifecyclePreviewRun": "Ejecutar vista previa",
   "settings.lifecyclePreviewRunning": "Ejecutando la vista previa...",
   "settings.lifecyclePreviewNoTitles": "No se evaluó ningún título.",
@@ -2700,8 +2705,7 @@ const es: LocaleDictionary = {
   "settings.lifecycleRuleUpdated": "Regla de ciclo de vida actualizada.",
   "settings.lifecycleRuleCreated":
     "Regla de ciclo de vida creada y guardada como desactivada.",
-  "settings.lifecycleRuleDeleted":
-    "Regla de ciclo de vida {{name}} eliminada.",
+  "settings.lifecycleRuleDeleted": "Regla de ciclo de vida {{name}} eliminada.",
 
   // ── Reglas de ciclo de vida — estado de la instancia ──
 
@@ -2806,7 +2810,8 @@ const es: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "Por qué se excluye este título (opcional)",
   "settings.lifecycleExcludeConfirm": "Excluir",
-  "settings.lifecycleExcluded": "{{title}} excluido de las reglas de ciclo de vida.",
+  "settings.lifecycleExcluded":
+    "{{title}} excluido de las reglas de ciclo de vida.",
   "move.dialogTitle": "Mover títulos",
   "move.destinationLibrary": "Biblioteca de destino",
   "move.destinationRoot": "Raíz de destino",

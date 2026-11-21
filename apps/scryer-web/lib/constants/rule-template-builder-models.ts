@@ -138,7 +138,13 @@ export const RULE_TEMPLATE_BUILDER_MODELS: Readonly<
       [],
       { DELETE_EPISODE_FILES: true },
       "EPISODE",
-      [["input.episode.facts.episode_position_by_air_date", "GREATER_THAN", "3"]],
+      [
+        [
+          "input.episode.facts.episode_position_by_air_date",
+          "GREATER_THAN",
+          "3",
+        ],
+      ],
     ),
     "keep-newest-two-downloaded-seasons": lifecycle(
       [],

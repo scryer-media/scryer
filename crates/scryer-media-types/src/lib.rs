@@ -15,6 +15,7 @@ pub const ANALYSIS_REVISION: u32 = DOLBY_VISION_RECORD_REVISION;
 
 /// The first revision whose primary audio summary follows the authored default
 /// track rather than the highest channel count or codec rank.
+#[cfg(test)]
 const AUTHORED_PRIMARY_AUDIO_REVISION: u32 = 2;
 
 /// The first revision that reads Dolby Vision configuration from Matroska track

@@ -1268,35 +1268,54 @@ pub fn request_person_targeted_paths(
 /// references cannot be read off it, so a caller that skips a read for rules
 /// answering false can never hand a rule a value it reads.
 pub fn request_rule_may_read_facts(rego_source: &str, rule_set_id: &str, facts: &[&str]) -> bool {
+    request_rule_may_read_fact_families(rego_source, rule_set_id, &[facts])[0]
+}
+
+/// [`request_rule_may_read_facts`] for several fact families at once, from one
+/// parse of the source: one answer per family, in the order given.
+pub fn request_rule_may_read_fact_families(
+    rego_source: &str,
+    rule_set_id: &str,
+    families: &[&[&str]],
+) -> Vec<bool> {
     let policy_path = request::user_policy_path(rule_set_id);
     let ctx = InputPathContext::request();
     let Ok(module) = parse_module(rego_source, &policy_path, &ctx.limits) else {
-        return true;
+        return vec![true; families.len()];
     };
     if input_import_error(&module, ctx.family).is_some() {
-        return true;
+        return vec![true; families.len()];
     }
     let nested = ctx.nested_fact_sections;
-    let mut reads = false;
+    let mut reads = vec![false; families.len()];
     walk_module_input_paths(&module, ctx, |path| {
-        reads = reads
-            || path.references_input_wholesale()
+        let unnamed = path.references_input_wholesale()
             || path.selects_fact_dynamically(nested)
-            || path.reads_facts_object_wholesale(nested)
-            || path
-                .fact_name(nested)
-                .is_some_and(|name| facts.contains(&name.as_str()))
-            || match path.components.as_slice() {
-                [
-                    InputPathComponent::Field(input),
-                    InputPathComponent::Field(observations),
-                    rest @ ..,
-                ] if input == "input" && observations == "observations" => match rest.first() {
-                    Some(InputPathComponent::Field(name)) => facts.contains(&name.as_str()),
-                    _ => true,
-                },
-                _ => false,
-            };
+            || path.reads_facts_object_wholesale(nested);
+        let fact_name = path.fact_name(nested);
+        let observation = match path.components.as_slice() {
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(observations),
+                rest @ ..,
+            ] if input == "input" && observations == "observations" => match rest.first() {
+                Some(InputPathComponent::Field(name)) => Some(Some(name.as_str())),
+                _ => Some(None),
+            },
+            _ => None,
+        };
+        for (family, read) in families.iter().zip(reads.iter_mut()) {
+            *read = *read
+                || unnamed
+                || fact_name
+                    .as_ref()
+                    .is_some_and(|name| family.contains(&name.as_str()))
+                || match observation {
+                    Some(Some(name)) => family.contains(&name),
+                    Some(None) => true,
+                    None => false,
+                };
+        }
     });
     reads
 }

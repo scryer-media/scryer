@@ -682,8 +682,7 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同级最小分数差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一质量级别的资源必须比当前文件的分数至少高出此值。",
-  "qualityProfile.minMissingEpisodesForPack":
-    "剧集包所需的最少缺失集数",
+  "qualityProfile.minMissingEpisodesForPack": "剧集包所需的最少缺失集数",
   "qualityProfile.minMissingEpisodesForPackInfo":
     "仅当该季缺失至少这么多集时才搜索季包。默认 2。设为 1 时，针对单个缺失集的自动搜索也可以选择剧集包，这可能会下载你已有的剧集。",
   "qualityProfile.minMissingPercentForSeriesPack":
@@ -1817,12 +1816,15 @@ const zh_CN: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Sidecar 文件",
   "settings.libraryFullHashBackfillTitle": "后台哈希",
   "settings.libraryFullHashBackfillLabel": "每晚计算文件哈希",
-  "settings.libraryFullHashBackfillDescription": "每晚读取此媒体库中的每个文件一次，记录其完整内容哈希。对于磁盘保持休眠的媒体库，请关闭此项；此后仅在移动、导入或检查需要时才读取文件哈希。",
+  "settings.libraryFullHashBackfillDescription":
+    "每晚读取此媒体库中的每个文件一次，记录其完整内容哈希。对于磁盘保持休眠的媒体库，请关闭此项；此后仅在移动、导入或检查需要时才读取文件哈希。",
   "settings.libraryFullHashBackfillDisableTitle": "关闭夜间哈希？",
-  "settings.libraryFullHashBackfillDisableWarning": "禁用此项会降低 Scryer 确保某些文件移动 100% 安全的能力。",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "禁用此项会降低 Scryer 确保某些文件移动 100% 安全的能力。",
   "settings.libraryFullHashBackfillDisableConfirm": "关闭",
   "settings.libraryFullHashBackfillEnabledStatus": "已为此媒体库开启夜间哈希。",
-  "settings.libraryFullHashBackfillDisabledStatus": "已为此媒体库关闭夜间哈希。",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "已为此媒体库关闭夜间哈希。",
   "settings.nfoWriteOnImportLabel": "导入时写入 NFO",
   "settings.nfoWriteOnImportDescription":
     "在导入的媒体旁写入 Kodi/Jellyfin/Emby 兼容的 .nfo 元数据文件；已存在的 .nfo 文件绝不会被覆盖",
@@ -2364,8 +2366,7 @@ const zh_CN: LocaleDictionary = {
   "settings.noLifecycleRulesFound": "暂无生命周期规则。",
   "settings.lifecycleRuleRevision": "修订版",
   "settings.lifecycleActionDoNothing": "不执行任何操作",
-  "settings.lifecycleActionUnmonitorScopeKeepFiles":
-    "取消监控该范围，保留文件",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles": "取消监控该范围，保留文件",
   "settings.lifecycleActionDeleteTitleAndFiles": "删除该标题及其文件",
   "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "取消监控该标题，删除全部文件",
@@ -2411,8 +2412,7 @@ const zh_CN: LocaleDictionary = {
 
   // ── 生命周期规则 — 模式与武装 ──
   "settings.lifecycleArmDestructiveLoading": "正在统计该规则已持有的候选项…",
-  "settings.lifecycleArmDestructiveCount":
-    "有 {{count}} 个候选项可能被处理。",
+  "settings.lifecycleArmDestructiveCount": "有 {{count}} 个候选项可能被处理。",
   "settings.lifecycleArmDestructiveNoCandidates":
     "该规则目前没有可被处理的候选项。",
   "settings.lifecycleArmDestructiveCountChanged":

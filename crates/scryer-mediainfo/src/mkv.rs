@@ -180,44 +180,41 @@ pub(crate) fn parse_mkv_source(
     let mut frame_rate_probe = None;
     let mut hdr10plus_probe = None;
 
-    if let Some(video_idx) = primary_video_index {
-        if !profile.skips_deep_probes() {
-            if let Some(track_num) = primary_video_track_num
-                && !primary_video_signals.nondefault_timestamp_scale
-            {
-                frame_rate_probe = Some(MkvFrameRateProbeRequest {
-                    target_track_num: track_num,
-                    timestamp_scale_ns,
-                });
-            }
+    if let Some(video_idx) = primary_video_index
+        && !profile.skips_deep_probes()
+        && let Some(track_num) = primary_video_track_num
+    {
+        if !primary_video_signals.nondefault_timestamp_scale {
+            frame_rate_probe = Some(MkvFrameRateProbeRequest {
+                target_track_num: track_num,
+                timestamp_scale_ns,
+            });
+        }
 
-            if let Some(track_num) = primary_video_track_num {
-                let nal_length_size = tracks[video_idx]
-                    .codec_private
-                    .as_deref()
-                    .map(hevc_nal_length_size)
-                    .unwrap_or(4);
+        let nal_length_size = tracks[video_idx]
+            .codec_private
+            .as_deref()
+            .map(hevc_nal_length_size)
+            .unwrap_or(4);
 
-                if profile == AnalysisProfile::FfprobeParity
-                    && should_probe_sonarr_hdr10plus(&tracks[video_idx])
-                {
-                    hdr10plus_probe = Some(MkvHdr10PlusProbeRequest::new(
-                        track_num,
-                        nal_length_size,
-                        primary_video_signals.has_itu_t_t35_mapping,
-                        Hdr10PlusProbeLimits::sonarr(),
-                    ));
-                } else if profile == AnalysisProfile::DefaultRich
-                    && should_confirm_mkv_hdr10plus(&tracks[video_idx], &primary_video_signals)
-                {
-                    hdr10plus_probe = Some(MkvHdr10PlusProbeRequest::new(
-                        track_num,
-                        nal_length_size,
-                        primary_video_signals.has_itu_t_t35_mapping,
-                        Hdr10PlusProbeLimits::rich(),
-                    ));
-                }
-            }
+        if profile == AnalysisProfile::FfprobeParity
+            && should_probe_sonarr_hdr10plus(&tracks[video_idx])
+        {
+            hdr10plus_probe = Some(MkvHdr10PlusProbeRequest::new(
+                track_num,
+                nal_length_size,
+                primary_video_signals.has_itu_t_t35_mapping,
+                Hdr10PlusProbeLimits::sonarr(),
+            ));
+        } else if profile == AnalysisProfile::DefaultRich
+            && should_confirm_mkv_hdr10plus(&tracks[video_idx], &primary_video_signals)
+        {
+            hdr10plus_probe = Some(MkvHdr10PlusProbeRequest::new(
+                track_num,
+                nal_length_size,
+                primary_video_signals.has_itu_t_t35_mapping,
+                Hdr10PlusProbeLimits::rich(),
+            ));
         }
     }
 

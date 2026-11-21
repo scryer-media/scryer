@@ -13,7 +13,11 @@ import {
 
 export type ServedRuleBuilderState =
   | { status: "loading" }
-  | { status: "ready"; payload: RuleBuilderSchemaPayload; outputs: RuleBuilderOutput[] }
+  | {
+      status: "ready";
+      payload: RuleBuilderSchemaPayload;
+      outputs: RuleBuilderOutput[];
+    }
   | { status: "failed" };
 
 const states = new Map<string, ServedRuleBuilderState>();

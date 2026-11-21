@@ -52,9 +52,7 @@
         "APPROVE": true,
         "SET_QUALITY_PROFILE": "Sample Profile",
         "SET_LEASE_DAYS": "30",
-        "REASONS": [
-          "sample_family_friendly"
-        ]
+        "REASONS": ["sample_family_friendly"]
       }
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.certification_rank <= 2\n\tinput.facts.is_adult == false\n\tinput.facts.commonsense_recommended == true\n\tinput.facts.tmdb_vote_average >= 6.5\n\tinput.facts.runtime_minutes < 240\n\tinput.facts.previous_request_count == 0\n\tinput.facts.age_rating != 18\n\tinput.facts.approved_last_30d > 1\n}\n\napprove if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nset_lease_days := 30 if rule_applies\n\nreasons contains \"sample_family_friendly\" if rule_applies\n",
@@ -166,10 +164,7 @@
       "outputs": {
         "DENY": true,
         "NOTIFY": "Sample list request denied",
-        "REASONS": [
-          "sample_list_request",
-          "sample_weekend"
-        ]
+        "REASONS": ["sample_list_request", "sample_weekend"]
       }
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.origin == \"public_list\"\n}\n\nrule_applies if {\n\tinput.library.facet != \"anime\"\n}\n\nrule_applies if {\n\tinput.now.weekday == \"sunday\"\n}\n\nrule_applies if {\n\t\"Sample Genre\" in input.facts.genres\n}\n\nrule_applies if {\n\tnot \"sample-theme\" in input.facts.themes\n}\n\nrule_applies if {\n\tcount(input.facts.exists_in_library_ids) > 0\n}\n\nrule_applies if {\n\tnot count(input.facts.canonical_tag_keys) > 0\n}\n\ndeny if rule_applies\n\nnotify := \"Sample list request denied\" if rule_applies\n\nreasons contains \"sample_list_request\" if rule_applies\n\nreasons contains \"sample_weekend\" if rule_applies\n",
@@ -186,16 +181,10 @@
             "weekday": "monday"
           },
           "facts": {
-            "genres": [
-              "Sample Other Genre"
-            ],
-            "themes": [
-              "sample-theme"
-            ],
+            "genres": ["Sample Other Genre"],
+            "themes": ["sample-theme"],
             "exists_in_library_ids": [],
-            "canonical_tag_keys": [
-              "sample-key"
-            ]
+            "canonical_tag_keys": ["sample-key"]
           }
         },
         "expected": false
@@ -212,13 +201,9 @@
             "weekday": "monday"
           },
           "facts": {
-            "genres": [
-              "Sample Other Genre"
-            ],
+            "genres": ["Sample Other Genre"],
             "exists_in_library_ids": [],
-            "canonical_tag_keys": [
-              "sample-key"
-            ]
+            "canonical_tag_keys": ["sample-key"]
           }
         },
         "expected": true
@@ -235,12 +220,8 @@
             "weekday": "monday"
           },
           "facts": {
-            "genres": [
-              "Sample Other Genre"
-            ],
-            "themes": [
-              "sample-theme"
-            ],
+            "genres": ["Sample Other Genre"],
+            "themes": ["sample-theme"],
             "exists_in_library_ids": []
           }
         },
@@ -258,13 +239,9 @@
             "weekday": "monday"
           },
           "facts": {
-            "themes": [
-              "sample-theme"
-            ],
+            "themes": ["sample-theme"],
             "exists_in_library_ids": [],
-            "canonical_tag_keys": [
-              "sample-key"
-            ]
+            "canonical_tag_keys": ["sample-key"]
           }
         },
         "expected": false
@@ -281,16 +258,10 @@
             "weekday": "monday"
           },
           "facts": {
-            "genres": [
-              "Sample Genre"
-            ],
-            "themes": [
-              "sample-theme"
-            ],
+            "genres": ["Sample Genre"],
+            "themes": ["sample-theme"],
             "exists_in_library_ids": [],
-            "canonical_tag_keys": [
-              "sample-key"
-            ]
+            "canonical_tag_keys": ["sample-key"]
           }
         },
         "expected": true
@@ -307,16 +278,10 @@
             "weekday": "monday"
           },
           "facts": {
-            "genres": [
-              "Sample Other Genre"
-            ],
-            "themes": [
-              "sample-theme"
-            ],
+            "genres": ["Sample Other Genre"],
+            "themes": ["sample-theme"],
             "exists_in_library_ids": [],
-            "canonical_tag_keys": [
-              "sample-key"
-            ]
+            "canonical_tag_keys": ["sample-key"]
           }
         },
         "expected": true
@@ -561,17 +526,9 @@
         }
       ],
       "outputs": {
-        "SET_REQUIRED_AUDIO_LANGUAGES": [
-          "eng"
-        ],
-        "SET_PREFERRED_AUDIO_LANGUAGES": [
-          "jpn",
-          "eng"
-        ],
-        "ADD_TAGS": [
-          "sample tag",
-          "sample.second_tag-2"
-        ]
+        "SET_REQUIRED_AUDIO_LANGUAGES": ["eng"],
+        "SET_PREFERRED_AUDIO_LANGUAGES": ["jpn", "eng"],
+        "ADD_TAGS": ["sample tag", "sample.second_tag-2"]
       }
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_array(input.request.required_audio_languages)\n\t\"eng\" in input.request.required_audio_languages\n}\n\nrule_applies if {\n\tis_array(input.request.preferred_audio_languages)\n\tnot \"jpn\" in input.request.preferred_audio_languages\n}\n\nrule_applies if {\n\tinput.request.required_audio_languages == []\n}\n\nrule_applies if {\n\tis_array(input.request.preferred_audio_languages)\n\tcount(input.request.preferred_audio_languages) > 0\n}\n\nrule_applies if {\n\tinput.request.required_audio_languages != null\n}\n\nset_required_audio_languages := [\"eng\"] if rule_applies\n\nset_preferred_audio_languages := [\"jpn\", \"eng\"] if rule_applies\n\nadd_tags := [\"sample tag\", \"sample.second_tag-2\"] if rule_applies\n",
@@ -589,9 +546,7 @@
         "input": {
           "request": {
             "required_audio_languages": null,
-            "preferred_audio_languages": [
-              "eng"
-            ]
+            "preferred_audio_languages": ["eng"]
           }
         },
         "expected": true
@@ -600,9 +555,7 @@
         "input": {
           "request": {
             "required_audio_languages": null,
-            "preferred_audio_languages": [
-              "jpn"
-            ]
+            "preferred_audio_languages": ["jpn"]
           }
         },
         "expected": true
@@ -660,9 +613,7 @@
       {
         "input": {
           "facts": {
-            "exists_in_library_ids": [
-              "sample-other"
-            ]
+            "exists_in_library_ids": ["sample-other"]
           }
         },
         "expected": false
@@ -670,10 +621,7 @@
       {
         "input": {
           "facts": {
-            "exists_in_library_ids": [
-              "sample-library",
-              "sample-other"
-            ]
+            "exists_in_library_ids": ["sample-library", "sample-other"]
           }
         },
         "expected": true
@@ -693,12 +641,8 @@
       {
         "input": {
           "facts": {
-            "exists_in_library_ids": [
-              "sample-other"
-            ],
-            "quality_profile_tiers": [
-              "sample-tier"
-            ]
+            "exists_in_library_ids": ["sample-other"],
+            "quality_profile_tiers": ["sample-tier"]
           }
         },
         "expected": true
@@ -774,13 +718,9 @@
       ],
       "outputs": {
         "APPROVE": true,
-        "ADD_TAGS": [
-          "sample"
-        ],
+        "ADD_TAGS": ["sample"],
         "NOTIFY": "notice with \"quotes\" and \\ slash",
-        "REASONS": [
-          "reason with \"quotes\" and \\ slash"
-        ]
+        "REASONS": ["reason with \"quotes\" and \\ slash"]
       }
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.title == \"Sample \\\"quoted\\\" \\\\ title\"\n\tinput.library.name != \"Ünïcødé 標籤 😀\"\n\tinput.library.is_default == true\n\tinput.now.hour_utc < 6\n}\n\napprove if rule_applies\n\nadd_tags := [\"sample\"] if rule_applies\n\nnotify := \"notice with \\\"quotes\\\" and \\\\ slash\" if rule_applies\n\nreasons contains \"reason with \\\"quotes\\\" and \\\\ slash\" if rule_applies\n",
@@ -885,9 +825,7 @@
         "APPROVE": true,
         "SET_QUALITY_PROFILE": "Sample Profile",
         "SET_LEASE_DAYS": "30",
-        "REASONS": [
-          "sample_family_friendly"
-        ]
+        "REASONS": ["sample_family_friendly"]
       }
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.country in {\"US\", \"Extra\"}\n\tinput.request.monitor_type in {\"ALL\", \"Extra\"}\n\tcount([item | some item in input.facts.exists_in_library_ids; item in {\"sample\", \"Extra\"}]) > 0\n\tcount([item | some item in input.facts.genres; item in {\"Sample\", \"Extra\"}]) > 0\n\tis_array(input.request.required_audio_languages)\n\tcount([item | some item in input.request.required_audio_languages; item in {\"eng\", \"Extra\"}]) > 0\n}\n\napprove if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nset_lease_days := 30 if rule_applies\n\nreasons contains \"sample_family_friendly\" if rule_applies\n",
@@ -896,18 +834,12 @@
         "input": {
           "facts": {
             "country": "US",
-            "exists_in_library_ids": [
-              "sample"
-            ],
-            "genres": [
-              "Sample"
-            ]
+            "exists_in_library_ids": ["sample"],
+            "genres": ["Sample"]
           },
           "request": {
             "monitor_type": "ALL",
-            "required_audio_languages": [
-              "eng"
-            ]
+            "required_audio_languages": ["eng"]
           }
         },
         "expected": true
@@ -916,18 +848,12 @@
         "input": {
           "facts": {
             "country": "Elsewhere",
-            "exists_in_library_ids": [
-              "sample"
-            ],
-            "genres": [
-              "Sample"
-            ]
+            "exists_in_library_ids": ["sample"],
+            "genres": ["Sample"]
           },
           "request": {
             "monitor_type": "ALL",
-            "required_audio_languages": [
-              "eng"
-            ]
+            "required_audio_languages": ["eng"]
           }
         },
         "expected": false
@@ -936,18 +862,12 @@
         "input": {
           "facts": {
             "country": "US",
-            "exists_in_library_ids": [
-              "sample"
-            ],
-            "genres": [
-              "Sample"
-            ]
+            "exists_in_library_ids": ["sample"],
+            "genres": ["Sample"]
           },
           "request": {
             "monitor_type": "Elsewhere",
-            "required_audio_languages": [
-              "eng"
-            ]
+            "required_audio_languages": ["eng"]
           }
         },
         "expected": false
@@ -956,18 +876,12 @@
         "input": {
           "facts": {
             "country": "US",
-            "exists_in_library_ids": [
-              "Elsewhere"
-            ],
-            "genres": [
-              "Sample"
-            ]
+            "exists_in_library_ids": ["Elsewhere"],
+            "genres": ["Sample"]
           },
           "request": {
             "monitor_type": "ALL",
-            "required_audio_languages": [
-              "eng"
-            ]
+            "required_audio_languages": ["eng"]
           }
         },
         "expected": false
@@ -976,18 +890,12 @@
         "input": {
           "facts": {
             "country": "US",
-            "exists_in_library_ids": [
-              "sample"
-            ],
-            "genres": [
-              "Elsewhere"
-            ]
+            "exists_in_library_ids": ["sample"],
+            "genres": ["Elsewhere"]
           },
           "request": {
             "monitor_type": "ALL",
-            "required_audio_languages": [
-              "eng"
-            ]
+            "required_audio_languages": ["eng"]
           }
         },
         "expected": false
@@ -996,18 +904,12 @@
         "input": {
           "facts": {
             "country": "US",
-            "exists_in_library_ids": [
-              "sample"
-            ],
-            "genres": [
-              "Sample"
-            ]
+            "exists_in_library_ids": ["sample"],
+            "genres": ["Sample"]
           },
           "request": {
             "monitor_type": "ALL",
-            "required_audio_languages": [
-              "Elsewhere"
-            ]
+            "required_audio_languages": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1052,9 +954,7 @@
         "APPROVE": true,
         "SET_QUALITY_PROFILE": "Sample Profile",
         "SET_LEASE_DAYS": "30",
-        "REASONS": [
-          "sample_family_friendly"
-        ]
+        "REASONS": ["sample_family_friendly"]
       }
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_string(input.facts.country)\n\tnot input.facts.country in {\"US\", \"Extra\"}\n\tis_string(input.request.monitor_type)\n\tnot input.request.monitor_type in {\"ALL\", \"Extra\"}\n\tis_array(input.facts.exists_in_library_ids)\n\tcount([item | some item in input.facts.exists_in_library_ids; item in {\"sample\", \"Extra\"}]) == 0\n\tcount([item | some item in input.facts.genres; item in {\"Sample\", \"Extra\"}]) == 0\n\tis_array(input.request.required_audio_languages)\n\tcount([item | some item in input.request.required_audio_languages; item in {\"eng\", \"Extra\"}]) == 0\n}\n\napprove if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nset_lease_days := 30 if rule_applies\n\nreasons contains \"sample_family_friendly\" if rule_applies\n",
@@ -1063,18 +963,12 @@
         "input": {
           "facts": {
             "country": "Elsewhere",
-            "exists_in_library_ids": [
-              "Elsewhere"
-            ],
-            "genres": [
-              "Elsewhere"
-            ]
+            "exists_in_library_ids": ["Elsewhere"],
+            "genres": ["Elsewhere"]
           },
           "request": {
             "monitor_type": "Elsewhere",
-            "required_audio_languages": [
-              "Elsewhere"
-            ]
+            "required_audio_languages": ["Elsewhere"]
           }
         },
         "expected": true
@@ -1083,18 +977,12 @@
         "input": {
           "facts": {
             "country": "US",
-            "exists_in_library_ids": [
-              "Elsewhere"
-            ],
-            "genres": [
-              "Elsewhere"
-            ]
+            "exists_in_library_ids": ["Elsewhere"],
+            "genres": ["Elsewhere"]
           },
           "request": {
             "monitor_type": "Elsewhere",
-            "required_audio_languages": [
-              "Elsewhere"
-            ]
+            "required_audio_languages": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1103,18 +991,12 @@
         "input": {
           "facts": {
             "country": "Elsewhere",
-            "exists_in_library_ids": [
-              "Elsewhere"
-            ],
-            "genres": [
-              "Elsewhere"
-            ]
+            "exists_in_library_ids": ["Elsewhere"],
+            "genres": ["Elsewhere"]
           },
           "request": {
             "monitor_type": "ALL",
-            "required_audio_languages": [
-              "Elsewhere"
-            ]
+            "required_audio_languages": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1123,18 +1005,12 @@
         "input": {
           "facts": {
             "country": "Elsewhere",
-            "exists_in_library_ids": [
-              "sample"
-            ],
-            "genres": [
-              "Elsewhere"
-            ]
+            "exists_in_library_ids": ["sample"],
+            "genres": ["Elsewhere"]
           },
           "request": {
             "monitor_type": "Elsewhere",
-            "required_audio_languages": [
-              "Elsewhere"
-            ]
+            "required_audio_languages": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1143,18 +1019,12 @@
         "input": {
           "facts": {
             "country": "Elsewhere",
-            "exists_in_library_ids": [
-              "Elsewhere"
-            ],
-            "genres": [
-              "Sample"
-            ]
+            "exists_in_library_ids": ["Elsewhere"],
+            "genres": ["Sample"]
           },
           "request": {
             "monitor_type": "Elsewhere",
-            "required_audio_languages": [
-              "Elsewhere"
-            ]
+            "required_audio_languages": ["Elsewhere"]
           }
         },
         "expected": false
@@ -1163,18 +1033,12 @@
         "input": {
           "facts": {
             "country": "Elsewhere",
-            "exists_in_library_ids": [
-              "Elsewhere"
-            ],
-            "genres": [
-              "Elsewhere"
-            ]
+            "exists_in_library_ids": ["Elsewhere"],
+            "genres": ["Elsewhere"]
           },
           "request": {
             "monitor_type": "Elsewhere",
-            "required_audio_languages": [
-              "eng"
-            ]
+            "required_audio_languages": ["eng"]
           }
         },
         "expected": false

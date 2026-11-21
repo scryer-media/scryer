@@ -936,7 +936,8 @@ export function RequestsView({
       approvalRequest.facet,
       qualityProfileOptions,
     );
-    if (prefill.qualityProfileId) setApprovalProfileId(prefill.qualityProfileId);
+    if (prefill.qualityProfileId)
+      setApprovalProfileId(prefill.qualityProfileId);
     if (prefill.monitorType && approvalRequest.facet !== "MOVIE") {
       setApprovalMonitorType(prefill.monitorType as RequestMonitorType);
       setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);

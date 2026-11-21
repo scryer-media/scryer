@@ -218,7 +218,8 @@ export function ruleImportRunFailureText(
     return null;
   }
   const reason = run.progressJson.reason;
-  const key = typeof reason === "string" ? ERROR_REASON_KEYS[reason] : undefined;
+  const key =
+    typeof reason === "string" ? ERROR_REASON_KEYS[reason] : undefined;
   return key ? translate(key) : null;
 }
 

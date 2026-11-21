@@ -6,9 +6,7 @@
         "field": "input.release.is_remux",
         "operator": "IS_TRUE",
         "value": "",
-        "lines": [
-          "input.release.is_remux == true"
-        ],
+        "lines": ["input.release.is_remux == true"],
         "present": [
           {
             "value": true,
@@ -25,9 +23,7 @@
         "field": "input.release.is_remux",
         "operator": "IS_FALSE",
         "value": "",
-        "lines": [
-          "input.release.is_remux == false"
-        ],
+        "lines": ["input.release.is_remux == false"],
         "present": [
           {
             "value": false,
@@ -44,9 +40,7 @@
         "field": "input.release.revision",
         "operator": "EQUALS",
         "value": "2",
-        "lines": [
-          "input.release.revision == 2"
-        ],
+        "lines": ["input.release.revision == 2"],
         "present": [
           {
             "value": 2,
@@ -63,9 +57,7 @@
         "field": "input.release.revision",
         "operator": "NOT_EQUALS",
         "value": "2",
-        "lines": [
-          "input.release.revision != 2"
-        ],
+        "lines": ["input.release.revision != 2"],
         "present": [
           {
             "value": 3,
@@ -82,9 +74,7 @@
         "field": "input.release.revision",
         "operator": "GREATER_THAN",
         "value": "2",
-        "lines": [
-          "input.release.revision > 2"
-        ],
+        "lines": ["input.release.revision > 2"],
         "present": [
           {
             "value": 3,
@@ -101,9 +91,7 @@
         "field": "input.release.revision",
         "operator": "GREATER_OR_EQUAL",
         "value": "2",
-        "lines": [
-          "input.release.revision >= 2"
-        ],
+        "lines": ["input.release.revision >= 2"],
         "present": [
           {
             "value": 2,
@@ -120,9 +108,7 @@
         "field": "input.release.revision",
         "operator": "LESS_THAN",
         "value": "2",
-        "lines": [
-          "input.release.revision < 2"
-        ],
+        "lines": ["input.release.revision < 2"],
         "present": [
           {
             "value": 1,
@@ -139,9 +125,7 @@
         "field": "input.release.revision",
         "operator": "LESS_OR_EQUAL",
         "value": "2",
-        "lines": [
-          "input.release.revision <= 2"
-        ],
+        "lines": ["input.release.revision <= 2"],
         "present": [
           {
             "value": 2,
@@ -158,9 +142,7 @@
         "field": "input.release.year",
         "operator": "EQUALS",
         "value": "2020",
-        "lines": [
-          "input.release.year == 2020"
-        ],
+        "lines": ["input.release.year == 2020"],
         "present": [
           {
             "value": 2020,
@@ -199,10 +181,7 @@
         "field": "input.release.year",
         "operator": "GREATER_THAN",
         "value": "2020",
-        "lines": [
-          "is_number(input.release.year)",
-          "input.release.year > 2020"
-        ],
+        "lines": ["is_number(input.release.year)", "input.release.year > 2020"],
         "present": [
           {
             "value": 2021,
@@ -241,10 +220,7 @@
         "field": "input.release.year",
         "operator": "LESS_THAN",
         "value": "2020",
-        "lines": [
-          "is_number(input.release.year)",
-          "input.release.year < 2020"
-        ],
+        "lines": ["is_number(input.release.year)", "input.release.year < 2020"],
         "present": [
           {
             "value": 2019,
@@ -283,9 +259,7 @@
         "field": "input.release.year",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.release.year != null"
-        ],
+        "lines": ["input.release.year != null"],
         "present": [
           {
             "value": 0,
@@ -299,9 +273,7 @@
         "field": "input.release.year",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.release.year != null"
-        ],
+        "lines": ["not input.release.year != null"],
         "present": [
           {
             "value": 0,
@@ -315,9 +287,7 @@
         "field": "input.release.raw_title",
         "operator": "EQUALS",
         "value": "Sample",
-        "lines": [
-          "input.release.raw_title == \"Sample\""
-        ],
+        "lines": ["input.release.raw_title == \"Sample\""],
         "present": [
           {
             "value": "Sample",
@@ -334,9 +304,7 @@
         "field": "input.release.raw_title",
         "operator": "IS_ONE_OF",
         "value": "Sample\nExtra",
-        "lines": [
-          "input.release.raw_title in {\"Sample\", \"Extra\"}"
-        ],
+        "lines": ["input.release.raw_title in {\"Sample\", \"Extra\"}"],
         "present": [
           {
             "value": "Sample",
@@ -373,9 +341,7 @@
         "field": "input.release.raw_title",
         "operator": "NOT_EQUALS",
         "value": "Sample",
-        "lines": [
-          "input.release.raw_title != \"Sample\""
-        ],
+        "lines": ["input.release.raw_title != \"Sample\""],
         "present": [
           {
             "value": "Other",
@@ -392,9 +358,7 @@
         "field": "input.release.edition",
         "operator": "EQUALS",
         "value": "Sample",
-        "lines": [
-          "input.release.edition == \"Sample\""
-        ],
+        "lines": ["input.release.edition == \"Sample\""],
         "present": [
           {
             "value": "Sample",
@@ -412,9 +376,7 @@
         "field": "input.release.edition",
         "operator": "IS_ONE_OF",
         "value": "Sample\nExtra",
-        "lines": [
-          "input.release.edition in {\"Sample\", \"Extra\"}"
-        ],
+        "lines": ["input.release.edition in {\"Sample\", \"Extra\"}"],
         "present": [
           {
             "value": "Sample",
@@ -474,9 +436,7 @@
         "field": "input.release.edition",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.release.edition != null"
-        ],
+        "lines": ["input.release.edition != null"],
         "present": [
           {
             "value": "",
@@ -490,9 +450,7 @@
         "field": "input.release.edition",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.release.edition != null"
-        ],
+        "lines": ["not input.release.edition != null"],
         "present": [
           {
             "value": "",
@@ -506,20 +464,14 @@
         "field": "input.release.languages_audio",
         "operator": "CONTAINS",
         "value": "en",
-        "lines": [
-          "\"en\" in input.release.languages_audio"
-        ],
+        "lines": ["\"en\" in input.release.languages_audio"],
         "present": [
           {
-            "value": [
-              "en"
-            ],
+            "value": ["en"],
             "expected": true
           },
           {
-            "value": [
-              "ja"
-            ],
+            "value": ["ja"],
             "expected": false
           }
         ],
@@ -534,15 +486,11 @@
         ],
         "present": [
           {
-            "value": [
-              "en"
-            ],
+            "value": ["en"],
             "expected": true
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": false
           }
         ],
@@ -558,15 +506,11 @@
         ],
         "present": [
           {
-            "value": [
-              "en"
-            ],
+            "value": ["en"],
             "expected": false
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": true
           }
         ],
@@ -582,15 +526,11 @@
         ],
         "present": [
           {
-            "value": [
-              "ja"
-            ],
+            "value": ["ja"],
             "expected": true
           },
           {
-            "value": [
-              "en"
-            ],
+            "value": ["en"],
             "expected": false
           }
         ],
@@ -600,18 +540,14 @@
         "field": "input.release.languages_audio",
         "operator": "IS_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.release.languages_audio) == 0"
-        ],
+        "lines": ["count(input.release.languages_audio) == 0"],
         "present": [
           {
             "value": [],
             "expected": true
           },
           {
-            "value": [
-              "en"
-            ],
+            "value": ["en"],
             "expected": false
           }
         ],
@@ -621,14 +557,10 @@
         "field": "input.release.languages_audio",
         "operator": "IS_NOT_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.release.languages_audio) > 0"
-        ],
+        "lines": ["count(input.release.languages_audio) > 0"],
         "present": [
           {
-            "value": [
-              "en"
-            ],
+            "value": ["en"],
             "expected": true
           },
           {
@@ -647,9 +579,7 @@
         "field": "input.facts.is_adult",
         "operator": "IS_TRUE",
         "value": "",
-        "lines": [
-          "input.facts.is_adult == true"
-        ],
+        "lines": ["input.facts.is_adult == true"],
         "present": [
           {
             "value": true,
@@ -666,9 +596,7 @@
         "field": "input.facts.is_adult",
         "operator": "IS_FALSE",
         "value": "",
-        "lines": [
-          "input.facts.is_adult == false"
-        ],
+        "lines": ["input.facts.is_adult == false"],
         "present": [
           {
             "value": false,
@@ -685,9 +613,7 @@
         "field": "input.facts.runtime_minutes",
         "operator": "EQUALS",
         "value": "90",
-        "lines": [
-          "input.facts.runtime_minutes == 90"
-        ],
+        "lines": ["input.facts.runtime_minutes == 90"],
         "present": [
           {
             "value": 90,
@@ -704,9 +630,7 @@
         "field": "input.facts.runtime_minutes",
         "operator": "NOT_EQUALS",
         "value": "90",
-        "lines": [
-          "input.facts.runtime_minutes != 90"
-        ],
+        "lines": ["input.facts.runtime_minutes != 90"],
         "present": [
           {
             "value": 91,
@@ -723,9 +647,7 @@
         "field": "input.facts.runtime_minutes",
         "operator": "GREATER_THAN",
         "value": "90",
-        "lines": [
-          "input.facts.runtime_minutes > 90"
-        ],
+        "lines": ["input.facts.runtime_minutes > 90"],
         "present": [
           {
             "value": 91,
@@ -742,9 +664,7 @@
         "field": "input.facts.runtime_minutes",
         "operator": "GREATER_OR_EQUAL",
         "value": "90",
-        "lines": [
-          "input.facts.runtime_minutes >= 90"
-        ],
+        "lines": ["input.facts.runtime_minutes >= 90"],
         "present": [
           {
             "value": 90,
@@ -761,9 +681,7 @@
         "field": "input.facts.runtime_minutes",
         "operator": "LESS_THAN",
         "value": "90",
-        "lines": [
-          "input.facts.runtime_minutes < 90"
-        ],
+        "lines": ["input.facts.runtime_minutes < 90"],
         "present": [
           {
             "value": 89,
@@ -780,9 +698,7 @@
         "field": "input.facts.runtime_minutes",
         "operator": "LESS_OR_EQUAL",
         "value": "90",
-        "lines": [
-          "input.facts.runtime_minutes <= 90"
-        ],
+        "lines": ["input.facts.runtime_minutes <= 90"],
         "present": [
           {
             "value": 90,
@@ -799,9 +715,7 @@
         "field": "input.request.year",
         "operator": "EQUALS",
         "value": "2020",
-        "lines": [
-          "input.request.year == 2020"
-        ],
+        "lines": ["input.request.year == 2020"],
         "present": [
           {
             "value": 2020,
@@ -840,10 +754,7 @@
         "field": "input.request.year",
         "operator": "GREATER_THAN",
         "value": "2020",
-        "lines": [
-          "is_number(input.request.year)",
-          "input.request.year > 2020"
-        ],
+        "lines": ["is_number(input.request.year)", "input.request.year > 2020"],
         "present": [
           {
             "value": 2021,
@@ -882,10 +793,7 @@
         "field": "input.request.year",
         "operator": "LESS_THAN",
         "value": "2020",
-        "lines": [
-          "is_number(input.request.year)",
-          "input.request.year < 2020"
-        ],
+        "lines": ["is_number(input.request.year)", "input.request.year < 2020"],
         "present": [
           {
             "value": 2019,
@@ -924,9 +832,7 @@
         "field": "input.request.year",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.request.year != null"
-        ],
+        "lines": ["input.request.year != null"],
         "present": [
           {
             "value": 0,
@@ -940,9 +846,7 @@
         "field": "input.request.year",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.request.year != null"
-        ],
+        "lines": ["not input.request.year != null"],
         "present": [
           {
             "value": 0,
@@ -956,9 +860,7 @@
         "field": "input.facts.country",
         "operator": "EQUALS",
         "value": "US",
-        "lines": [
-          "input.facts.country == \"US\""
-        ],
+        "lines": ["input.facts.country == \"US\""],
         "present": [
           {
             "value": "US",
@@ -975,9 +877,7 @@
         "field": "input.facts.country",
         "operator": "IS_ONE_OF",
         "value": "US\nExtra",
-        "lines": [
-          "input.facts.country in {\"US\", \"Extra\"}"
-        ],
+        "lines": ["input.facts.country in {\"US\", \"Extra\"}"],
         "present": [
           {
             "value": "US",
@@ -1014,9 +914,7 @@
         "field": "input.facts.country",
         "operator": "NOT_EQUALS",
         "value": "US",
-        "lines": [
-          "input.facts.country != \"US\""
-        ],
+        "lines": ["input.facts.country != \"US\""],
         "present": [
           {
             "value": "GB",
@@ -1033,9 +931,7 @@
         "field": "input.request.monitor_type",
         "operator": "EQUALS",
         "value": "ALL",
-        "lines": [
-          "input.request.monitor_type == \"ALL\""
-        ],
+        "lines": ["input.request.monitor_type == \"ALL\""],
         "present": [
           {
             "value": "ALL",
@@ -1053,9 +949,7 @@
         "field": "input.request.monitor_type",
         "operator": "IS_ONE_OF",
         "value": "ALL\nExtra",
-        "lines": [
-          "input.request.monitor_type in {\"ALL\", \"Extra\"}"
-        ],
+        "lines": ["input.request.monitor_type in {\"ALL\", \"Extra\"}"],
         "present": [
           {
             "value": "ALL",
@@ -1115,9 +1009,7 @@
         "field": "input.request.monitor_type",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.request.monitor_type != null"
-        ],
+        "lines": ["input.request.monitor_type != null"],
         "present": [
           {
             "value": "",
@@ -1131,9 +1023,7 @@
         "field": "input.request.monitor_type",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.request.monitor_type != null"
-        ],
+        "lines": ["not input.request.monitor_type != null"],
         "present": [
           {
             "value": "",
@@ -1147,9 +1037,7 @@
         "field": "input.request.origin",
         "operator": "EQUALS",
         "value": "manual",
-        "lines": [
-          "input.request.origin == \"manual\""
-        ],
+        "lines": ["input.request.origin == \"manual\""],
         "present": [
           {
             "value": "manual",
@@ -1166,9 +1054,7 @@
         "field": "input.request.origin",
         "operator": "NOT_EQUALS",
         "value": "manual",
-        "lines": [
-          "input.request.origin != \"manual\""
-        ],
+        "lines": ["input.request.origin != \"manual\""],
         "present": [
           {
             "value": "public_list",
@@ -1185,20 +1071,14 @@
         "field": "input.facts.exists_in_library_ids",
         "operator": "CONTAINS",
         "value": "sample",
-        "lines": [
-          "\"sample\" in input.facts.exists_in_library_ids"
-        ],
+        "lines": ["\"sample\" in input.facts.exists_in_library_ids"],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": true
           },
           {
-            "value": [
-              "other"
-            ],
+            "value": ["other"],
             "expected": false
           }
         ],
@@ -1213,15 +1093,11 @@
         ],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": true
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": false
           }
         ],
@@ -1237,15 +1113,11 @@
         ],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": false
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": true
           }
         ],
@@ -1261,15 +1133,11 @@
         ],
         "present": [
           {
-            "value": [
-              "other"
-            ],
+            "value": ["other"],
             "expected": true
           },
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": false
           }
         ],
@@ -1279,18 +1147,14 @@
         "field": "input.facts.exists_in_library_ids",
         "operator": "IS_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.facts.exists_in_library_ids) == 0"
-        ],
+        "lines": ["count(input.facts.exists_in_library_ids) == 0"],
         "present": [
           {
             "value": [],
             "expected": true
           },
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": false
           }
         ],
@@ -1300,14 +1164,10 @@
         "field": "input.facts.exists_in_library_ids",
         "operator": "IS_NOT_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.facts.exists_in_library_ids) > 0"
-        ],
+        "lines": ["count(input.facts.exists_in_library_ids) > 0"],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": true
           },
           {
@@ -1321,20 +1181,14 @@
         "field": "input.facts.genres",
         "operator": "CONTAINS",
         "value": "Sample",
-        "lines": [
-          "\"Sample\" in input.facts.genres"
-        ],
+        "lines": ["\"Sample\" in input.facts.genres"],
         "present": [
           {
-            "value": [
-              "Sample"
-            ],
+            "value": ["Sample"],
             "expected": true
           },
           {
-            "value": [
-              "Other"
-            ],
+            "value": ["Other"],
             "expected": false
           }
         ],
@@ -1349,15 +1203,11 @@
         ],
         "present": [
           {
-            "value": [
-              "Sample"
-            ],
+            "value": ["Sample"],
             "expected": true
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": false
           }
         ],
@@ -1372,15 +1222,11 @@
         ],
         "present": [
           {
-            "value": [
-              "Sample"
-            ],
+            "value": ["Sample"],
             "expected": false
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": true
           }
         ],
@@ -1390,20 +1236,14 @@
         "field": "input.facts.genres",
         "operator": "NOT_CONTAINS",
         "value": "Sample",
-        "lines": [
-          "not \"Sample\" in input.facts.genres"
-        ],
+        "lines": ["not \"Sample\" in input.facts.genres"],
         "present": [
           {
-            "value": [
-              "Other"
-            ],
+            "value": ["Other"],
             "expected": true
           },
           {
-            "value": [
-              "Sample"
-            ],
+            "value": ["Sample"],
             "expected": false
           }
         ],
@@ -1413,18 +1253,14 @@
         "field": "input.facts.genres",
         "operator": "IS_EMPTY",
         "value": "",
-        "lines": [
-          "not count(input.facts.genres) > 0"
-        ],
+        "lines": ["not count(input.facts.genres) > 0"],
         "present": [
           {
             "value": [],
             "expected": true
           },
           {
-            "value": [
-              "Sample"
-            ],
+            "value": ["Sample"],
             "expected": false
           }
         ],
@@ -1434,14 +1270,10 @@
         "field": "input.facts.genres",
         "operator": "IS_NOT_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.facts.genres) > 0"
-        ],
+        "lines": ["count(input.facts.genres) > 0"],
         "present": [
           {
-            "value": [
-              "Sample"
-            ],
+            "value": ["Sample"],
             "expected": true
           },
           {
@@ -1461,15 +1293,11 @@
         ],
         "present": [
           {
-            "value": [
-              "eng"
-            ],
+            "value": ["eng"],
             "expected": true
           },
           {
-            "value": [
-              "jpn"
-            ],
+            "value": ["jpn"],
             "expected": false
           }
         ],
@@ -1486,15 +1314,11 @@
         ],
         "present": [
           {
-            "value": [
-              "eng"
-            ],
+            "value": ["eng"],
             "expected": true
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": false
           }
         ],
@@ -1511,15 +1335,11 @@
         ],
         "present": [
           {
-            "value": [
-              "eng"
-            ],
+            "value": ["eng"],
             "expected": false
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": true
           }
         ],
@@ -1536,15 +1356,11 @@
         ],
         "present": [
           {
-            "value": [
-              "jpn"
-            ],
+            "value": ["jpn"],
             "expected": true
           },
           {
-            "value": [
-              "eng"
-            ],
+            "value": ["eng"],
             "expected": false
           }
         ],
@@ -1555,18 +1371,14 @@
         "field": "input.request.required_audio_languages",
         "operator": "IS_EMPTY",
         "value": "",
-        "lines": [
-          "input.request.required_audio_languages == []"
-        ],
+        "lines": ["input.request.required_audio_languages == []"],
         "present": [
           {
             "value": [],
             "expected": true
           },
           {
-            "value": [
-              "eng"
-            ],
+            "value": ["eng"],
             "expected": false
           }
         ],
@@ -1583,9 +1395,7 @@
         ],
         "present": [
           {
-            "value": [
-              "eng"
-            ],
+            "value": ["eng"],
             "expected": true
           },
           {
@@ -1600,9 +1410,7 @@
         "field": "input.request.required_audio_languages",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.request.required_audio_languages != null"
-        ],
+        "lines": ["input.request.required_audio_languages != null"],
         "present": [
           {
             "value": [],
@@ -1616,9 +1424,7 @@
         "field": "input.request.required_audio_languages",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.request.required_audio_languages != null"
-        ],
+        "lines": ["not input.request.required_audio_languages != null"],
         "present": [
           {
             "value": [],
@@ -1638,9 +1444,7 @@
         "field": "input.facts.monitored",
         "operator": "IS_TRUE",
         "value": "",
-        "lines": [
-          "input.facts.monitored == true"
-        ],
+        "lines": ["input.facts.monitored == true"],
         "present": [
           {
             "value": true,
@@ -1657,9 +1461,7 @@
         "field": "input.facts.monitored",
         "operator": "IS_FALSE",
         "value": "",
-        "lines": [
-          "input.facts.monitored == false"
-        ],
+        "lines": ["input.facts.monitored == false"],
         "present": [
           {
             "value": false,
@@ -1676,9 +1478,7 @@
         "field": "input.facts.file_count",
         "operator": "EQUALS",
         "value": "2",
-        "lines": [
-          "input.facts.file_count == 2"
-        ],
+        "lines": ["input.facts.file_count == 2"],
         "present": [
           {
             "value": 2,
@@ -1795,9 +1595,7 @@
         "field": "input.facts.file_count",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.facts.file_count != null"
-        ],
+        "lines": ["input.facts.file_count != null"],
         "present": [
           {
             "value": 0,
@@ -1810,9 +1608,7 @@
         "field": "input.facts.file_count",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.facts.file_count != null"
-        ],
+        "lines": ["not input.facts.file_count != null"],
         "present": [
           {
             "value": 0,
@@ -1825,9 +1621,7 @@
         "field": "input.facts.added_by_username",
         "operator": "EQUALS",
         "value": "sample",
-        "lines": [
-          "input.facts.added_by_username == \"sample\""
-        ],
+        "lines": ["input.facts.added_by_username == \"sample\""],
         "present": [
           {
             "value": "sample",
@@ -1844,9 +1638,7 @@
         "field": "input.facts.added_by_username",
         "operator": "IS_ONE_OF",
         "value": "sample\nExtra",
-        "lines": [
-          "input.facts.added_by_username in {\"sample\", \"Extra\"}"
-        ],
+        "lines": ["input.facts.added_by_username in {\"sample\", \"Extra\"}"],
         "present": [
           {
             "value": "sample",
@@ -1903,9 +1695,7 @@
         "field": "input.facts.added_by_username",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.facts.added_by_username != null"
-        ],
+        "lines": ["input.facts.added_by_username != null"],
         "present": [
           {
             "value": "",
@@ -1918,9 +1708,7 @@
         "field": "input.facts.added_by_username",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.facts.added_by_username != null"
-        ],
+        "lines": ["not input.facts.added_by_username != null"],
         "present": [
           {
             "value": "",
@@ -1933,20 +1721,14 @@
         "field": "input.facts.tags",
         "operator": "CONTAINS",
         "value": "sample",
-        "lines": [
-          "\"sample\" in input.facts.tags"
-        ],
+        "lines": ["\"sample\" in input.facts.tags"],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": true
           },
           {
-            "value": [
-              "other"
-            ],
+            "value": ["other"],
             "expected": false
           }
         ],
@@ -1961,15 +1743,11 @@
         ],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": true
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": false
           }
         ],
@@ -1985,15 +1763,11 @@
         ],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": false
           },
           {
-            "value": [
-              "Elsewhere"
-            ],
+            "value": ["Elsewhere"],
             "expected": true
           }
         ],
@@ -2009,15 +1783,11 @@
         ],
         "present": [
           {
-            "value": [
-              "other"
-            ],
+            "value": ["other"],
             "expected": true
           },
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": false
           }
         ],
@@ -2027,18 +1797,14 @@
         "field": "input.facts.tags",
         "operator": "IS_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.facts.tags) == 0"
-        ],
+        "lines": ["count(input.facts.tags) == 0"],
         "present": [
           {
             "value": [],
             "expected": true
           },
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": false
           }
         ],
@@ -2048,14 +1814,10 @@
         "field": "input.facts.tags",
         "operator": "IS_NOT_EMPTY",
         "value": "",
-        "lines": [
-          "count(input.facts.tags) > 0"
-        ],
+        "lines": ["count(input.facts.tags) > 0"],
         "present": [
           {
-            "value": [
-              "sample"
-            ],
+            "value": ["sample"],
             "expected": true
           },
           {
@@ -2069,9 +1831,7 @@
         "field": "input.facts.added_at",
         "operator": "MORE_THAN_DAYS_AGO",
         "value": "30",
-        "lines": [
-          "days_since(input.facts.added_at) > 30"
-        ],
+        "lines": ["days_since(input.facts.added_at) > 30"],
         "present": [
           {
             "value": "2025-12-31T00:00:00Z",
@@ -2120,9 +1880,7 @@
         "field": "input.facts.added_at",
         "operator": "HAS_VALUE",
         "value": "",
-        "lines": [
-          "input.facts.added_at != null"
-        ],
+        "lines": ["input.facts.added_at != null"],
         "present": [
           {
             "value": "2026-01-30T00:00:00Z",
@@ -2135,9 +1893,7 @@
         "field": "input.facts.added_at",
         "operator": "HAS_NO_VALUE",
         "value": "",
-        "lines": [
-          "not input.facts.added_at != null"
-        ],
+        "lines": ["not input.facts.added_at != null"],
         "present": [
           {
             "value": "2026-01-30T00:00:00Z",

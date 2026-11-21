@@ -302,6 +302,17 @@ pub struct BuiltinScoreDoc {
     pub codes: Vec<String>,
 }
 
+/// One field of the serialized input's `builtin_score` object.
+fn builtin_score_field<'a>(
+    document: &'a mut serde_json::Value,
+    field: &str,
+) -> Result<&'a mut serde_json::Value, RulesError> {
+    document
+        .get_mut("builtin_score")
+        .and_then(|score| score.get_mut(field))
+        .ok_or_else(|| RulesError::Evaluation(format!("builtin score has no {field}")))
+}
+
 /// A single scoring entry produced by a user rule.
 #[derive(Debug, Clone)]
 pub struct UserRuleEntry {
@@ -694,31 +705,56 @@ impl UserRulesEvaluator {
         facet: &str,
     ) -> Result<EvalResult, RulesError> {
         let outcome = if self.rules.iter().any(|rule| rule.extra.baseline) {
-            let mut phased_input = input.clone();
-            phased_input.builtin_score.total = 0;
-            let mut baseline =
-                self.evaluate_policies_where(&phased_input, facet, "baseline", |extra| {
-                    extra.baseline
-                })?;
+            // The input is serialized once. The baseline phase reads the
+            // document with a zero subtotal; the additional phase reads the
+            // same document with the baseline subtotal and codes patched in.
+            let mut shared: Option<serde_json::Value> = None;
+            let mut baseline = self.evaluate_document_where(
+                |_| {
+                    let mut first = serde_json::to_value(input)?;
+                    let untouched = first.clone();
+                    *builtin_score_field(&mut first, "total")? = serde_json::Value::from(0);
+                    shared = Some(untouched);
+                    Ok(first)
+                },
+                facet,
+                "baseline",
+                |rule| rule.extra.baseline,
+            )?;
             let subtotal = baseline
                 .records
                 .iter()
                 .flat_map(|record| &record.decision)
                 .try_fold(0_i64, |sum, entry| sum.checked_add(i64::from(entry.delta)))
                 .ok_or_else(|| RulesError::Evaluation("baseline score overflow".into()))?;
-            phased_input.builtin_score.total =
-                subtotal.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-            phased_input.builtin_score.codes.extend(
-                baseline
-                    .records
-                    .iter()
-                    .flat_map(|record| &record.decision)
-                    .map(|entry| entry.code.clone()),
-            );
-            let additional =
-                self.evaluate_policies_where(&phased_input, facet, "additional", |extra| {
-                    !extra.baseline
-                })?;
+            let total = subtotal.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+            let baseline_codes: Vec<serde_json::Value> = baseline
+                .records
+                .iter()
+                .flat_map(|record| &record.decision)
+                .map(|entry| serde_json::Value::from(entry.code.clone()))
+                .collect();
+            let additional = self.evaluate_document_where(
+                |_| {
+                    let mut second = match shared {
+                        Some(document) => document,
+                        None => serde_json::to_value(input)?,
+                    };
+                    *builtin_score_field(&mut second, "total")? = serde_json::Value::from(total);
+                    match builtin_score_field(&mut second, "codes")? {
+                        serde_json::Value::Array(codes) => codes.extend(baseline_codes),
+                        _ => {
+                            return Err(RulesError::Evaluation(
+                                "builtin score codes are not a list".into(),
+                            ));
+                        }
+                    }
+                    Ok(second)
+                },
+                facet,
+                "additional",
+                |rule| !rule.extra.baseline,
+            )?;
             baseline.records.extend(additional.records);
             baseline.errors.extend(additional.errors);
             baseline

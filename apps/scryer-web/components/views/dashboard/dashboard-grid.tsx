@@ -301,9 +301,7 @@ function toGridLayout(
 ): LayoutItem[] {
   return items.map((entry) => {
     const kind = dashboardPanelKind(entry.panelId);
-    const min = kind
-      ? dashboardPanelMinSize(kind, breakpoint)
-      : { w: 1, h: 1 };
+    const min = kind ? dashboardPanelMinSize(kind, breakpoint) : { w: 1, h: 1 };
     return {
       i: entry.panelId,
       x: entry.x,

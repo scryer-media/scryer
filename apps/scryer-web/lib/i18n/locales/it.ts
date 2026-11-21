@@ -2016,12 +2016,17 @@ const it: LocaleDictionary = {
   "settings.sidecarFilesTitle": "File sidecar",
   "settings.libraryFullHashBackfillTitle": "Hash in background",
   "settings.libraryFullHashBackfillLabel": "Calcola l'hash dei file di notte",
-  "settings.libraryFullHashBackfillDescription": "Legge ogni file di questa libreria una volta, durante la notte, per registrarne l'hash completo del contenuto. Disattivalo per le librerie su dischi che tieni in standby; l'hash di un file verrà letto solo quando uno spostamento, un'importazione o un controllo ne ha bisogno.",
-  "settings.libraryFullHashBackfillDisableTitle": "Disattivare l'hash notturno?",
-  "settings.libraryFullHashBackfillDisableWarning": "Disattivare questa opzione riduce la capacità di Scryer di garantire che alcuni spostamenti di file siano sicuri al 100%.",
+  "settings.libraryFullHashBackfillDescription":
+    "Legge ogni file di questa libreria una volta, durante la notte, per registrarne l'hash completo del contenuto. Disattivalo per le librerie su dischi che tieni in standby; l'hash di un file verrà letto solo quando uno spostamento, un'importazione o un controllo ne ha bisogno.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Disattivare l'hash notturno?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Disattivare questa opzione riduce la capacità di Scryer di garantire che alcuni spostamenti di file siano sicuri al 100%.",
   "settings.libraryFullHashBackfillDisableConfirm": "Disattiva",
-  "settings.libraryFullHashBackfillEnabledStatus": "Hash notturno attivato per questa libreria.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Hash notturno disattivato per questa libreria.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Hash notturno attivato per questa libreria.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Hash notturno disattivato per questa libreria.",
   "settings.nfoWriteOnImportLabel": "Scrivi NFO all'importazione",
   "settings.nfoWriteOnImportDescription":
     "Scrivi file di metadati .nfo compatibili con Kodi/Jellyfin/Emby accanto ai media importati; un file .nfo esistente non viene mai sovrascritto",
@@ -2673,8 +2678,7 @@ const it: LocaleDictionary = {
   "settings.lifecyclePreviewLibrary": "Libreria",
   "settings.lifecyclePreviewLibraryPlaceholder": "Seleziona una libreria",
   "settings.lifecyclePreviewLimit": "Titoli",
-  "settings.lifecyclePreviewLimitHelp":
-    "Fino a {{max}} titoli per esecuzione.",
+  "settings.lifecyclePreviewLimitHelp": "Fino a {{max}} titoli per esecuzione.",
   "settings.lifecyclePreviewRun": "Esegui anteprima",
   "settings.lifecyclePreviewRunning": "Anteprima in corso...",
   "settings.lifecyclePreviewNoTitles": "Nessun titolo è stato valutato.",
@@ -2787,8 +2791,7 @@ const it: LocaleDictionary = {
   "settings.lifecycleExclusionScopeGlobal": "Tutte le regole",
   "settings.lifecycleExclusionRemove": "Rimuovi esclusione",
   "settings.lifecycleExclusionRemoved": "Esclusione di {{title}} rimossa.",
-  "settings.lifecycleExclusionRemoving":
-    "Rimuovere l'esclusione di {{title}}?",
+  "settings.lifecycleExclusionRemoving": "Rimuovere l'esclusione di {{title}}?",
   "settings.lifecycleExcludeTitle": "Escludi dalle regole del ciclo di vita",
   "settings.lifecycleExcludeBody":
     "{{title}} sarà escluso a partire dalla prossima valutazione e il suo candidato passerà a escluso.",
@@ -2798,7 +2801,8 @@ const it: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "Perché questo titolo viene escluso (facoltativo)",
   "settings.lifecycleExcludeConfirm": "Escludi",
-  "settings.lifecycleExcluded": "{{title}} escluso dalle regole del ciclo di vita.",
+  "settings.lifecycleExcluded":
+    "{{title}} escluso dalle regole del ciclo di vita.",
   "move.dialogTitle": "Sposta titoli",
   "move.destinationLibrary": "Libreria di destinazione",
   "move.destinationRoot": "Radice di destinazione",
@@ -3425,8 +3429,7 @@ const it: LocaleDictionary = {
     "Contrassegnato per la rimozione",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.lifecycleTemplateFlagForReviewTitle":
-    "Contrassegna per revisione",
+  "settings.lifecycleTemplateFlagForReviewTitle": "Contrassegna per revisione",
   "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 

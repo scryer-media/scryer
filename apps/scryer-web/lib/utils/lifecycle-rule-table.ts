@@ -97,7 +97,9 @@ function columnOrder(
     case "state":
       return direction * (STATE_ORDER[left.state] - STATE_ORDER[right.state]);
     case "revision":
-      return direction * (left.currentRevisionNumber - right.currentRevisionNumber);
+      return (
+        direction * (left.currentRevisionNumber - right.currentRevisionNumber)
+      );
   }
 }
 

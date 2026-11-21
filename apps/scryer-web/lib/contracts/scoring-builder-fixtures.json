@@ -370,9 +370,7 @@
             "streaming_service": "sample-other-service",
             "edition": "Sample Edition",
             "protocol": null,
-            "languages_audio": [
-              "en"
-            ],
+            "languages_audio": ["en"],
             "languages_subtitles": [],
             "parse_confidence": 0.75,
             "anime_version": 2,
@@ -380,18 +378,14 @@
           },
           "context": {
             "media_type": "movie",
-            "tags": [
-              "sample-other"
-            ],
+            "tags": ["sample-other"],
             "coverage_member_count": 2
           },
           "profile": {
             "name": "Sample Other Profile"
           },
           "builtin_score": {
-            "codes": [
-              "sample_code"
-            ],
+            "codes": ["sample_code"],
             "total": 999
           }
         },
@@ -404,9 +398,7 @@
             "streaming_service": "sample-other-service",
             "edition": "Sample Edition",
             "protocol": null,
-            "languages_audio": [
-              "en"
-            ],
+            "languages_audio": ["en"],
             "languages_subtitles": [],
             "parse_confidence": 0.75,
             "anime_version": 2,
@@ -414,18 +406,14 @@
           },
           "context": {
             "media_type": "movie",
-            "tags": [
-              "sample-keep"
-            ],
+            "tags": ["sample-keep"],
             "coverage_member_count": 2
           },
           "profile": {
             "name": "Sample Other Profile"
           },
           "builtin_score": {
-            "codes": [
-              "sample_code"
-            ],
+            "codes": ["sample_code"],
             "total": 999
           }
         },
@@ -438,9 +426,7 @@
             "streaming_service": null,
             "edition": "Sample Edition",
             "protocol": null,
-            "languages_audio": [
-              "en"
-            ],
+            "languages_audio": ["en"],
             "languages_subtitles": [],
             "parse_confidence": 0.75,
             "anime_version": 2,
@@ -448,18 +434,14 @@
           },
           "context": {
             "media_type": "movie",
-            "tags": [
-              "sample-other"
-            ],
+            "tags": ["sample-other"],
             "coverage_member_count": 2
           },
           "profile": {
             "name": "Sample Other Profile"
           },
           "builtin_score": {
-            "codes": [
-              "sample_code"
-            ],
+            "codes": ["sample_code"],
             "total": 999
           }
         },
@@ -472,9 +454,7 @@
             "streaming_service": "sample-other-service",
             "edition": "Sample Edition",
             "protocol": null,
-            "languages_audio": [
-              "en"
-            ],
+            "languages_audio": ["en"],
             "languages_subtitles": [],
             "parse_confidence": 0.75,
             "anime_version": null,
@@ -482,18 +462,14 @@
           },
           "context": {
             "media_type": "movie",
-            "tags": [
-              "sample-other"
-            ],
+            "tags": ["sample-other"],
             "coverage_member_count": 2
           },
           "profile": {
             "name": "Sample Other Profile"
           },
           "builtin_score": {
-            "codes": [
-              "sample_code"
-            ],
+            "codes": ["sample_code"],
             "total": 999
           }
         },
@@ -506,9 +482,7 @@
             "streaming_service": "sample-other-service",
             "edition": "Sample Edition",
             "protocol": null,
-            "languages_audio": [
-              "en"
-            ],
+            "languages_audio": ["en"],
             "languages_subtitles": [],
             "parse_confidence": 0.75,
             "anime_version": 2,
@@ -516,18 +490,14 @@
           },
           "context": {
             "media_type": "movie",
-            "tags": [
-              "sample-other"
-            ],
+            "tags": ["sample-other"],
             "coverage_member_count": null
           },
           "profile": {
             "name": "Sample Other Profile"
           },
           "builtin_score": {
-            "codes": [
-              "sample_code"
-            ],
+            "codes": ["sample_code"],
             "total": 999
           }
         },
@@ -584,9 +554,7 @@
         "input": {
           "release": {
             "raw_title": "Sample Other Title",
-            "normalized_tokens": [
-              "Ünïcødé 標籤 😀"
-            ]
+            "normalized_tokens": ["Ünïcødé 標籤 😀"]
           }
         },
         "expected": true
@@ -722,9 +690,7 @@
           "release": {
             "raw_title": "Sample",
             "edition": "Sample",
-            "languages_audio": [
-              "en"
-            ]
+            "languages_audio": ["en"]
           }
         },
         "expected": true
@@ -734,9 +700,7 @@
           "release": {
             "raw_title": "Elsewhere",
             "edition": "Sample",
-            "languages_audio": [
-              "en"
-            ]
+            "languages_audio": ["en"]
           }
         },
         "expected": false
@@ -746,9 +710,7 @@
           "release": {
             "raw_title": "Sample",
             "edition": "Elsewhere",
-            "languages_audio": [
-              "en"
-            ]
+            "languages_audio": ["en"]
           }
         },
         "expected": false
@@ -758,9 +720,7 @@
           "release": {
             "raw_title": "Sample",
             "edition": "Sample",
-            "languages_audio": [
-              "Elsewhere"
-            ]
+            "languages_audio": ["Elsewhere"]
           }
         },
         "expected": false
@@ -805,9 +765,7 @@
           "release": {
             "raw_title": "Elsewhere",
             "edition": "Elsewhere",
-            "languages_audio": [
-              "Elsewhere"
-            ]
+            "languages_audio": ["Elsewhere"]
           }
         },
         "expected": true
@@ -817,9 +775,7 @@
           "release": {
             "raw_title": "Sample",
             "edition": "Elsewhere",
-            "languages_audio": [
-              "Elsewhere"
-            ]
+            "languages_audio": ["Elsewhere"]
           }
         },
         "expected": false
@@ -829,9 +785,7 @@
           "release": {
             "raw_title": "Elsewhere",
             "edition": "Sample",
-            "languages_audio": [
-              "Elsewhere"
-            ]
+            "languages_audio": ["Elsewhere"]
           }
         },
         "expected": false
@@ -841,9 +795,7 @@
           "release": {
             "raw_title": "Elsewhere",
             "edition": "Elsewhere",
-            "languages_audio": [
-              "en"
-            ]
+            "languages_audio": ["en"]
           }
         },
         "expected": false

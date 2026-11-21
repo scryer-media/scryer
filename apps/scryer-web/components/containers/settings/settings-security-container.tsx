@@ -748,11 +748,7 @@ export function SettingsSecurityContainer() {
 
   const handleMcpEnabledChange = React.useCallback(
     async (enabled: boolean) => {
-      if (
-        confirmBusy ||
-        saveBusy ||
-        enabled === settings.mcpEnabled
-      ) {
+      if (confirmBusy || saveBusy || enabled === settings.mcpEnabled) {
         return;
       }
 

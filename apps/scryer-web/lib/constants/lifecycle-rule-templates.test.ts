@@ -14,7 +14,8 @@ import {
 } from "./lifecycle-rule-templates.ts";
 
 const DESCRIPTORS = LIFECYCLE_SERVED_PAYLOAD.outputs;
-const templateActionHeads = (source: string) => templateRuleOutputs(source, DESCRIPTORS);
+const templateActionHeads = (source: string) =>
+  templateRuleOutputs(source, DESCRIPTORS);
 
 test("the gallery ships every starter template exactly once", () => {
   assert.equal(LIFECYCLE_RULE_TEMPLATES.length, 17);
@@ -63,14 +64,21 @@ test("every template carries a matcher the API can accept", () => {
 
 test("every template declares at least one served action and a non-negative grace period", () => {
   const labelled: [string, Record<string, string>][] = [
-    ["en", en], ["cs", cs], ["ru", ru], ["zh_HK", zhHK], ["zh_TW", zhTW],
+    ["en", en],
+    ["cs", cs],
+    ["ru", ru],
+    ["zh_HK", zhHK],
+    ["zh_TW", zhTW],
   ];
   for (const template of LIFECYCLE_RULE_TEMPLATES) {
     const heads = templateActionHeads(template.regoSource);
     assert.ok(heads.length > 0, `${template.id} declares no action`);
     for (const head of heads) {
       const descriptor = DESCRIPTORS.find((entry) => entry.id === head);
-      assert.ok(descriptor, `${template.id} declares ${head}, which is not served`);
+      assert.ok(
+        descriptor,
+        `${template.id} declares ${head}, which is not served`,
+      );
       for (const [name, strings] of labelled)
         assert.ok(
           strings[descriptor.labelKey],

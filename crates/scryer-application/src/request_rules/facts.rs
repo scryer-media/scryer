@@ -127,6 +127,145 @@ pub mod fact_reason {
 pub(crate) const WATCHLIST_FACT_NAMES: &[&str] =
     &["on_requester_watchlist", "requester_watchlist_days"];
 
+/// The facts drawn from the draft's quality profile.
+pub(crate) const QUALITY_FACT_NAMES: &[&str] = &[
+    "quality_profile_tiers",
+    "quality_profile_max_resolution",
+    "quality_profile_allows_upgrades",
+];
+
+/// The facts drawn from what the catalog and other requests hold for the
+/// identity, demand included.
+pub(crate) const CATALOG_FACT_NAMES: &[&str] = &[
+    "exists_in_library_ids",
+    "previous_request_count",
+    "previously_denied",
+    "previously_approved",
+    "other_requester_count",
+    "pending_by_other_requester",
+];
+
+/// The facts drawn from the requester's own request history and leases.
+pub(crate) const REQUESTER_HISTORY_FACT_NAMES: &[&str] = &[
+    "pending_request_count",
+    "approved_last_30d",
+    "denied_last_30d",
+    "total_approved",
+    "active_lease_count",
+    "days_since_last_request",
+];
+
+/// The target library's title count.
+pub(crate) const LIBRARY_TITLE_COUNT_FACT_NAMES: &[&str] = &["library_title_count"];
+
+/// Whether the list that submitted the draft excludes it.
+pub(crate) const LIST_EXCLUSION_FACT_NAMES: &[&str] = &["list_excluded"];
+
+/// How many titles the requester already has in the target library.
+pub(crate) const REQUESTER_TITLES_FACT_NAMES: &[&str] = &["requester_titles_in_library_count"];
+
+/// Which fact families an evaluation reads. A family left unread costs no
+/// read, and its facts read unknown as not yet collected; it is left unread
+/// only when no loaded rule can read any of its facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestFactReads {
+    pub quality: bool,
+    pub catalog: bool,
+    pub requester_history: bool,
+    pub library_title_count: bool,
+    pub watchlist: bool,
+    pub list_exclusion: bool,
+    pub requester_titles: bool,
+}
+
+impl RequestFactReads {
+    /// Read every family.
+    pub const ALL: Self = Self {
+        quality: true,
+        catalog: true,
+        requester_history: true,
+        library_title_count: true,
+        watchlist: true,
+        list_exclusion: true,
+        requester_titles: true,
+    };
+
+    /// Read no optional family.
+    pub const NONE: Self = Self {
+        quality: false,
+        catalog: false,
+        requester_history: false,
+        library_title_count: false,
+        watchlist: false,
+        list_exclusion: false,
+        requester_titles: false,
+    };
+
+    /// The families any of `policies` may read, each rule parsed once.
+    pub(crate) fn for_policies<'a>(policies: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        const FAMILIES: [&[&str]; 7] = [
+            QUALITY_FACT_NAMES,
+            CATALOG_FACT_NAMES,
+            REQUESTER_HISTORY_FACT_NAMES,
+            LIBRARY_TITLE_COUNT_FACT_NAMES,
+            WATCHLIST_FACT_NAMES,
+            LIST_EXCLUSION_FACT_NAMES,
+            REQUESTER_TITLES_FACT_NAMES,
+        ];
+        let mut reads = [false; 7];
+        for (rego_source, rule_set_id) in policies {
+            let rule_reads = scryer_rules::validation::request_rule_may_read_fact_families(
+                rego_source,
+                rule_set_id,
+                &FAMILIES,
+            );
+            for (read, rule_read) in reads.iter_mut().zip(rule_reads) {
+                *read |= rule_read;
+            }
+        }
+        let [
+            quality,
+            catalog,
+            requester_history,
+            library_title_count,
+            watchlist,
+            list_exclusion,
+            requester_titles,
+        ] = reads;
+        Self {
+            quality,
+            catalog,
+            requester_history,
+            library_title_count,
+            watchlist,
+            list_exclusion,
+            requester_titles,
+        }
+    }
+
+    /// The fact names of every family this leaves unread.
+    fn unread_fact_names(self) -> impl Iterator<Item = &'static str> {
+        [
+            (self.quality, QUALITY_FACT_NAMES),
+            (self.catalog, CATALOG_FACT_NAMES),
+            (self.requester_history, REQUESTER_HISTORY_FACT_NAMES),
+            (self.library_title_count, LIBRARY_TITLE_COUNT_FACT_NAMES),
+            (self.watchlist, WATCHLIST_FACT_NAMES),
+            (self.list_exclusion, LIST_EXCLUSION_FACT_NAMES),
+            (self.requester_titles, REQUESTER_TITLES_FACT_NAMES),
+        ]
+        .into_iter()
+        .filter(|(read, _)| !read)
+        .flat_map(|(_, names)| names.iter().copied())
+    }
+}
+
+impl Default for RequestFactReads {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
 /// A watch-later list is fresh for eight of its sync intervals, and never
 /// less than two days: the same window lifecycle watchlist facts use.
 fn watchlist_freshness_window(interval_seconds: i64) -> chrono::Duration {
@@ -266,13 +405,17 @@ pub struct RequestInputContext {
     /// `None` when the count could not be read.
     pub requester_titles_in_library_count: Option<i64>,
     pub storage: RequestStorageContext,
+    /// The families that were read; the facts of the rest read unknown as not
+    /// yet collected, whatever the fields above hold for them.
+    pub fact_reads: RequestFactReads,
 }
 
 // ── The pure builder ────────────────────────────────────────────────────────
 
 /// Turn a fully-read context into the document the engine evaluates.
 pub fn build_request_input(context: RequestInputContext) -> RequestInput {
-    let facts = build_facts(&context);
+    let mut facts = build_facts(&context);
+    mark_unread_facts(&mut facts, context.fact_reads);
     RequestInput {
         schema_version: REQUEST_INPUT_SCHEMA_VERSION,
         evaluation_time: context.evaluation_time,
@@ -801,6 +944,45 @@ fn optional_snapshot_fact<T: serde::Serialize>(
     }
 }
 
+/// Mark the facts of every family `reads` leaves unread as unknown, not yet
+/// collected.
+fn mark_unread_facts(facts: &mut RequestFactsDoc, reads: RequestFactReads) {
+    macro_rules! mark {
+        ($name:expr; $($field:ident),* $(,)?) => {
+            match $name {
+                $(stringify!($field) => {
+                    facts.$field = Observation::unknown(fact_reason::NOT_YET_COLLECTED);
+                })*
+                other => debug_assert!(false, "no fact named {other}"),
+            }
+        };
+    }
+    for name in reads.unread_fact_names() {
+        mark!(name;
+            quality_profile_tiers,
+            quality_profile_max_resolution,
+            quality_profile_allows_upgrades,
+            exists_in_library_ids,
+            previous_request_count,
+            previously_denied,
+            previously_approved,
+            other_requester_count,
+            pending_by_other_requester,
+            pending_request_count,
+            approved_last_30d,
+            denied_last_30d,
+            total_approved,
+            active_lease_count,
+            days_since_last_request,
+            library_title_count,
+            on_requester_watchlist,
+            requester_watchlist_days,
+            list_excluded,
+            requester_titles_in_library_count,
+        );
+    }
+}
+
 fn catalog_fact<T: serde::Serialize, F: FnOnce() -> T>(
     catalog: &RequestCatalogContext,
     resolve: F,
@@ -952,9 +1134,9 @@ impl AppUseCase {
     /// state, so a failed read must reach the evaluation fallback rather than
     /// fabricate an empty provider list.
     ///
-    /// Without `read_watchlist` the requester's lists are not read and the
-    /// watchlist facts read unknown as not yet collected: for an evaluation
-    /// whose rules cannot read them.
+    /// Only the families `reads` names are read. The facts of the rest read
+    /// unknown as not yet collected: for an evaluation whose rules cannot read
+    /// them.
     pub(crate) async fn assemble_request_input_context(
         &self,
         actor: &User,
@@ -963,31 +1145,52 @@ impl AppUseCase {
         snapshot: MediaRequestMetadataSnapshot,
         evaluation_time: DateTime<Utc>,
         excluding_request_id: Option<&str>,
-        read_watchlist: bool,
+        reads: RequestFactReads,
     ) -> AppResult<RequestInputContext> {
         let requester = self
             .request_requester_doc(actor, &library.id, evaluation_time)
             .await?;
         let list = self.request_list_doc(actor, draft).await;
         let request = request_doc(draft, list);
-        let quality = self.request_quality_context(draft).await;
-        let catalog = self
-            .request_catalog_context(actor, library, draft, excluding_request_id)
-            .await;
-        let history = self
-            .request_history_context(actor, evaluation_time, excluding_request_id)
-            .await;
-        let library_title_count = self.request_library_title_count(&library.id).await;
-        let watchlist = if read_watchlist {
+        let quality = if reads.quality {
+            self.request_quality_context(draft).await
+        } else {
+            None
+        };
+        let catalog = if reads.catalog {
+            self.request_catalog_context(actor, library, draft, excluding_request_id)
+                .await
+        } else {
+            RequestCatalogContext::default()
+        };
+        let history = if reads.requester_history {
+            self.request_history_context(actor, evaluation_time, excluding_request_id)
+                .await
+        } else {
+            RequestRequesterHistoryContext::default()
+        };
+        let library_title_count = if reads.library_title_count {
+            self.request_library_title_count(&library.id).await
+        } else {
+            None
+        };
+        let watchlist = if reads.watchlist {
             self.request_watchlist_context(actor, draft, evaluation_time)
                 .await
         } else {
             RequestWatchlistContext::Unavailable(fact_reason::NOT_YET_COLLECTED)
         };
-        let list_excluded = self.request_list_excluded(draft).await;
-        let requester_titles_in_library_count = self
-            .request_requester_titles_in_library_count(actor, &library.id)
-            .await;
+        let list_excluded = if reads.list_exclusion {
+            self.request_list_excluded(draft).await
+        } else {
+            None
+        };
+        let requester_titles_in_library_count = if reads.requester_titles {
+            self.request_requester_titles_in_library_count(actor, &library.id)
+                .await
+        } else {
+            None
+        };
         let storage = self.request_storage_context(library, evaluation_time);
 
         Ok(RequestInputContext {
@@ -1009,6 +1212,7 @@ impl AppUseCase {
             list_excluded,
             requester_titles_in_library_count,
             storage,
+            fact_reads: reads,
         })
     }
 
@@ -1232,15 +1436,16 @@ impl AppUseCase {
         library_id: &str,
         evaluation_time: DateTime<Utc>,
     ) -> AppResult<RequestRequesterDoc> {
-        let mut app_permissions = Vec::new();
-        for &permission in AppPermission::ALL {
-            if self.has_app_permission(actor, permission).await? {
-                app_permissions.push(permission.as_str().to_string());
-            }
-        }
+        // One authorization read answers every permission below, exactly as
+        // each `has_*_permission` call would have answered it.
+        let authorization = self.authorization_for_actor(actor).await?;
+        let app_permissions: Vec<String> = AppPermission::ALL
+            .iter()
+            .filter(|&&permission| authorization.has_app_permission(permission))
+            .map(|permission| permission.as_str().to_string())
+            .collect();
 
-        let mut library_permissions = Vec::new();
-        for permission in [
+        let library_permissions: Vec<String> = [
             LibraryPermission::View,
             LibraryPermission::ManageTitles,
             LibraryPermission::ResolveImports,
@@ -1248,14 +1453,17 @@ impl AppUseCase {
             LibraryPermission::Request,
             LibraryPermission::AutoApproveRequests,
             LibraryPermission::ManageSubtitles,
-        ] {
-            if self
-                .has_library_permission(actor, library_id, permission)
-                .await?
-            {
-                library_permissions.push(permission.as_str().to_string());
-            }
-        }
+        ]
+        .into_iter()
+        .filter(|&permission| {
+            crate::authorization::effective_library_permission(
+                &authorization,
+                library_id,
+                permission,
+            )
+        })
+        .map(|permission| permission.as_str().to_string())
+        .collect();
 
         // Verified links only: a pending claim is an assertion nobody has
         // confirmed, and a rule that trusted it would let anyone grant
@@ -1433,63 +1641,26 @@ impl AppUseCase {
         evaluation_time: DateTime<Utc>,
         excluding_request_id: Option<&str>,
     ) -> RequestRequesterHistoryContext {
-        use scryer_domain::MediaRequestStatus;
-
         let thirty_days_ago = evaluation_time - chrono::Duration::days(30);
-        let requests = &self.services.catalog.media_requests;
         let mut context = RequestRequesterHistoryContext {
             readable: true,
             ..RequestRequesterHistoryContext::default()
         };
 
-        let counters = async {
-            Ok::<_, crate::AppError>((
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Pending),
-                        None,
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Approved),
-                        Some(thirty_days_ago),
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Rejected),
-                        Some(thirty_days_ago),
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .count_for_requester(
-                        &actor.id,
-                        Some(MediaRequestStatus::Approved),
-                        None,
-                        excluding_request_id,
-                    )
-                    .await?,
-                requests
-                    .latest_request_at_for_user(&actor.id, excluding_request_id)
-                    .await?,
-            ))
-        }
-        .await;
+        let counters = self
+            .services
+            .catalog
+            .media_requests
+            .requester_history_summary(&actor.id, thirty_days_ago, excluding_request_id)
+            .await;
 
         match counters {
-            Ok((pending, approved_30d, denied_30d, total_approved, last_request_at)) => {
-                context.pending_request_count = pending as i64;
-                context.approved_last_30d = approved_30d as i64;
-                context.denied_last_30d = denied_30d as i64;
-                context.total_approved = total_approved as i64;
-                context.last_request_at = last_request_at;
+            Ok(summary) => {
+                context.pending_request_count = summary.pending_count as i64;
+                context.approved_last_30d = summary.approved_since_count as i64;
+                context.denied_last_30d = summary.rejected_since_count as i64;
+                context.total_approved = summary.approved_count as i64;
+                context.last_request_at = summary.latest_request_at;
             }
             Err(error) => {
                 tracing::warn!(

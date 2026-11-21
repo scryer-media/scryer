@@ -3,9 +3,9 @@ use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaRequestCounts,
     MediaRequestFingerprintSummary, MediaRequestOrder, MediaRequestQualityProfileReferenceCounts,
-    MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
-    MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
-    NewMediaRequest, TitleRequesters,
+    MediaRequestQuery, MediaRequestRepository, MediaRequestRequesterSummary,
+    MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
+    MediaRequestUpdateResult, NewMediaRequest, TitleRequesters,
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
@@ -812,6 +812,59 @@ impl MediaRequestRepository for MediaRequestStore {
             .transpose()?
             .unwrap_or(0)
             .max(0) as u64)
+    }
+
+    /// One statement over the requester's own submissions, served by
+    /// `idx_media_requests_requester_created`. Each conditional sum repeats
+    /// the filter of the matching `count_for_requester` call, and the latest
+    /// creation time is the row `latest_request_at_for_user` orders first.
+    async fn requester_history_summary(
+        &self,
+        user_id: &str,
+        since: chrono::DateTime<Utc>,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestRequesterSummary> {
+        let excluding = if excluding_request_id.is_some() {
+            " AND id <> {}"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS pending_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} AND created_at >= {{}}
+                                      THEN 1 ELSE 0 END), 0) AS approved_since_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} AND created_at >= {{}}
+                                      THEN 1 ELSE 0 END), 0) AS rejected_since_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS approved_count,
+                    MAX(created_at) AS latest_created_at
+               FROM media_requests
+              WHERE created_by_user_id = {{}}{excluding}"
+        );
+        let status = |status: MediaRequestStatus| SqlArg::Text(status.as_str().to_string());
+        let mut args = vec![
+            status(MediaRequestStatus::Pending),
+            status(MediaRequestStatus::Approved),
+            SqlArg::Timestamp(since),
+            status(MediaRequestStatus::Rejected),
+            SqlArg::Timestamp(since),
+            status(MediaRequestStatus::Approved),
+            SqlArg::Text(user_id.to_string()),
+        ];
+        if let Some(request_id) = excluding_request_id {
+            args.push(SqlArg::Text(request_id.to_string()));
+        }
+        let Some(row) = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?
+        else {
+            return Ok(MediaRequestRequesterSummary::default());
+        };
+        let count = |column: &str| row.i64(column).map(|value| value.max(0) as u64);
+        Ok(MediaRequestRequesterSummary {
+            pending_count: count("pending_count")?,
+            approved_since_count: count("approved_since_count")?,
+            rejected_since_count: count("rejected_since_count")?,
+            approved_count: count("approved_count")?,
+            latest_request_at: row.opt_timestamp("latest_created_at")?,
+        })
     }
 
     async fn latest_request_at_for_user(

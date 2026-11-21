@@ -2966,7 +2966,8 @@ const cs: LocaleDictionary = {
     "Ověřený zvukový profil nebo rozšiřující popisek jednotlivé stopy",
   "settings.refAudioStreamChannels": "Počet kanálů jednotlivé stopy",
   "settings.refAudioStreamLanguage": "Kód jazyka jednotlivé stopy",
-  "settings.refAudioStreamName": "Název zvukové stopy jednotlivé stopy, je-li dostupný",
+  "settings.refAudioStreamName":
+    "Název zvukové stopy jednotlivé stopy, je-li dostupný",
   "settings.refAudioStreamBitrateKbps": "Datový tok jednotlivé stopy v kb/s",
   "settings.refSectionSubtitleStreams": "— Vnořené položky stop titulků",
   "settings.refSubtitleStreamCodec": "Kodek titulků jednotlivé stopy",
@@ -3621,12 +3622,16 @@ const cs: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Doprovodné soubory",
   "settings.libraryFullHashBackfillTitle": "Hashování na pozadí",
   "settings.libraryFullHashBackfillLabel": "Hashovat soubory v noci",
-  "settings.libraryFullHashBackfillDescription": "Jednou v noci přečte každý soubor této knihovny a uloží úplný hash jeho obsahu. Vypněte to u knihoven na discích, které necháváte uspané; hash souboru se pak přečte jen tehdy, když ho potřebuje přesun, import nebo kontrola.",
+  "settings.libraryFullHashBackfillDescription":
+    "Jednou v noci přečte každý soubor této knihovny a uloží úplný hash jeho obsahu. Vypněte to u knihoven na discích, které necháváte uspané; hash souboru se pak přečte jen tehdy, když ho potřebuje přesun, import nebo kontrola.",
   "settings.libraryFullHashBackfillDisableTitle": "Vypnout noční hashování?",
-  "settings.libraryFullHashBackfillDisableWarning": "Vypnutím se snižuje schopnost Scryeru zajistit, že určité přesuny souborů jsou na 100 % bezpečné.",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Vypnutím se snižuje schopnost Scryeru zajistit, že určité přesuny souborů jsou na 100 % bezpečné.",
   "settings.libraryFullHashBackfillDisableConfirm": "Vypnout",
-  "settings.libraryFullHashBackfillEnabledStatus": "Noční hashování pro tuto knihovnu zapnuto.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Noční hashování pro tuto knihovnu vypnuto.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Noční hashování pro tuto knihovnu zapnuto.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Noční hashování pro tuto knihovnu vypnuto.",
   "settings.identityStorageTitle": "Identita a úložiště",
   "settings.mediaProfilesTitle": "Mediální profily",
   "settings.mediaProfilesHelp":

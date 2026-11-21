@@ -519,8 +519,10 @@ impl AppUseCase {
                 self.lifecycle_title_deletion_files(title).await?,
             ));
         }
+        // The manifest is the subject's catalog files and their ownership;
+        // whether each is on disk decides nothing here, so none is probed.
         let subject = self
-            .lifecycle_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
+            .lifecycle_resolve_subject_files(&candidate.subject_kind, &candidate.subject_id, title)
             .await?;
         if subject.ambiguous_files {
             return Err(AppError::validation_refused(
@@ -536,8 +538,14 @@ impl AppUseCase {
         candidate: &LifecycleCandidate,
         title: &Title,
     ) -> AppResult<()> {
+        // Only the subject's identity and monitoring are read here and in the
+        // confirmation below, so neither reads a media file or probes one.
         let subject = self
-            .lifecycle_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
+            .lifecycle_resolve_subject_monitoring(
+                &candidate.subject_kind,
+                &candidate.subject_id,
+                title,
+            )
             .await?;
         let actor = User::system_execution_actor();
         match subject.kind {
@@ -558,7 +566,11 @@ impl AppUseCase {
         }
         // Confirm the persisted state, including every future episode of a season.
         let fresh = self
-            .lifecycle_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
+            .lifecycle_resolve_subject_monitoring(
+                &candidate.subject_kind,
+                &candidate.subject_id,
+                title,
+            )
             .await?;
         if fresh.monitored || fresh.episodes.iter().any(|episode| episode.monitored) {
             return Err(AppError::Repository(
@@ -588,12 +600,12 @@ impl AppUseCase {
             ));
         }
         if candidate.subject_kind != Scope::Title.as_storage_str() {
+            // Monitoring is a catalog question: no media file is read.
             let fresh = self
-                .lifecycle_resolve_subject(
+                .lifecycle_resolve_subject_monitoring(
                     &candidate.subject_kind,
                     &candidate.subject_id,
                     title,
-                    &[],
                 )
                 .await?;
             return Ok(!fresh.monitored && fresh.episodes.iter().all(|episode| !episode.monitored));
@@ -665,7 +677,7 @@ impl AppUseCase {
         let evaluator = &mut *context.evaluator;
         let libraries = context.libraries;
         let tag_conflicts = context.tag_conflicts;
-        let storage_roots = context.storage_roots;
+        let recheck_shared = context.recheck_shared;
         let (subject_label, subject_files) = self
             .lifecycle_policy_deletion_files(candidate, title)
             .await?;
@@ -807,6 +819,14 @@ impl AppUseCase {
             revision_number: candidate.revision_number,
         };
         let actor = User::system_execution_actor();
+        // These rechecks keep only the decision, never the input, so a rule
+        // that reads no presence fact is rechecked without probing the
+        // title's files: its decision cannot depend on them.
+        let recheck_presence = if recheck_shared.source_reads.file_presence {
+            super::action_execution::RecheckFilePresence::Probe
+        } else {
+            super::action_execution::RecheckFilePresence::SkipUnread
+        };
         let mut failed = false;
         for index in 0..checkpoint.files.len() {
             if checkpoint.files[index].completed {
@@ -839,7 +859,8 @@ impl AppUseCase {
                         candidate,
                         libraries,
                         tag_conflicts,
-                        storage_roots,
+                        recheck_shared,
+                        recheck_presence,
                     )
                     .await
                 {

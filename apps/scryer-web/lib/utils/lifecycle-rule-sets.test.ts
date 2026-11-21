@@ -180,11 +180,7 @@ test("create input sends the source as the whole rule and no separate action", (
 
 test("matcher and metadata updates split along the API's versioned and unversioned halves", () => {
   const draft = lifecycleRuleDraftFromDetail(detail, lifecycle);
-  const source = updateLifecycleRuleSourceInput(
-    "rule-1",
-    draft,
-    lifecycle,
-  );
+  const source = updateLifecycleRuleSourceInput("rule-1", draft, lifecycle);
   const metadata = updateLifecycleRuleMetadataInput("rule-1", draft);
 
   assert.deepEqual(Object.keys(source).sort(), [
@@ -245,10 +241,7 @@ test("a new rule runs every eight hours until the operator picks otherwise", () 
     expression: null,
   };
   assert.deepEqual(initialLifecycleRuleDraft().schedule, expected);
-  assert.deepEqual(
-    newLifecycleRuleBuilderDraft(lifecycle).schedule,
-    expected,
-  );
+  assert.deepEqual(newLifecycleRuleBuilderDraft(lifecycle).schedule, expected);
   assert.deepEqual(
     createLifecycleRuleSetInput(
       newLifecycleRuleBuilderDraft(lifecycle),
@@ -269,10 +262,7 @@ test("a saved rule's schedule is read into the draft and sent back on create and
   };
 
   assert.deepEqual(draft.schedule, weekly);
-  assert.deepEqual(
-    copyLifecycleRuleDraft(detail, lifecycle).schedule,
-    weekly,
-  );
+  assert.deepEqual(copyLifecycleRuleDraft(detail, lifecycle).schedule, weekly);
   assert.deepEqual(
     createLifecycleRuleSetInput(draft, lifecycle).schedule,
     weekly,
@@ -399,10 +389,7 @@ test("no input names a scope or a storage root: heads say where an action acts",
 
 test("the preview limit stays inside the API's cap", () => {
   assert.equal(clampLifecyclePreviewLimit(0), 1);
-  assert.equal(
-    clampLifecyclePreviewLimit(500),
-    LIFECYCLE_PREVIEW_LIMIT_MAX,
-  );
+  assert.equal(clampLifecyclePreviewLimit(500), LIFECYCLE_PREVIEW_LIMIT_MAX);
   assert.equal(
     clampLifecyclePreviewLimit(Number.NaN),
     LIFECYCLE_PREVIEW_LIMIT_DEFAULT,
@@ -755,10 +742,7 @@ test("every rule state has real copy in the default locale", () => {
 });
 
 test("count acknowledgement reads a numeric fact and ignores prose", () => {
-  const error = (
-    value: unknown,
-    reason = "LIFECYCLE_ARM_COUNT_MISMATCH",
-  ) => ({
+  const error = (value: unknown, reason = "LIFECYCLE_ARM_COUNT_MISMATCH") => ({
     graphQLErrors: [
       {
         message: "any words (999)",
@@ -936,9 +920,7 @@ test("search history stays waiting or skipped until a durable receipt is accepte
     lifecycleSearchHistoryState({
       step: { id: "search" },
       run: null,
-      receipts: [
-        { jobRunId: "job-1", state: "accepted" },
-      ],
+      receipts: [{ jobRunId: "job-1", state: "accepted" }],
     } satisfies LifecycleActionStepProgress),
     "accepted",
   );

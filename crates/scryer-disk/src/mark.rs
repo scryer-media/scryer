@@ -336,6 +336,10 @@ impl Mark {
     }
 
     /// The length read; `None` for a mark that names a volume only.
+    #[expect(
+        clippy::len_without_is_empty,
+        reason = "Length is optional file metadata"
+    )]
     pub fn len(&self) -> Option<u64> {
         self.facts.map(|facts| facts.len)
     }

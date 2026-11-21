@@ -98,9 +98,9 @@ impl AppUseCase {
 
     /// How many decisions each of `rule_set_ids` took part in.
     ///
-    /// One count statement per rule set. Each counts the decisions whose
-    /// stored votes mention the rule set's id, a substring match no index
-    /// serves, so every count reads the whole decision table.
+    /// Counted from the rule set links written with each decision: one grouped
+    /// statement per bind-safe chunk of ids, served by the rule set index. A
+    /// rule set with no decision maps to zero.
     pub async fn request_rule_decision_counts(
         &self,
         actor: &User,
@@ -108,17 +108,19 @@ impl AppUseCase {
     ) -> AppResult<HashMap<String, u64>> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        let mut counts = HashMap::with_capacity(rule_set_ids.len());
-        for rule_set_id in rule_set_ids {
-            let count = self
-                .services
-                .customization
-                .request_rule_decisions
-                .count_for_rule_set(rule_set_id)
-                .await?;
-            counts.insert(rule_set_id.clone(), count);
-        }
-        Ok(counts)
+        let counts = self
+            .services
+            .customization
+            .request_rule_decisions
+            .count_for_rule_sets(rule_set_ids)
+            .await?;
+        Ok(rule_set_ids
+            .iter()
+            .map(|rule_set_id| {
+                let count = counts.get(rule_set_id.trim()).copied().unwrap_or(0);
+                (rule_set_id.clone(), count)
+            })
+            .collect())
     }
 
     /// The latest decision recorded for one request.

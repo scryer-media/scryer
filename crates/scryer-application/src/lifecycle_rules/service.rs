@@ -1055,7 +1055,10 @@ impl AppUseCase {
         // The shows are read together; one the batch could not build is read
         // on its own, which fails the preview exactly as it always did.
         let mut episode_inventories_by_title = self
-            .lifecycle_load_title_episode_inventories(&titles, None)
+            .lifecycle_load_title_episode_inventories(
+                &titles,
+                crate::lifecycle_rules::subjects::FilePresence::Probe(None),
+            )
             .await;
         for title in &titles {
             if title.facet != MediaFacet::Movie

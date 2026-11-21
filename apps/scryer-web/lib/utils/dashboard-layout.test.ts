@@ -166,7 +166,10 @@ test("defaults render the content the fixed page showed", () => {
 });
 
 test("panel ids are stable kebab-case the server accepts, and every default is at least the minimum", () => {
-  assert.equal(new Set(DASHBOARD_PANEL_KINDS).size, DASHBOARD_PANEL_KINDS.length);
+  assert.equal(
+    new Set(DASHBOARD_PANEL_KINDS).size,
+    DASHBOARD_PANEL_KINDS.length,
+  );
   for (const panelId of DASHBOARD_PANEL_KINDS) {
     assert.ok(isWellFormedPanelId(panelId), panelId);
     const spec = DASHBOARD_PANELS[panelId];
@@ -479,7 +482,12 @@ test("a settings change alone makes the layout dirty; key order does not", () =>
   });
   assert.deepEqual(changedDashboardBreakpoints(draft, current), ["LG"]);
   draft.LG = setDashboardPanelSettings(draft.LG, id, null);
-  assert.ok(!Object.hasOwn(draft.LG.find((e) => e.panelId === id)!, "settings"));
+  assert.ok(
+    !Object.hasOwn(
+      draft.LG.find((e) => e.panelId === id)!,
+      "settings",
+    ),
+  );
   assert.deepEqual(changedDashboardBreakpoints(draft, current), ["LG"]);
 });
 

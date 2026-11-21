@@ -78,7 +78,10 @@ async function withLifecycleViews(run: (views: Views) => void) {
       "lifecycle",
       async () => LIFECYCLE_SERVED_PAYLOAD,
     );
-    await served.loadServedRuleBuilder("request", async () => REQUEST_SERVED_PAYLOAD);
+    await served.loadServedRuleBuilder(
+      "request",
+      async () => REQUEST_SERVED_PAYLOAD,
+    );
     const TranslateContext =
       translation.TranslateContext as Context<Translate | null>;
     run({
@@ -121,9 +124,7 @@ function declared(
   };
 }
 
-function candidate(
-  overrides: Partial<LifecycleCandidate>,
-): LifecycleCandidate {
+function candidate(overrides: Partial<LifecycleCandidate>): LifecycleCandidate {
   return {
     fileCount: 1,
     totalSizeBytes: 1024,
@@ -255,7 +256,10 @@ test("the declared summary lists heads in execution order", async () => {
     );
     // This render translates nothing, so a served head shows by its Rego name.
     assert.match(unseen, /id="rule-unmonitor"[^>]*>(<[^>]*>)*unmonitor</);
-    assert.ok(unseen.indexOf('id="rule-unmonitor"') < unseen.indexOf('id="rule-archive"'));
+    assert.ok(
+      unseen.indexOf('id="rule-unmonitor"') <
+        unseen.indexOf('id="rule-archive"'),
+    );
   });
 });
 
@@ -324,7 +328,10 @@ test("a request rule's declared heads render in served order with their values",
         idPrefix: "request-rule",
       }),
     );
-    assert.match(markup, /id="request-rule-approve"[^>]*data-request-action-head="APPROVE"/);
+    assert.match(
+      markup,
+      /id="request-rule-approve"[^>]*data-request-action-head="APPROVE"/,
+    );
     assert.match(markup, /requests\.leaseForever/);
     assert.match(markup, /sample-tag/);
     assert.ok(
@@ -343,7 +350,10 @@ test("shaping renders each value with its rule and each conflict once, and nothi
     const markup = render(
       createElement(RequestShaping, {
         shaping: {
-          qualityProfile: { value: "Sample Profile", ruleSetName: "Sample rule" },
+          qualityProfile: {
+            value: "Sample Profile",
+            ruleSetName: "Sample rule",
+          },
           leaseDays: null,
           monitor: null,
           requiredAudioLanguages: null,
@@ -360,11 +370,19 @@ test("shaping renders each value with its rule and each conflict once, and nothi
     );
     assert.match(markup, /Sample Profile/);
     assert.match(markup, /requests\.shapingSetBy/);
-    assert.equal(markup.match(/data-request-shaping-conflict="SET_MONITOR"/g)?.length, 1);
+    assert.equal(
+      markup.match(/data-request-shaping-conflict="SET_MONITOR"/g)?.length,
+      1,
+    );
     assert.match(markup, /id="decision-shaping-conflict-set-monitor"/);
 
     assert.equal(
-      render(createElement(RequestShaping, { shaping: null, idPrefix: "decision-shaping" })),
+      render(
+        createElement(RequestShaping, {
+          shaping: null,
+          idPrefix: "decision-shaping",
+        }),
+      ),
       "",
     );
   });

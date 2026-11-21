@@ -2009,12 +2009,17 @@ const de: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Sidecar-Dateien",
   "settings.libraryFullHashBackfillTitle": "Hashing im Hintergrund",
   "settings.libraryFullHashBackfillLabel": "Dateien nachts hashen",
-  "settings.libraryFullHashBackfillDescription": "Liest jede Datei dieser Bibliothek einmal über Nacht, um ihren vollständigen Inhalts-Hash zu speichern. Schalte dies für Bibliotheken auf Festplatten aus, die du im Ruhezustand hältst; der Hash einer Datei wird dann nur gelesen, wenn ein Verschieben, Import oder eine Prüfung ihn braucht.",
-  "settings.libraryFullHashBackfillDisableTitle": "Nächtliches Hashing ausschalten?",
-  "settings.libraryFullHashBackfillDisableWarning": "Wenn du dies deaktivierst, kann Scryer weniger gut sicherstellen, dass bestimmte Dateiverschiebungen zu 100 % sicher sind.",
+  "settings.libraryFullHashBackfillDescription":
+    "Liest jede Datei dieser Bibliothek einmal über Nacht, um ihren vollständigen Inhalts-Hash zu speichern. Schalte dies für Bibliotheken auf Festplatten aus, die du im Ruhezustand hältst; der Hash einer Datei wird dann nur gelesen, wenn ein Verschieben, Import oder eine Prüfung ihn braucht.",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "Nächtliches Hashing ausschalten?",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "Wenn du dies deaktivierst, kann Scryer weniger gut sicherstellen, dass bestimmte Dateiverschiebungen zu 100 % sicher sind.",
   "settings.libraryFullHashBackfillDisableConfirm": "Ausschalten",
-  "settings.libraryFullHashBackfillEnabledStatus": "Nächtliches Hashing für diese Bibliothek eingeschaltet.",
-  "settings.libraryFullHashBackfillDisabledStatus": "Nächtliches Hashing für diese Bibliothek ausgeschaltet.",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "Nächtliches Hashing für diese Bibliothek eingeschaltet.",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "Nächtliches Hashing für diese Bibliothek ausgeschaltet.",
   "settings.nfoWriteOnImportLabel": "NFO beim Import schreiben",
   "settings.nfoWriteOnImportDescription":
     "Kodi/Jellyfin/Emby-kompatible .nfo-Metadaten-Dateien neben importierten Medien schreiben; eine vorhandene .nfo-Datei wird nie überschrieben",
@@ -2705,8 +2710,7 @@ const de: LocaleDictionary = {
   "settings.lifecycleCountdownInMinutes": "in {{count}} Min.",
   "settings.lifecycleCountdownInHours": "in {{count}} Std.",
   "settings.lifecycleCountdownInDays": "in {{count}} T.",
-  "settings.lifecycleCountdownOverdueMinutes":
-    "seit {{count}} Min. überfällig",
+  "settings.lifecycleCountdownOverdueMinutes": "seit {{count}} Min. überfällig",
   "settings.lifecycleCountdownOverdueHours": "seit {{count}} Std. überfällig",
   "settings.lifecycleCountdownOverdueDays": "seit {{count}} T. überfällig",
 
@@ -2724,8 +2728,7 @@ const de: LocaleDictionary = {
   "settings.lifecycleEvaluationRunsEmpty":
     "Noch keine Auswertungsläufe aufgezeichnet.",
   "settings.lifecycleActionRunsTitle": "Aktionsläufe",
-  "settings.lifecycleActionRunsEmpty":
-    "Noch keine Aktionsläufe aufgezeichnet.",
+  "settings.lifecycleActionRunsEmpty": "Noch keine Aktionsläufe aufgezeichnet.",
   "settings.lifecycleRunColStarted": "Gestartet",
   "settings.lifecycleRunColStatus": "Status",
   "settings.lifecycleRunColCounts": "Zählungen",
@@ -2755,8 +2758,7 @@ const de: LocaleDictionary = {
   "settings.lifecycleExclusionScopeGlobal": "Alle Regeln",
   "settings.lifecycleExclusionRemove": "Ausschluss entfernen",
   "settings.lifecycleExclusionRemoved": "Ausschluss für {{title}} entfernt.",
-  "settings.lifecycleExclusionRemoving":
-    "Ausschluss für {{title}} entfernen?",
+  "settings.lifecycleExclusionRemoving": "Ausschluss für {{title}} entfernen?",
   "settings.lifecycleExcludeTitle": "Von Lebenszyklusregeln ausschließen",
   "settings.lifecycleExcludeBody":
     "{{title}} wird ab der nächsten Auswertung ausgeschlossen, und der zugehörige Kandidat wechselt auf ausgeschlossen.",
@@ -2766,7 +2768,8 @@ const de: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "Warum dieser Titel ausgeschlossen wird (optional)",
   "settings.lifecycleExcludeConfirm": "Ausschließen",
-  "settings.lifecycleExcluded": "{{title}} von Lebenszyklusregeln ausgeschlossen.",
+  "settings.lifecycleExcluded":
+    "{{title}} von Lebenszyklusregeln ausgeschlossen.",
   "move.dialogTitle": "Titel verschieben",
   "move.destinationLibrary": "Zielbibliothek",
   "move.destinationRoot": "Ziel-Stammverzeichnis",

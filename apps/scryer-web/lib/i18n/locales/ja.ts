@@ -1957,12 +1957,17 @@ const ja: LocaleDictionary = {
   "settings.sidecarFilesTitle": "サイドカーファイル",
   "settings.libraryFullHashBackfillTitle": "バックグラウンドハッシュ",
   "settings.libraryFullHashBackfillLabel": "夜間にファイルをハッシュ",
-  "settings.libraryFullHashBackfillDescription": "このライブラリの各ファイルを夜間に一度読み取り、内容全体のハッシュを記録します。スピンダウンさせているディスク上のライブラリではオフにしてください。その場合、ファイルのハッシュは移動・インポート・チェックで必要になったときだけ読み取られます。",
-  "settings.libraryFullHashBackfillDisableTitle": "夜間ハッシュをオフにしますか？",
-  "settings.libraryFullHashBackfillDisableWarning": "これを無効にすると、特定のファイル移動が100%安全であることをScryerが保証しにくくなります。",
+  "settings.libraryFullHashBackfillDescription":
+    "このライブラリの各ファイルを夜間に一度読み取り、内容全体のハッシュを記録します。スピンダウンさせているディスク上のライブラリではオフにしてください。その場合、ファイルのハッシュは移動・インポート・チェックで必要になったときだけ読み取られます。",
+  "settings.libraryFullHashBackfillDisableTitle":
+    "夜間ハッシュをオフにしますか？",
+  "settings.libraryFullHashBackfillDisableWarning":
+    "これを無効にすると、特定のファイル移動が100%安全であることをScryerが保証しにくくなります。",
   "settings.libraryFullHashBackfillDisableConfirm": "オフにする",
-  "settings.libraryFullHashBackfillEnabledStatus": "このライブラリの夜間ハッシュをオンにしました。",
-  "settings.libraryFullHashBackfillDisabledStatus": "このライブラリの夜間ハッシュをオフにしました。",
+  "settings.libraryFullHashBackfillEnabledStatus":
+    "このライブラリの夜間ハッシュをオンにしました。",
+  "settings.libraryFullHashBackfillDisabledStatus":
+    "このライブラリの夜間ハッシュをオフにしました。",
   "settings.nfoWriteOnImportLabel": "インポート時にNFOを書き込み",
   "settings.nfoWriteOnImportDescription":
     "インポートされたメディアと一緒にKodi/Jellyfin/Emby互換の.nfoメタデータファイルを書き込みます。既存の.nfoファイルが上書きされることはありません",
@@ -2564,8 +2569,7 @@ const ja: LocaleDictionary = {
   "settings.lifecycleActionDoNothing": "何もしない",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "対象のモニタリングを解除し、ファイルは保持",
-  "settings.lifecycleActionDeleteTitleAndFiles":
-    "タイトルとそのファイルを削除",
+  "settings.lifecycleActionDeleteTitleAndFiles": "タイトルとそのファイルを削除",
   "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "タイトルのモニタリングを解除し、すべてのファイルを削除",
   "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
@@ -2668,8 +2672,7 @@ const ja: LocaleDictionary = {
   "settings.lifecycleEvaluationRunsTitle": "評価の実行",
   "settings.lifecycleEvaluationRunsEmpty": "評価の実行記録はまだありません。",
   "settings.lifecycleActionRunsTitle": "アクションの実行",
-  "settings.lifecycleActionRunsEmpty":
-    "アクションの実行記録はまだありません。",
+  "settings.lifecycleActionRunsEmpty": "アクションの実行記録はまだありません。",
   "settings.lifecycleRunColStarted": "開始",
   "settings.lifecycleRunColStatus": "状態",
   "settings.lifecycleRunColCounts": "件数",
@@ -2709,7 +2712,8 @@ const ja: LocaleDictionary = {
   "settings.lifecycleExcludeReasonPlaceholder":
     "このタイトルを除外する理由（任意）",
   "settings.lifecycleExcludeConfirm": "除外する",
-  "settings.lifecycleExcluded": "{{title}} をライフサイクルルールから除外しました。",
+  "settings.lifecycleExcluded":
+    "{{title}} をライフサイクルルールから除外しました。",
   "move.dialogTitle": "タイトルを移動",
   "move.destinationLibrary": "移動先ライブラリ",
   "move.destinationRoot": "移動先ルート",
@@ -3631,7 +3635,8 @@ const ja: LocaleDictionary = {
   "settings.refLifecycleFactsListsLeftAll":
     "対象を含んだことのあるすべてのリストが対象を外したかどうか",
   "settings.refLifecycleFactsListsLeftAt": "最後のリストが対象を外した日時",
-  "settings.refLifecycleFactsListsLastListName": "対象が最も最近外れた公開リスト",
+  "settings.refLifecycleFactsListsLastListName":
+    "対象が最も最近外れた公開リスト",
   "settings.refLifecycleFactsListsAddedByListValue":
     "リストの同期がタイトルを作成した場合は true。リストストアを読み取れなかった場合は理由 list_store_unreadable で不明",
   "settings.refLifecycleFactsListsOnEnabledListValue":

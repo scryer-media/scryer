@@ -275,7 +275,9 @@ export function SettingsSecuritySection({
                   />
                   <CheckboxField
                     id="security-mcp-enabled"
-                    checked={settings.mcpEnabledEnvOverride ?? settings.mcpEnabled}
+                    checked={
+                      settings.mcpEnabledEnvOverride ?? settings.mcpEnabled
+                    }
                     disabled={
                       busy ||
                       !canManageApiKeysRestriction ||

@@ -83,12 +83,18 @@ const PAYLOAD: RuleBuilderSchemaPayload = {
   outputs: [ARCHIVE, ...LIFECYCLE_SERVED_PAYLOAD.outputs, HOLD_FOR, SET_LABELS],
   subjects: (LIFECYCLE_SERVED_PAYLOAD.subjects ?? []).map((subject) =>
     subject.inputPath === null
-      ? { ...subject, outputs: ["ARCHIVE", ...subject.outputs, "HOLD_FOR", "SET_LABELS"] }
+      ? {
+          ...subject,
+          outputs: ["ARCHIVE", ...subject.outputs, "HOLD_FOR", "SET_LABELS"],
+        }
       : subject,
   ),
 };
 
-const SCHEMA = ruleBuilderSchemaFromPayload(LIFECYCLE_RULE_BUILDER_BASE, PAYLOAD);
+const SCHEMA = ruleBuilderSchemaFromPayload(
+  LIFECYCLE_RULE_BUILDER_BASE,
+  PAYLOAD,
+);
 const DESCRIPTORS = PAYLOAD.outputs;
 
 /// Translates from English, handing a missing key back as the real helper does.
@@ -99,9 +105,15 @@ function model(outputs: RuleBuilderModel["outputs"]): RuleBuilderModel {
     version: 2,
     family: "lifecycle",
     join: "ALL",
-    conditions: [{ field: "input.facts.monitored", operator: "IS_TRUE", value: "" }],
+    conditions: [
+      { field: "input.facts.monitored", operator: "IS_TRUE", value: "" },
+    ],
     outputs,
-    actions: Object.keys(outputs).map((output) => ({ output, join: "ALL", conditions: [] })),
+    actions: Object.keys(outputs).map((output) => ({
+      output,
+      join: "ALL",
+      conditions: [],
+    })),
   };
 }
 
@@ -120,14 +132,24 @@ test("the builder lists an unseen output where the server puts it and skips an u
   assert.deepEqual(skipped, ["HOLD_FOR"]);
   assert.deepEqual(
     outputs.find((output) => output.id === "SET_LABELS")?.value,
-    { kind: "text_list", options: "shelfLabels", maxItems: 2, maxBytes: 8, pattern: "[a-z]+" },
+    {
+      kind: "text_list",
+      options: "shelfLabels",
+      maxItems: 2,
+      maxBytes: 8,
+      pattern: "[a-z]+",
+    },
   );
 });
 
 test("an unseen output generates its template byte for byte, in the served order", () => {
   const result = generateRuleSource(
     SCHEMA,
-    model({ SET_LABELS: ["shelf", "box"], NOTIFY: "Sample notice", ARCHIVE: true }),
+    model({
+      SET_LABELS: ["shelf", "box"],
+      NOTIFY: "Sample notice",
+      ARCHIVE: true,
+    }),
     "TITLE",
   );
   assert.deepEqual(result, {
@@ -152,16 +174,28 @@ test("an unseen output generates its template byte for byte, in the served order
 
 test("an unseen output's limits are enforced from its descriptor", () => {
   assert.deepEqual(
-    problemCodes(generateRuleSource(SCHEMA, model({ SET_LABELS: ["Shelf"] }), "TITLE")),
+    problemCodes(
+      generateRuleSource(SCHEMA, model({ SET_LABELS: ["Shelf"] }), "TITLE"),
+    ),
     ["BUILDER_VALUE_INVALID"],
   );
   assert.deepEqual(
-    problemCodes(generateRuleSource(SCHEMA, model({ SET_LABELS: ["overlylong"] }), "TITLE")),
+    problemCodes(
+      generateRuleSource(
+        SCHEMA,
+        model({ SET_LABELS: ["overlylong"] }),
+        "TITLE",
+      ),
+    ),
     ["BUILDER_VALUE_TOO_LONG"],
   );
   assert.deepEqual(
     problemCodes(
-      generateRuleSource(SCHEMA, model({ SET_LABELS: ["a", "b", "c"] }), "TITLE"),
+      generateRuleSource(
+        SCHEMA,
+        model({ SET_LABELS: ["a", "b", "c"] }),
+        "TITLE",
+      ),
     ),
     ["BUILDER_VALUE_TOO_MANY"],
   );
@@ -180,7 +214,14 @@ test("an unseen output keeps to its variants and its conflicts", () => {
         SCHEMA,
         {
           ...model({ ARCHIVE: true }),
-          actions: [{ subject: "SEASON", output: "ARCHIVE", join: "ALL", conditions: [] }],
+          actions: [
+            {
+              subject: "SEASON",
+              output: "ARCHIVE",
+              join: "ALL",
+              conditions: [],
+            },
+          ],
         },
         null,
       ),
@@ -191,8 +232,12 @@ test("an unseen output keeps to its variants and its conflicts", () => {
 
   // Read in both directions.
   const both = { ARCHIVE: true, UNMONITOR: true } as const;
-  assert.deepEqual(ruleBuilderConflicts(SCHEMA, "ARCHIVE", both), ["UNMONITOR"]);
-  assert.deepEqual(ruleBuilderConflicts(SCHEMA, "UNMONITOR", both), ["ARCHIVE"]);
+  assert.deepEqual(ruleBuilderConflicts(SCHEMA, "ARCHIVE", both), [
+    "UNMONITOR",
+  ]);
+  assert.deepEqual(ruleBuilderConflicts(SCHEMA, "UNMONITOR", both), [
+    "ARCHIVE",
+  ]);
   assert.deepEqual(
     problemCodes(generateRuleSource(SCHEMA, model(both), "TITLE")),
     ["BUILDER_OUTPUTS_CONFLICT", "BUILDER_OUTPUTS_CONFLICT"],
@@ -215,7 +260,11 @@ test("an untranslated output is labelled by its head and has no help", () => {
   assert.equal(ruleBuilderOutputHelp(t, archive), null);
 
   const translated = (key: string) =>
-    key === ARCHIVE.labelKey ? "Archive" : key === ARCHIVE.helpKey ? "Moves it away." : t(key);
+    key === ARCHIVE.labelKey
+      ? "Archive"
+      : key === ARCHIVE.helpKey
+        ? "Moves it away."
+        : t(key);
   assert.equal(ruleBuilderOutputLabel(translated, archive), "Archive");
   assert.equal(ruleBuilderOutputHelp(translated, archive), "Moves it away.");
 });
@@ -228,7 +277,10 @@ test("a summary labels heads from the descriptors, then by head, then by id", ()
     en["ruleOutput.lifecycle.delete_files"],
   );
   assert.equal(ruleOutputHeadLabel(t, DESCRIPTORS, "ARCHIVE"), "archive");
-  assert.equal(ruleOutputHeadLabel(t, DESCRIPTORS, "SOME_LATER_HEAD"), "SOME_LATER_HEAD");
+  assert.equal(
+    ruleOutputHeadLabel(t, DESCRIPTORS, "SOME_LATER_HEAD"),
+    "SOME_LATER_HEAD",
+  );
   // While the descriptors load every head shows by its id.
   assert.equal(ruleOutputHeadLabel(t, [], "DELETE_FILES"), "DELETE_FILES");
   assert.equal(ruleOutputHeadHelp(t, ARCHIVE), null);
@@ -246,7 +298,10 @@ test("summaries order heads as served and put unknown ones last, as given", () =
     ),
     ["ARCHIVE", "ADD_TAGS", "NOTIFY", "SET_LABELS", "LATER_ONE", "LATER_TWO"],
   );
-  assert.deepEqual(sortByRuleOutputOrder([], ["B", "A"], (id) => id), ["B", "A"]);
+  assert.deepEqual(
+    sortByRuleOutputOrder([], ["B", "A"], (id) => id),
+    ["B", "A"],
+  );
 });
 
 test("the reference writes each head's syntax from its template", () => {
@@ -258,8 +313,12 @@ test("the reference writes each head's syntax from its template", () => {
 });
 
 test("templates name the heads they define, in served order", () => {
-  const source = "archive if rule_applies\n\nadd_tags := [\"x\"] if rule_applies\n";
-  assert.deepEqual(templateRuleOutputs(source, DESCRIPTORS), ["ARCHIVE", "ADD_TAGS"]);
+  const source =
+    'archive if rule_applies\n\nadd_tags := ["x"] if rule_applies\n';
+  assert.deepEqual(templateRuleOutputs(source, DESCRIPTORS), [
+    "ARCHIVE",
+    "ADD_TAGS",
+  ]);
 });
 
 // ── The Rego editor ───────────────────────────────────────────────────
@@ -270,7 +329,10 @@ test("the editor completes every head its variant offers, with a snippet from it
   assert.equal(title.length, DESCRIPTORS.length);
   // Lifecycle heads name their own level, so only an unseen head that lists
   // variants is left out of one.
-  assert.equal(episode.some((head) => head.head === "archive"), false);
+  assert.equal(
+    episode.some((head) => head.head === "archive"),
+    false,
+  );
   assert.ok(episode.some((head) => head.head === "delete_episode_files"));
   assert.ok(episode.some((head) => head.head === "delete_files"));
 
@@ -298,18 +360,19 @@ test("the editor completes every head its variant offers, with a snippet from it
 
 test("a translated head carries its help into completion and hover", () => {
   const translated = (key: string) =>
-    key === ARCHIVE.labelKey ? "Archive" : key === ARCHIVE.helpKey ? "Moves it away." : t(key);
-  assert.deepEqual(
-    regoHeadAssists([ARCHIVE], translated, null),
-    [
-      {
-        head: "archive",
-        detail: "Archive",
-        documentation: "Moves it away.",
-        snippet: "archive if {\n\t${1:true}\n}",
-      },
-    ],
-  );
+    key === ARCHIVE.labelKey
+      ? "Archive"
+      : key === ARCHIVE.helpKey
+        ? "Moves it away."
+        : t(key);
+  assert.deepEqual(regoHeadAssists([ARCHIVE], translated, null), [
+    {
+      head: "archive",
+      detail: "Archive",
+      documentation: "Moves it away.",
+      snippet: "archive if {\n\t${1:true}\n}",
+    },
+  ]);
 });
 
 test("the editor offers no heads while the descriptors are loading or failed", () => {
@@ -337,7 +400,10 @@ test("a picked value is only called missing against a loaded, non-empty catalog"
   assert.deepEqual(ruleBuilderCatalogMisses(undefined, ["Gone"]), []);
   assert.deepEqual(ruleBuilderCatalogMisses([], ["Gone"]), []);
   assert.deepEqual(
-    ruleBuilderCatalogMisses(["Sample Profile"], ["Sample Profile", "Gone", ""]),
+    ruleBuilderCatalogMisses(
+      ["Sample Profile"],
+      ["Sample Profile", "Gone", ""],
+    ),
     ["Gone"],
   );
   assert.deepEqual(

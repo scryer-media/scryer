@@ -3679,7 +3679,17 @@ impl crate::ports::RequestRuleDecisionRepository for NullRequestRuleDecisionRepo
     ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>> {
         Ok(Vec::new())
     }
+    async fn count_for_rule_sets(
+        &self,
+        _rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, u64>> {
+        Ok(std::collections::HashMap::new())
+    }
+
     async fn count_for_rule_set(&self, _rule_set_id: &str) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn delete_preflight_traces(&self, _limit: usize) -> AppResult<usize> {
         Ok(0)
     }
 }
