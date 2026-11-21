@@ -231,15 +231,28 @@ impl RuleEvaluationBatch {
     /// Capture the rule snapshot that is already present in this scoring
     /// context. Empty contexts retain no evaluator and skip rule evaluation.
     pub(crate) fn from_context(ctx: &ScoringContext<'_>) -> Self {
+        Self::from_rules(ctx.rules)
+    }
+
+    /// Capture an engine snapshot directly, for a caller that owns the snapshot
+    /// and scores many things against it. Empty engines retain no evaluator.
+    pub(crate) fn from_rules(rules: Option<&scryer_rules::UserRulesEngine>) -> Self {
         Self {
-            evaluator: ctx
-                .rules
+            evaluator: rules
                 .filter(|engine| !engine.is_empty())
                 .map(scryer_rules::UserRulesEngine::evaluator),
             errors: Vec::new(),
             engine_error: None,
             collect_diagnostics: false,
         }
+    }
+
+    /// Whether this batch has kept nothing from an earlier evaluation besides
+    /// the evaluator itself. Production batches never collect diagnostics, so
+    /// reusing one across calls hands each call the same state a fresh batch
+    /// would.
+    pub(crate) fn carries_no_diagnostics(&self) -> bool {
+        !self.collect_diagnostics && self.errors.is_empty() && self.engine_error.is_none()
     }
 }
 
@@ -1238,6 +1251,13 @@ pub(crate) fn evidence_from_media_file(file: &crate::TitleMediaFile) -> ReleaseE
 ///
 /// A change to what this returns for the same inputs must bump
 /// [`crate::quality::landed_bar_memo::SCORER_VERSION`].
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "single-shot entry point; live lanes score through a resolved context's batch"
+    )
+)]
 pub(crate) fn score_media_file(
     file: &crate::TitleMediaFile,
     ctx: &ScoringContext<'_>,
@@ -1276,6 +1296,35 @@ pub(crate) fn score_media_file_for_episodes_preview(
     }
 }
 
+/// [`score_media_file`] (no `episode_ids`) or [`score_media_file_for_episodes`]
+/// in a batch that already owns the sole rule evaluator. The same contract as
+/// [`score_release_in_batch`]: `ctx` must come from
+/// [`ScoringContext::without_rules`].
+pub(crate) fn score_media_file_in_batch(
+    file: &crate::TitleMediaFile,
+    episode_ids: &[String],
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    assert!(
+        ctx.rules.is_none(),
+        "batched canonical scoring requires a context without a rules engine"
+    );
+    let evidence = evidence_from_media_file(file);
+    if episode_ids.is_empty() {
+        score_release_with_rules(&evidence, ctx, rules)
+    } else {
+        score_disc_scope_with_rules(&evidence, ctx, rules, Some(episode_ids))
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "single-shot entry point; live lanes score through a resolved context's batch"
+    )
+)]
 pub(crate) fn score_media_file_for_episodes(
     file: &crate::TitleMediaFile,
     episode_ids: &[String],
