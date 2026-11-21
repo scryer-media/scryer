@@ -593,7 +593,7 @@ impl AppUseCase {
             )
         } else {
             let enrichment = self
-                .enrich_request_draft(&library.facet, external_ids.clone())
+                .stage_request_metadata(&library.facet, external_ids.clone(), false)
                 .await;
             (enrichment.snapshot, enrichment.external_ids)
         };

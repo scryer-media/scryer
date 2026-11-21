@@ -30,6 +30,10 @@ const PREFLIGHT_TRACE_PURGE_BATCH_SIZE: usize = 500;
 /// Batches per housekeeping pass, so one pass holds the writer for a bounded
 /// stretch; whatever is left goes on the next pass.
 const PREFLIGHT_TRACE_PURGE_MAX_BATCHES: usize = 100;
+/// Staged request metadata records removed per transaction.
+const STAGED_REQUEST_METADATA_PURGE_BATCH_SIZE: usize = 500;
+/// Batches per housekeeping pass; whatever is left goes on the next pass.
+const STAGED_REQUEST_METADATA_PURGE_MAX_BATCHES: usize = 100;
 
 /// How long a deleted title's recycle-cleanup record is kept: the history
 /// retention period, or forever when history is kept forever.
@@ -1210,6 +1214,8 @@ impl AppUseCase {
             .await?;
 
         let preflight_traces_purged = self.purge_preflight_request_rule_traces().await;
+        let staged_request_metadata_purged =
+            self.purge_stale_staged_request_metadata(Utc::now()).await;
 
         let (
             stale_history_events,
@@ -1434,6 +1440,7 @@ impl AppUseCase {
             stale_rule_set_history,
             stale_list_sync_runs,
             preflight_traces_purged,
+            staged_request_metadata_purged,
             stale_history_records,
             staged_nzb_artifacts_pruned,
             recycled_purged,
@@ -1465,6 +1472,35 @@ impl AppUseCase {
                 }
                 Err(error) => {
                     warn!(%error, "failed to remove pre-flight request rule traces");
+                    break;
+                }
+            }
+        }
+        purged
+    }
+
+    /// Remove staged request metadata older than its retention. A staged
+    /// record is the cached SMG answer for a subject somebody opened the
+    /// request dialog on; a request row keeps its own copy, so nothing reads
+    /// a record this old. Each batch is its own transaction; a batch that
+    /// finds none ends the pass without a write.
+    pub(crate) async fn purge_stale_staged_request_metadata(&self, now: DateTime<Utc>) -> usize {
+        let store = &self.services.catalog.media_requests;
+        let cutoff = now - crate::media_requests::STAGED_REQUEST_METADATA_RETENTION;
+        let mut purged = 0usize;
+        for _ in 0..STAGED_REQUEST_METADATA_PURGE_MAX_BATCHES {
+            match store
+                .delete_staged_metadata_before(cutoff, STAGED_REQUEST_METADATA_PURGE_BATCH_SIZE)
+                .await
+            {
+                Ok(removed) => {
+                    purged = purged.saturating_add(removed);
+                    if removed < STAGED_REQUEST_METADATA_PURGE_BATCH_SIZE {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, "failed to remove stale staged request metadata");
                     break;
                 }
             }

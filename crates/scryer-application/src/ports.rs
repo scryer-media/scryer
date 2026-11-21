@@ -3753,6 +3753,18 @@ pub struct MediaRequestQualityProfileReferenceCounts {
     pub pending_requested: u64,
 }
 
+/// The metadata staged for one request subject: what one SMG read returned,
+/// reduced to the request shape and kept so a preview and the submit that
+/// follows read the same record without asking SMG again.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedMediaRequestMetadata {
+    /// The subject: the facet and its normalized external identifiers.
+    pub staging_key: String,
+    /// The staged record as the application serialized it.
+    pub payload_json: String,
+    pub staged_at: DateTime<Utc>,
+}
+
 /// One requester's own submissions, aggregated in the store for the
 /// requester-history facts. Each figure is what the matching
 /// [`MediaRequestRepository::count_for_requester`] or
@@ -4116,6 +4128,25 @@ pub trait MediaRequestRepository: Send + Sync {
         user_id: &str,
         excluding_request_id: Option<&str>,
     ) -> AppResult<Option<DateTime<Utc>>>;
+
+    /// The metadata staged for `staging_key`, if any.
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<StagedMediaRequestMetadata>>;
+
+    /// Store the staged metadata for its subject, replacing what was staged
+    /// for that subject before.
+    async fn stage_metadata(&self, record: &StagedMediaRequestMetadata) -> AppResult<()>;
+
+    /// Remove up to `limit` staged records staged before `cutoff`. Returns how
+    /// many went. A call that finds none writes nothing. Request rows keep
+    /// their own copy of the metadata and are never touched.
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize>;
 
     /// Stamp the request-rule verdict onto a request row that is *not* being
     /// resolved (spec 0003 FR-016).

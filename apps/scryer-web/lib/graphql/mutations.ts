@@ -653,6 +653,14 @@ export const addTitleAndQueueMutation = `mutation AddTitleAndQueue($input: AddTi
   }
 }`;
 
+/// Fired once when the request dialog opens: the server reads the subject's
+/// metadata and keeps it, and every preview and the submit read that record.
+export const stageMyRequestMetadataMutation = `mutation StageMyRequestMetadata($input: StageMediaRequestMetadataInput!) {
+  stageMyRequestMetadata(input: $input) {
+    metadataPartial
+  }
+}`;
+
 export const submitMediaRequestMutation = `mutation SubmitMediaRequest($input: SubmitMediaRequestInput!) {
   submitMediaRequest(input: $input) {
       requestId

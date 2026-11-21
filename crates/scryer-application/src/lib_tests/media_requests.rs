@@ -2879,16 +2879,24 @@ async fn submit_media_request_records_a_partial_snapshot_when_enrichment_fails()
     );
 }
 
-#[tokio::test]
-async fn a_preview_and_the_submit_that_follows_it_read_smg_once() {
+/// A movie request app whose gateway counts every read that reaches SMG.
+fn staging_app(
+    tvdb_id: i64,
+    fail_detail: bool,
+) -> (
+    MediaRequestTestHarness,
+    AppUseCase,
+    Arc<std::sync::atomic::AtomicUsize>,
+    SubmitMediaRequestInput,
+) {
     let harness = bootstrap_media_request_app();
-    let tvdb_id = 92_040;
-    let mut movie = make_movie_metadata(tvdb_id, "Cached Movie");
+    let mut movie = make_movie_metadata(tvdb_id, "Staged Movie");
     widen_movie_for_snapshot(&mut movie);
     let detail_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let app = harness.app.with_test_overrides(|builder| {
         builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
             movies: HashMap::from([(tvdb_id, movie)]),
+            fail_detail,
             detail_calls: detail_calls.clone(),
             ..Default::default()
         }))
@@ -2896,54 +2904,318 @@ async fn a_preview_and_the_submit_that_follows_it_read_smg_once() {
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut input = media_request_input(library_id, tvdb_id);
     input.external_ids = vec![external_id("TVDB", tvdb_id)];
+    (harness, app, detail_calls, input)
+}
+
+fn smg_reads(detail_calls: &std::sync::atomic::AtomicUsize) -> usize {
+    detail_calls.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn staged_record_count(harness: &MediaRequestTestHarness) -> usize {
+    harness
+        .media_requests
+        .staged_metadata
+        .lock()
+        .expect("staged metadata lock")
+        .len()
+}
+
+#[tokio::test]
+async fn a_preview_of_an_unstaged_subject_reads_no_smg_and_writes_nothing() {
+    let (harness, app, detail_calls, input) = staging_app(92_040, false);
+
+    for _ in 0..3 {
+        let preflight = app
+            .preview_my_request_decision(&harness.user, input.clone())
+            .await
+            .expect("a preview of an unstaged subject still answers");
+        assert!(
+            preflight.metadata_partial,
+            "nothing was staged, so the metadata reads as unavailable"
+        );
+    }
+
+    assert_eq!(smg_reads(&detail_calls), 0, "a preview never reaches SMG");
+    assert_eq!(staged_record_count(&harness), 0, "a preview never writes");
+    assert!(
+        harness.media_requests.requests.lock().await.is_empty(),
+        "a preview creates no request"
+    );
+}
+
+#[tokio::test]
+async fn staging_then_previews_and_the_submit_read_smg_once() {
+    let (harness, app, detail_calls, input) = staging_app(92_041, false);
+
+    let staged = app
+        .stage_my_request_metadata(
+            &harness.user,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids.clone(),
+        )
+        .await
+        .expect("staging should succeed");
+    assert!(!staged.metadata_partial);
+    assert_eq!(smg_reads(&detail_calls), 1, "staging is the one SMG read");
+    assert_eq!(staged_record_count(&harness), 1);
+
+    // The request dialog previews on every edit.
+    for _ in 0..3 {
+        let preflight = app
+            .preview_my_request_decision(&harness.user, input.clone())
+            .await
+            .expect("preview should succeed");
+        assert!(
+            !preflight.metadata_partial,
+            "the preview reads the staged record"
+        );
+    }
+    // Opening the dialog again on the same subject stages again.
+    app.stage_my_request_metadata(
+        &harness.user,
+        &input.library_id,
+        MediaFacet::Movie,
+        input.external_ids.clone(),
+    )
+    .await
+    .expect("staging again should succeed");
+
     let normalized = normalize_media_request_external_ids(input.external_ids.clone())
         .expect("request external ids should normalize");
-
-    // Two pre-flight evaluations, as the request dialog would issue while the requester edits.
-    let first = app
-        .enrich_request_draft(&MediaFacet::Movie, normalized.clone())
-        .await;
-    let second = app
-        .enrich_request_draft(&MediaFacet::Movie, normalized)
-        .await;
-    assert_eq!(
-        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the second pre-flight is served from the enrichment cache"
-    );
-    assert_eq!(first.snapshot, second.snapshot);
+    let staged_enrichment = app
+        .staged_request_metadata(&MediaFacet::Movie, &normalized)
+        .await
+        .expect("the subject is staged");
 
     app.submit_media_request(&harness.user, input)
         .await
         .expect("request submission should succeed");
 
     assert_eq!(
-        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
+        smg_reads(&detail_calls),
         1,
-        "the submit reuses the enrichment the preview already paid for (FR-021)"
+        "previews, a second staging and the submit all reuse the one read"
     );
     let requests = harness.media_requests.requests.lock().await;
     let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
     assert_eq!(
-        snapshot, first.snapshot,
+        snapshot, staged_enrichment.snapshot,
         "what the requester was shown is what the request was stored with"
+    );
+    assert!(!snapshot.partial);
+}
+
+#[tokio::test]
+async fn a_submit_of_an_unstaged_subject_reads_smg_once_and_stages_it() {
+    let (harness, app, detail_calls, input) = staging_app(92_042, false);
+
+    app.submit_media_request(&harness.user, input.clone())
+        .await
+        .expect("request submission should succeed");
+
+    assert_eq!(smg_reads(&detail_calls), 1);
+    assert_eq!(
+        staged_record_count(&harness),
+        1,
+        "the submit staged what it read"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(!snapshot.partial, "the request carries the full snapshot");
+    drop(requests);
+
+    let preflight = app
+        .preview_my_request_decision(&harness.user, input)
+        .await
+        .expect("preview should succeed");
+    assert!(!preflight.metadata_partial);
+    assert_eq!(
+        smg_reads(&detail_calls),
+        1,
+        "a later preview of the same subject reads the staged record"
     );
 }
 
+#[tokio::test]
+async fn a_failed_staging_keeps_the_preview_and_the_submit_agreeing() {
+    let (harness, app, detail_calls, input) = staging_app(92_043, true);
+
+    let staged = app
+        .stage_my_request_metadata(
+            &harness.user,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids.clone(),
+        )
+        .await
+        .expect("an SMG outage does not fail the staging step");
+    assert!(staged.metadata_partial);
+    let reads_after_staging = smg_reads(&detail_calls);
+    assert!(reads_after_staging >= 1, "staging asked SMG");
+    assert_eq!(staged_record_count(&harness), 1, "the outage is staged too");
+
+    let preflight = app
+        .preview_my_request_decision(&harness.user, input.clone())
+        .await
+        .expect("preview should succeed");
+    assert!(preflight.metadata_partial);
+
+    app.submit_media_request(&harness.user, input.clone())
+        .await
+        .expect("a metadata outage must never fail a submission");
+    assert_eq!(
+        smg_reads(&detail_calls),
+        reads_after_staging,
+        "the submit reads the staged outage instead of asking SMG again"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(snapshot.partial);
+    assert_eq!(snapshot.source.as_deref(), Some("enrichment_failed"));
+    drop(requests);
+
+    // The requester opening the dialog again is the retry.
+    app.stage_my_request_metadata(
+        &harness.user,
+        &input.library_id,
+        MediaFacet::Movie,
+        input.external_ids,
+    )
+    .await
+    .expect("staging again should succeed");
+    assert!(
+        smg_reads(&detail_calls) > reads_after_staging,
+        "staging again asks SMG again when the record established nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_staged_record_is_not_reused() {
+    let (harness, app, detail_calls, input) = staging_app(92_044, false);
+    let normalized = normalize_media_request_external_ids(input.external_ids.clone())
+        .expect("request external ids should normalize");
+    let key = crate::media_requests::media_request_staging_key(&MediaFacet::Movie, &normalized);
+
+    app.stage_request_metadata(&MediaFacet::Movie, normalized.clone(), false)
+        .await;
+    assert_eq!(smg_reads(&detail_calls), 1);
+    // Age the record to just past its freshness window.
+    {
+        let mut staged = harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock");
+        let record = staged.get_mut(&key).expect("the record is staged");
+        record.staged_at = Utc::now()
+            - crate::media_requests::STAGED_REQUEST_METADATA_FRESH_FOR
+            - chrono::Duration::minutes(1);
+    }
+
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_none(),
+        "a stale record does not answer a preview"
+    );
+    assert_eq!(
+        smg_reads(&detail_calls),
+        1,
+        "and the preview read asks nobody"
+    );
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("request submission should succeed");
+    assert_eq!(
+        smg_reads(&detail_calls),
+        2,
+        "the submit refreshes the stale record with one read"
+    );
+    assert!(
+        app.staged_request_metadata(&MediaFacet::Movie, &normalized)
+            .await
+            .is_some(),
+        "and the refreshed record answers again"
+    );
+}
+
+#[tokio::test]
+async fn staging_requires_request_permission_before_smg_is_asked() {
+    let (harness, app, detail_calls, input) = staging_app(92_045, false);
+    let stranger = library_permission_user("stranger", &input.library_id, &[]);
+
+    let error = app
+        .stage_my_request_metadata(
+            &stranger,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids,
+        )
+        .await
+        .expect_err("a caller without request permission is refused");
+    assert!(
+        matches!(error, AppError::UnauthorizedReason { .. }),
+        "{error:?}"
+    );
+    assert_eq!(smg_reads(&detail_calls), 0);
+    assert_eq!(staged_record_count(&harness), 0);
+}
+
+#[tokio::test]
+async fn housekeeping_removes_only_staged_records_past_retention() {
+    let (harness, app, _detail_calls, _input) = staging_app(92_046, false);
+    let now = Utc::now();
+    {
+        let mut staged = harness
+            .media_requests
+            .staged_metadata
+            .lock()
+            .expect("staged metadata lock");
+        for (key, age) in [
+            ("movie|tvdb=1", chrono::Duration::days(8)),
+            ("movie|tvdb=2", chrono::Duration::days(30)),
+            ("movie|tvdb=3", chrono::Duration::days(6)),
+            ("movie|tvdb=4", chrono::Duration::hours(1)),
+        ] {
+            staged.insert(
+                key.to_string(),
+                crate::StagedMediaRequestMetadata {
+                    staging_key: key.to_string(),
+                    payload_json: "{}".to_string(),
+                    staged_at: now - age,
+                },
+            );
+        }
+    }
+
+    assert_eq!(app.purge_stale_staged_request_metadata(now).await, 2);
+
+    let staged = harness
+        .media_requests
+        .staged_metadata
+        .lock()
+        .expect("staged metadata lock");
+    let mut kept: Vec<&str> = staged.keys().map(String::as_str).collect();
+    kept.sort_unstable();
+    assert_eq!(kept, vec!["movie|tvdb=3", "movie|tvdb=4"]);
+}
+
 #[test]
-fn enrichment_cache_key_ignores_external_id_order_and_case() {
-    let a = crate::media_requests::media_request_enrichment_cache_key(
+fn staging_key_ignores_external_id_order_and_case() {
+    let a = crate::media_requests::media_request_staging_key(
         &MediaFacet::Movie,
         &[external_id("TVDB", 42), external_id("imdb", "tt0000042")],
     );
-    let b = crate::media_requests::media_request_enrichment_cache_key(
+    let b = crate::media_requests::media_request_staging_key(
         &MediaFacet::Movie,
         &[external_id("imdb", "tt0000042"), external_id("tvdb", 42)],
     );
     assert_eq!(a, b);
     assert_ne!(
         a,
-        crate::media_requests::media_request_enrichment_cache_key(
+        crate::media_requests::media_request_staging_key(
             &MediaFacet::Series,
             &[external_id("tvdb", 42), external_id("imdb", "tt0000042")],
         ),

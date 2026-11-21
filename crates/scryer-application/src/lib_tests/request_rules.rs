@@ -1360,6 +1360,18 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     let mut input = media_request_input(library_id, 9052);
     input.requested_lease_days = Some(21);
 
+    // The request dialog stages the subject when it opens, then previews.
+    harness
+        .app
+        .stage_my_request_metadata(
+            &harness.user,
+            &input.library_id,
+            MediaFacet::Movie,
+            input.external_ids.clone(),
+        )
+        .await
+        .expect("staging should succeed");
+
     let preflight = harness
         .app
         .preview_my_request_decision(&harness.user, input.clone())

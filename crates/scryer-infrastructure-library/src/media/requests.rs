@@ -5,7 +5,7 @@ use scryer_application::{
     MediaRequestFingerprintSummary, MediaRequestOrder, MediaRequestQualityProfileReferenceCounts,
     MediaRequestQuery, MediaRequestRepository, MediaRequestRequesterSummary,
     MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
-    MediaRequestUpdateResult, NewMediaRequest, TitleRequesters,
+    MediaRequestUpdateResult, NewMediaRequest, StagedMediaRequestMetadata, TitleRequesters,
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
@@ -19,6 +19,9 @@ use crate::media::monitor_selections::{
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
 use crate::workflow::stores::append_domain_event_tx;
+
+/// Staged records removed per transaction at most; one bind each.
+const STAGED_METADATA_DELETE_CHUNK: usize = 500;
 
 #[derive(Clone)]
 pub struct MediaRequestStore {
@@ -865,6 +868,104 @@ impl MediaRequestRepository for MediaRequestStore {
             approved_count: count("approved_count")?,
             latest_request_at: row.opt_timestamp("latest_created_at")?,
         })
+    }
+
+    async fn staged_metadata(
+        &self,
+        staging_key: &str,
+    ) -> AppResult<Option<StagedMediaRequestMetadata>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT staging_key, payload_json, staged_at
+               FROM media_request_staged_metadata
+              WHERE staging_key = {}",
+            &[SqlArg::Text(staging_key.to_string())],
+        )
+        .await?;
+        row.map(|row| {
+            Ok(StagedMediaRequestMetadata {
+                staging_key: row.text("staging_key")?,
+                payload_json: row.text("payload_json")?,
+                staged_at: row.timestamp("staged_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn stage_metadata(&self, record: &StagedMediaRequestMetadata) -> AppResult<()> {
+        let args = vec![
+            SqlArg::Text(record.staging_key.clone()),
+            SqlArg::Text(record.payload_json.clone()),
+            SqlArg::Timestamp(record.staged_at),
+        ];
+        SqlRuntime::run_in_transaction(&self.datastore, "stage_media_request_metadata", move |tx| {
+            let args = args.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "INSERT INTO media_request_staged_metadata
+                         (staging_key, payload_json, staged_at)
+                     VALUES ({}, {}, {})
+                     ON CONFLICT (staging_key) DO UPDATE SET
+                         payload_json = excluded.payload_json,
+                         staged_at = excluded.staged_at",
+                    &args,
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+    }
+
+    /// The select is served by `idx_media_request_staged_metadata_staged_at`,
+    /// so a pass with nothing old enough reads the index and writes nothing.
+    async fn delete_staged_metadata_before(
+        &self,
+        cutoff: chrono::DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<usize> {
+        let limit = limit.min(STAGED_METADATA_DELETE_CHUNK);
+        if limit == 0 {
+            return Ok(0);
+        }
+        let keys: Vec<String> = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT staging_key FROM media_request_staged_metadata
+              WHERE staged_at < {}
+              ORDER BY staged_at
+              LIMIT {}",
+            &[SqlArg::Timestamp(cutoff), SqlArg::I64(limit as i64)],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("staging_key"))
+        .collect::<AppResult<_>>()?;
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = std::iter::repeat_n("{}", keys.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        // The cutoff is repeated so a record staged again since the select
+        // is kept.
+        let sql = format!(
+            "DELETE FROM media_request_staged_metadata
+              WHERE staging_key IN ({placeholders}) AND staged_at < {{}}"
+        );
+        let mut args: Vec<SqlArg> = keys.into_iter().map(SqlArg::Text).collect();
+        args.push(SqlArg::Timestamp(cutoff));
+        let removed = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_staged_media_request_metadata",
+            move |tx| {
+                let args = args.clone();
+                let sql = sql.clone();
+                Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+            },
+        )
+        .await?;
+        Ok(removed as usize)
     }
 
     async fn latest_request_at_for_user(

@@ -21710,6 +21710,19 @@ type MutationRoot {
 		id: ID!
 	): ResumeLocationOperationPayload!
 	"""
+	Read a request subject's metadata once and keep it for the previews and the submit that follow; requires request permission on the target library.
+	
+	The request dialog calls this when it opens. `previewMyRequestDecision`
+	reads the staged record and never fetches metadata itself, so a subject
+	that was not staged previews as metadata unavailable.
+	"""
+	stageMyRequestMetadata(
+		"""
+		Target library, facet, and external identifiers of the subject.
+		"""
+		input: StageMediaRequestMetadataInput!
+	): StageMediaRequestMetadataPayload!
+	"""
 	Create a media request with the requested metadata and acquisition preferences.
 	"""
 	submitMediaRequest(
@@ -31850,6 +31863,35 @@ enum SortDirectionValue {
 	Highest or latest values first.
 	"""
 	DESC
+}
+
+"""
+The subject a requester picked, staged before the request dialog previews it.
+"""
+input StageMediaRequestMetadataInput {
+	"""
+	Library the request would target.
+	"""
+	libraryId: ID!
+	"""
+	Requested media facet.
+	"""
+	facet: MediaFacetValue!
+	"""
+	External provider identifiers of the subject, as a submit would send them.
+	"""
+	externalIds: [ExternalIdInput!]!
+}
+
+"""
+What staging a request subject's metadata established.
+"""
+type StageMediaRequestMetadataPayload {
+	"""
+	True when the metadata could not be fully established, so a preview
+	or a submit of this subject reads some facts as unknown.
+	"""
+	metadataPartial: Boolean!
 }
 
 """
