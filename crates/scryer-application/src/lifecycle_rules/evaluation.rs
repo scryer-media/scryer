@@ -2358,16 +2358,14 @@ impl AppUseCase {
             .collect();
         linked_titles.sort();
         linked_titles.dedup();
-        let mut with_files: HashSet<String> = HashSet::new();
-        for title_id in &linked_titles {
-            with_files.extend(
-                self.services
-                    .library
-                    .media_files
-                    .list_series_movie_link_ids_with_files_for_title(title_id)
-                    .await?,
-            );
-        }
+        let with_files: HashSet<String> = self
+            .services
+            .library
+            .media_files
+            .list_series_movie_link_ids_with_files_for_titles(&linked_titles)
+            .await?
+            .into_iter()
+            .collect();
 
         let mut by_title: HashMap<String, Vec<LifecycleSeriesMovieDoc>> = HashMap::new();
         for link in links {
