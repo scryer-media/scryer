@@ -7,11 +7,11 @@ use crate::storage::sql::json::{canonical_json_text, json_text_or};
 
 /// Append-only traces of request evaluations (spec 0003 FR-016).
 ///
-/// There is no update, and the only delete removes the pre-flight traces older
-/// builds wrote, which explain no request: a decision explains what the
-/// instance did at one instant, and rewriting it would make the explanation a
-/// fiction. Rule deletion does not cascade here either — the trace outlives
-/// the rule.
+/// There is no update: a decision explains what the instance did at one
+/// instant, and rewriting it would make the explanation a fiction. Two
+/// deletes exist. One removes the pre-flight traces older builds wrote, which
+/// explain no request. The other is retention: each rule set keeps its newest
+/// few traces. Rule deletion does not cascade here.
 #[derive(Clone)]
 pub struct RequestRuleDecisionStore {
     datastore: StoreDatastore,
@@ -240,7 +240,79 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         .await?;
         Ok(removed as usize)
     }
+
+    /// One read ranks every rule set's traces newest first and names the
+    /// traces outside the newest `keep` of each rule set that voted in them;
+    /// the deletes then go in bind-safe transactions. Once a pass has run,
+    /// the links table holds about `keep` rows per rule set, so the read is
+    /// small and a pass with nothing to remove writes nothing.
+    async fn delete_traces_beyond_latest_per_rule_set(
+        &self,
+        keep: usize,
+        limit: usize,
+    ) -> AppResult<usize> {
+        if keep == 0 || limit == 0 {
+            return Ok(0);
+        }
+        let ids: Vec<String> = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT ranked.decision_id AS decision_id
+               FROM (
+                    SELECT l.decision_id AS decision_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY l.rule_set_id
+                               ORDER BY d.evaluated_at DESC, d.id DESC
+                           ) AS trace_rank
+                      FROM request_rule_decision_rule_sets l
+                      JOIN request_rule_decisions d ON d.id = l.decision_id
+                    ) AS ranked
+              GROUP BY ranked.decision_id
+             HAVING MIN(ranked.trace_rank) > {}
+              LIMIT {}",
+            &[
+                SqlArg::I64(keep.min(i64::MAX as usize) as i64),
+                SqlArg::I64(limit.min(SUPERSEDED_TRACE_READ_MAX) as i64),
+            ],
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("decision_id"))
+        .collect::<AppResult<_>>()?;
+        let mut removed = 0usize;
+        for chunk in ids.chunks(SUPERSEDED_TRACE_DELETE_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_links = format!(
+                "DELETE FROM request_rule_decision_rule_sets WHERE decision_id IN ({placeholders})"
+            );
+            let delete_decisions =
+                format!("DELETE FROM request_rule_decisions WHERE id IN ({placeholders})");
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            removed += SqlRuntime::run_in_transaction(
+                &self.datastore,
+                "delete_superseded_request_rule_decisions",
+                move |tx| {
+                    let args = args.clone();
+                    let delete_links = delete_links.clone();
+                    let delete_decisions = delete_decisions.clone();
+                    Box::pin(async move {
+                        SqlRuntime::execute(SqlExec::Tx(tx), &delete_links, &args).await?;
+                        SqlRuntime::execute(SqlExec::Tx(tx), &delete_decisions, &args).await
+                    })
+                },
+            )
+            .await? as usize;
+        }
+        Ok(removed)
+    }
 }
+
+/// Superseded traces named by one read at most.
+const SUPERSEDED_TRACE_READ_MAX: usize = 10_000;
+
+/// Superseded traces removed per transaction at most; one bind each.
+const SUPERSEDED_TRACE_DELETE_CHUNK: usize = 500;
 
 /// Rule set ids bound per decision count statement, far under both dialects'
 /// bind limits.

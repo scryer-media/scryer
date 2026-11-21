@@ -12536,6 +12536,18 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
     /// that finds none writes nothing. Traces of submitted requests are never
     /// touched.
     async fn delete_preflight_traces(&self, limit: usize) -> AppResult<usize>;
+
+    /// Remove up to `limit` traces that are older than the newest `keep`
+    /// traces of every rule set that voted in them, with their rule set
+    /// links. A trace two rule sets voted in stays while either still counts
+    /// it among its newest `keep`. A trace no rule set voted in is never
+    /// touched, and neither is anything when `keep` is zero. Returns how many
+    /// traces went. A call that finds none writes nothing.
+    async fn delete_traces_beyond_latest_per_rule_set(
+        &self,
+        keep: usize,
+        limit: usize,
+    ) -> AppResult<usize>;
 }
 
 /// Title leases and keep claims (spec 0003 FR-041…FR-044).
