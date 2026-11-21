@@ -122,7 +122,7 @@ function LifecycleSequenceProgress({
     progress.map((entry) => [entry.step.id, entry]),
   );
   return (
-    <ol className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+    <ol className="space-y-1 text-xs text-muted-foreground">
       {sequence.steps.map((step, index) => {
         const entry = progressByStepId.get(step.id);
         const acceptedReceipt = entry?.receipts.find(
