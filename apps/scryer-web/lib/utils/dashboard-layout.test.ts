@@ -6,7 +6,7 @@ import {
   DASHBOARD_COLUMNS,
   DASHBOARD_MAX_COLUMNS,
   DASHBOARD_MAX_ITEMS,
-  DASHBOARD_PANEL_IDS,
+  DASHBOARD_PANEL_KINDS,
   DASHBOARD_PANELS,
   DEFAULT_DASHBOARD_LAYOUTS,
   appendDashboardPanel,
@@ -16,11 +16,14 @@ import {
   dashboardPanelTier,
   defaultDashboardLayouts,
   effectiveDashboardLayouts,
-  isDashboardPanelId,
+  dashboardPanelKind,
+  isInstancedDashboardPanelKind,
   isWellFormedPanelId,
+  newDashboardPanelId,
   normalizeDashboardItems,
   placeDashboardPanel,
   removeDashboardPanel,
+  setDashboardPanelSettings,
   type DashboardBreakpoint,
   type DashboardLayoutItem,
 } from "./dashboard-layout.ts";
@@ -150,8 +153,9 @@ test("defaults render the content the fixed page showed", () => {
   };
   for (const breakpoint of DASHBOARD_BREAKPOINTS) {
     for (const entry of DEFAULT_DASHBOARD_LAYOUTS[breakpoint]) {
-      assert.ok(isDashboardPanelId(entry.panelId), entry.panelId);
-      const tier = dashboardPanelTier(entry.panelId, breakpoint, entry);
+      const kind = dashboardPanelKind(entry.panelId);
+      assert.ok(kind, entry.panelId);
+      const tier = dashboardPanelTier(kind, breakpoint, entry);
       assert.equal(
         tier,
         expected[breakpoint][entry.panelId] ?? "regular",
@@ -162,8 +166,8 @@ test("defaults render the content the fixed page showed", () => {
 });
 
 test("panel ids are stable kebab-case the server accepts, and every default is at least the minimum", () => {
-  assert.equal(new Set(DASHBOARD_PANEL_IDS).size, DASHBOARD_PANEL_IDS.length);
-  for (const panelId of DASHBOARD_PANEL_IDS) {
+  assert.equal(new Set(DASHBOARD_PANEL_KINDS).size, DASHBOARD_PANEL_KINDS.length);
+  for (const panelId of DASHBOARD_PANEL_KINDS) {
     assert.ok(isWellFormedPanelId(panelId), panelId);
     const spec = DASHBOARD_PANELS[panelId];
     assert.ok(
@@ -194,11 +198,11 @@ test("panel ids are stable kebab-case the server accepts, and every default is a
         DASHBOARD_COLUMNS[breakpoint] <= DASHBOARD_MAX_COLUMNS,
     );
   }
-  assert.ok(DASHBOARD_PANEL_IDS.length <= DASHBOARD_MAX_ITEMS);
+  assert.ok(DASHBOARD_PANEL_KINDS.length <= DASHBOARD_MAX_ITEMS);
 });
 
 test("recycle bin is optional at every breakpoint and survives layout persistence", () => {
-  assert.ok(DASHBOARD_PANEL_IDS.includes("recycle-bin"));
+  assert.ok(DASHBOARD_PANEL_KINDS.includes("recycle-bin"));
   for (const breakpoint of DASHBOARD_BREAKPOINTS) {
     const defaults = DEFAULT_DASHBOARD_LAYOUTS[breakpoint];
     assert.ok(!defaults.some((entry) => entry.panelId === "recycle-bin"));
@@ -354,4 +358,150 @@ test("a drop onto other panels moves only the dropped one, down to the first fre
       assert.ok(apart, `${left.panelId} overlaps ${right.panelId}`);
     }
   }
+});
+
+test("an id names its kind: single-use kinds by name, instanced kinds with a suffix", () => {
+  assert.equal(dashboardPanelKind("storage"), "storage");
+  assert.equal(
+    dashboardPanelKind("lifecycle-upcoming--a1b2c3"),
+    "lifecycle-upcoming",
+  );
+  assert.ok(isInstancedDashboardPanelKind("lifecycle-upcoming"));
+  assert.ok(!isInstancedDashboardPanelKind("storage"));
+  for (const unknown of [
+    "lifecycle-upcoming",
+    "lifecycle-upcoming--",
+    "lifecycle-upcoming--A1B2",
+    "lifecycle-upcoming--a1--b2",
+    "storage--a1b2c3",
+    "panel-unknown",
+    "panel-unknown--a1b2c3",
+    "",
+  ]) {
+    assert.equal(dashboardPanelKind(unknown), null, unknown);
+  }
+});
+
+test("each new instance gets its own well-formed id; single-use kinds keep their name", () => {
+  assert.equal(newDashboardPanelId("storage", ["storage"]), "storage");
+  const first = newDashboardPanelId("lifecycle-upcoming");
+  assert.match(first, /^lifecycle-upcoming--[a-z0-9]{6}$/);
+  assert.ok(isWellFormedPanelId(first));
+  // A random source that repeats itself still yields an unused id.
+  const values = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.5, 0, 0, 0, 0, 0];
+  let at = 0;
+  const repeating = () => values[at++ % values.length]!;
+  const taken = ["lifecycle-upcoming--000000"];
+  const second = newDashboardPanelId("lifecycle-upcoming", taken, repeating);
+  assert.notEqual(second, taken[0]);
+  assert.equal(dashboardPanelKind(second), "lifecycle-upcoming");
+
+  let items: DashboardLayoutItem[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const id = newDashboardPanelId(
+      "lifecycle-upcoming",
+      items.map((entry) => entry.panelId),
+    );
+    items = appendDashboardPanel(items, id, "LG");
+  }
+  assert.equal(items.length, 3);
+  assert.equal(new Set(items.map((entry) => entry.panelId)).size, 3);
+  assert.deepEqual(
+    items.map((entry) => [entry.y, entry.w, entry.h]),
+    [
+      [0, 3, 5],
+      [5, 3, 5],
+      [10, 3, 5],
+    ],
+  );
+});
+
+test("panel settings survive normalizing, placing and the save payload", () => {
+  const settings = { actions: ["delete_files"], name: "Soon" };
+  const saved = [
+    { ...row("lifecycle-upcoming--a1b2c3", 0, 0, 4, 6), settings },
+    { ...row("storage", 4, 0, 6, 10), settings: null },
+    { ...row("requests", 0, 6, 4, 7), settings: ["not", "an", "object"] },
+  ] as DashboardLayoutItem[];
+  const normalized = normalizeDashboardItems(saved, "LG");
+  assert.deepEqual(normalized, [
+    { ...row("lifecycle-upcoming--a1b2c3", 0, 0, 4, 6), settings },
+    row("storage", 4, 0, 6, 10),
+    row("requests", 0, 6, 4, 7),
+  ]);
+
+  const moved = placeDashboardPanel(
+    normalized,
+    "lifecycle-upcoming--a1b2c3",
+    "LG",
+    { x: 8, y: 20 },
+  );
+  assert.deepEqual(moved.at(-1), {
+    ...row("lifecycle-upcoming--a1b2c3", 8, 20, 3, 5),
+    settings,
+  });
+
+  const input = dashboardLayoutInput("LG", moved);
+  assert.deepEqual(
+    input.items.find((entry) => entry.panelId === "lifecycle-upcoming--a1b2c3")
+      ?.settings,
+    settings,
+  );
+  assert.ok(
+    !Object.hasOwn(
+      input.items.find((entry) => entry.panelId === "storage")!,
+      "settings",
+    ),
+  );
+  const [reloaded] = effectiveDashboardLayouts([input]).LG.filter(
+    (entry) => entry.panelId === "lifecycle-upcoming--a1b2c3",
+  );
+  assert.deepEqual(reloaded?.settings, settings);
+});
+
+test("a settings change alone makes the layout dirty; key order does not", () => {
+  const id = "lifecycle-upcoming--a1b2c3";
+  const current = defaultDashboardLayouts();
+  current.LG = appendDashboardPanel(current.LG, id, "LG");
+  current.LG = setDashboardPanelSettings(current.LG, id, {
+    actions: ["notify"],
+    name: "Soon",
+  });
+  const draft = defaultDashboardLayouts();
+  draft.LG = setDashboardPanelSettings(current.LG, id, {
+    name: "Soon",
+    actions: ["notify"],
+  });
+  assert.deepEqual(changedDashboardBreakpoints(draft, current), []);
+  draft.LG = setDashboardPanelSettings(draft.LG, id, {
+    actions: ["notify", "search"],
+    name: "Soon",
+  });
+  assert.deepEqual(changedDashboardBreakpoints(draft, current), ["LG"]);
+  draft.LG = setDashboardPanelSettings(draft.LG, id, null);
+  assert.ok(!Object.hasOwn(draft.LG.find((e) => e.panelId === id)!, "settings"));
+  assert.deepEqual(changedDashboardBreakpoints(draft, current), ["LG"]);
+});
+
+test("ids of no known kind are dropped, as are exact repeats of an instance", () => {
+  const normalized = normalizeDashboardItems(
+    [
+      row("lifecycle-upcoming--a1b2c3", 0, 0, 4, 6),
+      row("lifecycle-upcoming--a1b2c3", 4, 0, 4, 6),
+      row("lifecycle-upcoming--d4e5f6", 8, 0, 1, 1),
+      row("lifecycle-upcoming", 0, 6, 4, 6),
+      row("panel-unknown--a1b2c3", 0, 12, 4, 6),
+    ],
+    "LG",
+  );
+  assert.deepEqual(normalized, [
+    row("lifecycle-upcoming--a1b2c3", 0, 0, 4, 6),
+    // Held to the kind's minimum size.
+    row("lifecycle-upcoming--d4e5f6", 8, 0, 3, 5),
+  ]);
+  assert.deepEqual(appendDashboardPanel([], "panel-unknown", "LG"), []);
+  assert.deepEqual(
+    placeDashboardPanel([], "lifecycle-upcoming", "LG", { x: 0, y: 0 }),
+    [],
+  );
 });

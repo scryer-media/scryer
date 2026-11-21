@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::workflow::stores::WorkflowOperationStore;
+use scryer_application::lifecycle_rules::{DecidedActionHead, DecidedActions};
 use scryer_application::{
     JobKey, JobRunRecord, JobRunRepository, JobRunStatus, JobTriggerSource,
     LifecycleActionRunRepository, LifecycleActionStepRepository, LifecycleCandidateQuery,
@@ -1207,6 +1208,240 @@ async fn listing_filters_by_rule_state_and_library_and_counts_by_state() {
         .await
         .expect("counts");
     assert_eq!(counts, vec![(LifecycleCandidateState::Observing, 2)]);
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// A candidate due `days` from now with these stored decided actions.
+fn decided_candidate(
+    id: &str,
+    rule_set_id: &str,
+    subject_kind: &str,
+    days: i64,
+    decided_actions_json: Option<String>,
+) -> LifecycleCandidate {
+    let mut row = candidate(id, rule_set_id, &format!("title-{id}"), 1);
+    row.subject_kind = subject_kind.to_string();
+    row.subject_id = format!("subject-{id}");
+    row.due_at = Utc::now() + chrono::Duration::days(days);
+    row.decided_actions_json = decided_actions_json;
+    row
+}
+
+fn decided_json(actions: DecidedActions) -> Option<String> {
+    Some(scryer_application::lifecycle_rules::decided_actions_to_json(&actions))
+}
+
+#[tokio::test]
+async fn listing_filters_by_decided_action_and_rule_set_before_the_limit() {
+    let (services, db) = temp_services("scryer_lifecycle_candidate_action_filter").await;
+    seed_rule_set(&services, "rule-a").await;
+    seed_rule_set(&services, "rule-b").await;
+    let store = evaluation_store(&services);
+
+    let seeded = vec![
+        // No decided actions recorded, and due soonest.
+        decided_candidate("no-document", "rule-a", "title", 0, None),
+        // A boolean head.
+        decided_candidate(
+            "deletes-files",
+            "rule-a",
+            "title",
+            1,
+            decided_json(DecidedActions {
+                delete_files: true,
+                ..DecidedActions::default()
+            }),
+        ),
+        // An optional head, set.
+        decided_candidate(
+            "changes-profile",
+            "rule-a",
+            "title",
+            2,
+            decided_json(DecidedActions {
+                set_quality_profile: Some("Fixture HD".into()),
+                search: true,
+                ..DecidedActions::default()
+            }),
+        ),
+        // A list head, non-empty, and an explicit empty list beside it.
+        decided_candidate(
+            "adds-tags",
+            "rule-b",
+            "title",
+            3,
+            decided_json(DecidedActions {
+                add_tags: vec!["fixture-stale".into()],
+                ..DecidedActions::default()
+            }),
+        ),
+        // A head stored only while set, here set; every other optional key omitted.
+        decided_candidate(
+            "notifies",
+            "rule-b",
+            "title",
+            4,
+            Some(r#"{"unmonitor":false,"delete_files":false,"delete_title":false,"search":false,"set_quality_profile":null,"add_tags":[],"remove_tags":[],"notify":"fixture message"}"#.into()),
+        ),
+        // A document written before the later heads existed: their keys are absent.
+        decided_candidate(
+            "older-document",
+            "rule-b",
+            "title",
+            5,
+            Some(r#"{"unmonitor":true}"#.into()),
+        ),
+        // Deleting the title subsumes deleting its files.
+        decided_candidate(
+            "deletes-title",
+            "rule-a",
+            "title",
+            6,
+            decided_json(DecidedActions {
+                delete_files: true,
+                delete_title: true,
+                ..DecidedActions::default()
+            }),
+        ),
+        // Subject-specific heads.
+        decided_candidate(
+            "season-deletes",
+            "rule-b",
+            "season",
+            7,
+            decided_json(DecidedActions {
+                delete_files: true,
+                monitor: true,
+                ..DecidedActions::default()
+            }),
+        ),
+        decided_candidate(
+            "episode-subtitles",
+            "rule-a",
+            "episode",
+            8,
+            decided_json(DecidedActions {
+                fetch_subtitles: true,
+                move_to_root: Some("/fixture/root".into()),
+                move_to_library: Some("fixture-library".into()),
+                remove_tags: vec!["fixture-fresh".into()],
+                ..DecidedActions::default()
+            }),
+        ),
+        // Text that is not JSON decides nothing and does not fail the read.
+        decided_candidate("unreadable", "rule-a", "title", 9, Some("not json".into())),
+    ];
+    for row in &seeded {
+        store.create_candidate(row).await.expect("create");
+    }
+
+    let ids = |rows: Vec<LifecycleCandidate>| -> Vec<String> {
+        rows.into_iter().map(|row| row.id).collect()
+    };
+    let list = |query: LifecycleCandidateQuery| {
+        let store = store.clone();
+        async move { store.list_candidates(&query).await.expect("list") }
+    };
+
+    // Every head, alone, returns exactly what the application's own matcher
+    // decides for the seeded rows, soonest due first.
+    for head in DecidedActionHead::ALL {
+        let expected: Vec<String> = seeded
+            .iter()
+            .filter(|row| {
+                scryer_application::lifecycle_rules::decided_actions_include_head(
+                    scryer_application::lifecycle_rules::decided_actions_from_json(
+                        row.decided_actions_json.as_deref(),
+                    )
+                    .as_ref(),
+                    &row.subject_kind,
+                    head,
+                )
+            })
+            .map(|row| row.id.clone())
+            .collect();
+        let found = ids(list(LifecycleCandidateQuery {
+            action_heads: vec![head],
+            ..Default::default()
+        })
+        .await);
+        assert_eq!(found, expected, "{head:?}");
+    }
+
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            action_heads: vec![DecidedActionHead::DeleteFiles],
+            ..Default::default()
+        })
+        .await),
+        vec!["deletes-files", "season-deletes"]
+    );
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            action_heads: vec![DecidedActionHead::DeleteSeasonFiles],
+            ..Default::default()
+        })
+        .await),
+        vec!["season-deletes"]
+    );
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            action_heads: vec![DecidedActionHead::Monitor],
+            ..Default::default()
+        })
+        .await),
+        vec!["season-deletes"]
+    );
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            action_heads: vec![
+                DecidedActionHead::SetQualityProfile,
+                DecidedActionHead::AddTags,
+                DecidedActionHead::Notify,
+            ],
+            ..Default::default()
+        })
+        .await),
+        vec!["changes-profile", "adds-tags", "notifies"]
+    );
+
+    // The rule-set filter, alone and with the action filter, applied before the limit.
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            rule_set_ids: Some(vec!["rule-b".to_string()]),
+            ..Default::default()
+        })
+        .await),
+        vec!["adds-tags", "notifies", "older-document", "season-deletes"]
+    );
+    assert!(
+        list(LifecycleCandidateQuery {
+            rule_set_ids: Some(Vec::new()),
+            ..Default::default()
+        })
+        .await
+        .is_empty()
+    );
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            rule_set_ids: Some(vec!["rule-b".to_string()]),
+            action_heads: vec![DecidedActionHead::Unmonitor],
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await),
+        vec!["older-document"]
+    );
+    assert_eq!(
+        ids(list(LifecycleCandidateQuery {
+            action_heads: vec![DecidedActionHead::Unmonitor],
+            limit: Some(2),
+            ..Default::default()
+        })
+        .await),
+        vec!["deletes-files", "older-document"]
+    );
 
     let _ = std::fs::remove_file(db);
 }

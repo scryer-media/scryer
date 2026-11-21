@@ -292,6 +292,33 @@ pub fn lifecycle_action_head_value(head: AppActionHead) -> LifecycleActionHead {
     }
 }
 
+pub fn lifecycle_action_head_into_application(head: LifecycleActionHead) -> AppActionHead {
+    match head {
+        LifecycleActionHead::Unmonitor => AppActionHead::Unmonitor,
+        LifecycleActionHead::DeleteFiles => AppActionHead::DeleteFiles,
+        LifecycleActionHead::DeleteTitle => AppActionHead::DeleteTitle,
+        LifecycleActionHead::Search => AppActionHead::Search,
+        LifecycleActionHead::SetQualityProfile => AppActionHead::SetQualityProfile,
+        LifecycleActionHead::AddTags => AppActionHead::AddTags,
+        LifecycleActionHead::RemoveTags => AppActionHead::RemoveTags,
+        LifecycleActionHead::Monitor => AppActionHead::Monitor,
+        LifecycleActionHead::FetchSubtitles => AppActionHead::FetchSubtitles,
+        LifecycleActionHead::MoveToLibrary => AppActionHead::MoveToLibrary,
+        LifecycleActionHead::MoveToRoot => AppActionHead::MoveToRoot,
+        LifecycleActionHead::Notify => AppActionHead::Notify,
+        LifecycleActionHead::MonitorSeason => AppActionHead::MonitorSeason,
+        LifecycleActionHead::UnmonitorSeason => AppActionHead::UnmonitorSeason,
+        LifecycleActionHead::DeleteSeasonFiles => AppActionHead::DeleteSeasonFiles,
+        LifecycleActionHead::FetchSeasonSubtitles => AppActionHead::FetchSeasonSubtitles,
+        LifecycleActionHead::NotifySeason => AppActionHead::NotifySeason,
+        LifecycleActionHead::MonitorEpisode => AppActionHead::MonitorEpisode,
+        LifecycleActionHead::UnmonitorEpisode => AppActionHead::UnmonitorEpisode,
+        LifecycleActionHead::DeleteEpisodeFiles => AppActionHead::DeleteEpisodeFiles,
+        LifecycleActionHead::FetchEpisodeSubtitles => AppActionHead::FetchEpisodeSubtitles,
+        LifecycleActionHead::NotifyEpisode => AppActionHead::NotifyEpisode,
+    }
+}
+
 pub fn from_lifecycle_declared_actions(declared: &AppDeclaredActions) -> LifecycleDeclaredActions {
     LifecycleDeclaredActions {
         heads: declared

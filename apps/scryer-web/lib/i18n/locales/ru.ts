@@ -11636,6 +11636,8 @@ const ru: LocaleDictionary = {
   "dashboard.layout.dragPanel": "Перетащить {{name}} на панель управления",
   "dashboard.layout.movePanel": "Переместить {{name}}",
   "dashboard.layout.removePanel": "Убрать {{name}}",
+  "dashboard.layout.configurePanel": "Настроить {{name}}",
+  "dashboard.layout.applyPanelSettings": "Применить",
   "dashboard.layout.empty":
     "На панели управления нет блоков. Откройте раздел «Блоки», чтобы добавить их.",
   "dashboard.layout.saved": "Компоновка панели управления сохранена.",
@@ -11657,6 +11659,8 @@ const ru: LocaleDictionary = {
     "Один из блоков этой компоновки находится за пределами сетки.",
   "dashboard.layout.refusal.sizeInvalid":
     "У одного из блоков этой компоновки не задана ширина или высота.",
+  "dashboard.layout.refusal.panelSettingsInvalid":
+    "У одного из блоков этой компоновки настройки, которые сервер не может сохранить.",
   "settings.enableFormLogin": "Включить вход",
   "settings.securitySetAdminPasswordTitle": "Задайте пароль администратора",
   "settings.securitySetAdminPasswordDescription":
@@ -14220,6 +14224,20 @@ const ru: LocaleDictionary = {
   "dashboard.recycleBinWindow": "Ближайшие 72 часа",
   "dashboard.recycleBinDueNow": "Уже пора",
   "dashboard.recycleBinDueIn": "Через {{hours}} ч",
+  "dashboard.lifecycleUpcoming": "Предстоящие действия жизненного цикла",
+  "dashboard.panel.lifecycleUpcomingDescription":
+    "Действия, которые включённые правила жизненного цикла скоро выполнят, начиная с ближайших. Добавьте блок несколько раз, чтобы следить за разными действиями.",
+  "dashboard.lifecycleUpcomingEmpty":
+    "Ни у одного включённого правила жизненного цикла нет предстоящих действий.",
+  "dashboard.lifecycleUpcomingEmptyFiltered":
+    "Ни у одного включённого правила жизненного цикла нет предстоящих действий из выбранных.",
+  "dashboard.lifecycleUpcomingOff":
+    "Правила жизненного цикла выключены для этого экземпляра, поэтому предстоящих действий нет.",
+  "dashboard.lifecycleUpcomingPaused": "Действия приостановлены",
+  "dashboard.lifecycleUpcomingSettingsDescription":
+    "Выберите, за какими действиями следит этот блок и как он называется.",
+  "dashboard.lifecycleUpcomingName": "Название блока",
+  "dashboard.lifecycleUpcomingAllActions": "Все действия",
   "settings.seedingProfileNameRequired": "Введите название профиля.",
   "settings.seedingProfileRatioInvalid":
     "Введите число не меньше нуля или оставьте поле пустым.",

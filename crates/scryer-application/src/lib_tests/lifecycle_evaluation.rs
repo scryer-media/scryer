@@ -328,6 +328,22 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
                         .as_ref()
                         .is_none_or(|id| &candidate.library_id == id)
                     && (query.states.is_empty() || query.states.contains(&candidate.state))
+                    && query
+                        .rule_set_ids
+                        .as_ref()
+                        .is_none_or(|ids| ids.contains(&candidate.rule_set_id))
+                    && (query.action_heads.is_empty() || {
+                        let decided = crate::lifecycle_rules::decided_actions_from_json(
+                            candidate.decided_actions_json.as_deref(),
+                        );
+                        query.action_heads.iter().any(|head| {
+                            crate::lifecycle_rules::decided_actions_include_head(
+                                decided.as_ref(),
+                                &candidate.subject_kind,
+                                *head,
+                            )
+                        })
+                    })
             })
             .cloned()
             .collect();

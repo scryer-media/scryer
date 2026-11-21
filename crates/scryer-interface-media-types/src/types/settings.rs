@@ -4,7 +4,7 @@ use super::{
     RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
     VerificationDepthValue,
 };
-use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, Json, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 #[derive(SimpleObject, Clone)]
@@ -617,6 +617,9 @@ pub struct UiDashboardLayoutItem {
     pub w: i32,
     /// Height in grid rows.
     pub h: i32,
+    /// The panel's own settings as saved by the web client, a JSON object, or
+    /// null when the panel has none.
+    pub settings: Option<Json<serde_json::Value>>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -734,6 +737,10 @@ pub struct UiDashboardLayoutItemInput {
     pub w: i32,
     /// Height in grid rows, at least 1.
     pub h: i32,
+    /// The panel's own settings: a JSON object of at most 2048 bytes when
+    /// serialized, stored as given. Omitted or null saves the panel without
+    /// settings.
+    pub settings: Option<Json<serde_json::Value>>,
 }
 
 #[derive(InputObject, Clone)]

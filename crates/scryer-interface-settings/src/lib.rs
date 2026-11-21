@@ -629,6 +629,7 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
                         y: item.y,
                         w: item.w,
                         h: item.h,
+                        settings: item.settings.map(async_graphql::Json),
                     })
                     .collect(),
             })
@@ -698,6 +699,7 @@ pub(crate) fn dashboard_layout_from_input(
                 y: item.y,
                 w: item.w,
                 h: item.h,
+                settings: item.settings.map(|settings| settings.0),
             })
             .collect(),
     }

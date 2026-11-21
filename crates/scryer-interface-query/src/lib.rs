@@ -4284,12 +4284,23 @@ impl AcquisitionQueries {
         >,
         #[graphql(desc = "Return candidates whose subject belongs to this library only.")]
         library_id: Option<ID>,
+        #[graphql(
+            desc = "Return candidates whose decided actions include at least one of these heads, as their `actions.heads` reports them; a season or episode head matches only a season or episode subject that decided the title head it narrows. A candidate recorded without decided actions matches none. Null or empty applies no action filter."
+        )]
+        actions: Option<Vec<LifecycleActionHead>>,
+        #[graphql(
+            desc = "Return candidates of rules currently in one of these states, as the rule list reports them. Null or empty applies no rule-state filter."
+        )]
+        rule_states: Option<Vec<LifecycleRuleState>>,
 
         #[graphql(desc = "Maximum number of candidates to return; defaults to 50, at most 200.")]
         limit: Option<i32>,
     ) -> GqlResult<Vec<LifecycleCandidate>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let look_ahead = ctx.look_ahead();
+        let skip_sequence_projection = !look_ahead.field("actionSequence").exists()
+            && !look_ahead.field("sequenceSteps").exists();
 
         let candidates = app
             .list_lifecycle_candidates(
@@ -4302,6 +4313,17 @@ impl AcquisitionQueries {
                         .map(crate::mappers::lifecycle_candidate_state_into_application)
                         .collect(),
                     library_id: library_id.map(String::from),
+                    action_heads: actions
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(crate::mappers::lifecycle_action_head_into_application)
+                        .collect(),
+                    rule_states: rule_states
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(crate::mappers::lifecycle_rule_state_into_application)
+                        .collect(),
+                    skip_sequence_projection,
 
                     limit: Some(lifecycle_list_limit(limit)),
                 },

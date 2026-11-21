@@ -1004,6 +1004,7 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
         y
         w
         h
+        settings
       }
     }
   }
@@ -1051,6 +1052,7 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
         y
         w
         h
+        settings
       }
     }
   }
@@ -1097,6 +1099,7 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
         y
         w
         h
+        settings
       }
     }`;
 

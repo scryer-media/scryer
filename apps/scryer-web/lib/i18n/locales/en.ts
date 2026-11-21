@@ -4878,6 +4878,20 @@ const en: LocaleDictionary = {
   "dashboard.recycleBinWindow": "Next 72 hours",
   "dashboard.recycleBinDueNow": "Due now",
   "dashboard.recycleBinDueIn": "In {{hours}}h",
+  "dashboard.lifecycleUpcoming": "Upcoming lifecycle actions",
+  "dashboard.panel.lifecycleUpcomingDescription":
+    "Actions enabled lifecycle rules are about to take, soonest first. Add it more than once to follow different actions.",
+  "dashboard.lifecycleUpcomingEmpty":
+    "No enabled lifecycle rule has an action coming up.",
+  "dashboard.lifecycleUpcomingEmptyFiltered":
+    "No enabled lifecycle rule has one of these actions coming up.",
+  "dashboard.lifecycleUpcomingOff":
+    "Lifecycle rules are switched off for this instance, so no actions are coming up.",
+  "dashboard.lifecycleUpcomingPaused": "Actions paused",
+  "dashboard.lifecycleUpcomingSettingsDescription":
+    "Choose which actions this panel follows and what it is called.",
+  "dashboard.lifecycleUpcomingName": "Panel name",
+  "dashboard.lifecycleUpcomingAllActions": "All actions",
   "dashboard.layout.edit": "Edit dashboard",
   "dashboard.layout.editing": "Editing dashboard",
   "dashboard.layout.editHint":
@@ -4899,6 +4913,8 @@ const en: LocaleDictionary = {
   "dashboard.layout.dragPanel": "Drag {{name}} onto the dashboard",
   "dashboard.layout.movePanel": "Move {{name}}",
   "dashboard.layout.removePanel": "Remove {{name}}",
+  "dashboard.layout.configurePanel": "Configure {{name}}",
+  "dashboard.layout.applyPanelSettings": "Apply",
   "dashboard.layout.empty":
     "No panels are on the dashboard. Open Panels to add some.",
   "dashboard.layout.saved": "Dashboard layout saved.",
@@ -4917,6 +4933,8 @@ const en: LocaleDictionary = {
     "A panel in this layout sits outside the grid.",
   "dashboard.layout.refusal.sizeInvalid":
     "A panel in this layout has no width or height.",
+  "dashboard.layout.refusal.panelSettingsInvalid":
+    "A panel in this layout has settings the server cannot store.",
 
   "discovery.failedToLoad": "Failed to load discovery",
   "discovery.featured": "Featured",
