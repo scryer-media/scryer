@@ -33,7 +33,7 @@ use scryer_rules::lifecycle::{
     LifecycleOutcome, LifecyclePolicy, LifecycleRulesEngine, LifecycleRulesEvaluator,
 };
 use serde::Serialize;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::lifecycle_rules::action_catalog::{
     LifecycleRiskClass, LifecycleSubjectKind as ActionSubjectKind,
@@ -47,7 +47,7 @@ use crate::lifecycle_rules::facts::{
     LifecycleLibraryRef, LifecycleTitleClaims, LifecycleTitlePeople, LifecycleTitleWatch,
     build_subject_input, build_subject_input_with_completed_retention_episodes,
 };
-use crate::lifecycle_rules::safety::{LifecycleActivityCheck, LifecyclePlaybackHold};
+use crate::lifecycle_rules::safety::LifecycleActivityCheck;
 use crate::lifecycle_rules::sequence_execution::SequenceCandidateExecutionContext;
 use crate::lifecycle_rules::sequence_history::lifecycle_sequence_history_steps;
 use crate::lifecycle_rules::service::LifecycleRuleSetDetail;
@@ -235,6 +235,9 @@ pub mod execution_reason {
     pub const PLAYBACK_HOLD: &str = "playback_hold";
     /// A configured media server could not be asked about playback.
     pub const PLAYBACK_UNKNOWN: &str = "playback_unknown";
+    /// A session is playing something that could not be matched to any
+    /// Scryer title, so it may be this one. Holds destructive work only.
+    pub const PLAYBACK_UNATTRIBUTED: &str = "playback_unattributed";
     /// A rule that reads a watch fact matched, and reading the subject's
     /// items back from the media server found a play newer than the stored
     /// facts, by an account the watch facts count.
@@ -343,6 +346,7 @@ pub mod execution_reason {
         UNKNOWN_AT_EXECUTION,
         PLAYBACK_HOLD,
         PLAYBACK_UNKNOWN,
+        PLAYBACK_UNATTRIBUTED,
         WATCH_RECHECK_NEWER_PLAY,
         WATCH_RECHECK_UNCREDITED_PLAY,
         WATCH_RECHECK_UNAVAILABLE,
@@ -398,7 +402,7 @@ pub mod execution_reason {
                     "{reason} has a stray underscore"
                 );
             }
-            assert_eq!(ALL.len(), 36);
+            assert_eq!(ALL.len(), 37);
         }
     }
 }
@@ -970,7 +974,8 @@ impl AppUseCase {
             return Ok(LifecycleEvaluationTrigger {
                 started: false,
                 message: Some(
-                    "both instance effect gates are off, so no actions can execute".to_string(),
+                    "lifecycle actions are paused for this instance, so nothing was acted on"
+                        .to_string(),
                 ),
             });
         }
@@ -1042,6 +1047,9 @@ impl AppUseCase {
             return Ok(report);
         }
         report.gates_enabled = true;
+        // Every pass reads playback afresh; its candidates then share one
+        // picture (see `safety`).
+        self.runtime.integrations.lifecycle_playback.clear().await;
 
         let mut rule_sets = self
             .services
@@ -2215,15 +2223,21 @@ impl AppUseCase {
             }
         }
 
-        // (4) Playback holds every action kind, unknown included.
-        match self.lifecycle_playback_hold().await {
-            Ok(LifecyclePlaybackHold::Clear) => {}
-            Ok(LifecyclePlaybackHold::Hold { .. }) => {
-                return SafetyDecision::Hold(execution_reason::PLAYBACK_HOLD);
-            }
-            Ok(LifecyclePlaybackHold::Unknown { .. }) | Err(_) => {
-                return SafetyDecision::Hold(execution_reason::PLAYBACK_UNKNOWN);
-            }
+        // (4) A session playing this title holds every action kind, and so
+        // does a server that could not be asked. A session no title could be
+        // matched to holds destructive work only.
+        let playback = self
+            .lifecycle_playback_hold_for_title(&title.id, high_risk)
+            .await;
+        if let Some(code) = playback.reason_code() {
+            info!(
+                rule_set_id = candidate.rule_set_id.as_str(),
+                title_id = title.id.as_str(),
+                reason = code,
+                playback = playback.describe().as_str(),
+                "lifecycle action held for playback"
+            );
+            return SafetyDecision::Hold(code);
         }
 
         // (5) Acquisition activity, unknown included.

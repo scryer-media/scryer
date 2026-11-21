@@ -163,6 +163,12 @@ impl ScryerLibraryPaths {
         }
     }
 
+    /// A server file path in Scryer's spelling, through the connection's path
+    /// mappings. A path no mapping covers is returned as the server spelt it.
+    pub fn to_scryer_path(&self, server_path: &str) -> String {
+        map_media_server_path(server_path, &self.to_scryer)
+    }
+
     /// Whether a server file path could be one of Scryer's files: once mapped
     /// to Scryer's spelling it lies inside a library root, or the roots are
     /// unknown.

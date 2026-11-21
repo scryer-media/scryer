@@ -58,7 +58,11 @@ pub use evaluation::{
     LifecycleEvaluationReport, LifecycleEvaluationTrigger, LifecycleExclusionView, LifecycleGates,
     LifecycleGatesUpdate, candidate_reason,
 };
-pub use safety::{LifecycleActivityCheck, LifecyclePlaybackHold, fold_playback_hold};
+pub(crate) use safety::LifecyclePlaybackCache;
+pub use safety::{
+    LifecycleActivityCheck, LifecyclePlaybackHold, LifecyclePlaybackPicture, PlayingSession,
+    SessionAttribution, fold_playback_picture,
+};
 /// The decided-actions document and its heads, for callers that filter
 /// candidates by what was decided.
 pub use scryer_rules::lifecycle_actions::{

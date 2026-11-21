@@ -4382,6 +4382,23 @@ engine = "postgres"
 scope = "all"
 
 [[migration]]
+version = 362
+description = "media server playback items provider item index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0362_media_server_playback_items_provider_item_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0362_media_server_playback_items_provider_item_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
 version = 363
 description = "dashboard panel settings and lifecycle candidates state due index"
 checksum_algo = "blake3"

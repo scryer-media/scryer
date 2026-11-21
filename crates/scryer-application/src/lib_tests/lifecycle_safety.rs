@@ -7,9 +7,9 @@ use super::*;
 use crate::lifecycle_rules::{LifecycleActivityCheck, LifecyclePlaybackHold};
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
-    PlaybackProbeStatus,
+    PlaybackProbeStatus, PlayingMedia, ProviderPlayedItem,
 };
-use scryer_domain::MediaServerProvider;
+use scryer_domain::{MediaServerProvider, MediaServerSignalKind};
 
 /// Playback probe that replays a fixed snapshot, or fails.
 struct StubPlaybackProbe {
@@ -49,6 +49,7 @@ impl MediaServerPlaybackProbe for StubPlaybackProbe {
                 .map(|(id, status)| ConnectionPlaybackActivity {
                     connection_id: id.clone(),
                     provider: MediaServerProvider::Jellyfin,
+                    path_mappings: Vec::new(),
                     status: status.clone(),
                 })
                 .collect(),
@@ -131,31 +132,81 @@ fn activity_app() -> ActivityFixture {
 
 // ── Playback hold ───────────────────────────────────────────────────────────
 
+fn playing_file(path: &str, name: &str) -> PlaybackProbeStatus {
+    PlaybackProbeStatus::Playing(vec![PlayingMedia::Video(ProviderPlayedItem {
+        provider_item_id: format!("jf-{name}"),
+        kind: MediaServerSignalKind::Movie,
+        name: Some(name.to_string()),
+        file_paths: vec![path.to_string()],
+        ..ProviderPlayedItem::default()
+    })])
+}
+
 #[tokio::test]
 async fn an_assembly_without_media_servers_reports_a_clear_playback_hold() {
     // The default assembly carries the null probe, which observes nothing.
     let (app, _user) = bootstrap();
 
     assert_eq!(
-        app.lifecycle_playback_hold().await.expect("hold"),
+        app.lifecycle_playback_hold_for_title("title-a", true).await,
         LifecyclePlaybackHold::Clear
     );
 }
 
 #[tokio::test]
-async fn any_active_session_anywhere_holds_every_action() {
-    // MVP semantics: the hold is global, not per subject.
+async fn a_session_on_a_known_file_holds_only_that_title() {
     let (app, _user) = bootstrap();
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: "title-a".to_string(),
+            file_path: "/media/movies/alpha.mkv".to_string(),
+            size_bytes: 1_000,
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
     let app = app.with_test_overrides(|services| {
-        services.with_media_server_playback_probe(Arc::new(StubPlaybackProbe::reporting(vec![
-            ("jellyfin", PlaybackProbeStatus::ActiveSessions(1)),
-            ("plex", PlaybackProbeStatus::Idle),
-        ])))
+        services
+            .with_media_files(media_files.clone())
+            .with_media_server_playback_probe(Arc::new(StubPlaybackProbe::reporting(vec![
+                ("jellyfin", playing_file("/media/movies/alpha.mkv", "Alpha")),
+                ("plex", PlaybackProbeStatus::Idle),
+            ])))
     });
 
+    for destructive in [true, false] {
+        let hold = app.lifecycle_playback_hold_for_title("title-a", destructive).await;
+        assert!(
+            matches!(hold, LifecyclePlaybackHold::Hold { .. }),
+            "{hold:?}"
+        );
+        assert_eq!(
+            app.lifecycle_playback_hold_for_title("title-b", destructive)
+                .await,
+            LifecyclePlaybackHold::Clear
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_session_no_title_can_be_matched_to_holds_only_destructive_work() {
+    let (app, _user) = bootstrap();
+    let app = app.with_test_overrides(|services| {
+        services.with_media_server_playback_probe(Arc::new(StubPlaybackProbe::reporting(vec![(
+            "jellyfin",
+            playing_file("/media/movies/unknown.mkv", "Unknown"),
+        )])))
+    });
+
+    let hold = app.lifecycle_playback_hold_for_title("title-a", true).await;
+    assert!(
+        matches!(hold, LifecyclePlaybackHold::Unattributed { .. }),
+        "{hold:?}"
+    );
     assert_eq!(
-        app.lifecycle_playback_hold().await.expect("hold"),
-        LifecyclePlaybackHold::Hold { active_sessions: 1 }
+        app.lifecycle_playback_hold_for_title("title-a", false).await,
+        LifecyclePlaybackHold::Clear
     );
 }
 
@@ -172,12 +223,14 @@ async fn an_unreachable_connection_makes_the_hold_unknown() {
         ])))
     });
 
-    let hold = app.lifecycle_playback_hold().await.expect("hold");
-    assert!(
-        matches!(hold, LifecyclePlaybackHold::Unknown { .. }),
-        "{hold:?}"
-    );
-    assert!(hold.holds_destructive_work());
+    for destructive in [true, false] {
+        let hold = app.lifecycle_playback_hold_for_title("title-a", destructive).await;
+        assert!(
+            matches!(hold, LifecyclePlaybackHold::Unknown { .. }),
+            "{hold:?}"
+        );
+        assert!(hold.holds());
+    }
 }
 
 #[tokio::test]
@@ -187,7 +240,7 @@ async fn a_broken_probe_is_unknown_rather_than_an_error() {
         services.with_media_server_playback_probe(Arc::new(StubPlaybackProbe::failing()))
     });
 
-    let hold = app.lifecycle_playback_hold().await.expect("hold");
+    let hold = app.lifecycle_playback_hold_for_title("title-a", false).await;
     assert!(
         matches!(hold, LifecyclePlaybackHold::Unknown { .. }),
         "{hold:?}"

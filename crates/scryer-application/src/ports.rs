@@ -4956,6 +4956,17 @@ pub trait MediaServerConnectionRepository: Send + Sync {
         entity_kind: scryer_domain::MediaServerPlaybackEntityKind,
         entity_id: &str,
     ) -> AppResult<Vec<scryer_domain::MediaServerPlaybackItem>>;
+    /// Mappings for provider items, as `(connection id, provider item id)`
+    /// pairs: the reverse of [`Self::list_playback_items_for_entities`], used
+    /// to place a live session on a Scryer title. A pair with no mapping is
+    /// absent. The default knows no mapping, which leaves a session to the
+    /// other evidence and, failing that, unattributed.
+    async fn list_playback_items_for_provider_items(
+        &self,
+        _provider_items: &[(String, String)],
+    ) -> AppResult<Vec<scryer_domain::MediaServerPlaybackItem>> {
+        Ok(Vec::new())
+    }
     async fn list_playback_items_for_entities(
         &self,
         entities: &[(scryer_domain::MediaServerPlaybackEntityKind, String)],
@@ -14907,8 +14918,9 @@ pub trait SubtitleDownloadRepository: Send + Sync {
 /// fail-closed hold.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackProbeStatus {
-    /// The server answered and is streaming this many sessions right now.
-    ActiveSessions(u32),
+    /// The server answered and these sessions are playing right now, one
+    /// entry per session. Never empty: a server playing nothing is `Idle`.
+    Playing(Vec<PlayingMedia>),
     /// The server answered and nothing is playing.
     Idle,
     /// The server could not be asked, or its answer could not be read. Carries
@@ -14916,11 +14928,49 @@ pub enum PlaybackProbeStatus {
     Unreachable(String),
 }
 
+impl PlaybackProbeStatus {
+    /// How many sessions the server reported playing.
+    pub fn playing_sessions(&self) -> usize {
+        match self {
+            Self::Playing(sessions) => sessions.len(),
+            Self::Idle | Self::Unreachable(_) => 0,
+        }
+    }
+}
+
+/// What one live session is playing, as the server reported it.
+///
+/// Nothing here is a Scryer identity: the lifecycle safety check attributes a
+/// session to a title with the same mapping the watch-signal sync uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlayingMedia {
+    /// A movie or an episode, normalized exactly as a watch-signal item is:
+    /// the provider's item id, its external ids, the series' provider item
+    /// id and the season and episode numbers of an episode, and its file
+    /// paths. Play-state fields carry nothing.
+    Video(ProviderPlayedItem),
+    /// Music or another audio item. Scryer manages no audio, so a session
+    /// playing one is not playing any Scryer title.
+    Audio,
+    /// Anything else (an unidentified video, a trailer, live TV), or an item
+    /// the server reported in a shape that could not be read. It can still be
+    /// placed through the provider's mapping or a file path, and holds as
+    /// unattributed otherwise.
+    Other {
+        provider_item_id: Option<String>,
+        name: Option<String>,
+        file_paths: Vec<String>,
+    },
+}
+
 /// One enabled media-server connection's contribution to a playback snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionPlaybackActivity {
     pub connection_id: String,
     pub provider: scryer_domain::MediaServerProvider,
+    /// The connection's path mappings (Scryer path to server path), so a
+    /// session's file can be read back in Scryer's spelling.
+    pub path_mappings: Vec<scryer_domain::MediaServerPathMapping>,
     pub status: PlaybackProbeStatus,
 }
 

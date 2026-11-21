@@ -783,7 +783,7 @@ pub use ports::{
 };
 pub use ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
-    PlaybackProbeStatus, lookup_keys_claimed_by_others, name_candidates_in_bucket,
+    PlaybackProbeStatus, PlayingMedia, lookup_keys_claimed_by_others, name_candidates_in_bucket,
     title_lookup_forms, titles_matching_external_id, titles_matching_lookup_key_shapes,
     titles_matching_lookup_keys,
 };

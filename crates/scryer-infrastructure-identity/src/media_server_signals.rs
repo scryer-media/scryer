@@ -2209,7 +2209,7 @@ pub fn normalize_plex_item(entry: &Value) -> Option<ProviderPlayedItem> {
 }
 
 /// Every `Media[].Part[].file` of a Plex item: one per file of each version.
-fn plex_file_paths(entry: &Value) -> Vec<String> {
+pub(crate) fn plex_file_paths(entry: &Value) -> Vec<String> {
     entry
         .get("Media")
         .and_then(Value::as_array)

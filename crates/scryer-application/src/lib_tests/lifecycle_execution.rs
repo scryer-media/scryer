@@ -16,13 +16,15 @@ use crate::location::ownership_guard::OwnedEntity;
 use crate::location::test_support::InMemoryLocationOperationStore;
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
-    PlaybackProbeStatus,
+    PlaybackProbeStatus, PlayingMedia, ProviderPlayedItem,
 };
-use scryer_domain::{LifecycleCandidateState, LifecycleRuleState, MediaServerProvider};
+use scryer_domain::{
+    LifecycleCandidateState, LifecycleRuleState, MediaServerProvider, MediaServerSignalKind,
+};
 
-/// A playback probe whose answer the test chooses.
+/// A playback probe whose answer the test chooses, and may change.
 struct FixedPlaybackProbe {
-    status: PlaybackProbeStatus,
+    status: Arc<std::sync::Mutex<PlaybackProbeStatus>>,
 }
 
 #[async_trait]
@@ -32,7 +34,8 @@ impl MediaServerPlaybackProbe for FixedPlaybackProbe {
             connections: vec![ConnectionPlaybackActivity {
                 connection_id: "conn-1".to_string(),
                 provider: MediaServerProvider::Jellyfin,
-                status: self.status.clone(),
+                path_mappings: Vec::new(),
+                status: self.status.lock().expect("playback status").clone(),
             }],
             observed_at: Utc::now(),
         })
@@ -46,6 +49,8 @@ pub(super) struct ExecutionFixture {
     pub(super) evaluation: Arc<InMemoryLifecycleEvaluationRepo>,
     #[allow(dead_code)] // sibling acceptance modules selectively need this seam
     pub(super) media_files: Arc<MockMediaFileRepo>,
+    /// What the playback probe reports, when the fixture wired one.
+    playback: Arc<std::sync::Mutex<PlaybackProbeStatus>>,
 }
 
 pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
@@ -56,6 +61,7 @@ pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionF
     let job_runs = Arc::new(RecordingJobRunRepo::with_lifecycle_action_job_receipts(
         evaluation.action_job_receipts.clone(),
     ));
+    let playback_status = Arc::new(std::sync::Mutex::new(PlaybackProbeStatus::Idle));
     let app = app.with_test_overrides(|services| {
         let services = services
             .with_lifecycle_rule_set_store(rules.clone())
@@ -64,7 +70,10 @@ pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionF
             .with_job_runs(job_runs.clone());
         match playback {
             Some(status) => {
-                services.with_media_server_playback_probe(Arc::new(FixedPlaybackProbe { status }))
+                *playback_status.lock().expect("playback status") = status;
+                services.with_media_server_playback_probe(Arc::new(FixedPlaybackProbe {
+                    status: playback_status.clone(),
+                }))
             }
             None => services,
         }
@@ -75,6 +84,7 @@ pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionF
         rules,
         evaluation,
         media_files,
+        playback: playback_status,
     }
 }
 
@@ -134,6 +144,29 @@ pub(super) async fn seed_title(
 }
 
 impl ExecutionFixture {
+    /// A session on the wired probe now plays `title`, through a file Scryer
+    /// knows belongs to it.
+    async fn watching(&self, title: &Title) {
+        let path = format!("/media/playing/{}.mkv", title.id);
+        self.media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.clone(),
+                size_bytes: 1_000,
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        *self.playback.lock().expect("playback status") =
+            PlaybackProbeStatus::Playing(vec![PlayingMedia::Video(ProviderPlayedItem {
+                provider_item_id: format!("jf-{}", title.id),
+                kind: MediaServerSignalKind::Movie,
+                name: Some(title.name.clone()),
+                file_paths: vec![path],
+                ..ProviderPlayedItem::default()
+            })]);
+    }
+
     async fn observed_rule(&self, draft: LifecycleRuleDraft) -> String {
         let created = self
             .app
@@ -1457,8 +1490,8 @@ async fn arming_any_rule_requires_system_settings_authority() {
 }
 
 #[tokio::test]
-async fn active_playback_blocks_every_due_action() {
-    let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(2)));
+async fn playback_of_a_title_holds_its_due_action() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
     let rule_id = fixture
         .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
@@ -1467,6 +1500,7 @@ async fn active_playback_blocks_every_due_action() {
         .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Being Watched", true).await;
+    fixture.watching(&title).await;
     fixture.evaluate().await;
 
     let report = fixture.handle().await;
@@ -1497,12 +1531,19 @@ async fn active_playback_blocks_every_due_action() {
     );
 }
 
-/// A pass that finds a candidate still held by the same safety check writes
-/// nothing for it: no state change, no new history entry. A hold for another
-/// reason is still written.
+/// A session that cannot be matched to any Scryer title, such as a stream
+/// with no item id, ids or file.
+fn unattributable_session() -> PlaybackProbeStatus {
+    PlaybackProbeStatus::Playing(vec![PlayingMedia::Other {
+        provider_item_id: None,
+        name: None,
+        file_paths: Vec::new(),
+    }])
+}
+
 #[tokio::test]
-async fn a_second_pass_under_the_same_safety_hold_writes_nothing() {
-    let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(1)));
+async fn a_session_on_one_title_leaves_another_titles_action_free() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
     let rule_id = fixture
         .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
@@ -1510,7 +1551,109 @@ async fn a_second_pass_under_the_same_safety_hold_writes_nothing() {
     fixture
         .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
-    seed_title(&fixture.app, &fixture.user, "Lantern Cove", true).await;
+    let watched = seed_title(&fixture.app, &fixture.user, "Alder Quay", true).await;
+    let idle = seed_title(&fixture.app, &fixture.user, "Birch Hollow", true).await;
+    fixture.watching(&watched).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 1, "{report:?}");
+    let monitored = |title: &Title| {
+        let app = &fixture.app;
+        let user = &fixture.user;
+        let id = title.id.clone();
+        async move {
+            app.get_title(user, &id)
+                .await
+                .expect("read title")
+                .expect("title exists")
+                .monitored
+        }
+    };
+    assert!(monitored(&watched).await, "the playing title is held");
+    assert!(!monitored(&idle).await, "the other title is acted on");
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    let held = candidates
+        .iter()
+        .find(|candidate| candidate.title_id == watched.id)
+        .expect("watched candidate");
+    assert_eq!(held.state, LifecycleCandidateState::Blocked);
+    assert_eq!(held.state_reason, execution_reason::PLAYBACK_HOLD);
+}
+
+#[tokio::test]
+async fn an_unattributed_session_lets_reversible_work_proceed() {
+    let fixture = execution_app(Some(unattributable_session()));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Cedar Reach", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.executed, 1, "{report:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored);
+}
+
+#[tokio::test]
+async fn an_unattributed_session_holds_destructive_work() {
+    let fixture = execution_app(Some(unattributable_session()));
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Dunmore Fell", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, Some(1))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some(),
+        "a held delete must not remove the title"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, LifecycleCandidateState::Blocked);
+    assert_eq!(
+        candidate.state_reason,
+        execution_reason::PLAYBACK_UNATTRIBUTED
+    );
+}
+
+/// A pass that finds a candidate still held by the same safety check writes
+/// nothing for it: no state change, no new history entry. A hold for another
+/// reason is still written.
+#[tokio::test]
+async fn a_second_pass_under_the_same_safety_hold_writes_nothing() {
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, LifecycleRuleState::Enabled, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Lantern Cove", true).await;
+    fixture.watching(&title).await;
     fixture.evaluate().await;
 
     let report = fixture.handle().await;
@@ -1724,7 +1867,7 @@ async fn an_undecidable_subject_blocks_at_execution() {
 
 #[tokio::test]
 async fn a_held_candidate_waits_for_the_next_evaluation_then_is_examined_again() {
-    let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(1)));
+    let fixture = execution_app(Some(PlaybackProbeStatus::Idle));
     let rule_id = fixture
         .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
@@ -1733,6 +1876,7 @@ async fn a_held_candidate_waits_for_the_next_evaluation_then_is_examined_again()
         .arm(&rule_id, LifecycleRuleState::Enabled, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Later", true).await;
+    fixture.watching(&title).await;
     fixture.evaluate().await;
     // The evaluation began before anything the passes below write.
     fixture
@@ -1792,6 +1936,7 @@ fn execution_app_with_operations(
         rules,
         evaluation,
         media_files,
+        playback: Arc::new(std::sync::Mutex::new(PlaybackProbeStatus::Idle)),
     }
 }
 
