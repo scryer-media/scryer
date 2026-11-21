@@ -62,9 +62,9 @@ pub struct RequestRulesEngineCache {
     /// True after a persisted rule mutation could not be reflected in this
     /// generation. Evaluation must hold rather than consult stale policy.
     pub unavailable: bool,
-    /// False only when no loaded rule can read the requester's watchlist
-    /// facts, so evaluation may leave the requester's lists unread.
-    pub reads_watchlist_facts: bool,
+    /// The fact families some loaded rule may read. Evaluation leaves the
+    /// others unread.
+    pub fact_reads: crate::request_rules::facts::RequestFactReads,
 }
 
 impl Default for RequestRulesEngineCache {
@@ -75,7 +75,7 @@ impl Default for RequestRulesEngineCache {
             load_errors: HashMap::new(),
             generation: 0,
             unavailable: false,
-            reads_watchlist_facts: true,
+            fact_reads: crate::request_rules::facts::RequestFactReads::ALL,
         }
     }
 }
@@ -249,13 +249,11 @@ impl AppUseCase {
         };
         let rule_count = policies.len();
         // Every loaded rule is evaluated, whichever libraries it covers.
-        let reads_watchlist_facts = policies.iter().any(|policy| {
-            scryer_rules::validation::request_rule_may_read_facts(
-                &policy.rego_source,
-                &policy.id,
-                crate::request_rules::facts::WATCHLIST_FACT_NAMES,
-            )
-        });
+        let fact_reads = crate::request_rules::facts::RequestFactReads::for_policies(
+            policies
+                .iter()
+                .map(|policy| (policy.rego_source.as_str(), policy.id.as_str())),
+        );
 
         let mut guard = self
             .services
@@ -279,7 +277,7 @@ impl AppUseCase {
             load_errors,
             generation,
             unavailable: false,
-            reads_watchlist_facts,
+            fact_reads,
         };
         drop(guard);
 

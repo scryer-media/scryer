@@ -558,7 +558,8 @@ approve if {
         !harness
             .app
             .request_rules_engine_snapshot()
-            .reads_watchlist_facts
+            .fact_reads
+            .watchlist
     );
 
     let watching = create_rule(&harness, "Watchlisted titles", READS_WATCHLIST).await;
@@ -567,7 +568,8 @@ approve if {
         !harness
             .app
             .request_rules_engine_snapshot()
-            .reads_watchlist_facts
+            .fact_reads
+            .watchlist
     );
     harness
         .app
@@ -578,7 +580,70 @@ approve if {
         harness
             .app
             .request_rules_engine_snapshot()
-            .reads_watchlist_facts
+            .fact_reads
+            .watchlist
+    );
+}
+
+#[tokio::test]
+async fn the_engine_reads_only_the_fact_families_a_loaded_rule_may_use() {
+    use crate::request_rules::facts::RequestFactReads;
+    const READS_DEMAND: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.facts.other_requester_count > 1
+}
+"#;
+    const READS_LIBRARY_AND_QUALITY: &str = r#"package rules
+import rego.v1
+
+approve if {
+	input.facts.library_title_count < 100
+	input.observations.quality_profile_tiers.status == "known"
+}
+"#;
+    let harness = bootstrap_media_request_app();
+    let plain = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &plain.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert_eq!(
+        harness.app.request_rules_engine_snapshot().fact_reads,
+        RequestFactReads::NONE
+    );
+
+    let demand = create_rule(&harness, "Popular titles", READS_DEMAND).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &demand.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert_eq!(
+        harness.app.request_rules_engine_snapshot().fact_reads,
+        RequestFactReads {
+            catalog: true,
+            ..RequestFactReads::NONE
+        }
+    );
+
+    // A fact named under observations counts as read too.
+    let anything = create_rule(&harness, "Small libraries", READS_LIBRARY_AND_QUALITY).await;
+    harness
+        .app
+        .set_request_rule_enabled(&harness.manager, &anything.rule_set.id, true)
+        .await
+        .expect("enabling should succeed");
+    assert_eq!(
+        harness.app.request_rules_engine_snapshot().fact_reads,
+        RequestFactReads {
+            catalog: true,
+            library_title_count: true,
+            quality: true,
+            ..RequestFactReads::NONE
+        }
     );
 }
 

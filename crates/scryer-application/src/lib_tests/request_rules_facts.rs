@@ -15,7 +15,7 @@ use crate::media_requests::snapshot::{
     MediaRequestMetadataSnapshot, SnapshotReleaseDates, SnapshotSeriesShape,
 };
 use crate::request_rules::facts::{
-    RequestCatalogContext, RequestInputContext, RequestQualityContext,
+    RequestCatalogContext, RequestFactReads, RequestInputContext, RequestQualityContext,
     RequestRequesterHistoryContext, RequestStorageContext, RequestStorageFigures,
     RequestWatchlistContext, build_request_input, fact_reason,
 };
@@ -219,6 +219,7 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
                 available_percent: 25.0,
             }),
         },
+        fact_reads: RequestFactReads::ALL,
     }
 }
 
@@ -861,7 +862,7 @@ async fn assembled_request(
             full_snapshot(),
             evaluation_time(),
             None,
-            true,
+            RequestFactReads::ALL,
         )
         .await
         .expect("a list read failure must not stop the request from evaluating");
@@ -983,13 +984,13 @@ async fn assembled_document(
     harness: &super::MediaRequestTestHarness,
     draft: &crate::request_rules::RequestDraft,
 ) -> serde_json::Value {
-    assembled_document_reading(harness, draft, true).await
+    assembled_document_reading(harness, draft, RequestFactReads::ALL).await
 }
 
 async fn assembled_document_reading(
     harness: &super::MediaRequestTestHarness,
     draft: &crate::request_rules::RequestDraft,
-    read_watchlist: bool,
+    reads: RequestFactReads,
 ) -> serde_json::Value {
     let context = harness
         .app
@@ -1000,7 +1001,7 @@ async fn assembled_document_reading(
             full_snapshot(),
             evaluation_time(),
             None,
-            read_watchlist,
+            reads,
         )
         .await
         .expect("the request evaluates");
@@ -1134,8 +1135,17 @@ async fn skipping_the_watchlist_read_changes_only_the_watchlist_facts() {
     row.first_seen_at = evaluation_time() - chrono::Duration::days(9);
     harness.lists.insert_rows(vec![row]);
 
-    let read = assembled_document_reading(&harness, &watchlisted_draft(), true).await;
-    let skipped = assembled_document_reading(&harness, &watchlisted_draft(), false).await;
+    let read =
+        assembled_document_reading(&harness, &watchlisted_draft(), RequestFactReads::ALL).await;
+    let skipped = assembled_document_reading(
+        &harness,
+        &watchlisted_draft(),
+        RequestFactReads {
+            watchlist: false,
+            ..RequestFactReads::ALL
+        },
+    )
+    .await;
 
     // A rule that names a watchlist fact always gets the read, and with it the
     // same values as before.
@@ -1161,6 +1171,96 @@ async fn skipping_the_watchlist_read_changes_only_the_watchlist_facts() {
         document
     };
     assert_eq!(without_watchlist(read), without_watchlist(skipped));
+}
+
+/// Remove `names` from a document's facts and observations.
+fn without_facts(mut document: serde_json::Value, names: &[&str]) -> serde_json::Value {
+    for section in ["facts", "observations"] {
+        if let Some(object) = document
+            .get_mut(section)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for name in names {
+                object.remove(*name);
+            }
+        }
+    }
+    document
+}
+
+#[test]
+fn an_unread_family_reads_unknown_and_leaves_every_other_fact_alone() {
+    use crate::request_rules::facts::{
+        CATALOG_FACT_NAMES, LIBRARY_TITLE_COUNT_FACT_NAMES, LIST_EXCLUSION_FACT_NAMES,
+        QUALITY_FACT_NAMES, REQUESTER_HISTORY_FACT_NAMES, REQUESTER_TITLES_FACT_NAMES,
+        WATCHLIST_FACT_NAMES,
+    };
+    let full = document(context_with(full_snapshot()));
+    let families: [(&[&str], fn(&mut RequestFactReads)); 7] = [
+        (QUALITY_FACT_NAMES, |reads| reads.quality = false),
+        (CATALOG_FACT_NAMES, |reads| reads.catalog = false),
+        (REQUESTER_HISTORY_FACT_NAMES, |reads| {
+            reads.requester_history = false
+        }),
+        (LIBRARY_TITLE_COUNT_FACT_NAMES, |reads| {
+            reads.library_title_count = false
+        }),
+        (WATCHLIST_FACT_NAMES, |reads| reads.watchlist = false),
+        (LIST_EXCLUSION_FACT_NAMES, |reads| {
+            reads.list_exclusion = false
+        }),
+        (REQUESTER_TITLES_FACT_NAMES, |reads| {
+            reads.requester_titles = false
+        }),
+    ];
+    for (names, unread) in families {
+        let mut context = context_with(full_snapshot());
+        unread(&mut context.fact_reads);
+        let skipped = document(context);
+        for name in names {
+            // Every name is a real fact, known in the full document.
+            assert_eq!(status_of(&full, name), "known", "{name}");
+            assert_eq!(status_of(&skipped, name), "unknown", "{name}");
+            assert_eq!(
+                reason_of(&skipped, name),
+                fact_reason::NOT_YET_COLLECTED,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            without_facts(full.clone(), names),
+            without_facts(skipped, names)
+        );
+    }
+}
+
+#[tokio::test]
+async fn assembling_with_every_family_unread_matches_the_full_document_elsewhere() {
+    let harness = super::bootstrap_media_request_app();
+    let read = assembled_document(&harness, &watchlisted_draft()).await;
+    let skipped =
+        assembled_document_reading(&harness, &watchlisted_draft(), RequestFactReads::NONE).await;
+    let unread: Vec<&str> = [
+        crate::request_rules::facts::QUALITY_FACT_NAMES,
+        crate::request_rules::facts::CATALOG_FACT_NAMES,
+        crate::request_rules::facts::REQUESTER_HISTORY_FACT_NAMES,
+        crate::request_rules::facts::LIBRARY_TITLE_COUNT_FACT_NAMES,
+        crate::request_rules::facts::WATCHLIST_FACT_NAMES,
+        crate::request_rules::facts::LIST_EXCLUSION_FACT_NAMES,
+        crate::request_rules::facts::REQUESTER_TITLES_FACT_NAMES,
+    ]
+    .concat();
+    for name in &unread {
+        assert_eq!(
+            reason_of(&skipped, name),
+            fact_reason::NOT_YET_COLLECTED,
+            "{name}"
+        );
+    }
+    assert_eq!(
+        without_facts(read, &unread),
+        without_facts(skipped, &unread)
+    );
 }
 
 #[tokio::test]
