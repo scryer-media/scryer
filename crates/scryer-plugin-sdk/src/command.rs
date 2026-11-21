@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ConfigFieldDef, ListPluginAccountRequest, ListPluginAccountResponse, ListPluginFetchRequest,
     ListPluginFetchResponse, ListPluginHealthRequest, ListPluginHealthResponse,
+    MetadataPluginHealthRequest, MetadataPluginHealthResponse, MetadataPluginLookupRequest,
+    MetadataPluginLookupResponse, MetadataPluginSearchRequest, MetadataPluginSearchResponse,
     PluginCompletedDownload, PluginDownloadClientAddRequest, PluginDownloadClientAddResponse,
     PluginDownloadClientControlRequest, PluginDownloadClientMarkImportedRequest,
     PluginDownloadClientStatus, PluginDownloadItem, PluginDownloadScopedListRequest,
@@ -74,6 +76,7 @@ pub enum PluginCommand {
     Notification(PluginNotificationCommand),
     Subtitle(PluginSubtitleCommand),
     List(PluginListCommand),
+    Metadata(PluginMetadataCommand),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +87,7 @@ pub enum PluginCommandResult {
     Notification(PluginNotificationCommandResult),
     Subtitle(PluginSubtitleCommandResult),
     List(PluginListCommandResult),
+    Metadata(PluginMetadataCommandResult),
 }
 
 /// The existing action exports take an action name and arbitrary structured
@@ -327,6 +331,23 @@ pub enum PluginListCommandResult {
     Fetch(PluginResult<ListPluginFetchResponse>),
     Account(PluginResult<ListPluginAccountResponse>),
     Health(PluginResult<ListPluginHealthResponse>),
+}
+
+/// Metadata-provider operations.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "operation", content = "request", rename_all = "snake_case")]
+pub enum PluginMetadataCommand {
+    Lookup(MetadataPluginLookupRequest),
+    Search(MetadataPluginSearchRequest),
+    Health(MetadataPluginHealthRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "operation", content = "result", rename_all = "snake_case")]
+pub enum PluginMetadataCommandResult {
+    Lookup(PluginResult<MetadataPluginLookupResponse>),
+    Search(PluginResult<MetadataPluginSearchResponse>),
+    Health(PluginResult<MetadataPluginHealthResponse>),
 }
 
 #[cfg(test)]

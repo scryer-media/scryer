@@ -1881,6 +1881,13 @@ async fn bootstrap_application(
                 &disabled_builtin_plugins,
             ),
         )))
+        .with_metadata_plugin_provider(Arc::new(
+            scryer_plugins::DynamicMetadataPluginProvider::new(
+                // Installed metadata providers are loaded with every other
+                // family by `load_runtime_plugins_at_boot`.
+                scryer_plugins::build_metadata_plugin_provider_from_runtime_plugins(&[]),
+            ),
+        ))
         .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
         .with_tracked_download_handle(TrackedDownloadHandle::new(tracked_download_tx))
         .build();

@@ -38,6 +38,7 @@ pub struct AppServicesBuilder {
 pub(super) struct AppServicesBuildConfiguration {
     domain_events: bool,
     metadata_gateway: bool,
+    metadata_plugins: bool,
     library_scanner: bool,
     imports: bool,
     workflow_operations: bool,
@@ -736,6 +737,15 @@ impl AppServicesBuilder {
         self.services.lists.plugins = value;
         self
     }
+    /// The installed metadata-provider plugins.
+    pub fn with_metadata_plugin_provider(
+        mut self,
+        value: Arc<dyn crate::metadata_plugins::MetadataPluginProvider>,
+    ) -> Self {
+        self.services.library.metadata_plugins = value;
+        self.configured.metadata_plugins = true;
+        self
+    }
     pub fn with_list_account_auth_gateway(
         mut self,
         value: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
@@ -787,7 +797,16 @@ impl AppServicesBuilder {
         self.finish()
     }
 
-    fn finish(self) -> AppAssembly {
+    fn finish(mut self) -> AppAssembly {
+        // Metadata-provider plugins answer only what SMG can't.
+        if self.configured.metadata_plugins {
+            let library = &mut self.services.library;
+            library.metadata_gateway =
+                Arc::new(crate::metadata_plugins::PluginFallbackMetadataGateway::new(
+                    library.metadata_gateway.clone(),
+                    library.metadata_plugins.clone(),
+                ));
+        }
         AppAssembly {
             services: self.services,
             runtime: self.runtime,

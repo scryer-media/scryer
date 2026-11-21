@@ -48,6 +48,7 @@ pub(crate) enum PluginHostKind {
     ArchiveExtractor,
     DownloadClient,
     List,
+    Metadata,
     Notification,
     Subtitle,
 }
@@ -58,6 +59,7 @@ impl PluginHostKind {
             Self::ArchiveExtractor => "archive extractor plugin",
             Self::DownloadClient => "download client plugin",
             Self::List => "list plugin",
+            Self::Metadata => "metadata provider plugin",
             Self::Notification => "notification plugin",
             Self::Subtitle => "subtitle provider plugin",
         }

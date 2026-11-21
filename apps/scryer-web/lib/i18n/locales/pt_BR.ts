@@ -1782,6 +1782,7 @@ const pt_BR: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "Extração de arquivos",
   "settings.pluginCategoryNotification": "Notificação",
   "settings.pluginCategorySubtitleProvider": "Provedor de legendas",
+  "settings.pluginCategoryMetadataProvider": "Provedor de metadados",
   "settings.pluginOfficialOnly": "Apenas oficiais",
   "settings.pluginInstall": "Instalar",
   "settings.pluginInstalling": "Instalando…",

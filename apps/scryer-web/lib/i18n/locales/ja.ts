@@ -1731,6 +1731,7 @@ const ja: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "アーカイブ展開",
   "settings.pluginCategoryNotification": "通知",
   "settings.pluginCategorySubtitleProvider": "字幕プロバイダー",
+  "settings.pluginCategoryMetadataProvider": "メタデータプロバイダー",
   "settings.pluginOfficialOnly": "公式のみ",
   "settings.pluginInstall": "インストール",
   "settings.pluginInstalling": "インストール中…",

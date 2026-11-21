@@ -23,6 +23,7 @@ pub(crate) mod engine;
 mod error;
 mod family_component_host;
 pub(crate) mod list_component_host;
+pub(crate) mod metadata_component_host;
 pub(crate) mod module_cache;
 pub(crate) mod notification_component_host;
 mod sandbox;
@@ -39,6 +40,10 @@ pub(crate) use download_client_component_host::{
 pub(crate) use list_component_host::{
     ListComponentInvocation, list_component_describe, process_list_component,
     validate_list_component,
+};
+pub(crate) use metadata_component_host::{
+    MetadataComponentInvocation, metadata_component_describe, process_metadata_component,
+    validate_metadata_component,
 };
 pub(crate) use notification_component_host::{
     NotificationComponentInvocation, notification_component_describe,

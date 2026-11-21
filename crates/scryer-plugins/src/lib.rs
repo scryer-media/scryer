@@ -7,6 +7,7 @@ mod indexer_adapter;
 mod list_adapter;
 mod loader;
 mod login_session_carry;
+mod metadata_adapter;
 pub mod newznab_profiles;
 mod notification_adapter;
 mod plugin_http_host;
@@ -47,6 +48,10 @@ pub use loader::build_subtitle_plugin_provider;
 pub use loader::build_subtitle_plugin_provider_from_runtime_plugins;
 pub use loader::load_indexer_plugins;
 pub use loader::schedule_plugin_rehydration;
+pub use metadata_adapter::{
+    DynamicMetadataPluginProvider, WasmMetadataPluginProvider,
+    build_metadata_plugin_provider_from_runtime_plugins,
+};
 pub use plugin_http_host::PluginHttpRuntime;
 pub use plugin_http_host::shared_plugin_http_runtime;
 pub use runtime_features::PLUGIN_REQUIRED_FEATURE_RELAXED_SIMD;

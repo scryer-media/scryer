@@ -76,7 +76,7 @@
       "$ref": "#/$defs/SubtitleSyncAlignRequest"
     },
     "subtitle_sync_align_result": {
-      "$ref": "#/$defs/PluginResult32"
+      "$ref": "#/$defs/PluginResult35"
     },
     "subtitle_sync_process_request": {
       "$ref": "#/$defs/SubtitleSyncPluginProcessRequest"
@@ -124,7 +124,7 @@
       "$ref": "#/$defs/ArchivePluginProcessRequest"
     },
     "archive_process_result": {
-      "$ref": "#/$defs/PluginResult33"
+      "$ref": "#/$defs/PluginResult36"
     },
     "notification_request": {
       "$ref": "#/$defs/PluginNotificationRequest"
@@ -575,6 +575,19 @@
             }
           },
           "$ref": "#/$defs/ListProviderDescriptor",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "metadata_provider"
+            }
+          },
+          "$ref": "#/$defs/MetadataProviderDescriptor",
           "required": [
             "kind"
           ]
@@ -2798,6 +2811,87 @@
         "provider_type"
       ]
     },
+    "MetadataMediaKind": {
+      "description": "Media kinds a metadata provider may answer for.",
+      "type": "string",
+      "enum": [
+        "movie"
+      ]
+    },
+    "MetadataProviderCapabilities": {
+      "type": "object",
+      "properties": {
+        "search": {
+          "description": "The plugin answers `search` (title and year). Without it the host only\nasks by IMDb id.",
+          "type": "boolean",
+          "default": false
+        },
+        "health": {
+          "description": "The plugin answers `health` for its installation-wide settings.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "MetadataProviderDescriptor": {
+      "type": "object",
+      "properties": {
+        "provider_type": {
+          "type": "string"
+        },
+        "provider_aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "display_name": {
+          "description": "Shown beside results this provider supplied, such as `OMDb`.",
+          "type": "string"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MetadataMediaKind"
+          }
+        },
+        "capabilities": {
+          "$ref": "#/$defs/MetadataProviderCapabilities",
+          "default": {
+            "search": false,
+            "health": false
+          }
+        },
+        "config_fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigFieldDef"
+          }
+        },
+        "default_base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "provider_type",
+        "display_name"
+      ]
+    },
     "PluginCommandRequest": {
       "description": "One native command request.",
       "type": "object",
@@ -2892,6 +2986,22 @@
             },
             "command": {
               "$ref": "#/$defs/PluginListCommand"
+            }
+          },
+          "required": [
+            "family",
+            "command"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "family": {
+              "type": "string",
+              "const": "metadata"
+            },
+            "command": {
+              "$ref": "#/$defs/PluginMetadataCommand"
             }
           },
           "required": [
@@ -7083,6 +7193,107 @@
     "ListPluginHealthRequest": {
       "type": "object"
     },
+    "PluginMetadataCommand": {
+      "description": "Metadata-provider operations.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "lookup"
+            },
+            "request": {
+              "$ref": "#/$defs/MetadataPluginLookupRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "search"
+            },
+            "request": {
+              "$ref": "#/$defs/MetadataPluginSearchRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "health"
+            },
+            "request": {
+              "$ref": "#/$defs/MetadataPluginHealthRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "request"
+          ]
+        }
+      ]
+    },
+    "MetadataPluginLookupRequest": {
+      "description": "One title by its IMDb id.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MetadataMediaKind"
+        },
+        "imdb_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "imdb_id"
+      ]
+    },
+    "MetadataPluginSearchRequest": {
+      "description": "Titles by name, for a provider whose `search` capability is on.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MetadataMediaKind"
+        },
+        "query": {
+          "type": "string"
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "limit": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "query",
+        "limit"
+      ]
+    },
+    "MetadataPluginHealthRequest": {
+      "type": "object"
+    },
     "PluginCommandResponse": {
       "description": "One native command response.",
       "type": "object",
@@ -7177,6 +7388,22 @@
             },
             "result": {
               "$ref": "#/$defs/PluginListCommandResult"
+            }
+          },
+          "required": [
+            "family",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "family": {
+              "type": "string",
+              "const": "metadata"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginMetadataCommandResult"
             }
           },
           "required": [
@@ -10105,6 +10332,287 @@
         "healthy"
       ]
     },
+    "PluginMetadataCommandResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "lookup"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginResult21"
+            }
+          },
+          "required": [
+            "operation",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "search"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginResult22"
+            }
+          },
+          "required": [
+            "operation",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "health"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginResult23"
+            }
+          },
+          "required": [
+            "operation",
+            "result"
+          ]
+        }
+      ]
+    },
+    "PluginResult21": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/MetadataPluginLookupResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MetadataPluginLookupResponse": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "description": "`None` when the provider has no title under that id.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetadataPluginTitle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "MetadataPluginTitle": {
+      "description": "One title as the provider knows it. Dates are `YYYY-MM-DD`.",
+      "type": "object",
+      "properties": {
+        "imdb_id": {
+          "description": "`tt` followed by digits.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "release_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "genres": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runtime_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "poster_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content_rating": {
+          "description": "The certification, such as `PG-13`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "imdb_rating": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "imdb_votes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "directors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cast": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "original_language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "imdb_id",
+        "title"
+      ]
+    },
+    "PluginResult22": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/MetadataPluginSearchResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MetadataPluginSearchResponse": {
+      "type": "object",
+      "properties": {
+        "titles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MetadataPluginTitle"
+          },
+          "default": []
+        }
+      }
+    },
+    "PluginResult23": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/MetadataPluginHealthResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MetadataPluginHealthResponse": {
+      "type": "object",
+      "properties": {
+        "healthy": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "healthy"
+      ]
+    },
     "PluginHostRequest": {
       "description": "A single request over the native host-service transport.",
       "oneOf": [
@@ -10552,7 +11060,7 @@
           "type": "object",
           "properties": {
             "ConfigGet": {
-              "$ref": "#/$defs/PluginResult21"
+              "$ref": "#/$defs/PluginResult24"
             }
           },
           "required": [
@@ -10564,7 +11072,7 @@
           "type": "object",
           "properties": {
             "StateGet": {
-              "$ref": "#/$defs/PluginResult22"
+              "$ref": "#/$defs/PluginResult25"
             }
           },
           "required": [
@@ -10576,7 +11084,7 @@
           "type": "object",
           "properties": {
             "StateSet": {
-              "$ref": "#/$defs/PluginResult23"
+              "$ref": "#/$defs/PluginResult26"
             }
           },
           "required": [
@@ -10588,7 +11096,7 @@
           "type": "object",
           "properties": {
             "StateDelete": {
-              "$ref": "#/$defs/PluginResult23"
+              "$ref": "#/$defs/PluginResult26"
             }
           },
           "required": [
@@ -10600,7 +11108,7 @@
           "type": "object",
           "properties": {
             "Http": {
-              "$ref": "#/$defs/PluginResult24"
+              "$ref": "#/$defs/PluginResult27"
             }
           },
           "required": [
@@ -10612,7 +11120,7 @@
           "type": "object",
           "properties": {
             "SocketOpen": {
-              "$ref": "#/$defs/PluginResult25"
+              "$ref": "#/$defs/PluginResult28"
             }
           },
           "required": [
@@ -10624,7 +11132,7 @@
           "type": "object",
           "properties": {
             "SocketRead": {
-              "$ref": "#/$defs/PluginResult26"
+              "$ref": "#/$defs/PluginResult29"
             }
           },
           "required": [
@@ -10636,7 +11144,7 @@
           "type": "object",
           "properties": {
             "SocketWrite": {
-              "$ref": "#/$defs/PluginResult27"
+              "$ref": "#/$defs/PluginResult30"
             }
           },
           "required": [
@@ -10648,7 +11156,7 @@
           "type": "object",
           "properties": {
             "SocketStartTls": {
-              "$ref": "#/$defs/PluginResult28"
+              "$ref": "#/$defs/PluginResult31"
             }
           },
           "required": [
@@ -10660,7 +11168,7 @@
           "type": "object",
           "properties": {
             "SocketClose": {
-              "$ref": "#/$defs/PluginResult29"
+              "$ref": "#/$defs/PluginResult32"
             }
           },
           "required": [
@@ -10672,7 +11180,7 @@
           "type": "object",
           "properties": {
             "ProcessExec": {
-              "$ref": "#/$defs/PluginResult30"
+              "$ref": "#/$defs/PluginResult33"
             }
           },
           "required": [
@@ -10684,7 +11192,7 @@
           "type": "object",
           "properties": {
             "ArchiveExtract": {
-              "$ref": "#/$defs/PluginResult31"
+              "$ref": "#/$defs/PluginResult34"
             }
           },
           "required": [
@@ -10694,7 +11202,7 @@
         }
       ]
     },
-    "PluginResult21": {
+    "PluginResult24": {
       "oneOf": [
         {
           "type": "object",
@@ -10734,7 +11242,7 @@
         }
       }
     },
-    "PluginResult22": {
+    "PluginResult25": {
       "oneOf": [
         {
           "type": "object",
@@ -10780,7 +11288,7 @@
         }
       }
     },
-    "PluginResult23": {
+    "PluginResult26": {
       "oneOf": [
         {
           "type": "object",
@@ -10819,7 +11327,7 @@
         "changed"
       ]
     },
-    "PluginResult24": {
+    "PluginResult27": {
       "oneOf": [
         {
           "type": "object",
@@ -10878,7 +11386,7 @@
         "status"
       ]
     },
-    "PluginResult25": {
+    "PluginResult28": {
       "oneOf": [
         {
           "type": "object",
@@ -10919,7 +11427,7 @@
         "handle"
       ]
     },
-    "PluginResult26": {
+    "PluginResult29": {
       "oneOf": [
         {
           "type": "object",
@@ -10962,7 +11470,7 @@
         "eof"
       ]
     },
-    "PluginResult27": {
+    "PluginResult30": {
       "oneOf": [
         {
           "type": "object",
@@ -11003,7 +11511,7 @@
         "bytes_written"
       ]
     },
-    "PluginResult28": {
+    "PluginResult31": {
       "oneOf": [
         {
           "type": "object",
@@ -11044,7 +11552,7 @@
         "handle"
       ]
     },
-    "PluginResult29": {
+    "PluginResult32": {
       "oneOf": [
         {
           "type": "object",
@@ -11083,7 +11591,7 @@
         "closed"
       ]
     },
-    "PluginResult30": {
+    "PluginResult33": {
       "oneOf": [
         {
           "type": "object",
@@ -11143,7 +11651,7 @@
         "exit_code"
       ]
     },
-    "PluginResult31": {
+    "PluginResult34": {
       "oneOf": [
         {
           "type": "object",
@@ -11501,7 +12009,7 @@
         "format"
       ]
     },
-    "PluginResult32": {
+    "PluginResult35": {
       "oneOf": [
         {
           "type": "object",
@@ -11698,7 +12206,7 @@
         }
       ]
     },
-    "PluginResult33": {
+    "PluginResult36": {
       "oneOf": [
         {
           "type": "object",

@@ -1,0 +1,38 @@
+package scryer:metadata@1.0.0;
+
+/// The metadata-provider contract, revision 1.0.
+///
+/// # Payloads
+///
+/// Both exports carry UTF-8 JSON, as the list world does: `describe` returns
+/// a `PluginDescriptor` document whose provider is
+/// `ProviderDescriptor::MetadataProvider`, and `process` exchanges a
+/// `scryer_plugin_sdk::command::PluginCommandRequest` for a
+/// `PluginCommandResponse` carrying `PluginCommand::Metadata` and its
+/// `lookup` / `search` / `health` operations.
+///
+/// # When the host calls it
+///
+/// Only for titles the metadata gateway could not answer, so a provider whose
+/// upstream counts requests is spent on genuine gaps. A provider keeps its
+/// own request budget and answer cache through `state-get` / `state-cas`.
+///
+/// # Imports
+///
+/// `scryer:host/services@1.0.0` is the encoded door (config, plugin state,
+/// HTTP) and `scryer:runtime/host@1.0.0` the typed, family-neutral surface
+/// (async `http`, `sleep`, clocks, deadline, state compare-and-swap).
+/// Metadata providers receive no filesystem preopens.
+world metadata-provider {
+  import scryer:host/services@1.0.0;
+  import scryer:runtime/host@1.0.0;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: async func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

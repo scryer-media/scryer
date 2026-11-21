@@ -76,6 +76,8 @@ pub(crate) enum PluginRuntimeBacking {
     Notification,
     /// `scryer:lists/list-provider@1.0.0`.
     List,
+    /// `scryer:metadata/metadata-provider@1.0.0`.
+    Metadata,
 }
 
 /// The operator-facing diagnostic for a pre-component artifact of `provider`'s
@@ -110,6 +112,10 @@ pub(crate) fn core_module_rejected(provider: &ProviderDescriptor) -> String {
         ProviderDescriptor::ListProvider(_) => {
             ("list provider plugins", "scryer:lists/list-provider@1.0.0")
         }
+        ProviderDescriptor::MetadataProvider(_) => (
+            "metadata provider plugins",
+            "scryer:metadata/metadata-provider@1.0.0",
+        ),
     };
     format!(
         "{family} must be WASI Preview 2 components (world {world}); this artifact is a legacy \
@@ -138,6 +144,7 @@ impl PluginRuntimeBacking {
             ProviderDescriptor::DownloadClient(_) => Self::DownloadClient,
             ProviderDescriptor::Notification(_) => Self::Notification,
             ProviderDescriptor::ListProvider(_) => Self::List,
+            ProviderDescriptor::MetadataProvider(_) => Self::Metadata,
         })
     }
 }

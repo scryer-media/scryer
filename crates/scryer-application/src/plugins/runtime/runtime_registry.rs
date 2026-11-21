@@ -90,6 +90,17 @@ impl AppUseCase {
                         AppError::Repository(format!("failed to remove list provider plugin: {e}"))
                     })?;
             }
+            "metadata_provider" => {
+                self.services
+                    .library
+                    .metadata_plugins
+                    .remove_runtime_plugin(provider_type)
+                    .map_err(|e| {
+                        AppError::Repository(format!(
+                            "failed to remove metadata provider plugin: {e}"
+                        ))
+                    })?;
+            }
             other => {
                 return Err(AppError::validation_refused(crate::error_reasons::plugins::TYPE_RUNTIME_REMOVAL_UNSUPPORTED, format!(
                     "unsupported plugin_type '{}' for runtime removal",

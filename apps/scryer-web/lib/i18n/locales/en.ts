@@ -7697,6 +7697,7 @@ const en: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "Archive Extraction",
   "settings.pluginCategoryNotification": "Notification",
   "settings.pluginCategorySubtitleProvider": "Subtitle Provider",
+  "settings.pluginCategoryMetadataProvider": "Metadata Provider",
   "settings.pluginOfficialOnly": "Official only",
   "settings.pluginInstall": "Install",
   "settings.pluginInstalling": "Installing…",

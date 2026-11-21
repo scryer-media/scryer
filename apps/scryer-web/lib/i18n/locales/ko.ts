@@ -1702,6 +1702,7 @@ const ko: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "아카이브 추출",
   "settings.pluginCategoryNotification": "알림",
   "settings.pluginCategorySubtitleProvider": "자막 제공자",
+  "settings.pluginCategoryMetadataProvider": "메타데이터 제공자",
   "settings.pluginOfficialOnly": "공식만",
   "settings.pluginInstall": "설치",
   "settings.pluginInstalling": "설치 중…",

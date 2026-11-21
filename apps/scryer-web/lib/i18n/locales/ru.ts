@@ -2975,6 +2975,7 @@ const ru: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "Распаковка архивов",
   "settings.pluginCategoryNotification": "Уведомления",
   "settings.pluginCategorySubtitleProvider": "Провайдер субтитров",
+  "settings.pluginCategoryMetadataProvider": "Провайдер метаданных",
   "settings.pluginOfficialOnly": "Только официальные",
   "settings.pluginInstall": "Установить",
   "settings.pluginInstalling": "Установка…",

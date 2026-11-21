@@ -2627,6 +2627,7 @@ const nl: LocaleDictionary = {
   "settings.pluginCategoryArchiveExtractor": "Archiefextractie",
   "settings.pluginCategoryNotification": "Notificatie",
   "settings.pluginCategorySubtitleProvider": "Ondertitelprovider",
+  "settings.pluginCategoryMetadataProvider": "Metadataprovider",
   "settings.pluginOfficialOnly": "Alleen officieel",
   "settings.pluginInstall": "Installeren",
   "settings.pluginInstalling": "Installeren…",
