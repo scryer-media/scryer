@@ -10087,6 +10087,7 @@ const en: LocaleDictionary = {
   "settings.lifecycleRuleTemplatePlaceholder": "Start from a template",
   "settings.lifecycleFileDeleted": "Deleted",
   "settings.lifecycleFilePending": "Pending",
+  "settings.lifecycleFileColPath": "File",
   "settings.lifecycleFileResults": "File results",
   "settings.lifecycleFileProgress":
     "{{completed}} deleted · {{remaining}} remaining",

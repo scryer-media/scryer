@@ -7,6 +7,7 @@ import { useState } from "react";
 import type * as React from "react";
 import { Ban, Play, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
@@ -50,7 +51,10 @@ import {
 } from "@/lib/utils/lifecycle-rule-sets";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { parseLifecycleFileResults } from "@/lib/utils/lifecycle-file-results";
+import {
+  parseLifecycleFileResults,
+  type LifecycleFileResults as ParsedLifecycleFileResults,
+} from "@/lib/utils/lifecycle-file-results";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { InfoHelp } from "@/components/common/info-help";
 import {
@@ -118,7 +122,7 @@ function LifecycleSequenceProgress({
     progress.map((entry) => [entry.step.id, entry]),
   );
   return (
-    <ol className="mt-1 space-y-1 text-xs text-muted-foreground">
+    <ol className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {sequence.steps.map((step, index) => {
         const entry = progressByStepId.get(step.id);
         const acceptedReceipt = entry?.receipts.find(
@@ -807,6 +811,15 @@ export function LifecycleRunsPanel({
     ruleSetRecords.map((record) => [record.id, record.name]),
   );
   const everyRule = runScopeRuleSetId === LIFECYCLE_FILTER_ALL;
+  const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const toggleRun = (id: string) =>
+    setExpandedRunIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   return (
     <div id="settings-lifecycle-runs" className="space-y-8">
@@ -1000,6 +1013,7 @@ export function LifecycleRunsPanel({
           >
             <TableHeader>
               <TableRow>
+                <TableHead className="w-[1%]" />
                 <TableHead className="whitespace-nowrap">
                   {t("settings.lifecycleRunColStarted")}
                 </TableHead>
@@ -1013,45 +1027,12 @@ export function LifecycleRunsPanel({
             </TableHeader>
             <TableBody>
               {actionRuns.map((run) => (
-                <TableRow
+                <ActionRunRows
                   key={run.id}
-                  data-ui="settings-table-row"
-                  id={selectorId("settings-lifecycle-action-run-row", run.id)}
-                  className="[&>td]:align-top"
-                >
-                  <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
-                    {timestamp(run.startedAt, dateTimeFormat)}
-                  </TableCell>
-                  <TableCell>
-                    <SubjectCell
-                      titleName={run.titleName}
-                      subjectKind={run.subjectKind}
-                      subjectLabel={run.subjectLabel}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-[13px] text-[var(--scry-ink2)]">
-                      <ActionKindLabel kind={run.actionKind} />
-                    </span>
-                    <LifecycleSequenceProgress
-                      sequence={run.actionSequence}
-                      progress={run.sequenceSteps}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <RunOutcome
-                      status={run.status}
-                      holdReason={run.holdReason}
-                      causeCode={run.causeCode}
-                      error={run.error}
-                    >
-                      <LifecycleFileResults detail={run.detail} />
-                    </RunOutcome>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-[var(--scry-muted)]">
-                    {run.attempt}
-                  </TableCell>
-                </TableRow>
+                  run={run}
+                  expanded={expandedRunIds.has(run.id)}
+                  onToggle={() => toggleRun(run.id)}
+                />
               ))}
             </TableBody>
           </Table>
@@ -1177,64 +1158,162 @@ export function LifecycleExclusionsPanel({
   );
 }
 
-function LifecycleFileResults({ detail }: { detail: string }) {
+/// One action run. A run that changed files gets a disclosure that opens the
+/// file table under the row, so the row itself stays one line tall.
+function ActionRunRows({
+  run,
+  expanded,
+  onToggle,
+}: {
+  run: LifecycleActionRun;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const results = parseLifecycleFileResults(detail);
-  if (!results) return null;
+  const results = parseLifecycleFileResults(run.detail);
+  const detailId = selectorId("settings-lifecycle-action-run-detail", run.id);
   return (
-    <details className="group whitespace-normal">
-      <summary className="cursor-pointer text-xs font-medium text-[var(--scry-accent-text)] hover:underline">
-        {t("settings.lifecycleFileResults")} ({results.files.length})
-      </summary>
-      <div className="mt-2 space-y-1.5 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-2.5">
+    <>
+      <TableRow
+        data-ui="settings-table-row"
+        id={selectorId("settings-lifecycle-action-run-row", run.id)}
+        className={cn("[&>td]:align-top", expanded && "border-b-0")}
+      >
+        <TableCell className="w-[1%] pr-0">
+          {results ? (
+            <TableDisclosureButton
+              id={selectorId("settings-lifecycle-action-run-toggle", run.id)}
+              expanded={expanded}
+              aria-controls={expanded ? detailId : undefined}
+              aria-label={t("settings.lifecycleFileResults")}
+              onClick={onToggle}
+            />
+          ) : null}
+        </TableCell>
+        <TableCell className="whitespace-nowrap text-[var(--scry-muted)]">
+          {timestamp(run.startedAt, dateTimeFormat)}
+        </TableCell>
+        <TableCell>
+          <SubjectCell
+            titleName={run.titleName}
+            subjectKind={run.subjectKind}
+            subjectLabel={run.subjectLabel}
+          />
+        </TableCell>
+        <TableCell>
+          {run.actionSequence === null ? (
+            <span className="text-[13px] text-[var(--scry-ink2)]">
+              <ActionKindLabel kind={run.actionKind} />
+            </span>
+          ) : null}
+          <LifecycleSequenceProgress
+            sequence={run.actionSequence}
+            progress={run.sequenceSteps}
+          />
+        </TableCell>
+        <TableCell>
+          <RunOutcome
+            status={run.status}
+            holdReason={run.holdReason}
+            causeCode={run.causeCode}
+            error={run.error}
+          >
+            {results ? (
+              <span className="whitespace-nowrap text-xs text-[var(--scry-muted)]">
+                {lifecycleFileResultsSummary(results, t)}
+              </span>
+            ) : null}
+          </RunOutcome>
+        </TableCell>
+        <TableCell className="text-right tabular-nums text-[var(--scry-muted)]">
+          {run.attempt}
+        </TableCell>
+      </TableRow>
+      {expanded && results ? (
+        <TableRow id={detailId} className="bg-[var(--scry-surfC)]">
+          <TableCell />
+          <TableCell colSpan={5}>
+            <LifecycleFileResultsTable results={results} />
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  );
+}
+
+function lifecycleFileResultsSummary(
+  results: ParsedLifecycleFileResults,
+  t: Translate,
+): string {
+  const progress = t("settings.lifecycleFileProgress", {
+    completed: results.completedFileCount,
+    remaining: results.remainingFileCount,
+  });
+  return results.totalSizeBytes != null
+    ? `${t("settings.lifecycleFileSummary", {
+        count: results.files.length,
+        size: formatBytes(results.totalSizeBytes),
+      })} · ${progress}`
+    : progress;
+}
+
+function LifecycleFileResultsTable({
+  results,
+}: {
+  results: ParsedLifecycleFileResults;
+}) {
+  const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
+  return (
+    <div className="space-y-1.5 py-1">
+      {results.graceDeadline ? (
         <p className="text-xs text-[var(--scry-muted)]">
-          {results.totalSizeBytes != null
-            ? `${t("settings.lifecycleFileSummary", {
-                count: results.files.length,
-                size: formatBytes(results.totalSizeBytes),
-              })} · `
-            : null}
-          {t("settings.lifecycleFileProgress", {
-            completed: results.completedFileCount,
-            remaining: results.remainingFileCount,
+          {t("settings.lifecyclePreviewDue", {
+            time: formatUiDateTime(results.graceDeadline, dateTimeFormat),
           })}
         </p>
-        {results.graceDeadline ? (
-          <p className="text-xs text-[var(--scry-muted)]">
-            {t("settings.lifecyclePreviewDue", {
-              time: formatUiDateTime(results.graceDeadline, dateTimeFormat),
-            })}
-          </p>
-        ) : null}
-        <ul className="space-y-1">
+      ) : null}
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-[var(--scry-muted)]">
+            <th className="pb-1 pr-4 font-medium">
+              {t("settings.lifecycleFileColPath")}
+            </th>
+            <th className="w-[1%] whitespace-nowrap pb-1 font-medium">
+              {t("label.status")}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
           {results.files.map((file) => (
-            <li
+            <tr
               key={file.fileId}
-              className="flex flex-col gap-0.5 border-t border-[var(--scry-border3)] pt-1 text-xs first:border-t-0 first:pt-0"
+              className="border-t border-[var(--scry-border3)] align-top"
             >
-              <span
+              <td
                 data-code-font
-                className="break-all text-[var(--scry-ink2)]"
+                className="break-all py-1 pr-4 text-[var(--scry-ink2)]"
               >
                 {file.filePath ?? file.fileId}
-              </span>
-              <span
-                className={
+              </td>
+              <td
+                className={cn(
+                  "py-1",
                   file.error
                     ? "text-[var(--scry-danger-text)]"
-                    : "text-[var(--scry-muted)]"
-                }
+                    : "whitespace-nowrap text-[var(--scry-muted)]",
+                )}
               >
                 {file.error ??
                   (file.completed
                     ? t("settings.lifecycleFileDeleted")
                     : t("settings.lifecycleFilePending"))}
-              </span>
-            </li>
+              </td>
+            </tr>
           ))}
-        </ul>
-      </div>
-    </details>
+        </tbody>
+      </table>
+    </div>
   );
 }
