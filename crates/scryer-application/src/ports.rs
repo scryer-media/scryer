@@ -10345,6 +10345,28 @@ pub trait MediaFileRepository: Send + Sync {
         title_id: &str,
     ) -> AppResult<Vec<String>>;
 
+    /// [`Self::list_series_movie_link_ids_with_files_for_title`] for several
+    /// titles: every link id any of them answers, each once. Any number of
+    /// ids is accepted; SQL stores read them together.
+    async fn list_series_movie_link_ids_with_files_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        let mut link_ids = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for title_id in title_ids {
+            for link_id in self
+                .list_series_movie_link_ids_with_files_for_title(title_id)
+                .await?
+            {
+                if seen.insert(link_id.clone()) {
+                    link_ids.push(link_id);
+                }
+            }
+        }
+        Ok(link_ids)
+    }
+
     async fn list_title_media_size_summaries(
         &self,
         title_ids: &[String],

@@ -734,6 +734,34 @@ impl MediaFileStore {
         fetch_media_files(self.datastore.read_exec(), &sql, &args).await
     }
 
+    async fn list_series_movie_link_ids_with_files_for_titles_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let sql = format!(
+            "SELECT DISTINCT fsmlm.series_movie_link_id
+             FROM media_files mf
+             INNER JOIN file_series_movie_link_map fsmlm ON fsmlm.file_id = mf.id
+             WHERE mf.title_id IN ({placeholders})
+               AND {}",
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter()
+            .map(|row| row.text("series_movie_link_id"))
+            .collect()
+    }
+
     async fn list_title_media_size_summaries_statement(
         &self,
         title_ids: &[String],
@@ -1686,6 +1714,26 @@ impl MediaFileRepository for MediaFileStore {
         rows.iter()
             .map(|row| row.text("series_movie_link_id"))
             .collect()
+    }
+
+    async fn list_series_movie_link_ids_with_files_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<String>> {
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut link_ids = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for chunk in title_ids.chunks(per_statement) {
+            for link_id in self
+                .list_series_movie_link_ids_with_files_for_titles_statement(chunk)
+                .await?
+            {
+                if seen.insert(link_id.clone()) {
+                    link_ids.push(link_id);
+                }
+            }
+        }
+        Ok(link_ids)
     }
 
     async fn list_title_media_size_summaries(
@@ -4356,6 +4404,111 @@ mod tests {
         expected.sort();
         assert_eq!(paths, expected);
         assert!(files.list_media_file_paths(&[]).await.unwrap().is_empty());
+    }
+
+    /// The several-title read answers every link id the one-title read
+    /// answers for any of the titles, each once.
+    #[tokio::test]
+    async fn series_movie_links_with_files_read_for_several_titles_as_one_by_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("links.db").to_string_lossy())
+            .await
+            .unwrap();
+        for id in ["series-a", "series-b", "series-c"] {
+            title_store(&services)
+                .create(make_test_series_title(id))
+                .await
+                .unwrap();
+        }
+        let datastore = services.datastore();
+        execute_write(
+            &datastore,
+            "test_movie_entity",
+            "INSERT INTO movie_entities (id, title, created_at, updated_at)
+             VALUES ('entity-1', 'Synthetic Interlude', '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z')",
+            vec![],
+        )
+        .await
+        .unwrap();
+        for (link, series) in [
+            ("link-a", "series-a"),
+            ("link-b", "series-b"),
+            ("link-c", "series-c"),
+        ] {
+            execute_write(
+                &datastore,
+                "test_series_movie_link",
+                "INSERT INTO series_movie_links (id, series_title_id, movie_entity_id,
+                                                 created_at, updated_at)
+                 VALUES ({}, {}, 'entity-1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                vec![SqlArg::Text(link.into()), SqlArg::Text(series.into())],
+            )
+            .await
+            .unwrap();
+        }
+        let files = media_file_store(&services);
+        // Series a's file carries its own link and series b's; series b's
+        // carries b's; series c has a link but no file.
+        for (series, links) in [
+            ("series-a", vec!["link-a", "link-b"]),
+            ("series-b", vec!["link-b"]),
+        ] {
+            let file_id = files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: series.into(),
+                    file_path: format!("/synthetic/{series}.mkv"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            for link in links {
+                execute_write(
+                    &datastore,
+                    "test_file_link",
+                    "INSERT INTO file_series_movie_link_map (file_id, series_movie_link_id)
+                     VALUES ({}, {})",
+                    vec![SqlArg::Text(file_id.clone()), SqlArg::Text(link.into())],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let titles: Vec<String> = ["series-a", "series-b", "series-c"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let mut one_by_one = std::collections::BTreeSet::new();
+        for title in &titles {
+            one_by_one.extend(
+                files
+                    .list_series_movie_link_ids_with_files_for_title(title)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let together = files
+            .list_series_movie_link_ids_with_files_for_titles(&titles)
+            .await
+            .unwrap();
+        let unique: std::collections::BTreeSet<String> = together.iter().cloned().collect();
+        assert_eq!(
+            together.len(),
+            unique.len(),
+            "each link id once: {together:?}"
+        );
+        assert_eq!(unique, one_by_one);
+        assert_eq!(
+            unique.into_iter().collect::<Vec<_>>(),
+            vec!["link-a".to_string(), "link-b".to_string()]
+        );
+        assert!(
+            files
+                .list_series_movie_link_ids_with_files_for_titles(&[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

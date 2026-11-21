@@ -411,6 +411,169 @@ async fn candidate_listing_subjects_match_evaluation_subjects_and_evaluation_sti
     }
 }
 
+/// The narrower execution resolvers answer what the full resolver answers for
+/// the fields each caller reads: the manifest resolver the label, files and
+/// ambiguity without probing; the monitoring resolver the monitoring; and the
+/// shared-inventory resolver the whole subject and its title.
+#[tokio::test]
+async fn narrow_subject_resolvers_match_the_full_resolver() {
+    use crate::lib_tests::lifecycle_title_completion::{add_episode_file, season_and_episode};
+    use crate::lifecycle_rules::subjects::{LifecycleSubject, presence_probes};
+
+    let fixture = title_fixture("Ferrowmoor", MediaFacet::Series).await;
+    let (first_season, present) = season_and_episode(&fixture, 1, 1, "2024-01-01").await;
+    let (_, missing) = season_and_episode(&fixture, 2, 1, "2024-02-01").await;
+    let (_, shared) = season_and_episode(&fixture, 3, 1, "2024-03-01").await;
+    add_episode_file(&fixture, &present, "Ferrowmoor/S01E01.mkv").await;
+    add_episode_file(&fixture, &missing, "Ferrowmoor/S02E01.mkv").await;
+    let spanning = add_episode_file(&fixture, &shared, "Ferrowmoor/S03E01.mkv").await;
+    // One file covering an episode of two seasons is ambiguous for each.
+    fixture
+        .execution
+        .app
+        .services
+        .library
+        .media_files
+        .link_file_to_episode(&spanning, &present.id)
+        .await
+        .expect("link second episode");
+    std::fs::remove_file(fixture.root.join("Ferrowmoor/S02E01.mkv")).expect("remove one file");
+    let app = &fixture.execution.app;
+    app.set_episode_monitored(&fixture.execution.user, &missing.id, false)
+        .await
+        .expect("unmonitor one episode");
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&fixture.title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("read title files");
+
+    let whole = |subject: &LifecycleSubject| {
+        format!(
+            "{:?} {} {} {:?} {:?} {:?} {} {} {} {} {:?}",
+            subject.kind,
+            subject.id,
+            subject.label,
+            subject.collection.as_ref().map(|collection| &collection.id),
+            subject.episodes,
+            subject.files,
+            subject.episode_file_count,
+            subject.episode_file_count_unresolved,
+            subject.ambiguous_files,
+            subject.monitored,
+            subject
+                .inventory
+                .as_ref()
+                .map(|inventory| inventory.comparable()),
+        )
+    };
+    let manifest = |subject: &LifecycleSubject| {
+        (
+            subject.label.clone(),
+            subject
+                .files
+                .iter()
+                .map(|file| file.id.clone())
+                .collect::<Vec<_>>(),
+            subject.ambiguous_files,
+        )
+    };
+    let monitoring = |subject: &LifecycleSubject| {
+        (
+            subject.id.clone(),
+            subject.monitored,
+            subject
+                .episodes
+                .iter()
+                .map(|episode| (episode.id.clone(), episode.monitored))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let mut subjects = vec![("title", title.id.clone())];
+    for collection in app
+        .services
+        .catalog
+        .shows
+        .list_collections_for_title(&title.id)
+        .await
+        .expect("read seasons")
+    {
+        subjects.push(("season", collection.id));
+    }
+    for episode in [&present, &missing, &shared] {
+        subjects.push(("episode", episode.id.clone()));
+    }
+    assert!(subjects.iter().any(|(_, id)| *id == first_season.id));
+    for (kind, id) in &subjects {
+        let full = app
+            .lifecycle_resolve_subject(kind, id, &title, &files)
+            .await
+            .expect("full subject");
+        let full_bare = app
+            .lifecycle_resolve_subject(kind, id, &title, &[])
+            .await
+            .expect("full subject without title files");
+
+        let probes = presence_probes::under(&fixture.root);
+        let files_only = app
+            .lifecycle_resolve_subject_files(kind, id, &title)
+            .await
+            .expect("manifest subject");
+        assert_eq!(
+            presence_probes::under(&fixture.root),
+            probes,
+            "{kind} manifest probes nothing"
+        );
+        assert_eq!(manifest(&files_only), manifest(&full_bare), "{kind} {id}");
+        let monitored = app
+            .lifecycle_resolve_subject_monitoring(kind, id, &title)
+            .await
+            .expect("monitoring subject");
+        assert_eq!(monitoring(&monitored), monitoring(&full), "{kind} {id}");
+
+        let (subject, title_subject) = app
+            .lifecycle_resolve_subject_with_title(kind, id, &title, &files, true)
+            .await
+            .expect("shared subject");
+        assert_eq!(whole(&subject), whole(&full), "{kind} {id}");
+        match title_subject {
+            None => assert_eq!(*kind, "title"),
+            Some(title_subject) => {
+                let alone = app
+                    .lifecycle_resolve_subject("title", &title.id, &title, &files)
+                    .await
+                    .expect("title subject");
+                assert_eq!(
+                    whole(&title_subject.expect("shared title subject")),
+                    whole(&alone),
+                    "{kind} {id} title"
+                );
+            }
+        }
+    }
+    // A subject the title no longer holds is not found the same way.
+    let gone = app
+        .lifecycle_resolve_subject_with_title("episode", "no-such-episode", &title, &files, true)
+        .await
+        .expect_err("unknown episode");
+    let gone_full = app
+        .lifecycle_resolve_subject("episode", "no-such-episode", &title, &files)
+        .await
+        .expect_err("unknown episode");
+    assert_eq!(gone.to_string(), gone_full.to_string());
+    assert_eq!(gone.validation_reason(), gone_full.validation_reason());
+}
+
 #[tokio::test]
 async fn evaluation_pass_probes_each_file_once_and_sees_what_a_fresh_load_sees() {
     use crate::lib_tests::lifecycle_title_completion::{add_episode_file, season_and_episode};
@@ -642,7 +805,10 @@ async fn a_page_of_inventories_read_together_matches_loading_each_title() {
 
     // Preview's form: no pass memo.
     let batched = app
-        .lifecycle_load_title_episode_inventories(&titles, None)
+        .lifecycle_load_title_episode_inventories(
+            &titles,
+            crate::lifecycle_rules::subjects::FilePresence::Probe(None),
+        )
         .await;
     let mut shows = Vec::new();
     for title in &titles {
@@ -671,7 +837,10 @@ async fn a_page_of_inventories_read_together_matches_loading_each_title() {
     // would make, and the same inventories.
     let mut batched_presence = LifecyclePassFilePresence::default();
     let with_memo = app
-        .lifecycle_load_title_episode_inventories(&titles, Some(&mut batched_presence))
+        .lifecycle_load_title_episode_inventories(
+            &titles,
+            crate::lifecycle_rules::subjects::FilePresence::Probe(Some(&mut batched_presence)),
+        )
         .await;
     let mut per_title_presence = LifecyclePassFilePresence::default();
     for title in titles

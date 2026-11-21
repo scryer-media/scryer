@@ -68,6 +68,10 @@ pub(super) struct InMemoryLifecycleEvaluationRepo {
     pub(super) actions_conflict_writes: std::sync::atomic::AtomicUsize,
     /// How many batches those markers were written in.
     pub(super) actions_conflict_batches: std::sync::atomic::AtomicUsize,
+    /// How many single-subject live-candidate reads were made.
+    pub(super) single_subject_candidate_reads: std::sync::atomic::AtomicUsize,
+    /// When set, every batched live-candidate read fails.
+    pub(super) fail_subject_candidate_lists: AtomicBool,
     /// When set to a subject id, recording a continuing match for that
     /// subject's candidate fails, as a lost database write would.
     pub(super) fail_record_match_for_subject: std::sync::Mutex<Option<String>>,
@@ -260,6 +264,8 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         subject_kind: &str,
         subject_id: &str,
     ) -> AppResult<Option<LifecycleCandidate>> {
+        self.single_subject_candidate_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self
             .candidates
             .lock()
@@ -280,6 +286,12 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         subject_kind: &str,
         subject_ids: &[String],
     ) -> AppResult<Vec<LifecycleCandidate>> {
+        if self
+            .fail_subject_candidate_lists
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository("candidate list unavailable".into()));
+        }
         let wanted: std::collections::HashSet<&str> =
             subject_ids.iter().map(String::as_str).collect();
         Ok(self
@@ -1982,6 +1994,76 @@ async fn a_repeat_match_advances_only_the_last_match_and_never_the_clock() {
     assert_eq!(second.due_at, first.due_at);
     assert!(second.last_matched_at >= first.last_matched_at);
     assert_eq!(second.state, LifecycleCandidateState::Observing);
+}
+
+/// A pass reads its subjects' live candidates a chunk at a time, not once
+/// per subject, and decides each exactly as a pass that reads them one by one:
+/// a failed chunk read falls back to that, with the same outcome.
+#[tokio::test]
+async fn a_pass_reads_live_candidates_by_chunk_and_falls_back_per_subject() {
+    let fixture = evaluation_app();
+    for name in ["Chunk one", "Chunk two", "Chunk three"] {
+        seed_title(&fixture.app, &fixture.user, name, true).await;
+    }
+    seed_title(&fixture.app, &fixture.user, "Chunk unmonitored", false).await;
+    fixture.armed_rule(MONITORED_SOURCE, 7).await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let opened = fixture.evaluation.all_candidates().await;
+    assert_eq!(opened.len(), 3, "{opened:?}");
+
+    let reads = |fixture: &EvaluationFixture| {
+        fixture
+            .evaluation
+            .single_subject_candidate_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    let shape = |candidates: Vec<LifecycleCandidate>| {
+        let mut shape: Vec<_> = candidates
+            .into_iter()
+            .map(|candidate| {
+                (
+                    candidate.id,
+                    candidate.subject_id,
+                    format!("{:?}", candidate.state),
+                    candidate.match_generation,
+                    candidate.first_matched_at,
+                )
+            })
+            .collect();
+        shape.sort();
+        shape
+    };
+
+    let before = reads(&fixture);
+    let batched = fixture.evaluate().await;
+    assert_eq!(
+        reads(&fixture),
+        before,
+        "no subject reads its own candidate"
+    );
+    let batched_shape = shape(fixture.evaluation.all_candidates().await);
+
+    fixture
+        .evaluation
+        .fail_subject_candidate_lists
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let before = reads(&fixture);
+    let fallback = fixture.evaluate().await;
+    assert_eq!(
+        reads(&fixture) - before,
+        4,
+        "each subject reads its own candidate when the chunk read fails"
+    );
+    assert_eq!(
+        shape(fixture.evaluation.all_candidates().await),
+        batched_shape
+    );
+    for report in [&batched, &fallback] {
+        assert_eq!(report.candidates_created, 0);
+        assert_eq!(report.candidates_matched, 3);
+        assert_eq!(report.candidates_canceled, 0);
+    }
 }
 
 #[tokio::test]
