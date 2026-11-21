@@ -480,6 +480,122 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
     );
 }
 
+/// A season delete removes exactly the season's files and keeps the other
+/// season's, while the per-file rechecks probe the share only for the
+/// matcher's own re-evaluation: the manifest and monitoring rechecks read the
+/// catalog alone, and a season and its title share one inventory read.
+#[tokio::test]
+async fn season_sequence_delete_keeps_sibling_files_and_probes_once_per_recheck() {
+    let fixture = title_fixture("Probe count scope", MediaFacet::Series).await;
+    let app = &fixture.execution.app;
+    let user = &fixture.execution.user;
+    let season = app
+        .create_collection(
+            user,
+            fixture.title.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create season");
+    let mut targets = Vec::new();
+    for number in 1..=3 {
+        let episode = app
+            .create_episode(
+                user,
+                fixture.title.id.clone(),
+                Some(season.id.clone()),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".to_string()),
+                None,
+                Some(format!("Episode 1-{number}")),
+                Some(format!("2020-01-0{number}")),
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("create episode");
+        let relative = format!("Probe/Season 01/S01E0{number}.mkv");
+        let file_id = add_episode_file(&fixture, &episode, &relative).await;
+        targets.push((fixture.root.join(&relative), file_id));
+    }
+    let mut siblings = Vec::new();
+    for number in 1..=2 {
+        let (_, episode) =
+            season_and_episode(&fixture, 2, number, &format!("2020-02-0{number}")).await;
+        let relative = format!("Probe/Season 02/S02E0{number}.mkv");
+        let file_id = add_episode_file(&fixture, &episode, &relative).await;
+        siblings.push((fixture.root.join(&relative), file_id));
+    }
+    let mut draft = sequence_draft(deletion_steps());
+    draft.rego_source = crate::lib_tests::heads_source_at(
+        format!(
+            "package selected_season\nimport rego.v1\n\nmatch if {{\n  input.season.id == {:?}\n}}\n",
+            season.id
+        ),
+        &[
+            scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor,
+            scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles,
+        ],
+        scryer_domain::LifecycleRuleSubjectKind::Season,
+    );
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    assert_eq!(candidate.subject_id, season.id);
+    super::lifecycle_rules::arm_rule(
+        app,
+        user,
+        &rule_set_id,
+        LifecycleRuleState::Enabled,
+        Some(1),
+    )
+    .await;
+
+    let probes_before = crate::lifecycle_rules::subjects::presence_probes::under(&fixture.root);
+    let report = app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("execute selected season sequence");
+    let probes =
+        crate::lifecycle_rules::subjects::presence_probes::under(&fixture.root) - probes_before;
+
+    assert_eq!(report.executed, 1, "{report:?}");
+    for (path, file_id) in &targets {
+        assert!(!path.exists(), "{} is a deletion target", path.display());
+        assert!(
+            app.services
+                .library
+                .media_files
+                .get_media_file_by_id(file_id)
+                .await
+                .expect("read deleted row")
+                .is_none()
+        );
+    }
+    for (path, file_id) in &siblings {
+        assert!(path.exists(), "{} stays on disk", path.display());
+        assert!(
+            app.services
+                .library
+                .media_files
+                .get_media_file_by_id(file_id)
+                .await
+                .expect("read preserved row")
+                .is_some()
+        );
+    }
+    // Four step rechecks of the five-file title (20), the journal's
+    // retention read (5), and one inventory per file recheck as the season
+    // empties (5 + 4 + 3). The manifest and monitoring rechecks and a second
+    // inventory per recheck took this to 123.
+    assert_eq!(probes, 37, "presence probes during the action pass");
+}
+
 #[tokio::test]
 async fn a_fresh_re_monitor_cancels_the_sequence_delete_files_step_and_preserves_files() {
     let fixture = execution_app(None);

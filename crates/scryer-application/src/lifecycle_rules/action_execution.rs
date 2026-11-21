@@ -1885,8 +1885,10 @@ impl AppUseCase {
                 .map(Vec::as_slice),
             store_readable: claims_by_title.is_some(),
         };
-        let subject = match self
-            .lifecycle_resolve_subject(
+        // A season or episode is evaluated beside its title's own facts. Both
+        // come from one fresh inventory read now, rather than one each.
+        let (subject, title_subject) = match self
+            .lifecycle_resolve_subject_with_title(
                 &candidate.subject_kind,
                 &candidate.subject_id,
                 &title,
@@ -1894,7 +1896,7 @@ impl AppUseCase {
             )
             .await
         {
-            Ok(subject) => subject,
+            Ok(resolved) => resolved,
             Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
                 return SafetyDecision::Cancel(execution_reason::TITLE_MISSING);
             }
@@ -1940,18 +1942,10 @@ impl AppUseCase {
             series_movies,
             completed_retention_episode_ids.as_ref(),
         );
-        // A season or episode is evaluated beside its title's own facts,
-        // read now like everything else here.
-        let title_subject = if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title {
-            None
-        } else {
-            match self
-                .lifecycle_resolve_subject("title", &title.id, &title, files)
-                .await
-            {
-                Ok(title_subject) => Some(title_subject),
-                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
-            }
+        let title_subject = match title_subject {
+            None => None,
+            Some(Ok(title_subject)) => Some(title_subject),
+            Some(Err(_)) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
         let storage_roots = match storage_roots
             .get_or_try_init(|| self.lifecycle_storage_roots_context())

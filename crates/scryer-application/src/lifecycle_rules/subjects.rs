@@ -781,6 +781,67 @@ impl AppUseCase {
             .ok_or_else(subject_no_longer_belongs)
     }
 
+    /// [`Self::lifecycle_resolve_subject`] for a question about which files
+    /// the subject covers: its label, its files and whether their coverage is
+    /// ambiguous. None of those depends on whether a file is on disk, so no
+    /// file is probed; the subject's downloaded-episode counts are not
+    /// resolved and must not be read.
+    pub(crate) async fn lifecycle_resolve_subject_files(
+        &self,
+        kind: &str,
+        subject_id: &str,
+        title: &Title,
+    ) -> AppResult<LifecycleSubject> {
+        let kind = subject_coordinates_kind(kind, subject_id)?;
+        let subjects = if title.facet == scryer_domain::MediaFacet::Movie {
+            self.lifecycle_subjects_for_title(kind, title, &[]).await?
+        } else {
+            let inventory = self
+                .load_title_episode_inventory(title, FilePresence::Skip)
+                .await?;
+            self.lifecycle_subjects_from_episode_inventory(kind, title, &[], &inventory)?
+        };
+        subjects
+            .into_iter()
+            .find(|subject| subject.id == subject_id)
+            .ok_or_else(subject_no_longer_belongs)
+    }
+
+    /// [`Self::lifecycle_resolve_subject`] for a subject and, for a season or
+    /// episode, its title, both projected from one fresh inventory load
+    /// instead of one each. The title's result is kept apart so a caller can
+    /// tell its failure from the subject's.
+    pub(crate) async fn lifecycle_resolve_subject_with_title(
+        &self,
+        kind: &str,
+        subject_id: &str,
+        title: &Title,
+        files: &[TitleMediaFile],
+    ) -> AppResult<(LifecycleSubject, Option<AppResult<LifecycleSubject>>)> {
+        let scope = subject_coordinates_kind(kind, subject_id)?;
+        if title.facet == scryer_domain::MediaFacet::Movie {
+            // A movie's only subject is its title, read without an inventory.
+            let subject = self
+                .lifecycle_resolve_subject(kind, subject_id, title, files)
+                .await?;
+            let title_subject = (scope != Scope::Title).then(|| Err(subject_no_longer_belongs()));
+            return Ok((subject, title_subject));
+        }
+        let inventory = self.lifecycle_load_title_episode_inventory(title).await?;
+        let subject = self
+            .lifecycle_subjects_from_episode_inventory(scope, title, files, &inventory)?
+            .into_iter()
+            .find(|subject| subject.id == subject_id)
+            .ok_or_else(subject_no_longer_belongs)?;
+        let title_subject = (scope != Scope::Title).then(|| {
+            self.lifecycle_subjects_from_episode_inventory(Scope::Title, title, files, &inventory)?
+                .into_iter()
+                .find(|subject| subject.id == title.id)
+                .ok_or_else(subject_no_longer_belongs)
+        });
+        Ok((subject, title_subject))
+    }
+
     /// [`Self::lifecycle_resolve_subject`] from catalog rows alone, for a
     /// question about the subject's monitoring. No media file is read and no
     /// file is probed, so the subject's files and file coverage are empty;
@@ -1029,7 +1090,39 @@ impl LifecycleTitleEpisodeInventory {
     }
 }
 
+/// Every presence probe a test made, by path, so a test can count the probes
+/// under its own fixture root while other tests probe theirs.
+#[cfg(test)]
+pub(crate) mod presence_probes {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    static PROBES: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Mutex::default);
+
+    pub(super) fn record(path: &str) {
+        *PROBES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(path.to_string())
+            .or_default() += 1;
+    }
+
+    /// The probes made so far of paths under `root`.
+    pub(crate) fn under(root: &std::path::Path) -> usize {
+        let root = root.to_string_lossy();
+        PROBES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|(path, _)| path.starts_with(&*root))
+            .map(|(_, count)| *count)
+            .sum()
+    }
+}
+
 async fn file_availability(path: &str) -> EpisodeFileAvailability {
+    #[cfg(test)]
+    presence_probes::record(path);
     if path.trim().is_empty() {
         return EpisodeFileAvailability::Missing;
     }

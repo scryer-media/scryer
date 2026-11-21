@@ -519,8 +519,10 @@ impl AppUseCase {
                 self.lifecycle_title_deletion_files(title).await?,
             ));
         }
+        // The manifest is the subject's catalog files and their ownership;
+        // whether each is on disk decides nothing here, so none is probed.
         let subject = self
-            .lifecycle_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
+            .lifecycle_resolve_subject_files(&candidate.subject_kind, &candidate.subject_id, title)
             .await?;
         if subject.ambiguous_files {
             return Err(AppError::validation_refused(
@@ -536,8 +538,14 @@ impl AppUseCase {
         candidate: &LifecycleCandidate,
         title: &Title,
     ) -> AppResult<()> {
+        // Only the subject's identity and monitoring are read here and in the
+        // confirmation below, so neither reads a media file or probes one.
         let subject = self
-            .lifecycle_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
+            .lifecycle_resolve_subject_monitoring(
+                &candidate.subject_kind,
+                &candidate.subject_id,
+                title,
+            )
             .await?;
         let actor = User::system_execution_actor();
         match subject.kind {
@@ -558,7 +566,11 @@ impl AppUseCase {
         }
         // Confirm the persisted state, including every future episode of a season.
         let fresh = self
-            .lifecycle_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
+            .lifecycle_resolve_subject_monitoring(
+                &candidate.subject_kind,
+                &candidate.subject_id,
+                title,
+            )
             .await?;
         if fresh.monitored || fresh.episodes.iter().any(|episode| episode.monitored) {
             return Err(AppError::Repository(
@@ -588,12 +600,12 @@ impl AppUseCase {
             ));
         }
         if candidate.subject_kind != Scope::Title.as_storage_str() {
+            // Monitoring is a catalog question: no media file is read.
             let fresh = self
-                .lifecycle_resolve_subject(
+                .lifecycle_resolve_subject_monitoring(
                     &candidate.subject_kind,
                     &candidate.subject_id,
                     title,
-                    &[],
                 )
                 .await?;
             return Ok(!fresh.monitored && fresh.episodes.iter().all(|episode| !episode.monitored));
